@@ -1,0 +1,59 @@
+# Configuration file for EMHASS
+
+retrieve_hass_conf:
+  - freq: 30 # The time step to resample retrieved data from hass
+  - days_to_retrieve: 2 # We will retrieve data from now and up to days_to_retrieve days
+  - var_PV: 'sensor.power_photovoltaics' # Photovoltaic produced power sensor in Watts
+  - var_load: 'sensor.power_load_no_var_loads' # Household power consumption sensor in Watts (deferrable loads should be substracted)
+  - load_negative: False # Set to True if the retrived load variable is negative by convention
+  - set_zero_min: True # A special treatment for a minimum value saturation to zero. Values below zero are replaced by nans
+  - var_replace_zero: # A list of retrived variables that we would want  to replace nans with zeros
+    - 'sensor.power_photovoltaics'
+  - var_interp: # A list of retrived variables that we would want to interpolate nan values using linear interpolation
+    - 'sensor.power_photovoltaics'
+    - 'sensor.power_load_no_var_loads'
+
+optim_conf:
+  - num_def_loads: 2
+  - P_deferrable_nom: # Watts
+    - 3000
+    - 750
+  - def_total_hours: # hours
+    - 5
+    - 8
+  - treat_def_as_semi_cont: # treat this variable as semi continuous 
+    - True
+    - True
+  - set_def_constant: # set as a constant fixed value variable with just one startup for each 24h
+    - False
+    - False
+  - list_hp_periods: # list of different tariff periods
+    - period_hp_1:
+      - start: '02:54'
+      - end: '15:24'
+    - period_hp_2:
+      - start: '17:24'
+      - end: '20:24'
+  - load_cost_hp: 0.1464 # €/kWh
+  - load_cost_hc: 0.096359 # €/kWh
+  - prod_sell_price: 0.065 # €/kWh
+  - set_use_battery: False # consider a battery storage
+  - delta_forecast: 1 # days
+
+plant_conf:
+  - P_grid_max: 9000 # Watts
+  - Pd_max: 1000 # Watts
+  - Pc_max: 1000 # Watts
+  - eta_disch: 0.95 # unit
+  - eta_ch: 0.95 # unit
+  - Enom: 5000 # Wh
+  - SOCmin: 0.3 # unit
+  - SOCmax: 0.9 # unit
+  - SOCtarget: 0.6 # unit
+  - module_model: 'CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M'
+  - inverter_model: 'Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_'
+  - surface_tilt: 30
+  - surface_azimuth: 205
+  - modules_per_string: 16
+  - strings_per_inverter: 1
+
