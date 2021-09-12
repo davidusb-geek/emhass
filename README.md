@@ -14,7 +14,7 @@ EMHASS was designed to be integrated with Home Assistant, hence it's name. Insta
 
 The main dependencies of this project are PVLib to model power from a PV residential installation and the PuLP Python package to perform the actual optimizations using the Linear Programming approach.
 
-The complete documentation for this package is available here.
+The complete documentation for this package is [available here](https://emhass.readthedocs.io/en/latest/).
 
 ## Installation
 
