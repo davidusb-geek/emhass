@@ -153,3 +153,11 @@ make clean
 make html
 sphinx-apidoc -o ./ ../src/emhass/
 ```
+
+## TODO
+
+- [ ] Implement an energy management with a Model Predictive Control approach. Consider implementing the receiding horizon approach. 
+- [ ] Improve load forecasting using a time series forecast algorithm. Some tests were made with fbprophet but results are not completly satisfactory. The model needs some regressors for more accuracy.
+- [ ] Introduce the modeling of constraints during optimization for a thermal energy storage
+- [ ] EMHASS hass been tested in Home Assistan Core. It need to be tested on Home Assistant Operating System and Home Assistant Container. 
+- [ ] Create an EMHASS add-on for even easier installation on Home Assistant Operating System and Home Assistant Supervised
