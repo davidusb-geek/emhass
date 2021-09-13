@@ -19,15 +19,20 @@ class optimization(ABC):
     including the battery equations are hence transformed in a linear form.
     
     This class methods are:
+
     - get_load_unit_cost
+
     - perform_optimization
+
     - perform_perfect_forecast_optim
+
     - perform_dayahead_forecast_optim
+    
     """
 
     def __init__(self, retrieve_hass_conf, optim_conf, plant_conf, days_list, opt_time_delta=24):
         """
-        Define constructor for optimization class
+        Define constructor for optimization class.
         
         :param retrieve_hass_conf: Configuration parameters used to retrieve data \
             from hass
@@ -339,7 +344,7 @@ class optimization(ABC):
 
     def perform_perfect_forecast_optim(self, df_input_data):
         """
-        Perform an optimization on historical data (perfectly known PV production)
+        Perform an optimization on historical data (perfectly known PV production).
         
         :param df_input_data: A DataFrame containing all the input data used for \
             the optimization, notably photovoltaics and load consumption powers.
@@ -370,7 +375,21 @@ class optimization(ABC):
         return self.opt_res
         
     def perform_dayahead_forecast_optim(self, df_input_data, P_PV, P_load):
+        """
+        Perform a day-ahead optimization task using real forecast data.
         
+        :param df_input_data: A DataFrame containing all the input data used for \
+            the optimization, notably the unit load cost for power consumption.
+        :type df_input_data: pandas.DataFrame
+        :param P_PV: The forecasted PV power production.
+        :type P_PV: pandas.DataFrame
+        :param P_load: The forecasted Load power consumption. This power should \
+            not include the power from the deferrable load that we want to find.
+        :type P_load: pandas.DataFrame
+        :return: opt_res: A DataFrame containing the optimization results
+        :rtype: pandas.DataFrame
+
+        """
         self.logger.info("Perform optimization for the day-ahead")
         self.opt_res = pd.DataFrame()
         
