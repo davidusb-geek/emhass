@@ -71,8 +71,8 @@ These are the technical parameters of the energy system of the household.
 
 - P_grid_max: The maximum power that can be supplied by the utility grid in Watts. Defaults to 9000.
 
-We will define the technical parameters of the PV installation. For the modeling task we rely on the PVLib Python package. For more information see: https://pvlib-python.readthedocs.io/en/stable/
-The complete list of supported modules and inverter models can be found here: https://pvlib-python.readthedocs.io/en/stable/generated/pvlib.pvsystem.retrieve_sam.html
+We will define the technical parameters of the PV installation. For the modeling task we rely on the PVLib Python package. For more information see: [https://pvlib-python.readthedocs.io/en/stable/](https://pvlib-python.readthedocs.io/en/stable/)
+The complete list of supported modules and inverter models can be found here: [https://pvlib-python.readthedocs.io/en/stable/generated/pvlib.pvsystem.retrieve_sam.html](https://pvlib-python.readthedocs.io/en/stable/generated/pvlib.pvsystem.retrieve_sam.html)
 
 - module_model: The PV module model. For example: 'CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M'
 - inverter_model: The PV inverter model. For example: 'Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_'

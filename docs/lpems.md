@@ -8,7 +8,7 @@ Imagine that we have installed some solar panels in our house. Imagine that we h
 
 Now, how can we be certain of the good and optimal management of these devices? If we define a fixed schedule for our deferrable loads, is this the best solution? When we can indicate or force a charge or discharge on the battery? This is a well known academic problem for an Energy Management System.
 
-The first and most basic approach could be to define some basic rules or heuristics, this is the so called rule-based approach. The rules could be some fixed schedules for the deferrable loads, or some threshold based triggering of the battery charge/discharge, and so on. The rule-based approach has the advantage of being simple to implement and robust. However, the main disadvantage is that optimality is not guranteed. 
+The first and most basic approach could be to define some basic rules or heuristics, this is the so called rule-based approach. The rules could be some fixed schedules for the deferrable loads, or some threshold based triggering of the battery charge/discharge, and so on. The rule-based approach has the advantage of being simple to implement and robust. However, the main disadvantage is that optimality is not guaranteed. 
 
 The goal of this work is to provide an easy to implement framework where anyone using Home Assistant can apply the best and optimal set of instructions to control the energy flow in a household. There are many ways and techniques that can be found in the literature to implement optimized EMS. In this package we are using just one of those techniques, the Linear Programming approach, that will be presented below.
 
@@ -46,7 +46,7 @@ $$
 \sum_{i=1}^{\Delta_{opt}/\Delta_t} 0.001*\Delta_t(unit_{LoadCost_i}*(P_{load_i}+P_{defSum_i})+prod_{SellPrice}*P_{gridNeg_i})
 $$
 
-where $\Delta_{opt}$ is the total period of optimization in hours, $\Delta_t$ is the optimization time step in hours, $unit_{LoadCost_i}$ is the cost of the energy from the utility in EUR/kWh, $P_{load}$ is the electricity load consumption, $P_{defSum}$ is the sum of the deferrable loads defined, $prod_{SellPrice}$ is the price of the energy sold to the utility, $P_{gridNeg}$ is the negative component of the grid power, this is the power exported to the grid. 
+where $\Delta_{opt}$ is the total period of optimization in hours, $\Delta_t$ is the optimization time step in hours, $unit_{LoadCost_i}$ is the cost of the energy from the utility in EUR/kWh, $P_{load}$ is the electricity load consumption, $P_{defSum}$ is the sum of the deferrable loads defined, $prod_{SellPrice}$ is the price of the energy sold to the utility, $P_{gridNeg}$ is the negative component of the grid power, this is the power exported to the grid. All these power are expressed in Watts.
 
 The goal with this cost function is to maximize the self-consumption from PV power while minimizing the energy exported to the grid.
 
@@ -68,7 +68,7 @@ Some other special linear constraints are defined. A constraint is introduced to
 
 Constraints are also used to define semi-continuous variables. Semi-continuous variables are variables that must take a value between their minimum and maximum or zero.
 
-A final set of constraints is used to define the bahavior of the battery. Notably:
+A final set of constraints is used to define the behavior of the battery. Notably:
 - Ensure that maximum charge and discharge powers are not exceeded.
 - Minimum and maximum state of charge values are not exceeded.
 - Force the final state of charge value to be equal to the initial state of charge.
