@@ -25,6 +25,8 @@ class retrieve_hass(ABC):
     
     - prepare_data: to apply some data treatment in preparation for the optimization task
     
+    - post_data: Post passed data to hass
+    
     """
 
     def __init__(self, hass_url, long_lived_token, freq, time_zone):
