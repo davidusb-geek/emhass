@@ -161,3 +161,6 @@ sphinx-apidoc -o ./ ../src/emhass/
 - [ ] Introduce the modeling of constraints during optimization for a thermal energy storage
 - [ ] EMHASS hass been tested in Home Assistan Core. It need to be tested on Home Assistant Operating System and Home Assistant Container. 
 - [ ] Create an EMHASS add-on for even easier installation on Home Assistant Operating System and Home Assistant Supervised
+- [ ] Package everything in a docker container
+- [ ] Define the type of forecast that should be used from the configuration file
+- [ ] Create a plotting class to visualize the optimization results
