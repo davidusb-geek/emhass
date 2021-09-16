@@ -110,7 +110,7 @@ automation:
     - service: homeassistant.turn_on
       entity_id: switch.water_heater
 ```
-A second automation should used to turn off the switch:
+A second automation should be used to turn off the switch:
 ```
 automation:
   trigger:
