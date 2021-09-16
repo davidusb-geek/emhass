@@ -25,11 +25,7 @@ source bin/activate
 ```
 Install using the distribution files:
 ```
-python3 -m pip install emhass
-```
-... or the compiled whl file:
-```
-pip install emhass-X.X.X-py3-none-any.whl
+pip install emhass
 ```
 Clone this repository to obtain the example configuration files.
 We will suppose that this repository is cloned to:
