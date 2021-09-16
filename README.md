@@ -98,7 +98,7 @@ sudo chmod -R 755 /home/user/emhass/scripts/publish_data.sh
 sudo chmod +x /home/user/emhass/scripts/dayahead_optim.sh
 sudo chmod +x /home/user/emhass/scripts/publish_data.sh
 ```
-The final action will be to link a sensor value in Home Assistant to control the switch of a desired controllable load. For example imagine that I want to control my water heater and that the `publish-data` action is publishing the optimized value of a deferrable load that I have linked to my water heater desider behavior. In this case we could use an automation like this one below to control the desired real switch:
+The final action will be to link a sensor value in Home Assistant to control the switch of a desired controllable load. For example imagine that I want to control my water heater and that the `publish-data` action is publishing the optimized value of a deferrable load that I have linked to my water heater desired behavior. In this case we could use an automation like this one below to control the desired real switch:
 ```
 automation:
   trigger:
