@@ -31,11 +31,7 @@ source bin/activate
 ```
 Install using the distribution files:
 ```
-python3 -m pip install emhass
-```
-... or the compiled whl file:
-```
-pip install emhass-X.X.X-py3-none-any.whl
+pip install emhass
 ```
 Clone this repository to obtain the example configuration files.
 We will suppose that this repository is cloned to:
@@ -54,21 +50,20 @@ The available arguments are:
 For example, the following line command can be used to perform a day-ahead optimization task:
 ```
 emhass --action 'dayahead-optim' --config '/home/user/emhass'
-
 ```
-Before running any valuable command you need to modify the config.yaml and secrets.yaml files. 
+Before running any valuable command you need to modify the `config.yaml` and `secrets.yaml` files. These files should contain the information adapted to your own system. To do this take a look at the special section for this in the [documentation](https://emhass.readthedocs.io/en/latest/config.html).
 
 ## Home Assistant integration
 
-To integrate with home assistant we will need to define some shell commands in the configuration.yaml file and some basic automations in the automations.yaml file.
+To integrate with home assistant we will need to define some shell commands in the `configuration.yaml` file and some basic automations in the `automations.yaml` file.
 
-In configuration.yaml:
+In `configuration.yaml`:
 ```
 shell_command:
   dayahead_optim: /home/user/emhass/scripts/dayahead_optim.sh
   publish_data: /home/user/emhass/scripts/publish_data.sh
 ```
-And in automations.yaml:
+And in `automations.yaml`:
 ```
 - alias: EMHASS day-ahead optimization
   trigger:
@@ -110,9 +105,21 @@ automation:
     - platform: numeric_state
       entity_id:
         - sensor.p_deferrable1
-      above: 0
+      above: 0.1
   action:
     - service: homeassistant.turn_on
+      entity_id: switch.water_heater
+```
+A second automation should used to turn off the switch:
+```
+automation:
+  trigger:
+    - platform: numeric_state
+      entity_id:
+        - sensor.p_deferrable1
+      below: 0.1
+  action:
+    - service: homeassistant.turn_off
       entity_id: switch.water_heater
 ```
 
@@ -122,7 +129,7 @@ To develop using Anaconda:
 ```
 conda create --name emhass-dev python=3.8 pip=21.0.1
 ```
-Then activate environment and install emhass using the provided setup.py file:
+Then activate environment and install `emhass` using the provided `setup.py` file:
 ```
 conda activate emhass-dev
 python setup.py install
@@ -149,9 +156,9 @@ pip install sphinx==3.5.4 sphinx-rtd-theme==0.5.2 myst-parser==0.14.0
 ```
 The actual documentation is generated using:
 ```
+sphinx-apidoc -o ./ ../src/emhass/
 make clean
 make html
-sphinx-apidoc -o ./ ../src/emhass/
 ```
 
 ## TODO
