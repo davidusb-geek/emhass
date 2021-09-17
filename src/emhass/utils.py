@@ -23,12 +23,14 @@ def get_root_2pardir():
     """
     return os.path.abspath(os.path.join(os.path.join(os.getcwd(), os.path.pardir), os.path.pardir))
 
-def get_logger(fun_name, file = True):
+def get_logger(fun_name, config_path, file = True):
     """
     Create a simple logger object.
     
     :param fun_name: The Python function object name where the logger will be used
     :type fun_name: str
+    :param config_path: The path to the yaml configuration file
+    :type config_path: str
     :param file: Write log to a file, defaults to True
     :type file: bool, optional
     :return: The logger object and the handler
@@ -37,10 +39,11 @@ def get_logger(fun_name, file = True):
     """
 	# create logger object
     logger = logging.getLogger(fun_name)
-    logger.propagate = False
+    logger.propagate = True
     logger.setLevel(logging.DEBUG)
+    logger.fileSetting = file
     if file:
-        ch = logging.FileHandler('pv_chirens.log')
+        ch = logging.FileHandler(config_path + '/data/emhass_logger.log')
     else:
         ch = logging.StreamHandler()
     ch.setLevel(logging.DEBUG)

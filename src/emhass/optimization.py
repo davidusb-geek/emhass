@@ -8,10 +8,6 @@ from pulp import PULP_CBC_CMD
 
 from emhass.utils import get_logger
 
-# create logger
-logger, ch = get_logger(__name__, file=False)
-
-
 class optimization(ABC):
     """
     Optimize the deferrable load and battery energy dispatch problem using \ 
@@ -30,7 +26,8 @@ class optimization(ABC):
     
     """
 
-    def __init__(self, retrieve_hass_conf, optim_conf, plant_conf, days_list, opt_time_delta=24):
+    def __init__(self, retrieve_hass_conf, optim_conf, plant_conf, days_list, 
+                 config_path, logger, opt_time_delta=24):
         """
         Define constructor for optimization class.
         
@@ -46,6 +43,10 @@ class optimization(ABC):
             hass and used for the optimization task. We will retrieve data from \
             now and up to days_to_retrieve days
         :type days_list: list
+        :param config_path: The path to the yaml configuration file
+        :type config_path: str
+        :param logger: The passed logger object
+        :type logger: logging object
         :param opt_time_delta: The number of hours to optimize. If days_list has \
             more than one day then the optimization will be peformed by chunks of \
             opt_time_delta periods, defaults to 24
@@ -64,8 +65,8 @@ class optimization(ABC):
         self.var_PV = self.retrieve_hass_conf['var_PV']
         self.var_load = self.retrieve_hass_conf['var_load']
         self.var_load_new = self.var_load+'_positive'
-        self.logger = logger
-        self.ch = ch
+        # create logger
+        self.logger, self.ch = get_logger(__name__, config_path, file=logger.fileSetting)
         
     def get_load_unit_cost(self, df_final):
         """
@@ -98,7 +99,7 @@ class optimization(ABC):
 
         .. math::
 
-            \sum_{i=1}^{\Delta_{opt}/\Delta_t} 0.001*\Delta_t(unit_{LoadCost_i}*(P_{load_i}+P_{defSum_i})+prod_{SellPrice}*P_{gridNeg_i})
+            \sum_{i=1}^{\Delta_{opt}/\Delta_t} 0.001*\Delta_t(unit_{LoadCost_i}*(P_{load_i}+P_{defSum_i})-prod_{SellPrice}*P_{gridNeg_i})
         
         where :math:`\Delta_{opt}` is the total period of optimization in hours, \
         :math:`\Delta_t` is the optimization time step in hours, :math:`unit_{LoadCost_i}` \
@@ -190,7 +191,7 @@ class optimization(ABC):
         P_def_sum= []
         for i in set_I:
             P_def_sum.append(plp.lpSum(P_deferrable[k][i] for k in range(self.optim_conf['num_def_loads'])))
-        objective = plp.lpSum(unit_load_cost[i]*(P_load[i] + P_def_sum[i])*0.001*self.timeStep + \
+        objective = plp.lpSum(unit_load_cost[i]*(P_load[i] + P_def_sum[i])*0.001*self.timeStep - \
                         self.optim_conf['prod_sell_price'] * P_grid_neg[i] * 0.001*self.timeStep
             for i in set_I)
         opt_model.setObjective(objective)
@@ -319,6 +320,8 @@ class optimization(ABC):
         opt_tp["P_Load"] = [P_load[i] for i in set_I]
         for k in range(self.optim_conf['num_def_loads']):
             opt_tp["P_deferrable{}".format(k)] = [P_deferrable[k][i].varValue for i in set_I]
+        opt_tp["P_grid_pos"] = [P_grid_pos[i].varValue for i in set_I]
+        opt_tp["P_grid_neg"] = [P_grid_neg[i].varValue for i in set_I]
         opt_tp["P_grid"] = [P_grid_pos[i].varValue + P_grid_neg[i].varValue for i in set_I]
         if self.optim_conf['set_use_battery']:
             opt_tp["P_batt"] = [P_sto_pos[i].varValue + P_sto_neg[i].varValue for i in set_I]
@@ -336,8 +339,9 @@ class optimization(ABC):
         P_def_sum_tp = []
         for i in set_I:
             P_def_sum_tp.append(sum(P_deferrable[k][i].varValue for k in range(self.optim_conf['num_def_loads'])))
-        opt_tp["cost_fun"] = [unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) * 0.001 + \
-                              self.optim_conf['prod_sell_price'] * P_grid_neg[i].varValue * 0.001
+        opt_tp["unit_load_cost"] = [unit_load_cost[i] for i in set_I]
+        opt_tp["cost_fun"] = [unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) * 0.001 * self.timeStep - \
+                              self.optim_conf['prod_sell_price'] * P_grid_neg[i].varValue * 0.001 * self.timeStep
                               for i in set_I]
         
         return opt_tp

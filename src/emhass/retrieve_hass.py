@@ -8,10 +8,6 @@ import json
 
 from emhass.utils import get_logger
 
-# create logger
-logger, ch = get_logger(__name__, file=False)
-
-
 class retrieve_hass(ABC):
     """
     Retrieve data from Home Assistant using the restful API.
@@ -29,7 +25,7 @@ class retrieve_hass(ABC):
     
     """
 
-    def __init__(self, hass_url, long_lived_token, freq, time_zone):
+    def __init__(self, hass_url, long_lived_token, freq, time_zone, config_path, logger):
         """
         Define constructor for retrieve_hass class.
         
@@ -41,14 +37,18 @@ class retrieve_hass(ABC):
         :type freq: pd.TimeDelta
         :param time_zone: The time zone
         :type time_zone: datetime.timezone
+        :param config_path: The path to the yaml configuration file
+        :type config_path: str
+        :param logger: The passed logger object
+        :type logger: logging object
 
         """
         self.hass_url = hass_url
         self.long_lived_token = long_lived_token
         self.freq = freq
         self.time_zone = time_zone
-        self.logger = logger
-        self.ch = ch
+        # create logger
+        self.logger, self.ch = get_logger(__name__, config_path, file=logger.fileSetting)
 
 
     def get_data(self, days_list, var_list, minimal_response = False,
