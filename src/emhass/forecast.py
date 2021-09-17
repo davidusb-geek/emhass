@@ -188,7 +188,7 @@ class forecast(ABC):
         mc = ModelChain(system, location, aoi_model="physical")
         mc.run_model(df_weather)
         
-        P_PV_forecast = mc.ac
+        P_PV_forecast = mc.results.ac
         
         return P_PV_forecast
     
