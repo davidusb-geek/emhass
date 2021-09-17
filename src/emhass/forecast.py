@@ -16,9 +16,6 @@ from pvlib.temperature import TEMPERATURE_MODEL_PARAMETERS
 from emhass.retrieve_hass import retrieve_hass
 from emhass.utils import get_logger, get_days_list
 
-# create logger
-logger, ch = get_logger(__name__, file=False)
-
 class forecast(ABC):
     """
     Generate weather and load forecasts needed as inputs to the optimization.
@@ -30,26 +27,26 @@ class forecast(ABC):
     webpage which proposes detailed forecasts based on Lat/Lon locations. This
     methods seems quite stable but as any scrape method it will fail if any changes
     are made to the webpage API.
-
+    
     The 'get_power_from_weather' method is proposed here to convert from irradiance
     data to electrical power. Again PVLib is used to model the PV plant.
     For the load forecast two methods are available.
-
+    
     The first method allows the user to use a CSV file with their own forecast.
     With this method a more powerful external package for time series forecast
     may be used to create your own detailed load forecast.
-
+    
     The CSV should contain no header and the timestamped data should have the
     following format:
-
+        
     2021-04-29 00:00:00+00:00,287.07
-
-    2021-04-29 00:30:00+00:00,274.27
-
-    2021-04-29 01:00:00+00:00,243.38
     
+    2021-04-29 00:30:00+00:00,274.27
+    
+    2021-04-29 01:00:00+00:00,243.38
+        
     ...
-
+    
     The second method is a naive method, also called persistance.
     It simply assumes that the forecast for a future period will be equal to the
     observed values in a past period. The past period is controlled using 
@@ -57,7 +54,8 @@ class forecast(ABC):
     
     """
 
-    def __init__(self, retrieve_hass_conf, optim_conf, plant_conf, conf_path, opt_time_delta=24):
+    def __init__(self, retrieve_hass_conf, optim_conf, plant_conf, 
+                 config_path, logger, opt_time_delta=24):
         """
         Define constructor for the forecast class.
         
@@ -70,6 +68,10 @@ class forecast(ABC):
         :param plant_conf: Dictionnary containing the needed configuration
         data from the configuration file, specific for the modeling of the PV plant
         :type plant_conf: dict
+        :param config_path: The path to the yaml configuration file
+        :type config_path: str
+        :param logger: The passed logger object
+        :type logger: logging object
         :param opt_time_delta: The time delta in hours used to generate forecasts, 
         a value of 24 will generate 24 hours of forecast data, defaults to 24
         :type opt_time_delta: int, optional
@@ -89,9 +91,9 @@ class forecast(ABC):
         self.end_forecast = (self.start_forecast + self.optim_conf['delta_forecast']).replace(microsecond=0)
         self.lat = self.retrieve_hass_conf['lat'] 
         self.lon = self.retrieve_hass_conf['lon']
-        self.root = conf_path
-        self.logger = logger
-        self.ch = ch
+        self.root = config_path
+        # create logger
+        self.logger, self.ch = get_logger(__name__, config_path, file=logger.fileSetting)
         
     def get_weather_forecast(self, method='scrapper'):
         """
@@ -102,7 +104,7 @@ class forecast(ABC):
         :type method: str, optional
         :return: The DataFrame containing the forecasted data
         :rtype: pd.DataFrame
-
+        
         """
         model = GFS()
         self.logger.info("Retrieving weather forecast data using method = "+method)
@@ -220,7 +222,7 @@ class forecast(ABC):
         time_zone_load_foreacast = None
         
         rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
-                           self.freq, time_zone_load_foreacast)
+                           self.freq, time_zone_load_foreacast, self.root, self.logger)
         
         rh.get_data(days_list, var_list)
         rh.prepare_data(self.retrieve_hass_conf['var_load'], load_negative = self.retrieve_hass_conf['load_negative'],

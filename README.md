@@ -146,6 +146,15 @@ And generate distribution archives with::
 ```
 python3 -m build
 ```
+Create a new tag version:
+```
+git tag vX.X.X
+git push origin --tags
+```
+Upload to pypi:
+```
+`twine upload dist/*
+```
 In Spyder you can use CTRL+F6 and add the needed arguments in the "Command line options". The runfile command in the ipython console may look like this:
 ```
 runfile('/home/user/emhass/src/emhass/command_line.py', args='--action "dayahead-optim" --config "/home/user/emhass"', wdir='/home/user/emhass/src/emhass')
