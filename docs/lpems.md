@@ -40,10 +40,10 @@ The LP has of course its set of advantages and disadvantages. The main advantage
 
 ## Household EMS with LP
 
-The LP problem for the household EMS is posed to minimize the following obtective function:
+The LP problem for the household EMS is posed to maximize the profit. In this case this is defined by the revenues from selling PV power to the grid minus the consummed energy cost. This can be represented with the following obtective function:
 
 $$
-\sum_{i=1}^{\Delta_{opt}/\Delta_t} 0.001*\Delta_t(unit_{LoadCost_i}*(P_{load_i}+P_{defSum_i})+prod_{SellPrice}*P_{gridNeg_i})
+\sum_{i=1}^{\Delta_{opt}/\Delta_t} 0.001*\Delta_t(-(prod_{SellPrice}*P_{gridNeg_i}+unit_{LoadCost_i}*(P_{load_i}+P_{defSum_i})))
 $$
 
 where $\Delta_{opt}$ is the total period of optimization in hours, $\Delta_t$ is the optimization time step in hours, $unit_{LoadCost_i}$ is the cost of the energy from the utility in EUR/kWh, $P_{load}$ is the electricity load consumption, $P_{defSum}$ is the sum of the deferrable loads defined, $prod_{SellPrice}$ is the price of the energy sold to the utility, $P_{gridNeg}$ is the negative component of the grid power, this is the power exported to the grid. All these power are expressed in Watts.
