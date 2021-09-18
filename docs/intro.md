@@ -34,7 +34,7 @@ We will suppose that this repository is cloned to:
 ```
 This will be the root path containing the yaml configuration files (`config.yaml` and `secrets.yaml`) and the different needed folders (a `data` folder to store the optimizations results and a `scripts` folder containing the bash scripts described further below).
 
-To upgrade the installation in the furutre just use:
+To upgrade the installation in the future just use:
 ```
 python3 -m pip install --upgrade emhass
 ```
