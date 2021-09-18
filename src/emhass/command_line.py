@@ -121,11 +121,12 @@ def publish_data(input_data_dict, logger):
     if not os.path.isfile(input_data_dict['root'] + '/data/' + filename + '.csv'):
         logger.error("File not found error, run the dayahead_forecast_optim first.")
     else:
-        opt_res_dayahead = pd.read_csv(input_data_dict['root'] + '/data/' + filename + '.csv')
+        opt_res_dayahead = pd.read_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_col='timestamp')
         opt_res_dayahead.index = pd.to_datetime(opt_res_dayahead.index)
+        opt_res_dayahead.index.freq = input_data_dict['retrieve_hass_conf']['freq']
     # Estimate the current index
-    today_precise = datetime.now(input_data_dict['retrieve_hass_conf']['time_zone']).replace(second=0, microsecond=0)
-    idx_closest = opt_res_dayahead.index.get_loc(today_precise, method='backfill')
+    now_precise = datetime.now(input_data_dict['retrieve_hass_conf']['time_zone']).replace(second=0, microsecond=0)
+    idx_closest = opt_res_dayahead.index.get_loc(now_precise, method='backfill')
     # Publish PV forecast
     input_data_dict['rh'].post_data(opt_res_dayahead['P_PV'], idx_closest, 
                                     'sensor.p_pv_forecast', "W", "PV Power Forecast")
