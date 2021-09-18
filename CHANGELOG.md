@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2021-09-18
+### Fixed
+- Fixed a bug when publish-data and reading the CSV file, the index was not correctly defined, so there was a bug when applying pandas get_loc.
+### Added
+- Added a global requirements.txt file for pip install.
+
 ## [0.1.3] - 2021-09-17
 ### Fixed
 - Fixed packaging and configuration for readthedocs.
@@ -28,3 +34,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.1]: https://github.com/davidusb-geek/emhass/releases/tag/v0.1.1
 [0.1.2]: https://github.com/davidusb-geek/emhass/releases/tag/v0.1.2
 [0.1.3]: https://github.com/davidusb-geek/emhass/releases/tag/v0.1.3
+[0.1.4]: https://github.com/davidusb-geek/emhass/releases/tag/v0.1.4
