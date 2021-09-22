@@ -126,7 +126,7 @@ def publish_data(input_data_dict, logger):
         opt_res_dayahead.index.freq = input_data_dict['retrieve_hass_conf']['freq']
     # Estimate the current index
     now_precise = datetime.now(input_data_dict['retrieve_hass_conf']['time_zone']).replace(second=0, microsecond=0)
-    idx_closest = opt_res_dayahead.index.get_loc(now_precise, method='backfill')
+    idx_closest = opt_res_dayahead.index.get_loc(now_precise, method='ffill')
     # Publish PV forecast
     input_data_dict['rh'].post_data(opt_res_dayahead['P_PV'], idx_closest, 
                                     'sensor.p_pv_forecast', "W", "PV Power Forecast")

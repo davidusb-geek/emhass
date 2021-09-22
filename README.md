@@ -176,12 +176,16 @@ make html
 ```
 
 ## TODO
-
-- [ ] Implement an energy management with a Model Predictive Control approach. Consider implementing the receiding horizon approach. 
-- [ ] Improve load forecasting using a time series forecast algorithm. Some tests were made with fbprophet but results are not completly satisfactory. The model needs some regressors for more accuracy.
+### New functionalities
+- [ ] Implement an energy management with a Model Predictive Control approach. Consider implementing the receiding horizon approach.
 - [ ] Introduce the modeling of constraints during optimization for a thermal energy storage
+- [ ] Create a plotting class to visualize the optimization results
+- [ ] Integrate the possibility of variable tariffs, for purshasing and selling energy to the grid.
+### Related to forecasting improvement
+- [ ] Improve load forecasting using a time series forecast algorithm. Some tests were made with fbprophet but results are not completly satisfactory. The model needs some regressors for more accuracy.
+- [ ] Test with LTSM with or without Autoencoders
+- [ ] Define the type of forecast that should be used from the configuration file
+### Packaging and HA integration
 - [ ] EMHASS hass been tested in Home Assistan Core. It need to be tested on Home Assistant Operating System and Home Assistant Container. 
 - [ ] Create an EMHASS add-on for even easier installation on Home Assistant Operating System and Home Assistant Supervised
 - [ ] Package everything in a docker container
-- [ ] Define the type of forecast that should be used from the configuration file
-- [ ] Create a plotting class to visualize the optimization results
