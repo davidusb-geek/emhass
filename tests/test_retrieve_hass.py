@@ -1,31 +1,30 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import os
 from unittest import TestCase
 import pandas as pd
 import pytz
 
 from emhass.retrieve_hass import retrieve_hass
-from emhass.utils import get_root, get_root_2pardir, get_yaml_parse, get_days_list
+from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
 class TestRetrieveHass(TestCase):
 
     def setUp(self):
-        try:
-            root = get_root()
-            retrieve_hass_conf, _, _ = get_yaml_parse(root)
-        except:
-            root = get_root_2pardir()
-            retrieve_hass_conf, _, _ = get_yaml_parse(root)
+        # the root folder
+        root = get_root()
+        retrieve_hass_conf, _, _ = get_yaml_parse(root)
+        # create logger
+        logger, ch = get_logger(__name__, root, file=False)
         
         self.retrieve_hass_conf = retrieve_hass_conf
         self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
         self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
+        self.rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
+                                self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
+                                root, logger)
         
     def test_get_data(self):
-        self.rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
-                           self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'])
         self.rh.get_data(self.days_list, self.var_list,
                          minimal_response=False, significant_changes_only=False)
         self.assertIsInstance(self.rh.df_final, type(pd.DataFrame()))

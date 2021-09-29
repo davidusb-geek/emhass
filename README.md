@@ -181,6 +181,7 @@ make html
 - [ ] Introduce the modeling of constraints during optimization for a thermal energy storage
 - [ ] Create a plotting class to visualize the optimization results
 - [ ] Integrate the possibility of variable tariffs, for purshasing and selling energy to the grid.
+- [ ] Propose multiple types of cost functions: profit maximization, self-consumption maximization, etc.
 ### Related to forecasting improvement
 - [ ] Improve load forecasting using a time series forecast algorithm. Some tests were made with fbprophet but results are not completly satisfactory. The model needs some regressors for more accuracy.
 - [ ] Test with LTSM with or without Autoencoders
