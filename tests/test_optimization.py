@@ -7,17 +7,16 @@ import pandas as pd
 from emhass.retrieve_hass import retrieve_hass
 from emhass.optimization import optimization
 from emhass.forecast import forecast
-from emhass.utils import get_root, get_root_2pardir, get_yaml_parse, get_days_list
+from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
 class TestOptimization(TestCase):
 
     def setUp(self):
-        try:
-            root = get_root()
-            retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(root)
-        except:
-            root = get_root_2pardir()
-            retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(root)
+        # the root folder
+        root = get_root()
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(root)
+        # create logger
+        logger, ch = get_logger(__name__, root, file=False)
 
         self.retrieve_hass_conf, self.optim_conf, self.plant_conf = \
             retrieve_hass_conf, optim_conf, plant_conf
@@ -26,7 +25,8 @@ class TestOptimization(TestCase):
         self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
         
         self.rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
-                           self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'])
+                           self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
+                           root, logger)
         self.rh.get_data(self.days_list, self.var_list,
                          minimal_response=False, significant_changes_only=False)
         self.rh.prepare_data(self.retrieve_hass_conf['var_load'], load_negative = self.retrieve_hass_conf['load_negative'],
@@ -35,7 +35,8 @@ class TestOptimization(TestCase):
                              var_interp = self.retrieve_hass_conf['var_interp'])
         self.df_input_data = self.rh.df_final.copy()
         
-        self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf)
+        self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf,
+                             root, logger)
         self.df_weather = self.fcst.get_weather_forecast(method='scrapper')
         self.P_PV_forecast = self.fcst.get_power_from_weather(self.df_weather)
         self.P_load_forecast = self.fcst.get_load_forecast()

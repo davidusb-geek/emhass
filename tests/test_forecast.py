@@ -5,21 +5,21 @@ from unittest import TestCase
 import pandas as pd
 
 from emhass.forecast import forecast
-from emhass.utils import get_root, get_root_2pardir, get_yaml_parse
+from emhass.utils import get_root, get_yaml_parse, get_logger
 
 class TestForecast(TestCase):
 
     def setUp(self):
-        try:
-            root = get_root()
-            retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(root)
-        except:
-            root = get_root_2pardir()
-            retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(root)
+        # the root folder
+        root = get_root()
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(root)
+        # create logger
+        logger, ch = get_logger(__name__, root, file=False)
 
         self.retrieve_hass_conf, self.optim_conf, self.plant_conf = \
             retrieve_hass_conf, optim_conf, plant_conf
-        self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, root)
+        self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+                             root, logger)
         
     def get_weather_forecast(self):
         self.df_weather_scrap = self.fcst.get_weather_forecast(method='scrapper')
@@ -30,7 +30,7 @@ class TestForecast(TestCase):
         self.assertEqual(self.df_weather_scrap.index.tz, self.fcst.time_zone)
         self.assertTrue(self.fcst.start_forecast < ts for ts in self.df_weather_scrap.index)
         self.assertEqual(len(self.df_weather_scrap), int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
-        print(">> The lenght of the wheater forecast = "+str(len(self.df_weather_scrap)))
+        print(">> The length of the wheater forecast = "+str(len(self.df_weather_scrap)))
         try:
             self.df_weather_pvlib = self.fcst.get_weather_forecast(method='pvlib')
         except:
@@ -51,7 +51,7 @@ class TestForecast(TestCase):
         self.assertIsInstance(self.P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(self.P_load_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.P_PV_forecast), len(self.P_load_forecast))
-        print(">> The lenght of the load forecast = "+str(len(self.P_load_forecast)))
+        print(">> The length of the load forecast = "+str(len(self.P_load_forecast)))
         
 if __name__ == '__main__':
     tf=TestForecast()
