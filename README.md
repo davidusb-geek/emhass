@@ -134,12 +134,15 @@ To develop using Anaconda:
 ```
 conda create --name emhass-dev python=3.8 pip=21.0.1
 ```
-Then activate environment and install `emhass` using the provided `setup.py` file:
+Then activate environment and install the required packages using:
 ```
-conda activate emhass-dev
-python setup.py install
+pip install -r docs/requirements.txt
 ```
-Add more packages if needed, this is optional if using spyder:
+Add `emhass` to the Python path using the path to `src`, for example:
+```
+/home/user/emhass/src
+```
+Add more conda packages if needed, this is optional, only if using spyder:
 ```
 conda install spyder-kernels
 ```
@@ -181,6 +184,7 @@ make html
 - [ ] Introduce the modeling of constraints during optimization for a thermal energy storage
 - [ ] Create a plotting class to visualize the optimization results
 - [ ] Integrate the possibility of variable tariffs, for purshasing and selling energy to the grid.
+- [ ] Propose multiple types of cost functions: profit maximization, self-consumption maximization, etc.
 ### Related to forecasting improvement
 - [ ] Improve load forecasting using a time series forecast algorithm. Some tests were made with fbprophet but results are not completly satisfactory. The model needs some regressors for more accuracy.
 - [ ] Test with LTSM with or without Autoencoders

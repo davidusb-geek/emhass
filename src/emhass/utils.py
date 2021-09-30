@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import pandas as pd
-import yaml, pytz, logging, os, glob
+import yaml, pytz, logging, os
 from datetime import datetime, timedelta, timezone
 
 def get_root():
