@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from abc import ABC
+from typing import (
+    Optional,
+)
 import pandas as pd
 from datetime import datetime, timedelta
 import requests
 from bs4 import BeautifulSoup
+import logging
 import pvlib
 from pvlib.forecast import GFS
 from pvlib.pvsystem import PVSystem
@@ -14,9 +17,9 @@ from pvlib.modelchain import ModelChain
 from pvlib.temperature import TEMPERATURE_MODEL_PARAMETERS
 
 from emhass.retrieve_hass import retrieve_hass
-from emhass.utils import get_logger, get_days_list
+from emhass.utils import get_days_list
 
-class forecast(ABC):
+class forecast:
     """
     Generate weather and load forecasts needed as inputs to the optimization.
     
@@ -54,8 +57,8 @@ class forecast(ABC):
     
     """
 
-    def __init__(self, retrieve_hass_conf, optim_conf, plant_conf, 
-                 config_path, logger, opt_time_delta=24):
+    def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, 
+                 config_path: str, logger: logging.Logger, opt_time_delta: Optional[int] = 24) -> None:
         """
         Define constructor for the forecast class.
         
@@ -92,10 +95,9 @@ class forecast(ABC):
         self.lat = self.retrieve_hass_conf['lat'] 
         self.lon = self.retrieve_hass_conf['lon']
         self.root = config_path
-        # create logger
-        self.logger, self.ch = get_logger(__name__, config_path, file=logger.fileSetting)
+        self.logger = logger
         
-    def get_weather_forecast(self, method='scrapper'):
+    def get_weather_forecast(self, method: Optional[str] = 'scrapper') -> pd.DataFrame:
         """
         Get and generate weather forecast data.
         
@@ -158,7 +160,7 @@ class forecast(ABC):
             self.logger.error("Passed method is not valid")
         return data
     
-    def get_power_from_weather(self, df_weather):
+    def get_power_from_weather(self, df_weather: pd.DataFrame) -> pd.Series:
         """
         Convert wheater forecast data into electrical power.
         
@@ -192,8 +194,8 @@ class forecast(ABC):
         
         return P_PV_forecast
     
-    def get_load_forecast(self, days_min_load_forecast=3, method='naive',
-                          csv_path="/data/data_load_forecast.csv"):
+    def get_load_forecast(self, days_min_load_forecast: Optional[int] = 3, method: Optional[str] = 'naive',
+                          csv_path: Optional[str] = "/data/data_load_forecast.csv") -> pd.Series:
         """
         Get and generate the load forecast data.
         
