@@ -29,7 +29,7 @@ class optimization:
     """
 
     def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, days_list: pd.date_range, 
-                 config_path: str, logger: logging.Logger, opt_time_delta: Optional[int] = 24) -> None:
+                 costfun: str, config_path: str, logger: logging.Logger, opt_time_delta: Optional[int] = 24) -> None:
         """
         Define constructor for optimization class.
         
@@ -45,6 +45,8 @@ class optimization:
             hass and used for the optimization task. We will retrieve data from \
             now and up to days_to_retrieve days
         :type days_list: list
+        :param costfun: The type of cost function to use for optimization problem
+        :type costfun: str
         :param config_path: The path to the yaml configuration file
         :type config_path: str
         :param logger: The passed logger object
@@ -67,6 +69,7 @@ class optimization:
         self.var_PV = self.retrieve_hass_conf['var_PV']
         self.var_load = self.retrieve_hass_conf['var_load']
         self.var_load_new = self.var_load+'_positive'
+        self.costfun = costfun
         self.logger = logger
         
     def get_load_unit_cost(self, df_final: pd.DataFrame) -> pd.DataFrame:
@@ -196,9 +199,17 @@ class optimization:
         P_def_sum= []
         for i in set_I:
             P_def_sum.append(plp.lpSum(P_deferrable[k][i] for k in range(self.optim_conf['num_def_loads'])))
-        objective = plp.lpSum(-(unit_load_cost[i]*(P_load[i] + P_def_sum[i])*0.001*self.timeStep + \
-                        self.optim_conf['prod_sell_price'] * P_grid_neg[i] * 0.001*self.timeStep)
-            for i in set_I)
+        if self.costfun == 'profit':
+            objective = plp.lpSum(-unit_load_cost[i]*(P_load[i] + P_def_sum[i])*0.001*self.timeStep
+                for i in set_I)
+        elif self.costfun == 'cost':
+            objective = plp.lpSum(-(unit_load_cost[i]*(P_load[i] + P_def_sum[i])*0.001*self.timeStep + \
+                            self.optim_conf['prod_sell_price'] * P_grid_neg[i] * 0.001*self.timeStep)
+                for i in set_I)
+        elif self.costfun == 'self-cnosumption':
+            self.logger.error("Oops, this cost function is not yet implemented, sorry...")
+        else:
+            self.logger.error("The cost function specified type is not valid")
         opt_model.setObjective(objective)
         
         ## Setting constraints

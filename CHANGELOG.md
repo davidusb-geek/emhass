@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed test_optimization bad setup.
 - Implemented typing for compatibility with Python4
 - Fixed logger integration in classes
+- Implementing different types of cost functions
 
 ## [0.1.5] - 2021-09-22
 ### Fixed
