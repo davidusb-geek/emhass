@@ -61,7 +61,8 @@ def setUp(config_path, costfun, logger):
         'rh': rh,
         'fcst': fcst,
         'P_PV_forecast': P_PV_forecast,
-        'P_load_forecast': P_load_forecast
+        'P_load_forecast': P_load_forecast,
+        'costfun': costfun
     }
     return input_data_dict
     
@@ -80,6 +81,9 @@ def perfect_forecast_optim(input_data_dict, logger):
     logger.info("Performing perfect forecast optimiaztion")
     df_input_data = input_data_dict['opt'].get_load_unit_cost(input_data_dict['df_input_data'])
     opt_res = input_data_dict['opt'].perform_perfect_forecast_optim(df_input_data)
+    # Save CSV file for analysis
+    filename = 'opt_res_perfect_optim_'+input_data_dict['costfun']
+    opt_res.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
     return opt_res
     
 def dayahead_forecast_optim(input_data_dict, logger):
