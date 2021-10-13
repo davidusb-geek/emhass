@@ -195,19 +195,23 @@ class optimization:
             P_sto_pos  = {(i):i*0 for i in set_I}
             P_sto_neg  = {(i):i*0 for i in set_I}
             
+        if self.costfun == 'self-consumption':
+            SC  = {(i):plp.LpVariable(cat='Continuous',
+                                      name="SC_{}".format(i)) for i in set_I}
+            
         ## Define objective
         P_def_sum= []
         for i in set_I:
             P_def_sum.append(plp.lpSum(P_deferrable[k][i] for k in range(self.optim_conf['num_def_loads'])))
         if self.costfun == 'profit':
-            objective = plp.lpSum(-unit_load_cost[i]*(P_load[i] + P_def_sum[i])*0.001*self.timeStep
-                for i in set_I)
+            objective = plp.lpSum(-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum[i]) + \
+                                                        self.optim_conf['prod_sell_price'] * P_grid_neg[i])
+                                  for i in set_I)
         elif self.costfun == 'cost':
-            objective = plp.lpSum(-(unit_load_cost[i]*(P_load[i] + P_def_sum[i])*0.001*self.timeStep + \
-                            self.optim_conf['prod_sell_price'] * P_grid_neg[i] * 0.001*self.timeStep)
-                for i in set_I)
-        elif self.costfun == 'self-cnosumption':
-            self.logger.error("Oops, this cost function is not yet implemented, sorry...")
+            objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum[i])
+                                  for i in set_I)
+        elif self.costfun == 'self-consumption':
+            objective = plp.lpSum(SC[i] for i in set_I)
         else:
             self.logger.error("The cost function specified type is not valid")
         opt_model.setObjective(objective)
@@ -220,6 +224,21 @@ class optimization:
                            sense = plp.LpConstraintEQ,
                            rhs = 0)
                        for i in set_I}
+            
+        # Two special constraints just for a self-consumption cost function: maxmin linear problem
+        if self.costfun == 'self-consumption':
+            constraints.update({"constraint_selfcons_PV_{}".format(i) : 
+                                plp.LpConstraint(
+                                    e = SC[i] - P_PV[i],
+                                    sense = plp.LpConstraintLE,
+                                    rhs = 0)
+                                for i in set_I})
+            constraints.update({"constraint_selfcons_PV_{}".format(i) : 
+                                plp.LpConstraint(
+                                    e = SC[i] - P_load[i] - P_def_sum[i],
+                                    sense = plp.LpConstraintLE,
+                                    rhs = 0)
+                                for i in set_I})
         
         # Avoid injecting and consuming from grid at the same time
         constraints.update({"constraint_pgridpos_{}".format(i) : 
@@ -342,7 +361,8 @@ class optimization:
         if self.optim_conf['set_use_battery']:
             opt_tp["P_batt"] = [P_sto_pos[i].varValue + P_sto_neg[i].varValue for i in set_I]
             SOC_opt_delta = [(P_sto_pos[i].varValue*(1/self.plant_conf['eta_disch']) + \
-                              self.plant_conf['eta_ch']*P_sto_neg[i].varValue)*(self.timeStep/(self.plant_conf['Enom'])) for i in set_I]
+                              self.plant_conf['eta_ch']*P_sto_neg[i].varValue)*(
+                                  self.timeStep/(self.plant_conf['Enom'])) for i in set_I]
             SOCinit = self.plant_conf['SOCtarget']
             SOC_opt = []
             for i in set_I:
@@ -356,9 +376,21 @@ class optimization:
         for i in set_I:
             P_def_sum_tp.append(sum(P_deferrable[k][i].varValue for k in range(self.optim_conf['num_def_loads'])))
         opt_tp["unit_load_cost"] = [unit_load_cost[i] for i in set_I]
-        opt_tp["cost_fun"] = [-(unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) * 0.001 * self.timeStep + \
-                              self.optim_conf['prod_sell_price'] * P_grid_neg[i].varValue * 0.001 * self.timeStep)
-                              for i in set_I]
+        opt_tp["cost_profit"] = [-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) + \
+                                                       self.optim_conf['prod_sell_price'] * P_grid_neg[i].varValue)
+                                 for i in set_I]
+        
+        if self.costfun == 'profit':
+            opt_tp["cost_fun_profit"] = [-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) + \
+                                                               self.optim_conf['prod_sell_price'] * P_grid_neg[i].varValue)
+                                         for i in set_I]
+        elif self.costfun == 'cost':
+            opt_tp["cost_fun_cost"] = [-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i])
+                                       for i in set_I]
+        elif self.costfun == 'self-consumption':
+            opt_tp["cost_fun_selfcons"] = [SC[i].varValue for i in set_I]
+        else:
+            self.logger.error("The cost function specified type is not valid") 
         
         return opt_tp
 
