@@ -1,11 +1,15 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+from typing import (
+    Tuple,
+    Optional,
+)
 import pandas as pd
 import yaml, pytz, logging, os
 from datetime import datetime, timedelta, timezone
 
-def get_root():
+def get_root() -> str:
     """
     Get the root absolute path of the working directory.
     
@@ -14,7 +18,7 @@ def get_root():
     """
     return os.path.abspath(os.path.join(os.getcwd(), os.path.pardir))
 
-def get_root_2pardir():
+def get_root_2pardir() -> str:
     """
     Get the root absolute path of the working directory using two pardir commands.
     
@@ -23,7 +27,7 @@ def get_root_2pardir():
     """
     return os.path.abspath(os.path.join(os.path.join(os.getcwd(), os.path.pardir), os.path.pardir))
 
-def get_logger(fun_name, config_path, file = True):
+def get_logger(fun_name: str, config_path: str, file: Optional[bool] = True) -> Tuple[logging.Logger, logging.StreamHandler]:
     """
     Create a simple logger object.
     
@@ -53,7 +57,7 @@ def get_logger(fun_name, config_path, file = True):
 
     return logger, ch
 
-def get_yaml_parse(config_path):
+def get_yaml_parse(config_path: str) -> Tuple[dict, dict, dict]:
     """
     Perform parsing of the config.yaml file.
     
@@ -81,7 +85,7 @@ def get_yaml_parse(config_path):
     
     return retrieve_hass_conf, optim_conf, plant_conf
 
-def get_days_list(days_to_retrieve):
+def get_days_list(days_to_retrieve: int) -> pd.date_range:
     """
     Get list of past days from today to days_to_retrieve.
     
