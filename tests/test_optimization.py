@@ -43,7 +43,8 @@ class TestOptimization(TestCase):
         self.df_input_data_dayahead = pd.concat([self.P_PV_forecast, self.P_load_forecast], axis=1)
         self.df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
         
-        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, self.days_list)
+        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, self.days_list,
+                                root, logger)
         
     def test_perform_perfect_forecast_optim(self):
         self.df_input_data = self.opt.get_load_unit_cost(self.df_input_data)
