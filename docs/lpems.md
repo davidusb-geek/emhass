@@ -47,7 +47,7 @@ Three main cost functions are proposed.
 ### Cost functions
 
 - The profit cost function: In this case the cost function is posed to maximize the profit. In this case this is defined by the revenues from selling PV power to the grid minus the consummed energy cost. This can be represented with the following obtective function:
-- 
+
 $$
 \sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t(unit_{LoadCost[i]}*(P_{load[i]}+P_{defSum[i]}) + prod_{SellPrice}*P_{gridNeg[i]})
 $$
