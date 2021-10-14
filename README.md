@@ -51,10 +51,11 @@ To run a command simply use the `emhass` command followed by the needed argument
 The available arguments are:
 - `--action`: That is used to set the desired action, options are: `perfect-optim`, `dayahead-optim` and `publish-data`
 - `--config`: Define path to the config.yaml file
+- `--costfun`: Define the type of cost function, options are: `profit`, `cost`, `self-consumption`
 
 For example, the following line command can be used to perform a day-ahead optimization task:
 ```
-emhass --action 'dayahead-optim' --config '/home/user/emhass'
+emhass --action 'dayahead-optim' --config '/home/user/emhass' --costfun 'profit'
 ```
 Before running any valuable command you need to modify the `config.yaml` and `secrets.yaml` files. These files should contain the information adapted to your own system. To do this take a look at the special section for this in the [documentation](https://emhass.readthedocs.io/en/latest/config.html).
 
@@ -182,9 +183,9 @@ make html
 ### New functionalities
 - [ ] Implement an energy management with a Model Predictive Control approach. Consider implementing the receiding horizon approach.
 - [ ] Introduce the modeling of constraints during optimization for a thermal energy storage
-- [ ] Create a plotting class to visualize the optimization results
+- [x] Create a plotting script to visualize the optimization results
 - [ ] Integrate the possibility of variable tariffs, for purshasing and selling energy to the grid.
-- [ ] Propose multiple types of cost functions: profit maximization, self-consumption maximization, etc.
+- [x] Propose multiple types of cost functions: profit maximization, self-consumption maximization, etc.
 ### Related to forecasting improvement
 - [ ] Improve load forecasting using a time series forecast algorithm. Some tests were made with fbprophet but results are not completly satisfactory. The model needs some regressors for more accuracy.
 - [ ] Test with LTSM with or without Autoencoders
