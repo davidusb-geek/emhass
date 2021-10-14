@@ -151,7 +151,7 @@ Update the build package:
 ```
 python3 -m pip install --upgrade build
 ```
-And generate distribution archives with::
+And generate distribution archives with:
 ```
 python3 -m build
 ```
