@@ -11,12 +11,14 @@ from emhass.forecast import forecast
 from emhass.optimization import optimization
 from emhass.utils import get_yaml_parse, get_days_list, get_logger
 
-def setUp(config_path, logger):
+def setUp(config_path, costfun, logger):
     """
     Set up some of the data needed for the different actions.
     
     :param config_path: The absolute path where the config.yaml file is located
     :type config_path: str
+    :param costfun: The type of cost function to use for optimization problem
+    :type costfun: str
     :param logger: The passed logger object
     :type logger: logging object
     :return: A dictionnary with multiple data used by the action functions
@@ -48,7 +50,7 @@ def setUp(config_path, logger):
     df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
     df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
     opt = optimization(retrieve_hass_conf, optim_conf, plant_conf, days_list, 
-                       config_path, logger)
+                       costfun, config_path, logger)
     # The input data dictionnary to return
     input_data_dict = {
         'root': config_path,
@@ -59,7 +61,8 @@ def setUp(config_path, logger):
         'rh': rh,
         'fcst': fcst,
         'P_PV_forecast': P_PV_forecast,
-        'P_load_forecast': P_load_forecast
+        'P_load_forecast': P_load_forecast,
+        'costfun': costfun
     }
     return input_data_dict
     
@@ -78,6 +81,9 @@ def perfect_forecast_optim(input_data_dict, logger):
     logger.info("Performing perfect forecast optimiaztion")
     df_input_data = input_data_dict['opt'].get_load_unit_cost(input_data_dict['df_input_data'])
     opt_res = input_data_dict['opt'].perform_perfect_forecast_optim(df_input_data)
+    # Save CSV file for analysis
+    filename = 'opt_res_perfect_optim_'+input_data_dict['costfun']
+    opt_res.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
     return opt_res
     
 def dayahead_forecast_optim(input_data_dict, logger):
@@ -152,13 +158,19 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--action', help='Set the desired action, options are: perfect-optim, dayahead-optim and publish-data')
     parser.add_argument('--config', help='Define path to the config.yaml file')
+    parser.add_argument('--costfun', help='Define the type of cost function, options are: profit, cost, self-consumption')
     args = parser.parse_args()
     # The path to the configuration files
     config_path = args.config
+    # The cost function type
+    if args.costfun is None:
+        costfun = 'profit'
+    else:
+        costfun = args.costfun
     # create logger
     logger, ch = get_logger(__name__, config_path, file=False)
     # Setup parameters
-    input_data_dict = setUp(config_path, logger)
+    input_data_dict = setUp(config_path, costfun, logger)
     # Perform selected action
     if args.action == 'perfect-optim':
         opt_res = perfect_forecast_optim(input_data_dict, logger)

@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from abc import ABC
+from typing import (
+    Optional,
+)
 import pandas as pd
+import numpy as np
 import pulp as plp
 from pulp import PULP_CBC_CMD
+import logging
 
-from emhass.utils import get_logger
-
-class optimization(ABC):
+class optimization:
     """
     Optimize the deferrable load and battery energy dispatch problem using \ 
     the linear programming optimization technique. All equipement equations, \
@@ -26,8 +28,8 @@ class optimization(ABC):
     
     """
 
-    def __init__(self, retrieve_hass_conf, optim_conf, plant_conf, days_list, 
-                 config_path, logger, opt_time_delta=24):
+    def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, days_list: pd.date_range, 
+                 costfun: str, config_path: str, logger: logging.Logger, opt_time_delta: Optional[int] = 24) -> None:
         """
         Define constructor for optimization class.
         
@@ -43,6 +45,8 @@ class optimization(ABC):
             hass and used for the optimization task. We will retrieve data from \
             now and up to days_to_retrieve days
         :type days_list: list
+        :param costfun: The type of cost function to use for optimization problem
+        :type costfun: str
         :param config_path: The path to the yaml configuration file
         :type config_path: str
         :param logger: The passed logger object
@@ -65,10 +69,10 @@ class optimization(ABC):
         self.var_PV = self.retrieve_hass_conf['var_PV']
         self.var_load = self.retrieve_hass_conf['var_load']
         self.var_load_new = self.var_load+'_positive'
-        # create logger
-        self.logger, self.ch = get_logger(__name__, config_path, file=logger.fileSetting)
+        self.costfun = costfun
+        self.logger = logger
         
-    def get_load_unit_cost(self, df_final):
+    def get_load_unit_cost(self, df_final: pd.DataFrame) -> pd.DataFrame:
         """
         Get the unit cost for the load consumption based on multiple tariff \
         periods. This is the cost of the energy from the utility in a vector \
@@ -91,7 +95,8 @@ class optimization(ABC):
             df_final.loc[df_hp.index, self.var_cost] = self.optim_conf['load_cost_hp']
         return df_final
         
-    def perform_optimization(self, data_opt, P_PV, P_load, unit_load_cost):
+    def perform_optimization(self, data_opt: pd.DataFrame, P_PV: np.array, 
+                             P_load: np.array, unit_load_cost: np.array) -> pd.DataFrame:
         r"""
         Perform the actual optimization using linear programming (LP).
 
@@ -130,13 +135,13 @@ class optimization(ABC):
         :type data_tp: pd.DataFrame
         :param P_PV: The photovoltaic power values. This can be real historical \
             values or forecasted values.
-        :type P_PV: numpy.Array
+        :type P_PV: numpy.array
         :param P_load: The load power consumption values
-        :type P_load: np.Array
+        :type P_load: np.array
         :param unit_load_cost: The cost of power consumption for each unit of time. \
             This is the cost of the energy from the utility in a vector sampled \
             at the fixed freq value
-        :type unit_load_cost: np.Array
+        :type unit_load_cost: np.array
         :return: The input DataFrame with all the different results from the \
             optimization appended
         :rtype: pd.DataFrame
@@ -190,13 +195,25 @@ class optimization(ABC):
             P_sto_pos  = {(i):i*0 for i in set_I}
             P_sto_neg  = {(i):i*0 for i in set_I}
             
+        if self.costfun == 'self-consumption':
+            SC  = {(i):plp.LpVariable(cat='Continuous',
+                                      name="SC_{}".format(i)) for i in set_I}
+            
         ## Define objective
         P_def_sum= []
         for i in set_I:
             P_def_sum.append(plp.lpSum(P_deferrable[k][i] for k in range(self.optim_conf['num_def_loads'])))
-        objective = plp.lpSum(-(unit_load_cost[i]*(P_load[i] + P_def_sum[i])*0.001*self.timeStep + \
-                        self.optim_conf['prod_sell_price'] * P_grid_neg[i] * 0.001*self.timeStep)
-            for i in set_I)
+        if self.costfun == 'profit':
+            objective = plp.lpSum(-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum[i]) + \
+                                                        self.optim_conf['prod_sell_price'] * P_grid_neg[i])
+                                  for i in set_I)
+        elif self.costfun == 'cost':
+            objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum[i])
+                                  for i in set_I)
+        elif self.costfun == 'self-consumption':
+            objective = plp.lpSum(SC[i] for i in set_I)
+        else:
+            self.logger.error("The cost function specified type is not valid")
         opt_model.setObjective(objective)
         
         ## Setting constraints
@@ -207,6 +224,21 @@ class optimization(ABC):
                            sense = plp.LpConstraintEQ,
                            rhs = 0)
                        for i in set_I}
+            
+        # Two special constraints just for a self-consumption cost function: maxmin linear problem
+        if self.costfun == 'self-consumption':
+            constraints.update({"constraint_selfcons_PV_{}".format(i) : 
+                                plp.LpConstraint(
+                                    e = SC[i] - P_PV[i],
+                                    sense = plp.LpConstraintLE,
+                                    rhs = 0)
+                                for i in set_I})
+            constraints.update({"constraint_selfcons_PV_{}".format(i) : 
+                                plp.LpConstraint(
+                                    e = SC[i] - P_load[i] - P_def_sum[i],
+                                    sense = plp.LpConstraintLE,
+                                    rhs = 0)
+                                for i in set_I})
         
         # Avoid injecting and consuming from grid at the same time
         constraints.update({"constraint_pgridpos_{}".format(i) : 
@@ -329,7 +361,8 @@ class optimization(ABC):
         if self.optim_conf['set_use_battery']:
             opt_tp["P_batt"] = [P_sto_pos[i].varValue + P_sto_neg[i].varValue for i in set_I]
             SOC_opt_delta = [(P_sto_pos[i].varValue*(1/self.plant_conf['eta_disch']) + \
-                              self.plant_conf['eta_ch']*P_sto_neg[i].varValue)*(self.timeStep/(self.plant_conf['Enom'])) for i in set_I]
+                              self.plant_conf['eta_ch']*P_sto_neg[i].varValue)*(
+                                  self.timeStep/(self.plant_conf['Enom'])) for i in set_I]
             SOCinit = self.plant_conf['SOCtarget']
             SOC_opt = []
             for i in set_I:
@@ -343,13 +376,25 @@ class optimization(ABC):
         for i in set_I:
             P_def_sum_tp.append(sum(P_deferrable[k][i].varValue for k in range(self.optim_conf['num_def_loads'])))
         opt_tp["unit_load_cost"] = [unit_load_cost[i] for i in set_I]
-        opt_tp["cost_fun"] = [-(unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) * 0.001 * self.timeStep + \
-                              self.optim_conf['prod_sell_price'] * P_grid_neg[i].varValue * 0.001 * self.timeStep)
-                              for i in set_I]
+        opt_tp["cost_profit"] = [-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) + \
+                                                       self.optim_conf['prod_sell_price'] * P_grid_neg[i].varValue)
+                                 for i in set_I]
+        
+        if self.costfun == 'profit':
+            opt_tp["cost_fun_profit"] = [-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) + \
+                                                               self.optim_conf['prod_sell_price'] * P_grid_neg[i].varValue)
+                                         for i in set_I]
+        elif self.costfun == 'cost':
+            opt_tp["cost_fun_cost"] = [-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i])
+                                       for i in set_I]
+        elif self.costfun == 'self-consumption':
+            opt_tp["cost_fun_selfcons"] = [SC[i].varValue for i in set_I]
+        else:
+            self.logger.error("The cost function specified type is not valid") 
         
         return opt_tp
 
-    def perform_perfect_forecast_optim(self, df_input_data):
+    def perform_perfect_forecast_optim(self, df_input_data: pd.DataFrame) -> pd.DataFrame:
         """
         Perform an optimization on historical data (perfectly known PV production).
         
@@ -381,7 +426,8 @@ class optimization(ABC):
         
         return self.opt_res
         
-    def perform_dayahead_forecast_optim(self, df_input_data, P_PV, P_load):
+    def perform_dayahead_forecast_optim(self, df_input_data: pd.DataFrame, 
+                                        P_PV: pd.Series, P_load: pd.Series) -> pd.DataFrame:
         """
         Perform a day-ahead optimization task using real forecast data.
         

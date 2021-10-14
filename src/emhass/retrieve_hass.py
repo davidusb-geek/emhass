@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from abc import ABC
+from typing import (
+    Tuple,
+    Optional,
+)
 import numpy as np, pandas as pd
 from requests import get, post
 import json
+import datetime, logging
 
-from emhass.utils import get_logger
-
-class retrieve_hass(ABC):
+class retrieve_hass:
     """
     Retrieve data from Home Assistant using the restful API.
     
@@ -25,7 +27,8 @@ class retrieve_hass(ABC):
     
     """
 
-    def __init__(self, hass_url, long_lived_token, freq, time_zone, config_path, logger):
+    def __init__(self, hass_url: str, long_lived_token: str, freq: pd.Timedelta, 
+                 time_zone: datetime.timezone, config_path: str, logger: logging.Logger) -> None:
         """
         Define constructor for retrieve_hass class.
         
@@ -47,12 +50,10 @@ class retrieve_hass(ABC):
         self.long_lived_token = long_lived_token
         self.freq = freq
         self.time_zone = time_zone
-        # create logger
-        self.logger, self.ch = get_logger(__name__, config_path, file=logger.fileSetting)
+        self.logger = logger
 
-
-    def get_data(self, days_list, var_list, minimal_response = False,
-                 significant_changes_only = False):
+    def get_data(self, days_list: pd.date_range, var_list: list, minimal_response: Optional[bool] = False,
+                 significant_changes_only: Optional[bool] = False) -> None:
         """
         Retrieve the actual data from hass.
         
@@ -115,8 +116,8 @@ class retrieve_hass(ABC):
         self.df_final.index.freq = self.freq
 
     
-    def prepare_data(self, var_load, load_negative = False, set_zero_min = True,
-                     var_replace_zero = None, var_interp = None):
+    def prepare_data(self, var_load: str, load_negative: Optional[bool] = False, set_zero_min: Optional[bool] = True,
+                     var_replace_zero: Optional[list] = None, var_interp: Optional[list] = None) -> None:
         """
         Apply some data treatment in preparation for the optimization task.
         
@@ -171,8 +172,8 @@ class retrieve_hass(ABC):
         # Drop datetimeindex duplicates on final DF
         self.df_final = self.df_final[~self.df_final.index.duplicated(keep='first')]
         
-    def post_data(self, data_df, idx, entity_id, 
-                  unit_of_measurement, friendly_name):
+    def post_data(self, data_df: pd.DataFrame, idx: int, entity_id: str, 
+                  unit_of_measurement: str, friendly_name: str) -> None:
         """
         Post passed data to hass.
         
