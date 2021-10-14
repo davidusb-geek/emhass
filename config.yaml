@@ -34,8 +34,8 @@ optim_conf:
     - period_hp_2:
       - start: '17:24'
       - end: '20:24'
-  - load_cost_hp: 0.1464 # €/kWh
-  - load_cost_hc: 0.096359 # €/kWh
+  - load_cost_hp: 0.1907 # €/kWh
+  - load_cost_hc: 0.1419 # €/kWh
   - prod_sell_price: 0.065 # €/kWh
   - set_use_battery: False # consider a battery storage
   - delta_forecast: 1 # days
