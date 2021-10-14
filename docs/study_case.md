@@ -11,7 +11,7 @@ emhass --action 'perfect-optim' --config '/home/user/emhass' --costfun 'profit'
 
 The `--costfun` is compared with all the possible options: `profit`, `cost`, `self-consumption`.
 
-The obtained results are presented below. These results different behaviors of the optimization algorithm depending on the cost function.
+The obtained results are presented below. These results shows different behaviors of the optimization algorithm depending on the cost function.
 
 ![](./images/optim_results.png)
 
