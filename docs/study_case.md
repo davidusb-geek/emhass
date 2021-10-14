@@ -2,7 +2,7 @@
 
 In this section a study case is presented.
 
-For this example a 5 kWp solar production is considered with two deferrable loads. No battery is considered. The configuration used is the default configuration proposed with EMHASS.
+For this example a 5 kWp solar production is considered with two deferrable loads. No battery is considered. The configuration used is the default configuration proposed with EMHASS. We will use 5-day historical data for this optimization.
 
 We compare the results obtained with the perfect optimization using the following command:
 ```
