@@ -46,22 +46,28 @@ Three main cost functions are proposed.
 
 ### Cost functions
 
-- The profit cost function: In this case the cost function is posed to maximize the profit. In this case this is defined by the revenues from selling PV power to the grid minus the consummed energy cost. This can be represented with the following obtective function:
+**The profit cost function:** 
+
+In this case the cost function is posed to maximize the profit. In this case this is defined by the revenues from selling PV power to the grid minus the consummed energy cost. This can be represented with the following obtective function:
 
 $$
-\sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t(unit_{LoadCost[i]}*(P_{load[i]}+P_{defSum[i]}) + prod_{SellPrice}*P_{gridNeg[i]})
+\sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t(unit_{LoadCost}[i]*(P_{load}[i]+P_{defSum}[i]) + prod_{SellPrice}*P_{gridNeg}[i])
 $$
 
 where $\Delta_{opt}$ is the total period of optimization in hours, $\Delta_t$ is the optimization time step in hours, $unit_{LoadCost_i}$ is the cost of the energy from the utility in EUR/kWh, $P_{load}$ is the electricity load consumption (positive defined), $P_{defSum}$ is the sum of the deferrable loads defined, $prod_{SellPrice}$ is the price of the energy sold to the utility, $P_{gridNeg}$ is the negative component of the grid power, this is the power exported to the grid. All these power are expressed in Watts.
 
-- The energy from the grid cost: In this case the cost function is computed as the cost of the energy comming from the grid. 
+**The energy from the grid cost:** 
+
+In this case the cost function is computed as the cost of the energy comming from the grid. 
 This is:
 
 $$
-\sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t unit_{LoadCost[i]}*(P_{load[i]}+P_{defSum[i]})
+\sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t unit_{LoadCost}[i]*(P_{load}[i]+P_{defSum}[i])
 $$
 
-- The self-consumption cost function: This is a cost function designed to maximize the self-consumption of the PV plant. 
+**The self-consumption cost function:**
+
+This is a cost function designed to maximize the self-consumption of the PV plant. 
 The self-consumption is defined as:
 
 $$
@@ -84,7 +90,7 @@ $$
 and
 
 $$
-SC[i] \leq P_{load[i]}+P_{defSum[i]}
+SC[i] \leq P_{load}[i]+P_{defSum}[i]
 $$
 
 All these cost functions can be chosen by the user with the `--costfun` tag with the `emhass` command. The options are: `profit`, `cost`, `self-consumption`.

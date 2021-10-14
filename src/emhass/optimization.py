@@ -99,36 +99,6 @@ class optimization:
                              P_load: np.array, unit_load_cost: np.array) -> pd.DataFrame:
         r"""
         Perform the actual optimization using linear programming (LP).
-
-        The LP problem for the household EMS is posed to maximize the profit. \
-        In this case this is defined by the revenues from selling PV power to \
-        the grid minus the consummed energy cost. This can be represented with \
-        the following obtective function:
-
-        .. math::
-
-            \sum_{i=1}^{\Delta_{opt}/\Delta_t} 0.001*\Delta_t(-(prod_{SellPrice}*P_{gridNeg_i}+unit_{LoadCost_i}*(P_{load_i}+P_{defSum_i})))
-        
-        where :math:`\Delta_{opt}` is the total period of optimization in hours, \
-        :math:`\Delta_t` is the optimization time step in hours, :math:`unit_{LoadCost_i}` \
-        is the cost of the energy from the utility in EUR/kWh, :math:`P_{load}` is the \
-        electricity load consumption, :math:`P_{defSum}` is the sum of the deferrable \
-        loads defined, :math:`prod_{SellPrice}` is the price of the energy sold to \
-        the utility, :math:`P_{gridNeg}` is the negative component of the grid power, \
-        this is the power exported to the grid. \
-        The goal is to maximize the auto-consumption from PV power.\
-        The problem constraints are written as follows: \
-
-        - The main constraint: power balance \
-
-        .. math::
-
-            P_{PV_i}-P_{defSum_i}-P_{load_i}+P_{gridNeg_i}+P_{gridPos_i}+P_{stoPos_i}+P_{stoNeg_i}=0
-
-        with :math:`P_{PV}` the PV power production, :math:`P_{gridPos}` the \
-        positive component of the grid power (from grid to household), \
-        :math:`P_{stoPos}` and :math:`P_{stoNeg}` are the positive (discharge) \
-        and negative components of the battery power (charge)
         
         :param data_tp: A DataFrame containing the input data. The results of the \
             optimization will be appended (decision variables, cost function values, etc)
