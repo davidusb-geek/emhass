@@ -40,19 +40,50 @@ The LP has of course its set of advantages and disadvantages. The main advantage
 
 ## Household EMS with LP
 
-The LP problem for the household EMS is posed to maximize the profit. In this case this is defined by the revenues from selling PV power to the grid minus the consummed energy cost. This can be represented with the following obtective function:
+The LP problem for the household EMS is solved in EMHASS using different user-chosen cost functions.
 
+Three main cost functions are proposed.
+
+### Cost functions
+
+- The profit cost function: In this case the cost function is posed to maximize the profit. In this case this is defined by the revenues from selling PV power to the grid minus the consummed energy cost. This can be represented with the following obtective function:
 $$
-\sum_{i=1}^{\Delta_{opt}/\Delta_t} 0.001*\Delta_t(prod_{SellPrice}*P_{gridNeg_i}-unit_{LoadCost_i}*(P_{load_i}+P_{defSum_i}))
+\sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t(unit_{LoadCost[i]}*(P_{load[i]}+P_{defSum[i]}) + prod_{SellPrice}*P_{gridNeg[i]})
 $$
 
-where $\Delta_{opt}$ is the total period of optimization in hours, $\Delta_t$ is the optimization time step in hours, $unit_{LoadCost_i}$ is the cost of the energy from the utility in EUR/kWh, $P_{load}$ is the electricity load consumption, $P_{defSum}$ is the sum of the deferrable loads defined, $prod_{SellPrice}$ is the price of the energy sold to the utility, $P_{gridNeg}$ is the negative component of the grid power, this is the power exported to the grid. All these power are expressed in Watts.
+where $\Delta_{opt}$ is the total period of optimization in hours, $\Delta_t$ is the optimization time step in hours, $unit_{LoadCost_i}$ is the cost of the energy from the utility in EUR/kWh, $P_{load}$ is the electricity load consumption (positive defined), $P_{defSum}$ is the sum of the deferrable loads defined, $prod_{SellPrice}$ is the price of the energy sold to the utility, $P_{gridNeg}$ is the negative component of the grid power, this is the power exported to the grid. All these power are expressed in Watts.
 
-The goal with this cost function is to maximize the profit of the household energy costs.
+- The energy from the grid cost: In this case the cost function is computed as the cost of the energy comming from the grid. 
+This is:
+$$
+\sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t unit_{LoadCost[i]}*(P_{load[i]}+P_{defSum[i]})
+$$
+
+- The self-consumption cost function: This is a cost function designed to maximize the self-consumption of the PV plant. 
+The self-consumption is defined as:
+$$
+SC = \min(P_{PV}, (P_{load}+P_{defSum}))
+$$
+To convert this to a linear cost function, an additional continuous variable $SC$ is added. This is the so-called maximin problem.
+The cost function is defined as:
+$$
+\sum_{i=1}^{\Delta_{opt}/\Delta_t} SC[i]
+$$
+With the following set of constraints:
+$$
+SC[i]\leqP_{PV}[i]
+$$
+and
+$$
+SC[i]\leqP_{load[i]}+P_{defSum[i]}
+$$
+
+All these cost functions can be chosen by the user with the `--costfun` tag with the `emhass` command. The options are: `profit`, `cost`, `self-consumption`.
+They are all set in the LP formualtion as cost function to maximize.
 
 The problem constraints are written as follows.
 
-### The main constraint: power balance 
+### The main constraint: power balance
 
 $$
 P_{PV_i}-P_{defSum_i}-P_{load_i}+P_{gridNeg_i}+P_{gridPos_i}+P_{stoPos_i}+P_{stoNeg_i}=0
