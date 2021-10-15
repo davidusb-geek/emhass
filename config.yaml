@@ -2,7 +2,7 @@
 
 retrieve_hass_conf:
   - freq: 30 # The time step to resample retrieved data from hass
-  - days_to_retrieve: 6 # We will retrieve data from now and up to days_to_retrieve days
+  - days_to_retrieve: 8 # We will retrieve data from now and up to days_to_retrieve days
   - var_PV: 'sensor.power_photovoltaics' # Photovoltaic produced power sensor in Watts
   - var_load: 'sensor.power_load_no_var_loads' # Household power consumption sensor in Watts (deferrable loads should be substracted)
   - load_negative: False # Set to True if the retrived load variable is negative by convention
@@ -25,8 +25,8 @@ optim_conf:
     - True
     - True
   - set_def_constant: # set as a constant fixed value variable with just one startup for each 24h
-    - True
-    - True
+    - False
+    - False
   - list_hp_periods: # list of different tariff periods
     - period_hp_1:
       - start: '02:54'

@@ -97,7 +97,7 @@ class optimization:
         
     def perform_optimization(self, data_opt: pd.DataFrame, P_PV: np.array, 
                              P_load: np.array, unit_load_cost: np.array) -> pd.DataFrame:
-        r"""
+        """
         Perform the actual optimization using linear programming (LP).
         
         :param data_tp: A DataFrame containing the input data. The results of the \

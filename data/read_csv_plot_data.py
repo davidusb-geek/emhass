@@ -45,8 +45,9 @@ data['gain_profit'] = data_profit['cost_profit']
 data['gain_selfcons'] = data_selfcons['cost_profit']
 
 # Meta parameters
+save_figs = True
 symbols =['circle', 'square', 'diamond', 'star', 'triangle-left', 'triangle-right']
-template = 'none'
+template = 'presentation'
 symbol_size = 5
 cf = ['cost', 'profit', 'selfcons']
 
@@ -125,8 +126,9 @@ for traces in fig_traces:
 this_figure.layout.template = template
 this_figure.show()
 
-fig_filename = root + "/docs/images/optim_results"
-this_figure.write_image(fig_filename + ".png", width=1.5*1080, height=1.5*1.5*1080)
+if save_figs:
+    fig_filename = root + "/docs/images/optim_results"
+    this_figure.write_image(fig_filename + ".png", width=1.5*768, height=1.5*1.5*768)
 
 fig_bar = px.bar(np.arange(len(cf)), x=[c+" (+"+"{:.2f}".format(np.sum(data['gain_'+c])*100/np.sum(
                      data['gain_profit'])-100)+"%)" for c in cf], 
@@ -137,5 +139,7 @@ fig_bar.update_yaxes(title_text="Cost function total value")
 fig_bar.update_traces(texttemplate='%{text:.4s}', textposition='outside')
 fig_bar.update_xaxes(title_text = "Cost function")
 fig_bar.show()
-fig_filename = root + "/docs/images/optim_results_bar_plot"
-fig_bar.write_image(fig_filename + ".png", width=1080, height=0.8*1080)
+
+if save_figs:
+    fig_filename = root + "/docs/images/optim_results_bar_plot"
+    fig_bar.write_image(fig_filename + ".png", width=1080, height=0.8*1080)
