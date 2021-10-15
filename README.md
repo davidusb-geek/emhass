@@ -186,6 +186,7 @@ make html
 - [x] Create a plotting script to visualize the optimization results
 - [ ] Integrate the possibility of variable tariffs, for purshasing and selling energy to the grid.
 - [x] Propose multiple types of cost functions: profit maximization, self-consumption maximization, etc.
+- [ ] Add elasticity to LP formulation in case on infeasible solution.
 ### Related to forecasting improvement
 - [ ] Improve load forecasting using a time series forecast algorithm. Some tests were made with fbprophet but results are not completly satisfactory. The model needs some regressors for more accuracy.
 - [ ] Test with LTSM with or without Autoencoders
