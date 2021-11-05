@@ -46,7 +46,7 @@ setup(
         'numpy>=1.20.1',
         'pandas>=1.2.3',
         'pvlib>=0.8.1',
-        'protobuf>=3.0.0a3',
+        'protobuf>=3.0.0',
         'siphon>=0.9',
         'pytz>=2021.1',
         'requests>=2.25.1',
