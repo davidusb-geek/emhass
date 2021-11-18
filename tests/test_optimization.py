@@ -43,8 +43,13 @@ class TestOptimization(TestCase):
         self.df_input_data_dayahead = pd.concat([self.P_PV_forecast, self.P_load_forecast], axis=1)
         self.df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
         
+        self.costfun = 'profit'
         self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, self.days_list,
-                                root, logger)
+                                self.costfun, root, logger)
+        
+    def test_get_load_unit_cost(self):
+        self.df_input_data = self.opt.get_load_unit_cost(self.df_input_data)
+        self.assertTrue(self.opt.var_cost in self.df_input_data.columns)
         
     def test_perform_perfect_forecast_optim(self):
         self.df_input_data = self.opt.get_load_unit_cost(self.df_input_data)
@@ -52,7 +57,7 @@ class TestOptimization(TestCase):
         self.assertIsInstance(self.opt_res, type(pd.DataFrame()))
         self.assertIsInstance(self.opt_res.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(self.opt_res.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-        self.assertTrue('cost_fun' in self.opt_res.columns)
+        self.assertTrue('cost_fun_'+self.costfun in self.opt_res.columns)
         
     def test_perform_dayahead_forecast_optim(self):
         self.df_input_data_dayahead = self.opt.get_load_unit_cost(self.df_input_data_dayahead)
@@ -61,7 +66,7 @@ class TestOptimization(TestCase):
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
         self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-        self.assertTrue('cost_fun' in self.opt_res_dayahead.columns)
+        self.assertTrue('cost_fun_'+self.costfun in self.opt_res_dayahead.columns)
         
     def test_publish_data(self):
         self.rh.post_data(self.P_PV_forecast, 0, 'sensor.p_pv_forecast',
@@ -70,6 +75,7 @@ class TestOptimization(TestCase):
 if __name__ == '__main__':
     topt=TestOptimization()
     topt.setUp()
+    topt.test_get_load_unit_cost()
     topt.test_perform_perfect_forecast_optim()
     topt.test_perform_dayahead_forecast_optim()
     topt.test_publish_data()
