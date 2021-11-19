@@ -203,7 +203,7 @@ class forecast:
             will be used to generate a naive forecast, defaults to 3
         :type days_min_load_forecast: int, optional
         :param method: The method to be used to generate load forecast, the options \
-            are 'csv' to load a CSV file of 'naive' for a persistance model, defaults to 'naive'
+            are 'csv' to load a CSV file or 'naive' for a persistance model, defaults to 'naive'
         :type method: str, optional
         :param csv_path: The path to the CSV file used when method = 'csv', \
             defaults to "/data/data_load_forecast.csv"
