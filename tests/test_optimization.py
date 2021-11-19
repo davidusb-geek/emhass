@@ -39,7 +39,7 @@ class TestOptimization(TestCase):
                              root, logger)
         self.df_weather = self.fcst.get_weather_forecast(method='scrapper')
         self.P_PV_forecast = self.fcst.get_power_from_weather(self.df_weather)
-        self.P_load_forecast = self.fcst.get_load_forecast()
+        self.P_load_forecast = self.fcst.get_load_forecast(method='naive')
         self.df_input_data_dayahead = pd.concat([self.P_PV_forecast, self.P_load_forecast], axis=1)
         self.df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
         
@@ -52,7 +52,6 @@ class TestOptimization(TestCase):
         self.assertTrue(self.opt.var_cost in self.df_input_data.columns)
         
     def test_perform_perfect_forecast_optim(self):
-        self.df_input_data = self.opt.get_load_unit_cost(self.df_input_data)
         self.opt_res = self.opt.perform_perfect_forecast_optim(self.df_input_data)
         self.assertIsInstance(self.opt_res, type(pd.DataFrame()))
         self.assertIsInstance(self.opt_res.index, pd.core.indexes.datetimes.DatetimeIndex)
