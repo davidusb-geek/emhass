@@ -39,8 +39,8 @@ optim_conf:
   - prod_sell_price: 0.065 # €/kWh
   - set_use_battery: False # consider a battery storage
   - delta_forecast: 1 # days
-  # Add control for PV, load and prices forecast methods
-  # Move get_load_unit_cost from optimization to forecast class!
+  - weather_forecast_method: 'scrapper' # options are 'scrapper' and 'pvlib' (but pvlib remain unstable)
+  - load_forecast_method: 'naive' # options are 'csv' to load a CSV file or 'naive' for a persistance model
 
 plant_conf:
   - P_grid_max: 9000 # Watts
