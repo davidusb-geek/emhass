@@ -44,9 +44,9 @@ def setUp(config_path, costfun, logger):
     # Initialize objects
     fcst = forecast(retrieve_hass_conf, optim_conf, plant_conf,
                     config_path, logger)
-    df_weather = fcst.get_weather_forecast(method='scrapper')
+    df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
-    P_load_forecast = fcst.get_load_forecast(method='naive')
+    P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
     df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
     df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
     opt = optimization(retrieve_hass_conf, optim_conf, plant_conf, days_list, 
