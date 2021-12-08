@@ -64,6 +64,8 @@ These are the parameters needed to properly define the optimization problem.
 - prod_sell_price: The paid price for energy injected to the grid from excedent PV production in €/kWh. Defaults to 0.065.
 - set_use_battery: Set to True if we should consider an energy storage device such as a Li-Ion battery. Defaults to False.
 - delta_forecast: The number of days for forecasted data. Defaults to 1.
+- weather_forecast_method: This will define the weather forecast method that will be used, the options are 'scrapper' and 'pvlib' (but pvlib method remains unstable).
+- load_forecast_method: The load forecast method that will be used, the options are 'csv' to load a CSV file or 'naive' for a simple 1-day persistance model.
 
 ## System configuration parameters
 
