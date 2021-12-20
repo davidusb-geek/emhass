@@ -16,18 +16,18 @@ pd.options.plotting.backend = "plotly"
 from emhass.utils import get_root, get_logger
 
 # the root folder
-root = get_root()
+root = str(get_root(__file__))
 # create logger
 logger, ch = get_logger(__name__, root, file=False)
 
 # Reading CSV files
-path_file = "opt_res_perfect_optim_cost.csv"
+path_file = root + "/data/opt_res_perfect_optim_cost.csv"
 data_cost = pd.read_csv(path_file, index_col='timestamp')
 data_cost.index = pd.to_datetime(data_cost.index)
-path_file = "opt_res_perfect_optim_profit.csv"
+path_file = root + "/data/opt_res_perfect_optim_profit.csv"
 data_profit = pd.read_csv(path_file, index_col='timestamp')
 data_profit.index = pd.to_datetime(data_profit.index)
-path_file = "opt_res_perfect_optim_self-consumption.csv"
+path_file = root + "/data/opt_res_perfect_optim_self-consumption.csv"
 data_selfcons = pd.read_csv(path_file, index_col='timestamp')
 data_selfcons.index = pd.to_datetime(data_selfcons.index)
 
