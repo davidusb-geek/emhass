@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from typing import (
-    Tuple,
-    Optional,
-)
+from typing import Optional
 import numpy as np, pandas as pd
 from requests import get, post
 import json

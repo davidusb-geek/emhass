@@ -6,17 +6,26 @@ from typing import (
     Optional,
 )
 import pandas as pd
-import yaml, pytz, logging, os
+import yaml, pytz, logging, os, pathlib
 from datetime import datetime, timedelta, timezone
 
-def get_root() -> str:
+def get_root(file: str, num_parent: Optional[int] = 3) -> str:
     """
     Get the root absolute path of the working directory.
     
+    :param file: The passed file path with __file__
     :return: The root path
     :rtype: str
     """
-    return os.path.abspath(os.path.join(os.getcwd(), os.path.pardir))
+    if num_parent == 3:
+        root = pathlib.Path(file).resolve().parent.parent.parent
+    elif num_parent == 2:
+        root = pathlib.Path(file).resolve().parent.parent
+    elif num_parent == 1:
+        root = pathlib.Path(file).resolve().parent
+    else:
+        raise ValueError("num_parent value not valid, must be between 1 and 3")
+    return root
 
 def get_root_2pardir() -> str:
     """

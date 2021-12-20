@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from typing import (
-    Optional,
-)
+from typing import Optional
 import pandas as pd
 from datetime import datetime, timedelta
 import requests
