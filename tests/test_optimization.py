@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from unittest import TestCase
+import unittest
 import pandas as pd
 
 from emhass.retrieve_hass import retrieve_hass
@@ -9,15 +9,15 @@ from emhass.optimization import optimization
 from emhass.forecast import forecast
 from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
-class TestOptimization(TestCase):
+# the root folder
+root = str(get_root(__file__, num_parent=2))
+retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(root)
+# create logger
+logger, ch = get_logger(__name__, root, file=False)
+
+class TestOptimization(unittest.TestCase):
 
     def setUp(self):
-        # the root folder
-        root = get_root()
-        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(root)
-        # create logger
-        logger, ch = get_logger(__name__, root, file=False)
-
         self.retrieve_hass_conf, self.optim_conf, self.plant_conf = \
             retrieve_hass_conf, optim_conf, plant_conf
         
@@ -46,9 +46,9 @@ class TestOptimization(TestCase):
         self.costfun = 'profit'
         self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, self.days_list,
                                 self.costfun, root, logger)
+        self.df_input_data = self.opt.get_load_unit_cost(self.df_input_data)
         
     def test_get_load_unit_cost(self):
-        self.df_input_data = self.opt.get_load_unit_cost(self.df_input_data)
         self.assertTrue(self.opt.var_cost in self.df_input_data.columns)
         
     def test_perform_perfect_forecast_optim(self):
@@ -72,9 +72,6 @@ class TestOptimization(TestCase):
                           "W", "PV Power Forecast")
 
 if __name__ == '__main__':
-    topt=TestOptimization()
-    topt.setUp()
-    topt.test_get_load_unit_cost()
-    topt.test_perform_perfect_forecast_optim()
-    topt.test_perform_dayahead_forecast_optim()
-    topt.test_publish_data()
+    unittest.main()
+    ch.close()
+    logger.removeHandler(ch)
