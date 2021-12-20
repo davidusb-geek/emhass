@@ -4,8 +4,9 @@
 import unittest
 import pandas as pd
 
+from emhass.retrieve_hass import retrieve_hass
 from emhass.forecast import forecast
-from emhass.utils import get_root, get_yaml_parse, get_logger
+from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
 # the root folder
 root = str(get_root(__file__, num_parent=2))
@@ -18,6 +19,21 @@ class TestForecast(unittest.TestCase):
     def setUp(self):
         self.retrieve_hass_conf, self.optim_conf, self.plant_conf = \
             retrieve_hass_conf, optim_conf, plant_conf
+            
+        self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
+        self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
+        
+        self.rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
+                           self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
+                           root, logger)
+        self.rh.get_data(self.days_list, self.var_list,
+                         minimal_response=False, significant_changes_only=False)
+        self.rh.prepare_data(self.retrieve_hass_conf['var_load'], load_negative = self.retrieve_hass_conf['load_negative'],
+                             set_zero_min = self.retrieve_hass_conf['set_zero_min'], 
+                             var_replace_zero = self.retrieve_hass_conf['var_replace_zero'], 
+                             var_interp = self.retrieve_hass_conf['var_interp'])
+        self.df_input_data = self.rh.df_final.copy()
+        
         self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                              root, logger)
         self.df_weather_scrap = self.fcst.get_weather_forecast(method='scrapper')
@@ -52,6 +68,10 @@ class TestForecast(unittest.TestCase):
         self.assertEqual(self.P_load_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.P_PV_forecast), len(self.P_load_forecast))
         print(">> The length of the load forecast = "+str(len(self.P_load_forecast)))
+        
+    def test_get_load_cost_forecast(self):
+        self.df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data)
+        self.assertTrue(self.fcst.var_load_cost in self.df_input_data.columns)
         
 if __name__ == '__main__':
     unittest.main()
