@@ -94,6 +94,12 @@ class forecast:
         self.lon = self.retrieve_hass_conf['lon']
         self.root = config_path
         self.logger = logger
+        self.var_load_cost = 'unit_load_cost'
+        self.var_prod_price = 'unit_prod_price'
+        self.forecast_dates = pd.date_range(start=self.start_forecast, 
+                                            end=self.end_forecast-self.freq, 
+                                            freq=self.freq).round(self.freq)
+        
         
     def get_weather_forecast(self, method: Optional[str] = 'scrapper') -> pd.DataFrame:
         """
@@ -192,6 +198,22 @@ class forecast:
         
         return P_PV_forecast
     
+    def get_forecast_days_csv(self) -> pd.date_range:
+        """
+        Get the date range vector of forecast dates that will be used when \
+        loading a CSV file.
+        
+        :return: The forecast dates vector
+        :rtype: pd.date_range
+
+        """
+        start_forecast_csv = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(hour=0, minute=0, second=0, microsecond=0)
+        end_forecast_csv = (start_forecast_csv + self.optim_conf['delta_forecast']).replace(microsecond=0)
+        forecast_dates_csv = pd.date_range(start=start_forecast_csv, 
+                                           end=end_forecast_csv+timedelta(days=1)-self.freq, 
+                                           freq=self.freq).round(self.freq)
+        return forecast_dates_csv
+    
     def get_load_forecast(self, days_min_load_forecast: Optional[int] = 3, method: Optional[str] = 'naive',
                           csv_path: Optional[str] = "/data/data_load_forecast.csv") -> pd.Series:
         """
@@ -212,63 +234,81 @@ class forecast:
         """
         days_list = get_days_list(days_min_load_forecast)
         
-        forecast_dates = pd.date_range(start=self.start_forecast, 
-                                       end=self.end_forecast-self.freq, freq=self.freq).round(self.freq)
-        
-        self.logger.info("Retrieving data from hass for load forecast using method = "+method)
-        var_list = [self.var_load]
-        var_replace_zero = None
-        var_interp = [self.var_load]
-        time_zone_load_foreacast = None
-        
-        rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
-                           self.freq, time_zone_load_foreacast, self.root, self.logger)
-        
-        rh.get_data(days_list, var_list)
-        rh.prepare_data(self.retrieve_hass_conf['var_load'], load_negative = self.retrieve_hass_conf['load_negative'],
-                        set_zero_min = self.retrieve_hass_conf['set_zero_min'], 
-                        var_replace_zero = var_replace_zero, 
-                        var_interp = var_interp)
-        
-        df_load = rh.df_final.copy()
-        
-        df = df_load.copy()[[self.var_load_new]]
-        
-        if method == 'csv' or method == 'naive': # using a naive approach
-            mask_train = (df.index > days_list[:-2][0]) & (df.index <= days_list[:-2][-1])
-            df_train = df.copy().loc[mask_train]
-            df_train = df_train.rename(columns={self.var_load_new: 'y'})
+        if method == 'naive': # using a naive approach
+            self.logger.info("Retrieving data from hass for load forecast using method = "+method)
+            var_list = [self.var_load]
+            var_replace_zero = None
+            var_interp = [self.var_load]
+            time_zone_load_foreacast = None
             
-            mask_test = (df.index > days_list[:-2][-1]) & (df.index <= days_list[:-1][-1])
-            df_test = df.copy().loc[mask_test]
-            df_test = df_test.rename(columns={self.var_load_new: 'y'})
+            rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
+                               self.freq, time_zone_load_foreacast, self.root, self.logger)
             
-            mask_forecast_in_test = (df.index > days_list[:-3][-1]) & (df.index <= days_list[:-2][-1])
-            forecast_in_test = df.copy().loc[mask_forecast_in_test]
-            forecast_in_test = forecast_in_test.rename(columns={self.var_load_new: 'yhat'})
-            forecast_in_test.index = df_test.index
+            rh.get_data(days_list, var_list)
+            rh.prepare_data(self.retrieve_hass_conf['var_load'], load_negative = self.retrieve_hass_conf['load_negative'],
+                            set_zero_min = self.retrieve_hass_conf['set_zero_min'], 
+                            var_replace_zero = var_replace_zero, 
+                            var_interp = var_interp)
             
-            if method == 'csv': # reading from a csv file
-                start_forecast_csv = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(hour=0, minute=0, second=0, microsecond=0)
-                end_forecast_csv = (start_forecast_csv + self.optim_conf['delta_forecast']).replace(microsecond=0)
-                forecast_dates_csv = pd.date_range(start=start_forecast_csv, 
-                                                   end=end_forecast_csv+timedelta(days=1)-self.freq, freq=self.freq).round(self.freq)
-                load_csv_file_path = self.root + csv_path
-                df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
-                df_csv = pd.concat([df_csv, df_csv], axis=0)
-                df_csv.index = forecast_dates_csv
-                df_csv.drop(['ts'], axis=1, inplace=True)
-                forecast_out = df_csv.copy().loc[forecast_dates]
+            df = rh.df_final.copy()[[self.var_load_new]]
             
-            if method == 'naive': # using a naive approach
-                mask_forecast_out = (df.index > days_list[-1] - self.optim_conf['delta_forecast'])
-                forecast_out = df.copy().loc[mask_forecast_out]
-                forecast_out = forecast_out.rename(columns={self.var_load_new: 'yhat'})
-                # Force forecast_out length to avoid mismatches
-                forecast_out = forecast_out.iloc[0:len(forecast_dates)]
-                forecast_out.index = forecast_dates
+            mask_forecast_out = (df.index > days_list[-1] - self.optim_conf['delta_forecast'])
+            forecast_out = df.copy().loc[mask_forecast_out]
+            forecast_out = forecast_out.rename(columns={self.var_load_new: 'yhat'})
+            # Force forecast_out length to avoid mismatches
+            forecast_out = forecast_out.iloc[0:len(self.forecast_dates)]
+            forecast_out.index = self.forecast_dates
+        
+        elif method == 'csv': # reading from a csv file
+            forecast_dates_csv = self.get_forecast_days_csv()
+            load_csv_file_path = self.root + csv_path
+            df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
+            df_csv = pd.concat([df_csv, df_csv], axis=0)
+            df_csv.index = forecast_dates_csv
+            df_csv.drop(['ts'], axis=1, inplace=True)
+            forecast_out = df_csv.copy().loc[self.forecast_dates]
             
         else:
             self.logger.error("Passed method is not valid")
 
         return forecast_out['yhat']
+    
+    def get_load_cost_forecast(self, df_final: pd.DataFrame, method: Optional[str] = 'hp_hc_periods',
+                               csv_path: Optional[str] = "/data/data_load_cost_forecast.csv") -> pd.DataFrame:
+        """
+        Get the unit cost for the load consumption based on multiple tariff \
+        periods. This is the cost of the energy from the utility in a vector \
+        sampled at the fixed freq value.
+        
+        :param df_input_data: The DataFrame containing all the input data retrieved
+            from hass
+        :type df_input_data: pd.DataFrame
+        :return: The input DataFrame with one additionnal column appended containing
+            the load cost by unit of time
+        :rtype: pd.DataFrame
+
+        """
+        if method == 'hp_hc_periods':
+            df_final[self.var_load_cost] = self.optim_conf['load_cost_hc']
+            list_df_hp = []
+            for key, period_hp in self.optim_conf['list_hp_periods'].items():
+                list_df_hp.append(df_final[self.var_load_cost].between_time(
+                    period_hp[0]['start'], period_hp[1]['end']))
+            for df_hp in list_df_hp:
+                df_final.loc[df_hp.index, self.var_load_cost] = self.optim_conf['load_cost_hp']
+        
+        elif method == 'csv':
+            forecast_dates_csv = self.get_forecast_days_csv()
+            load_csv_file_path = self.root + csv_path
+            df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
+            df_csv = pd.concat([df_csv, df_csv], axis=0)
+            df_csv.index = forecast_dates_csv
+            df_csv.drop(['ts'], axis=1, inplace=True)
+            forecast_out = df_csv.copy().loc[self.forecast_dates]
+            df_final[self.var_load_cost] = forecast_out
+        
+        else:
+            self.logger.error("Passed method is not valid")
+            
+        return df_final
+    

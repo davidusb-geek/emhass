@@ -46,10 +46,6 @@ class TestOptimization(unittest.TestCase):
         self.costfun = 'profit'
         self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, self.days_list,
                                 self.costfun, root, logger)
-        self.df_input_data = self.opt.get_load_unit_cost(self.df_input_data)
-        
-    def test_get_load_unit_cost(self):
-        self.assertTrue(self.opt.var_cost in self.df_input_data.columns)
         
     def test_perform_perfect_forecast_optim(self):
         self.opt_res = self.opt.perform_perfect_forecast_optim(self.df_input_data)

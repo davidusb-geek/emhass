@@ -59,7 +59,6 @@ class optimization:
         self.optim_conf = optim_conf
         self.plant_conf = plant_conf
         self.days_list = days_list
-        self.var_cost = 'unit_load_cost'
         self.freq = self.retrieve_hass_conf['freq']
         self.time_zone = self.retrieve_hass_conf['time_zone']
         self.timeStep = self.freq.seconds/3600 # in hours
@@ -69,29 +68,6 @@ class optimization:
         self.var_load_new = self.var_load+'_positive'
         self.costfun = costfun
         self.logger = logger
-        
-    def get_load_unit_cost(self, df_final: pd.DataFrame) -> pd.DataFrame:
-        """
-        Get the unit cost for the load consumption based on multiple tariff \
-        periods. This is the cost of the energy from the utility in a vector \
-        sampled at the fixed freq value.
-        
-        :param df_input_data: The DataFrame containing all the input data retrieved
-            from hass
-        :type df_input_data: pd.DataFrame
-        :return: The input DataFrame with one additionnal column appended containing
-            the load cost by unit of time
-        :rtype: pd.DataFrame
-
-        """
-        df_final[self.var_cost] = self.optim_conf['load_cost_hc']
-        list_df_hp = []
-        for key, period_hp in self.optim_conf['list_hp_periods'].items():
-            list_df_hp.append(df_final[self.var_cost].between_time(
-                period_hp[0]['start'], period_hp[1]['end']))
-        for df_hp in list_df_hp:
-            df_final.loc[df_hp.index, self.var_cost] = self.optim_conf['load_cost_hp']
-        return df_final
         
     def perform_optimization(self, data_opt: pd.DataFrame, P_PV: np.array, 
                              P_load: np.array, unit_load_cost: np.array) -> pd.DataFrame:
