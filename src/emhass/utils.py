@@ -27,15 +27,6 @@ def get_root(file: str, num_parent: Optional[int] = 3) -> str:
         raise ValueError("num_parent value not valid, must be between 1 and 3")
     return root
 
-def get_root_2pardir() -> str:
-    """
-    Get the root absolute path of the working directory using two pardir commands.
-    
-    :return: The root path
-    :rtype: str
-    """
-    return os.path.abspath(os.path.join(os.path.join(os.getcwd(), os.path.pardir), os.path.pardir))
-
 def get_logger(fun_name: str, config_path: str, file: Optional[bool] = True) -> Tuple[logging.Logger, logging.StreamHandler]:
     """
     Create a simple logger object.
