@@ -40,16 +40,26 @@ class TestForecast(unittest.TestCase):
         self.P_PV_forecast = self.fcst.get_power_from_weather(self.df_weather_scrap)
         
     def test_get_weather_forecast(self):
+        self.assertTrue(self.df_input_data.isnull().sum().sum()==0)
         self.assertIsInstance(self.df_weather_scrap, type(pd.DataFrame()))
         self.assertTrue(col in self.df_weather_scrap.columns for col in ['ghi', 'dni', 'dhi', 'temp_air'])
         self.assertIsInstance(self.df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(self.df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(self.df_weather_scrap.index.tz, self.fcst.time_zone)
         self.assertTrue(self.fcst.start_forecast < ts for ts in self.df_weather_scrap.index)
-        self.assertEqual(len(self.df_weather_scrap), int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
+        self.assertEqual(len(self.df_weather_scrap), 
+                         int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
         print(">> The length of the wheater forecast = "+str(len(self.df_weather_scrap)))
         try:
             self.df_weather_pvlib = self.fcst.get_weather_forecast(method='pvlib')
+            self.assertIsInstance(self.df_weather_pvlib, type(pd.DataFrame()))
+            self.assertTrue(col in self.df_weather_pvlib.columns for col in ['ghi', 'dni', 'dhi', 'temp_air'])
+            self.assertIsInstance(self.df_weather_pvlib.index, pd.core.indexes.datetimes.DatetimeIndex)
+            self.assertIsInstance(self.df_weather_pvlib.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+            self.assertEqual(self.df_weather_pvlib.index.tz, self.fcst.time_zone)
+            self.assertTrue(self.fcst.start_forecast < ts for ts in self.df_weather_pvlib.index)
+            self.assertEqual(len(self.df_weather_pvlib), 
+                             int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
         except:
             print(">> The pvlib method to get weather result in error output!")
         
@@ -70,8 +80,13 @@ class TestForecast(unittest.TestCase):
         print(">> The length of the load forecast = "+str(len(self.P_load_forecast)))
         
     def test_get_load_cost_forecast(self):
-        self.df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data)
-        self.assertTrue(self.fcst.var_load_cost in self.df_input_data.columns)
+        df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data)
+        self.assertTrue(self.fcst.var_load_cost in df_input_data.columns)
+        self.assertTrue(df_input_data.isnull().sum().sum()==0)
+        df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data,
+                                                         method='csv')
+        self.assertTrue(self.fcst.var_load_cost in df_input_data.columns)
+        self.assertTrue(df_input_data.isnull().sum().sum()==0)
         
 if __name__ == '__main__':
     unittest.main()

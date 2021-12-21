@@ -283,8 +283,15 @@ class forecast:
         :param df_input_data: The DataFrame containing all the input data retrieved
             from hass
         :type df_input_data: pd.DataFrame
+        :param method: The method to be used to generate load costforecast, \
+            the options are 'hp_hc_periods' for peak and non-peak hours contracts\
+            and 'csv' to load a CSV file, defaults to 'hp_hc_periods'
+        :type method: str, optional
+        :param csv_path: The path to the CSV file used when method = 'csv', \
+            defaults to "/data/data_load_cost_forecast.csv"
+        :type csv_path: str, optional
         :return: The input DataFrame with one additionnal column appended containing
-            the load cost by unit of time
+            the load cost for each time observation.
         :rtype: pd.DataFrame
 
         """
@@ -331,4 +338,6 @@ class forecast:
         
         else:
             self.logger.error("Passed method is not valid")
+            
+        return df_final
     

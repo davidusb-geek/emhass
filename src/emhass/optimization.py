@@ -26,7 +26,8 @@ class optimization:
     
     """
 
-    def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, days_list: pd.date_range, 
+    def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, 
+                 var_load_cost: str, var_prod_price: str, days_list: pd.date_range, 
                  costfun: str, config_path: str, logger: logging.Logger, opt_time_delta: Optional[int] = 24) -> None:
         """
         Define constructor for optimization class.
@@ -68,6 +69,8 @@ class optimization:
         self.var_load_new = self.var_load+'_positive'
         self.costfun = costfun
         self.logger = logger
+        self.var_load_cost = var_load_cost
+        self.var_prod_price = var_prod_price
         
     def perform_optimization(self, data_opt: pd.DataFrame, P_PV: np.array, 
                              P_load: np.array, unit_load_cost: np.array) -> pd.DataFrame:
@@ -360,7 +363,7 @@ class optimization:
             data_tp = df_input_data.copy().loc[pd.date_range(start=day_start, end=day_end, freq=self.freq)]
             P_PV = data_tp[self.var_PV].values
             P_load = data_tp[self.var_load_new].values
-            unit_load_cost = data_tp[self.var_cost].values # €/kWh
+            unit_load_cost = data_tp[self.var_load_cost].values # €/kWh
             # Call optimization function
             opt_tp = self.perform_optimization(data_tp, P_PV, P_load, unit_load_cost)
             if len(self.opt_res) == 0:
@@ -390,7 +393,7 @@ class optimization:
         self.logger.info("Perform optimization for the day-ahead")
         self.opt_res = pd.DataFrame()
         
-        unit_load_cost = df_input_data[self.var_cost].values # €/kWh
+        unit_load_cost = df_input_data[self.var_load_cost].values # €/kWh
         
         # Call optimization function
         self.opt_res = self.perform_optimization(P_load, P_PV.values.ravel(), 
