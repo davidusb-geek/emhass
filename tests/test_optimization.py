@@ -48,6 +48,7 @@ class TestOptimization(unittest.TestCase):
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.days_list, self.costfun, root, logger)
         self.df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data)
+        self.df_input_data = self.fcst.get_prod_price_forecast(self.df_input_data)
         
     def test_perform_perfect_forecast_optim(self):
         self.opt_res = self.opt.perform_perfect_forecast_optim(self.df_input_data)
@@ -58,6 +59,7 @@ class TestOptimization(unittest.TestCase):
         
     def test_perform_dayahead_forecast_optim(self):
         self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))

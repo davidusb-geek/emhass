@@ -88,6 +88,15 @@ class TestForecast(unittest.TestCase):
         self.assertTrue(self.fcst.var_load_cost in df_input_data.columns)
         self.assertTrue(df_input_data.isnull().sum().sum()==0)
         
+    def test_get_prod_price_forecast(self):
+        df_input_data = self.fcst.get_prod_price_forecast(self.df_input_data)
+        self.assertTrue(self.fcst.var_prod_price in df_input_data.columns)
+        self.assertTrue(df_input_data.isnull().sum().sum()==0)
+        df_input_data = self.fcst.get_prod_price_forecast(self.df_input_data,
+                                                         method='csv')
+        self.assertTrue(self.fcst.var_prod_price in df_input_data.columns)
+        self.assertTrue(df_input_data.isnull().sum().sum()==0)
+        
 if __name__ == '__main__':
     unittest.main()
     ch.close()
