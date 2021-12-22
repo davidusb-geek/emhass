@@ -29,6 +29,8 @@ optim_conf:
   - set_def_constant: # set as a constant fixed value variable with just one startup for each 24h
     - False
     - False
+  - weather_forecast_method: 'scrapper' # options are 'scrapper' and 'pvlib' (but pvlib remain unstable)
+  - load_forecast_method: 'naive' # options are 'csv' to load a custom load forecast from a CSV file or 'naive' for a persistance model
   - load_cost_forecast_method: 'hp_hc_periods' # options are 'hp_hc_periods' for peak and non-peak hours contracts and 'csv' to load custom cost from CSV file 
   - list_hp_periods: # list of different tariff periods (only needed if load_cost_forecast_method='hp_hc_periods')
     - period_hp_1:
@@ -41,8 +43,6 @@ optim_conf:
   - load_cost_hc: 0.1419 # non-peak hours load cost in €/kWh (only needed if load_cost_forecast_method='hp_hc_periods')
   - prod_price_forecast_method: 'constant' # options are 'constant' for constant fixed value or 'csv' to load custom price forecast from a CSV file
   - prod_sell_price: 0.065 # power production selling price in €/kWh (only needed if prod_price_forecast_method='constant')
-  - weather_forecast_method: 'scrapper' # options are 'scrapper' and 'pvlib' (but pvlib remain unstable)
-  - load_forecast_method: 'naive' # options are 'csv' to load a custom load forecast from a CSV file or 'naive' for a persistance model
 
 plant_conf:
   - P_grid_max: 9000 # Watts

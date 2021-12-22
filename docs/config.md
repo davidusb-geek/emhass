@@ -39,6 +39,8 @@ The parameters in the `secrets.yaml` file are:
 
 These are the parameters needed to properly define the optimization problem.
 
+- set_use_battery: Set to True if we should consider an energy storage device such as a Li-Ion battery. Defaults to False.
+- delta_forecast: The number of days for forecasted data. Defaults to 1.
 - num_def_loads: Define the number of deferrable loads to consider. Defaults to 2.
 - P_deferrable_nom: The nominal power for each deferrable load in Watts. This is a list with a number of elements consistent with the number of deferrable loads defined before. For example:
 	- 3000
@@ -52,20 +54,22 @@ These are the parameters needed to properly define the optimization problem.
 - set_def_constant: Define if we should set each deferrable load as a constant fixed value variable with just one startup for each optimization task. For example:
 	- False
 	- False
-- list_hp_periods: Define a list of peak hour periods for load consumption from the grid. This is useful if you have a contract with peak and non-peak hours. For example for two peak hour periods: 
-	- period_hp_1:
-		- start: '02:54'
-		- end: '15:24'
-	- period_hp_2:
-		- start: '17:24'
-		- end: '20:24'
-- load_cost_hp: The cost of the electrical energy from the grid during peak hours in €/kWh. Defaults to 0.1464.
-- load_cost_hc: The cost of the electrical energy from the grid during non-peak hours in €/kWh. Defaults to 0.096359.
-- prod_sell_price: The paid price for energy injected to the grid from excedent PV production in €/kWh. Defaults to 0.065.
-- set_use_battery: Set to True if we should consider an energy storage device such as a Li-Ion battery. Defaults to False.
-- delta_forecast: The number of days for forecasted data. Defaults to 1.
-- weather_forecast_method: This will define the weather forecast method that will be used, the options are 'scrapper' and 'pvlib' (but pvlib method remains unstable).
-- load_forecast_method: The load forecast method that will be used, the options are 'csv' to load a CSV file or 'naive' for a simple 1-day persistance model.
+- weather_forecast_method: This will define the weather forecast method that will be used. The options are 'scrapper' for a scrapping method for weather forecast from clearoutside.com and 'pvlib' to use the forecast utilities from the PVLib package (but beware that 'pvlib' method remains unstable, it should be tested before use). Defaults to 'scrapper'.
+- load_forecast_method: The load forecast method that will be used. The options are 'csv' to load a CSV file or 'naive' for a simple 1-day persistance model. Defaults to 'naive'.
+- load_cost_forecast_method: Define the method that will be used for load cost forecast. The options are 'hp_hc_periods' for peak and non-peak hours contracts and 'csv' to load custom cost from CSV file. The default CSV file path that will be used is '/data/data_load_cost_forecast.csv'.
+The following parameters and definitions are only needed if load_cost_forecast_method='hp_hc_periods':
+	- list_hp_periods: Define a list of peak hour periods for load consumption from the grid. This is useful if you have a contract with peak and non-peak hours. For example for two peak hour periods: 
+		- period_hp_1:
+			- start: '02:54'
+			- end: '15:24'
+		- period_hp_2:
+			- start: '17:24'
+			- end: '20:24'
+	- load_cost_hp: The cost of the electrical energy from the grid during peak hours in €/kWh. Defaults to 0.1907.
+	- load_cost_hc: The cost of the electrical energy from the grid during non-peak hours in €/kWh. Defaults to 0.1419.
+
+- prod_price_forecast_method: Define the method that will be used for PV power production price forecast. This is the price that is payed by the utility for energy injected to the grid. The options are 'constant' for a constant fixed value or 'csv' to load custom price forecast from a CSV file. The default CSV file path that will be used is '/data/data_prod_price_forecast.csv'.
+- prod_sell_price: The paid price for energy injected to the grid from excedent PV production in €/kWh. Defaults to 0.065. This parameter is only needed if prod_price_forecast_method='constant'.
 
 ## System configuration parameters
 
