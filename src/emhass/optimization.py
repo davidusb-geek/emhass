@@ -26,7 +26,8 @@ class optimization:
     
     """
 
-    def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, days_list: pd.date_range, 
+    def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, 
+                 var_load_cost: str, var_prod_price: str, days_list: pd.date_range, 
                  costfun: str, config_path: str, logger: logging.Logger, opt_time_delta: Optional[int] = 24) -> None:
         """
         Define constructor for optimization class.
@@ -39,6 +40,10 @@ class optimization:
         :param plant_conf: Configuration parameters used to model the electrical \
             system: PV production, battery, etc.
         :type plant_conf: dict
+        :param var_load_cost: The column name for the unit load cost.
+        :type var_load_cost: str
+        :param var_prod_price: The column name for the unit power production price.
+        :type var_prod_price: str
         :param days_list: A list of the days of data that will be retrieved from \
             hass and used for the optimization task. We will retrieve data from \
             now and up to days_to_retrieve days
@@ -59,7 +64,6 @@ class optimization:
         self.optim_conf = optim_conf
         self.plant_conf = plant_conf
         self.days_list = days_list
-        self.var_cost = 'unit_load_cost'
         self.freq = self.retrieve_hass_conf['freq']
         self.time_zone = self.retrieve_hass_conf['time_zone']
         self.timeStep = self.freq.seconds/3600 # in hours
@@ -69,32 +73,12 @@ class optimization:
         self.var_load_new = self.var_load+'_positive'
         self.costfun = costfun
         self.logger = logger
-        
-    def get_load_unit_cost(self, df_final: pd.DataFrame) -> pd.DataFrame:
-        """
-        Get the unit cost for the load consumption based on multiple tariff \
-        periods. This is the cost of the energy from the utility in a vector \
-        sampled at the fixed freq value.
-        
-        :param df_input_data: The DataFrame containing all the input data retrieved
-            from hass
-        :type df_input_data: pd.DataFrame
-        :return: The input DataFrame with one additionnal column appended containing
-            the load cost by unit of time
-        :rtype: pd.DataFrame
-
-        """
-        df_final[self.var_cost] = self.optim_conf['load_cost_hc']
-        list_df_hp = []
-        for key, period_hp in self.optim_conf['list_hp_periods'].items():
-            list_df_hp.append(df_final[self.var_cost].between_time(
-                period_hp[0]['start'], period_hp[1]['end']))
-        for df_hp in list_df_hp:
-            df_final.loc[df_hp.index, self.var_cost] = self.optim_conf['load_cost_hp']
-        return df_final
+        self.var_load_cost = var_load_cost
+        self.var_prod_price = var_prod_price
         
     def perform_optimization(self, data_opt: pd.DataFrame, P_PV: np.array, 
-                             P_load: np.array, unit_load_cost: np.array) -> pd.DataFrame:
+                             P_load: np.array, unit_load_cost: np.array,
+                             unit_prod_price: np.array) -> pd.DataFrame:
         """
         Perform the actual optimization using linear programming (LP).
         
@@ -110,6 +94,10 @@ class optimization:
             This is the cost of the energy from the utility in a vector sampled \
             at the fixed freq value
         :type unit_load_cost: np.array
+        :param unit_prod_price: The price of power injected to the grid each unit of time. \
+            This is the price of the energy injected to the utility in a vector \
+            sampled at the fixed freq value.
+        :type unit_prod_price: np.array
         :return: The input DataFrame with all the different results from the \
             optimization appended
         :rtype: pd.DataFrame
@@ -173,13 +161,13 @@ class optimization:
             P_def_sum.append(plp.lpSum(P_deferrable[k][i] for k in range(self.optim_conf['num_def_loads'])))
         if self.costfun == 'profit':
             objective = plp.lpSum(-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum[i]) + \
-                                                        self.optim_conf['prod_sell_price'] * P_grid_neg[i])
+                                                        unit_prod_price[i] * P_grid_neg[i])
                                   for i in set_I)
         elif self.costfun == 'cost':
             objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum[i])
                                   for i in set_I)
         elif self.costfun == 'self-consumption':
-            objective = plp.lpSum(SC[i] for i in set_I)
+            objective = plp.lpSum(0.001*self.timeStep*unit_load_cost[i]*SC[i] for i in set_I)
         else:
             self.logger.error("The cost function specified type is not valid")
         opt_model.setObjective(objective)
@@ -344,19 +332,20 @@ class optimization:
         for i in set_I:
             P_def_sum_tp.append(sum(P_deferrable[k][i].varValue for k in range(self.optim_conf['num_def_loads'])))
         opt_tp["unit_load_cost"] = [unit_load_cost[i] for i in set_I]
+        opt_tp["unit_prod_price"] = [unit_prod_price[i] for i in set_I]
         opt_tp["cost_profit"] = [-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) + \
-                                                       self.optim_conf['prod_sell_price'] * P_grid_neg[i].varValue)
+                                                       unit_prod_price[i] * P_grid_neg[i].varValue)
                                  for i in set_I]
         
         if self.costfun == 'profit':
             opt_tp["cost_fun_profit"] = [-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) + \
-                                                               self.optim_conf['prod_sell_price'] * P_grid_neg[i].varValue)
+                                                               unit_prod_price[i] * P_grid_neg[i].varValue)
                                          for i in set_I]
         elif self.costfun == 'cost':
             opt_tp["cost_fun_cost"] = [-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i])
                                        for i in set_I]
         elif self.costfun == 'self-consumption':
-            opt_tp["cost_fun_selfcons"] = [SC[i].varValue for i in set_I]
+            opt_tp["cost_fun_selfcons"] = [-0.001*self.timeStep*unit_load_cost[i]*SC[i].varValue for i in set_I]
         else:
             self.logger.error("The cost function specified type is not valid") 
         
@@ -384,9 +373,11 @@ class optimization:
             data_tp = df_input_data.copy().loc[pd.date_range(start=day_start, end=day_end, freq=self.freq)]
             P_PV = data_tp[self.var_PV].values
             P_load = data_tp[self.var_load_new].values
-            unit_load_cost = data_tp[self.var_cost].values # €/kWh
+            unit_load_cost = data_tp[self.var_load_cost].values # €/kWh
+            unit_prod_price = data_tp[self.var_prod_price].values # €/kWh
             # Call optimization function
-            opt_tp = self.perform_optimization(data_tp, P_PV, P_load, unit_load_cost)
+            opt_tp = self.perform_optimization(data_tp, P_PV, P_load, 
+                                               unit_load_cost, unit_prod_price)
             if len(self.opt_res) == 0:
                 self.opt_res = opt_tp
             else:
@@ -414,11 +405,13 @@ class optimization:
         self.logger.info("Perform optimization for the day-ahead")
         self.opt_res = pd.DataFrame()
         
-        unit_load_cost = df_input_data[self.var_cost].values # €/kWh
+        unit_load_cost = df_input_data[self.var_load_cost].values # €/kWh
+        unit_prod_price = df_input_data[self.var_prod_price].values # €/kWh
         
         # Call optimization function
         self.opt_res = self.perform_optimization(P_load, P_PV.values.ravel(), 
-                                                 P_load.values.ravel(), unit_load_cost)
+                                                 P_load.values.ravel(), 
+                                                 unit_load_cost, unit_prod_price)
         
         return self.opt_res
     

@@ -4,16 +4,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0]
+## [0.2.1] - Unreleased
+### Fixed
+- Cleaned unittest implementation
+### Added
+- Added support to choose the methods for weather and load forecast from configuration file.
+- Added new load cost and power production price forecasts, mainly allowing the user to load a CSV file with their own forecast.
+
+## [0.2.0] - 2021-10-14
 ### Fixed
 - Fixed tests to pass with latest changes on passing path and logger arguments.
 - Updated requirements for PVLib and Protobuf.
 - Removed unnecessary use of abstract classes.
 - Fixed test_optimization bad setup.
-- Implemented typing for compatibility with Python4
 - Fixed logger integration in classes
-- Implemented different types of cost functions
 - Updated documentation
+### Added
+- Implemented typing for compatibility with Python4
+- Implemented different types of cost functions
 
 ## [0.1.5] - 2021-09-22
 ### Fixed
@@ -51,3 +59,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.3]: https://github.com/davidusb-geek/emhass/releases/tag/v0.1.3
 [0.1.4]: https://github.com/davidusb-geek/emhass/releases/tag/v0.1.4
 [0.1.5]: https://github.com/davidusb-geek/emhass/releases/tag/v0.1.5
+[0.2.0]: https://github.com/davidusb-geek/emhass/releases/tag/v0.2.0
