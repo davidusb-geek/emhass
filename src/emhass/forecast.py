@@ -214,6 +214,56 @@ class forecast:
                                            freq=self.freq).round(self.freq)
         return forecast_dates_csv
     
+    def get_forecast_out_from_csv(self, df_final: pd.DataFrame, 
+                                  forecast_dates_csv: pd.date_range,
+                                  csv_path: str) -> pd.DataFrame:
+        """
+        Get the forecast data as a DataFrame from a CSV file. The data contained \
+            in the CSV file should be a 24h forecast with the same frequency as \
+            the main 'freq' parameter in the configuration file. The timestamp \
+            will not be used and a new DateTimeIndex is generated to fit the \
+            timestamp index of the input data in 'df_final'.
+        
+        :param df_final: The DataFrame containing the input data.
+        :type df_final: pd.DataFrame
+        :param forecast_dates_csv: The forecast dates vector
+        :type forecast_dates_csv: pd.date_range
+        :param csv_path: The path to the CSV file
+        :type csv_path: str
+        :return: The data from the CSV file
+        :rtype: pd.DataFrame
+
+        """
+        days_list = pd.date_range(start=df_final.index[0], 
+                                  end=df_final.index[-1], 
+                                  freq='D')
+            
+        load_csv_file_path = self.root + csv_path
+        df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
+        df_csv.index = forecast_dates_csv
+        df_csv.drop(['ts'], axis=1, inplace=True)
+        
+        forecast_out = pd.DataFrame()
+        for day in days_list:
+            first_elm_index = [i for i, x in enumerate(df_final.index.day == day.day) if x][0]
+            last_elm_index = [i for i, x in enumerate(df_final.index.day == day.day) if x][-1]
+            fcst_index = pd.date_range(start=df_final.index[first_elm_index],
+                                       end=df_final.index[last_elm_index], 
+                                       freq=df_final.index.freq)
+            first_hour = str(df_final.index[first_elm_index].hour)+":"+str(df_final.index[first_elm_index].minute)
+            last_hour = str(df_final.index[last_elm_index].hour)+":"+str(df_final.index[last_elm_index].minute)
+            if len(forecast_out) == 0:
+                forecast_out = pd.DataFrame(
+                    df_csv.between_time(first_hour, last_hour).values,
+                    index=fcst_index)
+            else:
+                forecast_tp = pd.DataFrame(
+                    df_csv.between_time(first_hour, last_hour).values,
+                    index=fcst_index)
+                forecast_out = pd.concat([forecast_out, forecast_tp], axis=0)
+        
+        return forecast_out
+    
     def get_load_forecast(self, days_min_load_forecast: Optional[int] = 3, method: Optional[str] = 'naive',
                           csv_path: Optional[str] = "/data/data_load_forecast.csv") -> pd.Series:
         """
@@ -280,10 +330,9 @@ class forecast:
         periods. This is the cost of the energy from the utility in a vector \
         sampled at the fixed freq value.
         
-        :param df_input_data: The DataFrame containing all the input data retrieved
-            from hass
-        :type df_input_data: pd.DataFrame
-        :param method: The method to be used to generate load costforecast, \
+        :param df_final: The DataFrame containing the input data.
+        :type df_final: pd.DataFrame
+        :param method: The method to be used to generate load cost forecast, \
             the options are 'hp_hc_periods' for peak and non-peak hours contracts\
             and 'csv' to load a CSV file, defaults to 'hp_hc_periods'
         :type method: str, optional
@@ -303,39 +352,47 @@ class forecast:
                     period_hp[0]['start'], period_hp[1]['end']))
             for df_hp in list_df_hp:
                 df_final.loc[df_hp.index, self.var_load_cost] = self.optim_conf['load_cost_hp']
-        
         elif method == 'csv':
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
-            days_list = pd.date_range(start=df_final.index[0], 
-                                      end=df_final.index[-1], 
-                                      freq='D')
-            
-            load_csv_file_path = self.root + csv_path
-            df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
-            df_csv.index = forecast_dates_csv
-            df_csv.drop(['ts'], axis=1, inplace=True)
-            
-            forecast_out = pd.DataFrame()
-            for day in days_list:
-                first_elm_index = [i for i, x in enumerate(df_final.index.day == day.day) if x][0]
-                last_elm_index = [i for i, x in enumerate(df_final.index.day == day.day) if x][-1]
-                fcst_index = pd.date_range(start=df_final.index[first_elm_index],
-                                           end=df_final.index[last_elm_index], 
-                                           freq=df_final.index.freq)
-                first_hour = str(df_final.index[first_elm_index].hour)+":"+str(df_final.index[first_elm_index].minute)
-                last_hour = str(df_final.index[last_elm_index].hour)+":"+str(df_final.index[last_elm_index].minute)
-                if len(forecast_out) == 0:
-                    forecast_out = pd.DataFrame(
-                        df_csv.between_time(first_hour, last_hour).values,
-                        index=fcst_index)
-                else:
-                    forecast_tp = pd.DataFrame(
-                        df_csv.between_time(first_hour, last_hour).values,
-                        index=fcst_index)
-                    forecast_out = pd.concat([forecast_out, forecast_tp], axis=0)
-                    
+            forecast_out = self.get_forecast_out_from_csv(df_final,
+                                                          forecast_dates_csv,
+                                                          csv_path)
             df_final[self.var_load_cost] = forecast_out
+        else:
+            self.logger.error("Passed method is not valid")
+            
+        return df_final
+    
+    def get_prod_price_forecast(self, df_final: pd.DataFrame, method: Optional[str] = 'constant',
+                               csv_path: Optional[str] = "/data/data_prod_price_forecast.csv") -> pd.DataFrame:
+        """
+        Get the unit power production price for the energy injected to the grid.\
+        This is the price of the energy injected to the utility in a vector \
+        sampled at the fixed freq value.
         
+        :param df_input_data: The DataFrame containing all the input data retrieved
+            from hass
+        :type df_input_data: pd.DataFrame
+        :param method: The method to be used to generate the production price forecast, \
+            the options are 'constant' for a fixed constant value and 'csv'\
+            to load a CSV file, defaults to 'constant'
+        :type method: str, optional
+        :param csv_path: The path to the CSV file used when method = 'csv', \
+            defaults to "/data/data_load_cost_forecast.csv"
+        :type csv_path: str, optional
+        :return: The input DataFrame with one additionnal column appended containing
+            the power production price for each time observation.
+        :rtype: pd.DataFrame
+
+        """
+        if method == 'constant':
+            df_final[self.var_prod_price] = self.optim_conf['prod_sell_price']
+        elif method == 'csv':
+            forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
+            forecast_out = self.get_forecast_out_from_csv(df_final,
+                                                          forecast_dates_csv,
+                                                          csv_path)
+            df_final[self.var_prod_price] = forecast_out
         else:
             self.logger.error("Passed method is not valid")
             
