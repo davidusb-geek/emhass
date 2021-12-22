@@ -80,7 +80,11 @@ def perfect_forecast_optim(input_data_dict, logger):
 
     """
     logger.info("Performing perfect forecast optimization")
-    df_input_data = input_data_dict['fcst'].get_load_cost_forecast(input_data_dict['df_input_data'])
+    df_input_data = input_data_dict['fcst'].get_load_cost_forecast(
+        input_data_dict['df_input_data'], 
+        method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'])
+    df_input_data = input_data_dict['fcst'].get_prod_price_forecast(
+        df_input_data, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
     opt_res = input_data_dict['opt'].perform_perfect_forecast_optim(df_input_data)
     # Save CSV file for analysis
     filename = 'opt_res_perfect_optim_'+input_data_dict['costfun']
@@ -100,7 +104,11 @@ def dayahead_forecast_optim(input_data_dict, logger):
 
     """
     logger.info("Performing day-ahead forecast optimization")
-    df_input_data_dayahead = input_data_dict['fcst'].get_load_cost_forecast(input_data_dict['df_input_data_dayahead'])
+    df_input_data_dayahead = input_data_dict['fcst'].get_load_cost_forecast(
+        input_data_dict['df_input_data_dayahead'],
+        method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'])
+    df_input_data_dayahead = input_data_dict['fcst'].get_prod_price_forecast(
+        df_input_data_dayahead, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
     opt_res_dayahead = input_data_dict['opt'].perform_dayahead_forecast_optim(
         df_input_data_dayahead, input_data_dict['P_PV_forecast'], input_data_dict['P_load_forecast'])
     # Save CSV file for publish_data
