@@ -51,7 +51,8 @@ To run a command simply use the `emhass` command followed by the needed argument
 The available arguments are:
 - `--action`: That is used to set the desired action, options are: `perfect-optim`, `dayahead-optim` and `publish-data`
 - `--config`: Define path to the config.yaml file
-- `--costfun`: Define the type of cost function, options are: `profit`, `cost`, `self-consumption`
+- `--costfun`: Define the type of cost function, this is optional and the options are: `profit` (default), `cost`, `self-consumption`
+- `--log2file`: Define if we should log to a file or not, this is optional and the options are: `True` or `False` (default)
 
 For example, the following line command can be used to perform a day-ahead optimization task:
 ```
