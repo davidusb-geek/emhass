@@ -165,21 +165,17 @@ def main():
     """Define the main command line entry function."""
     # Parsing arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('--action', help='Set the desired action, options are: perfect-optim, dayahead-optim and publish-data')
-    parser.add_argument('--config', help='Define path to the config.yaml file')
-    parser.add_argument('--costfun', help='Define the type of cost function, options are: profit, cost, self-consumption')
+    parser.add_argument('--action', type=str, help='Set the desired action, options are: perfect-optim, dayahead-optim and publish-data')
+    parser.add_argument('--config', type=str, help='Define path to the config.yaml file')
+    parser.add_argument('--costfun', type=str, default='profit', help='Define the type of cost function, options are: profit, cost, self-consumption')
+    parser.add_argument('--log2file', type=bool, default=False, help='Define if we should log to a file or not')
     args = parser.parse_args()
     # The path to the configuration files
     config_path = args.config
-    # The cost function type
-    if args.costfun is None:
-        costfun = 'profit'
-    else:
-        costfun = args.costfun
     # create logger
-    logger, ch = get_logger(__name__, config_path, file=False)
+    logger, ch = get_logger(__name__, config_path, file=args.log2file)
     # Setup parameters
-    input_data_dict = setUp(config_path, costfun, logger)
+    input_data_dict = setUp(config_path, args.costfun, logger)
     # Perform selected action
     if args.action == 'perfect-optim':
         opt_res = perfect_forecast_optim(input_data_dict, logger)
