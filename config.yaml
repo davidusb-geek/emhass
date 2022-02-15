@@ -45,19 +45,18 @@ optim_conf:
   - prod_sell_price: 0.065 # power production selling price in €/kWh (only needed if prod_price_forecast_method='constant')
 
 plant_conf:
-  - P_grid_max: 9000 # Watts
-  - Pd_max: 1000 # Watts
-  - Pc_max: 1000 # Watts
-  - eta_disch: 0.95 # unit
-  - eta_ch: 0.95 # unit
-  - Enom: 5000 # Wh
-  - SOCmin: 0.3 # unit
-  - SOCmax: 0.9 # unit
-  - SOCtarget: 0.6 # unit
-  - module_model: 'CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M'
-  - inverter_model: 'Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_'
-  - surface_tilt: 30
-  - surface_azimuth: 205
-  - modules_per_string: 16
-  - strings_per_inverter: 1
-
+  - P_grid_max: 9000 # The maximum power that can be supplied by the utility grid in Watts
+  - module_model: 'CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M' # The PV module model
+  - inverter_model: 'Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_' # The PV inverter model
+  - surface_tilt: 30 # The tilt angle of your solar panels
+  - surface_azimuth: 205 # The azimuth angle of your PV installation
+  - modules_per_string: 16 # The number of modules per string
+  - strings_per_inverter: 1 # The number of used strings per inverter
+  - Pd_max: 1000 # If your system has a battery (set_use_battery=True), the maximum discharge power in Watts
+  - Pc_max: 1000 # If your system has a battery (set_use_battery=True), the maximum charge power in Watts
+  - eta_disch: 0.95 # If your system has a battery (set_use_battery=True), the discharge efficiency
+  - eta_ch: 0.95 # If your system has a battery (set_use_battery=True), the charge efficiency
+  - Enom: 5000 # If your system has a battery (set_use_battery=True), the total capacity of the battery stack in Wh
+  - SOCmin: 0.3 # If your system has a battery (set_use_battery=True), the minimun allowable battery state of charge
+  - SOCmax: 0.9 # If your system has a battery (set_use_battery=True), the minimun allowable battery state of charge
+  - SOCtarget: 0.6 # If your system has a battery (set_use_battery=True), the desired battery state of charge at the end of each optimization cycle
