@@ -1,6 +1,6 @@
 # Configuration file
 
-In this section we will explain all the parts of the `config.yaml` needed to properly run EMHASS.
+In this section we will explain all the parts of the `config_emhass.yaml` needed to properly run EMHASS.
 
 We will find three main parts on the configuration file:
 
@@ -24,9 +24,9 @@ These are the parameters that we will need to define to retrieve data from Home 
 	- 'sensor.power_photovoltaics'
 	- 'sensor.power_load_no_var_loads'
 
-A second part of this section is given by some privacy-sensitive parameters that should be included in a `secrets.yaml` file alongside the `config.yaml` file.
+A second part of this section is given by some privacy-sensitive parameters that should be included in a `secrets_emhass.yaml` file alongside the `config_emhass.yaml` file.
 
-The parameters in the `secrets.yaml` file are:
+The parameters in the `secrets_emhass.yaml` file are:
 
 - hass_url: The URL to your Home Assistant instance. For example: https://myhass.duckdns.org/
 - long_lived_token: A Long-Lived Access Token from the Lovelace profile page.
@@ -95,5 +95,5 @@ If your system has a battery (set_use_battery=True), then you should define the 
 - eta_ch: The charge efficiency. Defaults to 0.95.
 - Enom: The total capacity of the battery stack in Wh. Defaults to 5000.
 - SOCmin: The minimun allowable battery state of charge. Defaults to 0.3.
-- SOCmax: The minimun allowable battery state of charge. Defaults to 0.9.
+- SOCmax: The maximum allowable battery state of charge. Defaults to 0.9.
 - SOCtarget: The desired battery state of charge at the end of each optimization cycle. Defaults to 0.6.

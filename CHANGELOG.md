@@ -6,7 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 ### Added
+- Added a new input data file using pickle for tests.
 - Added support to select if the logger should save to a file or not.
+### Breaking changes
+- Changed package usage of configuration file path, now the user must provide the complete path including the yaml file itself.
+- Changed the names of the configuration and secrets yaml files. These changes will avoid compatibility issues when using hass add-ons.
 
 ## [0.2.1] - 2021-12-22
 ### Fixed

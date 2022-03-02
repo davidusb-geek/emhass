@@ -6,7 +6,7 @@ from typing import (
     Optional,
 )
 import pandas as pd
-import yaml, pytz, logging, os, pathlib
+import yaml, pytz, logging, pathlib
 from datetime import datetime, timedelta, timezone
 
 def get_root(file: str, num_parent: Optional[int] = 3) -> str:
@@ -47,7 +47,7 @@ def get_logger(fun_name: str, config_path: str, file: Optional[bool] = True) -> 
     logger.setLevel(logging.DEBUG)
     logger.fileSetting = file
     if file:
-        ch = logging.FileHandler(config_path + '/data/emhass_logger.log')
+        ch = logging.FileHandler(config_path + '/data/logger_emhass.log')
     else:
         ch = logging.StreamHandler()
     ch.setLevel(logging.DEBUG)
@@ -67,9 +67,10 @@ def get_yaml_parse(config_path: str) -> Tuple[dict, dict, dict]:
     :rtype: tuple(dict)
 
     """
-    with open(config_path + '/config.yaml', 'r') as file:
+    base = config_path.parent
+    with open(config_path, 'r') as file:
         input_conf = yaml.load(file, Loader=yaml.FullLoader)
-    with open(config_path + '/secrets.yaml', 'r') as file:
+    with open(base / 'secrets_emhass.yaml', 'r') as file:
         input_secrets = yaml.load(file, Loader=yaml.FullLoader)
         
     retrieve_hass_conf = dict((key,d[key]) for d in input_conf['retrieve_hass_conf'] for key in d)

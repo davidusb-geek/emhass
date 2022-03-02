@@ -5,13 +5,14 @@ import argparse
 import os
 import pandas as pd
 from datetime import datetime, timezone
+import pathlib
 
 from emhass.retrieve_hass import retrieve_hass
 from emhass.forecast import forecast
 from emhass.optimization import optimization
 from emhass.utils import get_yaml_parse, get_days_list, get_logger
 
-def setUp(config_path, costfun, logger):
+def setUp(config_path, base_path, costfun, logger):
     """
     Set up some of the data needed for the different actions.
     
@@ -33,7 +34,7 @@ def setUp(config_path, costfun, logger):
     var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
     rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
                        retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'], 
-                       config_path, logger)
+                       base_path, logger)
     rh.get_data(days_list, var_list,
                 minimal_response=False, significant_changes_only=False)
     rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
@@ -43,7 +44,7 @@ def setUp(config_path, costfun, logger):
     df_input_data = rh.df_final.copy()
     # Initialize objects
     fcst = forecast(retrieve_hass_conf, optim_conf, plant_conf,
-                    config_path, logger)
+                    base_path, logger)
     df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
     P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
@@ -51,10 +52,10 @@ def setUp(config_path, costfun, logger):
     df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
     opt = optimization(retrieve_hass_conf, optim_conf, plant_conf, 
                        fcst.var_load_cost, fcst.var_prod_price, days_list, 
-                       costfun, config_path, logger)
+                       costfun, base_path, logger)
     # The input data dictionnary to return
     input_data_dict = {
-        'root': config_path,
+        'root': base_path,
         'retrieve_hass_conf': retrieve_hass_conf,
         'df_input_data': df_input_data,
         'df_input_data_dayahead': df_input_data_dayahead,
@@ -171,11 +172,12 @@ def main():
     parser.add_argument('--log2file', type=bool, default=False, help='Define if we should log to a file or not')
     args = parser.parse_args()
     # The path to the configuration files
-    config_path = args.config
+    config_path = pathlib.Path(args.config)
+    base_path = str(config_path.parent)
     # create logger
-    logger, ch = get_logger(__name__, config_path, file=args.log2file)
+    logger, ch = get_logger(__name__, base_path, file=args.log2file)
     # Setup parameters
-    input_data_dict = setUp(config_path, args.costfun, logger)
+    input_data_dict = setUp(config_path, base_path, args.costfun, logger)
     # Perform selected action
     if args.action == 'perfect-optim':
         opt_res = perfect_forecast_optim(input_data_dict, logger)

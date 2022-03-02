@@ -32,7 +32,7 @@ We will suppose that this repository is cloned to:
 ```
 /home/user/emhass
 ```
-This will be the root path containing the yaml configuration files (`config.yaml` and `secrets.yaml`) and the different needed folders (a `data` folder to store the optimizations results and a `scripts` folder containing the bash scripts described further below).
+This will be the root path containing the yaml configuration files (`config_emhass.yaml` and `secrets_emhass.yaml`) and the different needed folders (a `data` folder to store the optimizations results and a `scripts` folder containing the bash scripts described further below).
 
 To upgrade the installation in the future just use:
 ```
@@ -44,15 +44,15 @@ python3 -m pip install --upgrade emhass
 To run a command simply use the `emhass` command followed by the needed arguments.
 The available arguments are:
 - `--action`: That is used to set the desired action, options are: `perfect-optim`, `dayahead-optim` and `publish-data`
-- `--config`: Define path to the config.yaml file
+- `--config`: Define path to the config_emhass.yaml file (including the yaml file itself)
 - `--costfun`: Define the type of cost function, this is optional and the options are: `profit` (default), `cost`, `self-consumption`
 - `--log2file`: Define if we should log to a file or not, this is optional and the options are: `True` or `False` (default)
 
 For example, the following line command can be used to perform a day-ahead optimization task:
 ```
-emhass --action 'dayahead-optim' --config '/home/user/emhass' --costfun 'profit'
+emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.yaml' --costfun 'profit'
 ```
-Before running any valuable command you need to modify the `config.yaml` and `secrets.yaml` files. These files should contain the information adapted to your own system. To do this take a look at the special section for this in the [documentation](https://emhass.readthedocs.io/en/latest/config.html).
+Before running any valuable command you need to modify the `config_emhass.yaml` and `secrets_emhass.yaml` files. These files should contain the information adapted to your own system. To do this take a look at the special section for this in the [documentation](https://emhass.readthedocs.io/en/latest/config.html).
 
 ## Home Assistant integration
 
@@ -84,13 +84,13 @@ Create the file `dayahead_optim.sh` with the following content:
 ```
 #!/bin/bash
 . /home/user/emhassenv/bin/activate
-emhass --action 'dayahead-optim' --config '/home/user/emhass'
+emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.yaml'
 ```
 And the file `publish_data.sh` with the following content:
 ```
 #!/bin/bash
 . /home/user/emhassenv/bin/activate
-emhass --action 'publish-data' --config '/home/user/emhass'
+emhass --action 'publish-data' --config '/home/user/emhass/config_emhass.yaml'
 ```
 Then specify user rights and make the files executables:
 ```

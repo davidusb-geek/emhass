@@ -6,7 +6,7 @@ For this example a 5 kWp solar production is considered with two deferrable load
 
 We compare the results obtained with the perfect optimization using the following command:
 ```
-emhass --action 'perfect-optim' --config '/home/user/emhass' --costfun 'profit'
+emhass --action 'perfect-optim' --config '/home/user/emhass/config_emhass.yaml' --costfun 'profit'
 ```
 
 The `--costfun` is compared with all the possible options: `profit`, `cost`, `self-consumption`.

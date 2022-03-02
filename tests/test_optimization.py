@@ -3,6 +3,8 @@
 
 import unittest
 import pandas as pd
+import pathlib
+import pickle
 
 from emhass.retrieve_hass import retrieve_hass
 from emhass.optimization import optimization
@@ -11,24 +13,27 @@ from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
 # the root folder
 root = str(get_root(__file__, num_parent=2))
-retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(root)
+retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'))
 # create logger
 logger, ch = get_logger(__name__, root, file=False)
 
 class TestOptimization(unittest.TestCase):
 
     def setUp(self):
+        get_data_from_file = True
         self.retrieve_hass_conf, self.optim_conf, self.plant_conf = \
             retrieve_hass_conf, optim_conf, plant_conf
-        
         self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
         self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
-        
         self.rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                            self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
                            root, logger)
-        self.rh.get_data(self.days_list, self.var_list,
-                         minimal_response=False, significant_changes_only=False)
+        if get_data_from_file:
+            with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'rb') as inp:
+                self.rh.df_final = pickle.load(inp)
+        else:
+            self.rh.get_data(self.days_list, self.var_list,
+                            minimal_response=False, significant_changes_only=False)
         self.rh.prepare_data(self.retrieve_hass_conf['var_load'], load_negative = self.retrieve_hass_conf['load_negative'],
                              set_zero_min = self.retrieve_hass_conf['set_zero_min'], 
                              var_replace_zero = self.retrieve_hass_conf['var_replace_zero'], 
