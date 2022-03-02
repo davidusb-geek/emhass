@@ -1,6 +1,6 @@
 # ---> Python
 # Secret yaml file
-secrets.yaml
+secrets_emhass.yaml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
