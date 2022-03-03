@@ -23,15 +23,15 @@ class TestOptimization(unittest.TestCase):
         get_data_from_file = True
         self.retrieve_hass_conf, self.optim_conf, self.plant_conf = \
             retrieve_hass_conf, optim_conf, plant_conf
-        self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
-        self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
         self.rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                            self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
                            root, logger)
         if get_data_from_file:
             with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'rb') as inp:
-                self.rh.df_final = pickle.load(inp)
+                self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
         else:
+            self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
+            self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
             self.rh.get_data(self.days_list, self.var_list,
                             minimal_response=False, significant_changes_only=False)
         self.rh.prepare_data(self.retrieve_hass_conf['var_load'], load_negative = self.retrieve_hass_conf['load_negative'],

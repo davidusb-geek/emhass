@@ -22,20 +22,21 @@ class TestRetrieveHass(unittest.TestCase):
         get_data_from_file = True
         save_data_to_file = False
         self.retrieve_hass_conf = retrieve_hass_conf
-        self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
-        self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
         self.rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                                 self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
                                 root, logger)
         if get_data_from_file:
             with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'rb') as inp:
-                self.rh.df_final = pickle.load(inp)
+                self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
         else:
+            self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
+            self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
             self.rh.get_data(self.days_list, self.var_list,
                             minimal_response=False, significant_changes_only=False)
             if save_data_to_file:
                 with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'wb') as outp:
-                    pickle.dump(self.rh.df_final, outp, pickle.HIGHEST_PROTOCOL)
+                    pickle.dump((self.rh.df_final, self.days_list, self.var_list), 
+                                outp, pickle.HIGHEST_PROTOCOL)
         self.df_raw = self.rh.df_final.copy()
         
     def test_get_data(self):
