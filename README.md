@@ -9,11 +9,20 @@
   <a href="https://github.com/davidusb-geek/emhass/releases">
     <img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/davidusb-geek/emhass">
   </a>
+  <a href="https://github.com/davidusb-geek/emhass/actions">
+    <img alt="GitHub Workflow Status" src="https://img.shields.io/github/workflow/status/davidusb-geek/emhass/Python%20package">
+  </a>
+  <a href="https://app.codecov.io/gh/davidusb-geek/emhass">
+    <img alt="Codecov" src="https://img.shields.io/codecov/c/github/davidusb-geek/emhass">
+  </a>
   <a href="https://pypi.org/project/emhass/">
     <img alt="PyPI - Python Version" src="https://img.shields.io/pypi/pyversions/emhass">
   </a>
-  <a href="https://github.com/davidusb-geek/emhass/actions">
-    <img alt="GitHub Workflow Status" src="https://img.shields.io/github/workflow/status/davidusb-geek/emhass/Python%20package">
+  <a href="https://pypi.org/project/emhass/">
+    <img alt="PyPI - Status" src="https://img.shields.io/pypi/status/emhass">
+  </a>
+  <a href="https://emhass.readthedocs.io/en/latest/">
+    <img alt="Read the Docs" src="https://img.shields.io/readthedocs/emhass">
   </a>
 </p>
 
