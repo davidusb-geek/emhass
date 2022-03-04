@@ -1,8 +1,23 @@
-# emhass
+<div align="center">
+  <br>
+  <img alt="EMHASS" src="./docs/images/emhass_logo.png" width="300px">
+  <h1>EMHASS</h1>
+  <strong>Energy Management for Home Assistant</strong>
+</div>
+<br>
+<p align="center">
+  <a href="https://github.com/davidusb-geek/emhass/releases">
+    <img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/davidusb-geek/emhass">
+  </a>
+  <a href="https://pypi.org/project/emhass/">
+    <img alt="PyPI - Python Version" src="https://img.shields.io/pypi/pyversions/emhass">
+  </a>
+  <a href="https://github.com/davidusb-geek/emhass/actions">
+    <img alt="GitHub Workflow Status" src="https://img.shields.io/github/workflow/status/davidusb-geek/emhass/Python%20package">
+  </a>
+</p>
 
-EMHASS: Energy Management for Home Assistant
-
-![](./docs/images/emhass_logo.png)
+EHMASS is a moduled designed to optimize your home energy interfacing with Home Assistant.
 
 ## Context
 
