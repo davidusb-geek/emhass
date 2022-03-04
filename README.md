@@ -1,8 +1,8 @@
 <div align="center">
   <br>
   <img alt="EMHASS" src="./docs/images/emhass_logo.png" width="300px">
-  <h1>EMHASS</h1>
-  <strong>Energy Management for Home Assistant</strong>
+  <h1>Energy Management for Home Assistant</h1>
+  <strong></strong>
 </div>
 <br>
 <p align="center">
