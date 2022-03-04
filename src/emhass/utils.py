@@ -57,7 +57,7 @@ def get_logger(fun_name: str, config_path: str, file: Optional[bool] = True) -> 
 
     return logger, ch
 
-def get_yaml_parse(config_path: str) -> Tuple[dict, dict, dict]:
+def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True) -> Tuple[dict, dict, dict]:
     """
     Perform parsing of the config.yaml file.
     
@@ -70,11 +70,20 @@ def get_yaml_parse(config_path: str) -> Tuple[dict, dict, dict]:
     base = config_path.parent
     with open(config_path, 'r') as file:
         input_conf = yaml.load(file, Loader=yaml.FullLoader)
-    with open(base / 'secrets_emhass.yaml', 'r') as file:
-        input_secrets = yaml.load(file, Loader=yaml.FullLoader)
+    if use_secrets:
+        with open(base / 'secrets_emhass.yaml', 'r') as file:
+            input_secrets = yaml.load(file, Loader=yaml.FullLoader)
         
     retrieve_hass_conf = dict((key,d[key]) for d in input_conf['retrieve_hass_conf'] for key in d)
-    retrieve_hass_conf = {**retrieve_hass_conf, **input_secrets}
+    if use_secrets:
+        retrieve_hass_conf = {**retrieve_hass_conf, **input_secrets}
+    else:
+        retrieve_hass_conf['hass_url'] = 'https://myhass.duckdns.org/'
+        retrieve_hass_conf['long_lived_token'] = 'thatverylongtokenhere'
+        retrieve_hass_conf['time_zone'] = 'Europe/Paris'
+        retrieve_hass_conf['lat'] = 45.83
+        retrieve_hass_conf['lon'] = 6.86
+        retrieve_hass_conf['alt'] = 4807.8
     retrieve_hass_conf['freq'] = pd.to_timedelta(retrieve_hass_conf['freq'], "minutes")
     retrieve_hass_conf['time_zone'] = pytz.timezone(retrieve_hass_conf['time_zone'])
     

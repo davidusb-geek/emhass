@@ -8,6 +8,8 @@ import requests
 from bs4 import BeautifulSoup
 import logging
 import pvlib
+import pathlib
+import pickle
 from pvlib.forecast import GFS
 from pvlib.pvsystem import PVSystem
 from pvlib.location import Location
@@ -56,7 +58,8 @@ class forecast:
     """
 
     def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, 
-                 config_path: str, logger: logging.Logger, opt_time_delta: Optional[int] = 24) -> None:
+                 config_path: str, logger: logging.Logger, opt_time_delta: Optional[int] = 24,
+                 get_data_from_file: Optional[bool] = False) -> None:
         """
         Define constructor for the forecast class.
         
@@ -76,6 +79,10 @@ class forecast:
         :param opt_time_delta: The time delta in hours used to generate forecasts, 
         a value of 24 will generate 24 hours of forecast data, defaults to 24
         :type opt_time_delta: int, optional
+        :param get_data_from_file: Select if data should be retrieved from a 
+        previously saved pickle useful for testing or directly from connection to
+        hass database
+        :type get_data_from_file: bool, optional
 
         """
         self.retrieve_hass_conf = retrieve_hass_conf
@@ -94,6 +101,7 @@ class forecast:
         self.lon = self.retrieve_hass_conf['lon']
         self.root = config_path
         self.logger = logger
+        self.get_data_from_file = get_data_from_file
         self.var_load_cost = 'unit_load_cost'
         self.var_prod_price = 'unit_prod_price'
         self.forecast_dates = pd.date_range(start=self.start_forecast, 
@@ -282,7 +290,6 @@ class forecast:
         :rtype: pd.DataFrame
 
         """
-        days_list = get_days_list(days_min_load_forecast)
         
         if method == 'naive': # using a naive approach
             self.logger.info("Retrieving data from hass for load forecast using method = "+method)
@@ -293,8 +300,12 @@ class forecast:
             
             rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                                self.freq, time_zone_load_foreacast, self.root, self.logger)
-            
-            rh.get_data(days_list, var_list)
+            if self.get_data_from_file:
+                with open(pathlib.Path(self.root+'/data/test_df_final.pkl'), 'rb') as inp:
+                    rh.df_final, days_list, _ = pickle.load(inp)
+            else:
+                days_list = get_days_list(days_min_load_forecast)
+                rh.get_data(days_list, var_list)
             rh.prepare_data(self.retrieve_hass_conf['var_load'], load_negative = self.retrieve_hass_conf['load_negative'],
                             set_zero_min = self.retrieve_hass_conf['set_zero_min'], 
                             var_replace_zero = var_replace_zero, 

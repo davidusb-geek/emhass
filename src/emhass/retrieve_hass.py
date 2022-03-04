@@ -25,7 +25,8 @@ class retrieve_hass:
     """
 
     def __init__(self, hass_url: str, long_lived_token: str, freq: pd.Timedelta, 
-                 time_zone: datetime.timezone, config_path: str, logger: logging.Logger) -> None:
+                 time_zone: datetime.timezone, config_path: str, logger: logging.Logger,
+                 get_data_from_file: Optional[bool] = False) -> None:
         """
         Define constructor for retrieve_hass class.
         
@@ -41,6 +42,10 @@ class retrieve_hass:
         :type config_path: str
         :param logger: The passed logger object
         :type logger: logging object
+        :param get_data_from_file: Select if data should be retrieved from a 
+        previously saved pickle useful for testing or directly from connection to
+        hass database
+        :type get_data_from_file: bool, optional
 
         """
         self.hass_url = hass_url
@@ -48,6 +53,7 @@ class retrieve_hass:
         self.freq = freq
         self.time_zone = time_zone
         self.logger = logger
+        self.get_data_from_file = get_data_from_file
 
     def get_data(self, days_list: pd.date_range, var_list: list, minimal_response: Optional[bool] = False,
                  significant_changes_only: Optional[bool] = False) -> None:
@@ -200,7 +206,11 @@ class retrieve_hass:
                 "friendly_name": friendly_name
             }
         }
-        response = post(url, headers=headers, data=json.dumps(data))
+        if self.get_data_from_file:
+            class response: pass
+            response.status_code = 400
+        else:
+            response = post(url, headers=headers, data=json.dumps(data))
         if response.status_code == 200:
             self.logger.info("Successfully posted value in existing entity_id")
         elif response.status_code == 201:
@@ -215,4 +225,4 @@ class retrieve_hass:
             self.logger.info("Error posting value to HASS: Method not allowed")
         else:
             self.logger.info("The received response code is not recognized")
-        
+        return response
