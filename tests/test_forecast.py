@@ -12,7 +12,6 @@ from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
 # the root folder
 root = str(get_root(__file__, num_parent=2))
-retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'))
 # create logger
 logger, ch = get_logger(__name__, root, file=False)
 
@@ -20,6 +19,7 @@ class TestForecast(unittest.TestCase):
 
     def setUp(self):
         get_data_from_file = True
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=False)
         self.retrieve_hass_conf, self.optim_conf, self.plant_conf = \
             retrieve_hass_conf, optim_conf, plant_conf
         self.rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
@@ -40,7 +40,7 @@ class TestForecast(unittest.TestCase):
         self.df_input_data = self.rh.df_final.copy()
         
         self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
-                             root, logger)
+                             root, logger, get_data_from_file=get_data_from_file)
         self.df_weather_scrap = self.fcst.get_weather_forecast(method='scrapper')
         self.P_PV_forecast = self.fcst.get_power_from_weather(self.df_weather_scrap)
         

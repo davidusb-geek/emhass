@@ -12,7 +12,6 @@ from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
 # the root folder
 root = str(get_root(__file__, num_parent=2))
-retrieve_hass_conf, _, _ = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'))
 # create logger
 logger, ch = get_logger(__name__, root, file=False)
 
@@ -21,10 +20,11 @@ class TestRetrieveHass(unittest.TestCase):
     def setUp(self):
         get_data_from_file = True
         save_data_to_file = False
+        retrieve_hass_conf, _, _ = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=False)
         self.retrieve_hass_conf = retrieve_hass_conf
         self.rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                                 self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
-                                root, logger)
+                                root, logger, get_data_from_file=get_data_from_file)
         if get_data_from_file:
             with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'rb') as inp:
                 self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
@@ -62,6 +62,11 @@ class TestRetrieveHass(unittest.TestCase):
         if self.retrieve_hass_conf['load_negative']:
             self.assertEqual(self.rh.df_final[self.retrieve_hass_conf['var_load']+"_positive"].isnull().sum(), 0)
         
+    def test_publish_data(self):
+        response = self.rh.post_data(self.df_raw, 0, self.df_raw.columns[0],
+                                     "Unit", "Variable")
+        self.assertEqual(response.status_code, 400)
+    
 if __name__ == '__main__':
     unittest.main()
     ch.close()
