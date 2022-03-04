@@ -41,7 +41,7 @@ setup(
     keywords='energy, management, optimization, hass',  # Optional
     package_dir={'': 'src'},  # Optional
     packages=find_packages(where='src'),  # Required
-    python_requires='>=3.8, <4',
+    python_requires='>=3.8, <3.10',
     install_requires=[
         'numpy>=1.20.1',
         'pandas>=1.2.3',
