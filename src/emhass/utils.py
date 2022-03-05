@@ -15,6 +15,8 @@ def get_root(file: str, num_parent: Optional[int] = 3) -> str:
     
     :param file: The passed file path with __file__
     :return: The root path
+    :param num_parent: The number of parents levels up to desired root folder
+    :type num_parent: int, optional
     :rtype: str
     """
     if num_parent == 3:
@@ -27,7 +29,7 @@ def get_root(file: str, num_parent: Optional[int] = 3) -> str:
         raise ValueError("num_parent value not valid, must be between 1 and 3")
     return root
 
-def get_logger(fun_name: str, config_path: str, file: Optional[bool] = True) -> Tuple[logging.Logger, logging.StreamHandler]:
+def get_logger(fun_name: str, config_path: str, save_to_file: Optional[bool] = True) -> Tuple[logging.Logger, logging.StreamHandler]:
     """
     Create a simple logger object.
     
@@ -35,8 +37,8 @@ def get_logger(fun_name: str, config_path: str, file: Optional[bool] = True) -> 
     :type fun_name: str
     :param config_path: The path to the yaml configuration file
     :type config_path: str
-    :param file: Write log to a file, defaults to True
-    :type file: bool, optional
+    :param save_to_file: Write log to a file, defaults to True
+    :type save_to_file: bool, optional
     :return: The logger object and the handler
     :rtype: object
     
@@ -63,6 +65,9 @@ def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True) -> Tupl
     
     :param config_path: The path to the yaml configuration file
     :type config_path: str
+    :param use_secrets: Indicate if we should use a secrets file or not.
+    Set to False for unit tests.
+    :type use_secrets: bool, optional
     :return: A tuple with the dictionaries containing the parsed data
     :rtype: tuple(dict)
 
