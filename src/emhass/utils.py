@@ -47,8 +47,8 @@ def get_logger(fun_name: str, config_path: str, save_to_file: Optional[bool] = T
     logger = logging.getLogger(fun_name)
     logger.propagate = True
     logger.setLevel(logging.DEBUG)
-    logger.fileSetting = file
-    if file:
+    logger.fileSetting = save_to_file
+    if save_to_file:
         ch = logging.FileHandler(config_path + '/data/logger_emhass.log')
     else:
         ch = logging.StreamHandler()
