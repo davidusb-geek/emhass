@@ -175,7 +175,7 @@ def main():
     config_path = pathlib.Path(args.config)
     base_path = str(config_path.parent)
     # create logger
-    logger, ch = get_logger(__name__, base_path, file=args.log2file)
+    logger, ch = get_logger(__name__, base_path, save_to_file=args.log2file)
     # Setup parameters
     input_data_dict = setUp(config_path, base_path, args.costfun, logger)
     # Perform selected action

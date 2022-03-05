@@ -18,7 +18,7 @@ from emhass.utils import get_root, get_logger
 # the root folder
 root = str(get_root(__file__))
 # create logger
-logger, ch = get_logger(__name__, root, file=False)
+logger, ch = get_logger(__name__, root, save_to_file=False)
 
 # Reading CSV files
 path_file = root + "/data/opt_res_perfect_optim_cost.csv"

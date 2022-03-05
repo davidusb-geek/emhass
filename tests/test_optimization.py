@@ -14,7 +14,7 @@ from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 # the root folder
 root = str(get_root(__file__, num_parent=2))
 # create logger
-logger, ch = get_logger(__name__, root, file=False)
+logger, ch = get_logger(__name__, root, save_to_file=False)
 
 class TestOptimization(unittest.TestCase):
 
