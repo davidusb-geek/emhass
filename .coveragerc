@@ -1,0 +1,7 @@
+[run]
+branch = True
+source = emhass
+parallel = True
+omit =
+    */tests/*
+    **/setup.py
