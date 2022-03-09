@@ -35,28 +35,20 @@ jobs:
         python -m pip install pytest
         python setup.py install
         
-    - name: Generate coverage report
+    - name: Test with pytest
       run: |
-        pip install pytest-cov
-        pytest --cov=src/emhass --cov-report=xml
-
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v2
-      with:
-        env_vars: OS,PYTHON
-        token: ${{secrets.CODECOV_TOKEN}}
-        fail_ci_if_error: true
-        verbose: true
+        pytest
         
-        
-    #- name: Test with pytest
+    #- name: Generate coverage report
     #  run: |
-    #    pytest
+    #    pip install pytest-cov
+    #    pytest --cov=src/emhass --cov-report=xml
+
     #- name: Upload coverage to Codecov
     #  uses: codecov/codecov-action@v2
     #  with:
     #    env_vars: OS,PYTHON
     #    token: ${{secrets.CODECOV_TOKEN}}
-    #    flags: unittests
-    #    name: codecov-umbrella
+    #    fail_ci_if_error: true
     #    verbose: true
+        
