@@ -12,8 +12,8 @@
   <a href="https://github.com/davidusb-geek/emhass/actions">
     <img alt="GitHub Workflow Status" src="https://img.shields.io/github/workflow/status/davidusb-geek/emhass/Python%20package">
   </a>
-  <a href="https://app.codecov.io/gh/davidusb-geek/emhass">
-    <img alt="Codecov" src="https://img.shields.io/codecov/c/github/davidusb-geek/emhass">
+  <a href="https://github.com/davidusb-geek/emhass/blob/master/LICENSE">
+    <img alt="GitHub" src="https://img.shields.io/github/license/davidusb-geek/emhass">
   </a>
   <a href="https://pypi.org/project/emhass/">
     <img alt="PyPI - Python Version" src="https://img.shields.io/pypi/pyversions/emhass">
