@@ -195,22 +195,3 @@ sphinx-apidoc -o ./ ../src/emhass/
 make clean
 make html
 ```
-
-## TODO
-### New functionalities
-- [x] Create a plotting script to visualize the optimization results.
-- [x] Propose multiple types of cost functions: profit maximization, self-consumption maximization, etc.
-- [x] Integrate the possibility of variable tariffs, for purshasing and selling energy to the grid.
-- [ ] Implement an energy management with a Model Predictive Control approach. Consider implementing the receiding horizon approach.
-- [ ] Introduce the modeling of constraints during optimization for a thermal energy storage.
-- [ ] Add elasticity to LP formulation in case on infeasible solution.
-### Related to forecasting improvement
-- [x] Define the type of forecast that should be used from the configuration file.
-- [x] Move get_load_unit_cost from optimization to forecast class: define forecast methods for load and PV production prices.
-- [ ] Improve load forecasting using a time series forecast algorithm. Some tests were made with fbprophet but results are not completly satisfactory. The model needs some regressors for more accuracy.
-- [ ] Test with LTSM with or without Autoencoders.
-### Packaging, HA integration, testing
-- [ ] EMHASS hass been tested in Home Assistan Core. It need to be tested on Home Assistant Operating System and Home Assistant Container. 
-- [ ] Create an EMHASS add-on for even easier installation on Home Assistant Operating System and Home Assistant Supervised.
-- [ ] Package everything in a docker container.
-- [ ] Improve testing to be used with no running hass instance.
