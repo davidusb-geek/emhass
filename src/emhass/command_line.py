@@ -12,7 +12,7 @@ from emhass.forecast import forecast
 from emhass.optimization import optimization
 from emhass.utils import get_yaml_parse, get_days_list, get_logger
 
-def setUp(config_path, base_path, costfun, logger, url, key, params):
+def setUp(config_path, base_path, costfun, logger, params):
     """
     Set up some of the data needed for the different actions.
     
@@ -22,10 +22,6 @@ def setUp(config_path, base_path, costfun, logger, url, key, params):
     :type costfun: str
     :param logger: The passed logger object
     :type logger: logging object
-    :param url: URL to Home Assistant
-    :type url: str
-    :param key: API access Key to Home Assistant
-    :type key: str
     :param params: Configuration parameters passed from data/options.json
     :type params: str
     :return: A dictionnary with multiple data used by the action functions
@@ -176,8 +172,6 @@ def main():
     parser.add_argument('--config', type=str, help='Define path to the config.yaml file')
     parser.add_argument('--costfun', type=str, default='profit', help='Define the type of cost function, options are: profit, cost, self-consumption')
     parser.add_argument('--log2file', type=bool, default=False, help='Define if we should log to a file or not')
-    parser.add_argument('--url', type=str, default=None, help='URL to Home Assistant')
-    parser.add_argument('--key', type=str, default=None, help='API access Key to Home Assistant')
     parser.add_argument('--params', type=str, default=None, help='Configuration parameters passed from data/options.json')
     args = parser.parse_args()
     # The path to the configuration files
@@ -186,11 +180,8 @@ def main():
     # create logger
     logger, ch = get_logger(__name__, base_path, save_to_file=args.log2file)
     # Setup parameters
-    url = args.url
-    key = args.key
     params = args.params
-    input_data_dict = setUp(config_path, base_path, args.costfun, logger, 
-                            url, key, params)
+    input_data_dict = setUp(config_path, base_path, args.costfun, logger, params)
     # Perform selected action
     if args.action == 'perfect-optim':
         opt_res = perfect_forecast_optim(input_data_dict, logger)
