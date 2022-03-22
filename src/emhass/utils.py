@@ -6,7 +6,7 @@ from typing import (
     Optional,
 )
 import pandas as pd
-import yaml, pytz, logging, pathlib
+import yaml, pytz, logging, pathlib, json
 from datetime import datetime, timedelta, timezone
 
 def get_root(file: str, num_parent: Optional[int] = 3) -> str:
@@ -59,7 +59,8 @@ def get_logger(fun_name: str, config_path: str, save_to_file: Optional[bool] = T
 
     return logger, ch
 
-def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True) -> Tuple[dict, dict, dict]:
+def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
+                   params: Optional[str] = None) -> Tuple[dict, dict, dict]:
     """
     Perform parsing of the config.yaml file.
     
@@ -68,13 +69,18 @@ def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True) -> Tupl
     :param use_secrets: Indicate if we should use a secrets file or not.
     Set to False for unit tests.
     :type use_secrets: bool, optional
+    :param params: Configuration parameters passed from data/options.json
+    :type params: str
     :return: A tuple with the dictionaries containing the parsed data
     :rtype: tuple(dict)
 
     """
     base = config_path.parent
-    with open(config_path, 'r') as file:
-        input_conf = yaml.load(file, Loader=yaml.FullLoader)
+    if params is None:
+        with open(config_path, 'r') as file:
+            input_conf = yaml.load(file, Loader=yaml.FullLoader)
+    else:
+        input_conf = json.loads(params)
     if use_secrets:
         with open(base / 'secrets_emhass.yaml', 'r') as file:
             input_secrets = yaml.load(file, Loader=yaml.FullLoader)
