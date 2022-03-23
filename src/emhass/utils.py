@@ -82,8 +82,11 @@ def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
     else:
         input_conf = json.loads(params)
     if use_secrets:
-        with open(base / 'secrets_emhass.yaml', 'r') as file:
-            input_secrets = yaml.load(file, Loader=yaml.FullLoader)
+        if params is None:
+            with open(base / 'secrets_emhass.yaml', 'r') as file:
+                input_secrets = yaml.load(file, Loader=yaml.FullLoader)
+        else:
+            input_secrets = input_conf.pop('params_secrets', None)
         
     retrieve_hass_conf = dict((key,d[key]) for d in input_conf['retrieve_hass_conf'] for key in d)
     if use_secrets:
