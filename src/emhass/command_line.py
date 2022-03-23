@@ -12,7 +12,7 @@ from emhass.forecast import forecast
 from emhass.optimization import optimization
 from emhass.utils import get_yaml_parse, get_days_list, get_logger
 
-def setUp(config_path, base_path, costfun, logger):
+def setUp(config_path, base_path, costfun, logger, params):
     """
     Set up some of the data needed for the different actions.
     
@@ -22,13 +22,15 @@ def setUp(config_path, base_path, costfun, logger):
     :type costfun: str
     :param logger: The passed logger object
     :type logger: logging object
+    :param params: Configuration parameters passed from data/options.json
+    :type params: str
     :return: A dictionnary with multiple data used by the action functions
     :rtype: dict
 
     """
     logger.info("Setting up needed data")
     # Parsing yaml
-    retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(config_path)
+    retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(config_path, params=params)
     # Retrieve data from hass
     days_list = get_days_list(retrieve_hass_conf['days_to_retrieve'])
     var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
@@ -36,7 +38,7 @@ def setUp(config_path, base_path, costfun, logger):
                        retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'], 
                        base_path, logger)
     rh.get_data(days_list, var_list,
-                minimal_response=False, significant_changes_only=False)
+                minimal_response=False, significant_changes_only=False, significant_changes_only=False)
     rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
                     set_zero_min = retrieve_hass_conf['set_zero_min'], 
                     var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
@@ -170,6 +172,7 @@ def main():
     parser.add_argument('--config', type=str, help='Define path to the config.yaml file')
     parser.add_argument('--costfun', type=str, default='profit', help='Define the type of cost function, options are: profit, cost, self-consumption')
     parser.add_argument('--log2file', type=bool, default=False, help='Define if we should log to a file or not')
+    parser.add_argument('--params', type=str, default=None, help='Configuration parameters passed from data/options.json')
     args = parser.parse_args()
     # The path to the configuration files
     config_path = pathlib.Path(args.config)
@@ -177,7 +180,8 @@ def main():
     # create logger
     logger, ch = get_logger(__name__, base_path, save_to_file=args.log2file)
     # Setup parameters
-    input_data_dict = setUp(config_path, base_path, args.costfun, logger)
+    params = args.params
+    input_data_dict = setUp(config_path, base_path, args.costfun, logger, params)
     # Perform selected action
     if args.action == 'perfect-optim':
         opt_res = perfect_forecast_optim(input_data_dict, logger)
