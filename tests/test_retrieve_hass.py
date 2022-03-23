@@ -6,6 +6,7 @@ import pandas as pd
 import pytz
 import pathlib
 import pickle
+import json
 
 from emhass.retrieve_hass import retrieve_hass
 from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
@@ -38,6 +39,16 @@ class TestRetrieveHass(unittest.TestCase):
                     pickle.dump((self.rh.df_final, self.days_list, self.var_list), 
                                 outp, pickle.HIGHEST_PROTOCOL)
         self.df_raw = self.rh.df_final.copy()
+        
+    def test_get_yaml_parse(self):
+        with open(root+'/config_emhass.json', 'r') as read_file:
+            data = json.load(read_file)
+        params = json.dumps(data)
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), 
+                                                                    use_secrets=False, params=params)
+        self.assertIsInstance(retrieve_hass_conf, dict)
+        self.assertIsInstance(optim_conf, dict)
+        self.assertIsInstance(plant_conf, dict)
         
     def test_get_data(self):
         self.assertIsInstance(self.rh.df_final, type(pd.DataFrame()))

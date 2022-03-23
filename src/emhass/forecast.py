@@ -143,6 +143,7 @@ class forecast:
                 for count_row, row in enumerate(list_rows):
                     raw_data.loc[count_row, col] = float(row.get_text())
             raw_data.set_index(forecast_dates_scrap, inplace=True)
+            raw_data = raw_data[~raw_data.index.duplicated(keep='first')]
             raw_data = raw_data.reindex(forecast_dates)
             raw_data.interpolate(method='linear', axis=0, limit=None, 
                                  limit_direction='both', inplace=True)

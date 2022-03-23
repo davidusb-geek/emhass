@@ -12,8 +12,8 @@
   <a href="https://github.com/davidusb-geek/emhass/actions">
     <img alt="GitHub Workflow Status" src="https://img.shields.io/github/workflow/status/davidusb-geek/emhass/Python%20package">
   </a>
-  <a href="https://app.codecov.io/gh/davidusb-geek/emhass">
-    <img alt="Codecov" src="https://img.shields.io/codecov/c/github/davidusb-geek/emhass">
+  <a href="https://github.com/davidusb-geek/emhass/blob/master/LICENSE">
+    <img alt="GitHub" src="https://img.shields.io/github/license/davidusb-geek/emhass">
   </a>
   <a href="https://pypi.org/project/emhass/">
     <img alt="PyPI - Python Version" src="https://img.shields.io/pypi/pyversions/emhass">
@@ -196,21 +196,14 @@ make clean
 make html
 ```
 
-## TODO
-### New functionalities
-- [x] Create a plotting script to visualize the optimization results.
-- [x] Propose multiple types of cost functions: profit maximization, self-consumption maximization, etc.
-- [x] Integrate the possibility of variable tariffs, for purshasing and selling energy to the grid.
-- [ ] Implement an energy management with a Model Predictive Control approach. Consider implementing the receiding horizon approach.
-- [ ] Introduce the modeling of constraints during optimization for a thermal energy storage.
-- [ ] Add elasticity to LP formulation in case on infeasible solution.
-### Related to forecasting improvement
-- [x] Define the type of forecast that should be used from the configuration file.
-- [x] Move get_load_unit_cost from optimization to forecast class: define forecast methods for load and PV production prices.
-- [ ] Improve load forecasting using a time series forecast algorithm. Some tests were made with fbprophet but results are not completly satisfactory. The model needs some regressors for more accuracy.
-- [ ] Test with LTSM with or without Autoencoders.
-### Packaging, HA integration, testing
-- [ ] EMHASS hass been tested in Home Assistan Core. It need to be tested on Home Assistant Operating System and Home Assistant Container. 
-- [ ] Create an EMHASS add-on for even easier installation on Home Assistant Operating System and Home Assistant Supervised.
-- [ ] Package everything in a docker container.
-- [ ] Improve testing to be used with no running hass instance.
+## License
+
+MIT License
+
+Copyright (c) 2021-2022 David HERNANDEZ
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
