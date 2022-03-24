@@ -92,8 +92,8 @@ def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
     if use_secrets:
         retrieve_hass_conf = {**retrieve_hass_conf, **input_secrets}
     else:
-        retrieve_hass_conf['hass_url'] = 'https://myhass.duckdns.org/'
-        retrieve_hass_conf['long_lived_token'] = 'thatverylongtokenhere'
+        retrieve_hass_conf['hass_url'] = 'http://supervisor/core/api'
+        retrieve_hass_conf['long_lived_token'] = '${SUPERVISOR_TOKEN}'
         retrieve_hass_conf['time_zone'] = 'Europe/Paris'
         retrieve_hass_conf['lat'] = 45.83
         retrieve_hass_conf['lon'] = 6.86
