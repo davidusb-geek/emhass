@@ -1,18 +1,18 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import argparse
-import os
+import argparse, os, pathlib, logging
 import pandas as pd
 from datetime import datetime, timezone
-import pathlib
+from typing import Optional
 
 from emhass.retrieve_hass import retrieve_hass
 from emhass.forecast import forecast
 from emhass.optimization import optimization
 from emhass.utils import get_yaml_parse, get_days_list, get_logger
 
-def setUp(config_path, base_path, costfun, logger, params):
+def setUp(config_path: pathlib.Path, base_path: str, costfun: str, 
+    params: str, logger: logging.Logger) -> dict:
     """
     Set up some of the data needed for the different actions.
     
@@ -20,10 +20,10 @@ def setUp(config_path, base_path, costfun, logger, params):
     :type config_path: str
     :param costfun: The type of cost function to use for optimization problem
     :type costfun: str
-    :param logger: The passed logger object
-    :type logger: logging object
     :param params: Configuration parameters passed from data/options.json
     :type params: str
+    :param logger: The passed logger object
+    :type logger: logging object
     :return: A dictionnary with multiple data used by the action functions
     :rtype: dict
 
@@ -38,7 +38,7 @@ def setUp(config_path, base_path, costfun, logger, params):
                        retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'], 
                        base_path, logger)
     rh.get_data(days_list, var_list,
-                minimal_response=False, significant_changes_only=False, significant_changes_only=False)
+                minimal_response=False, significant_changes_only=False)
     rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
                     set_zero_min = retrieve_hass_conf['set_zero_min'], 
                     var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
@@ -70,7 +70,8 @@ def setUp(config_path, base_path, costfun, logger, params):
     }
     return input_data_dict
     
-def perfect_forecast_optim(input_data_dict, logger):
+def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
+    save_data_to_file: Optional[bool] = True) -> pd.DataFrame:
     """
     Perform a call to the perfect forecast optimization routine.
     
@@ -78,6 +79,8 @@ def perfect_forecast_optim(input_data_dict, logger):
     :type input_data_dict: dict
     :param logger: The passed logger object
     :type logger: logging object
+    :param save_data_to_file: Save optimization results to CSV file
+    :type save_data_to_file: bool, optional
     :return: The output data of the optimization
     :rtype: pd.DataFrame
 
@@ -90,11 +93,13 @@ def perfect_forecast_optim(input_data_dict, logger):
         df_input_data, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
     opt_res = input_data_dict['opt'].perform_perfect_forecast_optim(df_input_data)
     # Save CSV file for analysis
-    filename = 'opt_res_perfect_optim_'+input_data_dict['costfun']
-    opt_res.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
+    if save_data_to_file:
+        filename = 'opt_res_perfect_optim_'+input_data_dict['costfun']
+        opt_res.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
     return opt_res
     
-def dayahead_forecast_optim(input_data_dict, logger):
+def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
+    save_data_to_file: Optional[bool] = False) -> pd.DataFrame:
     """
     Perform a call to the day-ahead optimization routine.
     
@@ -102,6 +107,8 @@ def dayahead_forecast_optim(input_data_dict, logger):
     :type input_data_dict: dict
     :param logger: The passed logger object
     :type logger: logging object
+    :param save_data_to_file: Save optimization results to CSV file
+    :type save_data_to_file: bool, optional
     :return: The output data of the optimization
     :rtype: pd.DataFrame
 
@@ -115,12 +122,15 @@ def dayahead_forecast_optim(input_data_dict, logger):
     opt_res_dayahead = input_data_dict['opt'].perform_dayahead_forecast_optim(
         df_input_data_dayahead, input_data_dict['P_PV_forecast'], input_data_dict['P_load_forecast'])
     # Save CSV file for publish_data
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    filename = 'opt_res_dayahead_'+today.strftime("%Y_%m_%d")
+    if save_data_to_file:
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        filename = 'opt_res_dayahead_'+today.strftime("%Y_%m_%d")
+    else: # Just save the latest optimization results
+        filename = 'opt_res_dayahead_latest'
     opt_res_dayahead.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
     return opt_res_dayahead
     
-def publish_data(input_data_dict, logger):
+def publish_data(input_data_dict: dict, logger: logging.Logger) -> pd.DataFrame:
     """
     Publish the data obtained from the optimization results.
     
@@ -181,7 +191,7 @@ def main():
     logger, ch = get_logger(__name__, base_path, save_to_file=args.log2file)
     # Setup parameters
     params = args.params
-    input_data_dict = setUp(config_path, base_path, args.costfun, logger, params)
+    input_data_dict = setUp(config_path, base_path, args.costfun, params, logger)
     # Perform selected action
     if args.action == 'perfect-optim':
         opt_res = perfect_forecast_optim(input_data_dict, logger)
