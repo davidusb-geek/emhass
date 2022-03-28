@@ -153,6 +153,8 @@ automation:
     - service: homeassistant.turn_off
       entity_id: switch.water_heater
 ```
+The `publish-data` command will push to Home Assistant the optimization results for each deferrable load defined in the configuration. For example if you have defined two deferrable loads, then the command will publish `sensor.p_deferrable1` and `sensor.p_deferrable2` to Home Assistant.
+
 
 ## Development
 
