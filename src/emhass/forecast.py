@@ -298,9 +298,10 @@ class forecast:
             var_replace_zero = None
             var_interp = [self.var_load]
             time_zone_load_foreacast = None
+            params = None
             
             rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
-                               self.freq, time_zone_load_foreacast, self.root, self.logger)
+                               self.freq, time_zone_load_foreacast, params, self.root, self.logger)
             if self.get_data_from_file:
                 with open(pathlib.Path(self.root+'/data/test_df_final.pkl'), 'rb') as inp:
                     rh.df_final, days_list, _ = pickle.load(inp)
