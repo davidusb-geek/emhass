@@ -36,7 +36,7 @@ def setUp(config_path: pathlib.Path, base_path: str, costfun: str,
     var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
     rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
                        retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'], 
-                       base_path, logger)
+                       params, base_path, logger)
     rh.get_data(days_list, var_list,
                 minimal_response=False, significant_changes_only=False)
     rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],

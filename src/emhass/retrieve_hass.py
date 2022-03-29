@@ -25,7 +25,7 @@ class retrieve_hass:
     """
 
     def __init__(self, hass_url: str, long_lived_token: str, freq: pd.Timedelta, 
-                 time_zone: datetime.timezone, config_path: str, logger: logging.Logger,
+                 time_zone: datetime.timezone, params: str, config_path: str, logger: logging.Logger,
                  get_data_from_file: Optional[bool] = False) -> None:
         """
         Define constructor for retrieve_hass class.
@@ -38,6 +38,8 @@ class retrieve_hass:
         :type freq: pd.TimeDelta
         :param time_zone: The time zone
         :type time_zone: datetime.timezone
+        :param params: Configuration parameters passed from data/options.json
+        :type params: str
         :param config_path: The path to the yaml configuration file
         :type config_path: str
         :param logger: The passed logger object
@@ -52,6 +54,8 @@ class retrieve_hass:
         self.long_lived_token = long_lived_token
         self.freq = freq
         self.time_zone = time_zone
+        self.params = params
+        self.config_path = config_path
         self.logger = logger
         self.get_data_from_file = get_data_from_file
 
@@ -81,21 +85,25 @@ class retrieve_hass:
         """
         self.logger.info("Retrieve hass get data method initiated...")
         self.df_final = pd.DataFrame()
+        # Looping on each day from days list
         for day in days_list:
         
             for i, var in enumerate(var_list):
                 
-                url = self.hass_url+"api/history/period/"+day.isoformat()+"?filter_entity_id="+var
-                if minimal_response:
+                if self.params is None: # If this is the case we suppose that we are using the supervisor API
+                    url = self.hass_url+"/history/period/"+day.isoformat()+"?filter_entity_id="+var
+                else: # Otherwise the Home Assistant Core API it is
+                    url = self.hass_url+"api/history/period/"+day.isoformat()+"?filter_entity_id="+var
+                if minimal_response: # A support for minimal response
                     url = url + "?minimal_response"
-                if significant_changes_only:
+                if significant_changes_only: # And for signicant changes only (check the HASS restful API for more info)
                     url = url + "?significant_changes_only"
                 headers = {
                     "Authorization": "Bearer " + self.long_lived_token,
                     "content-type": "application/json",
                 }
                 response = get(url, headers=headers)
-                try:
+                try: # Sometimes when there are connection problems we need to catch empty retrieved json
                     data = response.json()[0]
                 except IndexError:
                     self.logger.error("The retrieved JSON is empty, check that correct day or variable names are passed")
@@ -103,14 +111,16 @@ class retrieve_hass:
                 df_raw = pd.DataFrame.from_dict(data)
                 if len(df_raw) == 0:
                     self.logger.error("Retrieved empty Dataframe, check that correct day or variable names are passed")
-                if i == 0:
+                if i == 0: # Defining the DataFrame container
                     from_date = pd.to_datetime(df_raw['last_changed']).min()
                     to_date = pd.to_datetime(df_raw['last_changed']).max()
                     ts = pd.to_datetime(pd.date_range(start=from_date, end=to_date, freq=self.freq), 
                                         format='%Y-%d-%m %H:%M').round(self.freq)
                     df_day = pd.DataFrame(index = ts)
+                # Caution with undefined string data: unknown, unavailable, etc.
                 df_tp = df_raw.copy()[['state']].replace(
                     ['unknown', 'unavailable', ''], np.nan).astype(float).rename(columns={'state': var})
+                # Setting index, resampling and concatenation
                 df_tp.set_index(pd.to_datetime(df_raw['last_changed']), inplace=True)
                 df_tp = df_tp.resample(self.freq).mean()
                 df_day = pd.concat([df_day, df_tp], axis=1)
@@ -143,16 +153,17 @@ class retrieve_hass:
         :rtype: pandas.DataFrame
         
         """
-        if load_negative:
+        if load_negative: # Apply the correct sign to load power
             self.df_final[var_load+'_positive'] = -self.df_final[var_load]
         else:
             self.df_final[var_load+'_positive'] = self.df_final[var_load]
         self.df_final.drop([var_load], inplace=True, axis=1)
-        if set_zero_min:
+        if set_zero_min: # Apply minimum values
             self.df_final.clip(lower=0.0, inplace=True, axis=1)
             self.df_final.replace(to_replace=0.0, value=np.nan, inplace=True)
         new_var_replace_zero = []
         new_var_interp = []
+        # Just changing the names of variables to contain the fact that they are considered positive
         if var_replace_zero is not None:
             for string in var_replace_zero:
                 new_string = string.replace(var_load, var_load+'_positive')
@@ -165,11 +176,13 @@ class retrieve_hass:
                 new_var_interp.append(new_string)
         else:
             new_var_interp = None
+        # Treating NaN replacement: either by zeros or by linear interpolation
         if new_var_replace_zero is not None:
             self.df_final[new_var_replace_zero] = self.df_final[new_var_replace_zero].fillna(0.0)
         if new_var_interp is not None:
             self.df_final[new_var_interp] = self.df_final[new_var_interp].interpolate(
                 method='linear', axis=0, limit=None)
+        # Setting the correct time zone on DF index
         if self.time_zone is not None:
             self.df_final.index = self.df_final.index.tz_convert(self.time_zone)
         # Drop datetimeindex duplicates on final DF
@@ -194,11 +207,15 @@ class retrieve_hass:
         :type friendly_name: str
 
         """
-        url = self.hass_url+"api/states/"+entity_id
+        if self.params is None: # If this is the case we suppose that we are using the supervisor API
+            url = self.hass_url+"/states/"+entity_id
+        else: # Otherwise the Home Assistant Core API it is
+            url = self.hass_url+"api/states/"+entity_id
         headers = {
             "Authorization": "Bearer " + self.long_lived_token,
             "content-type": "application/json",
         }
+        # Preparing the data dict to be published
         data = {
             "state": str(data_df.loc[data_df.index[idx]]),
             "attributes": {
@@ -206,11 +223,13 @@ class retrieve_hass:
                 "friendly_name": friendly_name
             }
         }
+        # Actually post the data
         if self.get_data_from_file:
             class response: pass
             response.status_code = 400
         else:
             response = post(url, headers=headers, data=json.dumps(data))
+        # Treating the response status and posting them on the logger
         if response.status_code == 200:
             self.logger.info("Successfully posted value in existing entity_id")
         elif response.status_code == 201:
