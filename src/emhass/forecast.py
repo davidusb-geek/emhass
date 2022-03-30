@@ -166,6 +166,26 @@ class forecast:
     
     def cloud_cover_to_irradiance(self, cloud_cover: pd.Series, 
                                   offset:Optional[int] = 35) -> pd.DataFrame:
+        """Estimates irradiance from cloud cover in the following steps:
+        
+        1. Determine clear sky GHI using Ineichen model and
+           climatological turbidity.
+           
+        2. Estimate cloudy sky GHI using a function of cloud_cover
+           
+        3. Estimate cloudy sky DNI using the DISC model.
+        
+        4. Calculate DHI from DNI and GHI.
+        
+        (This function was copied and modified from PVLib)
+
+        :param cloud_cover: Cloud cover in %.
+        :type cloud_cover: pd.Series
+        :param offset: Determines the minimum GHI., defaults to 35
+        :type offset: Optional[int], optional
+        :return: Estimated GHI, DNI, and DHI.
+        :rtype: pd.DataFrame
+        """
         location = Location(latitude=self.lat, longitude=self.lon)
         solpos = location.get_solarposition(cloud_cover.index)
         cs = location.get_clearsky(cloud_cover.index, model='ineichen', 
