@@ -2,19 +2,17 @@
 # -*- coding: utf-8 -*-
 
 from typing import Optional
-import pandas as pd
+import pathlib, pickle, copy, logging
+import pandas as pd, numpy as np
 from datetime import datetime, timedelta
 import requests
 from bs4 import BeautifulSoup
-import logging
 import pvlib
-import pathlib
-import pickle
-from pvlib.forecast import GFS
 from pvlib.pvsystem import PVSystem
 from pvlib.location import Location
 from pvlib.modelchain import ModelChain
 from pvlib.temperature import TEMPERATURE_MODEL_PARAMETERS
+from pvlib.irradiance import disc
 
 from emhass.retrieve_hass import retrieve_hass
 from emhass.utils import get_days_list
@@ -109,18 +107,18 @@ class forecast:
                                             freq=self.freq).round(self.freq)
         
         
-    def get_weather_forecast(self, method: Optional[str] = 'scrapper') -> pd.DataFrame:
+    def get_weather_forecast(self, method: Optional[str] = 'scrapper',
+                             csv_path: Optional[str] = "/data/data_weather_forecast.csv") -> pd.DataFrame:
         """
         Get and generate weather forecast data.
         
-        :param method: The desired method, options are 'scrapper' and 'pvlib', \
+        :param method: The desired method, options are 'scrapper' and 'csv', \
             defaults to 'scrapper'
         :type method: str, optional
         :return: The DataFrame containing the forecasted data
         :rtype: pd.DataFrame
         
         """
-        model = GFS()
         self.logger.info("Retrieving weather forecast data using method = "+method)
         if method == 'scrapper':
             freq_scrap = pd.to_timedelta(60, "minutes")
@@ -147,31 +145,40 @@ class forecast:
             raw_data = raw_data.reindex(forecast_dates)
             raw_data.interpolate(method='linear', axis=0, limit=None, 
                                  limit_direction='both', inplace=True)
-            model.set_location(self.time_zone, self.lat, self.lon)
-            ghi_est = model.cloud_cover_to_irradiance(raw_data['Total Clouds (% Sky Obscured)'])
+            ghi_est = self.cloud_cover_to_irradiance(raw_data['Total Clouds (% Sky Obscured)'])
             data = ghi_est
             data['temp_air'] = raw_data['Temperature (°C)']
             data['wind_speed'] = raw_data['Wind Speed/Direction (mph)']*1.60934 # conversion to km/h
             data['relative_humidity'] = raw_data['Relative Humidity (%)']
             data['precipitable_water'] = pvlib.atmosphere.gueymard94_pw(
                 data['temp_air'], data['relative_humidity'])
-        elif method == 'pvlib':
-            """
-            This is experimental, the GHI forecast from PVLib is unstable and prone to
-            changes. The advantage of this approach is that the resulting DF automatically
-            contains the needed variables for the PV plant model
-            """
-            raw_data = model.get_data(self.lat, self.lon, self.start_forecast, self.end_forecast)
-            data = raw_data.copy()
-            data = model.rename(data)
-            data['temp_air'] = model.kelvin_to_celsius(data['temp_air'])
-            data['wind_speed'] = model.uv_to_speed(data)
-            irrad_data = model.cloud_cover_to_irradiance(data['total_clouds'])
-            data = data.join(irrad_data, how='outer')
-            data = data[model.output_variables]
+        elif method == 'csv': # reading from a csv file
+            forecast_dates_csv = self.get_forecast_days_csv()
+            load_csv_file_path = self.root + csv_path
+            data = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
+            data = pd.concat([data, data], axis=0)
+            data.index = forecast_dates_csv
+            data.drop(['ts'], axis=1, inplace=True)
+            data = data.copy().loc[self.forecast_dates]
         else:
             self.logger.error("Passed method is not valid")
         return data
+    
+    def cloud_cover_to_irradiance(self, cloud_cover: pd.Series, 
+                                  offset:Optional[int] = 35) -> pd.DataFrame:
+        location = Location(latitude=self.lat, longitude=self.lon)
+        solpos = location.get_solarposition(cloud_cover.index)
+        cs = location.get_clearsky(cloud_cover.index, model='ineichen', 
+                                   solar_position=solpos)
+        # Using only the linear method
+        offset = offset / 100.
+        cloud_cover_unit = copy.deepcopy(cloud_cover) / 100.
+        ghi = (offset + (1 - offset) * (1 - cloud_cover_unit)) * cs['ghi']
+        # Using disc model
+        dni = disc(ghi, solpos['zenith'], cloud_cover.index)['dni']
+        dhi = ghi - dni * np.cos(np.radians(solpos['zenith']))
+        irrads = pd.DataFrame({'ghi': ghi, 'dni': dni, 'dhi': dhi}).fillna(0)
+        return irrads
     
     def get_power_from_weather(self, df_weather: pd.DataFrame) -> pd.Series:
         """

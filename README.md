@@ -158,7 +158,11 @@ The `publish-data` command will push to Home Assistant the optimization results 
 
 ## Development
 
-To develop using Anaconda:
+Create a developer environment:
+```
+virtualenv -p /usr/bin/python3 emhass-dev
+```
+To develop using Anaconda use (pick the correct Python and Pip versions):
 ```
 conda create --name emhass-dev python=3.8 pip=21.0.1
 ```
@@ -169,6 +173,15 @@ pip install -r docs/requirements.txt
 Add `emhass` to the Python path using the path to `src`, for example:
 ```
 /home/user/emhass/src
+```
+If working on linux we can add these lines to the `~/.bashrc` file:
+```
+# Python modules
+export PYTHONPATH="${PYTHONPATH}:/home/user/emhass/src"
+```
+Don't foget to source the `~/.bashrc` file:
+```
+source ~/.bashrc
 ```
 Update the build package:
 ```
