@@ -6,6 +6,8 @@ import pandas as pd
 from datetime import datetime, timezone
 from typing import Optional
 
+from importlib.metadata import version
+import emhass
 from emhass.retrieve_hass import retrieve_hass
 from emhass.forecast import forecast
 from emhass.optimization import optimization
@@ -95,7 +97,9 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     # Save CSV file for analysis
     if save_data_to_file:
         filename = 'opt_res_perfect_optim_'+input_data_dict['costfun']
-        opt_res.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
+    else: # Just save the latest optimization results
+        filename = 'opt_res_perfect_optim_latest'
+    opt_res.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
     return opt_res
     
 def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
@@ -183,6 +187,7 @@ def main():
     parser.add_argument('--costfun', type=str, default='profit', help='Define the type of cost function, options are: profit, cost, self-consumption')
     parser.add_argument('--log2file', type=bool, default=False, help='Define if we should log to a file or not')
     parser.add_argument('--params', type=str, default=None, help='Configuration parameters passed from data/options.json')
+    parser.add_argument('--version', action='version', version='%(prog)s '+version('emhass'))
     args = parser.parse_args()
     # The path to the configuration files
     config_path = pathlib.Path(args.config)

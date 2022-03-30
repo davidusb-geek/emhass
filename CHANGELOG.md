@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - 2022-03-29
 ### Added
 - Improved support for the new add-on and direct communication via the supervisor.
+- The CLI now can return the version using the --version argument.
+### Fix
+- Removed dependency from PVLib Forecast class, as it has been marked as deprecated.
 
 ## [0.2.2] - 2022-03-05
 ### Added
