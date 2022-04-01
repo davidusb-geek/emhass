@@ -19,26 +19,45 @@ from emhass.utils import get_days_list
 
 class forecast:
     """
-    Generate weather and load forecasts needed as inputs to the optimization.
+    Generate weather, load and costs forecasts needed as inputs to the optimization.
+
+    In EMHASS we have basically 4 forecasts to deal with:
+
+    - PV power production forecast (internally based on the weather forecast and the 
+    characteristics of your PV plant). This is given in Watts.
     
-    The weather forecast is obtained from two methods. In the first method
-    the tools proposed in the PVLib package are use to retrieve data from the
-    GFS global model. However this API proposed by PVLib is highly experimental
-    and prone to changes. A second method uses a scrapper to the ClearOutside
-    webpage which proposes detailed forecasts based on Lat/Lon locations. This
-    methods seems quite stable but as any scrape method it will fail if any changes
-    are made to the webpage API.
+    - Load power forecast: how much power your house will demand on the next 24h. This 
+    is given in Watts.
+
+    - PV production selling price forecast: at what price are you selling your excess 
+    PV production on the next 24h. This is given in EUR/kWh.
+
+    - Load cost forecast: the price of the energy from the grid on the next 24h. This 
+    is given in EUR/kWh.
+    
+    The weather forecast is obtained from two methods. The first method
+    uses a scrapper to the ClearOutside webpage which proposes detailed forecasts 
+    based on Lat/Lon locations. This method seems quite stable but as with any scrape 
+    method it will fail if any changes are made to the webpage API. The second method
+    for weather forecast is using a direct read fro a CSV file. With this method we
+    will consider that we are reading the PV power directly.
     
     The 'get_power_from_weather' method is proposed here to convert from irradiance
     data to electrical power. Again PVLib is used to model the PV plant.
-    For the load forecast two methods are available.
     
-    The first method allows the user to use a CSV file with their own forecast.
-    With this method a more powerful external package for time series forecast
-    may be used to create your own detailed load forecast.
+    For the load forecast two methods are available. The first method allows the user 
+    to use a CSV file with their own forecast. With this method a more powerful 
+    external package for time series forecast may be used to create your own detailed 
+    load forecast. The second method is a naive method, also called persistance.
+    It simply assumes that the forecast for a future period will be equal to the
+    observed values in a past period. The past period is controlled using 
+    parameter 'delta_forecast'.
+
+    For the PV production selling price and Load cost forecasts the privileged method
+    is a direct read from a user provided CSV file. 
     
-    The CSV should contain no header and the timestamped data should have the
-    following format:
+    For all the forecastin g methods, the CSV file should contain no header and the 
+    timestamped data should have the following format:
         
     2021-04-29 00:00:00+00:00,287.07
     
@@ -48,10 +67,8 @@ class forecast:
         
     ...
     
-    The second method is a naive method, also called persistance.
-    It simply assumes that the forecast for a future period will be equal to the
-    observed values in a past period. The past period is controlled using 
-    parameter 'delta_forecast'.
+    The data columns in these files will correspond to the data in the units expected
+    for each forecasting method.
     
     """
 
@@ -120,13 +137,15 @@ class forecast:
         
         """
         self.logger.info("Retrieving weather forecast data using method = "+method)
+        self.weather_forecast_method = method # Saving this attribute for later use to identify csv method usage
         if method == 'scrapper':
-            freq_scrap = pd.to_timedelta(60, "minutes")
+            freq_scrap = pd.to_timedelta(60, "minutes") # The scrapping time step is 60min
             forecast_dates_scrap = pd.date_range(start=self.start_forecast,
                                                  end=self.end_forecast-freq_scrap, 
                                                  freq=freq_scrap).round(freq_scrap)
             forecast_dates = pd.date_range(start=self.start_forecast, 
                                            end=self.end_forecast-self.freq, freq=self.freq).round(self.freq)
+            # Using the clearoutside webpage
             response = requests.get("https://clearoutside.com/forecast/"+str(round(self.lat, 2))+"/"+str(round(self.lon, 2)))
             soup = BeautifulSoup(response.content, 'html.parser')
             table = soup.find_all(id='day_0')[0]
@@ -135,16 +154,19 @@ class forecast:
             selected_cols = [0, 1, 2, 3, 10, 12, 15] # Selected variables
             col_names = [list_names[i].get_text() for i in selected_cols]
             list_tables = [list_tables[i] for i in selected_cols]
+            # Building the raw DF container
             raw_data = pd.DataFrame(index=range(24), columns=col_names, dtype=float)
             for count_col, col in enumerate(col_names):
                 list_rows = list_tables[count_col].find_all('li')
                 for count_row, row in enumerate(list_rows):
                     raw_data.loc[count_row, col] = float(row.get_text())
+            # Treating index
             raw_data.set_index(forecast_dates_scrap, inplace=True)
             raw_data = raw_data[~raw_data.index.duplicated(keep='first')]
             raw_data = raw_data.reindex(forecast_dates)
             raw_data.interpolate(method='linear', axis=0, limit=None, 
                                  limit_direction='both', inplace=True)
+            # Converting the cloud cover into Global Horizontal Irradiance with a PVLib method
             ghi_est = self.cloud_cover_to_irradiance(raw_data['Total Clouds (% Sky Obscured)'])
             data = ghi_est
             data['temp_air'] = raw_data['Temperature (°C)']
@@ -154,8 +176,9 @@ class forecast:
                 data['temp_air'], data['relative_humidity'])
         elif method == 'csv': # reading from a csv file
             forecast_dates_csv = self.get_forecast_days_csv()
-            load_csv_file_path = self.root + csv_path
-            data = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
+            weather_csv_file_path = self.root + csv_path
+            # Loading the csv file, we will consider that this is the PV power in W
+            data = pd.read_csv(weather_csv_file_path, header=None, names=['ts', 'yhat'])
             data = pd.concat([data, data], axis=0)
             data.index = forecast_dates_csv
             data.drop(['ts'], axis=1, inplace=True)
@@ -212,25 +235,32 @@ class forecast:
         :rtype: pd.DataFrame
 
         """
-        # Transform to power (Watts)
-        location = Location(latitude=self.lat, longitude=self.lon)
-        temp_params = TEMPERATURE_MODEL_PARAMETERS['sapm']['close_mount_glass_glass']
-        cec_modules = pvlib.pvsystem.retrieve_sam('CECMod')
-        cec_inverters = pvlib.pvsystem.retrieve_sam('cecinverter')
-        module = cec_modules[self.plant_conf['module_model']]
-        inverter = cec_inverters[self.plant_conf['inverter_model']]
-        
-        system = PVSystem(surface_tilt=self.plant_conf['surface_tilt'], 
-                          surface_azimuth=self.plant_conf['surface_azimuth'],
-                          module_parameters=module,
-                          inverter_parameters=inverter,
-                          temperature_model_parameters=temp_params,
-                          modules_per_string=self.plant_conf['modules_per_string'],
-                          strings_per_inverter=self.plant_conf['strings_per_inverter'])
-        mc = ModelChain(system, location, aoi_model="physical")
-        mc.run_model(df_weather)
-        
-        P_PV_forecast = mc.results.ac
+        if self.weather_forecast_method == 'csv': # If using csv method we consider that yhat is the PV power in W
+            P_PV_forecast = df_weather['yhat']
+            P_PV_forecast.name = None
+        else: # We will transform the weather data into electrical power
+            # Transform to power (Watts)
+            # Setting the main parameters of the PV plant
+            location = Location(latitude=self.lat, longitude=self.lon)
+            temp_params = TEMPERATURE_MODEL_PARAMETERS['sapm']['close_mount_glass_glass']
+            cec_modules = pvlib.pvsystem.retrieve_sam('CECMod')
+            cec_inverters = pvlib.pvsystem.retrieve_sam('cecinverter')
+            # Selecting correct module and inverter
+            module = cec_modules[self.plant_conf['module_model']]
+            inverter = cec_inverters[self.plant_conf['inverter_model']]
+            # Building the PV system in PVLib
+            system = PVSystem(surface_tilt=self.plant_conf['surface_tilt'], 
+                            surface_azimuth=self.plant_conf['surface_azimuth'],
+                            module_parameters=module,
+                            inverter_parameters=inverter,
+                            temperature_model_parameters=temp_params,
+                            modules_per_string=self.plant_conf['modules_per_string'],
+                            strings_per_inverter=self.plant_conf['strings_per_inverter'])
+            mc = ModelChain(system, location, aoi_model="physical")
+            # Run the model on the weather DF indexes
+            mc.run_model(df_weather)
+            # Extracting results for AC power
+            P_PV_forecast = mc.results.ac
         
         return P_PV_forecast
     
@@ -326,7 +356,7 @@ class forecast:
             var_interp = [self.var_load]
             time_zone_load_foreacast = None
             params = None
-            
+            # We will need to retrieve a new set of load data according to the days_min_load_forecast parameter
             rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                                self.freq, time_zone_load_foreacast, params, self.root, self.logger)
             if self.get_data_from_file:
