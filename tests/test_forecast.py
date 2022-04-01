@@ -56,18 +56,21 @@ class TestForecast(unittest.TestCase):
         self.assertEqual(len(self.df_weather_scrap), 
                          int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
         print(">> The length of the wheater forecast = "+str(len(self.df_weather_scrap)))
-        try:
-            self.df_weather_pvlib = self.fcst.get_weather_forecast(method='pvlib')
-            self.assertIsInstance(self.df_weather_pvlib, type(pd.DataFrame()))
-            self.assertTrue(col in self.df_weather_pvlib.columns for col in ['ghi', 'dni', 'dhi', 'temp_air'])
-            self.assertIsInstance(self.df_weather_pvlib.index, pd.core.indexes.datetimes.DatetimeIndex)
-            self.assertIsInstance(self.df_weather_pvlib.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-            self.assertEqual(self.df_weather_pvlib.index.tz, self.fcst.time_zone)
-            self.assertTrue(self.fcst.start_forecast < ts for ts in self.df_weather_pvlib.index)
-            self.assertEqual(len(self.df_weather_pvlib), 
-                             int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
-        except:
-            print(">> The pvlib method to get weather result in error output!")
+        self.df_weather_csv = self.fcst.get_weather_forecast(method='csv')
+        self.assertEqual(self.fcst.weather_forecast_method, 'csv')
+        self.assertIsInstance(self.df_weather_csv, type(pd.DataFrame()))
+        self.assertIsInstance(self.df_weather_csv.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(self.df_weather_csv.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        self.assertEqual(self.df_weather_csv.index.tz, self.fcst.time_zone)
+        self.assertTrue(self.fcst.start_forecast < ts for ts in self.df_weather_csv.index)
+        self.assertEqual(len(self.df_weather_csv), 
+                         int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
+        P_PV_forecast = self.fcst.get_power_from_weather(self.df_weather_csv)
+        self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
+        self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
+        self.assertEqual(len(self.df_weather_csv), len(P_PV_forecast))
         
     def test_get_power_from_weather(self):
         self.assertIsInstance(self.P_PV_forecast, pd.core.series.Series)

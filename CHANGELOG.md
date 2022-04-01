@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Improved support for the new add-on and direct communication via the supervisor.
 - The CLI now can return the version using the --version argument.
+- Improved comments in forecast class.
+- Added unittest for csv method for weather forecast.
 ### Fix
 - Removed dependency from PVLib Forecast class, as it has been marked as deprecated.
 
