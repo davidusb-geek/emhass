@@ -42,7 +42,7 @@ class TestOptimization(unittest.TestCase):
         self.df_input_data = self.rh.df_final.copy()
         
         self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf,
-                             root, logger, get_data_from_file=get_data_from_file)
+                             params, root, logger, get_data_from_file=get_data_from_file)
         self.df_weather = self.fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
         self.P_PV_forecast = self.fcst.get_power_from_weather(self.df_weather)
         self.P_load_forecast = self.fcst.get_load_forecast(method=optim_conf['load_forecast_method'])

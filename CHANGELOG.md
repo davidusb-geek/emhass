@@ -4,12 +4,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2022-03-29
+## [0.2.3] - 2022-03-29
 ### Added
 - Improved support for the new add-on and direct communication via the supervisor.
 - The CLI now can return the version using the --version argument.
 - Improved comments in forecast class.
 - Added unittest for csv method for weather forecast.
+- Added support for passing lists of values to all forecasting methods.
 ### Fix
 - Removed dependency from PVLib Forecast class, as it has been marked as deprecated.
 - Fixed failing docs builds due to uncompatible jinja2 an markupsafe versions.
@@ -81,3 +82,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.0]: https://github.com/davidusb-geek/emhass/releases/tag/v0.2.0
 [0.2.1]: https://github.com/davidusb-geek/emhass/releases/tag/v0.2.1
 [0.2.2]: https://github.com/davidusb-geek/emhass/releases/tag/v0.2.2
+[0.2.3]: https://github.com/davidusb-geek/emhass/releases/tag/v0.2.3

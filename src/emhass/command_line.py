@@ -48,7 +48,7 @@ def setUp(config_path: pathlib.Path, base_path: str, costfun: str,
     df_input_data = rh.df_final.copy()
     # Initialize objects
     fcst = forecast(retrieve_hass_conf, optim_conf, plant_conf,
-                    base_path, logger)
+                    params, base_path, logger)
     df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
     P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
@@ -68,7 +68,8 @@ def setUp(config_path: pathlib.Path, base_path: str, costfun: str,
         'fcst': fcst,
         'P_PV_forecast': P_PV_forecast,
         'P_load_forecast': P_load_forecast,
-        'costfun': costfun
+        'costfun': costfun,
+        'params': params
     }
     return input_data_dict
     
