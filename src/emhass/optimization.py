@@ -16,8 +16,6 @@ class optimization:
     
     This class methods are:
 
-    - get_load_unit_cost
-
     - perform_optimization
 
     - perform_perfect_forecast_optim
@@ -28,7 +26,8 @@ class optimization:
 
     def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, 
                  var_load_cost: str, var_prod_price: str, days_list: pd.date_range, 
-                 costfun: str, config_path: str, logger: logging.Logger, opt_time_delta: Optional[int] = 24) -> None:
+                 costfun: str, config_path: str, logger: logging.Logger, 
+                 opt_time_delta: Optional[int] = 24) -> None:
         """
         Define constructor for optimization class.
         

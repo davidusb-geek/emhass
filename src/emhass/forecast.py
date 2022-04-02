@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 from typing import Optional
-import pathlib, pickle, copy, logging
+import pathlib, pickle, copy, logging, json
 import pandas as pd, numpy as np
 from datetime import datetime, timedelta
 import requests
@@ -73,7 +73,8 @@ class forecast:
     """
 
     def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, 
-                 config_path: str, logger: logging.Logger, opt_time_delta: Optional[int] = 24,
+                 params: str, config_path: str, logger: logging.Logger, 
+                 opt_time_delta: Optional[int] = 24,
                  get_data_from_file: Optional[bool] = False) -> None:
         """
         Define constructor for the forecast class.
@@ -87,6 +88,8 @@ class forecast:
         :param plant_conf: Dictionnary containing the needed configuration
             data from the configuration file, specific for the modeling of the PV plant
         :type plant_conf: dict
+        :param params: Configuration parameters passed from data/options.json
+        :type params: str
         :param config_path: The path to the yaml configuration file
         :type config_path: str
         :param logger: The passed logger object
@@ -122,7 +125,10 @@ class forecast:
         self.forecast_dates = pd.date_range(start=self.start_forecast, 
                                             end=self.end_forecast-self.freq, 
                                             freq=self.freq).round(self.freq)
-        
+        if params is None:
+            self.params = params
+        else:
+            self.params = json.loads(params)
         
     def get_weather_forecast(self, method: Optional[str] = 'scrapper',
                              csv_path: Optional[str] = "/data/data_weather_forecast.csv") -> pd.DataFrame:
@@ -180,9 +186,31 @@ class forecast:
             # Loading the csv file, we will consider that this is the PV power in W
             data = pd.read_csv(weather_csv_file_path, header=None, names=['ts', 'yhat'])
             data = pd.concat([data, data], axis=0)
-            data.index = forecast_dates_csv
-            data.drop(['ts'], axis=1, inplace=True)
-            data = data.copy().loc[self.forecast_dates]
+            # Check if the passed data has the correct length
+            if len(data) < len(forecast_dates_csv):
+                data = None
+                self.logger.error("Passed data from CSV is not long enough")
+            else:
+                # Define index and pick correct dates
+                data.index = forecast_dates_csv
+                data.drop(['ts'], axis=1, inplace=True)
+                data = data.copy().loc[self.forecast_dates]
+        elif method == 'list': # reading a list of values
+            forecast_dates_csv = self.get_forecast_days_csv()
+            # Loading data from passed list
+            data_list = self.params['passed_data']['pv_power_forecast']
+            data_list = data_list + data_list
+            # Check if the passed data has the correct length
+            if len(data_list) < len(forecast_dates_csv):
+                data = None
+                self.logger.error("Passed data from passed list is not long enough")
+            else:
+                # Define index and pick correct dates
+                data_dict = {'ts':forecast_dates_csv, 'yhat':data_list}
+                data = pd.DataFrame.from_dict(data_dict)
+                data.index = forecast_dates_csv
+                data.drop(['ts'], axis=1, inplace=True)
+                data = data.copy().loc[self.forecast_dates]
         else:
             self.logger.error("Passed method is not valid")
         return data
@@ -280,9 +308,8 @@ class forecast:
                                            freq=self.freq).round(self.freq)
         return forecast_dates_csv
     
-    def get_forecast_out_from_csv(self, df_final: pd.DataFrame, 
-                                  forecast_dates_csv: pd.date_range,
-                                  csv_path: str) -> pd.DataFrame:
+    def get_forecast_out_from_csv(self, df_final: pd.DataFrame, forecast_dates_csv: pd.date_range,
+                                  csv_path: str, data_list: Optional[list] = None) -> pd.DataFrame:
         """
         Get the forecast data as a DataFrame from a CSV file. The data contained \
             in the CSV file should be a 24h forecast with the same frequency as \
@@ -303,11 +330,17 @@ class forecast:
         days_list = pd.date_range(start=df_final.index[0], 
                                   end=df_final.index[-1], 
                                   freq='D')
-            
-        load_csv_file_path = self.root + csv_path
-        df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
-        df_csv.index = forecast_dates_csv
-        df_csv.drop(['ts'], axis=1, inplace=True)
+        
+        if csv_path is None:
+            data_dict = {'ts':forecast_dates_csv, 'yhat':data_list}
+            df_csv = pd.DataFrame.from_dict(data_dict)
+            df_csv.index = forecast_dates_csv
+            df_csv.drop(['ts'], axis=1, inplace=True)
+        else:
+            load_csv_file_path = self.root + csv_path
+            df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
+            df_csv.index = forecast_dates_csv
+            df_csv.drop(['ts'], axis=1, inplace=True)
         
         forecast_out = pd.DataFrame()
         for day in days_list:
@@ -355,10 +388,9 @@ class forecast:
             var_replace_zero = None
             var_interp = [self.var_load]
             time_zone_load_foreacast = None
-            params = None
             # We will need to retrieve a new set of load data according to the days_min_load_forecast parameter
             rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
-                               self.freq, time_zone_load_foreacast, params, self.root, self.logger)
+                               self.freq, time_zone_load_foreacast, self.params, self.root, self.logger)
             if self.get_data_from_file:
                 with open(pathlib.Path(self.root+'/data/test_df_final.pkl'), 'rb') as inp:
                     rh.df_final, days_list, _ = pickle.load(inp)
@@ -384,10 +416,31 @@ class forecast:
             load_csv_file_path = self.root + csv_path
             df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
             df_csv = pd.concat([df_csv, df_csv], axis=0)
-            df_csv.index = forecast_dates_csv
-            df_csv.drop(['ts'], axis=1, inplace=True)
-            forecast_out = df_csv.copy().loc[self.forecast_dates]
-            
+            if len(df_csv) < len(forecast_dates_csv):
+                forecast_out = {'yhat':None}
+                self.logger.error("Passed data from CSV is not long enough")
+            else:
+                df_csv.index = forecast_dates_csv
+                df_csv.drop(['ts'], axis=1, inplace=True)
+                forecast_out = df_csv.copy().loc[self.forecast_dates]
+        
+        elif method == 'list': # reading a list of values
+            forecast_dates_csv = self.get_forecast_days_csv()
+            # Loading data from passed list
+            data_list = self.params['passed_data']['load_power_forecast']
+            data_list = data_list + data_list
+            # Check if the passed data has the correct length
+            if len(data_list) < len(forecast_dates_csv):
+                forecast_out = {'yhat':None}
+                self.logger.error("Passed data from passed list is not long enough")
+            else:
+                # Define index and pick correct dates
+                data_dict = {'ts':forecast_dates_csv, 'yhat':data_list}
+                data = pd.DataFrame.from_dict(data_dict)
+                data.index = forecast_dates_csv
+                data.drop(['ts'], axis=1, inplace=True)
+                forecast_out = data.copy().loc[self.forecast_dates]
+
         else:
             self.logger.error("Passed method is not valid")
 
@@ -428,6 +481,18 @@ class forecast:
                                                           forecast_dates_csv,
                                                           csv_path)
             df_final[self.var_load_cost] = forecast_out
+        elif method == 'list': # reading a list of values
+            forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
+            data_list = self.params['passed_data']['load_cost_forecast']
+            if len(data_list) < len(forecast_dates_csv):
+                df_final = None
+                self.logger.error("Passed data from passed list is not long enough")
+            else:
+                forecast_out = self.get_forecast_out_from_csv(df_final,
+                                                            forecast_dates_csv,
+                                                            None,
+                                                            data_list=data_list)
+                df_final[self.var_load_cost] = forecast_out
         else:
             self.logger.error("Passed method is not valid")
             
@@ -463,6 +528,18 @@ class forecast:
                                                           forecast_dates_csv,
                                                           csv_path)
             df_final[self.var_prod_price] = forecast_out
+        elif method == 'list': # reading a list of values
+            forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
+            data_list = self.params['passed_data']['prod_price_forecast']
+            if len(data_list) < len(forecast_dates_csv):
+                df_final = None
+                self.logger.error("Passed data from passed list is not long enough")
+            else:
+                forecast_out = self.get_forecast_out_from_csv(df_final,
+                                                            forecast_dates_csv,
+                                                            None,
+                                                            data_list=data_list)
+                df_final[self.var_prod_price] = forecast_out
         else:
             self.logger.error("Passed method is not valid")
             

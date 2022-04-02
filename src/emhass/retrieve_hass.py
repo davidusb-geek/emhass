@@ -90,7 +90,7 @@ class retrieve_hass:
         
             for i, var in enumerate(var_list):
                 
-                if self.params is None: # If this is the case we suppose that we are using the supervisor API
+                if self.params is not None: # If this is the case we suppose that we are using the supervisor API
                     url = self.hass_url+"/history/period/"+day.isoformat()+"?filter_entity_id="+var
                 else: # Otherwise the Home Assistant Core API it is
                     url = self.hass_url+"api/history/period/"+day.isoformat()+"?filter_entity_id="+var

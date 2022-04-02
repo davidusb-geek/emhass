@@ -43,8 +43,8 @@ class TestRetrieveHass(unittest.TestCase):
         
     def test_get_yaml_parse(self):
         with open(root+'/config_emhass.json', 'r') as read_file:
-            data = json.load(read_file)
-        data.update({
+            params = json.load(read_file)
+        params.update({
             'params_secrets': {
                 'hass_url': 'http://supervisor/core/api',
                 'long_lived_token': '${SUPERVISOR_TOKEN}',
@@ -54,7 +54,7 @@ class TestRetrieveHass(unittest.TestCase):
                 'alt': 4807.8
             }
             })
-        params = json.dumps(data)
+        params = json.dumps(params)
         retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), 
                                                                     use_secrets=True, params=params)
         self.assertIsInstance(retrieve_hass_conf, dict)
