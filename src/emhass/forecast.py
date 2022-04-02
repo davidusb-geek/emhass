@@ -20,20 +20,20 @@ from emhass.utils import get_days_list
 class forecast:
     """
     Generate weather, load and costs forecasts needed as inputs to the optimization.
-
+    
     In EMHASS we have basically 4 forecasts to deal with:
-
+    
     - PV power production forecast (internally based on the weather forecast and the 
-    characteristics of your PV plant). This is given in Watts.
+        characteristics of your PV plant). This is given in Watts.
     
     - Load power forecast: how much power your house will demand on the next 24h. This 
-    is given in Watts.
-
+        is given in Watts.
+    
     - PV production selling price forecast: at what price are you selling your excess 
-    PV production on the next 24h. This is given in EUR/kWh.
-
+        PV production on the next 24h. This is given in EUR/kWh.
+    
     - Load cost forecast: the price of the energy from the grid on the next 24h. This 
-    is given in EUR/kWh.
+        is given in EUR/kWh.
     
     The weather forecast is obtained from two methods. The first method
     uses a scrapper to the ClearOutside webpage which proposes detailed forecasts 
@@ -52,19 +52,19 @@ class forecast:
     It simply assumes that the forecast for a future period will be equal to the
     observed values in a past period. The past period is controlled using 
     parameter 'delta_forecast'.
-
+    
     For the PV production selling price and Load cost forecasts the privileged method
     is a direct read from a user provided CSV file. 
     
     For all the forecastin g methods, the CSV file should contain no header and the 
     timestamped data should have the following format:
-        
+    
     2021-04-29 00:00:00+00:00,287.07
     
     2021-04-29 00:30:00+00:00,274.27
     
     2021-04-29 01:00:00+00:00,243.38
-        
+    
     ...
     
     The data columns in these files will correspond to the data in the units expected
@@ -79,24 +79,24 @@ class forecast:
         Define constructor for the forecast class.
         
         :param retrieve_hass_conf: Dictionnary containing the needed configuration
-        data from the configuration file, specific to retrieve data from HASS
+            data from the configuration file, specific to retrieve data from HASS
         :type retrieve_hass_conf: dict
         :param optim_conf: Dictionnary containing the needed configuration
-        data from the configuration file, specific for the optimization task
+            data from the configuration file, specific for the optimization task
         :type optim_conf: dict
         :param plant_conf: Dictionnary containing the needed configuration
-        data from the configuration file, specific for the modeling of the PV plant
+            data from the configuration file, specific for the modeling of the PV plant
         :type plant_conf: dict
         :param config_path: The path to the yaml configuration file
         :type config_path: str
         :param logger: The passed logger object
         :type logger: logging object
         :param opt_time_delta: The time delta in hours used to generate forecasts, 
-        a value of 24 will generate 24 hours of forecast data, defaults to 24
+            a value of 24 will generate 24 hours of forecast data, defaults to 24
         :type opt_time_delta: int, optional
         :param get_data_from_file: Select if data should be retrieved from a 
-        previously saved pickle useful for testing or directly from connection to
-        hass database
+            previously saved pickle useful for testing or directly from connection to
+            hass database
         :type get_data_from_file: bool, optional
 
         """

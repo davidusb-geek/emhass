@@ -67,7 +67,7 @@ def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
     :param config_path: The path to the yaml configuration file
     :type config_path: str
     :param use_secrets: Indicate if we should use a secrets file or not.
-    Set to False for unit tests.
+        Set to False for unit tests.
     :type use_secrets: bool, optional
     :param params: Configuration parameters passed from data/options.json
     :type params: str
