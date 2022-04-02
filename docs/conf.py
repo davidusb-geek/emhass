@@ -18,7 +18,7 @@ for x in os.walk('../src/'):
 # -- Project information -----------------------------------------------------
 
 project = 'emhass'
-copyright = '2021, David HERNANDEZ'
+copyright = '2021-2022, David HERNANDEZ'
 author = 'David HERNANDEZ'
 
 # The full version, including alpha/beta/rc tags

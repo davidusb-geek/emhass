@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added unittest for csv method for weather forecast.
 ### Fix
 - Removed dependency from PVLib Forecast class, as it has been marked as deprecated.
+- Fixed failing docs builds due to uncompatible jinja2 an markupsafe versions.
 
 ## [0.2.2] - 2022-03-05
 ### Added
