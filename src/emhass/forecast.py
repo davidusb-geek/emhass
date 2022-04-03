@@ -263,7 +263,8 @@ class forecast:
         :rtype: pd.DataFrame
 
         """
-        if self.weather_forecast_method == 'csv': # If using csv method we consider that yhat is the PV power in W
+        # If using csv method we consider that yhat is the PV power in W
+        if self.weather_forecast_method == 'csv' or self.weather_forecast_method == 'list':
             P_PV_forecast = df_weather['yhat']
             P_PV_forecast.name = None
         else: # We will transform the weather data into electrical power
