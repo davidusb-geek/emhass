@@ -6,6 +6,7 @@ import numpy as np, pandas as pd
 from requests import get, post
 import json
 import datetime, logging
+from emhass.utils import add_freq
 
 class retrieve_hass:
     """
@@ -126,7 +127,9 @@ class retrieve_hass:
                 df_day = pd.concat([df_day, df_tp], axis=1)
             
             self.df_final = pd.concat([self.df_final, df_day], axis=0)
-        self.df_final.index.freq = self.freq
+        idx = add_freq(self.df_final.index, self.freq)
+        self.df_final.index = idx
+        #self.df_final.index.freq = self.freq
 
     
     def prepare_data(self, var_load: str, load_negative: Optional[bool] = False, set_zero_min: Optional[bool] = True,

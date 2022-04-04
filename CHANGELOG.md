@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 ### Fix
 - Fixed missing command to retrieve PV power forecast when using list of values.
+- Updated handling of freq definition to a pandas index.
 
 ## [0.2.3] - 2022-03-29
 ### Added
