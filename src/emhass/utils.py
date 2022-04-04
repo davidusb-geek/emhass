@@ -124,3 +124,20 @@ def get_days_list(days_to_retrieve: int) -> pd.date_range:
     days_list = pd.date_range(start=d, end=today.isoformat(), freq='D')
     
     return days_list
+
+def add_freq(index, freq=None):
+    """
+    Add a frequency attribute to index, through inference or directly.
+
+    """
+    index = index.copy()
+    if freq is None:
+        if index.freq is None:
+            freq = pd.infer_freq(index)
+        else:
+            return index
+    index.freq = pd.tseries.frequencies.to_offset(freq)
+    if index.freq is None:
+        raise AttributeError('no discernible frequency found to `index`. Specify'
+                             ' a frequency string with `freq`.')
+    return index
