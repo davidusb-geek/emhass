@@ -6,7 +6,7 @@ import numpy as np, pandas as pd
 from requests import get, post
 import json
 import datetime, logging
-from emhass.utils import add_freq
+from emhass.utils import set_df_index_freq
 
 class retrieve_hass:
     """
@@ -127,8 +127,9 @@ class retrieve_hass:
                 df_day = pd.concat([df_day, df_tp], axis=1)
             
             self.df_final = pd.concat([self.df_final, df_day], axis=0)
-        idx = add_freq(self.df_final.index, self.freq)
-        self.df_final.index = idx
+        self.df_final = set_df_index_freq(self.df_final)
+        if self.df_final.index.freq != self.freq:
+            self.logger.error("The inferred freq from data is not equal to the defined freq in passed parameters")
         #self.df_final.index.freq = self.freq
 
     

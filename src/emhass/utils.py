@@ -125,19 +125,16 @@ def get_days_list(days_to_retrieve: int) -> pd.date_range:
     
     return days_list
 
-def add_freq(index, freq=None):
+def set_df_index_freq(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Add a frequency attribute to index, through inference or directly.
-
+    Set the freq of a DataFrame DateTimeIndex.
+    Args:
+        df (pd.DataFrame): Input DataFrame
+    Returns:
+        pd.DataFrame: Input DataFrame with freq defined
     """
-    index = index.copy()
-    if freq is None:
-        if index.freq is None:
-            freq = pd.infer_freq(index)
-        else:
-            return index
-    index.freq = pd.tseries.frequencies.to_offset(freq)
-    if index.freq is None:
-        raise AttributeError('no discernible frequency found to `index`. Specify'
-                             ' a frequency string with `freq`.')
-    return index
+    idx_diff = np.diff(df.index)
+    sampling = pd.to_timedelta(np.median(idx_diff))
+    df = df[~df.index.duplicated()]
+    df = df.asfreq(sampling)
+    return df
