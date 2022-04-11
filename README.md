@@ -168,7 +168,7 @@ conda create --name emhass-dev python=3.8 pip=21.0.1
 ```
 Then activate environment and install the required packages using:
 ```
-pip install -r docs/requirements.txt
+pip install -r requirements.txt
 ```
 Add `emhass` to the Python path using the path to `src`, for example:
 ```
@@ -199,16 +199,6 @@ git push origin --tags
 Upload to pypi:
 ```
 twine upload dist/*
-```
-To generate de documentation we will use Sphynx, the following packages are needed:
-```
-pip install sphinx==3.5.4 sphinx-rtd-theme==0.5.2 myst-parser==0.14.0
-```
-The actual documentation is generated using:
-```
-sphinx-apidoc -o ./ ../src/emhass/
-make clean
-make html
 ```
 
 ## License
