@@ -150,3 +150,13 @@ For example:
 ```
 emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.yaml' --params '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}'
 ```
+
+The possible dictionnary keys to pass data are:
+
+- `pv_power_forecast` for the PV power production forecast.
+
+- `load_power_forecast` for the Load power forecast.
+
+- `load_cost_forecast` for the Load cost forecast.
+
+- `prod_price_forecast` for the PV production selling price forecast.
