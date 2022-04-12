@@ -5,7 +5,7 @@ from typing import (
     Tuple,
     Optional,
 )
-import pandas as pd
+import numpy as np, pandas as pd
 import yaml, pytz, logging, pathlib, json
 from datetime import datetime, timedelta, timezone
 
