@@ -108,10 +108,12 @@ class retrieve_hass:
                     data = response.json()[0]
                 except IndexError:
                     self.logger.error("The retrieved JSON is empty, check that correct day or variable names are passed")
+                    self.logger.error("Either the names of the passed variables are not correct or days_to_retrieve is larger than the recorded history of your sensor (check your recorder settings)")
                     break
                 df_raw = pd.DataFrame.from_dict(data)
                 if len(df_raw) == 0:
                     self.logger.error("Retrieved empty Dataframe, check that correct day or variable names are passed")
+                    self.logger.error("Either the names of the passed variables are not correct or days_to_retrieve is larger than the recorded history of your sensor (check your recorder settings)")
                 if i == 0: # Defining the DataFrame container
                     from_date = pd.to_datetime(df_raw['last_changed']).min()
                     to_date = pd.to_datetime(df_raw['last_changed']).max()
