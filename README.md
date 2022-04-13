@@ -77,6 +77,19 @@ You can find the add-on with the installation instructions here: [https://github
 
 The add-on usage instructions can be found on the documentation pane of the add-on once installed or directly here: [EMHASS Add-on documentation](https://github.com/davidusb-geek/emhass-add-on/blob/main/emhass/DOCS.md)
 
+### Install using Docker
+
+You can use Docker to build your own image of EMHASS un run optimizations. For this go to the add-on repository and use the Dockerfile there. 
+
+Clone the EMHASS add-on repository and build the Docker with:
+```
+docker build \
+  --build-arg BUILD_FROM="homeassistant/amd64-base:latest" \
+  -t local/emhass-addon \
+  .
+```
+These architectures are supported: `amd64`, `armhf`, `armv7` and `aarch64`.
+
 ## Usage
 
 To run a command simply use the `emhass` command followed by the needed arguments.
@@ -94,6 +107,26 @@ emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.yaml'
 ```
 Before running any valuable command you need to modify the `config_emhass.yaml` and `secrets_emhass.yaml` files. These files should contain the information adapted to your own system. To do this take a look at the special section for this in the [documentation](https://emhass.readthedocs.io/en/latest/config.html).
 
+If using Docker, you will need to moify the `config.yaml` file of the add-on repository. 
+
+Then run the Docker using using:
+```
+docker run \
+  --rm \
+  -v /tmp/my_test_data:/data \
+  -p 5000 \
+  local/emhass-addon
+```
+
+This add-on exposes a simple webserver on port 5000. You can access it directly using your brower, ex: http://localhost:5000.
+
+With this web server you can perform RESTful POST commands on one ENDPOINT called `action` with two main options:
+
+- A POST call to `action/dayahead-optim` to perform a day-ahead optimization task of your home energy
+- A POST call to `action/publish-data ` to publish the optimization results data.
+
+A `curl` command can the be used to launch an optimization task like this: `curl -i -H "Content-Type: application/json" -X POST -d '{}' http://localhost:5000/action/dayahead-optim`.
+
 ## Home Assistant integration
 
 To integrate with home assistant we will need to define some shell commands in the `configuration.yaml` file and some basic automations in the `automations.yaml` file.
@@ -104,6 +137,13 @@ shell_command:
   dayahead_optim: /home/user/emhass/scripts/dayahead_optim.sh
   publish_data: /home/user/emhass/scripts/publish_data.sh
 ```
+If using Docker you can use this instead on the `configuration.yaml` file:
+```
+shell_command:
+  dayahead_optim: curl -i -H "Content-Type: application/json" -X POST -d '{}' http://localhost:5000/action/dayahead-optim
+  publish_data: curl -i -H "Content-Type: application/json" -X POST -d '{}' http://localhost:5000/action/publish-data 
+```
+
 And in `automations.yaml`:
 ```
 - alias: EMHASS day-ahead optimization
@@ -120,6 +160,7 @@ And in `automations.yaml`:
   - service: shell_command.publish_data
 ```
 In these automations the optimization is performed everyday at 5:30am and the data is published every 5 minutes.
+
 Create the file `dayahead_optim.sh` with the following content:
 ```
 #!/bin/bash
@@ -178,7 +219,7 @@ In EMHASS we have basically 4 forecasts to deal with:
 
 - PV production selling price forecast: at what price are you selling your excess PV production on the next 24h. This is given in EUR/kWh.
 
-Maybe the hardest part is the load data: `sensor_power_load_no_var_loads`. As we want to optimize the energies, the load forecast default method is a naive approach using 1-day persistence, this mean that the load data variable should not contain the data from the deferrable loads themselves. For example, lets say that you set your deferrable load to be the washing machine. The variable that you should enter in EMHASS will be: `sensor_power_load_no_var_loads = sensor_power_load - sensor_power_washing_machine`. This is supposing that the overall load of your house is contained in variable: `sensor_power_load`. This can be easily done with a new template sensor in Home Assistant.
+Maybe the hardest part is the load data: parameter `var_load` in the configuration file. As we want to optimize the household energies, when need to frecast the load power conumption. The ldefault method for this is a naive approach using 1-day persistence, this mean that the load data variable should not contain the data from the deferrable loads themselves. For example, lets say that you set your deferrable load to be the washing machine. The variable that you should enter in EMHASS will be: `var_load: 'sensor.power_load_no_var_loads'` and `sensor_power_load_no_var_loads = sensor_power_load - sensor_power_washing_machine`. This is supposing that the overall load of your house is contained in variable: `sensor_power_load`. The sensor `sensor_power_load_no_var_loads` can be easily created with a new template sensor in Home Assistant.
 
 ### Passing your own forecast data
 
@@ -187,6 +228,10 @@ It is possible to provide EMHASS with your own forecast data. For this just add 
 For example:
 ```
 emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.yaml' --params '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}'
+```
+If using Docker you can pass this data as list of values to the data dictionnary during the `curl` POST:
+```
+curl -i -H "Content-Type: application/json" -X POST -d '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}' http://localhost:5000/action/dayahead-optim
 ```
 
 The possible dictionnary keys to pass data are:
