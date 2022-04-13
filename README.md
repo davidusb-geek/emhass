@@ -79,7 +79,7 @@ The add-on usage instructions can be found on the documentation pane of the add-
 
 ### Install using Docker
 
-You can use Docker to build your own image of EMHASS un run optimizations. For this go to the add-on repository and use the Dockerfile there. 
+You can use Docker to build your own image of EMHASS and run optimizations. For this go to the add-on repository and use the Dockerfile there. 
 
 Clone the EMHASS add-on repository and build the Docker with:
 ```
@@ -107,7 +107,7 @@ emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.yaml'
 ```
 Before running any valuable command you need to modify the `config_emhass.yaml` and `secrets_emhass.yaml` files. These files should contain the information adapted to your own system. To do this take a look at the special section for this in the [documentation](https://emhass.readthedocs.io/en/latest/config.html).
 
-If using Docker, you will need to moify the `config.yaml` file of the add-on repository. 
+If using Docker, you will need to modify the `config.yaml` file of the add-on repository. 
 
 Then run the Docker using using:
 ```
