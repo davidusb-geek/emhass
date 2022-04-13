@@ -69,6 +69,14 @@ To upgrade the installation in the future just use:
 python3 -m pip install --upgrade emhass
 ```
 
+### The EMHASS add-on
+
+For Home Assistant OS and HA Supervised users, I've developed an add-on that will help you use EMHASS. The add-on is more user friendly as the configuration can be modified directly in the add-on options pane and also it exposes a web ui that can be used to inspect the optimization results and manually trigger a new optimization.
+
+You can find the add-on with the installation instructions here: [https://github.com/davidusb-geek/emhass-add-on](https://github.com/davidusb-geek/emhass-add-on)
+
+The add-on usage instructions can be found on the documentation pane of the add-on once installed or directly here: [EMHASS Add-on documentation](https://github.com/davidusb-geek/emhass-add-on/blob/main/emhass/DOCS.md)
+
 ## Usage
 
 To run a command simply use the `emhass` command followed by the needed arguments.
