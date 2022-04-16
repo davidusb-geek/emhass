@@ -5,7 +5,7 @@ from typing import Optional
 import pandas as pd
 import numpy as np
 import pulp as plp
-from pulp import PULP_CBC_CMD
+from pulp import PULP_CBC_CMD, GLPK_CMD
 import logging
 
 class optimization:
@@ -298,7 +298,18 @@ class optimization:
     
         ## Finally, we call the solver to solve our optimization model:
         # solving with default solver CBC
-        opt_model.solve(PULP_CBC_CMD(msg=0))
+        try:
+            opt_model.solve(PULP_CBC_CMD(msg=0))
+        except Exception:
+            self.logger.warning("Failed LP solve with PULP_CBC_CMD solver, falling back to default Pulp")
+            try:
+                opt_model.solve()
+            except Exception:
+                self.logger.warning("Failed LP solve with default Pulp solver, falling back to GLPK_CMD")
+                try:
+                    opt_model.solve(GLPK_CMD(msg=0))
+                except Exception:
+                    self.logger.error("It was not possible to find a valid solver for Pulp package")
         
         # The status of the solution is printed to the screen
         self.logger.info("Status: " + plp.LpStatus[opt_model.status])
