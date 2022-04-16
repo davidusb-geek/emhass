@@ -290,6 +290,15 @@ Upload to pypi:
 twine upload dist/*
 ```
 
+## Troubleshooting
+
+Some problems may arise from solver related issues in the Pulp package. It was found that for arm64 architectures (ie. Raspberry Pi4, 64 bits) the default solver is not avaliable. A workaround is to install a new solver. The `glpk` solver is an option and can be installed with:
+```
+sudo apt-get install glpk-utils
+```
+After this it should be available for use and EMHASS can use it as a fallback option.
+
+
 ## License
 
 MIT License

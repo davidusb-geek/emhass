@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2022-04-16
+### Improvement
+- Improved handling of errors concerning solver issues with Pulp. Added support for `glpk` solver. For now just using a try/catch strategy but should update to solver passed as a parameter to EMHASS.
+
 ## [0.2.5] - 2022-04-12
 ### Fix
 - Fixed missing numpy import in utils.
@@ -14,10 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated handling of freq definition to a pandas index.
 
 ## [0.2.3] - 2022-03-29
-### Added
+### Improvement
 - Improved support for the new add-on and direct communication via the supervisor.
 - The CLI now can return the version using the --version argument.
 - Improved comments in forecast class.
+### Added
 - Added unittest for csv method for weather forecast.
 - Added support for passing lists of values to all forecasting methods.
 ### Fix
@@ -94,3 +99,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.3]: https://github.com/davidusb-geek/emhass/releases/tag/v0.2.3
 [0.2.4]: https://github.com/davidusb-geek/emhass/releases/tag/v0.2.4
 [0.2.5]: https://github.com/davidusb-geek/emhass/releases/tag/v0.2.5
+[0.2.6]: https://github.com/davidusb-geek/emhass/releases/tag/v0.2.6
