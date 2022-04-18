@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2022-04-18
+### Fix
+- Fixed if sentence to correctly use the supervisor API for publish data.
+- Fixing a error computing the nearest index of DataFrame. Using a try/catch strategy to use nearest method as a backup.
+
 ## [0.2.7] - 2022-04-18
 ### Fix
 - Fixing a fatal error where the publish data function will never reach the savec csv file as the default filename is not equal to the expected filename in publish_data.
