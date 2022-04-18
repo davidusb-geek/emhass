@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2022-04-18
+### Fix
+- Fixing a fatal error where the publish data function will never reach the savec csv file as the default filename is not equal to the expected filename in publish_data.
+
 ## [0.2.6] - 2022-04-16
 ### Improvement
 - Improved handling of errors concerning solver issues with Pulp. Added support for `glpk` solver. For now just using a try/catch strategy but should update to solver passed as a parameter to EMHASS.
@@ -100,3 +104,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.4]: https://github.com/davidusb-geek/emhass/releases/tag/v0.2.4
 [0.2.5]: https://github.com/davidusb-geek/emhass/releases/tag/v0.2.5
 [0.2.6]: https://github.com/davidusb-geek/emhass/releases/tag/v0.2.6
+[0.2.7]: https://github.com/davidusb-geek/emhass/releases/tag/v0.2.7
