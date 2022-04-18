@@ -163,7 +163,11 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         opt_res_dayahead.index.freq = input_data_dict['retrieve_hass_conf']['freq']
     # Estimate the current index
     now_precise = datetime.now(input_data_dict['retrieve_hass_conf']['time_zone']).replace(second=0, microsecond=0)
-    idx_closest = opt_res_dayahead.index.get_loc(now_precise, method='ffill')
+    try:
+        idx_closest = opt_res_dayahead.index.get_loc(now_precise, method='ffill')
+    except Exception:
+        logger.warning("Problem finding DataFrame index, using nearest option as a backup")
+        idx_closest = opt_res_dayahead.index.get_loc(now_precise, method='nearest')
     # Publish PV forecast
     input_data_dict['rh'].post_data(opt_res_dayahead['P_PV'], idx_closest, 
                                     'sensor.p_pv_forecast', "W", "PV Power Forecast")
