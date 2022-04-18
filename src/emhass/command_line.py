@@ -135,7 +135,8 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     opt_res_dayahead.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
     return opt_res_dayahead
     
-def publish_data(input_data_dict: dict, logger: logging.Logger) -> pd.DataFrame:
+def publish_data(input_data_dict: dict, logger: logging.Logger,
+    save_data_to_file: Optional[bool] = False) -> pd.DataFrame:
     """
     Publish the data obtained from the optimization results.
     
@@ -149,8 +150,11 @@ def publish_data(input_data_dict: dict, logger: logging.Logger) -> pd.DataFrame:
     """
     logger.info("Publishing data to HASS instance")
     # Check if a day ahead optimization has been performed (read CSV file)
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    filename = 'opt_res_dayahead_'+today.strftime("%Y_%m_%d")
+    if save_data_to_file:
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        filename = 'opt_res_dayahead_'+today.strftime("%Y_%m_%d")
+    else:
+        filename = 'opt_res_dayahead_latest'
     if not os.path.isfile(input_data_dict['root'] + '/data/' + filename + '.csv'):
         logger.error("File not found error, run the dayahead_forecast_optim first.")
     else:
