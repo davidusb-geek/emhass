@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2022-04-21
+### Fix
+- Fixed get_loc deprecation warning using now get_indexer pandas method. Improved selection of closest index.
+
 ## [0.2.8] - 2022-04-18
 ### Fix
 - Fixed if sentence to correctly use the supervisor API for publish data.
