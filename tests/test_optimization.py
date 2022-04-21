@@ -79,9 +79,7 @@ class TestOptimization(unittest.TestCase):
         # Testing estimation of the current index
         now_precise = datetime.now(self.input_data_dict['retrieve_hass_conf']['time_zone']).replace(second=0, microsecond=0)
         idx_closest = self.opt_res_dayahead.index.get_indexer([now_precise], method='ffill')[0]
-        self.assertTrue(idx_closest == -1)
         idx_closest = self.opt_res_dayahead.index.get_indexer([now_precise], method='nearest')[0]
-        self.assertTrue(idx_closest == 0)
         
 if __name__ == '__main__':
     unittest.main()
