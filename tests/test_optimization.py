@@ -5,6 +5,7 @@ import unittest
 import pandas as pd
 import pathlib
 import pickle
+from datetime import datetime, timezone
 
 from emhass.retrieve_hass import retrieve_hass
 from emhass.optimization import optimization
@@ -55,6 +56,9 @@ class TestOptimization(unittest.TestCase):
                                 self.days_list, self.costfun, root, logger)
         self.df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data)
         self.df_input_data = self.fcst.get_prod_price_forecast(self.df_input_data)
+        self.input_data_dict = {
+            'retrieve_hass_conf': retrieve_hass_conf,
+        }
         
     def test_perform_perfect_forecast_optim(self):
         self.opt_res = self.opt.perform_perfect_forecast_optim(self.df_input_data)
@@ -72,6 +76,12 @@ class TestOptimization(unittest.TestCase):
         self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertTrue('cost_fun_'+self.costfun in self.opt_res_dayahead.columns)
+        # Testing estimation of the current index
+        now_precise = datetime.now(self.input_data_dict['retrieve_hass_conf']['time_zone']).replace(second=0, microsecond=0)
+        idx_closest = self.opt_res_dayahead.index.get_indexer([now_precise], method='ffill')[0]
+        self.assertTrue(idx_closest == -1)
+        idx_closest = self.opt_res_dayahead.index.get_indexer([now_precise], method='nearest')[0]
+        self.assertTrue(idx_closest == 0)
         
 if __name__ == '__main__':
     unittest.main()
