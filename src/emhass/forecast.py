@@ -328,9 +328,7 @@ class forecast:
         :rtype: pd.DataFrame
 
         """
-        days_list = pd.date_range(start=df_final.index[0], 
-                                  end=df_final.index[-1], 
-                                  freq='D')
+        days_list = df_final.index.day.unique().tolist()
         
         if csv_path is None:
             data_dict = {'ts':forecast_dates_csv, 'yhat':data_list}
@@ -345,8 +343,8 @@ class forecast:
         
         forecast_out = pd.DataFrame()
         for day in days_list:
-            first_elm_index = [i for i, x in enumerate(df_final.index.day == day.day) if x][0]
-            last_elm_index = [i for i, x in enumerate(df_final.index.day == day.day) if x][-1]
+            first_elm_index = [i for i, x in enumerate(df_final.index.day == day) if x][0]
+            last_elm_index = [i for i, x in enumerate(df_final.index.day == day) if x][-1]
             fcst_index = pd.date_range(start=df_final.index[first_elm_index],
                                        end=df_final.index[last_elm_index], 
                                        freq=df_final.index.freq)
