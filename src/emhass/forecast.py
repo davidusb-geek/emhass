@@ -56,7 +56,7 @@ class forecast:
     For the PV production selling price and Load cost forecasts the privileged method
     is a direct read from a user provided CSV file. 
     
-    For all the forecastin g methods, the CSV file should contain no header and the 
+    For all the forecasting methods, the CSV file should contain no header and the 
     timestamped data should have the following format:
     
     2021-04-29 00:00:00+00:00,287.07

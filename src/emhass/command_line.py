@@ -53,6 +53,7 @@ def setUp(config_path: pathlib.Path, base_path: str, costfun: str,
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
     P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
     df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
+    df_input_data_dayahead.index.freq=df_input_data.index.freq
     df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
     opt = optimization(retrieve_hass_conf, optim_conf, plant_conf, 
                        fcst.var_load_cost, fcst.var_prod_price, days_list, 
