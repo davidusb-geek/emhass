@@ -280,6 +280,10 @@ And generate distribution archives with:
 ```
 python3 -m build
 ```
+Or with:
+```
+python3 setup.py build bdist_wheel
+```
 Create a new tag version:
 ```
 git tag vX.X.X
