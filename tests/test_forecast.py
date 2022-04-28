@@ -108,21 +108,10 @@ class TestForecast(unittest.TestCase):
             }
             })
         params['passed_data'] = {
-            'pv_power_forecast':[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89,
-            1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75,
-            804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            'load_power_forecast':[227.66, 228.33, 254.70, 255.97, 241.44, 255.99, 239.28, 184.23, 250.35, 241.04, 238.89, 254.29,
-            211.50, 209.48, 274.47, 385.9, 295.01, 246.9, 195.79, 268.3, 244.7, 220.18, 556.34, 783.07, 848.68, 464.60, 80.53, 
-            302.53, 174.05, 332.86, 252.25, 179.33, 169.94, 199.88, 114.03, 245.19, 903.83, 1222.35, 1343.13, 1148.32, 428.25,
-            356.49, 304.61, 239.95, 324.07, 299.97, 273.16, 328.05],
-            'load_cost_forecast':[0.22, 0.32, 0.29, 0.32, 0.32, 0.27, 0.21, 0.27, 0.21, 0.21, 
-            0.13, 0.13, 0.13, 0.13, 0.13, 0.13, 0.13, 0.21, 0.25, 0.32, 0.32, 0.29, 0.3, 0.29, 
-            0.13, 0.21, 0.13, 0.11, 0.1, 0.1, 0.1, 0.1, 0.11, 0.11, 0.1, 0.13, 0.29, 0.32, 0.32, 
-            0.32, 0.29, 0.33, 0.37, 0.51, 0.51, 0.37, 0.37, 0.37],
-            'prod_price_forecast':[0.33, 0.44, 0.42, 0.44, 0.44, 0.39, 0.33, 0.39, 0.33, 0.33, 
-            0.24, 0.24, 0.24, 0.24, 0.24, 0.24, 0.24, 0.33, 0.38, 0.44, 0.44, 0.42, 0.42, 0.42, 
-            0.24, 0.33, 0.24, 0.21, 0.21, 0.21, 0.21, 0.21, 0.21, 0.21, 0.21, 0.24, 0.42, 0.44, 
-            0.45, 0.44, 0.42, 0.46, 0.5, 0.66, 0.66, 0.5, 0.5, 0.5]
+            'pv_power_forecast':[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48],
+            'load_power_forecast':[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48],
+            'load_cost_forecast':[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48],
+            'prod_price_forecast':[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48]
         }
         params['optim_conf'][7]['weather_forecast_method'] = 'list'
         params['optim_conf'][8]['load_forecast_method'] = 'list'
@@ -150,63 +139,35 @@ class TestForecast(unittest.TestCase):
         
         fcst = forecast(retrieve_hass_conf, optim_conf, plant_conf, 
                         params_json, root, logger, get_data_from_file=True)
+        df_input_data = copy.deepcopy(df_input_data).iloc[-49:-1]
         P_PV_forecast = fcst.get_weather_forecast(method='list')
+        df_input_data.index = P_PV_forecast.index
+        df_input_data.index.freq = rh.df_final.index.freq
         self.assertIsInstance(P_PV_forecast, type(pd.DataFrame()))
         self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
         self.assertTrue(self.fcst.start_forecast < ts for ts in P_PV_forecast.index)
+        self.assertTrue(P_PV_forecast.values[0][0] == 1)
+        self.assertTrue(P_PV_forecast.values[-1][0] == 48)
         P_load_forecast = fcst.get_load_forecast(method='list')
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
         self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_load_forecast.index.tz, fcst.time_zone)
         self.assertEqual(len(P_PV_forecast), len(P_load_forecast))
+        self.assertTrue(P_load_forecast.values[0] == 1)
+        self.assertTrue(P_load_forecast.values[-1] == 48)
         df_input_data = fcst.get_load_cost_forecast(df_input_data, method='list')
         self.assertTrue(fcst.var_load_cost in df_input_data.columns)
         self.assertTrue(df_input_data.isnull().sum().sum()==0)
+        self.assertTrue(df_input_data['unit_load_cost'].values[0] == 1)
+        self.assertTrue(df_input_data['unit_load_cost'].values[-1] == 48)
         df_input_data = fcst.get_prod_price_forecast(df_input_data, method='list')
         self.assertTrue(fcst.var_prod_price in df_input_data.columns)
         self.assertTrue(df_input_data.isnull().sum().sum()==0)
-        # Test the dayahead_forecast_optim from command_line
-        pp = copy.deepcopy(params)
-        pp['passed_data'] = {'pv_power_forecast':None,'load_power_forecast':None,'load_cost_forecast':None,'prod_price_forecast':None}
-        pp['passed_data']['pv_power_forecast'] = params['passed_data']['pv_power_forecast']
-        pp['passed_data']['load_power_forecast'] = params['passed_data']['load_power_forecast']
-        pp['passed_data']['load_cost_forecast'] = None
-        pp['passed_data']['prod_price_forecast'] = params['passed_data']['prod_price_forecast']
-        pp['optim_conf'][7]['weather_forecast_method'] = 'list'
-        pp['optim_conf'][8]['load_forecast_method'] = 'list'
-        pp['optim_conf'][9]['load_cost_forecast_method'] = "hp_hc_periods"
-        pp['optim_conf'][13]['prod_price_forecast_method'] = 'list'
-        pp_json = json.dumps(pp)
-        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), 
-                                                                    use_secrets=False, params=pp_json)
-        fcst = forecast(retrieve_hass_conf, optim_conf, plant_conf, 
-                        pp_json, root, logger, get_data_from_file=True)
-        df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
-        P_PV_forecast = fcst.get_power_from_weather(df_weather)
-        P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
-        df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
-        df_input_data_dayahead.index.freq=rh.df_final.copy().index.freq
-        df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
-        opt = optimization(retrieve_hass_conf, optim_conf, plant_conf, 
-                           fcst.var_load_cost, fcst.var_prod_price,  
-                           days_list, 'profit', root, logger)
-        input_data_dict = {
-                'root': root,
-                'retrieve_hass_conf': retrieve_hass_conf,
-                'df_input_data': rh.df_final.copy(),
-                'df_input_data_dayahead': df_input_data_dayahead,
-                'opt': opt,
-                'rh': rh,
-                'fcst': fcst,
-                'P_PV_forecast': P_PV_forecast,
-                'P_load_forecast': P_load_forecast,
-                'params': pp
-            }
-        opt_res = dayahead_forecast_optim(input_data_dict, logger)
-        self.assertIsInstance(opt_res, type(pd.DataFrame()))
+        self.assertTrue(df_input_data['unit_prod_price'].values[0] == 1)
+        self.assertTrue(df_input_data['unit_prod_price'].values[-1] == 48)
         
     def test_get_power_from_weather(self):
         self.assertIsInstance(self.P_PV_forecast, pd.core.series.Series)

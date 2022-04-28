@@ -302,7 +302,7 @@ class forecast:
         :rtype: pd.date_range
 
         """
-        start_forecast_csv = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(hour=0, minute=0, second=0, microsecond=0)
+        start_forecast_csv = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(microsecond=0)
         end_forecast_csv = (start_forecast_csv + self.optim_conf['delta_forecast']).replace(microsecond=0)
         forecast_dates_csv = pd.date_range(start=start_forecast_csv, 
                                            end=end_forecast_csv+timedelta(days=timedelta_days)-self.freq, 
