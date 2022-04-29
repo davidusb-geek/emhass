@@ -14,6 +14,7 @@ retrieve_hass_conf:
     - 'sensor.power_load_no_var_loads'
 
 optim_conf:
+  - set_total_pv_sell: False # consider that all PV power is injected to the grid (self-consumption with total sell)
   - set_use_battery: False # consider a battery storage
   - delta_forecast: 1 # days
   - num_def_loads: 2

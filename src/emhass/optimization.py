@@ -159,12 +159,21 @@ class optimization:
         for i in set_I:
             P_def_sum.append(plp.lpSum(P_deferrable[k][i] for k in range(self.optim_conf['num_def_loads'])))
         if self.costfun == 'profit':
-            objective = plp.lpSum(-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum[i]) + \
-                                                        unit_prod_price[i] * P_grid_neg[i])
-                                  for i in set_I)
+            if self.optim_conf['set_total_pv_sell']:
+                objective = plp.lpSum(-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum[i]) + \
+                                                            unit_prod_price[i]*P_grid_neg[i])
+                                      for i in set_I)
+            else:
+                objective = plp.lpSum(-0.001*self.timeStep*(unit_load_cost[i]*P_grid_pos[i] + \
+                                                            unit_prod_price[i]*P_grid_neg[i])
+                                      for i in set_I)
         elif self.costfun == 'cost':
-            objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum[i])
-                                  for i in set_I)
+            if self.optim_conf['set_total_pv_sell']:
+                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*P_grid_pos[i]
+                                      for i in set_I)
+            else:
+                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum[i])
+                                      for i in set_I)
         elif self.costfun == 'self-consumption':
             objective = plp.lpSum(0.001*self.timeStep*unit_load_cost[i]*SC[i] for i in set_I)
         else:
