@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.2.11] - 2022-04-28
+### Improvement
+- Added config parameter to consider that all PV power is injected to the grid
+
+## [0.2.11] - 2022-04-28
 ### Fix
 - Fixed wrong handling of DateTimeIndex when dealing with forecast method for list of values and csv read.
 

@@ -11,7 +11,8 @@
 		{"var_interp": ["sensor.power_photovoltaics", "sensor.power_load_no_var_loads"]}
 	], 
 	"optim_conf": 
-	[
+	[	
+		{"set_total_pv_sell": false},
 		{"set_use_battery": false}, 
 		{"delta_forecast": 1}, 
 		{"num_def_loads": 2}, 
