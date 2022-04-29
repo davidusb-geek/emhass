@@ -32,7 +32,7 @@
 		{"load_cost_hc": 0.1419}, 
 		{"prod_price_forecast_method": "constant"}, 
 		{"prod_sell_price": 0.065},
-                {"set_total_pv_sell": false}
+        {"set_total_pv_sell": false}
 	], 
 	"plant_conf": 
 	[
