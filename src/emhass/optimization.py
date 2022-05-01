@@ -352,21 +352,26 @@ class optimization:
             P_def_sum_tp.append(sum(P_deferrable[k][i].varValue for k in range(self.optim_conf['num_def_loads'])))
         opt_tp["unit_load_cost"] = [unit_load_cost[i] for i in set_I]
         opt_tp["unit_prod_price"] = [unit_prod_price[i] for i in set_I]
-        opt_tp["cost_profit"] = [-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) + \
-                                                       unit_prod_price[i] * P_grid_neg[i].varValue)
-                                 for i in set_I]
+        if self.optim_conf['set_total_pv_sell']:
+            opt_tp["cost_profit"] = [-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) + \
+                unit_prod_price[i]*P_grid_neg[i].varValue) for i in set_I]
+        else:
+            opt_tp["cost_profit"] = [-0.001*self.timeStep*(unit_load_cost[i]*P_grid_pos[i].varValue + \
+                unit_prod_price[i]*P_grid_neg[i].varValue) for i in set_I]
         
         if self.costfun == 'profit':
-            opt_tp["cost_fun_profit"] = [-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) + \
-                                                               unit_prod_price[i] * P_grid_neg[i].varValue)
-                                         for i in set_I]
+            if self.optim_conf['set_total_pv_sell']:
+                opt_tp["cost_fun_profit"] = [-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) + \
+                    unit_prod_price[i]*P_grid_neg[i].varValue) for i in set_I]
+            else:
+                opt_tp["cost_fun_profit"] = [-0.001*self.timeStep*(unit_load_cost[i]*P_grid_pos[i].varValue + \
+                    unit_prod_price[i]*P_grid_neg[i].varValue) for i in set_I]
         elif self.costfun == 'cost':
-            opt_tp["cost_fun_cost"] = [-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i])
-                                       for i in set_I]
+            opt_tp["cost_fun_cost"] = [-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) for i in set_I]
         elif self.costfun == 'self-consumption':
             opt_tp["cost_fun_selfcons"] = [-0.001*self.timeStep*unit_load_cost[i]*SC[i].varValue for i in set_I]
         else:
-            self.logger.error("The cost function specified type is not valid") 
+            self.logger.error("The cost function specified type is not valid")
         
         return opt_tp
 

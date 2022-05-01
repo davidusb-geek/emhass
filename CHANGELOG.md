@@ -4,9 +4,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.13] - 2022-05-01
+### Improvement
+- Added support to pass list of PV plant parameters. This will enable to simulate mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270).
+### Fix
+- Fixed issue computing correct final cost values.
+
 ## [0.2.12] - 2022-04-28
 ### Improvement
-- Added config parameter to consider that all PV power is injected to the grid
+- Added config parameter to consider that all PV power is injected to the grid.
 
 ## [0.2.11] - 2022-04-28
 ### Fix
