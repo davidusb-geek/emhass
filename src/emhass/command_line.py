@@ -173,16 +173,25 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     # Publish Load forecast
     input_data_dict['rh'].post_data(opt_res_dayahead['P_Load'], idx_closest, 
                                     'sensor.p_load_forecast', "W", "Load Power Forecast")
+    cols_published = ['P_PV', 'P_Load']
     # Publish deferrable loads
     for k in range(input_data_dict['opt'].optim_conf['num_def_loads']):
-        input_data_dict['rh'].post_data(opt_res_dayahead["P_deferrable{}".format(k)], idx_closest, 
-                                        'sensor.p_deferrable{}'.format(k), "W", "Deferrable Load {}".format(k))
+        if "P_deferrable{}".format(k) not in opt_res_dayahead.columns:
+            logger.error("P_deferrable{}".format(k)+" was not found in results DataFrame. Optimization task may need to be relaunched or it did not converged to a solution.")
+        else:
+            input_data_dict['rh'].post_data(opt_res_dayahead["P_deferrable{}".format(k)], idx_closest, 
+                                            'sensor.p_deferrable{}'.format(k), "W", "Deferrable Load {}".format(k))
+            cols_published = cols_published+["P_deferrable{}".format(k)]
     # Publish battery power
     if input_data_dict['opt'].optim_conf['set_use_battery']:
-        input_data_dict['rh'].post_data(opt_res_dayahead['P_batt'], idx_closest,
-                                        'sensor.p_batt_forecast', "W", "Battery Power Forecast")
+        if 'P_batt' not in opt_res_dayahead.columns:
+            logger.error("P_batt was not found in results DataFrame. Optimization task may need to be relaunched or it did not converged to a solution.")
+        else:
+            input_data_dict['rh'].post_data(opt_res_dayahead['P_batt'], idx_closest,
+                                            'sensor.p_batt_forecast', "W", "Battery Power Forecast")
+            cols_published = cols_published+["P_batt"]
     # Create a DF resuming what has been published
-    opt_res = opt_res_dayahead.loc[opt_res_dayahead.index[idx_closest], ['P_PV', 'P_Load']]
+    opt_res = opt_res_dayahead.loc[opt_res_dayahead.index[idx_closest], cols_published]
     return opt_res
     
         
