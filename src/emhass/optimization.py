@@ -222,7 +222,7 @@ class optimization:
         for k in range(self.optim_conf['num_def_loads']):
             constraints.update({"constraint_defload{}_energy".format(k) :
                                 plp.LpConstraint(
-                                    e = plp.lpSum(P_deferrable[k][i] for i in set_I),
+                                    e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in set_I),
                                     sense = plp.LpConstraintEQ,
                                     rhs = self.optim_conf['def_total_hours'][k]*self.optim_conf['P_deferrable_nom'][k])
                                 })
