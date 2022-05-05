@@ -76,6 +76,8 @@ class TestOptimization(unittest.TestCase):
         self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertTrue('cost_fun_'+self.costfun in self.opt_res_dayahead.columns)
+        self.assertTrue(self.opt_res_dayahead['P_deferrable0'].sum()*(
+            self.retrieve_hass_conf['freq'].seconds/3600) == self.optim_conf['P_deferrable_nom'][0]*self.optim_conf['def_total_hours'][0])
         # Testing estimation of the current index
         now_precise = datetime.now(self.input_data_dict['retrieve_hass_conf']['time_zone']).replace(second=0, microsecond=0)
         idx_closest = self.opt_res_dayahead.index.get_indexer([now_precise], method='ffill')[0]

@@ -29,7 +29,7 @@ optim_conf:
   - set_def_constant: # set as a constant fixed value variable with just one startup for each 24h
     - False
     - False
-  - weather_forecast_method: 'scrapper' # options are 'scrapper' and 'pvlib' (but pvlib remain unstable)
+  - weather_forecast_method: 'scrapper' # options are 'scrapper' and 'csv'
   - load_forecast_method: 'naive' # options are 'csv' to load a custom load forecast from a CSV file or 'naive' for a persistance model
   - load_cost_forecast_method: 'hp_hc_periods' # options are 'hp_hc_periods' for peak and non-peak hours contracts and 'csv' to load custom cost from CSV file 
   - list_hp_periods: # list of different tariff periods (only needed if load_cost_forecast_method='hp_hc_periods')
