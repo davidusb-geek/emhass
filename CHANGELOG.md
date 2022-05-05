@@ -4,10 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.2.14] - 2022-05-05
 ### Improvement
 - Added more info on publish data errors when not key found. This error may mean that the optimization task may need to be relaunched or it did not converged to a solution.
 - Added better info to the configuration documentation when integrating PV module and inverter models from PVLib database. An underscore _ character should be added inplace of each special character.
+### Fix
+- Fixed missing timeStep product for correct deferrable load total energies.
 
 ## [0.2.13] - 2022-05-01
 ### Improvement
