@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 import pulp as plp
 from pulp import PULP_CBC_CMD, GLPK_CMD
-import logging
+import logging, copy
 
 class optimization:
     """
@@ -75,9 +75,10 @@ class optimization:
         self.var_load_cost = var_load_cost
         self.var_prod_price = var_prod_price
         
-    def perform_optimization(self, data_opt: pd.DataFrame, P_PV: np.array, 
-                             P_load: np.array, unit_load_cost: np.array,
-                             unit_prod_price: np.array) -> pd.DataFrame:
+    def perform_optimization(self, data_opt: pd.DataFrame, P_PV: np.array, P_load: np.array, 
+                             unit_load_cost: np.array, unit_prod_price: np.array,
+                             soc_init: Optional[float] = None, soc_final: Optional[float] = None,
+                             past_def_load_energies: Optional[list] = None) -> pd.DataFrame:
         """
         Perform the actual optimization using linear programming (LP).
         
@@ -97,11 +98,34 @@ class optimization:
             This is the price of the energy injected to the utility in a vector \
             sampled at the fixed freq value.
         :type unit_prod_price: np.array
+        :param soc_init: The initial battery SOC for the optimization. This parameter \
+            is optional, if not given soc_init = soc_final = soc_target from the configuration file.
+        :type soc_init: float
+        :param soc_final: The final battery SOC for the optimization. This parameter \
+            is optional, if not given soc_init = soc_final = soc_target from the configuration file.
+        :type soc_final: 
+        :param past_def_load_energies: The past already distributed values of the objective energy \
+            for each deferrable load.
+        :type past_def_load_energies: list
         :return: The input DataFrame with all the different results from the \
             optimization appended
         :rtype: pd.DataFrame
 
         """
+        # Prepare some data
+        if soc_init is None:
+            if soc_final is not None:
+                soc_init = soc_final
+            else:
+                soc_init = self.plant_conf['SOCtarget']
+        if soc_final is None:
+            if soc_init is not None:
+                soc_final = soc_init
+            else:
+                soc_final = self.plant_conf['SOCtarget']
+        if past_def_load_energies is None:
+            past_def_load_energies = [0*i for i in range(self.optim_conf['num_def_loads'])]
+        
         #### The LP problem using Pulp ####
         opt_model = plp.LpProblem("LP_Model", plp.LpMaximize)
         
@@ -224,7 +248,7 @@ class optimization:
                                 plp.LpConstraint(
                                     e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in set_I),
                                     sense = plp.LpConstraintEQ,
-                                    rhs = self.optim_conf['def_total_hours'][k]*self.optim_conf['P_deferrable_nom'][k])
+                                    rhs = self.optim_conf['def_total_hours'][k]*self.optim_conf['P_deferrable_nom'][k] - past_def_load_energies[k])
                                 })
             
         # Treat deferrable load as a semi-continuous variable
@@ -289,19 +313,19 @@ class optimization:
                                 plp.LpConstraint(
                                     e=-plp.lpSum(P_sto_pos[j]*(1/self.plant_conf['eta_disch']) + self.plant_conf['eta_ch']*P_sto_neg[j] for j in range(i)),
                                     sense=plp.LpConstraintLE,
-                                    rhs=(self.plant_conf['Enom']/self.timeStep)*(self.plant_conf['SOCmax'] - self.plant_conf['SOCtarget']))
+                                    rhs=(self.plant_conf['Enom']/self.timeStep)*(self.plant_conf['SOCmax'] - soc_init))
                                 for i in set_I})
             constraints.update({"constraint_socmin_{}".format(i) : 
                                 plp.LpConstraint(
                                     e=plp.lpSum(P_sto_pos[j]*(1/self.plant_conf['eta_disch']) + self.plant_conf['eta_ch']*P_sto_neg[j] for j in range(i)),
                                     sense=plp.LpConstraintLE,
-                                    rhs=(self.plant_conf['Enom']/self.timeStep)*(self.plant_conf['SOCtarget'] - self.plant_conf['SOCmin']))
+                                    rhs=(self.plant_conf['Enom']/self.timeStep)*(soc_init - self.plant_conf['SOCmin']))
                                 for i in set_I})
             constraints.update({"constraint_socfinal_{}".format(0) : 
                                 plp.LpConstraint(
                                     e=plp.lpSum(P_sto_pos[i]*(1/self.plant_conf['eta_disch']) + self.plant_conf['eta_ch']*P_sto_neg[i] for i in set_I),
                                     sense=plp.LpConstraintEQ,
-                                    rhs=0)
+                                    rhs=(soc_init - soc_final)*self.plant_conf['Enom']/self.timeStep)
                                 })
         opt_model.constraints = constraints
     
@@ -338,7 +362,7 @@ class optimization:
             SOC_opt_delta = [(P_sto_pos[i].varValue*(1/self.plant_conf['eta_disch']) + \
                               self.plant_conf['eta_ch']*P_sto_neg[i].varValue)*(
                                   self.timeStep/(self.plant_conf['Enom'])) for i in set_I]
-            SOCinit = self.plant_conf['SOCtarget']
+            SOCinit = copy.copy(soc_init)
             SOC_opt = []
             for i in set_I:
                 SOC_opt.append(SOCinit - SOC_opt_delta[i])
@@ -412,7 +436,8 @@ class optimization:
     def perform_dayahead_forecast_optim(self, df_input_data: pd.DataFrame, 
                                         P_PV: pd.Series, P_load: pd.Series) -> pd.DataFrame:
         """
-        Perform a day-ahead optimization task using real forecast data.
+        Perform a day-ahead optimization task using real forecast data. \
+        This type of optimization is intented to be launched once a day.
         
         :param df_input_data: A DataFrame containing all the input data used for \
             the optimization, notably the unit load cost for power consumption.
@@ -427,15 +452,62 @@ class optimization:
 
         """
         self.logger.info("Perform optimization for the day-ahead")
-        self.opt_res = pd.DataFrame()
         
         unit_load_cost = df_input_data[self.var_load_cost].values # €/kWh
         unit_prod_price = df_input_data[self.var_prod_price].values # €/kWh
         
         # Call optimization function
-        self.opt_res = self.perform_optimization(P_load, P_PV.values.ravel(), 
+        self.opt_res = self.perform_optimization(df_input_data, P_PV.values.ravel(), 
                                                  P_load.values.ravel(), 
                                                  unit_load_cost, unit_prod_price)
+        return self.opt_res
         
+    def perform_naive_mpc_optim(self, df_input_data: pd.DataFrame, P_PV: pd.Series, P_load: pd.Series,
+                                prediction_horizon: int, soc_init: Optional[float] = None, soc_final: Optional[float] = None,
+                                past_def_load_energies: Optional[list] = None) -> pd.DataFrame:
+        """
+        Perform a naive approach to a Model Predictive Control (MPC). \
+        This implementaion is naive because we are not using the formal formulation \
+        of a MPC. Only the sense of a receiding horizon is considered here. \
+        This optimization is more suitable for higher optimization frequency, ex: 5min.
+        
+        :param df_input_data: A DataFrame containing all the input data used for \
+            the optimization, notably the unit load cost for power consumption.
+        :type df_input_data: pandas.DataFrame
+        :param P_PV: The forecasted PV power production.
+        :type P_PV: pandas.DataFrame
+        :param P_load: The forecasted Load power consumption. This power should \
+            not include the power from the deferrable load that we want to find.
+        :type P_load: pandas.DataFrame
+        :param prediction_horizon: The prediction horizon of the MPC controller in minutes.
+        :type prediction_horizon: int
+        :param soc_init: The initial battery SOC for the optimization. This parameter \
+            is optional, if not given soc_init = soc_final = soc_target from the configuration file.
+        :type soc_init: float
+        :param soc_final: The final battery SOC for the optimization. This parameter \
+            is optional, if not given soc_init = soc_final = soc_target from the configuration file.
+        :type soc_final: 
+        :param past_def_load_energies: The past already distributed values of the objective energy \
+            for each deferrable load.
+        :type past_def_load_energies: list
+        :return: opt_res: A DataFrame containing the optimization results
+        :rtype: pandas.DataFrame
+
+        """
+        self.logger.info("Perform an iteration of a naive MPC controller")
+        
+        if prediction_horizon < 5*self.retrieve_hass_conf['freq']:
+            self.logger.error("Set the MPC prediction horizon to at least 5 times the optimization time step")
+            return pd.DataFrame()
+        else:
+            df_input_data = copy.deepcopy(df_input_data)[df_input_data.index[0]:df_input_data.index[0]+prediction_horizon]
+        
+        unit_load_cost = df_input_data[self.var_load_cost].values # €/kWh
+        unit_prod_price = df_input_data[self.var_prod_price].values # €/kWh
+        
+        # Call optimization function
+        self.opt_res = self.perform_optimization(df_input_data, P_PV.values.ravel(), P_load.values.ravel(), 
+                                                 unit_load_cost, unit_prod_price, soc_init=soc_init, 
+                                                 soc_final=soc_final, past_def_load_energies=past_def_load_energies)
         return self.opt_res
     

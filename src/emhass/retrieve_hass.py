@@ -132,7 +132,6 @@ class retrieve_hass:
         self.df_final = set_df_index_freq(self.df_final)
         if self.df_final.index.freq != self.freq:
             self.logger.error("The inferred freq from data is not equal to the defined freq in passed parameters")
-        #self.df_final.index.freq = self.freq
 
     
     def prepare_data(self, var_load: str, load_negative: Optional[bool] = False, set_zero_min: Optional[bool] = True,
