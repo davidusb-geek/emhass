@@ -1,7 +1,7 @@
 # Configuration file for EMHASS
 
 retrieve_hass_conf:
-  - freq: 30 # The time step to resample retrieved data from hass
+  - freq: 30 # The time step to resample retrieved data from hass in minutes
   - days_to_retrieve: 8 # We will retrieve data from now and up to days_to_retrieve days
   - var_PV: 'sensor.power_photovoltaics' # Photovoltaic produced power sensor in Watts
   - var_load: 'sensor.power_load_no_var_loads' # Household power consumption sensor in Watts (deferrable loads should be substracted)

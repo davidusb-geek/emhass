@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+### Improvement
+- Improved the command line setup function to perform the correct amount calls as needed by each action.
+- Added a new naive model predictive control function.
+
 ## [0.2.14] - 2022-05-05
 ### Improvement
 - Added more info on publish data errors when not key found. This error may mean that the optimization task may need to be relaunched or it did not converged to a solution.
