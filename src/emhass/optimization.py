@@ -496,6 +496,7 @@ class optimization:
         """
         self.logger.info("Perform an iteration of a naive MPC controller")
         
+        prediction_horizon = pd.Timedelta(prediction_horizon, unit='minutes')
         if prediction_horizon < 5*self.retrieve_hass_conf['freq']:
             self.logger.error("Set the MPC prediction horizon to at least 5 times the optimization time step")
             return pd.DataFrame()

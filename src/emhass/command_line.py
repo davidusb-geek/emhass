@@ -37,7 +37,8 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
     # Parsing yaml
     retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(config_path, params=params)
     # Treat runtimeparams
-    params, optim_conf = utils.treat_runtimeparams(runtimeparams, params, retrieve_hass_conf, optim_conf, logger)
+    params, optim_conf = utils.treat_runtimeparams(runtimeparams, params, retrieve_hass_conf, 
+                                                   optim_conf, plant_conf, set_type, logger)
     # Initialize objects
     days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
     rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
@@ -60,8 +61,8 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
                         var_interp = retrieve_hass_conf['var_interp'])
         df_input_data = rh.df_final.copy()
         # What we don't need for this type of action
-        P_PV_forecast, P_load_forecast, df_input_data_dayahead = None
-    elif set_type == "dayahead-optim":
+        P_PV_forecast, P_load_forecast, df_input_data_dayahead = None, None, None
+    elif set_type == "dayahead-optim" or set_type == "naive-mpc-optim":
         # Get PV and load forecasts
         df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
         P_PV_forecast = fcst.get_power_from_weather(df_weather)
@@ -72,8 +73,8 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         # What we don't need for this type of action
         df_input_data = None
     elif set_type == "publish-data":
-        df_input_data, df_input_data_dayahead = None
-        P_PV_forecast, P_load_forecast = None
+        df_input_data, df_input_data_dayahead = None, None
+        P_PV_forecast, P_load_forecast = None, None
     else:
         logger.error("The passed action argument and hence the set_type parameter for setup is not valid")
 
@@ -109,6 +110,7 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
 
     """
     logger.info("Performing perfect forecast optimization")
+    # Load cost and prod price forecast
     df_input_data = input_data_dict['fcst'].get_load_cost_forecast(
         input_data_dict['df_input_data'], 
         method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'])
@@ -139,6 +141,7 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
 
     """
     logger.info("Performing day-ahead forecast optimization")
+    # Load cost and prod price forecast
     df_input_data_dayahead = input_data_dict['fcst'].get_load_cost_forecast(
         input_data_dict['df_input_data_dayahead'],
         method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'])
@@ -154,6 +157,45 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         filename = 'opt_res_dayahead_latest'
     opt_res_dayahead.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
     return opt_res_dayahead
+
+def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
+    save_data_to_file: Optional[bool] = False) -> pd.DataFrame:
+    """
+    Perform a call to the naive Model Predictive Controller optimization routine.
+    
+    :param input_data_dict:  A dictionnary with multiple data used by the action functions
+    :type input_data_dict: dict
+    :param logger: The passed logger object
+    :type logger: logging object
+    :param save_data_to_file: Save optimization results to CSV file
+    :type save_data_to_file: bool, optional
+    :return: The output data of the optimization
+    :rtype: pd.DataFrame
+
+    """
+    logger.info("Performing naive MPC optimization")
+    # Load cost and prod price forecast
+    df_input_data_dayahead = input_data_dict['fcst'].get_load_cost_forecast(
+        input_data_dict['df_input_data_dayahead'],
+        method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'])
+    df_input_data_dayahead = input_data_dict['fcst'].get_prod_price_forecast(
+        df_input_data_dayahead, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
+    # The specifics params for the MPC at runtime
+    prediction_horizon = input_data_dict['params']['passed_data']['prediction_horizon']
+    soc_init = input_data_dict['params']['passed_data']['soc_init']
+    soc_final = input_data_dict['params']['passed_data']['soc_final']
+    past_def_load_energies = input_data_dict['params']['passed_data']['past_def_load_energies']
+    opt_res_naive_mpc = input_data_dict['opt'].perform_naive_mpc_optim(
+        df_input_data_dayahead, input_data_dict['P_PV_forecast'], input_data_dict['P_load_forecast'],
+        prediction_horizon, soc_init, soc_final, past_def_load_energies)
+    # Save CSV file for publish_data
+    if save_data_to_file:
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        filename = 'opt_res_naive_mpc_'+today.strftime("%Y_%m_%d")
+    else: # Just save the latest optimization results
+        filename = 'opt_res_naive_mpc_latest'
+    opt_res_naive_mpc.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
+    return opt_res_naive_mpc
     
 def publish_data(input_data_dict: dict, logger: logging.Logger,
     save_data_to_file: Optional[bool] = False) -> pd.DataFrame:
@@ -240,6 +282,8 @@ def main():
         opt_res = perfect_forecast_optim(input_data_dict, logger)
     elif args.action == 'dayahead-optim':
         opt_res = dayahead_forecast_optim(input_data_dict, logger)
+    elif args.action == 'naive-mpc-optim':
+        opt_res = naive_mpc_optim(input_data_dict, logger)
     elif args.action == 'publish-data':
         opt_res = publish_data(input_data_dict, logger)
     else:

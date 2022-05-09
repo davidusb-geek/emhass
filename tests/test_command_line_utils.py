@@ -61,8 +61,11 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(len(forecast_dates)==int(delta_forecast*60*24/freq))
         
     def test_treat_runtimeparams(self):
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True, params=self.params_json)
-        params, optim_conf = utils.treat_runtimeparams(self.runtimeparams_json, self.params_json, retrieve_hass_conf, optim_conf, logger)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
+            pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True, params=self.params_json)
+        set_type = 'dayahead-optim'
+        params, optim_conf = utils.treat_runtimeparams(self.runtimeparams_json, self.params_json, 
+                                                       retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
         self.assertIsInstance(params, str)
         params = json.loads(params)
         self.assertIsInstance(params['passed_data']['pv_power_forecast'], list)
@@ -73,10 +76,21 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(optim_conf['load_forecast_method'] == 'list')
         self.assertTrue(optim_conf['load_cost_forecast_method'] == 'list')
         self.assertTrue(optim_conf['prod_price_forecast_method'] == 'list')
+        set_type = 'naive-mpc-optim'
+        params, optim_conf = utils.treat_runtimeparams(self.runtimeparams_json, self.params_json, 
+                                                       retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
+        self.assertIsInstance(params, str)
+        params = json.loads(params)
+        self.assertTrue(params['passed_data']['prediction_horizon'] == 300)
+        self.assertTrue(params['passed_data']['soc_init'] == plant_conf['SOCtarget'])
+        self.assertTrue(params['passed_data']['soc_final'] == plant_conf['SOCtarget'])
+        self.assertTrue(params['passed_data']['past_def_load_energies'] == [0*i for i in range(optim_conf['num_def_loads'])])
         # This will be the case when using emhass in standalone mode
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True, params=self.params_json)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
+            pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True, params=self.params_json)
         params = json.dumps(None)
-        params, optim_conf = utils.treat_runtimeparams(self.runtimeparams_json, params, retrieve_hass_conf, optim_conf, logger)
+        params, optim_conf = utils.treat_runtimeparams(self.runtimeparams_json, params, 
+                                                       retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
         self.assertIsInstance(params, str)
         params = json.loads(params)
         self.assertIsInstance(params['passed_data']['pv_power_forecast'], list)
@@ -98,6 +112,12 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(input_data_dict['df_input_data'] == None)
         self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
+        action = 'publish-data'
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, action, logger)
+        self.assertTrue(input_data_dict['df_input_data'] == None)
+        self.assertTrue(input_data_dict['df_input_data_dayahead'] == None)
+        self.assertTrue(input_data_dict['P_PV_forecast'] == None)
+        self.assertTrue(input_data_dict['P_load_forecast'] == None)
         
         
 if __name__ == '__main__':

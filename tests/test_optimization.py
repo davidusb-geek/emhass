@@ -102,7 +102,7 @@ class TestOptimization(unittest.TestCase):
         self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.days_list, self.costfun, root, logger)
-        prediction_horizon = 10*self.retrieve_hass_conf['freq']
+        prediction_horizon = 300
         soc_init = 0.4
         soc_final = 0.6
         past_def_load_energies = [3000, 750]
