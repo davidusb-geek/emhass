@@ -59,6 +59,56 @@ def get_logger(fun_name: str, config_path: str, save_to_file: Optional[bool] = T
 
     return logger, ch
 
+def get_forecast_dates(freq: int, delta_forecast: int, timedelta_days: Optional[int] = 0) -> pd.core.indexes.datetimes.DatetimeIndex:
+    freq = pd.to_timedelta(freq, "minutes")
+    start_forecast = pd.Timestamp(datetime.now()).replace(hour=0, minute=0, second=0, microsecond=0)
+    end_forecast = (start_forecast + pd.Timedelta(days=delta_forecast)).replace(microsecond=0)
+    forecast_dates = pd.date_range(start=start_forecast, 
+        end=end_forecast+timedelta(days=timedelta_days)-freq, 
+        freq=freq).round(freq)
+    return forecast_dates
+
+def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict, optim_conf: dict, logger: logging.Logger) -> Tuple[str, dict]:
+    params = json.loads(params)
+    runtimeparams = json.loads(runtimeparams)
+    if runtimeparams is not None:
+        if params is None:
+            params = {'passed_data':{'pv_power_forecast':None,'load_power_forecast':None,'load_cost_forecast':None,'prod_price_forecast':None}}
+        freq = int(retrieve_hass_conf['freq'].seconds/60.0)
+        delta_forecast = int(optim_conf['delta_forecast'].days)
+        forecast_dates = get_forecast_dates(freq, delta_forecast)
+        if 'pv_power_forecast' in runtimeparams.keys():
+            if type(runtimeparams['pv_power_forecast']) == list and len(runtimeparams['pv_power_forecast']) <= len(forecast_dates):
+                params['passed_data']['pv_power_forecast'] = runtimeparams['pv_power_forecast']
+                optim_conf['weather_forecast_method'] = 'list'
+            else:
+                
+                logger.error("ERROR: The passed data is either not a list or the length is not correct, length should be "+str(len(forecast_dates)))
+                logger.error("Passed type is "+str(type(runtimeparams['pv_power_forecast']))+" and length is "+str(len(forecast_dates)))
+        if 'load_power_forecast' in runtimeparams.keys():
+            if type(runtimeparams['load_power_forecast']) == list and len(runtimeparams['load_power_forecast']) <= len(forecast_dates):
+                params['passed_data']['load_power_forecast'] = runtimeparams['load_power_forecast']
+                optim_conf['load_forecast_method'] = 'list'
+            else:
+                logger.error("ERROR: The passed data is either not a list or the length is not correct, length should be "+str(len(forecast_dates)))
+                logger.error("Passed type is "+str(type(runtimeparams['load_power_forecast']))+" and length is "+str(len(forecast_dates)))
+        if 'load_cost_forecast' in runtimeparams.keys():
+            if type(runtimeparams['load_cost_forecast']) == list and len(runtimeparams['load_cost_forecast']) <= len(forecast_dates):
+                params['passed_data']['load_cost_forecast'] = runtimeparams['load_cost_forecast']
+                optim_conf['load_cost_forecast_method'] = 'list'
+            else:
+                logger.error("ERROR: The passed data is either not a list or the length is not correct, length should be "+str(len(forecast_dates)))
+                logger.error("Passed type is "+str(type(runtimeparams['load_cost_forecast']))+" and length is "+str(len(forecast_dates)))
+        if 'prod_price_forecast' in runtimeparams.keys():
+            if type(runtimeparams['prod_price_forecast']) == list and len(runtimeparams['prod_price_forecast']) <= len(forecast_dates):
+                params['passed_data']['prod_price_forecast'] = runtimeparams['prod_price_forecast']
+                optim_conf['prod_price_forecast_method'] = 'list'
+            else:
+                logger.error("ERROR: The passed data is either not a list or the length is not correct, length should be "+str(len(forecast_dates)))
+                logger.error("Passed type is "+str(type(runtimeparams['prod_price_forecast']))+" and length is "+str(len(forecast_dates)))
+    params = json.dumps(params)
+    return params, optim_conf
+
 def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
                    params: Optional[str] = None) -> Tuple[dict, dict, dict]:
     """

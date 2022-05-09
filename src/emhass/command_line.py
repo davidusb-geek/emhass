@@ -7,14 +7,13 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from importlib.metadata import version
-import emhass
 from emhass.retrieve_hass import retrieve_hass
 from emhass.forecast import forecast
 from emhass.optimization import optimization
-from emhass.utils import get_yaml_parse, get_days_list, get_logger, set_df_index_freq
+from emhass import utils
 
-def setUp(config_path: pathlib.Path, base_path: str, costfun: str, 
-    params: str, set_type: str, logger: logging.Logger) -> dict:
+def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str, 
+    params: str, runtimeparams: str, set_type: str, logger: logging.Logger) -> dict:
     """
     Set up some of the data needed for the different actions.
     
@@ -24,6 +23,8 @@ def setUp(config_path: pathlib.Path, base_path: str, costfun: str,
     :type costfun: str
     :param params: Configuration parameters passed from data/options.json
     :type params: str
+    :param runtimeparams: Runtime optimization parameters passed as a dictionnary
+    :type runtimeparams: str
     :param set_type: Set the type of setup based on following type of optimization
     :type set_type: str
     :param logger: The passed logger object
@@ -34,8 +35,11 @@ def setUp(config_path: pathlib.Path, base_path: str, costfun: str,
     """
     logger.info("Setting up needed data")
     # Parsing yaml
-    retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(config_path, params=params)
+    retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(config_path, params=params)
+    # Treat runtimeparams
+    params, optim_conf = utils.treat_runtimeparams(runtimeparams, params, retrieve_hass_conf, optim_conf, logger)
     # Initialize objects
+    days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
     rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
                        retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'], 
                        params, base_path, logger)
@@ -47,7 +51,6 @@ def setUp(config_path: pathlib.Path, base_path: str, costfun: str,
     # Perform setup based on type of action
     if set_type == "perfect-optim":
         # Retrieve data from hass
-        days_list = get_days_list(retrieve_hass_conf['days_to_retrieve'])
         var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
         rh.get_data(days_list, var_list,
                     minimal_response=False, significant_changes_only=False)
@@ -64,7 +67,7 @@ def setUp(config_path: pathlib.Path, base_path: str, costfun: str,
         P_PV_forecast = fcst.get_power_from_weather(df_weather)
         P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
         df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
-        df_input_data_dayahead = set_df_index_freq(df_input_data_dayahead)
+        df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
         df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
         # What we don't need for this type of action
         df_input_data = None
@@ -220,18 +223,19 @@ def main():
     parser.add_argument('--costfun', type=str, default='profit', help='Define the type of cost function, options are: profit, cost, self-consumption')
     parser.add_argument('--log2file', type=bool, default=False, help='Define if we should log to a file or not')
     parser.add_argument('--params', type=str, default=None, help='Configuration parameters passed from data/options.json')
-    parser.add_argument('--runtimeparams', type=str, default=None, help='A dictionnary of runtime optimization parameters')
+    parser.add_argument('--runtimeparams', type=str, default=None, help='Pass runtime optimization parameters as dictionnary')
+    parser.add_argument('--add-on', type=bool, default=False, help='Define if we are usinng EMHASS with the add-on or in standalone mode')
+    parser.add_argument('--webserver', type=bool, default=False, help='Define if we should bring the webserver up')
     parser.add_argument('--version', action='version', version='%(prog)s '+version('emhass'))
     args = parser.parse_args()
     # The path to the configuration files
     config_path = pathlib.Path(args.config)
     base_path = str(config_path.parent)
     # create logger
-    logger, ch = get_logger(__name__, base_path, save_to_file=args.log2file)
+    logger, ch = utils.get_logger(__name__, base_path, save_to_file=args.log2file)
     # Setup parameters
-    input_data_dict = setUp(config_path, base_path, args.costfun, args.params, args.action, logger)
+    input_data_dict = set_input_data_dict(config_path, base_path, args.costfun, args.params, args.runtimeparams, args.action, logger)
     # Perform selected action
-    runtimeparams = args.runtimeparams
     if args.action == 'perfect-optim':
         opt_res = perfect_forecast_optim(input_data_dict, logger)
     elif args.action == 'dayahead-optim':
