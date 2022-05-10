@@ -18,8 +18,8 @@ optim_conf:
   - delta_forecast: 1 # days
   - num_def_loads: 2
   - P_deferrable_nom: # Watts
-    - 3000
-    - 750
+    - 3000.0
+    - 750.0
   - def_total_hours: # hours
     - 5
     - 8

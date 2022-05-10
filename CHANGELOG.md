@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Moved treatment of runtime parameters from the add-on to the core emhass module. This adds more clarity to the code andd also was needed when passing runtime paramters to emhass in standalone mode.
 - Added add-on paramter to command line to define if launching emhass from add-on or in standalone mode.
 - Added new testing file for command_line.
+- Added a webserver. Moved the webserver from the add-on to the core emhass module.
+- Added a Dockerfile and procedure to run emhass in standalone mode.
 
 ## [0.2.14] - 2022-05-05
 ### Improvement

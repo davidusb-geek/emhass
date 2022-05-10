@@ -1,6 +1,7 @@
 # ---> Python
 # Secret yaml file
 secrets_emhass.yaml
+*.tar
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
