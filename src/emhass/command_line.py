@@ -266,8 +266,6 @@ def main():
     parser.add_argument('--log2file', type=bool, default=False, help='Define if we should log to a file or not')
     parser.add_argument('--params', type=str, default=None, help='Configuration parameters passed from data/options.json')
     parser.add_argument('--runtimeparams', type=str, default=None, help='Pass runtime optimization parameters as dictionnary')
-    parser.add_argument('--add-on', type=bool, default=False, help='Define if we are usinng EMHASS with the add-on or in standalone mode')
-    parser.add_argument('--webserver', type=bool, default=False, help='Define if we should bring the webserver up')
     parser.add_argument('--version', action='version', version='%(prog)s '+version('emhass'))
     args = parser.parse_args()
     # The path to the configuration files
