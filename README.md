@@ -69,6 +69,21 @@ To upgrade the installation in the future just use:
 python3 -m pip install --upgrade emhass
 ```
 
+### Using Docker
+
+To install using docker you will need to build your image locally. For this use the rovided make file with this command:
+```
+make -f deploy_docker.mk clean_deploy
+```
+Then load the image in the .tar file:
+```
+docker load -i <TarFileName>.tar
+```
+Finally launch the docker itself:
+```
+docker run -it --restart always -e "LOCAL_COSTFUN=profit" --name DockerEMHASS <REPOSITORY:TAG>
+```
+
 ### The EMHASS add-on
 
 For Home Assistant OS and HA Supervised users, I've developed an add-on that will help you use EMHASS. The add-on is more user friendly as the configuration can be modified directly in the add-on options pane and also it exposes a web ui that can be used to inspect the optimization results and manually trigger a new optimization.

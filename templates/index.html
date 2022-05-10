@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <script src="http://ajax.googleapis.com/ajax/libs/jquery/2.0.0/jquery.min.js"></script>
+        <title>EMHASS: Energy Management Optimization for Home Assistant</title>
+        <link rel="stylesheet" type="text/css" href="../static/style.css">
+    </head>
+    <body>
+        <center>
+            <h2 style="font-family: Helvetica;color: darkblue;">EMHASS: Energy Management Optimization for Home Assistant</h2>
+            <h4 style="font-family: Helvetica;color: darkblue;">Basic optimization control</h4>
+        </center>
+        <div class="center">
+            <div align="center" class="form">
+                <form action="" method="get">
+                    <button type="button" id="dayahead-optimization" class="button button1" >Launch Day-ahead Optimization</button>
+                    <button type="button" id="publish-data" class="button button2" >Publish Optimization Results</button>
+                    <br>
+                </form>
+                <br><br>
+            </div>
+        </div>
+        {% for plot in injection_dict %}
+            <div align="center">
+                {{injection_dict[plot]}}
+            </div> 
+        {% endfor %}
+        <footer class="footer">
+            <center>
+                <p style="font-family: Helvetica;color: darkblue;">&copy; MIT License | Copyright (c) 2021-2022 David HERNANDEZ</p>
+            </center>
+        </footer>
+    </body>
+    <script>
+        document.getElementById('dayahead-optimization').addEventListener('click', function() {
+            var url = "/action/dayahead-optim"
+            var settings = {
+            "async": true,
+            "crossDomain": true,
+            "url": url,
+            "method": "POST",
+            "headers": {
+                'Content-Type':'application/json'
+            },
+            "dataType": 'json',
+            "data": '{}'
+            }
+            $.ajax(settings).done(function (response) {
+            });
+        });
+        document.getElementById('publish-data').addEventListener('click', function() {
+            var url = "/action/publish-data"
+            var settings = {
+            "async": true,
+            "crossDomain": true,
+            "url": url,
+            "method": "POST",
+            "headers": {
+                'Content-Type':'application/json'
+            },
+            "dataType": 'json',
+            "data": '{}'
+            }
+            $.ajax(settings).done(function (response) {
+            });
+        });
+    </script>
+</html>

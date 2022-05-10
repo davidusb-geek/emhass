@@ -7,14 +7,13 @@ from requests import get
 # from waitress import serve
 # from paste.translogger import TransLogger
 from pathlib import Path
-import os, json, argparse, pickle
-from datetime import datetime, timedelta
+import os, json, argparse, pickle, yaml
 import pandas as pd
 import plotly.express as px
 from emhass.command_line import set_input_data_dict
 from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim
 from emhass.command_line import publish_data
-from emhass.utils import get_root
+
 
 # Define the Flask instance
 app = Flask(__name__, static_url_path='/static')
@@ -37,60 +36,62 @@ def get_injection_dict(df, plot_size = 1366):
     injection_dict['table1'] = table1
     return injection_dict
 
-def build_params(params, options):
-    # Updating variables in retrieve_hass_conf
-    params['retrieve_hass_conf'][0]['freq'] = options['optimization_time_step']
-    params['retrieve_hass_conf'][1]['days_to_retrieve'] = options['historic_days_to_retrieve']
-    params['retrieve_hass_conf'][2]['var_PV'] = options['sensor_power_photovoltaics']
-    params['retrieve_hass_conf'][3]['var_load'] = options['sensor_power_load_no_var_loads']
-    params['retrieve_hass_conf'][6]['var_replace_zero'] = [options['sensor_power_photovoltaics']]
-    params['retrieve_hass_conf'][7]['var_interp'] = [options['sensor_power_photovoltaics'], options['sensor_power_load_no_var_loads']]
-    # Updating variables in optim_conf
-    params['optim_conf'][0]['set_use_battery'] = options['set_use_battery']
-    params['optim_conf'][2]['num_def_loads'] = options['number_of_deferrable_loads']
-    params['optim_conf'][3]['P_deferrable_nom'] = [i['nominal_power_of_deferrable_loads'] for i in options['list_nominal_power_of_deferrable_loads']]
-    params['optim_conf'][4]['def_total_hours'] = [i['operating_hours_of_each_deferrable_load'] for i in options['list_operating_hours_of_each_deferrable_load']]
-    params['optim_conf'][5]['treat_def_as_semi_cont'] = [i['treat_deferrable_load_as_semi_cont'] for i in options['list_treat_deferrable_load_as_semi_cont']]
-    params['optim_conf'][6]['set_def_constant'] = [False for i in range(len(params['optim_conf'][3]['P_deferrable_nom']))]
-    start_hours_list = [i['peak_hours_periods_start_hours'] for i in options['list_peak_hours_periods_start_hours']]
-    end_hours_list = [i['peak_hours_periods_end_hours'] for i in options['list_peak_hours_periods_end_hours']]
-    num_peak_hours = len(start_hours_list)
-    list_hp_periods_list = [{'period_hp_'+str(i+1):[{'start':start_hours_list[i]},{'end':end_hours_list[i]}]} for i in range(num_peak_hours)]
-    params['optim_conf'][10]['list_hp_periods'] = list_hp_periods_list
-    params['optim_conf'][11]['load_cost_hp'] = options['load_peak_hours_cost']
-    params['optim_conf'][12]['load_cost_hc'] = options['load_offpeak_hours_cost']
-    params['optim_conf'][14]['prod_sell_price'] = options['photovoltaic_production_sell_price']
-    params['optim_conf'][15]['set_total_pv_sell'] = options['set_total_pv_sell']
-    # Updating variables in plant_conf
-    params['plant_conf'][0]['P_grid_max'] = options['maximum_power_from_grid']
-    params['plant_conf'][1]['module_model'] = [i['pv_module_model'] for i in options['list_pv_module_model']]
-    params['plant_conf'][2]['inverter_model'] = [i['pv_inverter_model'] for i in options['list_pv_inverter_model']]
-    params['plant_conf'][3]['surface_tilt'] = [i['surface_tilt'] for i in options['list_surface_tilt']]
-    params['plant_conf'][4]['surface_azimuth'] = [i['surface_azimuth'] for i in options['list_surface_azimuth']]
-    params['plant_conf'][5]['modules_per_string'] = [i['modules_per_string'] for i in options['list_modules_per_string']]
-    params['plant_conf'][6]['strings_per_inverter'] = [i['strings_per_inverter'] for i in options['list_strings_per_inverter']]
-    params['plant_conf'][7]['Pd_max'] = options['battery_discharge_power_max']
-    params['plant_conf'][8]['Pc_max'] = options['battery_charge_power_max']
-    params['plant_conf'][9]['eta_disch'] = options['battery_discharge_efficiency']
-    params['plant_conf'][10]['eta_ch'] = options['battery_charge_efficiency']
-    params['plant_conf'][11]['Enom'] = options['battery_nominal_energy_capacity']
-    params['plant_conf'][12]['SOCmin'] = options['battery_minimum_state_of_charge']
-    params['plant_conf'][13]['SOCmax'] = options['battery_maximum_state_of_charge']
-    params['plant_conf'][14]['SOCtarget'] = options['battery_target_state_of_charge']
+def build_params(params, options, add_on):
+    if add_on:
+        # Updating variables in retrieve_hass_conf
+        params['retrieve_hass_conf'][0]['freq'] = options['optimization_time_step']
+        params['retrieve_hass_conf'][1]['days_to_retrieve'] = options['historic_days_to_retrieve']
+        params['retrieve_hass_conf'][2]['var_PV'] = options['sensor_power_photovoltaics']
+        params['retrieve_hass_conf'][3]['var_load'] = options['sensor_power_load_no_var_loads']
+        params['retrieve_hass_conf'][6]['var_replace_zero'] = [options['sensor_power_photovoltaics']]
+        params['retrieve_hass_conf'][7]['var_interp'] = [options['sensor_power_photovoltaics'], options['sensor_power_load_no_var_loads']]
+        # Updating variables in optim_conf
+        params['optim_conf'][0]['set_use_battery'] = options['set_use_battery']
+        params['optim_conf'][2]['num_def_loads'] = options['number_of_deferrable_loads']
+        params['optim_conf'][3]['P_deferrable_nom'] = [i['nominal_power_of_deferrable_loads'] for i in options['list_nominal_power_of_deferrable_loads']]
+        params['optim_conf'][4]['def_total_hours'] = [i['operating_hours_of_each_deferrable_load'] for i in options['list_operating_hours_of_each_deferrable_load']]
+        params['optim_conf'][5]['treat_def_as_semi_cont'] = [i['treat_deferrable_load_as_semi_cont'] for i in options['list_treat_deferrable_load_as_semi_cont']]
+        params['optim_conf'][6]['set_def_constant'] = [False for i in range(len(params['optim_conf'][3]['P_deferrable_nom']))]
+        start_hours_list = [i['peak_hours_periods_start_hours'] for i in options['list_peak_hours_periods_start_hours']]
+        end_hours_list = [i['peak_hours_periods_end_hours'] for i in options['list_peak_hours_periods_end_hours']]
+        num_peak_hours = len(start_hours_list)
+        list_hp_periods_list = [{'period_hp_'+str(i+1):[{'start':start_hours_list[i]},{'end':end_hours_list[i]}]} for i in range(num_peak_hours)]
+        params['optim_conf'][10]['list_hp_periods'] = list_hp_periods_list
+        params['optim_conf'][11]['load_cost_hp'] = options['load_peak_hours_cost']
+        params['optim_conf'][12]['load_cost_hc'] = options['load_offpeak_hours_cost']
+        params['optim_conf'][14]['prod_sell_price'] = options['photovoltaic_production_sell_price']
+        params['optim_conf'][15]['set_total_pv_sell'] = options['set_total_pv_sell']
+        # Updating variables in plant_conf
+        params['plant_conf'][0]['P_grid_max'] = options['maximum_power_from_grid']
+        params['plant_conf'][1]['module_model'] = [i['pv_module_model'] for i in options['list_pv_module_model']]
+        params['plant_conf'][2]['inverter_model'] = [i['pv_inverter_model'] for i in options['list_pv_inverter_model']]
+        params['plant_conf'][3]['surface_tilt'] = [i['surface_tilt'] for i in options['list_surface_tilt']]
+        params['plant_conf'][4]['surface_azimuth'] = [i['surface_azimuth'] for i in options['list_surface_azimuth']]
+        params['plant_conf'][5]['modules_per_string'] = [i['modules_per_string'] for i in options['list_modules_per_string']]
+        params['plant_conf'][6]['strings_per_inverter'] = [i['strings_per_inverter'] for i in options['list_strings_per_inverter']]
+        params['plant_conf'][7]['Pd_max'] = options['battery_discharge_power_max']
+        params['plant_conf'][8]['Pc_max'] = options['battery_charge_power_max']
+        params['plant_conf'][9]['eta_disch'] = options['battery_discharge_efficiency']
+        params['plant_conf'][10]['eta_ch'] = options['battery_charge_efficiency']
+        params['plant_conf'][11]['Enom'] = options['battery_nominal_energy_capacity']
+        params['plant_conf'][12]['SOCmin'] = options['battery_minimum_state_of_charge']
+        params['plant_conf'][13]['SOCmax'] = options['battery_maximum_state_of_charge']
+        params['plant_conf'][14]['SOCtarget'] = options['battery_target_state_of_charge']
     # The params dict
     params['params_secrets'] = params_secrets
-    params['passed_data'] = {'pv_power_forecast':None,'load_power_forecast':None,'load_cost_forecast':None,'prod_price_forecast':None}
+    params['passed_data'] = {'pv_power_forecast':None,'load_power_forecast':None,'load_cost_forecast':None,'prod_price_forecast':None,
+                             'prediction_horizon':None,'soc_init':None,'soc_final':None,'past_def_load_energies':None}
     return params
 
 @app.route('/')
 def index():
     app.logger.info("EMHASS server online, serving index.html...")
     # Load HTML template
-    file_loader = FileSystemLoader(base_path+'/templates')
+    file_loader = FileSystemLoader('/app/templates')
     env = Environment(loader=file_loader)
     template = env.get_template('index.html')
     # Load cache dict
-    with open(base_path+'/data/injection_dict.pkl', "rb") as fid:
+    with open('/app/data/injection_dict.pkl', "rb") as fid:
         injection_dict = pickle.load(fid)
     if injection_dict is None:
         return make_response(template.render(injection_dict={}))
@@ -99,11 +100,11 @@ def index():
 
 @app.route('/action/<action_name>', methods=['POST'])
 def action_call(action_name):
-    with open(base_path+'/data/params.pkl', "rb") as fid:
-        params = pickle.load(fid)
+    with open('/app/data/params.pkl', "rb") as fid:
+        config_path, params = pickle.load(fid)
     runtimeparams = request.get_json(force=True)
     params = json.dumps(params)
-    input_data_dict = set_input_data_dict(config_path, base_path, costfun, 
+    input_data_dict = set_input_data_dict(config_path, str(config_path.parent), costfun, 
         params, runtimeparams, action_name, app.logger)
     if action_name == 'publish-data':
         app.logger.info("Publishing data...")
@@ -114,7 +115,7 @@ def action_call(action_name):
         app.logger.info("Performing perfect optimization...")
         opt_res = perfect_forecast_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
-        with open(base_path+'/data/injection_dict.pkl', "wb") as fid:
+        with open('/app/data/injection_dict.pkl', "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action perfect-optim executed... \n'
         return make_response(msg, 201)
@@ -122,7 +123,7 @@ def action_call(action_name):
         app.logger.info("Performing dayahead optimization...")
         opt_res = dayahead_forecast_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
-        with open(base_path+'/data/injection_dict.pkl', "wb") as fid:
+        with open('/app/data/injection_dict.pkl', "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action dayahead-optim executed... \n'
         return make_response(msg, 201)
@@ -130,7 +131,7 @@ def action_call(action_name):
         app.logger.info("Performing naive MPC optimization...")
         opt_res = naive_mpc_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
-        with open(base_path+'/data/injection_dict.pkl', "wb") as fid:
+        with open('/app/data/injection_dict.pkl', "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action naive-mpc-optim executed... \n'
         return make_response(msg, 201)
@@ -144,7 +145,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--url', type=str, help='The URL to your Home Assistant instance, ex the external_url in your hass configuration')
     parser.add_argument('--key', type=str, help='Your access key. If using EMHASS in standalone this should be a Long-Lived Access Token')
-    parser.add_argument('--add_on', type=bool, default=True, help='Define if we are usinng EMHASS with the add-on or in standalone mode')
+    parser.add_argument('--add_on', type=bool, default=False, help='Define if we are usinng EMHASS with the add-on or in standalone mode')
     args = parser.parse_args()
     
     # Define the paths
@@ -153,17 +154,13 @@ if __name__ == "__main__":
         options_json = Path(OPTIONS_PATH)
         CONFIG_PATH = "/usr/src/config_emhass.json"
         config_path = Path(CONFIG_PATH)
-        base_path = str(config_path.parent)
-        url = args.url
+        hass_url = args.url
         key = args.key
     else:
         OPTIONS_PATH = "/app/config_emhass.json"
         options_json = Path(OPTIONS_PATH)
         CONFIG_PATH = "/app/config_emhass.json"
         config_path = Path(CONFIG_PATH)
-        base_path = str(config_path.parent)
-        url = os.getenv('LOCAL_URL', default='0.0.0.0')
-        key = os.getenv('LOCAL_KEY', default='123456')
         
     # Read options info
     if options_json.exists():
@@ -186,13 +183,11 @@ if __name__ == "__main__":
     params['retrieve_hass_conf'] = retrieve_hass_conf
     params['optim_conf'] = optim_conf
     params['plant_conf'] = plant_conf
-    with open(base_path+'/data/params.pkl', "wb") as fid:
-        pickle.dump(params, fid)
 
     # Initialize this global dict
-    opt_res = pd.read_csv(base_path+'/data/opt_res_dayahead_latest.csv', index_col='timestamp')
+    opt_res = pd.read_csv('/app/data/opt_res_dayahead_latest.csv', index_col='timestamp')
     injection_dict = get_injection_dict(opt_res)
-    with open(base_path+'/data/injection_dict.pkl', "wb") as fid:
+    with open('/app/data/injection_dict.pkl', "wb") as fid:
         pickle.dump(injection_dict, fid)
     
     if args.add_on:
@@ -202,14 +197,13 @@ if __name__ == "__main__":
         web_ui_url = options['web_ui_url']
         url_from_options = options['hass_url']
         if url_from_options == 'empty':
-            hass_url = args.url
             url = hass_url+"/config"
         else:
             hass_url = url_from_options
             url = hass_url+"/api/config"
         token_from_options = options['long_lived_token']
         if token_from_options == 'empty':
-            long_lived_token = args.key
+            long_lived_token = key
         else:
             long_lived_token = token_from_options
         headers = {
@@ -227,14 +221,15 @@ if __name__ == "__main__":
             'alt': config_hass['elevation']
         }
     else:
-        pass
+        costfun = os.getenv('LOCAL_COSTFUN', default='profit')
+        web_ui_url = '0.0.0.0'
+        with open('/app/secrets_emhass.yaml', 'r') as file:
+            params_secrets = yaml.load(file, Loader=yaml.FullLoader)
         
     # Build params
-    with open(base_path+'/data/params.pkl', "rb") as fid:
-        params = pickle.load(fid)
-    params = build_params(params, options)
-    with open(base_path+'/data/params.pkl', "wb") as fid:
-        pickle.dump(params, fid)
+    params = build_params(params, options, args.add_on)
+    with open('/app/data/params.pkl', "wb") as fid:
+        pickle.dump((config_path, params), fid)
 
     # Launch server
     port = int(os.environ.get('PORT', 5000))

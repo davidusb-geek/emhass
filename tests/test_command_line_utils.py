@@ -81,7 +81,7 @@ class TestCommandLineUtils(unittest.TestCase):
                                                        retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
         self.assertIsInstance(params, str)
         params = json.loads(params)
-        self.assertTrue(params['passed_data']['prediction_horizon'] == 300)
+        self.assertTrue(params['passed_data']['prediction_horizon'] == int(20*retrieve_hass_conf['freq'].seconds/60))
         self.assertTrue(params['passed_data']['soc_init'] == plant_conf['SOCtarget'])
         self.assertTrue(params['passed_data']['soc_final'] == plant_conf['SOCtarget'])
         self.assertTrue(params['passed_data']['past_def_load_energies'] == [0*i for i in range(optim_conf['num_def_loads'])])

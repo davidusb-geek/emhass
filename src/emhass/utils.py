@@ -82,7 +82,7 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
         forecast_dates = get_forecast_dates(freq, delta_forecast)
         if set_type == 'naive-mpc-optim':
             if 'prediction_horizon' not in runtimeparams.keys():
-                prediction_horizon = 300 # 300 minutes by default
+                prediction_horizon = int(20*retrieve_hass_conf['freq'].seconds/60) # 20 time steps by default
             else:
                 prediction_horizon = runtimeparams['prediction_horizon']
             params['passed_data']['prediction_horizon'] = prediction_horizon

@@ -15,7 +15,7 @@
 		{"set_use_battery": false}, 
 		{"delta_forecast": 1}, 
 		{"num_def_loads": 2}, 
-		{"P_deferrable_nom": [3000, 750]}, 
+		{"P_deferrable_nom": [3000.0, 750.0]}, 
 		{"def_total_hours": [5, 8]}, 
 		{"treat_def_as_semi_cont": [true, true]}, 
 		{"set_def_constant": [false, false]}, 
