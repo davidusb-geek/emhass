@@ -6,10 +6,10 @@ WORKDIR /app
 # copy the requirements file into the image
 COPY requirements_webserver.txt requirements_webserver.txt
 COPY setup.py setup.py
+COPY README.md README.md
 
 # Setup slim-buster
 RUN pip3 install --no-cache-dir -r requirements_webserver.txt
-RUN python3 setup.py install
 
 # copy contents
 COPY src/emhass/__init__.py /app/src/emhass/__init__.py
@@ -24,6 +24,8 @@ COPY secrets_emhass.yaml /app/secrets_emhass.yaml
 COPY data/opt_res_dayahead_latest.csv /app/data/opt_res_dayahead_latest.csv
 COPY templates/index.html /app/templates/index.html
 COPY static/style.css /app/static/style.css
+
+RUN python3 setup.py install
 
 # set env variables
 ENV PYTHONDONTWRITEBYTECODE 1
