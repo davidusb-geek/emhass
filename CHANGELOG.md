@@ -13,7 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added add-on paramter to command line to define if launching emhass from add-on or in standalone mode.
 - Added new testing file for command_line.
 - Added a webserver. Moved the webserver from the add-on to the core emhass module.
+- Added a WSGI production server for flask using waitress.
 - Added a Dockerfile and procedure to run emhass in standalone mode.
+- Updated the documentation.
 
 ## [0.2.14] - 2022-05-05
 ### Improvement

@@ -78,7 +78,7 @@ class optimization:
     def perform_optimization(self, data_opt: pd.DataFrame, P_PV: np.array, P_load: np.array, 
                              unit_load_cost: np.array, unit_prod_price: np.array,
                              soc_init: Optional[float] = None, soc_final: Optional[float] = None,
-                             past_def_load_energies: Optional[list] = None) -> pd.DataFrame:
+                             def_total_hours: Optional[list] = None) -> pd.DataFrame:
         """
         Perform the actual optimization using linear programming (LP).
         
@@ -104,9 +104,8 @@ class optimization:
         :param soc_final: The final battery SOC for the optimization. This parameter \
             is optional, if not given soc_init = soc_final = soc_target from the configuration file.
         :type soc_final: 
-        :param past_def_load_energies: The past already distributed values of the objective energy \
-            for each deferrable load.
-        :type past_def_load_energies: list
+        :param def_total_hours: The functioning hours for this iteration for each deferrable load.
+        :type def_total_hours: list
         :return: The input DataFrame with all the different results from the \
             optimization appended
         :rtype: pd.DataFrame
@@ -123,8 +122,8 @@ class optimization:
                 soc_final = soc_init
             else:
                 soc_final = self.plant_conf['SOCtarget']
-        if past_def_load_energies is None:
-            past_def_load_energies = [0*i for i in range(self.optim_conf['num_def_loads'])]
+        if def_total_hours is None:
+            def_total_hours = self.optim_conf['def_total_hours']
         
         #### The LP problem using Pulp ####
         opt_model = plp.LpProblem("LP_Model", plp.LpMaximize)
@@ -243,13 +242,22 @@ class optimization:
                             for i in set_I})
             
         # Total time of deferrable load
-        for k in range(self.optim_conf['num_def_loads']):
-            constraints.update({"constraint_defload{}_energy".format(k) :
-                                plp.LpConstraint(
-                                    e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in set_I),
-                                    sense = plp.LpConstraintEQ,
-                                    rhs = self.optim_conf['def_total_hours'][k]*self.optim_conf['P_deferrable_nom'][k] - past_def_load_energies[k])
-                                })
+        if def_total_hours is None:
+            for k in range(self.optim_conf['num_def_loads']):
+                constraints.update({"constraint_defload{}_energy".format(k) :
+                                    plp.LpConstraint(
+                                        e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in set_I),
+                                        sense = plp.LpConstraintEQ,
+                                        rhs = self.optim_conf['def_total_hours'][k]*self.optim_conf['P_deferrable_nom'][k])
+                                    })
+        else:
+            for k in range(self.optim_conf['num_def_loads']):
+                constraints.update({"constraint_defload{}_energy".format(k) :
+                                    plp.LpConstraint(
+                                        e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in set_I),
+                                        sense = plp.LpConstraintEQ,
+                                        rhs = def_total_hours[k]*self.optim_conf['P_deferrable_nom'][k])
+                                    })
             
         # Treat deferrable load as a semi-continuous variable
         for k in range(self.optim_conf['num_def_loads']):
@@ -464,7 +472,7 @@ class optimization:
         
     def perform_naive_mpc_optim(self, df_input_data: pd.DataFrame, P_PV: pd.Series, P_load: pd.Series,
                                 prediction_horizon: int, soc_init: Optional[float] = None, soc_final: Optional[float] = None,
-                                past_def_load_energies: Optional[list] = None) -> pd.DataFrame:
+                                def_total_hours: Optional[list] = None) -> pd.DataFrame:
         """
         Perform a naive approach to a Model Predictive Control (MPC). \
         This implementaion is naive because we are not using the formal formulation \
@@ -487,9 +495,8 @@ class optimization:
         :param soc_final: The final battery SOC for the optimization. This parameter \
             is optional, if not given soc_init = soc_final = soc_target from the configuration file.
         :type soc_final: 
-        :param past_def_load_energies: The past already distributed values of the objective energy \
-            for each deferrable load.
-        :type past_def_load_energies: list
+        :param def_total_hours: The functioning hours for this iteration for each deferrable load.
+        :type def_total_hours: list
         :return: opt_res: A DataFrame containing the optimization results
         :rtype: pandas.DataFrame
 
@@ -509,6 +516,6 @@ class optimization:
         # Call optimization function
         self.opt_res = self.perform_optimization(df_input_data, P_PV.values.ravel(), P_load.values.ravel(), 
                                                  unit_load_cost, unit_prod_price, soc_init=soc_init, 
-                                                 soc_final=soc_final, past_def_load_energies=past_def_load_energies)
+                                                 soc_final=soc_final, def_total_hours=def_total_hours)
         return self.opt_res
     

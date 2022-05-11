@@ -184,10 +184,10 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     prediction_horizon = input_data_dict['params']['passed_data']['prediction_horizon']
     soc_init = input_data_dict['params']['passed_data']['soc_init']
     soc_final = input_data_dict['params']['passed_data']['soc_final']
-    past_def_load_energies = input_data_dict['params']['passed_data']['past_def_load_energies']
+    def_total_hours = input_data_dict['params']['passed_data']['def_total_hours']
     opt_res_naive_mpc = input_data_dict['opt'].perform_naive_mpc_optim(
         df_input_data_dayahead, input_data_dict['P_PV_forecast'], input_data_dict['P_load_forecast'],
-        prediction_horizon, soc_init, soc_final, past_def_load_energies)
+        prediction_horizon, soc_init, soc_final, def_total_hours)
     # Save CSV file for publish_data
     if save_data_to_file:
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -260,7 +260,7 @@ def main():
     """Define the main command line entry function."""
     # Parsing arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('--action', type=str, help='Set the desired action, options are: perfect-optim, dayahead-optim and publish-data')
+    parser.add_argument('--action', type=str, help='Set the desired action, options are: perfect-optim, dayahead-optim, naive-mpc-optim and publish-data')
     parser.add_argument('--config', type=str, help='Define path to the config.yaml file')
     parser.add_argument('--costfun', type=str, default='profit', help='Define the type of cost function, options are: profit, cost, self-consumption')
     parser.add_argument('--log2file', type=bool, default=False, help='Define if we should log to a file or not')

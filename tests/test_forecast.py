@@ -3,10 +3,7 @@
 
 import unittest
 import pandas as pd
-import pathlib
-import pickle
-import json
-import copy
+import pathlib, pickle, json, copy, yaml
 
 from emhass.retrieve_hass import retrieve_hass
 from emhass.forecast import forecast
@@ -95,8 +92,8 @@ class TestForecast(unittest.TestCase):
         self.assertEqual(len(self.df_weather_csv), len(P_PV_forecast))
 
     def test_get_forecasts_with_lists(self):
-        with open(root+'/config_emhass.json', 'r') as read_file:
-            params = json.load(read_file)
+        with open(root+'/config_emhass.yaml', 'r') as file:
+            params = yaml.load(file, Loader=yaml.FullLoader)
         params.update({
             'params_secrets': {
                 'hass_url': 'http://supervisor/core/api',

@@ -76,13 +76,13 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
     if runtimeparams is not None:
         if params is None:
             params = {'passed_data':{'pv_power_forecast':None,'load_power_forecast':None,'load_cost_forecast':None,'prod_price_forecast':None,
-                                     'prediction_horizon':None,'soc_init':None,'soc_final':None,'past_def_load_energies':None}}
+                                     'prediction_horizon':None,'soc_init':None,'soc_final':None,'def_total_hours':None}}
         freq = int(retrieve_hass_conf['freq'].seconds/60.0)
         delta_forecast = int(optim_conf['delta_forecast'].days)
         forecast_dates = get_forecast_dates(freq, delta_forecast)
         if set_type == 'naive-mpc-optim':
             if 'prediction_horizon' not in runtimeparams.keys():
-                prediction_horizon = int(20*retrieve_hass_conf['freq'].seconds/60) # 20 time steps by default
+                prediction_horizon = int(10*retrieve_hass_conf['freq'].seconds/60) # 10 time steps by default
             else:
                 prediction_horizon = runtimeparams['prediction_horizon']
             params['passed_data']['prediction_horizon'] = prediction_horizon
@@ -96,11 +96,11 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
             else:
                 soc_final = runtimeparams['soc_final']
             params['passed_data']['soc_final'] = soc_final
-            if 'past_def_load_energies' not in runtimeparams.keys():
-                past_def_load_energies = [0*i for i in range(optim_conf['num_def_loads'])]
+            if 'def_total_hours' not in runtimeparams.keys():
+                def_total_hours = optim_conf['def_total_hours']
             else:
-                past_def_load_energies = runtimeparams['past_def_load_energies']
-            params['passed_data']['past_def_load_energies'] = past_def_load_energies
+                def_total_hours = runtimeparams['def_total_hours']
+            params['passed_data']['def_total_hours'] = def_total_hours
             forecast_dates = copy.deepcopy(forecast_dates)[0:int(pd.Timedelta(prediction_horizon, unit='minutes')/retrieve_hass_conf['freq'])]
         if 'pv_power_forecast' in runtimeparams.keys():
             if type(runtimeparams['pv_power_forecast']) == list and len(runtimeparams['pv_power_forecast']) >= len(forecast_dates):

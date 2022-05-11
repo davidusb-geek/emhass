@@ -39,6 +39,21 @@ To upgrade the installation in the future just use:
 python3 -m pip install --upgrade emhass
 ```
 
+### Using Docker
+
+To install using docker you will need to build your image locally. For this clone this repository, setup your `config_emhass.yaml` file and use the provided make file with this command:
+```
+make -f deploy_docker.mk clean_deploy
+```
+Then load the image in the .tar file:
+```
+docker load -i <TarFileName>.tar
+```
+Finally launch the docker itself:
+```
+docker run -it --restart always -p 5000:5000 -e "LOCAL_COSTFUN=profit" -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
+```
+
 ### The EMHASS add-on
 
 For Home Assistant OS and HA Supervised users, I've developed an add-on that will help you use EMHASS. The add-on is more user friendly as the configuration can be modified directly in the add-on options pane and also it exposes a web ui that can be used to inspect the optimization results and manually trigger a new optimization.
@@ -53,11 +68,12 @@ These architectures are supported: `amd64`, `armv7` and `aarch64`.
 
 To run a command simply use the `emhass` command followed by the needed arguments.
 The available arguments are:
-- `--action`: That is used to set the desired action, options are: `perfect-optim`, `dayahead-optim` and `publish-data`
-- `--config`: Define path to the config_emhass.yaml file (including the yaml file itself)
+- `--action`: That is used to set the desired action, options are: `perfect-optim`, `dayahead-optim`, `naive-mpc-optim` and `publish-data`
+- `--config`: Define path to the config.yaml file (including the yaml file itself)
 - `--costfun`: Define the type of cost function, this is optional and the options are: `profit` (default), `cost`, `self-consumption`
 - `--log2file`: Define if we should log to a file or not, this is optional and the options are: `True` or `False` (default)
-- `--params`: Configuration and data passed as JSON. This can be used to pass you own forecast data to EMHASS.
+- `--params`: Configuration as JSON. 
+- `--runtimeparams`: Data passed at runtime. This can be used to pass you own forecast data to EMHASS.
 - `--version`: Show the current version of EMHASS.
 
 For example, the following line command can be used to perform a day-ahead optimization task:
@@ -66,14 +82,16 @@ emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.yaml'
 ```
 Before running any valuable command you need to modify the `config_emhass.yaml` and `secrets_emhass.yaml` files. These files should contain the information adapted to your own system. To do this take a look at the special section for this in the [documentation](https://emhass.readthedocs.io/en/latest/config.html).
 
-If using the add-on, it exposes a simple webserver on port 5000. You can access it directly using your brower, ex: http://localhost:5000.
+If using the add-on or the standalone docker installation, it exposes a simple webserver on port 5000. You can access it directly using your brower, ex: http://localhost:5000.
 
 With this web server you can perform RESTful POST commands on one ENDPOINT called `action` with two main options:
 
-- A POST call to `action/dayahead-optim` to perform a day-ahead optimization task of your home energy
-- A POST call to `action/publish-data ` to publish the optimization results data.
+- A POST call to `action/perfect-optim` to perform a perfect optimization task on the historical data.
+- A POST call to `action/dayahead-optim` to perform a day-ahead optimization task of your home energy.
+- A POST call to `action/naive-mpc-optim` to perform a naive Model Predictive Controller optimization task. If using this option you will need to define the correct `runtimeparams` (see further below).
+- A POST call to `action/publish-data` to publish the optimization results data for the current timestamp.
 
-A `curl` command can the be used to launch an optimization task like this: `curl -i -H "Content-Type: application/json" -X POST -d '{}' http://localhost:5000/action/dayahead-optim`.
+A `curl` command can then be used to launch an optimization task like this: `curl -i -H "Content-Type: application/json" -X POST -d '{}' http://localhost:5000/action/dayahead-optim`.
 
 ## Home Assistant integration
 
@@ -107,7 +125,7 @@ And in `automations.yaml`:
   action:
   - service: shell_command.publish_data
 ```
-In these automations the optimization is performed everyday at 5:30am and the data is published every 5 minutes.
+In these automations the day-ahead optimization is performed everyday at 5:30am and the data is published every 5 minutes.
 
 Create the file `dayahead_optim.sh` with the following content:
 ```
@@ -191,3 +209,32 @@ The possible dictionnary keys to pass data are:
 - `load_cost_forecast` for the Load cost forecast.
 
 - `prod_price_forecast` for the PV production selling price forecast.
+
+### A naive Model Predictive Controller
+
+A MPC controller was introduced in v0.3.0. This an informal/naive representation of a MPC controller. 
+
+A MPC controller performs the following actions:
+
+- Set the prediction horizon and receiding horizon parameters.
+- Perform an optimization on the prediction horizon.
+- Apply the first element of the obtained optimized control variables.
+- Repeat at a relatively high frequency, ex: 5 min.
+
+This is the receiding horizon principle.
+
+When applyin this controller, the following `runtimeparams` should be defined:
+
+- `prediction_horizon` for the MPC prediction horizon. Fix this at at least 5 times the optimization time step.
+
+- `soc_init` for the initial value of the battery SOC for the current iteration of the MPC. 
+
+- `soc_final` for the final value of the battery SOC for the current iteration of the MPC. 
+
+- `def_total_hours` for the list of deferrable loads functioning hours. These values can decrease as the day advances to take into account receidding horizon daily energy objectives for each deferrable load.
+
+A correct call for a MPC optimization should look like:
+
+```
+curl -i -H "Content-Type: application/json" -X POST -d '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3]}' http://localhost:5000/action/naive-mpc-optim
+```

@@ -3,8 +3,7 @@
 
 import unittest
 import pandas as pd
-import pathlib
-import json
+import pathlib, json, yaml
 
 from emhass.command_line import set_input_data_dict
 from emhass import utils
@@ -17,8 +16,8 @@ logger, ch = utils.get_logger(__name__, root, save_to_file=False)
 class TestCommandLineUtils(unittest.TestCase):
 
     def setUp(self):
-        with open(root+'/config_emhass.json', 'r') as read_file:
-            params = json.load(read_file)
+        with open(root+'/config_emhass.yaml', 'r') as file:
+            params = yaml.load(file, Loader=yaml.FullLoader)
         params.update({
             'params_secrets': {
                 'hass_url': 'http://supervisor/core/api',
@@ -84,7 +83,7 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(params['passed_data']['prediction_horizon'] == int(20*retrieve_hass_conf['freq'].seconds/60))
         self.assertTrue(params['passed_data']['soc_init'] == plant_conf['SOCtarget'])
         self.assertTrue(params['passed_data']['soc_final'] == plant_conf['SOCtarget'])
-        self.assertTrue(params['passed_data']['past_def_load_energies'] == [0*i for i in range(optim_conf['num_def_loads'])])
+        self.assertTrue(params['passed_data']['def_total_hours'] == optim_conf['def_total_hours'])
         # This will be the case when using emhass in standalone mode
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
             pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True, params=self.params_json)

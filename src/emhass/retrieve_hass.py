@@ -91,7 +91,7 @@ class retrieve_hass:
         
             for i, var in enumerate(var_list):
                 
-                if self.params is not None: # If this is the case we suppose that we are using the supervisor API
+                if self.hass_url == "http://supervisor/core/api": # If we are using the supervisor API
                     url = self.hass_url+"/history/period/"+day.isoformat()+"?filter_entity_id="+var
                 else: # Otherwise the Home Assistant Core API it is
                     url = self.hass_url+"api/history/period/"+day.isoformat()+"?filter_entity_id="+var
@@ -187,6 +187,7 @@ class retrieve_hass:
         if new_var_interp is not None:
             self.df_final[new_var_interp] = self.df_final[new_var_interp].interpolate(
                 method='linear', axis=0, limit=None)
+            self.df_final[new_var_interp] = self.df_final[new_var_interp].fillna(0.0)
         # Setting the correct time zone on DF index
         if self.time_zone is not None:
             self.df_final.index = self.df_final.index.tz_convert(self.time_zone)
@@ -212,7 +213,7 @@ class retrieve_hass:
         :type friendly_name: str
 
         """
-        if self.params is not None: # If this is the case we suppose that we are using the supervisor API
+        if self.hass_url == "http://supervisor/core/api": # If we are using the supervisor API
             url = self.hass_url+"/states/"+entity_id
         else: # Otherwise the Home Assistant Core API it is
             url = self.hass_url+"api/states/"+entity_id
