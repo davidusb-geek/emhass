@@ -104,6 +104,7 @@ def action_call(action_name):
         config_path, params = pickle.load(fid)
     runtimeparams = request.get_json(force=True)
     params = json.dumps(params)
+    runtimeparams = json.dumps(runtimeparams)
     input_data_dict = set_input_data_dict(config_path, str(config_path.parent), costfun, 
         params, runtimeparams, action_name, app.logger)
     if action_name == 'publish-data':

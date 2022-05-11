@@ -81,7 +81,7 @@ docker load -i <TarFileName>.tar
 ```
 Finally launch the docker itself:
 ```
-docker run -it --restart always -e "LOCAL_COSTFUN=profit" --name DockerEMHASS <REPOSITORY:TAG>
+docker run -it --restart always -p 5000:5000 -e "LOCAL_COSTFUN=profit" --name DockerEMHASS <REPOSITORY:TAG>
 ```
 
 ### The EMHASS add-on
