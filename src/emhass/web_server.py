@@ -4,10 +4,10 @@
 from flask import Flask, make_response, request
 from jinja2 import Environment, FileSystemLoader
 from requests import get
-# from waitress import serve
-# from paste.translogger import TransLogger
+from waitress import serve
+from importlib.metadata import version
 from pathlib import Path
-import os, json, argparse, pickle, yaml
+import os, json, argparse, pickle, yaml, logging
 import pandas as pd
 import plotly.express as px
 from emhass.command_line import set_input_data_dict
@@ -17,6 +17,7 @@ from emhass.command_line import publish_data
 
 # Define the Flask instance
 app = Flask(__name__, static_url_path='/static')
+app.logger.setLevel(logging.INFO)
 
 def get_injection_dict(df, plot_size = 1366):
     # Create plots
@@ -80,14 +81,14 @@ def build_params(params, options, add_on):
     # The params dict
     params['params_secrets'] = params_secrets
     params['passed_data'] = {'pv_power_forecast':None,'load_power_forecast':None,'load_cost_forecast':None,'prod_price_forecast':None,
-                             'prediction_horizon':None,'soc_init':None,'soc_final':None,'past_def_load_energies':None}
+                             'prediction_horizon':None,'soc_init':None,'soc_final':None,'def_total_hours':None}
     return params
 
 @app.route('/')
 def index():
     app.logger.info("EMHASS server online, serving index.html...")
     # Load HTML template
-    file_loader = FileSystemLoader('/app/templates')
+    file_loader = FileSystemLoader('/app/src/emhass/templates')
     env = Environment(loader=file_loader)
     template = env.get_template('index.html')
     # Load cache dict
@@ -108,12 +109,12 @@ def action_call(action_name):
     input_data_dict = set_input_data_dict(config_path, str(config_path.parent), costfun, 
         params, runtimeparams, action_name, app.logger)
     if action_name == 'publish-data':
-        app.logger.info("Publishing data...")
+        app.logger.info(" >> Publishing data...")
         _ = publish_data(input_data_dict, app.logger)
         msg = f'EMHASS >> Action publish-data executed... \n'
         return make_response(msg, 201)
     elif action_name == 'perfect-optim':
-        app.logger.info("Performing perfect optimization...")
+        app.logger.info(" >> Performing perfect optimization...")
         opt_res = perfect_forecast_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
         with open('/app/data/injection_dict.pkl', "wb") as fid:
@@ -121,7 +122,7 @@ def action_call(action_name):
         msg = f'EMHASS >> Action perfect-optim executed... \n'
         return make_response(msg, 201)
     elif action_name == 'dayahead-optim':
-        app.logger.info("Performing dayahead optimization...")
+        app.logger.info(" >> Performing dayahead optimization...")
         opt_res = dayahead_forecast_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
         with open('/app/data/injection_dict.pkl', "wb") as fid:
@@ -129,7 +130,7 @@ def action_call(action_name):
         msg = f'EMHASS >> Action dayahead-optim executed... \n'
         return make_response(msg, 201)
     elif action_name == 'naive-mpc-optim':
-        app.logger.info("Performing naive MPC optimization...")
+        app.logger.info(" >> Performing naive MPC optimization...")
         opt_res = naive_mpc_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
         with open('/app/data/injection_dict.pkl', "wb") as fid:
@@ -153,27 +154,26 @@ if __name__ == "__main__":
     if args.add_on:
         OPTIONS_PATH = "/data/options.json"
         options_json = Path(OPTIONS_PATH)
-        CONFIG_PATH = "/usr/src/config_emhass.json"
+        CONFIG_PATH = "/usr/src/config_emhass.yaml"
         config_path = Path(CONFIG_PATH)
         hass_url = args.url
         key = args.key
+        # Read options info
+        if options_json.exists():
+            with options_json.open('r') as data:
+                options = json.load(data)
+        else:
+            app.logger.error("options.json does not exists")
     else:
-        OPTIONS_PATH = "/app/config_emhass.json"
-        options_json = Path(OPTIONS_PATH)
-        CONFIG_PATH = "/app/config_emhass.json"
+        CONFIG_PATH = "/app/config_emhass.yaml"
         config_path = Path(CONFIG_PATH)
-        
-    # Read options info
-    if options_json.exists():
-        with options_json.open('r') as data:
-            options = json.load(data)
-    else:
-        app.logger.error("options.json does not exists")
+        options = None
+    
 
     # Read example config file
     if config_path.exists():
-        with config_path.open('r') as data:
-            config = json.load(data)
+        with open(config_path, 'r') as file:
+            config = yaml.load(file, Loader=yaml.FullLoader)
         retrieve_hass_conf = config['retrieve_hass_conf']
         optim_conf = config['optim_conf']
         plant_conf = config['plant_conf']
@@ -226,6 +226,7 @@ if __name__ == "__main__":
         web_ui_url = '0.0.0.0'
         with open('/app/secrets_emhass.yaml', 'r') as file:
             params_secrets = yaml.load(file, Loader=yaml.FullLoader)
+        hass_url = params_secrets['hass_url']
         
     # Build params
     params = build_params(params, options, args.add_on)
@@ -234,5 +235,7 @@ if __name__ == "__main__":
 
     # Launch server
     port = int(os.environ.get('PORT', 5000))
-    app.run(debug=False, host=web_ui_url, port=port)
-    #serve(TransLogger(app, setup_console_handler=True), host=web_ui_url, port=port)
+    app.logger.info("Launching the emhass webserver at: http://"+web_ui_url+":"+str(port))
+    app.logger.info("Home Assistant data fetch will be performed using url: "+hass_url)
+    app.logger.info("Using core emhass version: "+version('emhass'))
+    serve(app, host=web_ui_url, port=port)

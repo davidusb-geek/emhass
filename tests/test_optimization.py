@@ -103,25 +103,25 @@ class TestOptimization(unittest.TestCase):
         self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.days_list, self.costfun, root, logger)
-        prediction_horizon = int(20*self.retrieve_hass_conf['freq'].seconds/60)
+        prediction_horizon = int(10*self.retrieve_hass_conf['freq'].seconds/60)
         soc_init = 0.4
         soc_final = 0.6
-        past_def_load_energies = [3000.0, 750.0]
+        def_total_hours = [2, 3]
         self.opt_res_dayahead = self.opt.perform_naive_mpc_optim(
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast, prediction_horizon,
-            soc_init=soc_init, soc_final=soc_final, past_def_load_energies=past_def_load_energies)
+            soc_init=soc_init, soc_final=soc_final, def_total_hours=def_total_hours)
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
         self.assertTrue('P_batt' in self.opt_res_dayahead.columns)
         self.assertTrue('SOC_opt' in self.opt_res_dayahead.columns)
         self.assertTrue(np.abs(self.opt_res_dayahead.loc[self.opt_res_dayahead.index[-1],'SOC_opt']-soc_final)<1e-3)
-        term1 = self.optim_conf['P_deferrable_nom'][0]*self.optim_conf['def_total_hours'][0]-past_def_load_energies[0]
+        term1 = self.optim_conf['P_deferrable_nom'][0]*def_total_hours[0]
         term2 = self.opt_res_dayahead['P_deferrable0'].sum()*(self.retrieve_hass_conf['freq'].seconds/3600)
         self.assertTrue(np.abs(term1-term2)<1e-3)
         soc_init = 0.8
         soc_final = 0.5
         self.opt_res_dayahead = self.opt.perform_naive_mpc_optim(
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast, prediction_horizon,
-            soc_init=soc_init, soc_final=soc_final, past_def_load_energies=past_def_load_energies)
+            soc_init=soc_init, soc_final=soc_final, def_total_hours=def_total_hours)
         self.assertAlmostEqual(self.opt_res_dayahead.loc[self.opt_res_dayahead.index[-1],'SOC_opt'], soc_final)
         
         

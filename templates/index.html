@@ -8,13 +8,26 @@
     <body>
         <center>
             <h2 style="font-family: Helvetica;color: darkblue;">EMHASS: Energy Management Optimization for Home Assistant</h2>
-            <h4 style="font-family: Helvetica;color: darkblue;">Basic optimization control</h4>
+            <h4 style="font-family: Helvetica;color: darkblue;">Use the buttons below to manually  launch different optimization tasks</h4>
         </center>
         <div class="center">
             <div align="center" class="form">
                 <form action="" method="get">
-                    <button type="button" id="dayahead-optimization" class="button button1" >Launch Day-ahead Optimization</button>
-                    <button type="button" id="publish-data" class="button button2" >Publish Optimization Results</button>
+                    <button type="button" id="perfect-optimization" class="button button1" >Perfect Optimization</button>
+                    <button type="button" id="dayahead-optimization" class="button button2" >Day-ahead Optimization</button>
+                    <!-- <button type="button" id="naive-mpc-optimization" class="button button3" >Naive MPC Optimization</button> -->
+                    <br>
+                </form>
+                <br><br>
+            </div>
+        </div>
+        <center>
+            <h4 style="font-family: Helvetica;color: darkblue;">Use the button below to publish the optimized variables at the current timestamp</h4>
+        </center>
+        <div class="center">
+            <div align="center" class="form">
+                <form action="" method="get">
+                    <button type="button" id="publish-data" class="button button1" >Publish Optimization Results</button>
                     <br>
                 </form>
                 <br><br>
@@ -32,6 +45,22 @@
         </footer>
     </body>
     <script>
+        document.getElementById('perfect-optimization').addEventListener('click', function() {
+            var url = "/action/perfect-optim"
+            var settings = {
+            "async": true,
+            "crossDomain": true,
+            "url": url,
+            "method": "POST",
+            "headers": {
+                'Content-Type':'application/json'
+            },
+            "dataType": 'json',
+            "data": '{}'
+            }
+            $.ajax(settings).done(function (response) {
+            });
+        });
         document.getElementById('dayahead-optimization').addEventListener('click', function() {
             var url = "/action/dayahead-optim"
             var settings = {
@@ -48,6 +77,22 @@
             $.ajax(settings).done(function (response) {
             });
         });
+        // document.getElementById('naive-mpc-optimization').addEventListener('click', function() {
+        //     var url = "/action/naive-mpc-optim"
+        //     var settings = {
+        //     "async": true,
+        //     "crossDomain": true,
+        //     "url": url,
+        //     "method": "POST",
+        //     "headers": {
+        //         'Content-Type':'application/json'
+        //     },
+        //     "dataType": 'json',
+        //     "data": '{}'
+        //     }
+        //     $.ajax(settings).done(function (response) {
+        //     });
+        // });
         document.getElementById('publish-data').addEventListener('click', function() {
             var url = "/action/publish-data"
             var settings = {

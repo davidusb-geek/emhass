@@ -3,10 +3,7 @@
 
 import unittest
 import pandas as pd
-import pytz
-import pathlib
-import pickle
-import json
+import pytz, pathlib, pickle, json, yaml
 
 from emhass.retrieve_hass import retrieve_hass
 from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
@@ -42,8 +39,8 @@ class TestRetrieveHass(unittest.TestCase):
         self.df_raw = self.rh.df_final.copy()
         
     def test_get_yaml_parse(self):
-        with open(root+'/config_emhass.json', 'r') as read_file:
-            params = json.load(read_file)
+        with open(root+'/config_emhass.yaml', 'r') as file:
+            params = yaml.load(file, Loader=yaml.FullLoader)
         params.update({
             'params_secrets': {
                 'hass_url': 'http://supervisor/core/api',
