@@ -169,7 +169,6 @@ if __name__ == "__main__":
         config_path = Path(CONFIG_PATH)
         options = None
     
-
     # Read example config file
     if config_path.exists():
         with open(config_path, 'r') as file:
@@ -179,6 +178,7 @@ if __name__ == "__main__":
         plant_conf = config['plant_conf']
     else:
         app.logger.error("config_emhass.json does not exists")
+        app.logger.info("Falied config_path: "+str(config_path))
 
     params = {}
     params['retrieve_hass_conf'] = retrieve_hass_conf
