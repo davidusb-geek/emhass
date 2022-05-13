@@ -61,6 +61,18 @@ def get_logger(fun_name: str, config_path: str, save_to_file: Optional[bool] = T
 
 def get_forecast_dates(freq: int, delta_forecast: int, 
                        timedelta_days: Optional[int] = 0) -> pd.core.indexes.datetimes.DatetimeIndex:
+    """
+    Get the date_range list of the needed future dates using the delta_forecast parameter.
+
+    :param freq: Optimization time step.
+    :type freq: int
+    :param delta_forecast: Number of days to forecast in the future to be used for the optimization.
+    :type delta_forecast: int
+    :param timedelta_days: Number of truncated days needed for each optimization iteration, defaults to 0
+    :type timedelta_days: Optional[int], optional
+    :return: A list of future forecast dates.
+    :rtype: pd.core.indexes.datetimes.DatetimeIndex
+    """
     freq = pd.to_timedelta(freq, "minutes")
     start_forecast = pd.Timestamp(datetime.now()).replace(hour=0, minute=0, second=0, microsecond=0)
     end_forecast = (start_forecast + pd.Timedelta(days=delta_forecast)).replace(microsecond=0)
@@ -71,10 +83,31 @@ def get_forecast_dates(freq: int, delta_forecast: int,
 
 def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict,
                         set_type: str, logger: logging.Logger) -> Tuple[str, dict]:
-    params = json.loads(params)
-    runtimeparams = json.loads(runtimeparams)
+    """
+    Treat the passed optimization runtime parameters. 
+    
+    :param runtimeparams: Json string containing the runtime parameters dict.
+    :type runtimeparams: str
+    :param params: Configuration parameters passed from data/options.json
+    :type params: str
+    :param retrieve_hass_conf: Container for data retrieving parameters.
+    :type retrieve_hass_conf: dict
+    :param optim_conf: Container for optimization parameters.
+    :type optim_conf: dict
+    :param plant_conf: Container for technical plant parameters.
+    :type plant_conf: dict
+    :param set_type: The type of action to be performed.
+    :type set_type: str
+    :param logger: The logger object.
+    :type logger: logging.Logger
+    :return: Returning the params and optimization parameter container.
+    :rtype: Tuple[str, dict]
+    """
     if runtimeparams is not None:
-        if params is None:
+        runtimeparams = json.loads(runtimeparams)
+        if params is not None:
+            params = json.loads(params)
+        else:
             params = {'passed_data':{'pv_power_forecast':None,'load_power_forecast':None,'load_cost_forecast':None,'prod_price_forecast':None,
                                      'prediction_horizon':None,'soc_init':None,'soc_final':None,'def_total_hours':None}}
         freq = int(retrieve_hass_conf['freq'].seconds/60.0)
