@@ -19,9 +19,9 @@ COPY src/emhass/optimization.py /app/src/emhass/optimization.py
 COPY src/emhass/retrieve_hass.py /app/src/emhass/retrieve_hass.py
 COPY src/emhass/utils.py /app/src/emhass/utils.py
 COPY src/emhass/web_server.py /app/src/emhass/web_server.py
+COPY src/emhass/templates/index.html /app/src/emhass/templates/index.html
+COPY src/emhass/static/style.css /app/src/emhass/static/style.css
 COPY data/opt_res_dayahead_latest.csv /app/data/opt_res_dayahead_latest.csv
-COPY templates/index.html /app/src/emhass/templates/index.html
-COPY static/style.css /app/src/emhass/static/style.css
 
 RUN python3 setup.py install
 
