@@ -51,6 +51,12 @@ Three main cost functions are proposed.
 In this case the cost function is posed to maximize the profit. In this case this is defined by the revenues from selling PV power to the grid minus the consummed energy cost. This can be represented with the following obtective function:
 
 $$
+\sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t(unit_{LoadCost}[i]*P_{gridPos}[i] + prod_{SellPrice}*P_{gridNeg}[i])
+$$
+
+For the special case of an energy contract where the totality of the PV produced energy is injected into the grid this will be:
+
+$$
 \sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t(unit_{LoadCost}[i]*(P_{load}[i]+P_{defSum}[i]) + prod_{SellPrice}*P_{gridNeg}[i])
 $$
 
@@ -118,6 +124,26 @@ A final set of constraints is used to define the behavior of the battery. Notabl
 - Ensure that maximum charge and discharge powers are not exceeded.
 - Minimum and maximum state of charge values are not exceeded.
 - Force the final state of charge value to be equal to the initial state of charge.
+
+The minimum and maximum state of charge limitations can be expressed as follows:
+
+$$
+\sum_{i=1}^{k} \frac{P_{stoPos_i}}{\eta_{dis}} + \eta_{ch}P_{stoNeg_i} \leq \frac{E_{nom}}{\Delta_t}(SOC_{init}-SOC_{min})
+$$
+
+and
+
+$$
+-(\sum_{i=1}^{k} \frac{P_{stoPos_i}}{\eta_{dis}} + \eta_{ch}P_{stoNeg_i}) \leq \frac{E_{nom}}{\Delta_t}(SOC_{max}-SOC_{init})
+$$
+
+where $E_{nom}$ is the battery capacity in kWh, $\eta_{dis/ch}$ are the discharge and charge efficiencies and $SOC$ is the state of charge.
+
+Forcing the final state of charge value to be equal to the initial state of charge can be expressed as follows:
+
+$$
+\sum_{i=1}^{k} \frac{P_{stoPos_i}}{\eta_{dis}} + \eta_{ch}P_{stoNeg_i} = \frac{E_{nom}}{\Delta_t}(SOC_{init}-SOC_{final})
+$$
 
 ### Perfect forecast optimization
 
