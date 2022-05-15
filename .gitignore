@@ -2,6 +2,7 @@
 # Secret yaml file
 secrets_emhass.yaml
 *.tar
+.vscode/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
