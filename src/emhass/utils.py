@@ -105,7 +105,7 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
     """
     if runtimeparams is not None:
         runtimeparams = json.loads(runtimeparams)
-        if params is not None:
+        if (params != None) and (params != 'null'):
             params = json.loads(params)
         else:
             params = {'passed_data':{'pv_power_forecast':None,'load_power_forecast':None,'load_cost_forecast':None,'prod_price_forecast':None,
