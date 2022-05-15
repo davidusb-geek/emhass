@@ -14,7 +14,7 @@ retrieve_hass_conf:
     - 'sensor.power_load_no_var_loads'
 
 optim_conf:
-  - set_use_battery: True # consider a battery storage
+  - set_use_battery: False # consider a battery storage
   - delta_forecast: 1 # days
   - num_def_loads: 2
   - P_deferrable_nom: # Watts
