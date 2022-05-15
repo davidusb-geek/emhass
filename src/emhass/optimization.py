@@ -124,6 +124,7 @@ class optimization:
                 soc_final = self.plant_conf['SOCtarget']
         if def_total_hours is None:
             def_total_hours = self.optim_conf['def_total_hours']
+        type_self_conso = 'bigm' # maxmin
         
         #### The LP problem using Pulp ####
         opt_model = plp.LpProblem("LP_Model", plp.LpMaximize)
@@ -198,7 +199,15 @@ class optimization:
                 objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum[i])
                                       for i in set_I)
         elif self.costfun == 'self-consumption':
-            objective = plp.lpSum(0.001*self.timeStep*unit_load_cost[i]*SC[i] for i in set_I)
+            if type_self_conso == 'bigm':
+                bigm = 1e3
+                objective = plp.lpSum(-0.001*self.timeStep*(bigm*unit_load_cost[i]*P_grid_pos[i] + \
+                                                            unit_prod_price[i]*P_grid_neg[i])
+                                      for i in set_I)
+            elif type_self_conso == 'maxmin':
+                objective = plp.lpSum(0.001*self.timeStep*unit_load_cost[i]*SC[i] for i in set_I)
+            else:
+                self.logger.error("Not a valida option for type_self_conso parameter")
         else:
             self.logger.error("The cost function specified type is not valid")
         opt_model.setObjective(objective)
@@ -212,20 +221,21 @@ class optimization:
                            rhs = 0)
                        for i in set_I}
             
-        # Two special constraints just for a self-consumption cost function: maxmin linear problem
+        # Two special constraints just for a self-consumption cost function
         if self.costfun == 'self-consumption':
-            constraints.update({"constraint_selfcons_PV_{}".format(i) : 
-                                plp.LpConstraint(
-                                    e = SC[i] - P_PV[i],
-                                    sense = plp.LpConstraintLE,
-                                    rhs = 0)
-                                for i in set_I})
-            constraints.update({"constraint_selfcons_PV_{}".format(i) : 
-                                plp.LpConstraint(
-                                    e = SC[i] - P_load[i] - P_def_sum[i],
-                                    sense = plp.LpConstraintLE,
-                                    rhs = 0)
-                                for i in set_I})
+            if type_self_conso == 'maxmin': # maxmin linear problem
+                constraints.update({"constraint_selfcons_PV_{}".format(i) : 
+                                    plp.LpConstraint(
+                                        e = SC[i] - P_PV[i],
+                                        sense = plp.LpConstraintLE,
+                                        rhs = 0)
+                                    for i in set_I})
+                constraints.update({"constraint_selfcons_PV_{}".format(i) : 
+                                    plp.LpConstraint(
+                                        e = SC[i] - P_load[i] - P_def_sum[i],
+                                        sense = plp.LpConstraintLE,
+                                        rhs = 0)
+                                    for i in set_I})
         
         # Avoid injecting and consuming from grid at the same time
         constraints.update({"constraint_pgridpos_{}".format(i) : 
@@ -354,8 +364,11 @@ class optimization:
         
         # The status of the solution is printed to the screen
         self.logger.info("Status: " + plp.LpStatus[opt_model.status])
-        self.logger.info("Total value of the Cost function = " + str(round(plp.value(opt_model.objective),2)))
-        
+        if plp.value(opt_model.objective) is None:
+            self.logger.warning("Cost function cannot be evaluated, probably None")
+        else:
+            self.logger.info("Total value of the Cost function = " + str(round(plp.value(opt_model.objective),2)))
+            
         # Build results Dataframe
         opt_tp = pd.DataFrame()
         opt_tp["P_PV"] = [P_PV[i] for i in set_I]
@@ -401,7 +414,11 @@ class optimization:
         elif self.costfun == 'cost':
             opt_tp["cost_fun_cost"] = [-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) for i in set_I]
         elif self.costfun == 'self-consumption':
-            opt_tp["cost_fun_selfcons"] = [-0.001*self.timeStep*unit_load_cost[i]*SC[i].varValue for i in set_I]
+            if type_self_conso == 'maxmin':
+                opt_tp["cost_fun_selfcons"] = [-0.001*self.timeStep*unit_load_cost[i]*SC[i].varValue for i in set_I]
+            elif type_self_conso == 'bigm':
+                opt_tp["cost_fun_selfcons"] = [-0.001*self.timeStep*(unit_load_cost[i]*P_grid_pos[i].varValue + \
+                    unit_prod_price[i]*P_grid_neg[i].varValue) for i in set_I]
         else:
             self.logger.error("The cost function specified type is not valid")
         
