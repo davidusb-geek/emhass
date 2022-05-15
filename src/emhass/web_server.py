@@ -8,6 +8,7 @@ from waitress import serve
 from importlib.metadata import version
 from pathlib import Path
 import os, json, argparse, pickle, yaml, logging
+from distutils.util import strtobool
 import pandas as pd
 import plotly.express as px
 from emhass.command_line import set_input_data_dict
@@ -37,8 +38,8 @@ def get_injection_dict(df, plot_size = 1366):
     injection_dict['table1'] = table1
     return injection_dict
 
-def build_params(params, options, add_on):
-    if add_on:
+def build_params(params, options, addon):
+    if addon == 1:
         # Updating variables in retrieve_hass_conf
         params['retrieve_hass_conf'][0]['freq'] = options['optimization_time_step']
         params['retrieve_hass_conf'][1]['days_to_retrieve'] = options['historic_days_to_retrieve']
@@ -88,7 +89,7 @@ def build_params(params, options, add_on):
 def index():
     app.logger.info("EMHASS server online, serving index.html...")
     # Load HTML template
-    file_loader = PackageLoader('web_server')
+    file_loader = PackageLoader('emhass', 'templates')
     env = Environment(loader=file_loader)
     template = env.get_template('index.html')
     # template = render_template('index.html')
@@ -148,11 +149,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--url', type=str, help='The URL to your Home Assistant instance, ex the external_url in your hass configuration')
     parser.add_argument('--key', type=str, help='Your access key. If using EMHASS in standalone this should be a Long-Lived Access Token')
-    parser.add_argument('--add_on', type=bool, default=False, help='Define if we are usinng EMHASS with the add-on or in standalone mode')
+    parser.add_argument('--addon', type=strtobool, default='False', help='Define if we are usinng EMHASS with the add-on or in standalone mode')
     args = parser.parse_args()
     
     # Define the paths
-    if args.add_on:
+    if args.addon == 1:
         OPTIONS_PATH = "/data/options.json"
         options_json = Path(OPTIONS_PATH)
         CONFIG_PATH = "/usr/src/config_emhass.yaml"
@@ -193,7 +194,7 @@ if __name__ == "__main__":
     with open(base_path+'/data/injection_dict.pkl', "wb") as fid:
         pickle.dump(injection_dict, fid)
     
-    if args.add_on:
+    if args.addon == 1:
         # The cost function
         costfun = options['costfun']
         # Some data from options
@@ -231,7 +232,7 @@ if __name__ == "__main__":
         hass_url = params_secrets['hass_url']
         
     # Build params
-    params = build_params(params, options, args.add_on)
+    params = build_params(params, options, args.addon)
     with open(base_path+'/data/params.pkl', "wb") as fid:
         pickle.dump((config_path, params), fid)
 

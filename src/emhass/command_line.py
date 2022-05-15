@@ -5,6 +5,7 @@ import argparse, os, pathlib, logging
 import pandas as pd
 from datetime import datetime, timezone
 from typing import Optional
+from distutils.util import strtobool
 
 from importlib.metadata import version
 from emhass.retrieve_hass import retrieve_hass
@@ -263,7 +264,7 @@ def main():
     parser.add_argument('--action', type=str, help='Set the desired action, options are: perfect-optim, dayahead-optim, naive-mpc-optim and publish-data')
     parser.add_argument('--config', type=str, help='Define path to the config.yaml file')
     parser.add_argument('--costfun', type=str, default='profit', help='Define the type of cost function, options are: profit, cost, self-consumption')
-    parser.add_argument('--log2file', type=bool, default=False, help='Define if we should log to a file or not')
+    parser.add_argument('--log2file', type=strtobool, default='False', help='Define if we should log to a file or not')
     parser.add_argument('--params', type=str, default=None, help='Configuration parameters passed from data/options.json')
     parser.add_argument('--runtimeparams', type=str, default=None, help='Pass runtime optimization parameters as dictionnary')
     parser.add_argument('--version', action='version', version='%(prog)s '+version('emhass'))
@@ -272,7 +273,7 @@ def main():
     config_path = pathlib.Path(args.config)
     base_path = str(config_path.parent)
     # create logger
-    logger, ch = utils.get_logger(__name__, base_path, save_to_file=args.log2file)
+    logger, ch = utils.get_logger(__name__, base_path, save_to_file=bool(args.log2file))
     # Setup parameters
     input_data_dict = set_input_data_dict(config_path, base_path, args.costfun, args.params, args.runtimeparams, args.action, logger)
     # Perform selected action
