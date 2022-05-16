@@ -250,12 +250,12 @@ A MPC controller was introduced in v0.3.0. This an informal/naive representation
 
 A MPC controller performs the following actions:
 
-- Set the prediction horizon and receiding horizon parameters.
+- Set the prediction horizon and receding horizon parameters.
 - Perform an optimization on the prediction horizon.
 - Apply the first element of the obtained optimized control variables.
 - Repeat at a relatively high frequency, ex: 5 min.
 
-This is the receiding horizon principle.
+This is the receding horizon principle.
 
 When applying this controller, the following `runtimeparams` should be defined:
 
@@ -265,7 +265,7 @@ When applying this controller, the following `runtimeparams` should be defined:
 
 - `soc_final` for the final value of the battery SOC for the current iteration of the MPC. 
 
-- `def_total_hours` for the list of deferrable loads functioning hours. These values can decrease as the day advances to take into account receidding horizon daily energy objectives for each deferrable load.
+- `def_total_hours` for the list of deferrable loads functioning hours. These values can decrease as the day advances to take into account receding horizon daily energy objectives for each deferrable load.
 
 A correct call for a MPC optimization should look like:
 
