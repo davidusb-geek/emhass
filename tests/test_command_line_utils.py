@@ -117,6 +117,39 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(input_data_dict['df_input_data_dayahead'] == None)
         self.assertTrue(input_data_dict['P_PV_forecast'] == None)
         self.assertTrue(input_data_dict['P_load_forecast'] == None)
+        action = 'naive-mpc-optim'
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, action, logger)
+        self.assertIsInstance(input_data_dict, dict)
+        self.assertTrue(input_data_dict['df_input_data'] == None)
+        self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
+        self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
+        self.assertTrue(input_data_dict['df_input_data_dayahead'].isnull().sum().sum()==0)
+        # A test similar to the docs
+        # with open(root+'/config_emhass.yaml', 'r') as file:
+        #     params = yaml.load(file, Loader=yaml.FullLoader)
+        # params.update({
+        #     'params_secrets': {
+        #         'hass_url': 'http://supervisor/core/api',
+        #         'long_lived_token': '${SUPERVISOR_TOKEN}',
+        #         'time_zone': 'Europe/Paris',
+        #         'lat': 45.83,
+        #         'lon': 6.86,
+        #         'alt': 8000.0
+        #     }
+        #     })
+        # runtimeparams = {"pv_power_forecast":
+        #     [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20], 
+        #     "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3]}
+        # runtimeparams_json = json.dumps(runtimeparams)
+        # params['passed_data'] = runtimeparams
+        # params_json = json.dumps(params)
+        # input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, action, logger)
+        # self.assertIsInstance(input_data_dict, dict)
+        # self.assertTrue(input_data_dict['df_input_data'] == None)
+        # self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
+        # self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
+        # self.assertTrue(input_data_dict['P_PV_forecast'] is not None)
+        # self.assertTrue(input_data_dict['P_load_forecast'] is not None)
         
         
 if __name__ == '__main__':

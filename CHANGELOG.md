@@ -6,7 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.5] - 2022-05-16
 ### Fix
-- Fixed unloaded json object problem.
+- Fixed wrong mpc pred horizon param.
 
 ## [0.3.4] - 2022-05-16
 ### Fix
