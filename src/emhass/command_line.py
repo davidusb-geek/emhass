@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import argparse, os, pathlib, logging
+import argparse, os, pathlib, logging, json
 import pandas as pd
 from datetime import datetime, timezone
 from typing import Optional
@@ -182,10 +182,11 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     df_input_data_dayahead = input_data_dict['fcst'].get_prod_price_forecast(
         df_input_data_dayahead, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
     # The specifics params for the MPC at runtime
-    prediction_horizon = input_data_dict['params']['passed_data']['prediction_horizon']
-    soc_init = input_data_dict['params']['passed_data']['soc_init']
-    soc_final = input_data_dict['params']['passed_data']['soc_final']
-    def_total_hours = input_data_dict['params']['passed_data']['def_total_hours']
+    params = json.loads(input_data_dict['params'])
+    prediction_horizon = params['passed_data']['prediction_horizon']
+    soc_init = params['passed_data']['soc_init']
+    soc_final = params['passed_data']['soc_final']
+    def_total_hours = params['passed_data']['def_total_hours']
     opt_res_naive_mpc = input_data_dict['opt'].perform_naive_mpc_optim(
         df_input_data_dayahead, input_data_dict['P_PV_forecast'], input_data_dict['P_load_forecast'],
         prediction_horizon, soc_init, soc_final, def_total_hours)
