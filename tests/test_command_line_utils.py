@@ -3,7 +3,7 @@
 
 import unittest
 import pandas as pd
-import pathlib, json, yaml
+import pathlib, json, yaml, copy
 
 from emhass.command_line import set_input_data_dict
 from emhass import utils
@@ -120,6 +120,27 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(input_data_dict['P_load_forecast'] == None)
         action = 'naive-mpc-optim'
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, action, logger)
+        self.assertIsInstance(input_data_dict, dict)
+        self.assertTrue(input_data_dict['df_input_data'] == None)
+        self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
+        self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
+        self.assertTrue(input_data_dict['df_input_data_dayahead'].isnull().sum().sum()==0)
+        self.assertTrue(len(input_data_dict['df_input_data_dayahead'])==10) # The default value for prediction_horizon
+        runtimeparams = {
+            'pv_power_forecast':[1,2,3,4,5,6,7,8,9,10],
+            'load_power_forecast':[1,2,3,4,5,6,7,8,9,10],
+            'load_cost_forecast':[1,2,3,4,5,6,7,8,9,10],
+            'prod_price_forecast':[1,2,3,4,5,6,7,8,9,10]
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params = copy.deepcopy(json.loads(self.params_json))
+        params['passed_data'] = runtimeparams
+        params['optim_conf'][7]['weather_forecast_method'] = 'list'
+        params['optim_conf'][8]['load_forecast_method'] = 'list'
+        params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
+        params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
+        params_json = json.dumps(params)
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, action, logger)
         self.assertIsInstance(input_data_dict, dict)
         self.assertTrue(input_data_dict['df_input_data'] == None)
         self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)

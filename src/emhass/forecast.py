@@ -122,13 +122,20 @@ class forecast:
         self.get_data_from_file = get_data_from_file
         self.var_load_cost = 'unit_load_cost'
         self.var_prod_price = 'unit_prod_price'
-        self.forecast_dates = pd.date_range(start=self.start_forecast, 
-                                            end=self.end_forecast-self.freq, 
-                                            freq=self.freq).round(self.freq)
+        
         if params is None:
             self.params = params
         else:
             self.params = json.loads(params)
+            
+        self.forecast_dates = pd.date_range(start=self.start_forecast, 
+                                            end=self.end_forecast-self.freq, 
+                                            freq=self.freq).round(self.freq)
+        if params is not None:
+            if 'prediction_horizon' in list(self.params['passed_data'].keys()):
+                if self.params['passed_data']['prediction_horizon'] is not None:
+                    self.forecast_dates = self.forecast_dates[0:self.params['passed_data']['prediction_horizon']]
+        
         
     def get_weather_forecast(self, method: Optional[str] = 'scrapper',
                              csv_path: Optional[str] = "/data/data_weather_forecast.csv") -> pd.DataFrame:
@@ -185,10 +192,14 @@ class forecast:
             weather_csv_file_path = self.root + csv_path
             # Loading the csv file, we will consider that this is the PV power in W
             data = pd.read_csv(weather_csv_file_path, header=None, names=['ts', 'yhat'])
-            data = pd.concat([data, data], axis=0)
+            if self.params is not None:
+                if 'prediction_horizon' not in list(self.params['passed_data'].keys()):
+                    data = pd.concat([data, data], axis=0)
+                else:
+                    if self.params['passed_data']['prediction_horizon'] is None:
+                        data = pd.concat([data, data], axis=0)
             # Check if the passed data has the correct length
-            if len(data) < len(forecast_dates_csv):
-                data = None
+            if len(data) < len(forecast_dates_csv) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from CSV is not long enough")
             else:
                 # Define index and pick correct dates
@@ -199,10 +210,15 @@ class forecast:
             forecast_dates_csv = self.get_forecast_days_csv()
             # Loading data from passed list
             data_list = self.params['passed_data']['pv_power_forecast']
-            data_list = data_list + data_list
+            if 'prediction_horizon' not in list(self.params['passed_data'].keys()):
+                data_list = data_list + data_list
+            else: 
+                if self.params['passed_data']['prediction_horizon'] is None:
+                    data_list = data_list + data_list
+                else:
+                    data_list = data_list[0:self.params['passed_data']['prediction_horizon']]
             # Check if the passed data has the correct length
-            if len(data_list) < len(forecast_dates_csv):
-                data = None
+            if len(data_list) < len(forecast_dates_csv) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from passed list is not long enough")
             else:
                 # Define index and pick correct dates
@@ -327,6 +343,9 @@ class forecast:
         forecast_dates_csv = pd.date_range(start=start_forecast_csv, 
                                            end=end_forecast_csv+timedelta(days=timedelta_days)-self.freq, 
                                            freq=self.freq).round(self.freq)
+        if 'prediction_horizon' in list(self.params['passed_data'].keys()):
+            if self.params['passed_data']['prediction_horizon'] is not None:
+                forecast_dates_csv = forecast_dates_csv[0:self.params['passed_data']['prediction_horizon']]
         return forecast_dates_csv
     
     def get_forecast_out_from_csv(self, df_final: pd.DataFrame, forecast_dates_csv: pd.date_range,
@@ -434,9 +453,13 @@ class forecast:
             forecast_dates_csv = self.get_forecast_days_csv()
             load_csv_file_path = self.root + csv_path
             df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
-            df_csv = pd.concat([df_csv, df_csv], axis=0)
-            if len(df_csv) < len(forecast_dates_csv):
-                forecast_out = {'yhat':None}
+            if self.params is not None:
+                if 'prediction_horizon' not in list(self.params['passed_data'].keys()):
+                    df_csv = pd.concat([df_csv, df_csv], axis=0)
+                else:
+                    if self.params['passed_data']['prediction_horizon'] is None:
+                        df_csv = pd.concat([df_csv, df_csv], axis=0)
+            if len(df_csv) < len(forecast_dates_csv) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from CSV is not long enough")
             else:
                 df_csv.index = forecast_dates_csv
@@ -447,10 +470,15 @@ class forecast:
             forecast_dates_csv = self.get_forecast_days_csv()
             # Loading data from passed list
             data_list = self.params['passed_data']['load_power_forecast']
-            data_list = data_list + data_list
+            if 'prediction_horizon' not in list(self.params['passed_data'].keys()):
+                data_list = data_list + data_list
+            else:
+                if self.params['passed_data']['prediction_horizon'] is None:
+                    data_list = data_list + data_list
+                else:
+                    data_list = data_list[0:self.params['passed_data']['prediction_horizon']]
             # Check if the passed data has the correct length
-            if len(data_list) < len(forecast_dates_csv):
-                forecast_out = {'yhat':None}
+            if len(data_list) < len(forecast_dates_csv) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from passed list is not long enough")
             else:
                 # Define index and pick correct dates
@@ -503,8 +531,7 @@ class forecast:
         elif method == 'list': # reading a list of values
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
             data_list = self.params['passed_data']['load_cost_forecast']
-            if len(data_list) < len(forecast_dates_csv):
-                df_final = None
+            if len(data_list) < len(forecast_dates_csv) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from passed list is not long enough")
             else:
                 forecast_out = self.get_forecast_out_from_csv(df_final,
@@ -550,8 +577,7 @@ class forecast:
         elif method == 'list': # reading a list of values
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
             data_list = self.params['passed_data']['prod_price_forecast']
-            if len(data_list) < len(forecast_dates_csv):
-                df_final = None
+            if len(data_list) < len(forecast_dates_csv) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from passed list is not long enough")
             else:
                 forecast_out = self.get_forecast_out_from_csv(df_final,
