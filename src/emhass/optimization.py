@@ -520,11 +520,11 @@ class optimization:
         """
         self.logger.info("Perform an iteration of a naive MPC controller")
         
-        if prediction_horizon < int(5*self.retrieve_hass_conf['freq'].seconds/60):
+        if prediction_horizon < 5:
             self.logger.error("Set the MPC prediction horizon to at least 5 times the optimization time step")
             return pd.DataFrame()
         else:
-            df_input_data = copy.deepcopy(df_input_data)[df_input_data.index[0]:df_input_data.index[0]+prediction_horizon*self.retrieve_hass_conf['freq']]
+            df_input_data = copy.deepcopy(df_input_data)[df_input_data.index[0]:df_input_data.index[prediction_horizon-1]]
         
         unit_load_cost = df_input_data[self.var_load_cost].values # €/kWh
         unit_prod_price = df_input_data[self.var_prod_price].values # €/kWh

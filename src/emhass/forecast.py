@@ -196,31 +196,21 @@ class forecast:
                 data.drop(['ts'], axis=1, inplace=True)
                 data = data.copy().loc[self.forecast_dates]
         elif method == 'list': # reading a list of values
-            if 'prediction_horizon' in self.params['passed_data'] and self.params['passed_data']['prediction_horizon'] is not None:
-                prediction_horizon = self.params['passed_data']['prediction_horizon']
-                forecast_dates = copy.deepcopy(self.forecast_dates)[0:int(pd.Timedelta(prediction_horizon, unit='minutes')/self.freq)]
-                data_list = self.params['passed_data']['pv_power_forecast']
-                data_list = copy.deepcopy(data_list)[0:int(pd.Timedelta(prediction_horizon, unit='minutes')/self.freq)]
-                data_dict = {'ts':forecast_dates, 'yhat':data_list}
-                data = pd.DataFrame.from_dict(data_dict)
-                data.index = forecast_dates
-                data.drop(['ts'], axis=1, inplace=True)
+            forecast_dates_csv = self.get_forecast_days_csv()
+            # Loading data from passed list
+            data_list = self.params['passed_data']['pv_power_forecast']
+            data_list = data_list + data_list
+            # Check if the passed data has the correct length
+            if len(data_list) < len(forecast_dates_csv):
+                data = None
+                self.logger.error("Passed data from passed list is not long enough")
             else:
-                forecast_dates_csv = self.get_forecast_days_csv()
-                # Loading data from passed list
-                data_list = self.params['passed_data']['pv_power_forecast']
-                data_list = data_list + data_list
-                # Check if the passed data has the correct length
-                if len(data_list) < len(forecast_dates_csv):
-                    data = None
-                    self.logger.error("Passed data from passed list is not long enough")
-                else:
-                    # Define index and pick correct dates
-                    data_dict = {'ts':forecast_dates_csv, 'yhat':data_list}
-                    data = pd.DataFrame.from_dict(data_dict)
-                    data.index = forecast_dates_csv
-                    data.drop(['ts'], axis=1, inplace=True)
-                    data = data.copy().loc[self.forecast_dates]
+                # Define index and pick correct dates
+                data_dict = {'ts':forecast_dates_csv, 'yhat':data_list}
+                data = pd.DataFrame.from_dict(data_dict)
+                data.index = forecast_dates_csv
+                data.drop(['ts'], axis=1, inplace=True)
+                data = data.copy().loc[self.forecast_dates]
         else:
             self.logger.error("Passed method is not valid")
         return data

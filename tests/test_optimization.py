@@ -103,7 +103,7 @@ class TestOptimization(unittest.TestCase):
         self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.days_list, self.costfun, root, logger)
-        prediction_horizon = int(10*self.retrieve_hass_conf['freq'].seconds/60)
+        prediction_horizon = 10
         soc_init = 0.4
         soc_final = 0.6
         def_total_hours = [2, 3]

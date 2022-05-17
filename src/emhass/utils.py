@@ -115,7 +115,7 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
         forecast_dates = get_forecast_dates(freq, delta_forecast)
         if set_type == 'naive-mpc-optim':
             if 'prediction_horizon' not in runtimeparams.keys():
-                prediction_horizon = int(10*retrieve_hass_conf['freq'].seconds/60) # 10 time steps by default
+                prediction_horizon = 10 # 10 time steps by default
             else:
                 prediction_horizon = runtimeparams['prediction_horizon']
             params['passed_data']['prediction_horizon'] = prediction_horizon
@@ -134,7 +134,7 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
             else:
                 def_total_hours = runtimeparams['def_total_hours']
             params['passed_data']['def_total_hours'] = def_total_hours
-            forecast_dates = copy.deepcopy(forecast_dates)[0:int(pd.Timedelta(prediction_horizon, unit='minutes')/retrieve_hass_conf['freq'])]
+            forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
         if 'pv_power_forecast' in runtimeparams.keys():
             if type(runtimeparams['pv_power_forecast']) == list and len(runtimeparams['pv_power_forecast']) >= len(forecast_dates):
                 params['passed_data']['pv_power_forecast'] = runtimeparams['pv_power_forecast']

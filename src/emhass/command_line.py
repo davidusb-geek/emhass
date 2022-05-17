@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import argparse, os, pathlib, logging, json
+import argparse, os, pathlib, logging, json, copy
 import pandas as pd
 from datetime import datetime, timezone
 from typing import Optional
@@ -71,6 +71,10 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
         df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
         df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
+        params = json.loads(params)
+        if 'prediction_horizon' in params['passed_data'] and params['passed_data']['prediction_horizon'] is not None:
+            prediction_horizon = params['passed_data']['prediction_horizon']
+            df_input_data_dayahead = copy.deepcopy(df_input_data_dayahead)[df_input_data_dayahead.index[0]:df_input_data_dayahead.index[prediction_horizon-1]]
         # What we don't need for this type of action
         df_input_data = None
     elif set_type == "publish-data":
@@ -182,11 +186,10 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     df_input_data_dayahead = input_data_dict['fcst'].get_prod_price_forecast(
         df_input_data_dayahead, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
     # The specifics params for the MPC at runtime
-    params = json.loads(input_data_dict['params'])
-    prediction_horizon = params['passed_data']['prediction_horizon']
-    soc_init = params['passed_data']['soc_init']
-    soc_final = params['passed_data']['soc_final']
-    def_total_hours = params['passed_data']['def_total_hours']
+    prediction_horizon = input_data_dict['params']['passed_data']['prediction_horizon']
+    soc_init = input_data_dict['params']['passed_data']['soc_init']
+    soc_final = input_data_dict['params']['passed_data']['soc_final']
+    def_total_hours = input_data_dict['params']['passed_data']['def_total_hours']
     opt_res_naive_mpc = input_data_dict['opt'].perform_naive_mpc_optim(
         df_input_data_dayahead, input_data_dict['P_PV_forecast'], input_data_dict['P_load_forecast'],
         prediction_horizon, soc_init, soc_final, def_total_hours)

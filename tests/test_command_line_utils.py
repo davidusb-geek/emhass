@@ -80,7 +80,7 @@ class TestCommandLineUtils(unittest.TestCase):
                                                        retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
         self.assertIsInstance(params, str)
         params = json.loads(params)
-        self.assertTrue(params['passed_data']['prediction_horizon'] == int(10*retrieve_hass_conf['freq'].seconds/60))
+        self.assertTrue(params['passed_data']['prediction_horizon'] == 10)
         self.assertTrue(params['passed_data']['soc_init'] == plant_conf['SOCtarget'])
         self.assertTrue(params['passed_data']['soc_final'] == plant_conf['SOCtarget'])
         self.assertTrue(params['passed_data']['def_total_hours'] == optim_conf['def_total_hours'])
@@ -111,6 +111,7 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(input_data_dict['df_input_data'] == None)
         self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
+        self.assertTrue(input_data_dict['df_input_data_dayahead'].isnull().sum().sum()==0)
         action = 'publish-data'
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, action, logger)
         self.assertTrue(input_data_dict['df_input_data'] == None)
@@ -124,6 +125,7 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].isnull().sum().sum()==0)
+        self.assertTrue(len(input_data_dict['df_input_data_dayahead'])==10) # The default value for prediction_horizon
         # A test similar to the docs
         # with open(root+'/config_emhass.yaml', 'r') as file:
         #     params = yaml.load(file, Loader=yaml.FullLoader)
