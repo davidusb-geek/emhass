@@ -198,8 +198,10 @@ class forecast:
                 else:
                     if self.params['passed_data']['prediction_horizon'] is None:
                         data = pd.concat([data, data], axis=0)
+            else:
+                data = pd.concat([data, data], axis=0)
             # Check if the passed data has the correct length
-            if len(data) < len(forecast_dates_csv) and self.params['passed_data']['prediction_horizon'] is None:
+            if len(data) < len(forecast_dates_csv):
                 self.logger.error("Passed data from CSV is not long enough")
             else:
                 # Define index and pick correct dates
@@ -343,9 +345,10 @@ class forecast:
         forecast_dates_csv = pd.date_range(start=start_forecast_csv, 
                                            end=end_forecast_csv+timedelta(days=timedelta_days)-self.freq, 
                                            freq=self.freq).round(self.freq)
-        if 'prediction_horizon' in list(self.params['passed_data'].keys()):
-            if self.params['passed_data']['prediction_horizon'] is not None:
-                forecast_dates_csv = forecast_dates_csv[0:self.params['passed_data']['prediction_horizon']]
+        if self.params is not None:
+            if 'prediction_horizon' in list(self.params['passed_data'].keys()):
+                if self.params['passed_data']['prediction_horizon'] is not None:
+                    forecast_dates_csv = forecast_dates_csv[0:self.params['passed_data']['prediction_horizon']]
         return forecast_dates_csv
     
     def get_forecast_out_from_csv(self, df_final: pd.DataFrame, forecast_dates_csv: pd.date_range,
@@ -459,7 +462,9 @@ class forecast:
                 else:
                     if self.params['passed_data']['prediction_horizon'] is None:
                         df_csv = pd.concat([df_csv, df_csv], axis=0)
-            if len(df_csv) < len(forecast_dates_csv) and self.params['passed_data']['prediction_horizon'] is None:
+            else:
+                df_csv = pd.concat([df_csv, df_csv], axis=0)
+            if len(df_csv) < len(forecast_dates_csv):
                 self.logger.error("Passed data from CSV is not long enough")
             else:
                 df_csv.index = forecast_dates_csv
