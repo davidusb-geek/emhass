@@ -4,6 +4,8 @@
     To use this script you will need plotly and kaleido. Install them using: 
         pip install plotly
         pip install kaleido
+    Before running this script you should perform a perfect optimization for each type of cost function:
+    profit, cost and self-consumption 
 '''
 import numpy as np
 import pandas as pd
