@@ -24,7 +24,7 @@ def get_injection_dict(df, plot_size = 1366):
     # Create plots
     fig = px.line(df, title='Systems powers and optimization cost results', 
                   template='seaborn', width=plot_size, height=0.75*plot_size)
-    fig.update_traces(line_shape="vh")
+    fig.update_traces(line_shape="hv")
     # Get full path to image
     image_path_0 = fig.to_html(full_html=False, default_width='75%')
     # The tables
