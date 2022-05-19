@@ -6,6 +6,8 @@ import pandas as pd
 import pathlib, json, yaml, copy
 
 from emhass.command_line import set_input_data_dict
+from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim
+from emhass.command_line import publish_data
 from emhass import utils
 
 # the root folder
@@ -106,20 +108,23 @@ class TestCommandLineUtils(unittest.TestCase):
         base_path = str(config_path.parent)
         costfun = 'profit'
         action = 'dayahead-optim'
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, action, logger)
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
         self.assertIsInstance(input_data_dict, dict)
         self.assertTrue(input_data_dict['df_input_data'] == None)
         self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].isnull().sum().sum()==0)
         action = 'publish-data'
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, action, logger)
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
         self.assertTrue(input_data_dict['df_input_data'] == None)
         self.assertTrue(input_data_dict['df_input_data_dayahead'] == None)
         self.assertTrue(input_data_dict['P_PV_forecast'] == None)
         self.assertTrue(input_data_dict['P_load_forecast'] == None)
         action = 'naive-mpc-optim'
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, action, logger)
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
         self.assertIsInstance(input_data_dict, dict)
         self.assertTrue(input_data_dict['df_input_data'] == None)
         self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
@@ -140,39 +145,69 @@ class TestCommandLineUtils(unittest.TestCase):
         params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
         params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
         params_json = json.dumps(params)
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, action, logger)
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
         self.assertIsInstance(input_data_dict, dict)
         self.assertTrue(input_data_dict['df_input_data'] == None)
         self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].isnull().sum().sum()==0)
         self.assertTrue(len(input_data_dict['df_input_data_dayahead'])==10) # The default value for prediction_horizon
+        
+    def test_dayahead_forecast_optim(self):
+        config_path = pathlib.Path(root+'/config_emhass.yaml')
+        base_path = str(config_path.parent)
+        costfun = 'profit'
+        action = 'dayahead-optim'
+        params = copy.deepcopy(json.loads(self.params_json))
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
+        opt_res = dayahead_forecast_optim(input_data_dict, logger)
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertTrue(opt_res.isnull().sum().sum()==0)
+        self.assertTrue(len(opt_res)==len(params['passed_data']['pv_power_forecast']))
+        
+    def test_naive_mpc_optim(self):
+        config_path = pathlib.Path(root+'/config_emhass.yaml')
+        base_path = str(config_path.parent)
+        costfun = 'profit'
+        action = 'naive-mpc-optim'
+        params = copy.deepcopy(json.loads(self.params_json))
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
+        opt_res = naive_mpc_optim(input_data_dict, logger)
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertTrue(opt_res.isnull().sum().sum()==0)
+        self.assertTrue(len(opt_res)==10)
         # A test similar to the docs
-        # with open(root+'/config_emhass.yaml', 'r') as file:
-        #     params = yaml.load(file, Loader=yaml.FullLoader)
-        # params.update({
-        #     'params_secrets': {
-        #         'hass_url': 'http://supervisor/core/api',
-        #         'long_lived_token': '${SUPERVISOR_TOKEN}',
-        #         'time_zone': 'Europe/Paris',
-        #         'lat': 45.83,
-        #         'lon': 6.86,
-        #         'alt': 8000.0
-        #     }
-        #     })
-        # runtimeparams = {"pv_power_forecast":
-        #     [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20], 
-        #     "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3]}
-        # runtimeparams_json = json.dumps(runtimeparams)
-        # params['passed_data'] = runtimeparams
-        # params_json = json.dumps(params)
-        # input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, action, logger)
-        # self.assertIsInstance(input_data_dict, dict)
-        # self.assertTrue(input_data_dict['df_input_data'] == None)
-        # self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
-        # self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
-        # self.assertTrue(input_data_dict['P_PV_forecast'] is not None)
-        # self.assertTrue(input_data_dict['P_load_forecast'] is not None)
+        runtimeparams = {"pv_power_forecast":
+            [1,2,3,4,5,6,7,8,9,10], 
+            "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3]}
+        runtimeparams_json = json.dumps(runtimeparams)
+        params['passed_data'] = runtimeparams
+        params['optim_conf'][7]['weather_forecast_method'] = 'list'
+        params['optim_conf'][8]['load_forecast_method'] = 'naive'
+        params['optim_conf'][9]['load_cost_forecast_method'] = 'hp_hc_periods'
+        params['optim_conf'][13]['prod_price_forecast_method'] = 'constant'
+        params_json = json.dumps(params)
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
+        
+        opt_res = naive_mpc_optim(input_data_dict, logger)
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertTrue(opt_res.isnull().sum().sum()==0)
+        self.assertTrue(len(opt_res)==10)
+        
+    def test_publish_data(self):
+        config_path = pathlib.Path(root+'/config_emhass.yaml')
+        base_path = str(config_path.parent)
+        costfun = 'profit'
+        action = 'naive-mpc-optim'
+        params = copy.deepcopy(json.loads(self.params_json))
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
+        opt_res = publish_data(input_data_dict, logger)
+        self.assertTrue(len(opt_res)==1)
         
         
 if __name__ == '__main__':

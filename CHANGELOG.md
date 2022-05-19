@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased - 2022-05-19
+### Improvement
+- Improve publish data logging
+- Round published data
+- Attributes to forecasts published data
+TODO
+- Messing with closest index
+- More plots for webserver
+- Centering html
+
+### Fix
+- Fixed problem with csv filenames, was using only filename specific to dayahead optimization.
+- Fixed data list handling for load cost and prod price forecasts.
+- Fixed publish data dictionary to contain only data from correct entity_id.
+TODO:
+- Double log lines 
+
 ## [0.3.8] - 2022-05-17
 ### Fix
 - Still fixing issues when passing csv files and lists.
@@ -44,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved the command line setup function to perform the correct amount calls as needed by each action.
 - Added a new naive model predictive control function.
 - Added runtime parameter option for better code order.
-- Moved treatment of runtime parameters from the add-on to the core emhass module. This adds more clarity to the code andd also was needed when passing runtime paramters to emhass in standalone mode.
+- Moved treatment of runtime parameters from the add-on to the core emhass module. This adds more clarity to the code and also was needed when passing runtime parameters to emhass in standalone mode.
 - Added add-on paramter to command line to define if launching emhass from add-on or in standalone mode.
 - Added new testing file for command_line.
 - Added a webserver. Moved the webserver from the add-on to the core emhass module.
@@ -196,3 +213,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.14]: https://github.com/davidusb-geek/emhass/releases/tag/v0.2.14
 [0.3.0]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.0
 [0.3.6]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.6
+[0.3.8]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.8
