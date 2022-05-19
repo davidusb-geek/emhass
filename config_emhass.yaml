@@ -12,6 +12,7 @@ retrieve_hass_conf:
   - var_interp: # A list of retrived variables that we would want to interpolate nan values using linear interpolation
     - 'sensor.power_photovoltaics'
     - 'sensor.power_load_no_var_loads'
+  - method_ts_round: 'nearest' # Set the method for timestamp rounding, options are: first, last and nearest
 
 optim_conf:
   - set_use_battery: False # consider a battery storage
