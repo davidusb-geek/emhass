@@ -272,7 +272,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                                             'sensor.p_batt_forecast', "W", "Battery Power Forecast")
             cols_published = cols_published+["P_batt"]
     # Create a DF resuming what has been published
-    opt_res = opt_res_latest.loc[opt_res_latest.index[idx_closest], cols_published]
+    opt_res = opt_res_latest[cols_published].loc[[opt_res_latest.index[idx_closest]]]
     return opt_res
     
         

@@ -221,9 +221,9 @@ class retrieve_hass:
             "content-type": "application/json",
         }
         # Preparing the data dict to be published
-        state = np.round(data_df.loc[data_df.index[idx],entity_id])
+        state = np.round(data_df.loc[data_df.index[idx]])
         if 'forecast' in entity_id:
-            forecast_list = copy.deepcopy(data_df).loc[data_df.index[idx]:,entity_id].reset_index()
+            forecast_list = copy.deepcopy(data_df).loc[data_df.index[idx]:].reset_index()
             forecast_list.columns = ['timestamps', entity_id]
             ts_list = [str(i) for i in forecast_list['timestamps'].tolist()]
             vals_list = [np.round(i) for i in forecast_list[entity_id].tolist()]

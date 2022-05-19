@@ -84,15 +84,15 @@ class TestRetrieveHass(unittest.TestCase):
             self.assertEqual(self.rh.df_final[self.retrieve_hass_conf['var_load']+"_positive"].isnull().sum(), 0)
         
     def test_publish_data(self):
-        response, data = self.rh.post_data(self.df_raw, 25, self.df_raw.columns[0], "Unit", "Variable")
+        response, data = self.rh.post_data(self.df_raw[self.df_raw.columns[0]], 25, 'sensor.p_pv_forecast', "Unit", "Variable")
         self.assertEqual(response.status_code, 200)
         self.assertTrue(data['state']==str(np.round(self.df_raw.loc[self.df_raw.index[25],self.df_raw.columns[0]])))
         self.assertTrue(data['attributes']['unit_of_measurement']=='Unit')
         self.assertTrue(data['attributes']['friendly_name']=='Variable')
         # Lets test publishing a forecast with more added attributes
         df = copy.deepcopy(self.df_raw.iloc[0:30])
-        df.columns = ['sensor.p_pv_forecast', 'sensor.p_load_forecast']
-        response, data = self.rh.post_data(df, 25, df.columns[0], "W", "PV Forecast")
+        df.columns = ['P_PV', 'P_Load']
+        response, data = self.rh.post_data(df[df.columns[0]], 25, 'sensor.p_pv_forecast', "W", "PV Forecast")
         self.assertEqual(response.status_code, 200)
         self.assertTrue(data['state']==str(np.round(df.loc[df.index[25],df.columns[0]])))
         self.assertTrue(data['attributes']['unit_of_measurement']=='W')
