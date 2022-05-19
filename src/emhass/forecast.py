@@ -536,6 +536,9 @@ class forecast:
         elif method == 'list': # reading a list of values
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
             data_list = self.params['passed_data']['load_cost_forecast']
+            if 'prediction_horizon' in list(self.params['passed_data'].keys()):
+                if self.params['passed_data']['prediction_horizon'] is not None:
+                    data_list = data_list[0:self.params['passed_data']['prediction_horizon']]
             if len(data_list) < len(forecast_dates_csv) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from passed list is not long enough")
             else:
@@ -582,6 +585,9 @@ class forecast:
         elif method == 'list': # reading a list of values
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
             data_list = self.params['passed_data']['prod_price_forecast']
+            if 'prediction_horizon' in list(self.params['passed_data'].keys()):
+                if self.params['passed_data']['prediction_horizon'] is not None:
+                    data_list = data_list[0:self.params['passed_data']['prediction_horizon']]
             if len(data_list) < len(forecast_dates_csv) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from passed list is not long enough")
             else:

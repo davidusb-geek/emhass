@@ -4,8 +4,7 @@
 from typing import Optional
 import numpy as np, pandas as pd
 from requests import get, post
-import json
-import datetime, logging
+import json, copy, datetime, logging
 from emhass.utils import set_df_index_freq
 
 class retrieve_hass:
@@ -222,22 +221,38 @@ class retrieve_hass:
             "content-type": "application/json",
         }
         # Preparing the data dict to be published
-        data = {
-            "state": str(data_df.loc[data_df.index[idx]]),
-            "attributes": {
-                "unit_of_measurement": unit_of_measurement,
-                "friendly_name": friendly_name
+        state = np.round(data_df.loc[data_df.index[idx],entity_id])
+        if 'forecast' in entity_id:
+            forecast_list = copy.deepcopy(data_df).loc[data_df.index[idx]:,entity_id].reset_index()
+            forecast_list.columns = ['timestamps', entity_id]
+            ts_list = [str(i) for i in forecast_list['timestamps'].tolist()]
+            vals_list = [np.round(i) for i in forecast_list[entity_id].tolist()]
+            forecast_list = [{'timestamp': ts_list[i], entity_id.split('sensor.')[1]: vals_list[i]} for i in range(len(ts_list))]
+            data = {
+                "state": str(state),
+                "attributes": {
+                    "unit_of_measurement": unit_of_measurement,
+                    "friendly_name": friendly_name,
+                    "forecasts": str(forecast_list)
+                }
             }
-        }
+        else:
+            data = {
+                "state": str(state),
+                "attributes": {
+                    "unit_of_measurement": unit_of_measurement,
+                    "friendly_name": friendly_name
+                }
+            }
         # Actually post the data
         if self.get_data_from_file:
             class response: pass
-            response.status_code = 400
+            response.status_code = 200
         else:
             response = post(url, headers=headers, data=json.dumps(data))
         # Treating the response status and posting them on the logger
         if response.status_code == 200:
-            self.logger.info("Successfully posted value in existing entity_id")
+            self.logger.info("Successfully posted to "+entity_id+" = "+str(state))
         elif response.status_code == 201:
             self.logger.info("Successfully posted value in a newly created entity_id")
         elif response.status_code == 400:
@@ -250,4 +265,4 @@ class retrieve_hass:
             self.logger.info("Error posting value to HASS: Method not allowed")
         else:
             self.logger.info("The received response code is not recognized")
-        return response
+        return response, data

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import argparse, os, pathlib, logging, json, copy
+import argparse, os, pathlib, logging, json, copy, pickle
 import pandas as pd
 from datetime import datetime, timezone
 from typing import Optional
@@ -14,7 +14,8 @@ from emhass.optimization import optimization
 from emhass import utils
 
 def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str, 
-    params: str, runtimeparams: str, set_type: str, logger: logging.Logger) -> dict:
+    params: str, runtimeparams: str, set_type: str, logger: logging.Logger,
+    get_data_from_file: Optional[bool] = False) -> dict:
     """
     Set up some of the data needed for the different actions.
     
@@ -30,6 +31,8 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
     :type set_type: str
     :param logger: The passed logger object
     :type logger: logging object
+    :param get_data_from_file: Use data from saved CSV file (useful for debug)
+    :type get_data_from_file: bool, optional
     :return: A dictionnary with multiple data used by the action functions
     :rtype: dict
 
@@ -41,26 +44,34 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
     params, optim_conf = utils.treat_runtimeparams(runtimeparams, params, retrieve_hass_conf, 
                                                    optim_conf, plant_conf, set_type, logger)
     # Initialize objects
-    days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
+    if get_data_from_file:
+        with open(pathlib.Path(base_path+'/data/test_df_final.pkl'), 'rb') as inp:
+            df_final, days_list, var_list = pickle.load(inp)
+    else:
+        days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
+        var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
+    # Define main objects
     rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
                        retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'], 
-                       params, base_path, logger)
+                       params, base_path, logger, get_data_from_file=get_data_from_file)
     fcst = forecast(retrieve_hass_conf, optim_conf, plant_conf,
-                    params, base_path, logger)
+                    params, base_path, logger, get_data_from_file=get_data_from_file)
     opt = optimization(retrieve_hass_conf, optim_conf, plant_conf, 
                        fcst.var_load_cost, fcst.var_prod_price, days_list, 
                        costfun, base_path, logger)
     # Perform setup based on type of action
     if set_type == "perfect-optim":
         # Retrieve data from hass
-        var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
-        rh.get_data(days_list, var_list,
-                    minimal_response=False, significant_changes_only=False)
-        rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
-                        set_zero_min = retrieve_hass_conf['set_zero_min'], 
-                        var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
-                        var_interp = retrieve_hass_conf['var_interp'])
-        df_input_data = rh.df_final.copy()
+        if get_data_from_file:
+            df_input_data = copy.deepcopy(df_final)
+        else:
+            rh.get_data(days_list, var_list,
+                        minimal_response=False, significant_changes_only=False)
+            rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
+                            set_zero_min = retrieve_hass_conf['set_zero_min'], 
+                            var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
+                            var_interp = retrieve_hass_conf['var_interp'])
+            df_input_data = rh.df_final.copy()
         # What we don't need for this type of action
         P_PV_forecast, P_load_forecast, df_input_data_dayahead = None, None, None
     elif set_type == "dayahead-optim" or set_type == "naive-mpc-optim":
@@ -126,7 +137,7 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     if save_data_to_file:
         filename = 'opt_res_perfect_optim_'+input_data_dict['costfun']
     else: # Just save the latest optimization results
-        filename = 'opt_res_perfect_optim_latest'
+        filename = 'opt_res_latest'
     opt_res.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
     return opt_res
     
@@ -159,7 +170,7 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         filename = 'opt_res_dayahead_'+today.strftime("%Y_%m_%d")
     else: # Just save the latest optimization results
-        filename = 'opt_res_dayahead_latest'
+        filename = 'opt_res_latest'
     opt_res_dayahead.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
     return opt_res_dayahead
 
@@ -198,12 +209,12 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         filename = 'opt_res_naive_mpc_'+today.strftime("%Y_%m_%d")
     else: # Just save the latest optimization results
-        filename = 'opt_res_naive_mpc_latest'
+        filename = 'opt_res_latest'
     opt_res_naive_mpc.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
     return opt_res_naive_mpc
     
 def publish_data(input_data_dict: dict, logger: logging.Logger,
-    save_data_to_file: Optional[bool] = False) -> pd.DataFrame:
+    save_data_to_file: Optional[bool] = False, method_fill: Optional[str] = 'nearest') -> pd.DataFrame:
     """
     Publish the data obtained from the optimization results.
     
@@ -211,6 +222,10 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     :type input_data_dict: dict
     :param logger: The passed logger object
     :type logger: logging object
+    :param save_data_to_file: If True we will read data from optimization results in dayahead CSV file
+    :type save_data_to_file: bool, optional
+    :param method_fill: The method that will be used to fill data from saved optimization results for current timestamp
+    :type method_fill: str, optional
     :return: The output data of the optimization readed from a CSV file in the data folder
     :rtype: pd.DataFrame
 
@@ -221,43 +236,43 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         filename = 'opt_res_dayahead_'+today.strftime("%Y_%m_%d")
     else:
-        filename = 'opt_res_dayahead_latest'
+        filename = 'opt_res_latest'
     if not os.path.isfile(input_data_dict['root'] + '/data/' + filename + '.csv'):
-        logger.error("File not found error, run the dayahead_forecast_optim first.")
+        logger.error("File not found error, run an optimization task first.")
     else:
-        opt_res_dayahead = pd.read_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_col='timestamp')
-        opt_res_dayahead.index = pd.to_datetime(opt_res_dayahead.index)
-        opt_res_dayahead.index.freq = input_data_dict['retrieve_hass_conf']['freq']
+        opt_res_latest = pd.read_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_col='timestamp')
+        opt_res_latest.index = pd.to_datetime(opt_res_latest.index)
+        opt_res_latest.index.freq = input_data_dict['retrieve_hass_conf']['freq']
     # Estimate the current index
     now_precise = datetime.now(input_data_dict['retrieve_hass_conf']['time_zone']).replace(second=0, microsecond=0)
-    idx_closest = opt_res_dayahead.index.get_indexer([now_precise], method='ffill')[0]
+    idx_closest = opt_res_latest.index.get_indexer([now_precise], method='ffill')[0]
     if idx_closest == -1:
-        idx_closest = opt_res_dayahead.index.get_indexer([now_precise], method='nearest')[0]
+        idx_closest = opt_res_latest.index.get_indexer([now_precise], method='nearest')[0]
     # Publish PV forecast
-    input_data_dict['rh'].post_data(opt_res_dayahead['P_PV'], idx_closest, 
+    input_data_dict['rh'].post_data(opt_res_latest['P_PV'], idx_closest, 
                                     'sensor.p_pv_forecast', "W", "PV Power Forecast")
     # Publish Load forecast
-    input_data_dict['rh'].post_data(opt_res_dayahead['P_Load'], idx_closest, 
+    input_data_dict['rh'].post_data(opt_res_latest['P_Load'], idx_closest, 
                                     'sensor.p_load_forecast', "W", "Load Power Forecast")
     cols_published = ['P_PV', 'P_Load']
     # Publish deferrable loads
     for k in range(input_data_dict['opt'].optim_conf['num_def_loads']):
-        if "P_deferrable{}".format(k) not in opt_res_dayahead.columns:
+        if "P_deferrable{}".format(k) not in opt_res_latest.columns:
             logger.error("P_deferrable{}".format(k)+" was not found in results DataFrame. Optimization task may need to be relaunched or it did not converged to a solution.")
         else:
-            input_data_dict['rh'].post_data(opt_res_dayahead["P_deferrable{}".format(k)], idx_closest, 
+            input_data_dict['rh'].post_data(opt_res_latest["P_deferrable{}".format(k)], idx_closest, 
                                             'sensor.p_deferrable{}'.format(k), "W", "Deferrable Load {}".format(k))
             cols_published = cols_published+["P_deferrable{}".format(k)]
     # Publish battery power
     if input_data_dict['opt'].optim_conf['set_use_battery']:
-        if 'P_batt' not in opt_res_dayahead.columns:
+        if 'P_batt' not in opt_res_latest.columns:
             logger.error("P_batt was not found in results DataFrame. Optimization task may need to be relaunched or it did not converged to a solution.")
         else:
-            input_data_dict['rh'].post_data(opt_res_dayahead['P_batt'], idx_closest,
+            input_data_dict['rh'].post_data(opt_res_latest['P_batt'], idx_closest,
                                             'sensor.p_batt_forecast', "W", "Battery Power Forecast")
             cols_published = cols_published+["P_batt"]
     # Create a DF resuming what has been published
-    opt_res = opt_res_dayahead.loc[opt_res_dayahead.index[idx_closest], cols_published]
+    opt_res = opt_res_latest.loc[opt_res_latest.index[idx_closest], cols_published]
     return opt_res
     
         
