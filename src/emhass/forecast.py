@@ -108,13 +108,12 @@ class forecast:
         self.plant_conf = plant_conf
         self.freq = self.retrieve_hass_conf['freq']
         self.time_zone = self.retrieve_hass_conf['time_zone']
+        self.method_ts_round = self.retrieve_hass_conf['method_ts_round']
         self.timeStep = self.freq.seconds/3600 # in hours
         self.time_delta = pd.to_timedelta(opt_time_delta, "hours") # The period of optimization
         self.var_PV = self.retrieve_hass_conf['var_PV']
         self.var_load = self.retrieve_hass_conf['var_load']
         self.var_load_new = self.var_load+'_positive'
-        self.start_forecast = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(microsecond=0)
-        self.end_forecast = (self.start_forecast + self.optim_conf['delta_forecast']).replace(microsecond=0)
         self.lat = self.retrieve_hass_conf['lat'] 
         self.lon = self.retrieve_hass_conf['lon']
         self.root = config_path
@@ -127,7 +126,14 @@ class forecast:
             self.params = params
         else:
             self.params = json.loads(params)
-            
+        
+        if self.method_ts_round == 'nearest':
+            self.start_forecast = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(microsecond=0)
+        elif self.method_ts_round == 'first':
+            self.start_forecast = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(microsecond=0).floor(freq=self.freq)
+        elif self.method_ts_round == 'last':
+            self.start_forecast = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(microsecond=0).ceil(freq=self.freq)
+        self.end_forecast = (self.start_forecast + self.optim_conf['delta_forecast']).replace(microsecond=0)
         self.forecast_dates = pd.date_range(start=self.start_forecast, 
                                             end=self.end_forecast-self.freq, 
                                             freq=self.freq).round(self.freq)
@@ -156,8 +162,6 @@ class forecast:
             forecast_dates_scrap = pd.date_range(start=self.start_forecast,
                                                  end=self.end_forecast-freq_scrap, 
                                                  freq=freq_scrap).round(freq_scrap)
-            forecast_dates = pd.date_range(start=self.start_forecast, 
-                                           end=self.end_forecast-self.freq, freq=self.freq).round(self.freq)
             # Using the clearoutside webpage
             response = requests.get("https://clearoutside.com/forecast/"+str(round(self.lat, 2))+"/"+str(round(self.lon, 2)))
             soup = BeautifulSoup(response.content, 'html.parser')
@@ -176,7 +180,7 @@ class forecast:
             # Treating index
             raw_data.set_index(forecast_dates_scrap, inplace=True)
             raw_data = raw_data[~raw_data.index.duplicated(keep='first')]
-            raw_data = raw_data.reindex(forecast_dates)
+            raw_data = raw_data.reindex(self.forecast_dates)
             raw_data.interpolate(method='linear', axis=0, limit=None, 
                                  limit_direction='both', inplace=True)
             # Converting the cloud cover into Global Horizontal Irradiance with a PVLib method
@@ -341,6 +345,12 @@ class forecast:
 
         """
         start_forecast_csv = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(microsecond=0)
+        if self.method_ts_round == 'nearest':
+            start_forecast_csv = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(microsecond=0)
+        elif self.method_ts_round == 'first':
+            start_forecast_csv = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(microsecond=0).floor(freq=self.freq)
+        elif self.method_ts_round == 'last':
+            start_forecast_csv = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(microsecond=0).ceil(freq=self.freq)
         end_forecast_csv = (start_forecast_csv + self.optim_conf['delta_forecast']).replace(microsecond=0)
         forecast_dates_csv = pd.date_range(start=start_forecast_csv, 
                                            end=end_forecast_csv+timedelta(days=timedelta_days)-self.freq, 

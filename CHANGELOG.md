@@ -10,10 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Round published data
 - Attributes to forecasts published data
 - Improved centering html on small devices
-TODO
-- Messing with closest index
-- More plots for webserver
-
+- Improved handling of closest index when publishing data
 ### Fix
 - Fixed problem with csv filenames, was using only filename specific to dayahead optimization.
 - Fixed data list handling for load cost and prod price forecasts.

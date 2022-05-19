@@ -203,11 +203,20 @@ class TestCommandLineUtils(unittest.TestCase):
         base_path = str(config_path.parent)
         costfun = 'profit'
         action = 'naive-mpc-optim'
-        params = copy.deepcopy(json.loads(self.params_json))
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
-        opt_res = publish_data(input_data_dict, logger)
-        self.assertTrue(len(opt_res)==1)
+        opt_res_latest = pd.read_csv(root + '/data/' + 'opt_res_latest' + '.csv', index_col='timestamp')
+        opt_res_latest.index = pd.to_datetime(opt_res_latest.index)
+        opt_res_latest.index.freq = input_data_dict['retrieve_hass_conf']['freq']
+        opt_res_first = publish_data(input_data_dict, logger)
+        self.assertTrue(len(opt_res_first)==1)
+        params = copy.deepcopy(json.loads(self.params_json))
+        params['retrieve_hass_conf'][8]['method_ts_round'] = 'last'
+        params_json = json.dumps(params)
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, self.runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
+        opt_res_last = publish_data(input_data_dict, logger)
+        self.assertTrue(len(opt_res_last)==1)
         
         
 if __name__ == '__main__':

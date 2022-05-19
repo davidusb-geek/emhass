@@ -214,7 +214,7 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     return opt_res_naive_mpc
     
 def publish_data(input_data_dict: dict, logger: logging.Logger,
-    save_data_to_file: Optional[bool] = False, method_fill: Optional[str] = 'nearest') -> pd.DataFrame:
+    save_data_to_file: Optional[bool] = False) -> pd.DataFrame:
     """
     Publish the data obtained from the optimization results.
     
@@ -224,8 +224,6 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     :type logger: logging object
     :param save_data_to_file: If True we will read data from optimization results in dayahead CSV file
     :type save_data_to_file: bool, optional
-    :param method_fill: The method that will be used to fill data from saved optimization results for current timestamp
-    :type method_fill: str, optional
     :return: The output data of the optimization readed from a CSV file in the data folder
     :rtype: pd.DataFrame
 
@@ -245,7 +243,12 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         opt_res_latest.index.freq = input_data_dict['retrieve_hass_conf']['freq']
     # Estimate the current index
     now_precise = datetime.now(input_data_dict['retrieve_hass_conf']['time_zone']).replace(second=0, microsecond=0)
-    idx_closest = opt_res_latest.index.get_indexer([now_precise], method='ffill')[0]
+    if input_data_dict['retrieve_hass_conf']['method_ts_round'] == 'nearest':
+        idx_closest = opt_res_latest.index.get_indexer([now_precise], method='nearest')[0]
+    elif input_data_dict['retrieve_hass_conf']['method_ts_round'] == 'first':
+        idx_closest = opt_res_latest.index.get_indexer([now_precise], method='ffill')[0]
+    elif input_data_dict['retrieve_hass_conf']['method_ts_round'] == 'last':
+        idx_closest = opt_res_latest.index.get_indexer([now_precise], method='bfill')[0]
     if idx_closest == -1:
         idx_closest = opt_res_latest.index.get_indexer([now_precise], method='nearest')[0]
     # Publish PV forecast
