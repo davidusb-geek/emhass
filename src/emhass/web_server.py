@@ -48,6 +48,7 @@ def build_params(params, options, addon):
         params['retrieve_hass_conf'][3]['var_load'] = options['sensor_power_load_no_var_loads']
         params['retrieve_hass_conf'][6]['var_replace_zero'] = [options['sensor_power_photovoltaics']]
         params['retrieve_hass_conf'][7]['var_interp'] = [options['sensor_power_photovoltaics'], options['sensor_power_load_no_var_loads']]
+        params['retrieve_hass_conf'][8]['method_ts_round'] = options['method_ts_round']
         # Updating variables in optim_conf
         params['optim_conf'][0]['set_use_battery'] = options['set_use_battery']
         params['optim_conf'][2]['num_def_loads'] = options['number_of_deferrable_loads']
