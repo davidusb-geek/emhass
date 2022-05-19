@@ -6,20 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased - 2022-05-19
 ### Improvement
-- Improve publish data logging
+- Improved publish data logging
 - Round published data
 - Attributes to forecasts published data
+- Improved centering html on small devices
 TODO
 - Messing with closest index
 - More plots for webserver
-- Centering html
 
 ### Fix
 - Fixed problem with csv filenames, was using only filename specific to dayahead optimization.
 - Fixed data list handling for load cost and prod price forecasts.
 - Fixed publish data dictionary to contain only data from correct entity_id.
-TODO:
-- Double log lines 
+- May have solved double log lines.
 
 ## [0.3.8] - 2022-05-17
 ### Fix

@@ -19,6 +19,7 @@ from emhass.command_line import publish_data
 # Define the Flask instance
 app = Flask(__name__) #, static_url_path='/static'
 app.logger.setLevel(logging.INFO)
+app.logger.propagate = False
 
 def get_injection_dict(df, plot_size = 1366):
     # Create plots
@@ -189,7 +190,7 @@ if __name__ == "__main__":
     params['plant_conf'] = plant_conf
 
     # Initialize this global dict
-    opt_res = pd.read_csv(base_path+'/data/opt_res_dayahead_latest.csv', index_col='timestamp')
+    opt_res = pd.read_csv(base_path+'/data/opt_res_latest.csv', index_col='timestamp')
     injection_dict = get_injection_dict(opt_res)
     with open(base_path+'/data/injection_dict.pkl', "wb") as fid:
         pickle.dump(injection_dict, fid)
