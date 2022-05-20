@@ -97,7 +97,7 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertTrue(data['state']==str(np.round(df.loc[df.index[25],df.columns[0]])))
         self.assertTrue(data['attributes']['unit_of_measurement']=='W')
         self.assertTrue(data['attributes']['friendly_name']=='PV Forecast')
-        self.assertIsInstance(data['attributes']['forecasts'], str)
+        self.assertIsInstance(data['attributes']['forecasts'], dict)
         
     
 if __name__ == '__main__':
