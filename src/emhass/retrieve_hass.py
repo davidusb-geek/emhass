@@ -223,17 +223,24 @@ class retrieve_hass:
         # Preparing the data dict to be published
         state = np.round(data_df.loc[data_df.index[idx]])
         if 'forecast' in entity_id:
-            forecast_list = copy.deepcopy(data_df).loc[data_df.index[idx]:].reset_index()
-            forecast_list.columns = ['timestamps', entity_id]
-            ts_list = [str(i) for i in forecast_list['timestamps'].tolist()]
-            vals_list = [np.round(i) for i in forecast_list[entity_id].tolist()]
-            forecast_list = [{'timestamp': ts_list[i], entity_id.split('sensor.')[1]: vals_list[i]} for i in range(len(ts_list))]
+            forecast_df = copy.deepcopy(data_df).loc[data_df.index[idx]:].reset_index()
+            forecast_df.columns = ['timestamps', entity_id]
+            ts_list = [str(i) for i in forecast_df['timestamps'].tolist()]
+            vals_list = [np.round(i) for i in forecast_df[entity_id].tolist()]
+            forecast_list = {
+                "forecasts": [],
+            }
+            for i, ts in enumerate(ts_list):
+                datum = {}
+                datum["date"] = ts
+                datum[entity_id.split('sensor.')[1]] = vals_list[i]
+                forecast_list["forecasts"].append(datum)
             data = {
                 "state": str(state),
                 "attributes": {
                     "unit_of_measurement": unit_of_measurement,
                     "friendly_name": friendly_name,
-                    "forecasts": str(forecast_list)
+                    "forecasts": forecast_list
                 }
             }
         else:
