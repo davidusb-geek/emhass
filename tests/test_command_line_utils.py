@@ -210,6 +210,7 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(len(opt_res_first)==1)
         params = copy.deepcopy(json.loads(self.params_json))
         params['retrieve_hass_conf'][8]['method_ts_round'] = 'last'
+        params['optim_conf'][0]['set_use_battery'] = True
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)

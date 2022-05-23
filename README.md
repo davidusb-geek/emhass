@@ -42,6 +42,8 @@ The complete documentation for this package is [available here](https://emhass.r
 
 ## Installation
 
+### Using a Python virtual environment
+
 It is recommended to install on a virtual environment.
 For this you will need `virtualenv`, install it using:
 ```
@@ -86,7 +88,7 @@ docker run -it --restart always -p 5000:5000 -e "LOCAL_COSTFUN=profit" -v $(pwd)
 
 ### The EMHASS add-on
 
-For Home Assistant OS and HA Supervised users, I've developed an add-on that will help you use EMHASS. The add-on is more user friendly as the configuration can be modified directly in the add-on options pane and also it exposes a web ui that can be used to inspect the optimization results and manually trigger a new optimization.
+For Home Assistant OS and HA Supervised users, I've developed an add-on that will help you use EMHASS. The add-on is more user friendly as the configuration can be modified directly in the add-on options pane and as with the standalone docker it exposes a web ui that can be used to inspect the optimization results and manually trigger a new optimization.
 
 You can find the add-on with the installation instructions here: [https://github.com/davidusb-geek/emhass-add-on](https://github.com/davidusb-geek/emhass-add-on)
 
@@ -103,7 +105,7 @@ The available arguments are:
 - `--costfun`: Define the type of cost function, this is optional and the options are: `profit` (default), `cost`, `self-consumption`
 - `--log2file`: Define if we should log to a file or not, this is optional and the options are: `True` or `False` (default)
 - `--params`: Configuration as JSON. 
-- `--runtimeparams`: Data passed at runtime. This can be used to pass you own forecast data to EMHASS.
+- `--runtimeparams`: Data passed at runtime. This can be used to pass your own forecast data to EMHASS.
 - `--version`: Show the current version of EMHASS.
 
 For example, the following line command can be used to perform a day-ahead optimization task:
@@ -247,7 +249,7 @@ The possible dictionnary keys to pass data are:
 
 ### A naive Model Predictive Controller
 
-A MPC controller was introduced in v0.3.0. This an informal/naive representation of a MPC controller. 
+A MPC controller was introduced in v0.3.0. This is an informal/naive representation of a MPC controller. 
 
 A MPC controller performs the following actions:
 
