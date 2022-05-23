@@ -4,13 +4,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.10] - 2022-05-23
+### Improvement
+- Added data as attributes for forecasts (PV and load), deferrable loads and battery: power+SOC.
+- Improved the graph in the webserver, now using subplots.
+- Rearranged vertical space in index.html template.
+### Fix
+- Added threads option on waitress to possibly improve queue problem.
+
 ## [0.3.9] - 2022-05-19
 ### Improvement
-- Improved publish data logging
-- Round published data
-- Attributes to forecasts published data
-- Improved centering html on small devices
-- Improved handling of closest index when publishing data
+- Improved publish data logging.
+- Round published data.
+- Attributes to forecasts published data.
+- Improved centering html on small devices.
+- Improved handling of closest index when publishing data.
 ### Fix
 - Fixed problem with csv filenames, was using only filename specific to dayahead optimization.
 - Fixed data list handling for load cost and prod price forecasts.

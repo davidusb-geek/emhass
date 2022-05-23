@@ -1,16 +1,18 @@
 # Introduction
 
 This module was conceived as an energy management optimization tool for residential electric power consumption and production systems.
-The goal is to optimize the energy use in order to maximize self-consumption.
+The goal is to optimize the energy use in order to maximize autoconsumption.
 The main study case is a household where we have solar panels, a grid connection and one or more controllable (deferrable) electrical loads. Including an energy storage system using batteries is also possible in the code.
 The package is highly configurable with an object oriented modular approach and a main configuration file defined by the user.
 EMHASS was designed to be integrated with Home Assistant, hence it's name. Installation instructions and example Home Assistant automation configurations are given below.
 
 The main dependencies of this project are PVLib to model power from a PV residential installation and the PuLP Python package to perform the actual optimizations using the Linear Programming approach.
 
-The source code for this package is [available here](https://github.com/davidusb-geek/emhass).
+The complete documentation for this package is [available here](https://emhass.readthedocs.io/en/latest/).
 
 ## Installation
+
+### Using a Python virtual environment
 
 It is recommended to install on a virtual environment.
 For this you will need `virtualenv`, install it using:
@@ -56,7 +58,7 @@ docker run -it --restart always -p 5000:5000 -e "LOCAL_COSTFUN=profit" -v $(pwd)
 
 ### The EMHASS add-on
 
-For Home Assistant OS and HA Supervised users, I've developed an add-on that will help you use EMHASS. The add-on is more user friendly as the configuration can be modified directly in the add-on options pane and also it exposes a web ui that can be used to inspect the optimization results and manually trigger a new optimization.
+For Home Assistant OS and HA Supervised users, I've developed an add-on that will help you use EMHASS. The add-on is more user friendly as the configuration can be modified directly in the add-on options pane and as with the standalone docker it exposes a web ui that can be used to inspect the optimization results and manually trigger a new optimization.
 
 You can find the add-on with the installation instructions here: [https://github.com/davidusb-geek/emhass-add-on](https://github.com/davidusb-geek/emhass-add-on)
 
@@ -73,7 +75,7 @@ The available arguments are:
 - `--costfun`: Define the type of cost function, this is optional and the options are: `profit` (default), `cost`, `self-consumption`
 - `--log2file`: Define if we should log to a file or not, this is optional and the options are: `True` or `False` (default)
 - `--params`: Configuration as JSON. 
-- `--runtimeparams`: Data passed at runtime. This can be used to pass you own forecast data to EMHASS.
+- `--runtimeparams`: Data passed at runtime. This can be used to pass your own forecast data to EMHASS.
 - `--version`: Show the current version of EMHASS.
 
 For example, the following line command can be used to perform a day-ahead optimization task:
@@ -152,7 +154,7 @@ automation:
   trigger:
     - platform: numeric_state
       entity_id:
-        - sensor.p_deferrable1
+        - sensor.p_deferrable0
       above: 0.1
   action:
     - service: homeassistant.turn_on
@@ -164,13 +166,15 @@ automation:
   trigger:
     - platform: numeric_state
       entity_id:
-        - sensor.p_deferrable1
+        - sensor.p_deferrable0
       below: 0.1
   action:
     - service: homeassistant.turn_off
       entity_id: switch.water_heater
 ```
-The `publish-data` command will push to Home Assistant the optimization results for each deferrable load defined in the configuration. For example if you have defined two deferrable loads, then the command will publish `sensor.p_deferrable1` and `sensor.p_deferrable2` to Home Assistant. When the `dayahead-optim` is launched, after the optimization, a csv file will be saved on disk. The `publish-data` command will load the latest csv file and look for the closest timestamp that match the current time using the `datetime.now()` method in Python. This means that if EMHASS is configured for 30min time step optimizations, the csv will be saved with timestamps 00:00, 00:30, 01:00, 01:30, ... and so on. If the current time is 00:05, then the closest timestamp of the optimization results that will be published is 00:00. If the current time is 00:25, then the closest timestamp of the optimization results that will be published is 00:30.
+The `publish-data` command will push to Home Assistant the optimization results for each deferrable load defined in the configuration. For example if you have defined two deferrable loads, then the command will publish `sensor.p_deferrable0` and `sensor.p_deferrable1` to Home Assistant. When the `dayahead-optim` is launched, after the optimization, a csv file will be saved on disk. The `publish-data` command will load the latest csv file and look for the closest timestamp that match the current time using the `datetime.now()` method in Python. This means that if EMHASS is configured for 30min time step optimizations, the csv will be saved with timestamps 00:00, 00:30, 01:00, 01:30, ... and so on. If the current time is 00:05, then the closest timestamp of the optimization results that will be published is 00:00. If the current time is 00:25, then the closest timestamp of the optimization results that will be published is 00:30.
+The `publish-data` command will also publish PV and load forecast data on sensors `p_pv_forecast` and `p_load_forecast`. If using a battery, then the battery optimized power will be published on sensor `p_batt_forecast`.
+
 
 ## Passing your own data
 
@@ -215,16 +219,16 @@ The possible dictionnary keys to pass data are:
 
 ### A naive Model Predictive Controller
 
-A MPC controller was introduced in v0.3.0. This an informal/naive representation of a MPC controller. 
+A MPC controller was introduced in v0.3.0. This is an informal/naive representation of a MPC controller. 
 
 A MPC controller performs the following actions:
 
-- Set the prediction horizon and receiding horizon parameters.
+- Set the prediction horizon and receding horizon parameters.
 - Perform an optimization on the prediction horizon.
 - Apply the first element of the obtained optimized control variables.
 - Repeat at a relatively high frequency, ex: 5 min.
 
-This is the receiding horizon principle.
+This is the receding horizon principle.
 
 When applying this controller, the following `runtimeparams` should be defined:
 
@@ -234,7 +238,7 @@ When applying this controller, the following `runtimeparams` should be defined:
 
 - `soc_final` for the final value of the battery SOC for the current iteration of the MPC. 
 
-- `def_total_hours` for the list of deferrable loads functioning hours. These values can decrease as the day advances to take into account receidding horizon daily energy objectives for each deferrable load.
+- `def_total_hours` for the list of deferrable loads functioning hours. These values can decrease as the day advances to take into account receding horizon daily energy objectives for each deferrable load.
 
 A correct call for a MPC optimization should look like:
 

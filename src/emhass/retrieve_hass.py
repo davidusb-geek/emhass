@@ -192,7 +192,31 @@ class retrieve_hass:
             self.df_final.index = self.df_final.index.tz_convert(self.time_zone)
         # Drop datetimeindex duplicates on final DF
         self.df_final = self.df_final[~self.df_final.index.duplicated(keep='first')]
-        
+    
+    @staticmethod
+    def get_attr_data_dict(data_df: pd.DataFrame, idx: int, entity_id: str, 
+                           unit_of_measurement: str, friendly_name: str, 
+                           list_name: str, state: float) -> dict:
+        list_df = copy.deepcopy(data_df).loc[data_df.index[idx]:].reset_index()
+        list_df.columns = ['timestamps', entity_id]
+        ts_list = [str(i) for i in list_df['timestamps'].tolist()]
+        vals_list = [np.round(i) for i in list_df[entity_id].tolist()]
+        forecast_list = []
+        for i, ts in enumerate(ts_list):
+            datum = {}
+            datum["date"] = ts
+            datum[entity_id.split('sensor.')[1]] = vals_list[i]
+            forecast_list.append(datum)
+        data = {
+            "state": str(state),
+            "attributes": {
+                "unit_of_measurement": unit_of_measurement,
+                "friendly_name": friendly_name,
+                list_name: forecast_list
+            }
+        }
+        return data
+    
     def post_data(self, data_df: pd.DataFrame, idx: int, entity_id: str, 
                   unit_of_measurement: str, friendly_name: str) -> None:
         """
@@ -221,28 +245,19 @@ class retrieve_hass:
             "content-type": "application/json",
         }
         # Preparing the data dict to be published
-        state = np.round(data_df.loc[data_df.index[idx]])
+        state = np.round(data_df.loc[data_df.index[idx]],2)
         if 'forecast' in entity_id:
-            forecast_df = copy.deepcopy(data_df).loc[data_df.index[idx]:].reset_index()
-            forecast_df.columns = ['timestamps', entity_id]
-            ts_list = [str(i) for i in forecast_df['timestamps'].tolist()]
-            vals_list = [np.round(i) for i in forecast_df[entity_id].tolist()]
-            forecast_list = {
-                "forecasts": [],
-            }
-            for i, ts in enumerate(ts_list):
-                datum = {}
-                datum["date"] = ts
-                datum[entity_id.split('sensor.')[1]] = vals_list[i]
-                forecast_list["forecasts"].append(datum)
-            data = {
-                "state": str(state),
-                "attributes": {
-                    "unit_of_measurement": unit_of_measurement,
-                    "friendly_name": friendly_name,
-                    "forecasts": forecast_list
-                }
-            }
+            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+                                                    friendly_name, "forecasts", state)
+        elif 'deferrable' in entity_id:
+            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+                                                    friendly_name, "deferrables_schedule", state)
+        elif 'batt' in entity_id:
+            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+                                                    friendly_name, "battery_scheduled_power", state)
+        elif 'SOC' in entity_id:
+            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+                                                    friendly_name, "battery_scheduled_soc", state)
         else:
             data = {
                 "state": str(state),

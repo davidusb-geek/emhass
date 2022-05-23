@@ -23,11 +23,23 @@ app.logger.propagate = False
 
 def get_injection_dict(df, plot_size = 1366):
     # Create plots
-    fig = px.line(df, title='Systems powers and optimization cost results', 
-                  template='seaborn', width=plot_size, height=0.75*plot_size)
-    fig.update_traces(line_shape="hv")
+    cols_p = [i for i in df.columns.to_list() if 'P_' in i]
+    fig_0 = px.line(df[cols_p], title='Systems powers schedule after optimization results', 
+                    template='plotly_white', width=plot_size, height=0.5*plot_size, line_shape="hv")
+    fig_0.update_layout(xaxis_title='Tiemstamp', yaxis_title='System powers (W)')
+    if 'SOC_opt' in df.columns.to_list():
+        fig_1 = px.line(df['SOC_opt'], title='Battery state of charge schedule after optimization results', 
+                        template='plotly_white', width=plot_size, height=0.5*plot_size, line_shape="hv")
+        fig_1.update_layout(xaxis_title='Tiemstamp', yaxis_title='Battery SOC (%)')
+    cols_cost = [i for i in df.columns.to_list() if 'cost_' in i or 'unit_' in i]
+    fig_2 = px.line(df[cols_cost], title='Systems costs obtained from optimization results', 
+                      template='plotly_white', width=plot_size, height=0.5*plot_size, line_shape="hv")
+    fig_0.update_layout(xaxis_title='Tiemstamp', yaxis_title='System costs (currency)')
     # Get full path to image
-    image_path_0 = fig.to_html(full_html=False, default_width='75%')
+    image_path_0 = fig_0.to_html(full_html=False, default_width='75%')
+    if 'SOC_opt' in df.columns.to_list():
+        image_path_1 = fig_1.to_html(full_html=False, default_width='75%')
+    image_path_2 = fig_2.to_html(full_html=False, default_width='75%')
     # The tables
     table1 = df.reset_index().to_html(classes='mystyle', index=False)
     # The dict of plots
@@ -35,6 +47,9 @@ def get_injection_dict(df, plot_size = 1366):
     injection_dict['title'] = '<h2>EMHASS optimization results</h2>'
     injection_dict['subsubtitle2'] = '<h4>Plotting latest optimization results</h4>'
     injection_dict['figure_0'] = image_path_0
+    if 'SOC_opt' in df.columns.to_list():
+        injection_dict['figure_1'] = image_path_1
+    injection_dict['figure_2'] = image_path_2
     injection_dict['subsubtitle1'] = '<h4>Last run optimization results table</h4>'
     injection_dict['table1'] = table1
     return injection_dict
@@ -244,4 +259,4 @@ if __name__ == "__main__":
     app.logger.info("Home Assistant data fetch will be performed using url: "+hass_url)
     app.logger.info("The base path is: "+base_path)
     app.logger.info("Using core emhass version: "+version('emhass'))
-    serve(app, host=web_ui_url, port=port)
+    serve(app, host=web_ui_url, port=port, threads=8)
