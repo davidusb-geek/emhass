@@ -86,7 +86,7 @@ class TestRetrieveHass(unittest.TestCase):
     def test_publish_data(self):
         response, data = self.rh.post_data(self.df_raw[self.df_raw.columns[0]], 25, 'sensor.p_pv_forecast', "Unit", "Variable")
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(data['state']==str(np.round(self.df_raw.loc[self.df_raw.index[25],self.df_raw.columns[0]])))
+        self.assertTrue(data['state']==str(np.round(self.df_raw.loc[self.df_raw.index[25],self.df_raw.columns[0]],2)))
         self.assertTrue(data['attributes']['unit_of_measurement']=='Unit')
         self.assertTrue(data['attributes']['friendly_name']=='Variable')
         # Lets test publishing a forecast with more added attributes
@@ -94,10 +94,10 @@ class TestRetrieveHass(unittest.TestCase):
         df.columns = ['P_PV', 'P_Load']
         response, data = self.rh.post_data(df[df.columns[0]], 25, 'sensor.p_pv_forecast', "W", "PV Forecast")
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(data['state']==str(np.round(df.loc[df.index[25],df.columns[0]])))
+        self.assertTrue(data['state']==str(np.round(df.loc[df.index[25],df.columns[0]],2)))
         self.assertTrue(data['attributes']['unit_of_measurement']=='W')
         self.assertTrue(data['attributes']['friendly_name']=='PV Forecast')
-        self.assertIsInstance(data['attributes']['forecasts'], dict)
+        self.assertIsInstance(data['attributes']['forecasts'], list)
         
     
 if __name__ == '__main__':
