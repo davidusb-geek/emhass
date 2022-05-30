@@ -163,7 +163,7 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
             else:
                 logger.error("ERROR: The passed data is either not a list or the length is not correct, length should be "+str(len(forecast_dates)))
                 logger.error("Passed type is "+str(type(runtimeparams['prod_price_forecast']))+" and length is "+str(len(forecast_dates)))
-    params = json.dumps(params)
+        params = json.dumps(params)
     return params, optim_conf
 
 def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
