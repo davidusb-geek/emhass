@@ -34,7 +34,7 @@ def get_injection_dict(df, plot_size = 1366):
     cols_cost = [i for i in df.columns.to_list() if 'cost_' in i or 'unit_' in i]
     fig_2 = px.line(df[cols_cost], title='Systems costs obtained from optimization results', 
                       template='plotly_white', width=plot_size, height=0.5*plot_size, line_shape="hv")
-    fig_0.update_layout(xaxis_title='Tiemstamp', yaxis_title='System costs (currency)')
+    fig_2.update_layout(xaxis_title='Tiemstamp', yaxis_title='System costs (currency)')
     # Get full path to image
     image_path_0 = fig_0.to_html(full_html=False, default_width='75%')
     if 'SOC_opt' in df.columns.to_list():
