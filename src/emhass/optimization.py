@@ -27,8 +27,7 @@ class optimization:
     def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, 
                  var_load_cost: str, var_prod_price: str, days_list: pd.date_range, 
                  costfun: str, config_path: str, logger: logging.Logger, 
-                 opt_time_delta: Optional[int] = 24, lp_solver: Optional[str] = 'PULP_CBC_CMD',
-                 lp_solver_path: Optional[str] = '/usr/bin/cbc') -> None:
+                 opt_time_delta: Optional[int] = 24) -> None:
         """
         Define constructor for optimization class.
         
@@ -58,10 +57,6 @@ class optimization:
             more than one day then the optimization will be peformed by chunks of \
             opt_time_delta periods, defaults to 24
         :type opt_time_delta: float, optional
-        :param lp_solver: The linear programming solver name to use
-        :type lp_solver: str, optional
-        :param lp_solver_path: The path to the solver name to use
-        :type lp_solver_path: str, optional
         
         """
         self.retrieve_hass_conf = retrieve_hass_conf
@@ -79,8 +74,16 @@ class optimization:
         self.logger = logger
         self.var_load_cost = var_load_cost
         self.var_prod_price = var_prod_price
-        self.lp_solver = lp_solver
-        self.lp_solver_path = lp_solver_path
+        if 'lp_solver' in optim_conf.keys():
+            self.lp_solver = optim_conf['lp_solver']
+        else:
+            self.lp_solver = 'PULP_CBC_CMD'
+        if 'lp_solver_path' in optim_conf.keys():
+            self.lp_solver_path = optim_conf['lp_solver_path']
+        else:
+            self.lp_solver_path = r'/usr/bin/cbc'
+        if self.lp_solver != 'COIN_CMD' and 'lp_solver_path' in optim_conf.keys():
+            self.logger.error("Use COIN_CMD solver name if you want to set a path for the LP solver")
         
     def perform_optimization(self, data_opt: pd.DataFrame, P_PV: np.array, P_load: np.array, 
                              unit_load_cost: np.array, unit_prod_price: np.array,
