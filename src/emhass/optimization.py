@@ -5,7 +5,7 @@ from typing import Optional
 import pandas as pd
 import numpy as np
 import pulp as plp
-from pulp import PULP_CBC_CMD, GLPK_CMD
+from pulp import PULP_CBC_CMD, COIN_CMD, GLPK_CMD
 import logging, copy
 
 class optimization:
@@ -27,7 +27,8 @@ class optimization:
     def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, 
                  var_load_cost: str, var_prod_price: str, days_list: pd.date_range, 
                  costfun: str, config_path: str, logger: logging.Logger, 
-                 opt_time_delta: Optional[int] = 24) -> None:
+                 opt_time_delta: Optional[int] = 24, lp_solver: Optional[str] = 'PULP_CBC_CMD',
+                 lp_solver_path: Optional[str] = '/usr/bin/cbc') -> None:
         """
         Define constructor for optimization class.
         
@@ -57,6 +58,10 @@ class optimization:
             more than one day then the optimization will be peformed by chunks of \
             opt_time_delta periods, defaults to 24
         :type opt_time_delta: float, optional
+        :param lp_solver: The linear programming solver name to use
+        :type lp_solver: str, optional
+        :param lp_solver_path: The path to the solver name to use
+        :type lp_solver_path: str, optional
         
         """
         self.retrieve_hass_conf = retrieve_hass_conf
@@ -74,6 +79,8 @@ class optimization:
         self.logger = logger
         self.var_load_cost = var_load_cost
         self.var_prod_price = var_prod_price
+        self.lp_solver = lp_solver
+        self.lp_solver_path = lp_solver_path
         
     def perform_optimization(self, data_opt: pd.DataFrame, P_PV: np.array, P_load: np.array, 
                              unit_load_cost: np.array, unit_prod_price: np.array,
@@ -350,17 +357,16 @@ class optimization:
         ## Finally, we call the solver to solve our optimization model:
         # solving with default solver CBC
         try:
-            opt_model.solve(PULP_CBC_CMD(msg=0))
+            if self.lp_solver == 'PULP_CBC_CMD':
+                opt_model.solve(PULP_CBC_CMD(msg=0))
+            elif self.lp_solver == 'GLPK_CMD':
+                opt_model.solve(GLPK_CMD(msg=0))
+            elif self.lp_solver == 'COIN_CMD':
+                opt_model.solve(COIN_CMD(msg=0, path=self.lp_solver_path))
+            else:
+                self.logger.error("Invalid solver name passed")
         except Exception:
-            self.logger.warning("Failed LP solve with PULP_CBC_CMD solver, falling back to default Pulp")
-            try:
-                opt_model.solve()
-            except Exception:
-                self.logger.warning("Failed LP solve with default Pulp solver, falling back to GLPK_CMD")
-                try:
-                    opt_model.solve(GLPK_CMD(msg=0))
-                except Exception:
-                    self.logger.error("It was not possible to find a valid solver for Pulp package")
+            self.logger.error("It was not possible to find a valid solver for Pulp package")
         
         # The status of the solution is printed to the screen
         self.logger.info("Status: " + plp.LpStatus[opt_model.status])
