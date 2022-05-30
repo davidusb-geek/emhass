@@ -4,7 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.11] - 2022-05-23
+## [0.3.13] - 2022-05-20
+### Fix
+- Fix wrong default value implementation for solver params.
+
+## [0.3.12] - 2022-05-20
 ### Improvement
 - Added support to provide solver name and path as parameters in the configuration file.
 
@@ -226,3 +230,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.0]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.0
 [0.3.6]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.6
 [0.3.8]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.8
+[0.3.13]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.13
