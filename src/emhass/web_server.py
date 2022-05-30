@@ -80,6 +80,8 @@ def build_params(params, options, addon):
         params['optim_conf'][12]['load_cost_hc'] = options['load_offpeak_hours_cost']
         params['optim_conf'][14]['prod_sell_price'] = options['photovoltaic_production_sell_price']
         params['optim_conf'][15]['set_total_pv_sell'] = options['set_total_pv_sell']
+        params['optim_conf'][16]['lp_solver'] = options['lp_solver']
+        params['optim_conf'][17]['lp_solver_path'] = options['lp_solver_path']
         # Updating variables in plant_conf
         params['plant_conf'][0]['P_grid_max'] = options['maximum_power_from_grid']
         params['plant_conf'][1]['module_model'] = [i['pv_module_model'] for i in options['list_pv_module_model']]
