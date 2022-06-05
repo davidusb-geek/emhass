@@ -230,4 +230,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.0]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.0
 [0.3.6]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.6
 [0.3.8]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.8
+[0.3.9]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.9
+[0.3.11]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.11
 [0.3.13]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.13
