@@ -42,16 +42,20 @@ def get_injection_dict(df, plot_size = 1366):
     image_path_2 = fig_2.to_html(full_html=False, default_width='75%')
     # The tables
     table1 = df.reset_index().to_html(classes='mystyle', index=False)
+    cost_cols = [i for i in opt_res.columns if 'cost_' in i]
+    table2 = df[cost_cols].reset_index().sum().to_frame(name='Cost Totals').to_html(classes='mystyle', index=False)
     # The dict of plots
     injection_dict = {}
     injection_dict['title'] = '<h2>EMHASS optimization results</h2>'
-    injection_dict['subsubtitle2'] = '<h4>Plotting latest optimization results</h4>'
+    injection_dict['subsubtitle0'] = '<h4>Plotting latest optimization results</h4>'
     injection_dict['figure_0'] = image_path_0
     if 'SOC_opt' in df.columns.to_list():
         injection_dict['figure_1'] = image_path_1
     injection_dict['figure_2'] = image_path_2
     injection_dict['subsubtitle1'] = '<h4>Last run optimization results table</h4>'
     injection_dict['table1'] = table1
+    injection_dict['subsubtitle2'] = '<h4>Cost totals for latest optimization results</h4>'
+    injection_dict['table2'] = table2
     return injection_dict
 
 def build_params(params, options, addon):

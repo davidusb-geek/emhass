@@ -197,6 +197,9 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertTrue(opt_res.isnull().sum().sum()==0)
         self.assertTrue(len(opt_res)==10)
+        # Test publish after passing the forecast as list
+        opt_res_pub = publish_data(input_data_dict, logger)
+        self.assertTrue(len(opt_res_pub)==1)
         
     def test_publish_data(self):
         config_path = pathlib.Path(root+'/config_emhass.yaml')
