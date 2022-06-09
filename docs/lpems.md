@@ -145,15 +145,54 @@ $$
 \sum_{i=1}^{k} \frac{P_{stoPos_i}}{\eta_{dis}} + \eta_{ch}P_{stoNeg_i} = \frac{E_{nom}}{\Delta_t}(SOC_{init}-SOC_{final})
 $$
 
+## The EMHASS optimizations
+
+There are 3 different optimization types that are implemented in EMHASS.
+
+- A perfect forecast optimization.
+
+- A day-ahead optimization.
+
+- A Model Predictive Control optimization.
+
+The following example diagram may help us understand the time frames of these optimizations:
+
+![](./images/optimization_graphics.png)
+
 ### Perfect forecast optimization
 
-This is the first of two type of optimization task that are proposed with this package. In this case the main inputs, the PV power production and the house power consumption, are fixed using historical values from the past. This mean that in some way we are optimizing a system with a perfect knowledge of the future. This optimization is of course non-practical in real life. However this can be give us the best possible solution of the optimization problem that can be later used as a reference for comparison purposes.
+This is the first type of optimization task that are proposed with this package. In this case the main inputs, the PV power production and the house power consumption, are fixed using historical values from the past. This mean that in some way we are optimizing a system with a perfect knowledge of the future. This optimization is of course non-practical in real life. However this can be give us the best possible solution of the optimization problem that can be later used as a reference for comparison purposes. On the example diagram presented before, the perfect optimization is defined on a 5-day period. These historical values will be retrieved from the Home Assistant database.
 
 ### Day-ahead optimization
 
-In this second type of optimization task the PV power production and the house power consumption are forecasted values. This is the action that should be performed in a real case scenario and is the case that should be launched from Home Assistant to obtain an optimized energy management of future actions.
+In this second type of optimization task the PV power production and the house power consumption are forecasted values. This is the action that should be performed in a real case scenario and is the case that should be launched from Home Assistant to obtain an optimized energy management of future actions. This optimization is defined in the time frame of the next 24 hours.
 
 As the optimization is bounded to forecasted values, it will also be bounded to uncertainty. The quality and accuracy of the optimization results will be inevitably linked to the quality of the forecast used for these values. The better the forecast error, the better accuracy of the optimization result.
+
+### Model Predictive Control (MPC) optimization
+
+This is an informal/naive representation of a MPC controller. 
+
+This type of controller performs the following actions:
+
+- Set the prediction horizon and receding horizon parameters.
+- Perform an optimization on the prediction horizon.
+- Apply the first element of the obtained optimized control variables.
+- Repeat at a relatively high frequency, ex: 5 min.
+
+On the example diagram presented before, the MPC is performed on 6h intervals at 6h, 12h and 18h. The prediction horizon is redecing to keep the one-day energy optimization notion. This type of optimization is used to take advantage of actualized forecast values during throughout the day. The user can of course choose higher implementation intervals.
+
+When applying this controller, the following `runtimeparams` should be defined:
+
+- `prediction_horizon` for the MPC prediction horizon. Fix this at at least 5 times the optimization time step.
+
+- `soc_init` for the initial value of the battery SOC for the current iteration of the MPC. 
+
+- `soc_final` for the final value of the battery SOC for the current iteration of the MPC. 
+
+- `def_total_hours` for the list of deferrable loads functioning hours. These values can decrease as the day advances to take into account receding horizon daily energy objectives for each deferrable load.
+
+In a practical use case, the values for `soc_init` and `soc_final` for each MPC optimization can be taken from the initial day-ahead optimization performed at the beginning of each day.
 
 We are now ready to configure our system using the proposed configuration file and link our package to Home Assistant!
 

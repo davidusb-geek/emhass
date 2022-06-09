@@ -83,7 +83,7 @@ python3 -m pip install --upgrade emhass
 
 If using the add-on or the standalone docker installation, it exposes a simple webserver on port 5000. You can access it directly using your brower, ex: http://localhost:5000.
 
-With this web server you can perform RESTful POST commands on one ENDPOINT called `action` with two main options:
+With this web server you can perform RESTful POST commands on one ENDPOINT called `action` with four options:
 
 - A POST call to `action/perfect-optim` to perform a perfect optimization task on the historical data.
 - A POST call to `action/dayahead-optim` to perform a day-ahead optimization task of your home energy.
@@ -169,33 +169,38 @@ In `automations.yaml`:
 ```
 In these automations the day-ahead optimization is performed everyday at 5:30am and the data is published every 5 minutes.
 
-The final action will be to link a sensor value in Home Assistant to control the switch of a desired controllable load. For example imagine that I want to control my water heater and that the `publish-data` action is publishing the optimized value of a deferrable load that I have linked to my water heater desired behavior. In this case we could use an automation like this one below to control the desired real switch:
+The final action will be to link a sensor value in Home Assistant to control the switch of a desired controllable load. For example imagine that I want to control my water heater and that the `publish-data` action is publishing the optimized value of a deferrable load that I want to be linked to my water heater desired behavior. In this case we could use an automation like this one below to control the desired real switch:
 ```
 automation:
+- alias: Water Heater Optimized ON
   trigger:
-    - platform: numeric_state
-      entity_id:
-        - sensor.p_deferrable0
-      above: 0.1
+  - minutes: /5
+    platform: time_pattern
+  condition:
+  - condition: numeric_state
+    entity_id: sensor.p_deferrable0
+    above: 0.1
   action:
     - service: homeassistant.turn_on
-      entity_id: switch.water_heater
+      entity_id: switch.water_heater_switch
 ```
 A second automation should be used to turn off the switch:
 ```
 automation:
+- alias: Water Heater Optimized OFF
   trigger:
-    - platform: numeric_state
-      entity_id:
-        - sensor.p_deferrable0
-      below: 0.1
+  - minutes: /5
+    platform: time_pattern
+  condition:
+  - condition: numeric_state
+    entity_id: sensor.p_deferrable0
+    below: 0.1
   action:
     - service: homeassistant.turn_off
-      entity_id: switch.water_heater
+      entity_id: switch.water_heater_switch
 ```
 The `publish-data` command will push to Home Assistant the optimization results for each deferrable load defined in the configuration. For example if you have defined two deferrable loads, then the command will publish `sensor.p_deferrable0` and `sensor.p_deferrable1` to Home Assistant. When the `dayahead-optim` is launched, after the optimization, a csv file will be saved on disk. The `publish-data` command will load the latest csv file and look for the closest timestamp that match the current time using the `datetime.now()` method in Python. This means that if EMHASS is configured for 30min time step optimizations, the csv will be saved with timestamps 00:00, 00:30, 01:00, 01:30, ... and so on. If the current time is 00:05, then the closest timestamp of the optimization results that will be published is 00:00. If the current time is 00:25, then the closest timestamp of the optimization results that will be published is 00:30.
 The `publish-data` command will also publish PV and load forecast data on sensors `p_pv_forecast` and `p_load_forecast`. If using a battery, then the battery optimized power and the SOC will be published on sensors `p_batt_forecast` and `soc_batt_forecast`. On these sensors the future values are passed as nested attributes.
-
 
 ## Passing your own data
 
@@ -209,7 +214,7 @@ In EMHASS we have basically 4 forecasts to deal with:
 
 - PV production selling price forecast: at what price are you selling your excess PV production on the next 24h. This is given in EUR/kWh.
 
-Maybe the hardest part is the load data: parameter `var_load` in the configuration file. As we want to optimize the household energies, when need to forecast the load power conumption. The default method for this is a naive approach using 1-day persistence, this mean that the load data variable should not contain the data from the deferrable loads themselves. For example, lets say that you set your deferrable load to be the washing machine. The variable that you should enter in EMHASS will be: `var_load: 'sensor.power_load_no_var_loads'` and `sensor_power_load_no_var_loads = sensor_power_load - sensor_power_washing_machine`. This is supposing that the overall load of your house is contained in variable: `sensor_power_load`. The sensor `sensor_power_load_no_var_loads` can be easily created with a new template sensor in Home Assistant.
+The sensor containing the load data should be specified in parameter `var_load` in the configuration file. As we want to optimize the household energies, when need to forecast the load power conumption. The default method for this is a naive approach using 1-day persistence. The load data variable should not contain the data from the deferrable loads themselves. For example, lets say that you set your deferrable load to be the washing machine. The variable that you should enter in EMHASS will be: `var_load: 'sensor.power_load_no_var_loads'` and `sensor_power_load_no_var_loads = sensor_power_load - sensor_power_washing_machine`. This is supposing that the overall load of your house is contained in variable: `sensor_power_load`. The sensor `sensor_power_load_no_var_loads` can be easily created with a new template sensor in Home Assistant.
 
 If you are implementing a MPC controller, then you should also need to provide some data at the optimization runtime using the key `runtimeparams`.
 
