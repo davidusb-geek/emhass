@@ -66,7 +66,6 @@ To upgrade the installation in the future just use:
 python3 -m pip install --upgrade emhass
 ```
 
-
 ## Usage
 
 ### 1) Add-on and docker standalone
@@ -99,7 +98,6 @@ For example, the following line command can be used to perform a day-ahead optim
 emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.yaml' --costfun 'profit'
 ```
 Before running any valuable command you need to modify the `config_emhass.yaml` and `secrets_emhass.yaml` files. These files should contain the information adapted to your own system. To do this take a look at the special section for this in the [documentation](https://emhass.readthedocs.io/en/latest/config.html).
-
 
 ## Home Assistant integration
 
