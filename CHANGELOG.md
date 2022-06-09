@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+### Improvement
+- Improving documentation, added "what is this" section.
+
 ## [0.3.15] - 2022-06-06
 ### Fix
 - Fixed small bug with wrong DF variable name in web server.
