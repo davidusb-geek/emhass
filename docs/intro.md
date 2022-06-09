@@ -111,7 +111,6 @@ shell_command:
   dayahead_optim: curl -i -H "Content-Type: application/json" -X POST -d '{}' http://localhost:5000/action/dayahead-optim
   publish_data: curl -i -H "Content-Type: application/json" -X POST -d '{}' http://localhost:5000/action/publish-data 
 ```
-
 ### 2) Legacy method using a Python virtual environment
 
 In `configuration.yaml`:
