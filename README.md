@@ -97,7 +97,6 @@ To upgrade the installation in the future just use:
 python3 -m pip install --upgrade emhass
 ```
 
-
 ## Usage
 
 ### 1) Add-on and docker standalone
@@ -131,7 +130,6 @@ emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.yaml'
 ```
 Before running any valuable command you need to modify the `config_emhass.yaml` and `secrets_emhass.yaml` files. These files should contain the information adapted to your own system. To do this take a look at the special section for this in the [documentation](https://emhass.readthedocs.io/en/latest/config.html).
 
-
 ## Home Assistant integration
 
 To integrate with home assistant we will need to define some shell commands in the `configuration.yaml` file and some basic automations in the `automations.yaml` file.
@@ -144,7 +142,6 @@ shell_command:
   dayahead_optim: curl -i -H "Content-Type: application/json" -X POST -d '{}' http://localhost:5000/action/dayahead-optim
   publish_data: curl -i -H "Content-Type: application/json" -X POST -d '{}' http://localhost:5000/action/publish-data 
 ```
-
 ### 2) Legacy method using a Python virtual environment
 
 In `configuration.yaml`:
@@ -172,7 +169,6 @@ sudo chmod -R 755 /home/user/emhass/scripts/publish_data.sh
 sudo chmod +x /home/user/emhass/scripts/dayahead_optim.sh
 sudo chmod +x /home/user/emhass/scripts/publish_data.sh
 ```
-
 ### Common for any installation method
 
 In `automations.yaml`:
