@@ -109,7 +109,7 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
             params = json.loads(params)
         else:
             params = {'passed_data':{'pv_power_forecast':None,'load_power_forecast':None,'load_cost_forecast':None,'prod_price_forecast':None,
-                                     'prediction_horizon':None,'soc_init':None,'soc_final':None,'def_total_hours':None}}
+                                     'prediction_horizon':None,'soc_init':None,'soc_final':None,'def_total_hours':None,'alpha':None,'beta':None}}
         freq = int(retrieve_hass_conf['freq'].seconds/60.0)
         delta_forecast = int(optim_conf['delta_forecast'].days)
         forecast_dates = get_forecast_dates(freq, delta_forecast)
@@ -134,6 +134,16 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
             else:
                 def_total_hours = runtimeparams['def_total_hours']
             params['passed_data']['def_total_hours'] = def_total_hours
+            if 'alpha' not in runtimeparams.keys():
+                alpha = 0.5
+            else:
+                alpha = runtimeparams['alpha']
+            params['passed_data']['alpha'] = alpha
+            if 'beta' not in runtimeparams.keys():
+                beta = 0.5
+            else:
+                beta = runtimeparams['beta']
+            params['passed_data']['beta'] = beta
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
         if 'pv_power_forecast' in runtimeparams.keys():
             if type(runtimeparams['pv_power_forecast']) == list and len(runtimeparams['pv_power_forecast']) >= len(forecast_dates):

@@ -348,7 +348,10 @@ class forecast:
                 P_PV_forecast = mc.results.ac
         
         if set_mix_forecast:
-            P_PV_forecast = forecast.get_mix_forecast(df_now, P_PV_forecast, 0.5, 0.5, 'sensor.power_photovoltaics')
+            P_PV_forecast = forecast.get_mix_forecast(
+                df_now, P_PV_forecast, 
+                self.params['passed_data']['alpha'], self.params['passed_data']['beta'], 
+                'sensor.power_photovoltaics')
         
         return P_PV_forecast
     
@@ -532,7 +535,10 @@ class forecast:
         
         P_Load_forecast = copy.deepcopy(forecast_out['yhat'])
         if set_mix_forecast:
-            P_Load_forecast = forecast.get_mix_forecast(df_now, P_Load_forecast, 0.5, 0.5, 'sensor.power_load_no_var_loads')
+            P_Load_forecast = forecast.get_mix_forecast(
+                df_now, P_Load_forecast, 
+                self.params['passed_data']['alpha'], self.params['passed_data']['beta'], 
+                'sensor.power_load_no_var_loads')
 
         return P_Load_forecast
     
