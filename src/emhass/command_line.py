@@ -43,13 +43,6 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
     # Treat runtimeparams
     params, optim_conf = utils.treat_runtimeparams(runtimeparams, params, retrieve_hass_conf, 
                                                    optim_conf, plant_conf, set_type, logger)
-    # Initialize objects
-    if get_data_from_file:
-        with open(pathlib.Path(base_path+'/data/test_df_final.pkl'), 'rb') as inp:
-            df_final, days_list, var_list = pickle.load(inp)
-    else:
-        days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
-        var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
     # Define main objects
     rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
                        retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'], 
@@ -57,10 +50,16 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
     fcst = forecast(retrieve_hass_conf, optim_conf, plant_conf,
                     params, base_path, logger, get_data_from_file=get_data_from_file)
     opt = optimization(retrieve_hass_conf, optim_conf, plant_conf, 
-                       fcst.var_load_cost, fcst.var_prod_price, days_list, 
+                       fcst.var_load_cost, fcst.var_prod_price, 
                        costfun, base_path, logger)
     # Perform setup based on type of action
     if set_type == "perfect-optim":
+        if get_data_from_file:
+            with open(pathlib.Path(base_path+'/data/test_df_final.pkl'), 'rb') as inp:
+                df_final, days_list, var_list = pickle.load(inp)
+        else:
+            days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
+            var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
         # Retrieve data from hass
         if get_data_from_file:
             df_input_data = copy.deepcopy(df_final)
@@ -74,7 +73,7 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
             df_input_data = rh.df_final.copy()
         # What we don't need for this type of action
         P_PV_forecast, P_load_forecast, df_input_data_dayahead = None, None, None
-    elif set_type == "dayahead-optim" or set_type == "naive-mpc-optim":
+    elif set_type == "dayahead-optim":
         # Get PV and load forecasts
         df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
         P_PV_forecast = fcst.get_power_from_weather(df_weather)
@@ -87,10 +86,40 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
             prediction_horizon = params['passed_data']['prediction_horizon']
             df_input_data_dayahead = copy.deepcopy(df_input_data_dayahead)[df_input_data_dayahead.index[0]:df_input_data_dayahead.index[prediction_horizon-1]]
         # What we don't need for this type of action
-        df_input_data = None
+        df_input_data, days_list = None, None
+    elif set_type == "naive-mpc-optim":
+        if get_data_from_file:
+            with open(pathlib.Path(base_path+'/data/test_df_final.pkl'), 'rb') as inp:
+                df_final, days_list, var_list = pickle.load(inp)
+        else:
+            days_list = utils.get_days_list(1)
+            var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
+        # Retrieve data from hass
+        if get_data_from_file:
+            df_input_data = copy.deepcopy(df_final)
+        else:
+            rh.get_data(days_list, var_list,
+                        minimal_response=False, significant_changes_only=False)
+            rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
+                            set_zero_min = retrieve_hass_conf['set_zero_min'], 
+                            var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
+                            var_interp = retrieve_hass_conf['var_interp'])
+            df_input_data = rh.df_final.copy()
+        # Get PV and load forecasts
+        df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
+        P_PV_forecast = fcst.get_power_from_weather(df_weather, set_mix_forecast=True, df_now=df_input_data)
+        P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'], set_mix_forecast=True, df_now=df_input_data)
+        df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
+        df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
+        df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
+        params = json.loads(params)
+        if 'prediction_horizon' in params['passed_data'] and params['passed_data']['prediction_horizon'] is not None:
+            prediction_horizon = params['passed_data']['prediction_horizon']
+            df_input_data_dayahead = copy.deepcopy(df_input_data_dayahead)[df_input_data_dayahead.index[0]:df_input_data_dayahead.index[prediction_horizon-1]]
     elif set_type == "publish-data":
         df_input_data, df_input_data_dayahead = None, None
         P_PV_forecast, P_load_forecast = None, None
+        days_list = None
     else:
         logger.error("The passed action argument and hence the set_type parameter for setup is not valid")
 
@@ -106,7 +135,8 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         'P_PV_forecast': P_PV_forecast,
         'P_load_forecast': P_load_forecast,
         'costfun': costfun,
-        'params': params
+        'params': params,
+        'days_list': days_list
     }
     return input_data_dict
     
@@ -134,7 +164,7 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'])
     df_input_data = input_data_dict['fcst'].get_prod_price_forecast(
         df_input_data, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
-    opt_res = input_data_dict['opt'].perform_perfect_forecast_optim(df_input_data)
+    opt_res = input_data_dict['opt'].perform_perfect_forecast_optim(df_input_data, input_data_dict['days_list'])
     # Save CSV file for analysis
     if save_data_to_file:
         filename = 'opt_res_perfect_optim_'+input_data_dict['costfun']

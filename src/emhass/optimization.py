@@ -25,7 +25,7 @@ class optimization:
     """
 
     def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, 
-                 var_load_cost: str, var_prod_price: str, days_list: pd.date_range, 
+                 var_load_cost: str, var_prod_price: str, 
                  costfun: str, config_path: str, logger: logging.Logger, 
                  opt_time_delta: Optional[int] = 24) -> None:
         """
@@ -43,10 +43,6 @@ class optimization:
         :type var_load_cost: str
         :param var_prod_price: The column name for the unit power production price.
         :type var_prod_price: str
-        :param days_list: A list of the days of data that will be retrieved from \
-            hass and used for the optimization task. We will retrieve data from \
-            now and up to days_to_retrieve days
-        :type days_list: list
         :param costfun: The type of cost function to use for optimization problem
         :type costfun: str
         :param config_path: The path to the yaml configuration file
@@ -62,7 +58,6 @@ class optimization:
         self.retrieve_hass_conf = retrieve_hass_conf
         self.optim_conf = optim_conf
         self.plant_conf = plant_conf
-        self.days_list = days_list
         self.freq = self.retrieve_hass_conf['freq']
         self.time_zone = self.retrieve_hass_conf['time_zone']
         self.timeStep = self.freq.seconds/3600 # in hours
@@ -433,19 +428,23 @@ class optimization:
         
         return opt_tp
 
-    def perform_perfect_forecast_optim(self, df_input_data: pd.DataFrame) -> pd.DataFrame:
+    def perform_perfect_forecast_optim(self, df_input_data: pd.DataFrame, days_list: pd.date_range) -> pd.DataFrame:
         """
         Perform an optimization on historical data (perfectly known PV production).
         
         :param df_input_data: A DataFrame containing all the input data used for \
             the optimization, notably photovoltaics and load consumption powers.
         :type df_input_data: pandas.DataFrame
+        :param days_list: A list of the days of data that will be retrieved from \
+            hass and used for the optimization task. We will retrieve data from \
+            now and up to days_to_retrieve days
+        :type days_list: list
         :return: opt_res: A DataFrame containing the optimization results
         :rtype: pandas.DataFrame
 
         """
         self.logger.info("Perform optimization for perfect forecast scenario")
-        self.days_list_tz = self.days_list.tz_convert(self.time_zone).round(self.freq)[:-1] # Converted to tz and without the current day (today)
+        self.days_list_tz = days_list.tz_convert(self.time_zone).round(self.freq)[:-1] # Converted to tz and without the current day (today)
         self.opt_res = pd.DataFrame()
         for day in self.days_list_tz:
             self.logger.info("Solving for day: "+str(day.day)+"-"+str(day.month)+"-"+str(day.year))
