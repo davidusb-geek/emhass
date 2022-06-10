@@ -51,6 +51,17 @@ The package is meant to be highly configurable with an object oriented modular a
 EMHASS was designed to be integrated with Home Assistant, hence it's name. 
 Installation instructions and example Home Assistant automation configurations are given below.
 
+You must follow these steps to make EMHASS work properly:
+
+1) Define all the parameters in the configuration pane according to your installation. See the description for each parameter in the **configuration** section below.
+
+2) You most notably will need to define the main data entering EMHASS. This will be the `sensor_power_photovoltaics` for the name of the your hass variable containing the PV produced power and the variable `sensor_power_load_no_var_loads` for the load power of your household excluding the power of the deferrable loads that you want to optimize.
+
+3) Launch the actual optimization and check the results. This can be done manually using the buttons in the web ui or with a `curl` command like this: `curl -i -H "Content-Type: application/json" -X POST -d '{}' http://localhost:5000/action/dayahead-optim`.
+
+4) If you’re satisfied with the optimization results then you can set the optimization and data publish task commands in an automation. You can read more about this on the **usage** section below.
+
+5) The final step is to link the deferrable loads variables to real switchs on your installation. An example code for this using automations and the shell command integration is presentedd below in the **usage** section.
 
 ## Installation
 
