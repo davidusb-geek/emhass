@@ -105,7 +105,7 @@ def build_params(params, options, addon):
     # The params dict
     params['params_secrets'] = params_secrets
     params['passed_data'] = {'pv_power_forecast':None,'load_power_forecast':None,'load_cost_forecast':None,'prod_price_forecast':None,
-                             'prediction_horizon':None,'soc_init':None,'soc_final':None,'def_total_hours':None}
+                             'prediction_horizon':None,'soc_init':None,'soc_final':None,'def_total_hours':None,'alpha':None,'beta':None}
     return params
 
 @app.route('/')

@@ -49,7 +49,7 @@ class TestForecast(unittest.TestCase):
         self.df_input_data_dayahead = pd.concat([self.P_PV_forecast, self.P_load_forecast], axis=1)
         self.df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
         self.opt = optimization(retrieve_hass_conf, optim_conf, plant_conf, 
-                       self.fcst.var_load_cost, self.fcst.var_prod_price, self.days_list, 
+                       self.fcst.var_load_cost, self.fcst.var_prod_price, 
                        'profit', root, logger)
         self.input_data_dict = {
             'root': root,
