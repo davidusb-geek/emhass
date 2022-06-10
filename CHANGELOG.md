@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.3.16] - 2022-06-10
 ### Improvement
 - Improving documentation, added "what is this" section and added some infographics.
 - Added new forecasts methods chapter in documentation.
