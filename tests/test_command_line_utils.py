@@ -126,7 +126,6 @@ class TestCommandLineUtils(unittest.TestCase):
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         self.assertIsInstance(input_data_dict, dict)
-        self.assertTrue(input_data_dict['df_input_data'] == None)
         self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].isnull().sum().sum()==0)
@@ -148,7 +147,6 @@ class TestCommandLineUtils(unittest.TestCase):
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         self.assertIsInstance(input_data_dict, dict)
-        self.assertTrue(input_data_dict['df_input_data'] == None)
         self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].isnull().sum().sum()==0)

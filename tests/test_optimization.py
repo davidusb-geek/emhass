@@ -54,7 +54,7 @@ class TestOptimization(unittest.TestCase):
         self.costfun = 'profit'
         self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
-                                self.days_list, self.costfun, root, logger)
+                                self.costfun, root, logger)
         self.df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data)
         self.df_input_data = self.fcst.get_prod_price_forecast(self.df_input_data)
         self.input_data_dict = {
@@ -62,7 +62,7 @@ class TestOptimization(unittest.TestCase):
         }
         
     def test_perform_perfect_forecast_optim(self):
-        self.opt_res = self.opt.perform_perfect_forecast_optim(self.df_input_data)
+        self.opt_res = self.opt.perform_perfect_forecast_optim(self.df_input_data, self.days_list)
         self.assertIsInstance(self.opt_res, type(pd.DataFrame()))
         self.assertIsInstance(self.opt_res.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(self.opt_res.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
@@ -87,7 +87,7 @@ class TestOptimization(unittest.TestCase):
         self.optim_conf.update({'set_use_battery': True})
         self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
-                                self.days_list, self.costfun, root, logger)
+                                self.costfun, root, logger)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
@@ -102,7 +102,7 @@ class TestOptimization(unittest.TestCase):
         self.optim_conf.update({'set_use_battery': True})
         self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
-                                self.days_list, self.costfun, root, logger)
+                                self.costfun, root, logger)
         prediction_horizon = 10
         soc_init = 0.4
         soc_final = 0.6
