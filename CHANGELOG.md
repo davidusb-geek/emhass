@@ -2,7 +2,9 @@
 
 ## Unreleased
 ### Improvement
-- Improving documentation, added "what is this" section.
+- Improving documentation, added "what is this" section and added some infographics.
+- Added new forecasts methods chapter in documentation.
+- Added publish of sensors for p_grid_forecast & total value of cost function.
 
 ## [0.3.15] - 2022-06-06
 ### Fix

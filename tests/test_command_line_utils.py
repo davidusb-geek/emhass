@@ -162,7 +162,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = copy.deepcopy(json.loads(self.params_json))
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
-        opt_res = dayahead_forecast_optim(input_data_dict, logger)
+        opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertTrue(opt_res.isnull().sum().sum()==0)
         self.assertTrue(len(opt_res)==len(params['passed_data']['pv_power_forecast']))
@@ -175,7 +175,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = copy.deepcopy(json.loads(self.params_json))
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
-        opt_res = naive_mpc_optim(input_data_dict, logger)
+        opt_res = naive_mpc_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertTrue(opt_res.isnull().sum().sum()==0)
         self.assertTrue(len(opt_res)==10)
@@ -193,7 +193,7 @@ class TestCommandLineUtils(unittest.TestCase):
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         
-        opt_res = naive_mpc_optim(input_data_dict, logger)
+        opt_res = naive_mpc_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertTrue(opt_res.isnull().sum().sum()==0)
         self.assertTrue(len(opt_res)==10)
@@ -208,7 +208,7 @@ class TestCommandLineUtils(unittest.TestCase):
         action = 'naive-mpc-optim'
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
-        opt_res = dayahead_forecast_optim(input_data_dict, logger)
+        opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
         opt_res_first = publish_data(input_data_dict, logger)
         self.assertTrue(len(opt_res_first)==1)
         params = copy.deepcopy(json.loads(self.params_json))
@@ -217,7 +217,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
-        opt_res = dayahead_forecast_optim(input_data_dict, logger)
+        opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
         opt_res_last = publish_data(input_data_dict, logger)
         self.assertTrue(len(opt_res_last)==1)
         

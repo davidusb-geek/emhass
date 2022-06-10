@@ -111,7 +111,7 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
     return input_data_dict
     
 def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
-    save_data_to_file: Optional[bool] = True) -> pd.DataFrame:
+    save_data_to_file: Optional[bool] = True, debug: Optional[bool] = False) -> pd.DataFrame:
     """
     Perform a call to the perfect forecast optimization routine.
     
@@ -121,6 +121,8 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     :type logger: logging object
     :param save_data_to_file: Save optimization results to CSV file
     :type save_data_to_file: bool, optional
+    :param debug: A debug option useful for unittests
+    :type debug: bool, optional
     :return: The output data of the optimization
     :rtype: pd.DataFrame
 
@@ -138,11 +140,12 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         filename = 'opt_res_perfect_optim_'+input_data_dict['costfun']
     else: # Just save the latest optimization results
         filename = 'opt_res_latest'
-    opt_res.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
+    if not debug:
+        opt_res.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
     return opt_res
     
 def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
-    save_data_to_file: Optional[bool] = False) -> pd.DataFrame:
+    save_data_to_file: Optional[bool] = False, debug: Optional[bool] = False) -> pd.DataFrame:
     """
     Perform a call to the day-ahead optimization routine.
     
@@ -152,6 +155,8 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     :type logger: logging object
     :param save_data_to_file: Save optimization results to CSV file
     :type save_data_to_file: bool, optional
+    :param debug: A debug option useful for unittests
+    :type debug: bool, optional
     :return: The output data of the optimization
     :rtype: pd.DataFrame
 
@@ -171,11 +176,12 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         filename = 'opt_res_dayahead_'+today.strftime("%Y_%m_%d")
     else: # Just save the latest optimization results
         filename = 'opt_res_latest'
-    opt_res_dayahead.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
+    if not debug:
+        opt_res_dayahead.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
     return opt_res_dayahead
 
 def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
-    save_data_to_file: Optional[bool] = False) -> pd.DataFrame:
+    save_data_to_file: Optional[bool] = False, debug: Optional[bool] = False) -> pd.DataFrame:
     """
     Perform a call to the naive Model Predictive Controller optimization routine.
     
@@ -185,6 +191,8 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     :type logger: logging object
     :param save_data_to_file: Save optimization results to CSV file
     :type save_data_to_file: bool, optional
+    :param debug: A debug option useful for unittests
+    :type debug: bool, optional
     :return: The output data of the optimization
     :rtype: pd.DataFrame
 
@@ -210,7 +218,8 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
         filename = 'opt_res_naive_mpc_'+today.strftime("%Y_%m_%d")
     else: # Just save the latest optimization results
         filename = 'opt_res_latest'
-    opt_res_naive_mpc.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
+    if not debug:
+        opt_res_naive_mpc.to_csv(input_data_dict['root'] + '/data/' + filename + '.csv', index_label='timestamp')
     return opt_res_naive_mpc
     
 def publish_data(input_data_dict: dict, logger: logging.Logger,
@@ -277,6 +286,14 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
             input_data_dict['rh'].post_data(opt_res_latest['SOC_opt']*100, idx_closest,
                                             'sensor.soc_batt_forecast', "%", "Battery SOC Forecast")
             cols_published = cols_published+["SOC_opt"]
+    # Publish grid power
+    input_data_dict['rh'].post_data(opt_res_latest['P_grid'], idx_closest, 
+                                    'sensor.p_grid_forecast', "W", "Grid Power Forecast")
+    cols_published = cols_published+["P_grid"]
+    # Publish total value of cost function
+    col_cost_fun = [i for i in opt_res_latest.columns if 'cost_fun_' in i]
+    input_data_dict['rh'].post_data(opt_res_latest[col_cost_fun], idx_closest, 
+                                    'sensor.total_cost_fun_value', "", "Total cost function value")
     # Create a DF resuming what has been published
     opt_res = opt_res_latest[cols_published].loc[[opt_res_latest.index[idx_closest]]]
     return opt_res
