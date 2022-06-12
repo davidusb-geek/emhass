@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.17] - 2022-06-12
+### Fix
+- Fixed wrong variables names for mixed forecasts.
+
 ## [0.3.16] - 2022-06-10
 ### Improvement
 - Improving documentation, added "what is this" section and added some infographics.
@@ -13,7 +17,7 @@
 
 ## [0.3.14] - 2022-06-05
 ### Improvement
-- Added one more table to the weu showing the cost totals.
+- Added one more table to the webui showing the cost totals.
 ### Fix
 - Fixed wrong type error when serializing numpy ints. Converted ints to Python type.
 

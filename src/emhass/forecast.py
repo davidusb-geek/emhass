@@ -350,8 +350,7 @@ class forecast:
         if set_mix_forecast:
             P_PV_forecast = forecast.get_mix_forecast(
                 df_now, P_PV_forecast, 
-                self.params['passed_data']['alpha'], self.params['passed_data']['beta'], 
-                'sensor.power_photovoltaics')
+                self.params['passed_data']['alpha'], self.params['passed_data']['beta'], self.var_PV)
         
         return P_PV_forecast
     
@@ -537,8 +536,7 @@ class forecast:
         if set_mix_forecast:
             P_Load_forecast = forecast.get_mix_forecast(
                 df_now, P_Load_forecast, 
-                self.params['passed_data']['alpha'], self.params['passed_data']['beta'], 
-                'sensor.power_load_no_var_loads')
+                self.params['passed_data']['alpha'], self.params['passed_data']['beta'], self.var_load_new)
 
         return P_Load_forecast
     
