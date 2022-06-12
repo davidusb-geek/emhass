@@ -54,23 +54,20 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
                        costfun, base_path, logger)
     # Perform setup based on type of action
     if set_type == "perfect-optim":
+        # Retrieve data from hass
         if get_data_from_file:
             with open(pathlib.Path(base_path+'/data/test_df_final.pkl'), 'rb') as inp:
-                df_final, days_list, var_list = pickle.load(inp)
+                rh.df_final, days_list, var_list = pickle.load(inp)
         else:
             days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
             var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
-        # Retrieve data from hass
-        if get_data_from_file:
-            df_input_data = copy.deepcopy(df_final)
-        else:
             rh.get_data(days_list, var_list,
                         minimal_response=False, significant_changes_only=False)
-            rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
-                            set_zero_min = retrieve_hass_conf['set_zero_min'], 
-                            var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
-                            var_interp = retrieve_hass_conf['var_interp'])
-            df_input_data = rh.df_final.copy()
+        rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
+                        set_zero_min = retrieve_hass_conf['set_zero_min'], 
+                        var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
+                        var_interp = retrieve_hass_conf['var_interp'])
+        df_input_data = rh.df_final.copy()
         # What we don't need for this type of action
         P_PV_forecast, P_load_forecast, df_input_data_dayahead = None, None, None
     elif set_type == "dayahead-optim":
@@ -88,23 +85,20 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         # What we don't need for this type of action
         df_input_data, days_list = None, None
     elif set_type == "naive-mpc-optim":
+        # Retrieve data from hass
         if get_data_from_file:
             with open(pathlib.Path(base_path+'/data/test_df_final.pkl'), 'rb') as inp:
-                df_final, days_list, var_list = pickle.load(inp)
+                rh.df_final, days_list, var_list = pickle.load(inp)
         else:
             days_list = utils.get_days_list(1)
             var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
-        # Retrieve data from hass
-        if get_data_from_file:
-            df_input_data = copy.deepcopy(df_final)
-        else:
             rh.get_data(days_list, var_list,
                         minimal_response=False, significant_changes_only=False)
-            rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
-                            set_zero_min = retrieve_hass_conf['set_zero_min'], 
-                            var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
-                            var_interp = retrieve_hass_conf['var_interp'])
-            df_input_data = rh.df_final.copy()
+        rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
+                        set_zero_min = retrieve_hass_conf['set_zero_min'], 
+                        var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
+                        var_interp = retrieve_hass_conf['var_interp'])
+        df_input_data = rh.df_final.copy()
         # Get PV and load forecasts
         df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
         P_PV_forecast = fcst.get_power_from_weather(df_weather, set_mix_forecast=True, df_now=df_input_data)
