@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+### Fix
+- Fixed small bug on webserver using pandas sum function for non numeric data. This was throwing the following message: Dropping of nuisance columns in DataFrame reductions (with 'numeric_only=None') is deprecated.
+
 ## [0.3.17] - 2022-06-12
 ### Fix
 - Fixed wrong variables names for mixed forecasts.
