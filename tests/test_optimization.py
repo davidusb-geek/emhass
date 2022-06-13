@@ -94,6 +94,11 @@ class TestOptimization(unittest.TestCase):
         self.assertTrue('P_batt' in self.opt_res_dayahead.columns)
         self.assertTrue('SOC_opt' in self.opt_res_dayahead.columns)
         self.assertAlmostEqual(self.opt_res_dayahead.loc[self.opt_res_dayahead.index[-1],'SOC_opt'], self.plant_conf['SOCtarget'])
+        # Test table conversion
+        opt_res = pd.read_csv(root+'/data/opt_res_latest.csv', index_col='timestamp')
+        cost_cols = [i for i in opt_res.columns if 'cost_' in i]
+        table = opt_res[cost_cols].reset_index().sum(numeric_only=True).to_frame(name='Cost Totals').reset_index()
+        
         
     def test_perform_naive_mpc_optim(self):
         self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
