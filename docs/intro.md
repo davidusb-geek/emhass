@@ -3,8 +3,6 @@
 This module was conceived as an energy management optimization tool for residential electric power consumption and production systems.
 The main dependencies of this project are PVLib to model power from a PV residential installation and the PuLP Python package to perform the actual optimizations using the Linear Programming approach.
 
-The complete documentation for this package is [available here](https://emhass.readthedocs.io/en/latest/).
-
 ## What is this?
 
 The goal here is to optimize the energy use of your home in order to maximize a pre-defined cost function, for example: autoconsumption.
