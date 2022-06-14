@@ -25,9 +25,9 @@
      borderopacity="1.0"
      inkscape:pageopacity="0.0"
      inkscape:pageshadow="2"
-     inkscape:zoom="1.5965931"
-     inkscape:cx="211.07444"
-     inkscape:cy="195.72927"
+     inkscape:zoom="1.1289618"
+     inkscape:cx="126.66505"
+     inkscape:cy="-68.647141"
      inkscape:document-units="px"
      inkscape:current-layer="layer1"
      showgrid="false"
@@ -1307,6 +1307,132 @@
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
+    <marker
+       inkscape:stockid="Arrow1Mstart"
+       orient="auto"
+       refY="0"
+       refX="0"
+       id="Arrow1Mstart-80-0-6"
+       style="overflow:visible">
+      <path
+         id="path3766-5-6-15"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         transform="matrix(0.4,0,0,0.4,4,0)"
+         inkscape:connector-curvature="0" />
+    </marker>
+    <marker
+       inkscape:stockid="Arrow1Mend"
+       orient="auto"
+       refY="0"
+       refX="0"
+       id="Arrow1Mend-69-5-8"
+       style="overflow:visible">
+      <path
+         id="path3769-06-0-0"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         transform="matrix(-0.4,0,0,-0.4,-4,0)"
+         inkscape:connector-curvature="0" />
+    </marker>
+    <marker
+       inkscape:stockid="Arrow1Mend"
+       orient="auto"
+       refY="0"
+       refX="0"
+       id="Arrow1Mend-7-0-9"
+       style="overflow:visible">
+      <path
+         id="path3769-47-9-7"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         transform="matrix(-0.4,0,0,-0.4,-4,0)"
+         inkscape:connector-curvature="0" />
+    </marker>
+    <marker
+       inkscape:stockid="Arrow1Mend"
+       orient="auto"
+       refY="0"
+       refX="0"
+       id="Arrow1Mend-7-0-1-0"
+       style="overflow:visible">
+      <path
+         id="path3769-47-9-5-5"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         transform="matrix(-0.4,0,0,-0.4,-4,0)"
+         inkscape:connector-curvature="0" />
+    </marker>
+    <marker
+       inkscape:stockid="Arrow1Mend"
+       orient="auto"
+       refY="0"
+       refX="0"
+       id="Arrow1Mend-78-23"
+       style="overflow:visible">
+      <path
+         id="path3769-31-11"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         transform="matrix(-0.4,0,0,-0.4,-4,0)"
+         inkscape:connector-curvature="0" />
+    </marker>
+    <marker
+       inkscape:stockid="Arrow1Mend"
+       orient="auto"
+       refY="0"
+       refX="0"
+       id="Arrow1Mend-78-2-50"
+       style="overflow:visible">
+      <path
+         id="path3769-31-0-2"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         transform="matrix(-0.4,0,0,-0.4,-4,0)"
+         inkscape:connector-curvature="0" />
+    </marker>
+    <marker
+       inkscape:stockid="Arrow1Mend"
+       orient="auto"
+       refY="0"
+       refX="0"
+       id="Arrow1Mend-70"
+       style="overflow:visible">
+      <path
+         id="path3769-14"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         transform="matrix(-0.4,0,0,-0.4,-4,0)"
+         inkscape:connector-curvature="0" />
+    </marker>
+    <marker
+       inkscape:stockid="Arrow1Mend"
+       orient="auto"
+       refY="0"
+       refX="0"
+       id="marker1626"
+       style="overflow:visible">
+      <path
+         id="path1624"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         transform="matrix(-0.4,0,0,-0.4,-4,0)"
+         inkscape:connector-curvature="0" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="Arrow1Send-4"
+       refX="0"
+       refY="0"
+       orient="auto"
+       inkscape:stockid="Arrow1Send"
+       inkscape:isstock="true">
+      <path
+         transform="matrix(-0.2,0,0,-0.2,-1.2,0)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         id="path29095-5" />
+    </marker>
   </defs>
   <metadata
      id="metadata7">
@@ -1324,292 +1450,6 @@
      inkscape:groupmode="layer"
      id="layer1"
      transform="translate(-713.11444,-58.453713)">
-    <g
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       transform="translate(705.57781,34.485011)"
-       id="g5297-9-1-1-7-3-9-2"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png">
-      <path
-         inkscape:connector-curvature="0"
-         id="path2985-4-5-8-1-9-0-0"
-         d="M 30.428572,33.505039 V 215.21932"
-         style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-start:url(#Arrow1Mstart-80-0);marker-end:none"
-         sodipodi:nodetypes="cc" />
-      <path
-         inkscape:connector-curvature="0"
-         id="path3755-8-2-9-7-8-7-0"
-         d="M 30.428572,215.21932 H 592.56857"
-         style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow1Mend-69-5)"
-         sodipodi:nodetypes="cc" />
-    </g>
-    <text
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
-       x="1127.1493"
-       y="262.27579"
-       id="text5398-3-38-8-2-8-8-6-3"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
-         sodipodi:role="line"
-         id="tspan5400-1-7-6-8-1-7-8-2"
-         x="1127.1493"
-         y="262.27579"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">0h</tspan></text>
-    <text
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
-       x="1215.1493"
-       y="262.27579"
-       id="text5398-3-2-4-5-6-8-7-5-9"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
-         sodipodi:role="line"
-         id="tspan5400-1-3-2-0-0-2-8-0-3"
-         x="1215.1493"
-         y="262.27579"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">24h</tspan></text>
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
-       d="M 1224.9696,249.24454 V 133.58209"
-       id="path5693-8-5-6-3-6-8"
-       inkscape:connector-curvature="0"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <text
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
-       x="1031.4874"
-       y="78.038956"
-       id="text5398-3-389-2-1-5-6-3-9-7"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
-         sodipodi:role="line"
-         id="tspan5400-1-34-9-3-4-1-4-9-2"
-         x="1031.4874"
-         y="78.038956"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">Past</tspan></text>
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:2, 2;stroke-dashoffset:0;stroke-opacity:1;marker-end:url(#Arrow1Mend-7-0)"
-       d="m 1154.3034,94.135261 131.6329,-0.20033"
-       id="path6074-9-6"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="cc"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
-       d="M 1134.3034,249.79771 V 134.13526"
-       id="path5693-8-5-6-3-6-8-1"
-       inkscape:connector-curvature="0"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:1, 1;stroke-dashoffset:0;stroke-opacity:1"
-       d="M 1134.3034,249.79771 V 76.859621"
-       id="path5693-8-5-6-3-6-8-1-9"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="cc"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:2, 2;stroke-dashoffset:0;stroke-opacity:1;marker-end:url(#Arrow1Mend-7-0-1)"
-       d="M 1112.3034,94.135261 980.67049,93.934931"
-       id="path6074-9-6-1"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="cc"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <text
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
-       x="1201.1523"
-       y="77.637924"
-       id="text5398-3-389-2-1-5-6-3-9-7-5"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
-         sodipodi:role="line"
-         id="tspan5400-1-34-9-3-4-1-4-9-2-5"
-         x="1201.1523"
-         y="77.637924"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">Future</tspan></text>
-    <text
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
-       x="1164.7544"
-       y="276.92581"
-       id="text5398-3-389-2-1-5-6-3-9-7-5-4"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
-         sodipodi:role="line"
-         id="tspan5400-1-34-9-3-4-1-4-9-2-5-1"
-         x="1164.7544"
-         y="276.92581"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">d-day</tspan></text>
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#Arrow1Mend-78)"
-       d="M 1160.1649,273.80099 H 1136.91"
-       id="path5252-7"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="cc"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#Arrow1Mend-78-2)"
-       d="m 1200.1649,273.80099 h 23.2549"
-       id="path5252-7-9"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="cc"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
-       d="M 1043.6372,250.35088 V 134.68843"
-       id="path5693-8-5-6-3-6-8-1-3"
-       inkscape:connector-curvature="0"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
-       d="M 952.97096,250.90405 V 135.2416"
-       id="path5693-8-5-6-3-6-8-1-3-7"
-       inkscape:connector-curvature="0"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
-       d="M 862.30476,251.45722 V 135.79477"
-       id="path5693-8-5-6-3-6-8-1-3-77"
-       inkscape:connector-curvature="0"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
-       d="M 771.63856,252.01039 V 136.34794"
-       id="path5693-8-5-6-3-6-8-1-3-1"
-       inkscape:connector-curvature="0"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#0000ff;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       d="m 1043.5099,225.42168 -1.879,-11.274 -3.4449,15.65834 -3.1316,-41.33802 -1.879,9.70817 -4.0712,-37.26686 -3.1317,42.90386 -2.5053,-6.26334 -3.6031,46.97212 -1.75,-14 -3.5,12.5 -1.25,-11 -3,10.5 -3.5,-30.75001 -2.5,11.75001 -2,-37.00001 -4.25001,53.50001 -2.75,-20.25001 -2.75,13.75001 -2.75,-17.75001 -3,14.75001 -2.25,-34.25001 -1.75,23 -2.75,22.25001 -4.25,-20.25001 -3.25,23.75001 -4.57743,-31.18744 -2.8185,20.98218 -4.38434,-15.34518 -2.50533,18.47685 -3.44484,-15.34518 -2.50533,7.82917"
-       id="path6259"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="cccccccccccccccccc"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#ff0000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       d="m 1135.5099,225.42168 -1.879,-11.274 -3.4449,15.65834 -3.1316,-41.33802 -1.879,9.70817 -4.0712,-37.26686 -3.1317,42.90386 -2.5053,-6.26334 -3.6031,46.97212 -1.75,-14 -3.5,12.5 -1.25,-11 -3,10.5 -3.5,-30.75001 -2.5,11.75001 -2,-37.00001 -4.25,53.50001 -2.75,-20.25001 -2.75,13.75001 -2.75,-17.75001 -3,14.75001 -2.25,-34.25001 -1.75,23 -2.75,22.25001 -4.25,-20.25001 -3.25,23.75001 -4.5774,-31.18744 -2.8185,20.98218 -4.3844,-15.34518 -2.5053,18.47685 -3.4448,-15.34518 -2.5054,7.82917"
-       id="path6259-3"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="cccccccccccccccccc"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#0000ff;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       d="m 861.24675,229.44302 -1.879,-11.274 1.879,11.274 -8.4555,-36.95368 -1.87904,9.70817 -3.44487,-20.35585 -3.75803,25.99285 -2.5053,-6.26334 -2.35043,17.22127 -3.00267,15.75085 -3.5,5.29716 -1.87633,-13.8185 -2.68684,-22.69568 -3.18683,12.46701 -2.5,11.75001 -2,-37.00001 -4.25001,53.50001 -2.75,-20.25001 -2.75,13.75001 -2.75,-17.75001 -3,14.75001 -2.25,-34.25001 -1.75,23 -3.06317,17.23934 -3.62366,-61.9012 -3.56317,58.19836 -4.57743,-18.97393 -2.8185,20.98218 -4.38434,-15.34518 -2.50533,18.47685 -3.44484,-15.34518 -2.50533,7.82917"
-       id="path6259-8"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="cccccccccccccccccccccccccccccccc"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <text
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
-       x="1068.2446"
-       y="278.92581"
-       id="text5398-3-389-2-1-5-6-3-9-7-5-4-4"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
-         sodipodi:role="line"
-         id="tspan5400-1-34-9-3-4-1-4-9-2-5-1-8"
-         x="1068.2446"
-         y="278.92581"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">day d-1</tspan></text>
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#Arrow1Mend)"
-       d="m 1065.3977,273.80099 h -18.9975"
-       id="path5252-7-3"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="cc"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#Arrow1Mend)"
-       d="M 1112.1196,273.80099 H 1132.91"
-       id="path5252-7-9-2"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="cc"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <text
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
-       x="-192.47389"
-       y="722.83514"
-       id="text5398-3-389-2-1-5-6-3-9-7-5-2"
-       transform="rotate(-90)"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
-         sodipodi:role="line"
-         id="tspan5400-1-34-9-3-4-1-4-9-2-5-2"
-         x="-192.47389"
-         y="722.83514"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">Power (W)</tspan></text>
-    <text
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
-       x="1267.7526"
-       y="269.561"
-       id="text5398-3-389-2-1-5-6-3-9-7-5-22"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
-         sodipodi:role="line"
-         id="tspan5400-1-34-9-3-4-1-4-9-2-5-6"
-         x="1267.7526"
-         y="269.561"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">Time</tspan></text>
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       inkscape:connector-curvature="0"
-       id="path7546"
-       d="M 806.23638,64.644321 H 759.22136"
-       style="fill:none;fill-rule:evenodd;stroke:#ff0000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       inkscape:connector-curvature="0"
-       id="path7546-9"
-       d="M 806.23638,86.644321 H 759.22136"
-       style="fill:none;fill-rule:evenodd;stroke:#0000ff;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
     <g
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
@@ -1729,83 +1569,320 @@
        d="m 1113.0424,481.58052 4.75,44.75 h 39 l 2.25,-11.75 4.25,4.75 2.25,-38.75 2.75,26.75 4.75,-55.25 2.25,15 4.5,-25.5 8,71.5 3.5,-33.25 6,44.25 3.5,-34.25 3.75,33.75 1.25,-6.5 3.75,9 h 18.75"
        style="fill:none;fill-rule:evenodd;stroke:#0000ff;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:2, 2;stroke-dashoffset:0;stroke-opacity:1"
        inkscape:export-filename="C:\Users\david.hernandez\Desktop\path8051-6-7.png" />
+    <g
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       transform="translate(705.04366,41.437122)"
+       id="g5297-9-1-1-7-3-9-2-8"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png">
+      <path
+         inkscape:connector-curvature="0"
+         id="path2985-4-5-8-1-9-0-0-9"
+         d="M 30.428572,33.505039 V 215.21932"
+         style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-start:url(#Arrow1Mstart-80-0-6);marker-end:none"
+         sodipodi:nodetypes="cc" />
+      <path
+         inkscape:connector-curvature="0"
+         id="path3755-8-2-9-7-8-7-0-3"
+         d="M 30.428572,215.21932 H 592.56857"
+         style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow1Mend-69-5-8)"
+         sodipodi:nodetypes="cc" />
+    </g>
+    <text
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       x="1126.6151"
+       y="269.22791"
+       id="text5398-3-38-8-2-8-8-6-3-8"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
+         sodipodi:role="line"
+         id="tspan5400-1-7-6-8-1-7-8-2-1"
+         x="1126.6151"
+         y="269.22791"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">0h</tspan></text>
+    <text
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       x="1214.6151"
+       y="269.22791"
+       id="text5398-3-2-4-5-6-8-7-5-9-7"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
+         sodipodi:role="line"
+         id="tspan5400-1-3-2-0-0-2-8-0-3-9"
+         x="1214.6151"
+         y="269.22791"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">24h</tspan></text>
+    <path
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
+       d="M 1224.4355,256.19665 V 140.5342"
+       id="path5693-8-5-6-3-6-8-11"
+       inkscape:connector-curvature="0"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+    <text
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       x="1030.9532"
+       y="84.991074"
+       id="text5398-3-389-2-1-5-6-3-9-7-2"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
+         sodipodi:role="line"
+         id="tspan5400-1-34-9-3-4-1-4-9-2-3"
+         x="1030.9532"
+         y="84.991074"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">Past</tspan></text>
+    <path
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:2, 2;stroke-dashoffset:0;stroke-opacity:1;marker-end:url(#Arrow1Mend-7-0-9)"
+       d="m 1153.7693,101.08737 131.6329,-0.20033"
+       id="path6074-9-6-2"
+       inkscape:connector-curvature="0"
+       sodipodi:nodetypes="cc"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+    <path
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
+       d="M 1133.7693,256.74982 V 141.08737"
+       id="path5693-8-5-6-3-6-8-1-93"
+       inkscape:connector-curvature="0"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+    <path
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:1, 1;stroke-dashoffset:0;stroke-opacity:1"
+       d="M 1133.7693,256.74982 V 83.811732"
+       id="path5693-8-5-6-3-6-8-1-9-2"
+       inkscape:connector-curvature="0"
+       sodipodi:nodetypes="cc"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+    <path
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:2, 2;stroke-dashoffset:0;stroke-opacity:1;marker-end:url(#Arrow1Mend-7-0-1-0)"
+       d="M 1111.7693,101.08737 980.13634,100.88704"
+       id="path6074-9-6-1-1"
+       inkscape:connector-curvature="0"
+       sodipodi:nodetypes="cc"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+    <text
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       x="1200.6182"
+       y="84.590042"
+       id="text5398-3-389-2-1-5-6-3-9-7-5-20"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
+         sodipodi:role="line"
+         id="tspan5400-1-34-9-3-4-1-4-9-2-5-8"
+         x="1200.6182"
+         y="84.590042"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">Future</tspan></text>
+    <text
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       x="1164.2202"
+       y="283.87793"
+       id="text5398-3-389-2-1-5-6-3-9-7-5-4-1"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
+         sodipodi:role="line"
+         id="tspan5400-1-34-9-3-4-1-4-9-2-5-1-1"
+         x="1164.2202"
+         y="283.87793"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">d-day</tspan></text>
+    <path
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#Arrow1Mend-78-23)"
+       d="m 1159.6308,280.7531 h -23.2549"
+       id="path5252-7-99"
+       inkscape:connector-curvature="0"
+       sodipodi:nodetypes="cc"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+    <path
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#Arrow1Mend-78-2-50)"
+       d="m 1199.6308,280.7531 h 23.2549"
+       id="path5252-7-9-4"
+       inkscape:connector-curvature="0"
+       sodipodi:nodetypes="cc"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+    <path
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
+       d="M 1043.1031,257.30299 V 141.64054"
+       id="path5693-8-5-6-3-6-8-1-3-4"
+       inkscape:connector-curvature="0"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+    <path
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
+       d="M 952.43681,257.85616 V 142.19371"
+       id="path5693-8-5-6-3-6-8-1-3-7-3"
+       inkscape:connector-curvature="0"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+    <path
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
+       d="M 861.77061,258.40933 V 142.74688"
+       id="path5693-8-5-6-3-6-8-1-3-77-7"
+       inkscape:connector-curvature="0"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+    <path
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
+       d="M 771.10441,258.9625 V 143.30005"
+       id="path5693-8-5-6-3-6-8-1-3-1-9"
+       inkscape:connector-curvature="0"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+    <text
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       x="1067.7104"
+       y="285.87793"
+       id="text5398-3-389-2-1-5-6-3-9-7-5-4-4-7"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
+         sodipodi:role="line"
+         id="tspan5400-1-34-9-3-4-1-4-9-2-5-1-8-3"
+         x="1067.7104"
+         y="285.87793"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">day d-1</tspan></text>
+    <path
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#Arrow1Mend-70)"
+       d="m 1064.8636,280.7531 h -18.9975"
+       id="path5252-7-3-2"
+       inkscape:connector-curvature="0"
+       sodipodi:nodetypes="cc"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+    <path
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#Arrow1Mend-70)"
+       d="m 1111.5855,280.7531 h 20.7904"
+       id="path5252-7-9-2-7"
+       inkscape:connector-curvature="0"
+       sodipodi:nodetypes="cc"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+    <text
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       x="-199.42601"
+       y="722.30103"
+       id="text5398-3-389-2-1-5-6-3-9-7-5-2-1"
+       transform="rotate(-90)"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
+         sodipodi:role="line"
+         id="tspan5400-1-34-9-3-4-1-4-9-2-5-2-5"
+         x="-199.42601"
+         y="722.30103"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">Power (W)</tspan></text>
+    <text
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       x="1267.2184"
+       y="276.51312"
+       id="text5398-3-389-2-1-5-6-3-9-7-5-22-3"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
+         sodipodi:role="line"
+         id="tspan5400-1-34-9-3-4-1-4-9-2-5-6-6"
+         x="1267.2184"
+         y="276.51312"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">Time</tspan></text>
+    <path
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       inkscape:connector-curvature="0"
+       id="path7546-1"
+       d="M 805.70223,71.596432 H 758.68721"
+       style="fill:none;fill-rule:evenodd;stroke:#ff0000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+    <path
+       inkscape:export-ydpi="150"
+       inkscape:export-xdpi="150"
+       inkscape:connector-curvature="0"
+       id="path7546-9-0"
+       d="M 805.70223,93.596432 H 758.68721"
+       style="fill:none;fill-rule:evenodd;stroke:#0000ff;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
     <text
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;font-size:18.6667px;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
-       x="812.25073"
-       y="70.81311"
-       id="text5398-3-389-2-1-5-6-3-9-7-5-6-4-2-3"
+       x="811.71655"
+       y="77.765213"
+       id="text5398-3-389-2-1-5-6-3-9-7-5-6-4-2-3-1"
        inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
          sodipodi:role="line"
-         id="tspan5400-1-34-9-3-4-1-4-9-2-5-4-4-2-0"
-         x="812.25073"
-         y="70.81311"
+         id="tspan5400-1-34-9-3-4-1-4-9-2-5-4-4-2-0-8"
+         x="811.71655"
+         y="77.765213"
          style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:18.6667px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">Forecast</tspan></text>
     <text
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;font-size:18.6667px;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
-       x="812.35388"
-       y="92.771179"
-       id="text5398-3-389-2-1-5-6-3-9-7-5-6-4-7-0-3"
+       x="811.8197"
+       y="99.723282"
+       id="text5398-3-389-2-1-5-6-3-9-7-5-6-4-7-0-3-9"
        inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
          sodipodi:role="line"
-         id="tspan5400-1-34-9-3-4-1-4-9-2-5-4-4-5-2-1"
-         x="812.35388"
-         y="92.771179"
+         id="tspan5400-1-34-9-3-4-1-4-9-2-5-4-4-5-2-1-6"
+         x="811.8197"
+         y="99.723282"
          style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:18.6667px;line-height:125%;font-family:'Times New Roman';-inkscape-font-specification:'Times New Roman,';text-align:start;writing-mode:lr-tb;text-anchor:start">Real</tspan></text>
     <path
-       inkscape:export-ydpi="150"
+       style="font-variation-settings:normal;fill:none;fill-opacity:1;stroke:#000004;stroke-width:1.5;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;marker-end:url(#Arrow1Send-4);stop-color:#000000"
+       d="m 1087.7198,197.1116 c 0,0 40.2423,-86.18297 90,0"
+       id="path28668-8"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"
        inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#0000ff;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       d="m 952.37832,230.43235 -1.87899,-22.59784 -3.4449,20.98218 -3.1316,-41.33802 -1.879,9.70817 -4.38437,-19.41635 -3.1317,41.96436 -0.93946,7.82917 -4.85577,15.9686 -1.75,-14 -3.5,12.5 -1.25,-11 -3,10.5 -3.5,-30.75001 -2.5,11.75001 -2,-25.09967 -4.25001,41.59967 -2.43683,-29.33185 -3.37634,12.49734 -2.43683,-7.4155 -3,14.75001 -1.3105,-55.54535 -2.6895,44.29534 -2.75,22.25001 -3.3105,-43.73752 -4.50267,22.49734 -4.26426,-6.44726 -2.8185,20.98218 -3.75801,-18.16368 -3.44483,25.36652 -3.13167,-19.41635 -2.50533,7.82917"
-       id="path6259-4"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="cccccccccccccccccccccccccccccccc"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+       inkscape:export-ydpi="150" />
     <path
-       inkscape:export-ydpi="150"
+       style="font-variation-settings:normal;opacity:1;fill:none;fill-opacity:1;stroke:#0000ff;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;stop-color:#000000;stop-opacity:1"
+       d="m 770.89331,238.22014 c 0,0 7.516,-18.79001 13.46617,-18.79001 5.95017,0 1.879,15.97151 21.60851,15.97151 19.72951,0 9.39501,-42.27752 32.56935,-42.27752 23.17435,0 11.90034,40.39852 22.54802,40.39852 10.64767,0 9.70817,-19.72951 19.72951,-19.72951 10.02133,0 5.32383,17.85051 19.41634,17.85051 14.09251,0 10.3345,-34.44835 20.35584,-34.44835 10.02134,0 4.38434,32.56935 14.09251,32.56935 9.70817,0 8.4555,-10.64767 18.47684,-10.64767 10.02134,0 5.95017,15.65834 15.34518,15.65834 9.395,0 7.20284,-20.66901 12.52667,-20.66901 5.32384,0 4.5903,20.79036 12.00332,20.79036 7.41303,0 7.09983,-33.31703 20.25283,-33.31703 13.153,0 7.516,30.69034 16.2847,30.69034 8.7687,0 6.8897,-5.32383 13.4662,-5.32383 6.5765,0 4.6975,4.38433 9.395,4.38433 4.6975,0 6.2633,-12.2135 11.9003,-12.2135 5.637,0 3.4449,15.97151 7.8292,15.97151 4.3843,0 5.3238,-33.82202 21.2953,-33.82202 15.9716,0 10.0214,31.62985 20.0427,31.62985 10.0214,0 4.4705,-11.86772 20.5555,-11.86772"
+       id="path2930"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"
        inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#ff0000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       d="m 1044.3783,230.43235 -1.879,-22.59784 -3.4449,20.98218 -3.1316,-41.33802 -1.879,9.70817 -4.3843,-19.41635 -3.1317,41.96436 -0.9395,7.82917 -4.8558,15.9686 -1.75,-14 -3.5,12.5 -1.25,-11 -3,10.5 -3.5,-30.75001 -2.5,11.75001 -2,-25.09967 -4.24998,41.59967 -2.43683,-29.33185 -3.37634,12.49734 -2.43683,-7.4155 -3,14.75001 -1.3105,-55.54535 -2.6895,44.29534 -2.75,22.25001 -3.3105,-43.73752 -4.50267,22.49734 -4.26426,-6.44726 -2.8185,20.98218 -3.75801,-18.16368 -3.44483,25.36652 -3.13167,-19.41635 -2.50533,7.82917"
-       id="path6259-4-4"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="cccccccccccccccccccccccccccccccc"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+       inkscape:export-ydpi="150" />
     <path
-       inkscape:export-ydpi="150"
+       style="font-variation-settings:normal;fill:none;fill-opacity:1;stroke:#ff0000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;stop-color:#000000"
+       d="m 862.89331,238.22014 c 0,0 7.516,-18.79001 13.46617,-18.79001 5.95017,0 1.879,15.97151 21.60851,15.97151 19.72951,0 9.39501,-42.27752 32.56935,-42.27752 23.17435,0 11.90034,40.39852 22.54802,40.39852 10.64767,0 9.70817,-19.72951 19.72951,-19.72951 10.02133,0 5.32383,17.85051 19.41634,17.85051 14.09249,0 10.33449,-34.44835 20.35589,-34.44835 10.0213,0 4.3843,32.56935 14.0925,32.56935 9.7081,0 8.4555,-10.64767 18.4768,-10.64767 10.0213,0 5.9502,15.65834 15.3452,15.65834 9.395,0 7.2028,-20.66901 12.5267,-20.66901 5.3238,0 4.5903,20.79036 12.0033,20.79036 7.413,0 7.0998,-33.31703 20.2528,-33.31703 13.153,0 7.516,30.69034 16.2847,30.69034 7.5368,0 7.2075,-3.933 11.1421,-5.03811 0.356,-0.10001 0.747,-0.17687 1.182,-0.22555 0.3506,-0.0392 0.7297,-0.0602 1.1421,-0.0602"
+       id="path2930-7"
+       sodipodi:nodetypes="cssssssssssssssssc"
+       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"
        inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#0000ff;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       d="m 1134.3283,232.67435 -2.1921,-21.97151 -3.4449,9.39501 -2.1921,-13.77934 -2.1922,-13.15301 -4.0712,6.26333 -3.4449,16.28468 -1.8789,-12.83984 -3.9163,36.63761 -1.75,-14 -2.5605,6.23666 -2.5027,-13.8185 -2.6868,19.58184 -3.5,-30.75001 -2.5,17.70018 -2.6263,-12.573 -3.6237,23.12283 -2.7501,-35.59519 -3.0631,18.76068 -2.4368,-9.92083 -3,17.25534 -0.371,-65.25352 -3.0027,16.42349 -3.3763,59.83003 -3.9368,-26.82651 -3.8764,5.58633 -2.5053,-10.02134 -4.2643,31.44593 -3.758,-15.97151 -3.758,9.39501 -3.1317,-12.52668 -2.5053,7.82917"
-       id="path6259-4-8"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="cccccccccccccccccccccccccccccccc"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
+       inkscape:export-ydpi="150" />
     <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#ff0000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:2, 2;stroke-dashoffset:0;stroke-opacity:1"
-       d="m 1224.3283,232.67435 -2.1921,-21.97151 -3.4449,9.39501 -2.1921,-13.77934 -2.1922,-13.15301 -4.0712,6.26333 -3.4449,16.28468 -1.8789,-12.83984 -3.9163,36.63761 -1.75,-14 -2.5605,6.23666 -2.5027,-13.8185 -2.6868,19.58184 -3.5,-30.75001 -2.5,17.70018 -2.6263,-12.573 -3.6237,23.12283 -2.7501,-35.59519 -3.0631,18.76068 -2.4368,-9.92083 -3,17.25534 -0.371,-65.25352 -3.0027,16.42349 -3.3763,59.83003 -3.9368,-26.82651 -3.8764,5.58633 -2.5053,-10.02134 -4.2643,31.44593 -3.758,-15.97151 -3.758,9.39501 -3.1317,-12.52668 -2.5053,7.82917"
-       id="path6259-4-8-5"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="cccccccccccccccccccccccccccccccc"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#ff0000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       d="m 953.24675,229.44302 -1.879,-11.274 1.879,11.274 -8.4555,-36.95368 -1.87904,9.70817 -3.44487,-20.35585 -3.75803,25.99285 -2.5053,-6.26334 -2.35043,17.22127 -3.00267,15.75085 -3.5,5.29716 -1.87633,-13.8185 -2.68684,-22.69568 -3.18683,12.46701 -2.5,11.75001 -2,-37.00001 -4.25001,53.50001 -2.75,-20.25001 -2.75,13.75001 -2.75,-17.75001 -3,14.75001 -2.25,-34.25001 -1.75,23 -3.06317,17.23934 -3.62366,-61.9012 -3.56317,58.19836 -4.57743,-18.97393 -2.8185,20.98218 -4.38434,-15.34518 -2.50533,18.47685 -3.44484,-15.34518 -2.50533,7.82917"
-       id="path6259-8-9"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="cccccccccccccccccccccccccccccccc"
-       inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png" />
-    <path
-       style="font-variation-settings:normal;opacity:1;fill:none;fill-opacity:1;stroke:#000004;stroke-width:1.5;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;marker-end:url(#Arrow1Send);stop-color:#000000;stop-opacity:1"
-       d="m 1077.6247,156.25775 c 0,0 40.2423,-86.182968 90,0"
-       id="path28668"
+       style="font-variation-settings:normal;fill:none;fill-opacity:1;stroke:#ff0000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:2, 2;stroke-dashoffset:0;stroke-opacity:1;stop-color:#000000"
+       d="m 1133.0353,226.94611 c 0.3561,-0.10001 0.7471,-0.17687 1.182,-0.22555 0.3506,-0.0392 0.7297,-0.0602 1.1421,-0.0602 6.5765,0 4.6975,4.38433 9.395,4.38433 4.6975,0 6.2634,-12.2135 11.9004,-12.2135 5.637,0 3.4448,15.97151 7.8291,15.97151 4.3844,0 5.3239,-33.82202 21.2954,-33.82202 15.9715,0 10.0213,31.62985 20.0427,31.62985 10.0213,0 4.4704,-11.86772 20.5555,-11.86772"
+       id="path2930-7-3"
+       sodipodi:nodetypes="csssssssc"
        inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"
        inkscape:export-xdpi="150"
        inkscape:export-ydpi="150" />
