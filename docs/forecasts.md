@@ -12,7 +12,7 @@ EMHASS will basically need 4 forecasts to work properly:
 
 ## PV power production forecast
 
-The default method for PV power forecast is the scrapping of weather forecast data from the https://clearoutside.com/ website. This site proposes detailed forecasts based on Lat/Lon locations. This method seems quite stable but as with any scrape method it will fail if any changes are made to the webpage API.
+The default method for PV power forecast is the scrapping of weather forecast data from the https://clearoutside.com/ website. This is obtained using `method=scrapper`. This site proposes detailed forecasts based on Lat/Lon locations. This method seems quite stable but as with any scrape method it will fail if any changes are made to the webpage API.
 
 This may change in the future to direct API's of weather forecast models as GFS or ECMWF, see:
 
@@ -22,11 +22,39 @@ This may change in the future to direct API's of weather forecast models as GFS 
 
 ## Load power forecast
 
-The default method for load forecast is a naive method, also called persistence. This method simply assumes that the forecast for a future period will be equal to the observed values in a past period. The past period is controlled using parameter `delta_forecast` and the default value for this is 24h.
+The default method for load forecast is a naive method, also called persistence. This is obtained using `method=naive`. This method simply assumes that the forecast for a future period will be equal to the observed values in a past period. The past period is controlled using parameter `delta_forecast` and the default value for this is 24h.
 
 This is presented graphically here:
 
 ![](./images/naive_forecast.png)
+
+## Load cost forecast
+
+The default method for load cost forecast is defined for a peak and non-peak hours contract type. This is obtained using `method=hp_hc_periods`.
+
+When using this method you can provide a list of peak-hour periods, so you can add as many peak-hour periods as possible.
+
+As an example for a two peak-hour periods contract you will need to define the following list in the configuration file:
+
+    - list_hp_periods:
+        - period_hp_1:
+            - start: '02:54'
+            - end: '15:24'
+        - period_hp_2:
+            - start: '17:24'
+            - end: '20:24'
+    - load_cost_hp: 0.1907
+    - load_cost_hc: 0.1419
+
+This example is presented graphically here:
+
+![](./images/hp_hc_periods.png)
+
+## PV production selling price forecast
+
+The default method for this forecast is simply a constant value. This can be obtained using `method=constant`.
+
+Then you will need to define the `prod_sell_price` variable to provide the correct price for energy injected to the grid from excedent PV production in €/kWh.
 
 ## Passing your own forecast data
 
@@ -35,12 +63,9 @@ For all the needed forecasts in EMHASS two other methods allows the user to prov
 For the `csv` method you should push a csv file to the `data` folder. The CSV file should contain no header and the timestamped data should have the following format:
     
     2021-04-29 00:00:00+00:00,287.07
-    
     2021-04-29 00:30:00+00:00,274.27
-    
     2021-04-29 01:00:00+00:00,243.38
-
-...
+    ...
 
 For the list method you just have to add the data as a list of values to a data dictionnary during the call to `emhass` using the `runtimeparams` option.
 
