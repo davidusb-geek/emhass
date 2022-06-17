@@ -63,6 +63,10 @@ You must follow these steps to make EMHASS work properly:
 
 5) The final step is to link the deferrable loads variables to real switchs on your installation. An example code for this using automations and the shell command integration is presentedd below in the **usage** section.
 
+A more detailed workflow is given below:
+
+![](./images/workflow.png)
+
 ## Installation
 
 ### 1) The EMHASS add-on for Home Assistant OS and supervised users

@@ -5,8 +5,8 @@
    height="350.30774mm"
    id="svg133"
    sodipodi:docname="ems_schema.svg"
-   inkscape:version="1.1.2 (08b2f3d93c, 2022-04-05)"
-   inkscape:export-filename="/home/user/Documents/David/Geek_projects/emhass-github/docs/images/ems_schema.png"
+   inkscape:version="1.1 (c68e22c387, 2021-05-23)"
+   inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\ems_schema.png"
    inkscape:export-xdpi="199.98865"
    inkscape:export-ydpi="199.98865"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
@@ -37,15 +37,15 @@
      guidetolerance="10"
      inkscape:pageopacity="0"
      inkscape:pageshadow="2"
-     inkscape:window-width="1920"
-     inkscape:window-height="1044"
+     inkscape:window-width="2400"
+     inkscape:window-height="1271"
      id="namedview135"
      showgrid="false"
-     inkscape:zoom="0.35355339"
-     inkscape:cx="1463.711"
-     inkscape:cy="811.75859"
-     inkscape:window-x="1366"
-     inkscape:window-y="0"
+     inkscape:zoom="0.5"
+     inkscape:cx="1934"
+     inkscape:cy="597"
+     inkscape:window-x="2391"
+     inkscape:window-y="-9"
      inkscape:window-maximized="1"
      inkscape:current-layer="svg133"
      inkscape:document-rotation="0"
@@ -965,10 +965,10 @@
        style="color-interpolation-filters:sRGB;"
        inkscape:label="Drop Shadow"
        id="filter34240"
-       x="-0.017072796"
-       y="-0.23808115"
-       width="1.0555388"
-       height="1.7744917">
+       x="-0.017074826"
+       y="-0.23811223"
+       width="1.0555454"
+       height="1.7745928">
       <feFlood
          flood-opacity="0.498039"
          flood-color="rgb(255,255,255)"
@@ -1034,10 +1034,10 @@
        style="color-interpolation-filters:sRGB;"
        inkscape:label="Drop Shadow"
        id="filter35090"
-       x="-0.012262616"
-       y="-0.11904058"
-       width="1.039891"
-       height="1.3872458">
+       x="-0.012265131"
+       y="-0.11905611"
+       width="1.0398992"
+       height="1.3872964">
       <feFlood
          flood-opacity="0.498039"
          flood-color="rgb(255,255,255)"
@@ -1070,10 +1070,10 @@
        style="color-interpolation-filters:sRGB;"
        inkscape:label="Drop Shadow"
        id="filter35102"
-       x="-0.008813175"
-       y="-0.054404845"
-       width="1.0286698"
-       height="1.1769821">
+       x="-0.0088151662"
+       y="-0.054728179"
+       width="1.0286762"
+       height="1.1780339">
       <feFlood
          flood-opacity="0.498039"
          flood-color="rgb(255,255,255)"
@@ -1106,10 +1106,10 @@
        style="color-interpolation-filters:sRGB;"
        inkscape:label="Drop Shadow"
        id="filter35114"
-       x="-0.014062056"
-       y="-0.060093977"
-       width="1.0457447"
-       height="1.1954892">
+       x="-0.01406252"
+       y="-0.060088321"
+       width="1.0457462"
+       height="1.1954708">
       <feFlood
          flood-opacity="0.498039"
          flood-color="rgb(255,255,255)"
@@ -1142,10 +1142,10 @@
        style="color-interpolation-filters:sRGB;"
        inkscape:label="Drop Shadow"
        id="filter35126"
-       x="-0.010022736"
-       y="-0.051832427"
-       width="1.0326045"
-       height="1.1686139">
+       x="-0.010023303"
+       y="-0.052117422"
+       width="1.0326064"
+       height="1.169541">
       <feFlood
          flood-opacity="0.498039"
          flood-color="rgb(255,255,255)"
@@ -1178,10 +1178,10 @@
        style="color-interpolation-filters:sRGB;"
        inkscape:label="Drop Shadow"
        id="filter35138"
-       x="-0.011189085"
-       y="-0.054763246"
-       width="1.0363987"
-       height="1.178148">
+       x="-0.011189938"
+       y="-0.055082311"
+       width="1.0364015"
+       height="1.1791859">
       <feFlood
          flood-opacity="0.498039"
          flood-color="rgb(255,255,255)"
@@ -1214,10 +1214,10 @@
        style="color-interpolation-filters:sRGB;"
        inkscape:label="Drop Shadow"
        id="filter35150"
-       x="-0.010477498"
-       y="-0.1230037"
-       width="1.0340839"
-       height="1.4001381">
+       x="-0.010478013"
+       y="-0.12299837"
+       width="1.0340856"
+       height="1.4001208">
       <feFlood
          flood-opacity="0.498039"
          flood-color="rgb(255,255,255)"
@@ -1250,10 +1250,10 @@
        style="color-interpolation-filters:sRGB;"
        inkscape:label="Drop Shadow"
        id="filter35162"
-       x="-0.013190041"
-       y="-0.057463135"
-       width="1.042908"
-       height="1.1869309">
+       x="-0.013190876"
+       y="-0.057452276"
+       width="1.0429107"
+       height="1.1868956">
       <feFlood
          flood-opacity="0.498039"
          flood-color="rgb(255,255,255)"
@@ -2497,18 +2497,18 @@
      y="691.81415" />
   <text
      xml:space="preserve"
-     style="font-style:normal;font-variant:normal;font-weight:400;font-size:100.601px;line-height:125%;font-family:Calibri;text-align:start;letter-spacing:0px;word-spacing:0px;text-anchor:start;fill:#000000;fill-opacity:1;stroke:none;stroke-width:1.88628"
-     x="1191.1853"
-     y="771.78625"
+     style="font-style:normal;font-variant:normal;font-weight:400;font-size:119.432px;line-height:125%;font-family:Calibri;text-align:start;letter-spacing:0px;word-spacing:0px;text-anchor:start;fill:#000000;fill-opacity:1;stroke:none;stroke-width:2.23936"
+     x="1194.4319"
+     y="773.57581"
      id="text65"
      inkscape:export-xdpi="200"
      inkscape:export-ydpi="200"
      transform="scale(0.98209996,1.0182263)"><tspan
        sodipodi:role="line"
-       x="1191.1853"
-       y="771.78625"
+       x="1194.4319"
+       y="773.57581"
        id="tspan63"
-       style="font-style:italic;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:100.601px;font-family:Calibri;-inkscape-font-specification:'Calibri Italic';stroke-width:1.88628">EMHASS</tspan></text>
+       style="font-style:italic;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:119.432px;font-family:Calibri;-inkscape-font-specification:'Calibri Italic';stroke-width:2.23936">EMHASS</tspan></text>
   <path
      style="fill:#41bdf5;stroke:none;stroke-width:0.499905"
      d="m 1587.4099,691.81415 v 112.47858 h 112.4786 V 691.81415 h -112.4786 m 79.9848,38.49266 c 10e-4,-1.44622 -0.3255,-3.57076 0.8013,-4.6974 1.4398,-1.43917 7.9555,-1.43937 9.3952,0 2.8005,2.80086 0.039,11.02175 0.9604,14.6955 1.2342,4.92256 16.7108,14.49224 3.8402,14.49724 h -3.9992 v 22.99562 l -0.8709,7.98448 -8.6273,0.51391 c -10.9375,0.0836 0.797,0 -50.4904,0 l -8.6272,-0.51391 -0.871,-7.98448 v -22.99562 c -2.2066,0 -8.3757,1.0688 -9.3701,-1.5737 -1.0202,-2.71149 5.092,-7.23063 6.7506,-9.08677 7.8986,-8.83892 16.7403,-16.94422 25.1153,-25.33267 2.7784,-2.78292 8.1064,-11.39873 12.4976,-11.03955 2.7185,0.22236 5.241,3.72319 6.9792,5.54059 5.4624,5.71262 10.9214,11.40163 16.5163,16.99676"
@@ -2580,7 +2580,7 @@
        id="tspan2230"
        x="165.69334"
        y="75.217049"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std'">PV power production forecast</tspan></text>
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT'">PV power production forecast</tspan></text>
   <text
      xml:space="preserve"
      style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;line-height:1.25;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';filter:url(#filter35090)"
@@ -2591,7 +2591,7 @@
        id="tspan2230-9"
        x="251.29881"
        y="587.5282"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std'">Load power forecast</tspan></text>
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT'">Load power forecast</tspan></text>
   <text
      xml:space="preserve"
      style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;line-height:1;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';filter:url(#filter35102)"
@@ -2602,11 +2602,11 @@
        id="tspan2230-9-3"
        x="568.19434"
        y="1209.1417"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:center;text-anchor:middle">Load cost and PV production </tspan><tspan
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:center;text-anchor:middle">Load cost and PV production </tspan><tspan
        sodipodi:role="line"
        x="568.19434"
-       y="1257.6499"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:center;text-anchor:middle"
+       y="1257.1417"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:center;text-anchor:middle"
        id="tspan15114">selling price forecasts</tspan></text>
   <text
      xml:space="preserve"
@@ -2618,11 +2618,11 @@
        id="tspan2230-9-36"
        x="1424.1298"
        y="1079.436"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;line-height:1;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:center;text-anchor:middle">Some controllable/</tspan><tspan
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;line-height:1;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:center;text-anchor:middle">Some controllable/</tspan><tspan
        sodipodi:role="line"
        x="1424.1298"
        y="1127.436"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;line-height:1;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:center;text-anchor:middle"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;line-height:1;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:center;text-anchor:middle"
        id="tspan21624">deferrable loads...</tspan></text>
   <text
      xml:space="preserve"
@@ -2633,12 +2633,12 @@
        sodipodi:role="line"
        x="1430.4087"
        y="394.94696"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;line-height:1;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:center;text-anchor:middle"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;line-height:1;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:center;text-anchor:middle"
        id="tspan21624-9">Objective function </tspan><tspan
        sodipodi:role="line"
        x="1430.4087"
        y="442.94696"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;line-height:1;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:center;text-anchor:middle"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;line-height:1;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:center;text-anchor:middle"
        id="tspan64905">and constraints</tspan></text>
   <path
      style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:5;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow1Mend-75);filter:url(#filter35252-2)"
@@ -2926,7 +2926,7 @@
        sodipodi:role="line"
        x="2343.6917"
        y="968.48993"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:center;text-anchor:middle"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:center;text-anchor:middle"
        id="tspan15114-6">Energy cost optimization</tspan></text>
   <text
      xml:space="preserve"
@@ -2937,12 +2937,12 @@
        sodipodi:role="line"
        x="2354.3792"
        y="540.94696"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:center;text-anchor:middle"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:center;text-anchor:middle"
        id="tspan21624-3">Controllable/deferrable </tspan><tspan
        sodipodi:role="line"
        x="2354.3792"
-       y="589.45514"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:center;text-anchor:middle"
+       y="588.94696"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:center;text-anchor:middle"
        id="tspan31444">loads optimized schedule</tspan></text>
   <g
      id="g46985"
@@ -4532,23 +4532,23 @@
        sodipodi:role="line"
        x="2334.1292"
        y="736.68134"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:center;text-anchor:middle"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:center;text-anchor:middle"
        id="tspan31444-4">Battery storage power </tspan><tspan
        sodipodi:role="line"
        x="2334.1292"
-       y="785.18951"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:center;text-anchor:middle"
+       y="784.68134"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:48px;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:center;text-anchor:middle"
        id="tspan58560">and SOC optimization</tspan></text>
   <path
      style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:5;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow1Mend-75-3);filter:url(#filter35252-2-8)"
      d="m 1290.5804,546.55696 204.8416,0.65785"
      id="path20640-4-0"
      sodipodi:nodetypes="cc"
-     transform="rotate(-90,1429.4908,540.45061)" />
+     transform="matrix(0,1,1,0,889.04019,-825.90631)" />
   <path
      style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:5;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow1Mend-75-3-4);filter:url(#filter35252-2-8-8)"
      d="m 1290.5804,546.55696 204.8416,0.65785"
      id="path20640-4-0-4"
      sodipodi:nodetypes="cc"
-     transform="rotate(90,1225.3543,757.24322)" />
+     transform="matrix(0,-1,-1,0,1982.5975,2323.7366)" />
 </svg>
