@@ -65,7 +65,7 @@ You must follow these steps to make EMHASS work properly:
 
 A more detailed workflow is given below:
 
-![](./images/workflow.png)
+![](https://raw.githubusercontent.com/davidusb-geek/emhass/master/docs/images/workflow.png)
 
 ## Installation
 
