@@ -43,7 +43,7 @@ def get_injection_dict(df, plot_size = 1366):
     # The tables
     table1 = df.reset_index().to_html(classes='mystyle', index=False)
     cost_cols = [i for i in df.columns if 'cost_' in i]
-    table2 = df[cost_cols].reset_index().sum().to_frame(name='Cost Totals').reset_index().to_html(classes='mystyle', index=False)
+    table2 = df[cost_cols].reset_index().sum(numeric_only=True).to_frame(name='Cost Totals').reset_index().to_html(classes='mystyle', index=False)
     # The dict of plots
     injection_dict = {}
     injection_dict['title'] = '<h2>EMHASS optimization results</h2>'
