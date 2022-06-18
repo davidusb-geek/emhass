@@ -3,6 +3,7 @@
 ## [0.3.17] - 2022-06-12
 ### Fix
 - Fixed wrong variables names for mixed forecasts.
+- Fixed handling of load sensor name in command line setup function.
 
 ## [0.3.16] - 2022-06-10
 ### Improvement
