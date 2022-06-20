@@ -22,6 +22,8 @@ class optimization:
 
     - perform_dayahead_forecast_optim
     
+    - perform_naive_mpc_optim
+    
     """
 
     def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, 
