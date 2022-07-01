@@ -113,6 +113,7 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
         freq = int(retrieve_hass_conf['freq'].seconds/60.0)
         delta_forecast = int(optim_conf['delta_forecast'].days)
         forecast_dates = get_forecast_dates(freq, delta_forecast)
+        # Treating special data passed for MPC control case
         if set_type == 'naive-mpc-optim':
             if 'prediction_horizon' not in runtimeparams.keys():
                 prediction_horizon = 10 # 10 time steps by default
@@ -145,6 +146,7 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
                 beta = runtimeparams['beta']
             params['passed_data']['beta'] = beta
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
+        # Treat passed forecast data lists
         if 'pv_power_forecast' in runtimeparams.keys():
             if type(runtimeparams['pv_power_forecast']) == list and len(runtimeparams['pv_power_forecast']) >= len(forecast_dates):
                 params['passed_data']['pv_power_forecast'] = runtimeparams['pv_power_forecast']
@@ -173,6 +175,17 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
             else:
                 logger.error("ERROR: The passed data is either not a list or the length is not correct, length should be "+str(len(forecast_dates)))
                 logger.error("Passed type is "+str(type(runtimeparams['prod_price_forecast']))+" and length is "+str(len(forecast_dates)))
+        # Treat optimization configuration parameters passed at runtime 
+        if 'num_def_loads' in runtimeparams.keys():
+            optim_conf['num_def_loads'] = runtimeparams['num_def_loads']
+        if 'P_deferrable_nom' in runtimeparams.keys():
+            optim_conf['P_deferrable_nom'] = runtimeparams['P_deferrable_nom']
+        if 'def_total_hours' in runtimeparams.keys():
+            optim_conf['def_total_hours'] = runtimeparams['def_total_hours']
+        if 'treat_def_as_semi_cont' in runtimeparams.keys():
+            optim_conf['treat_def_as_semi_cont'] = runtimeparams['treat_def_as_semi_cont']
+        if 'set_def_constant' in runtimeparams.keys():
+            optim_conf['set_def_constant'] = runtimeparams['set_def_constant']
         params = json.dumps(params)
     return params, optim_conf
 
