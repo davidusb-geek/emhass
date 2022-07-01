@@ -102,6 +102,30 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(optim_conf['load_forecast_method'] == 'list')
         self.assertTrue(optim_conf['load_cost_forecast_method'] == 'list')
         self.assertTrue(optim_conf['prod_price_forecast_method'] == 'list')
+        # Test passing optimization configuration parameters at runtime 
+        runtimeparams = json.loads(self.runtimeparams_json)
+        runtimeparams.update({'num_def_loads':3})
+        runtimeparams.update({'P_deferrable_nom':[3000.0, 750.0, 2500.0]})
+        runtimeparams.update({'def_total_hours':[5, 8, 10]})
+        runtimeparams.update({'treat_def_as_semi_cont':[True, True, True]})
+        runtimeparams.update({'set_def_constant':[False, False, False]})
+        runtimeparams_json = json.dumps(runtimeparams)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
+            pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True, params=self.params_json)
+        set_type = 'dayahead-optim'
+        params, optim_conf = utils.treat_runtimeparams(runtimeparams_json, self.params_json, 
+                                                       retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
+        self.assertIsInstance(params, str)
+        params = json.loads(params)
+        self.assertIsInstance(params['passed_data']['pv_power_forecast'], list)
+        self.assertIsInstance(params['passed_data']['load_power_forecast'], list)
+        self.assertIsInstance(params['passed_data']['load_cost_forecast'], list)
+        self.assertIsInstance(params['passed_data']['prod_price_forecast'], list)
+        self.assertTrue(optim_conf['num_def_loads'] == 3)
+        self.assertTrue(optim_conf['P_deferrable_nom'] == [3000.0, 750.0, 2500.0])
+        self.assertTrue(optim_conf['def_total_hours'] == [5, 8, 10])
+        self.assertTrue(optim_conf['treat_def_as_semi_cont'] == [True, True, True])
+        self.assertTrue(optim_conf['set_def_constant'] == [False, False, False])
         
     def test_set_input_data_dict(self):
         config_path = pathlib.Path(root+'/config_emhass.yaml')
