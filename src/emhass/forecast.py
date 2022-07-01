@@ -5,7 +5,7 @@ from typing import Optional
 import pathlib, pickle, copy, logging, json
 import pandas as pd, numpy as np
 from datetime import datetime, timedelta
-import requests
+from requests import get
 from bs4 import BeautifulSoup
 import pvlib
 from pvlib.pvsystem import PVSystem
@@ -165,7 +165,7 @@ class forecast:
                                                  end=self.end_forecast-freq_scrap, 
                                                  freq=freq_scrap).round(freq_scrap)
             # Using the clearoutside webpage
-            response = requests.get("https://clearoutside.com/forecast/"+str(round(self.lat, 2))+"/"+str(round(self.lon, 2)))
+            response = get("https://clearoutside.com/forecast/"+str(round(self.lat, 2))+"/"+str(round(self.lon, 2))+"?desktop=true")
             soup = BeautifulSoup(response.content, 'html.parser')
             table = soup.find_all(id='day_0')[0]
             list_names = table.find_all(class_='fc_detail_label')
@@ -193,6 +193,25 @@ class forecast:
             data['relative_humidity'] = raw_data['Relative Humidity (%)']
             data['precipitable_water'] = pvlib.atmosphere.gueymard94_pw(
                 data['temp_air'], data['relative_humidity'])
+        elif method == 'solcast': # using solcast API
+            forecast_dates_csv = self.get_forecast_days_csv()
+            # Retrieve data from the solcast API
+            headers = {
+                "Authorization": "Bearer " + self.retrieve_hass_conf['solcast_api_key'],
+                "content-type": "application/json",
+                }
+            url = "https://api.solcast.com.au/rooftop_sites/"+self.retrieve_hass_conf['solcast_rooftop_id']+"/forecasts?hours=24"
+            response = get(url, headers=headers)
+            data = response.json()
+            data_list = []
+            for elm in data['forecasts']:
+                data_list.append(elm['pv_estimate']*1000) # Converting kW to W
+            # Define index and pick correct dates
+            data_dict = {'ts':forecast_dates_csv, 'yhat':data_list}
+            data = pd.DataFrame.from_dict(data_dict)
+            data.index = forecast_dates_csv
+            data.drop(['ts'], axis=1, inplace=True)
+            data = data.copy().loc[self.forecast_dates]
         elif method == 'csv': # reading from a csv file
             forecast_dates_csv = self.get_forecast_days_csv()
             weather_csv_file_path = self.root + csv_path
@@ -300,7 +319,7 @@ class forecast:
 
         """
         # If using csv method we consider that yhat is the PV power in W
-        if self.weather_forecast_method == 'csv' or self.weather_forecast_method == 'list':
+        if self.weather_forecast_method == 'solcast' or self.weather_forecast_method == 'csv' or self.weather_forecast_method == 'list':
             P_PV_forecast = df_weather['yhat']
             P_PV_forecast.name = None
         else: # We will transform the weather data into electrical power
