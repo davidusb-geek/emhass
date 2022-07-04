@@ -84,6 +84,53 @@ For example if using the add-on or the standalone docker installation you can pa
 curl -i -H "Content-Type: application/json" -X POST -d '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}' http://localhost:5000/action/dayahead-optim
 ```
 
+### Example using: SolCast forecast + Amber prices
+
+If you're using SolCast then you can define the following sensors in your system:
+
+```
+sensors:
+
+  - platform: rest
+    name: "Solcast Forecast Data"
+    json_attributes:
+      - forecasts
+    resource: https://api.solcast.com.au/rooftop_sites/yyyy/forecasts?format=json&api_key=xxx&hours=24
+    method: GET
+    value_template: "{{ (value_json.forecasts[0].pv_estimate)|round(2) }}"
+    unit_of_measurement: "kW"
+    device_class: power
+    scan_interval: 8000
+    force_update: true
+
+  - platform: template
+    sensors:
+      solcast_24hrs_forecast :
+        value_template: >-
+          {%- set awattar_all_list = state_attr('sensor.solcast_forecast_data', 'forecasts') | map(attribute='pv_estimate') | list %}
+          {%- set values_all = namespace(all=[]) %}
+          {% for i in range(awattar_all_list | length) %}
+           {%- set v = (awattar_all_list[i] | float |multiply(1000) ) | int(0) %}
+            {%- set values_all.all = values_all.all + [ v ] %}
+          {%- endfor %} {{ (values_all.all)[:48] }}
+```
+
+With this you can now feed this SolCast forecast to EMHASS along with the mapping of the Amber prices. 
+
+A MPC call may look like this for 4 deferrable loads:
+
+```
+    post_mpc_optim_solcast: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{(
+          ([states('sensor.amber_general_price')|float(0)] +
+          state_attr('sensor.amber_general_forecast', 'forecasts') |map(attribute='per_kwh')|list)[:48])
+          }}, \"prod_price_forecast\":{{(
+          ([states('sensor.amber_feed_in_price')|float(0)] +
+          state_attr('sensor.amber_feed_in_forecast', 'forecasts')|map(attribute='per_kwh')|list)[:48]) 
+          }}, \"pv_power_forecast\":{{states('sensor.solcast_24hrs_forecast')
+          }}, \"prediction_horizon\":48,\"soc_init\":{{(states('sensor.powerwall_charge')|float(0))/100
+          }},\"soc_final\":0.05,\"def_total_hours\":[2,0,0,0]}' http://localhost:5000/action/naive-mpc-optim"
+```
+
 ## Now/current values in forecasts
 
 When implementing MPC applications with high optimization frequencies it can be interesting if at each MPC iteration the forecast values are updated with the real now/current values measured from live data. This is useful to improve the accuracy of the short-term forecasts. As shown in some of the references below, mixing with a persistance model make sense since this type of model performs very good at low temporal resolutions (intra-hour).
