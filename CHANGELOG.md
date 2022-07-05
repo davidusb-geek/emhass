@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+### Improvement
+- Improving documentation, added more information on forecast page.
+- Added support for SolCast PV production forecasts. 
 ### Fix
 - Fixed small bug on webserver using pandas sum function for non numeric data. This was throwing the following message: Dropping of nuisance columns in DataFrame reductions (with 'numeric_only=None') is deprecated.
 
