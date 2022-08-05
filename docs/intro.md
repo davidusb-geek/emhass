@@ -7,7 +7,7 @@ The main dependencies of this project are PVLib to model power from a PV residen
 
 The goal here is to optimize the energy use of your home in order to maximize a pre-defined cost function, for example: autoconsumption.
 
-The main study case is a household where we have solar panels, a grid connection, one or more controllable (deferrable) electrical loads and an energy storage system with batteries. Of course, it is not necessary to have all these equipements to use EMHASS (PV panels, batteries, etc), in the minimal use case you have a contrllable/deferrable load and you just want to obtain the optimized daily schedule for your load.
+The main study case is a household where we have solar panels, a grid connection, one or more controllable (deferrable) electrical loads and an energy storage system with batteries. Of course, it is not necessary to have all these equipements to use EMHASS (PV panels, batteries, etc), in the minimal use case you have a controllable/deferrable load and you just want to obtain the optimized daily schedule for your load.
 
 The package flow can be graphically represented as follows:
 
