@@ -1,4 +1,5 @@
 # ---> Python
+test.py
 # Secret yaml file
 secrets_emhass.yaml
 *.tar
@@ -118,6 +119,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+venvemhass/
 
 # Spyder project settings
 .spyderproject
