@@ -139,6 +139,10 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].isnull().sum().sum()==0)
+        self.assertTrue(input_data_dict['fcst'].optim_conf['weather_forecast_method']=='list')
+        self.assertTrue(input_data_dict['fcst'].optim_conf['load_forecast_method']=='list')
+        self.assertTrue(input_data_dict['fcst'].optim_conf['load_cost_forecast_method']=='list')
+        self.assertTrue(input_data_dict['fcst'].optim_conf['prod_price_forecast_method']=='list')
         action = 'publish-data'
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
@@ -175,6 +179,14 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].isnull().sum().sum()==0)
         self.assertTrue(len(input_data_dict['df_input_data_dayahead'])==10) # The default value for prediction_horizon
+        # action = 'dayahead-optim'
+        # input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+        #                                       action, logger, get_data_from_file=True)
+        # self.assertIsInstance(input_data_dict, dict)
+        # self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
+        # self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
+        # self.assertTrue(input_data_dict['df_input_data_dayahead'].isnull().sum().sum()==0)
+        # self.assertTrue(len(input_data_dict['df_input_data_dayahead'])==10) # The default value for prediction_horizon
         
     def test_dayahead_forecast_optim(self):
         config_path = pathlib.Path(root+'/config_emhass.yaml')
