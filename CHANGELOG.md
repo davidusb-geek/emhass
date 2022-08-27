@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.3.18] - 2022-08-27
 ### Improvement
 - Improving documentation, added more information on forecast page.
 - Added support for SolCast PV production forecasts. 
@@ -264,6 +264,7 @@
 [0.3.15]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.15
 [0.3.16]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.16
 [0.3.17]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.17
+[0.3.18]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.18
 
 # Notes
 All notable changes to this project will be documented in this file.
