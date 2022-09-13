@@ -26,15 +26,15 @@ def get_injection_dict(df, plot_size = 1366):
     cols_p = [i for i in df.columns.to_list() if 'P_' in i]
     fig_0 = px.line(df[cols_p], title='Systems powers schedule after optimization results', 
                     template='plotly_white', width=plot_size, height=0.5*plot_size, line_shape="hv")
-    fig_0.update_layout(xaxis_title='Tiemstamp', yaxis_title='System powers (W)')
+    fig_0.update_layout(xaxis_title='Timestamp', yaxis_title='System powers (W)')
     if 'SOC_opt' in df.columns.to_list():
         fig_1 = px.line(df['SOC_opt'], title='Battery state of charge schedule after optimization results', 
                         template='plotly_white', width=plot_size, height=0.5*plot_size, line_shape="hv")
-        fig_1.update_layout(xaxis_title='Tiemstamp', yaxis_title='Battery SOC (%)')
+        fig_1.update_layout(xaxis_title='Timestamp', yaxis_title='Battery SOC (%)')
     cols_cost = [i for i in df.columns.to_list() if 'cost_' in i or 'unit_' in i]
     fig_2 = px.line(df[cols_cost], title='Systems costs obtained from optimization results', 
                       template='plotly_white', width=plot_size, height=0.5*plot_size, line_shape="hv")
-    fig_2.update_layout(xaxis_title='Tiemstamp', yaxis_title='System costs (currency)')
+    fig_2.update_layout(xaxis_title='Timestamp', yaxis_title='System costs (currency)')
     # Get full path to image
     image_path_0 = fig_0.to_html(full_html=False, default_width='75%')
     if 'SOC_opt' in df.columns.to_list():
