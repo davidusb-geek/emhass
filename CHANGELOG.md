@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.19] - 2022-09-14
+### Fix
+- Updated default values for a working LP solver.
+- Removed option to provide a custom web ui url.
+- Added extra runtime parameters to use solcast PV forecast.
+
 ## [0.3.18] - 2022-08-27
 ### Improvement
 - Improving documentation, added more information on forecast page.

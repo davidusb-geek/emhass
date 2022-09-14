@@ -41,8 +41,9 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
     # Parsing yaml
     retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(config_path, params=params)
     # Treat runtimeparams
-    params, optim_conf = utils.treat_runtimeparams(runtimeparams, params, retrieve_hass_conf, 
-                                                   optim_conf, plant_conf, set_type, logger)
+    params, retrieve_hass_conf, optim_conf = utils.treat_runtimeparams(
+        runtimeparams, params, retrieve_hass_conf, 
+        optim_conf, plant_conf, set_type, logger)
     # Define main objects
     rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
                        retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'], 

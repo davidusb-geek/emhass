@@ -186,8 +186,12 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
             optim_conf['treat_def_as_semi_cont'] = runtimeparams['treat_def_as_semi_cont']
         if 'set_def_constant' in runtimeparams.keys():
             optim_conf['set_def_constant'] = runtimeparams['set_def_constant']
+        if 'solcast_api_key' in runtimeparams.keys():
+            retrieve_hass_conf['solcast_api_key'] = runtimeparams['solcast_api_key']
+        if 'solcast_rooftop_id' in runtimeparams.keys():
+            retrieve_hass_conf['solcast_rooftop_id'] = runtimeparams['solcast_rooftop_id']
         params = json.dumps(params)
-    return params, optim_conf
+    return params, retrieve_hass_conf, optim_conf
 
 def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
                    params: Optional[str] = None) -> Tuple[dict, dict, dict]:
