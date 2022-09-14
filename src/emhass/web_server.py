@@ -210,6 +210,7 @@ if __name__ == "__main__":
     params['retrieve_hass_conf'] = retrieve_hass_conf
     params['optim_conf'] = optim_conf
     params['plant_conf'] = plant_conf
+    web_ui_url = '0.0.0.0'
 
     # Initialize this global dict
     opt_res = pd.read_csv(base_path+'/data/opt_res_latest.csv', index_col='timestamp')
@@ -221,7 +222,6 @@ if __name__ == "__main__":
         # The cost function
         costfun = options['costfun']
         # Some data from options
-        web_ui_url = options['web_ui_url']
         url_from_options = options['hass_url']
         if url_from_options == 'empty':
             url = hass_url+"/config"
@@ -249,7 +249,6 @@ if __name__ == "__main__":
         }
     else:
         costfun = os.getenv('LOCAL_COSTFUN', default='profit')
-        web_ui_url = '0.0.0.0'
         with open('/app/secrets_emhass.yaml', 'r') as file:
             params_secrets = yaml.load(file, Loader=yaml.FullLoader)
         hass_url = params_secrets['hass_url']

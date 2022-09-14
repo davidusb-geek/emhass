@@ -65,8 +65,9 @@ class TestCommandLineUtils(unittest.TestCase):
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
             pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True, params=self.params_json)
         set_type = 'dayahead-optim'
-        params, optim_conf = utils.treat_runtimeparams(self.runtimeparams_json, self.params_json, 
-                                                       retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
+        params, retrieve_hass_conf, optim_conf = utils.treat_runtimeparams(
+            self.runtimeparams_json, self.params_json,
+            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
         self.assertIsInstance(params, str)
         params = json.loads(params)
         self.assertIsInstance(params['passed_data']['pv_power_forecast'], list)
@@ -78,8 +79,9 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(optim_conf['load_cost_forecast_method'] == 'list')
         self.assertTrue(optim_conf['prod_price_forecast_method'] == 'list')
         set_type = 'naive-mpc-optim'
-        params, optim_conf = utils.treat_runtimeparams(self.runtimeparams_json, self.params_json, 
-                                                       retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
+        params, retrieve_hass_conf, optim_conf = utils.treat_runtimeparams(
+            self.runtimeparams_json, self.params_json,
+            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
         self.assertIsInstance(params, str)
         params = json.loads(params)
         self.assertTrue(params['passed_data']['prediction_horizon'] == 10)
@@ -90,8 +92,9 @@ class TestCommandLineUtils(unittest.TestCase):
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
             pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True, params=self.params_json)
         params = json.dumps(None)
-        params, optim_conf = utils.treat_runtimeparams(self.runtimeparams_json, params, 
-                                                       retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
+        params, retrieve_hass_conf, optim_conf = utils.treat_runtimeparams(
+            self.runtimeparams_json, params,
+            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
         self.assertIsInstance(params, str)
         params = json.loads(params)
         self.assertIsInstance(params['passed_data']['pv_power_forecast'], list)
@@ -113,8 +116,9 @@ class TestCommandLineUtils(unittest.TestCase):
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
             pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True, params=self.params_json)
         set_type = 'dayahead-optim'
-        params, optim_conf = utils.treat_runtimeparams(runtimeparams_json, self.params_json, 
-                                                       retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
+        params, retrieve_hass_conf, optim_conf = utils.treat_runtimeparams(
+            runtimeparams_json, self.params_json,
+            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
         self.assertIsInstance(params, str)
         params = json.loads(params)
         self.assertIsInstance(params['passed_data']['pv_power_forecast'], list)
