@@ -271,6 +271,7 @@
 [0.3.16]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.16
 [0.3.17]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.17
 [0.3.18]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.18
+[0.3.19]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.19
 
 # Notes
 All notable changes to this project will be documented in this file.
