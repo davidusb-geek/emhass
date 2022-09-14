@@ -45,8 +45,8 @@ optim_conf:
   - prod_price_forecast_method: 'constant' # options are 'constant' for constant fixed value or 'csv' to load custom price forecast from a CSV file
   - prod_sell_price: 0.065 # power production selling price in €/kWh (only needed if prod_price_forecast_method='constant')
   - set_total_pv_sell: False # consider that all PV power is injected to the grid (self-consumption with total sell)
-  - lp_solver: 'COIN_CMD' # set the name of the linear programming solver that will be used
-  - lp_solver_path: '/usr/bin/cbc' # set the path to the LP solver
+  - lp_solver: 'PULP_CBC_CMD' # set the name of the linear programming solver that will be used
+  - lp_solver_path: 'empty' # set the path to the LP solver
 
 plant_conf:
   - P_grid_max: 9000 # The maximum power that can be supplied by the utility grid in Watts
