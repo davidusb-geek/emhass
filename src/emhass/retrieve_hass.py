@@ -7,6 +7,7 @@ from requests import get, post
 import json, copy, datetime, logging
 from emhass.utils import set_df_index_freq
 
+
 class retrieve_hass:
     """
     Retrieve data from Home Assistant using the restful API.
