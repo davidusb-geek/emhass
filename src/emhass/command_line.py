@@ -13,6 +13,7 @@ from emhass.forecast import forecast
 from emhass.optimization import optimization
 from emhass import utils
 
+
 def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str, 
     params: str, runtimeparams: str, set_type: str, logger: logging.Logger,
     get_data_from_file: Optional[bool] = False) -> dict:
