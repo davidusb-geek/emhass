@@ -17,6 +17,7 @@ from pvlib.irradiance import disc
 from emhass.retrieve_hass import retrieve_hass
 from emhass.utils import get_days_list
 
+
 class forecast:
     """
     Generate weather, load and costs forecasts needed as inputs to the optimization.
