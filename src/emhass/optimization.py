@@ -8,6 +8,7 @@ import pulp as plp
 from pulp import PULP_CBC_CMD, COIN_CMD, GLPK_CMD
 import logging, copy
 
+
 class optimization:
     """
     Optimize the deferrable load and battery energy dispatch problem using \ 
