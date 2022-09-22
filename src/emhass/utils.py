@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from typing import (
-    Tuple,
-    Optional,
-)
+from typing import Tuple, Optional
 import numpy as np, pandas as pd
 import yaml, pytz, logging, pathlib, json, copy
 from datetime import datetime, timedelta, timezone
+
 
 def get_root(file: str, num_parent: Optional[int] = 3) -> str:
     """
@@ -18,6 +16,7 @@ def get_root(file: str, num_parent: Optional[int] = 3) -> str:
     :param num_parent: The number of parents levels up to desired root folder
     :type num_parent: int, optional
     :rtype: str
+    
     """
     if num_parent == 3:
         root = pathlib.Path(file).resolve().parent.parent.parent
@@ -72,6 +71,7 @@ def get_forecast_dates(freq: int, delta_forecast: int,
     :type timedelta_days: Optional[int], optional
     :return: A list of future forecast dates.
     :rtype: pd.core.indexes.datetimes.DatetimeIndex
+    
     """
     freq = pd.to_timedelta(freq, "minutes")
     start_forecast = pd.Timestamp(datetime.now()).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -102,6 +102,7 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
     :type logger: logging.Logger
     :return: Returning the params and optimization parameter container.
     :rtype: Tuple[str, dict]
+    
     """
     if runtimeparams is not None:
         runtimeparams = json.loads(runtimeparams)
@@ -262,10 +263,12 @@ def get_days_list(days_to_retrieve: int) -> pd.date_range:
 def set_df_index_freq(df: pd.DataFrame) -> pd.DataFrame:
     """
     Set the freq of a DataFrame DateTimeIndex.
+    
     Args:
         df (pd.DataFrame): Input DataFrame
     Returns:
         pd.DataFrame: Input DataFrame with freq defined
+    
     """
     idx_diff = np.diff(df.index)
     sampling = pd.to_timedelta(np.median(idx_diff))
