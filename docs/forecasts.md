@@ -116,10 +116,10 @@ sensors:
     sensors:
       solcast_24hrs_forecast :
         value_template: >-
-          {%- set awattar_all_list = state_attr('sensor.solcast_forecast_data', 'forecasts') | map(attribute='pv_estimate') | list %}
+          {%- set power = state_attr('sensor.solcast_forecast_data', 'forecasts') | map(attribute='pv_estimate') | list %}
           {%- set values_all = namespace(all=[]) %}
-          {% for i in range(awattar_all_list | length) %}
-           {%- set v = (awattar_all_list[i] | float |multiply(1000) ) | int(0) %}
+          {% for i in range(power | length) %}
+           {%- set v = (power[i] | float |multiply(1000) ) | int(0) %}
             {%- set values_all.all = values_all.all + [ v ] %}
           {%- endfor %} {{ (values_all.all)[:48] }}
 ```
@@ -138,6 +138,84 @@ A MPC call may look like this for 4 deferrable loads:
           }}, \"pv_power_forecast\":{{states('sensor.solcast_24hrs_forecast')
           }}, \"prediction_horizon\":48,\"soc_init\":{{(states('sensor.powerwall_charge')|float(0))/100
           }},\"soc_final\":0.05,\"def_total_hours\":[2,0,0,0]}' http://localhost:5000/action/naive-mpc-optim"
+```
+
+Thanks to [@purcell_labs](https://github.com/purcell-lab) for this example donfiguration.
+
+### Example combining multiple SolCast configurations
+
+If you have multiple rooftops, for example for east-west facing solar panels, then you will need to fuze the sensors providing the different forecasts on a single one using templates in Home Assistant. Then feed that single sensor data passing the data as a list when calling the shell command.
+
+Here is a sample configuration to achiee this, thanks to [@gieljnssns](https://github.com/gieljnssns) for sharing.
+
+The two sensors using rest sensors:
+
+```
+- platform: rest
+  name: "Solcast Forecast huis"
+  json_attributes:
+    - forecasts
+  resource: https://api.solcast.com.au/rooftop_sites/xxxxxxxxxxc/forecasts?format=json&api_key=xxxxxxxxx&hours=24
+  method: GET
+  value_template: "{{ (value_json.forecasts[0].pv_estimate)|round(2) }}"
+  unit_of_measurement: "kW"
+  device_class: power
+  scan_interval: 86400
+  force_update: true
+
+- platform: rest
+  name: "Solcast Forecast garage"
+  json_attributes:
+    - forecasts
+  resource: https://api.solcast.com.au/rooftop_sites/xxxxxxxxxxc/forecasts?format=json&api_key=xxxxxxxxx&hours=24
+  method: GET
+  value_template: "{{ (value_json.forecasts[0].pv_estimate)|round(2) }}"
+  unit_of_measurement: "kW"
+  device_class: power
+  scan_interval: 86400
+  force_update: true
+```
+
+Then two templates, one for each sensor:
+
+```
+    solcast_24hrs_forecast_garage:
+      value_template: >-
+        {%- set power = state_attr('sensor.solcast_forecast_garage', 'forecasts') | map(attribute='pv_estimate') | list %}
+        {%- set values_all = namespace(all=[]) %}
+        {% for i in range(power | length) %}
+          {%- set v = (power[i] | float |multiply(1000) ) | int(0) %}
+          {%- set values_all.all = values_all.all + [ v ] %}
+        {%- endfor %} {{ (values_all.all)[:48] }}
+
+    solcast_24hrs_forecast_huis:
+      value_template: >-
+        {%- set power = state_attr('sensor.solcast_forecast_huis', 'forecasts') | map(attribute='pv_estimate') | list %}
+        {%- set values_all = namespace(all=[]) %}
+        {% for i in range(power | length) %}
+          {%- set v = (power[i] | float |multiply(1000) ) | int(0) %}
+          {%- set values_all.all = values_all.all + [ v ] %}
+        {%- endfor %} {{ (values_all.all)[:48] }}
+```
+
+And the fusion of the two sensors:
+
+```
+    solcast_24hrs_forecast:
+      value_template: >-
+        {% set a = states("sensor.solcast_24hrs_forecast_garage")[1:-1].split(',') | map('int') | list %}
+        {% set b = states("sensor.solcast_24hrs_forecast_huis")[1:-1].split(',') | map('int') | list %}
+        {% set ns = namespace(items = []) %}
+        {% for i in range(a | length) %}
+          {% set ns.items = ns.items + [ a[i]  + b[i]  ] %}
+        {% endfor %}
+        {{ ns.items }}
+```
+
+And finally the shell command:
+
+```
+dayahead_optim: curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":{{states('sensor.solcast_24hrs_forecast')}}}' http://localhost:5001/action/dayahead-optim
 ```
 
 ## Now/current values in forecasts
