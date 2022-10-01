@@ -288,6 +288,26 @@ The possible dictionnary keys to pass data are:
 
 - `prod_price_forecast` for the PV production selling price forecast.
 
+### Passing other data
+
+It is possible to also pass other data during runtime in order to automate the energy management. For example, it could be useful to dynamically update the total number of hours for each deferrable load (`def_total_hours`) using for instance a correlation with the outdoor temperature (useful for water heater for example). 
+
+Here is the list of the other additional dictionnary keys that can be passed at runtime:
+
+- `num_def_loads` for the number of deferrable loads to consider.
+
+- `P_deferrable_nom` for the nominal power for each deferrable load in Watts.
+
+- `def_total_hours` for the total number of hours that each deferrable load should operate.
+
+- `treat_def_as_semi_cont` to define if we should treat each deferrable load as a semi-continuous variable.
+
+- `set_def_constant` to define if we should set each deferrable load as a constant fixed value variable with just one startup for each optimization task.
+
+- `solcast_api_key` for the SolCast API key if you want to use this service for PV power production forecast.
+
+- `solcast_rooftop_id` for the ID of your rooftop for the SolCast service implementation.
+
 ### A naive Model Predictive Controller
 
 A MPC controller was introduced in v0.3.0. This is an informal/naive representation of a MPC controller. 

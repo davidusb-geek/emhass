@@ -36,12 +36,15 @@ class forecast:
     - Load cost forecast: the price of the energy from the grid on the next 24h. This \
         is given in EUR/kWh.
     
-    The weather forecast is obtained from two methods. The first method
+    The weather forecast is obtained from several methods. The first method
     uses a scrapper to the ClearOutside webpage which proposes detailed forecasts 
     based on Lat/Lon locations. This method seems quite stable but as with any scrape 
-    method it will fail if any changes are made to the webpage API. The second method
-    for weather forecast is using a direct read fro a CSV file. With this method we
-    will consider that we are reading the PV power directly.
+    method it will fail if any changes are made to the webpage API. A second method
+    for weather forecast is using a direct read from a CSV file. With this method we
+    will consider that we are reading the PV power directly. Another method is implemented
+    by passing the forecast values directly using a list of values. Another method is
+    using the external SolCast PV production forecast service. search the forecast 
+    section on the documentation for examples on how to apply these different methods. 
     
     The 'get_power_from_weather' method is proposed here to convert from irradiance
     data to electrical power. Again PVLib is used to model the PV plant.
@@ -151,7 +154,7 @@ class forecast:
         """
         Get and generate weather forecast data.
         
-        :param method: The desired method, options are 'scrapper' and 'csv', \
+        :param method: The desired method, options are 'scrapper', 'csv', 'list' and 'solcast'. \
             defaults to 'scrapper'
         :type method: str, optional
         :return: The DataFrame containing the forecasted data
@@ -195,7 +198,6 @@ class forecast:
             data['precipitable_water'] = pvlib.atmosphere.gueymard94_pw(
                 data['temp_air'], data['relative_humidity'])
         elif method == 'solcast': # using solcast API
-            forecast_dates_csv = self.get_forecast_days_csv()
             # Retrieve data from the solcast API
             headers = {
                 "Authorization": "Bearer " + self.retrieve_hass_conf['solcast_api_key'],
@@ -207,54 +209,41 @@ class forecast:
             data_list = []
             for elm in data['forecasts']:
                 data_list.append(elm['pv_estimate']*1000) # Converting kW to W
-            # Define index and pick correct dates
-            data_dict = {'ts':forecast_dates_csv, 'yhat':data_list}
-            data = pd.DataFrame.from_dict(data_dict)
-            data.index = forecast_dates_csv
-            data.drop(['ts'], axis=1, inplace=True)
-            data = data.copy().loc[self.forecast_dates]
+            # Check if the retrieved data has the correct length
+            if len(data_list) < len(self.forecast_dates):
+                self.logger.error("Not enough data retrived from SolCast service, try increasing the time step or use MPC")
+            else:
+                # Ensure correct length
+                data_list = data_list[0:len(self.forecast_dates)]
+                # Define DataFrame
+                data_dict = {'ts':self.forecast_dates, 'yhat':data_list}
+                data = pd.DataFrame.from_dict(data_dict)
+                # Define index
+                data.set_index('ts', inplace=True)
         elif method == 'csv': # reading from a csv file
-            forecast_dates_csv = self.get_forecast_days_csv()
             weather_csv_file_path = self.root + csv_path
             # Loading the csv file, we will consider that this is the PV power in W
             data = pd.read_csv(weather_csv_file_path, header=None, names=['ts', 'yhat'])
-            if self.params is not None:
-                if 'prediction_horizon' not in list(self.params['passed_data'].keys()):
-                    data = pd.concat([data, data], axis=0)
-                else:
-                    if self.params['passed_data']['prediction_horizon'] is None:
-                        data = pd.concat([data, data], axis=0)
-            else:
-                data = pd.concat([data, data], axis=0)
             # Check if the passed data has the correct length
-            if len(data) < len(forecast_dates_csv):
+            if len(data) < len(self.forecast_dates):
                 self.logger.error("Passed data from CSV is not long enough")
             else:
-                # Define index and pick correct dates
-                data.index = forecast_dates_csv
-                data.drop(['ts'], axis=1, inplace=True)
+                # Define index
+                data.index = self.forecast_dates
+                data.drop('ts', axis=1, inplace=True)
                 data = data.copy().loc[self.forecast_dates]
         elif method == 'list': # reading a list of values
-            forecast_dates_csv = self.get_forecast_days_csv()
             # Loading data from passed list
             data_list = self.params['passed_data']['pv_power_forecast']
-            if 'prediction_horizon' not in list(self.params['passed_data'].keys()):
-                data_list = data_list + data_list
-            else: 
-                if self.params['passed_data']['prediction_horizon'] is None:
-                    data_list = data_list + data_list
-                else:
-                    data_list = data_list[0:self.params['passed_data']['prediction_horizon']]
             # Check if the passed data has the correct length
-            if len(data_list) < len(forecast_dates_csv) and self.params['passed_data']['prediction_horizon'] is None:
+            if len(data_list) < len(self.forecast_dates) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from passed list is not long enough")
             else:
-                # Define index and pick correct dates
-                data_dict = {'ts':forecast_dates_csv, 'yhat':data_list}
+                # Define DataFrame
+                data_dict = {'ts':self.forecast_dates, 'yhat':data_list}
                 data = pd.DataFrame.from_dict(data_dict)
-                data.index = forecast_dates_csv
-                data.drop(['ts'], axis=1, inplace=True)
-                data = data.copy().loc[self.forecast_dates]
+                # Define index
+                data.set_index('ts', inplace=True)
         else:
             self.logger.error("Passed method is not valid")
         return data
@@ -509,44 +498,27 @@ class forecast:
             forecast_out.index = self.forecast_dates
         
         elif method == 'csv': # reading from a csv file
-            forecast_dates_csv = self.get_forecast_days_csv()
             load_csv_file_path = self.root + csv_path
             df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
-            if self.params is not None:
-                if 'prediction_horizon' not in list(self.params['passed_data'].keys()):
-                    df_csv = pd.concat([df_csv, df_csv], axis=0)
-                else:
-                    if self.params['passed_data']['prediction_horizon'] is None:
-                        df_csv = pd.concat([df_csv, df_csv], axis=0)
-            else:
-                df_csv = pd.concat([df_csv, df_csv], axis=0)
-            if len(df_csv) < len(forecast_dates_csv):
+            if len(df_csv) < len(self.forecast_dates):
                 self.logger.error("Passed data from CSV is not long enough")
             else:
-                df_csv.index = forecast_dates_csv
+                df_csv.index = self.forecast_dates
                 df_csv.drop(['ts'], axis=1, inplace=True)
                 forecast_out = df_csv.copy().loc[self.forecast_dates]
         
         elif method == 'list': # reading a list of values
-            forecast_dates_csv = self.get_forecast_days_csv()
             # Loading data from passed list
             data_list = self.params['passed_data']['load_power_forecast']
-            if 'prediction_horizon' not in list(self.params['passed_data'].keys()):
-                data_list = data_list + data_list
-            else:
-                if self.params['passed_data']['prediction_horizon'] is None:
-                    data_list = data_list + data_list
-                else:
-                    data_list = data_list[0:self.params['passed_data']['prediction_horizon']]
             # Check if the passed data has the correct length
-            if len(data_list) < len(forecast_dates_csv) and self.params['passed_data']['prediction_horizon'] is None:
+            if len(data_list) < len(self.forecast_dates) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from passed list is not long enough")
             else:
-                # Define index and pick correct dates
-                data_dict = {'ts':forecast_dates_csv, 'yhat':data_list}
+                # Define DataFrame
+                data_dict = {'ts':self.forecast_dates, 'yhat':data_list}
                 data = pd.DataFrame.from_dict(data_dict)
-                data.index = forecast_dates_csv
-                data.drop(['ts'], axis=1, inplace=True)
+                # Define index
+                data.set_index('ts', inplace=True)
                 forecast_out = data.copy().loc[self.forecast_dates]
 
         else:

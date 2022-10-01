@@ -44,7 +44,7 @@ class TestForecast(unittest.TestCase):
         self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                              params, root, logger, get_data_from_file=self.get_data_from_file)
         # The default for test is csv read
-        self.df_weather_scrap = self.fcst.get_weather_forecast(method='csv') # Still need to unittest these methods: 'scrapper','solcast'
+        self.df_weather_scrap = self.fcst.get_weather_forecast(method='csv') # Still need to unittest these methods: 'scrapper','solcast','forecast.solar'
         self.P_PV_forecast = self.fcst.get_power_from_weather(self.df_weather_scrap)
         self.P_load_forecast = self.fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
         self.df_input_data_dayahead = pd.concat([self.P_PV_forecast, self.P_load_forecast], axis=1)
