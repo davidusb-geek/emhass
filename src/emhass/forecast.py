@@ -228,6 +228,8 @@ class forecast:
             if len(data) < len(self.forecast_dates):
                 self.logger.error("Passed data from CSV is not long enough")
             else:
+                # Ensure correct length
+                data = data.loc[data.index[0:len(self.forecast_dates)],:]
                 # Define index
                 data.index = self.forecast_dates
                 data.drop('ts', axis=1, inplace=True)
@@ -239,6 +241,8 @@ class forecast:
             if len(data_list) < len(self.forecast_dates) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from passed list is not long enough")
             else:
+                # Ensure correct length
+                data_list = data_list[0:len(self.forecast_dates)]
                 # Define DataFrame
                 data_dict = {'ts':self.forecast_dates, 'yhat':data_list}
                 data = pd.DataFrame.from_dict(data_dict)
@@ -503,6 +507,9 @@ class forecast:
             if len(df_csv) < len(self.forecast_dates):
                 self.logger.error("Passed data from CSV is not long enough")
             else:
+                # Ensure correct length
+                df_csv = df_csv.loc[df_csv.index[0:len(self.forecast_dates)],:]
+                # Define index
                 df_csv.index = self.forecast_dates
                 df_csv.drop(['ts'], axis=1, inplace=True)
                 forecast_out = df_csv.copy().loc[self.forecast_dates]
@@ -514,6 +521,8 @@ class forecast:
             if len(data_list) < len(self.forecast_dates) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from passed list is not long enough")
             else:
+                # Ensure correct length
+                data_list = data_list[0:len(self.forecast_dates)]
                 # Define DataFrame
                 data_dict = {'ts':self.forecast_dates, 'yhat':data_list}
                 data = pd.DataFrame.from_dict(data_dict)
