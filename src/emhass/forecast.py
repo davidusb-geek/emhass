@@ -170,6 +170,10 @@ class forecast:
                                                  freq=freq_scrap).round(freq_scrap)
             # Using the clearoutside webpage
             response = get("https://clearoutside.com/forecast/"+str(round(self.lat, 2))+"/"+str(round(self.lon, 2))+"?desktop=true")
+            '''import bz2 # Uncomment to save a serialized response for tests
+            import _pickle as cPickle
+            with bz2.BZ2File("test_response_scrapper_method.pbz2", "w") as f: 
+                cPickle.dump(response, f)'''
             soup = BeautifulSoup(response.content, 'html.parser')
             table = soup.find_all(id='day_0')[0]
             list_names = table.find_all(class_='fc_detail_label')
