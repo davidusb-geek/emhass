@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+### Improvement
+- Added more detailed examples to the forecast module documentation.
+- Improved handling of datatime indexes in DataFrames on forecast module.
+- Added warning messages if passed list values contains non numeric items.
+
 ## [0.3.19] - 2022-09-14
 ### Fix
 - Updated default values for a working LP solver.

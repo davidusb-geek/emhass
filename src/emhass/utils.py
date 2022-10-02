@@ -155,6 +155,8 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
             else:
                 logger.error("ERROR: The passed data is either not a list or the length is not correct, length should be "+str(len(forecast_dates)))
                 logger.error("Passed type is "+str(type(runtimeparams['pv_power_forecast']))+" and length is "+str(len(forecast_dates)))
+            if len([x for x in runtimeparams['pv_power_forecast'] if not str(x).isdigit()]) > 0:
+                logger.warning("There are non numeric values on the passed data, check for missing values (nans, null, etc)")
         if 'load_power_forecast' in runtimeparams.keys():
             if type(runtimeparams['load_power_forecast']) == list and len(runtimeparams['load_power_forecast']) >= len(forecast_dates):
                 params['passed_data']['load_power_forecast'] = runtimeparams['load_power_forecast']
@@ -162,6 +164,8 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
             else:
                 logger.error("ERROR: The passed data is either not a list or the length is not correct, length should be "+str(len(forecast_dates)))
                 logger.error("Passed type is "+str(type(runtimeparams['load_power_forecast']))+" and length is "+str(len(forecast_dates)))
+            if len([x for x in runtimeparams['load_power_forecast'] if not str(x).isdigit()]) > 0:
+                logger.warning("There are non numeric values on the passed data, check for missing values (nans, null, etc)")
         if 'load_cost_forecast' in runtimeparams.keys():
             if type(runtimeparams['load_cost_forecast']) == list and len(runtimeparams['load_cost_forecast']) >= len(forecast_dates):
                 params['passed_data']['load_cost_forecast'] = runtimeparams['load_cost_forecast']
@@ -169,6 +173,8 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
             else:
                 logger.error("ERROR: The passed data is either not a list or the length is not correct, length should be "+str(len(forecast_dates)))
                 logger.error("Passed type is "+str(type(runtimeparams['load_cost_forecast']))+" and length is "+str(len(forecast_dates)))
+            if len([x for x in runtimeparams['load_cost_forecast'] if not str(x).isdigit()]) > 0:
+                logger.warning("There are non numeric values on the passed data, check for missing values (nans, null, etc)")
         if 'prod_price_forecast' in runtimeparams.keys():
             if type(runtimeparams['prod_price_forecast']) == list and len(runtimeparams['prod_price_forecast']) >= len(forecast_dates):
                 params['passed_data']['prod_price_forecast'] = runtimeparams['prod_price_forecast']
@@ -176,6 +182,8 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
             else:
                 logger.error("ERROR: The passed data is either not a list or the length is not correct, length should be "+str(len(forecast_dates)))
                 logger.error("Passed type is "+str(type(runtimeparams['prod_price_forecast']))+" and length is "+str(len(forecast_dates)))
+            if len([x for x in runtimeparams['prod_price_forecast'] if not str(x).isdigit()]) > 0:
+                logger.warning("There are non numeric values on the passed data, check for missing values (nans, null, etc)")
         # Treat optimization configuration parameters passed at runtime 
         if 'num_def_loads' in runtimeparams.keys():
             optim_conf['num_def_loads'] = runtimeparams['num_def_loads']
