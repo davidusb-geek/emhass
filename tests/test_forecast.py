@@ -2,8 +2,11 @@
 # -*- coding: utf-8 -*-
 
 import unittest
+from unittest.mock import MagicMock, patch
 import pandas as pd
 import pathlib, pickle, json, copy, yaml
+import bz2
+import _pickle as cPickle
 
 from emhass.retrieve_hass import retrieve_hass
 from emhass.forecast import forecast
@@ -66,15 +69,6 @@ class TestForecast(unittest.TestCase):
         }
     
     def test_get_weather_forecast(self):
-        # self.assertTrue(self.df_input_data.isnull().sum().sum()==0)
-        # self.assertIsInstance(self.df_weather_scrap, type(pd.DataFrame()))
-        # self.assertTrue(col in self.df_weather_scrap.columns for col in ['ghi', 'dni', 'dhi', 'temp_air'])
-        # self.assertIsInstance(self.df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex)
-        # self.assertIsInstance(self.df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-        # self.assertEqual(self.df_weather_scrap.index.tz, self.fcst.time_zone)
-        # self.assertTrue(self.fcst.start_forecast < ts for ts in self.df_weather_scrap.index)
-        # self.assertEqual(len(self.df_weather_scrap), 
-        #                  int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
         self.df_weather_csv = self.fcst.get_weather_forecast(method='csv')
         self.assertEqual(self.fcst.weather_forecast_method, 'csv')
         self.assertIsInstance(self.df_weather_csv, type(pd.DataFrame()))
@@ -90,6 +84,25 @@ class TestForecast(unittest.TestCase):
         self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.df_weather_csv), len(P_PV_forecast))
+
+    @patch('emhass.forecast.requests')
+    def test_get_weather_forecast_scrapper_method(self, mock_requests):
+        data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_scrapper_method.pbz2')), "rb")
+        response = cPickle.load(data)
+        mock_response = MagicMock()
+        mock_response.content = copy.deepcopy(response.content)
+        mock_response.status_code = 200
+        # specify the return value of the get() method
+        mock_requests.get.return_value = mock_response
+        df_weather_scrap = self.fcst.get_weather_forecast(method='scrapper')
+        self.assertEqual(self.fcst.weather_forecast_method, 'scrapper')
+        self.assertIsInstance(df_weather_scrap, type(pd.DataFrame()))
+        self.assertIsInstance(df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        self.assertEqual(df_weather_scrap.index.tz, self.fcst.time_zone)
+        self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_scrap.index)
+        self.assertEqual(len(df_weather_scrap), 
+                         int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
 
     def test_get_forecasts_with_lists(self):
         with open(root+'/config_emhass.yaml', 'r') as file:
@@ -181,7 +194,7 @@ class TestForecast(unittest.TestCase):
         self.plant_conf['strings_per_inverter'] = [1, 1]
         self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                              None, root, logger, get_data_from_file=self.get_data_from_file)
-        df_weather_scrap = self.fcst.get_weather_forecast(method='scrapper')
+        df_weather_scrap = self.fcst.get_weather_forecast(method='csv')
         P_PV_forecast = self.fcst.get_power_from_weather(df_weather_scrap)
         self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
         self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
@@ -193,7 +206,7 @@ class TestForecast(unittest.TestCase):
         df_input_data = self.input_data_dict['rh'].df_final.copy()
         self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                              params, root, logger, get_data_from_file=self.get_data_from_file)
-        df_weather_scrap = self.fcst.get_weather_forecast(method='scrapper')
+        df_weather_scrap = self.fcst.get_weather_forecast(method='csv')
         P_PV_forecast = self.fcst.get_power_from_weather(df_weather_scrap, set_mix_forecast=True, df_now=df_input_data)
         self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
         self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
