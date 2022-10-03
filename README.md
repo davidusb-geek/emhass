@@ -308,6 +308,8 @@ Here is the list of the other additional dictionnary keys that can be passed at 
 
 - `solcast_rooftop_id` for the ID of your rooftop for the SolCast service implementation.
 
+- `solar_forecast_kwp` for the PV peak installed power in kW used for the solar.forecast API call. 
+
 ### A naive Model Predictive Controller
 
 A MPC controller was introduced in v0.3.0. This is an informal/naive representation of a MPC controller. 

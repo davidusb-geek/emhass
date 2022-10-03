@@ -170,10 +170,6 @@ class forecast:
                                                  freq=freq_scrap).round(freq_scrap)
             # Using the clearoutside webpage
             response = get("https://clearoutside.com/forecast/"+str(round(self.lat, 2))+"/"+str(round(self.lon, 2))+"?desktop=true")
-            '''import bz2 # Uncomment to save a serialized response for tests
-            import _pickle as cPickle
-            with bz2.BZ2File("test_response_scrapper_method.pbz2", "w") as f: 
-                cPickle.dump(response, f)'''
             soup = BeautifulSoup(response.content, 'html.parser')
             table = soup.find_all(id='day_0')[0]
             list_names = table.find_all(class_='fc_detail_label')
@@ -201,6 +197,10 @@ class forecast:
             data['relative_humidity'] = raw_data['Relative Humidity (%)']
             data['precipitable_water'] = pvlib.atmosphere.gueymard94_pw(
                 data['temp_air'], data['relative_humidity'])
+            '''import bz2 # Uncomment to save a serialized data for tests
+            import _pickle as cPickle
+            with bz2.BZ2File("test_response_scrapper_method.pbz2", "w") as f: 
+                cPickle.dump(data, f)'''
         elif method == 'solcast': # using solcast API
             # Retrieve data from the solcast API
             headers = {
@@ -224,6 +224,36 @@ class forecast:
                 data = pd.DataFrame.from_dict(data_dict)
                 # Define index
                 data.set_index('ts', inplace=True)
+            '''import bz2 # Uncomment to save a serialized data for tests
+            import _pickle as cPickle
+            with bz2.BZ2File("test_response_solcast_method.pbz2", "w") as f: 
+                cPickle.dump(data, f)'''
+        elif method == 'solar.forecast': # using the solar.forecast API
+            # Retrieve data from the solar.forecast API
+            headers = {
+                "Accept": "application/json"
+                }
+            url = "https://api.forecast.solar/estimate/"+str(round(self.lat, 2))+"/"+str(round(self.lon, 2))+\
+                "/"+str(self.plant_conf["surface_tilt"])+"/"+str(self.plant_conf["surface_azimuth"]-180)+\
+                "/"+str(self.retrieve_hass_conf["solar_forecast_kwp"])
+            response = get(url, headers=headers)
+            data_raw = response.json()
+            data_dict = {'ts':list(data_raw['result']['watts'].keys()), 'yhat':list(data_raw['result']['watts'].values())}
+            # Form the final DataFrame
+            data = pd.DataFrame.from_dict(data_dict)
+            data.set_index('ts', inplace=True)
+            data.index = pd.to_datetime(data.index)
+            data = data.tz_localize(self.forecast_dates.tz)
+            data = data.reindex(index=self.forecast_dates)
+            mask_up_data_df = data.copy(deep=True).fillna(method = "ffill").isnull()
+            mask_down_data_df = data.copy(deep=True).fillna(method = "bfill").isnull()
+            data.interpolate(inplace=True)
+            data.loc[data.index[mask_up_data_df['yhat']==True],:] = 0.0
+            data.loc[data.index[mask_down_data_df['yhat']==True],:] = 0.0
+            '''import bz2 # Uncomment to save a serialized data for tests
+            import _pickle as cPickle
+            with bz2.BZ2File("test_response_solarforecast_method.pbz2", "w") as f: 
+                cPickle.dump(data, f)'''
         elif method == 'csv': # reading from a csv file
             weather_csv_file_path = self.root + csv_path
             # Loading the csv file, we will consider that this is the PV power in W
@@ -317,7 +347,8 @@ class forecast:
 
         """
         # If using csv method we consider that yhat is the PV power in W
-        if self.weather_forecast_method == 'solcast' or self.weather_forecast_method == 'csv' or self.weather_forecast_method == 'list':
+        if self.weather_forecast_method == 'solcast' or self.weather_forecast_method == 'solar.forecast' or \
+            self.weather_forecast_method == 'csv' or self.weather_forecast_method == 'list':
             P_PV_forecast = df_weather['yhat']
             P_PV_forecast.name = None
         else: # We will transform the weather data into electrical power
