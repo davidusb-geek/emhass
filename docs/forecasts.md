@@ -27,6 +27,13 @@ For example:
 curl -i -H 'Content-Type:application/json' -X POST -d '{"solcast_rooftop_id":"<your_system_id>","solcast_api_key":"<your_secret_api_key>"}' http://localhost:5000/action/dayahead-optim
 ```
 
+A thrd method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the PV peak installed power in kW) that should be passed at runtime.
+
+For example, for a 5 kWp installation:
+```
+curl -i -H 'Content-Type:application/json' -X POST -d '{"solar_forecast_kwp":5}' http://localhost:5000/action/dayahead-optim
+```
+
 ## Load power forecast
 
 The default method for load forecast is a naive method, also called persistence. This is obtained using `method=naive`. This method simply assumes that the forecast for a future period will be equal to the observed values in a past period. The past period is controlled using parameter `delta_forecast` and the default value for this is 24h.
