@@ -197,8 +197,13 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
             optim_conf['set_def_constant'] = runtimeparams['set_def_constant']
         if 'solcast_api_key' in runtimeparams.keys():
             retrieve_hass_conf['solcast_api_key'] = runtimeparams['solcast_api_key']
+            optim_conf['weather_forecast_method'] = 'solcast'
         if 'solcast_rooftop_id' in runtimeparams.keys():
             retrieve_hass_conf['solcast_rooftop_id'] = runtimeparams['solcast_rooftop_id']
+            optim_conf['weather_forecast_method'] = 'solcast'
+        if 'solar_forecast_kwp' in runtimeparams.keys():
+            retrieve_hass_conf['solar_forecast_kwp'] = runtimeparams['solar_forecast_kwp']
+            optim_conf['weather_forecast_method'] = 'solar.forecast'
         params = json.dumps(params)
     return params, retrieve_hass_conf, optim_conf
 
