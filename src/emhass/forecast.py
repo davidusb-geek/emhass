@@ -43,8 +43,10 @@ class forecast:
     for weather forecast is using a direct read from a CSV file. With this method we
     will consider that we are reading the PV power directly. Another method is implemented
     by passing the forecast values directly using a list of values. Another method is
-    using the external SolCast PV production forecast service. search the forecast 
-    section on the documentation for examples on how to apply these different methods. 
+    using the external SolCast PV production forecast service. A final method is using 
+    another external service: Solar.Forecast, for which just the nominal PV peak installed 
+    power should be provided. Search the forecast section on the documentation for examples 
+    on how to apply these different methods.
     
     The 'get_power_from_weather' method is proposed here to convert from irradiance
     data to electrical power. Again PVLib is used to model the PV plant.
