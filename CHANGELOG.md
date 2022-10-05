@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.3.20] - 2022-10-05
 ### Improvement
 - Added more detailed examples to the forecast module documentation.
 - Improved handling of datatime indexes in DataFrames on forecast module.
