@@ -69,7 +69,9 @@ For this system the total value of the obtained cost function is -1.56 EUR. We c
 
 ## A third test system: a 5kW PV installation, a 5kWh battery and two deferrable loads
 
-Now we will consider a complet system with PV and added batteries. In this case we want to schedule our deferrable loads but also the battery charge/discharge. We use again the `dayahead-optim` action or end point.
+Now we will consider a complet system with PV and added batteries. To add the battery we will set `set_use_battery: true` in the `optim_conf` section of the `config_emhass.yaml` file.
+
+In this case we want to schedule our deferrable loads but also the battery charge/discharge. We use again the `dayahead-optim` action or end point.
 
 The optimization results are:
 
