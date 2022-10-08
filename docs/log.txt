@@ -1,0 +1,48 @@
+2022-10-08 23:54:31,650 - __main__ - INFO - Retrieve hass get data method initiated...
+2022-10-08 23:54:40,377 - __main__ - INFO - Retrieving weather forecast data using method = solar.forecast
+2022-10-08 23:54:41,796 - __main__ - INFO - Retrieving data from hass for load forecast using method = naive
+2022-10-08 23:54:41,798 - __main__ - INFO - Retrieve hass get data method initiated...
+2022-10-08 23:54:49,639 - __main__ - INFO - Perform optimization for perfect forecast scenario
+2022-10-08 23:54:49,663 - __main__ - INFO - Solving for day: 30-9-2022
+2022-10-08 23:54:50,308 - __main__ - INFO - Status: Optimal
+2022-10-08 23:54:50,310 - __main__ - INFO - Total value of the Cost function = -3.98
+2022-10-08 23:54:50,374 - __main__ - INFO - Solving for day: 1-10-2022
+2022-10-08 23:54:50,989 - __main__ - INFO - Status: Optimal
+2022-10-08 23:54:51,003 - __main__ - INFO - Total value of the Cost function = -2.31
+2022-10-08 23:54:51,073 - __main__ - INFO - Solving for day: 2-10-2022
+2022-10-08 23:54:51,576 - __main__ - INFO - Status: Optimal
+2022-10-08 23:54:51,578 - __main__ - INFO - Total value of the Cost function = -4.79
+2022-10-08 23:54:51,618 - __main__ - INFO - Solving for day: 3-10-2022
+2022-10-08 23:54:51,992 - __main__ - INFO - Status: Optimal
+2022-10-08 23:54:51,994 - __main__ - INFO - Total value of the Cost function = -1.94
+2022-10-08 23:54:52,058 - __main__ - INFO - Solving for day: 4-10-2022
+2022-10-08 23:54:52,286 - __main__ - INFO - Status: Optimal
+2022-10-08 23:54:52,287 - __main__ - INFO - Total value of the Cost function = -2.88
+2022-10-08 23:54:52,318 - __main__ - INFO - Solving for day: 5-10-2022
+2022-10-08 23:54:52,552 - __main__ - INFO - Status: Optimal
+2022-10-08 23:54:52,553 - __main__ - INFO - Total value of the Cost function = -3.43
+2022-10-08 23:54:52,590 - __main__ - INFO - Solving for day: 6-10-2022
+2022-10-08 23:54:52,829 - __main__ - INFO - Status: Optimal
+2022-10-08 23:54:52,830 - __main__ - INFO - Total value of the Cost function = -2.15
+2022-10-08 23:54:52,873 - __main__ - INFO - Solving for day: 7-10-2022
+2022-10-08 23:54:53,114 - __main__ - INFO - Status: Optimal
+2022-10-08 23:54:53,115 - __main__ - INFO - Total value of the Cost function = -4.76
+System with: PV, two deferrable loads, perfect optimization, profit >> total cost function sum: -26.22797848156155
+2022-10-08 23:54:57,080 - __main__ - INFO - Perform optimization for the day-ahead
+2022-10-08 23:54:57,413 - __main__ - INFO - Status: Optimal
+2022-10-08 23:54:57,414 - __main__ - INFO - Total value of the Cost function = -1.56
+System with: PV, two deferrable loads, dayahead optimization, profit >> total cost function sum: -1.55666165370776
+2022-10-08 23:54:58,498 - __main__ - INFO - Retrieving weather forecast data using method = solar.forecast
+2022-10-08 23:54:58,982 - __main__ - INFO - Retrieving data from hass for load forecast using method = naive
+2022-10-08 23:54:58,983 - __main__ - INFO - Retrieve hass get data method initiated...
+2022-10-08 23:55:01,260 - __main__ - INFO - Perform optimization for the day-ahead
+2022-10-08 23:55:01,494 - __main__ - INFO - Status: Optimal
+2022-10-08 23:55:01,497 - __main__ - INFO - Total value of the Cost function = -5.38
+System with: two deferrable loads, dayahead optimization, profit >> total cost function sum: -5.3752567673975005
+2022-10-08 23:55:02,837 - __main__ - INFO - Retrieving weather forecast data using method = solar.forecast
+2022-10-08 23:55:04,378 - __main__ - INFO - Retrieving data from hass for load forecast using method = naive
+2022-10-08 23:55:04,379 - __main__ - INFO - Retrieve hass get data method initiated...
+2022-10-08 23:55:06,323 - __main__ - INFO - Perform optimization for the day-ahead
+2022-10-08 23:55:07,086 - __main__ - INFO - Status: Optimal
+2022-10-08 23:55:07,087 - __main__ - INFO - Total value of the Cost function = -1.23
+System with: PV, Battery, two deferrable loads, dayahead optimization, profit >> total cost function sum: -1.227904241914

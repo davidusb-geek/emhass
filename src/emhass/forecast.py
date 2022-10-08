@@ -349,53 +349,56 @@ class forecast:
 
         """
         # If using csv method we consider that yhat is the PV power in W
-        if self.weather_forecast_method == 'solcast' or self.weather_forecast_method == 'solar.forecast' or \
-            self.weather_forecast_method == 'csv' or self.weather_forecast_method == 'list':
-            P_PV_forecast = df_weather['yhat']
-            P_PV_forecast.name = None
-        else: # We will transform the weather data into electrical power
-            # Transform to power (Watts)
-            # Setting the main parameters of the PV plant
-            location = Location(latitude=self.lat, longitude=self.lon)
-            temp_params = TEMPERATURE_MODEL_PARAMETERS['sapm']['close_mount_glass_glass']
-            cec_modules = pvlib.pvsystem.retrieve_sam('CECMod')
-            cec_inverters = pvlib.pvsystem.retrieve_sam('cecinverter')
-            if type(self.plant_conf['module_model']) == list:
-                P_PV_forecast = pd.Series(0, index=df_weather.index)
-                for i in range(len(self.plant_conf['module_model'])):
+        if "solar_forecast_kwp" in self.retrieve_hass_conf.keys() and self.retrieve_hass_conf["solar_forecast_kwp"] == 0:
+            P_PV_forecast = pd.Series(0, index=df_weather.index)
+        else:
+            if self.weather_forecast_method == 'solcast' or self.weather_forecast_method == 'solar.forecast' or \
+                self.weather_forecast_method == 'csv' or self.weather_forecast_method == 'list':
+                P_PV_forecast = df_weather['yhat']
+                P_PV_forecast.name = None
+            else: # We will transform the weather data into electrical power
+                # Transform to power (Watts)
+                # Setting the main parameters of the PV plant
+                location = Location(latitude=self.lat, longitude=self.lon)
+                temp_params = TEMPERATURE_MODEL_PARAMETERS['sapm']['close_mount_glass_glass']
+                cec_modules = pvlib.pvsystem.retrieve_sam('CECMod')
+                cec_inverters = pvlib.pvsystem.retrieve_sam('cecinverter')
+                if type(self.plant_conf['module_model']) == list:
+                    P_PV_forecast = pd.Series(0, index=df_weather.index)
+                    for i in range(len(self.plant_conf['module_model'])):
+                        # Selecting correct module and inverter
+                        module = cec_modules[self.plant_conf['module_model'][i]]
+                        inverter = cec_inverters[self.plant_conf['inverter_model'][i]]
+                        # Building the PV system in PVLib
+                        system = PVSystem(surface_tilt=self.plant_conf['surface_tilt'][i], 
+                                        surface_azimuth=self.plant_conf['surface_azimuth'][i],
+                                        module_parameters=module,
+                                        inverter_parameters=inverter,
+                                        temperature_model_parameters=temp_params,
+                                        modules_per_string=self.plant_conf['modules_per_string'][i],
+                                        strings_per_inverter=self.plant_conf['strings_per_inverter'][i])
+                        mc = ModelChain(system, location, aoi_model="physical")
+                        # Run the model on the weather DF indexes
+                        mc.run_model(df_weather)
+                        # Extracting results for AC power
+                        P_PV_forecast = P_PV_forecast + mc.results.ac
+                else:
                     # Selecting correct module and inverter
-                    module = cec_modules[self.plant_conf['module_model'][i]]
-                    inverter = cec_inverters[self.plant_conf['inverter_model'][i]]
+                    module = cec_modules[self.plant_conf['module_model']]
+                    inverter = cec_inverters[self.plant_conf['inverter_model']]
                     # Building the PV system in PVLib
-                    system = PVSystem(surface_tilt=self.plant_conf['surface_tilt'][i], 
-                                    surface_azimuth=self.plant_conf['surface_azimuth'][i],
+                    system = PVSystem(surface_tilt=self.plant_conf['surface_tilt'], 
+                                    surface_azimuth=self.plant_conf['surface_azimuth'],
                                     module_parameters=module,
                                     inverter_parameters=inverter,
                                     temperature_model_parameters=temp_params,
-                                    modules_per_string=self.plant_conf['modules_per_string'][i],
-                                    strings_per_inverter=self.plant_conf['strings_per_inverter'][i])
+                                    modules_per_string=self.plant_conf['modules_per_string'],
+                                    strings_per_inverter=self.plant_conf['strings_per_inverter'])
                     mc = ModelChain(system, location, aoi_model="physical")
                     # Run the model on the weather DF indexes
                     mc.run_model(df_weather)
                     # Extracting results for AC power
-                    P_PV_forecast = P_PV_forecast + mc.results.ac
-            else:
-                # Selecting correct module and inverter
-                module = cec_modules[self.plant_conf['module_model']]
-                inverter = cec_inverters[self.plant_conf['inverter_model']]
-                # Building the PV system in PVLib
-                system = PVSystem(surface_tilt=self.plant_conf['surface_tilt'], 
-                                surface_azimuth=self.plant_conf['surface_azimuth'],
-                                module_parameters=module,
-                                inverter_parameters=inverter,
-                                temperature_model_parameters=temp_params,
-                                modules_per_string=self.plant_conf['modules_per_string'],
-                                strings_per_inverter=self.plant_conf['strings_per_inverter'])
-                mc = ModelChain(system, location, aoi_model="physical")
-                # Run the model on the weather DF indexes
-                mc.run_model(df_weather)
-                # Extracting results for AC power
-                P_PV_forecast = mc.results.ac
+                    P_PV_forecast = mc.results.ac
         
         if set_mix_forecast:
             P_PV_forecast = forecast.get_mix_forecast(
