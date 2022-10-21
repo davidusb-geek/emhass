@@ -1,7 +1,4 @@
-# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
-
-name: Python package
+name: Python test
 
 on:
   push:
@@ -38,17 +35,3 @@ jobs:
     - name: Test with pytest
       run: |
         pytest
-        
-    #- name: Generate coverage report
-    #  run: |
-    #    pip install pytest-cov
-    #    pytest --cov=src/emhass --cov-report=xml
-
-    #- name: Upload coverage to Codecov
-    #  uses: codecov/codecov-action@v2
-    #  with:
-    #    env_vars: OS,PYTHON
-    #    token: ${{secrets.CODECOV_TOKEN}}
-    #    fail_ci_if_error: true
-    #    verbose: true
-        
