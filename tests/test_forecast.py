@@ -115,7 +115,7 @@ class TestForecast(unittest.TestCase):
         self.assertEqual(len(df_weather_solcast), 
                          int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
         
-    def test_get_weather_forecast_solcast_method(self):
+    def test_get_weather_forecast_solarforecast_method(self):
         data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_solarforecast_method.pbz2')), "rb")
         data = cPickle.load(data)
         self.fcst.get_weather_forecast = MagicMock(return_value=data)
