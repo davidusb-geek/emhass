@@ -24,6 +24,9 @@
   <a href="https://emhass.readthedocs.io/en/latest/">
     <img alt="Read the Docs" src="https://img.shields.io/readthedocs/emhass">
   </a>
+  <a href="https://codecov.io/github/davidusb-geek/emhass" >
+  <img src="https://codecov.io/github/davidusb-geek/emhass/branch/master/graph/badge.svg?token=BW7KSCHN90"/>
+  </a>
 </p>
 
 EHMASS is a Python module designed to optimize your home energy interfacing with Home Assistant.
