@@ -19,7 +19,7 @@ from emhass.utils import get_days_list
 
 
 class forecast:
-    """
+    r"""
     Generate weather, load and costs forecasts needed as inputs to the optimization.
     
     In EMHASS we have basically 4 forecasts to deal with:
@@ -153,7 +153,7 @@ class forecast:
         
     def get_weather_forecast(self, method: Optional[str] = 'scrapper',
                              csv_path: Optional[str] = "/data/data_weather_forecast.csv") -> pd.DataFrame:
-        """
+        r"""
         Get and generate weather forecast data.
         
         :param method: The desired method, options are 'scrapper', 'csv', 'list' and 'solcast'. \
@@ -249,9 +249,9 @@ class forecast:
             data = data.reindex(index=self.forecast_dates)
             mask_up_data_df = data.copy(deep=True).fillna(method = "ffill").isnull()
             mask_down_data_df = data.copy(deep=True).fillna(method = "bfill").isnull()
-            data.interpolate(inplace=True)
             data.loc[data.index[mask_up_data_df['yhat']==True],:] = 0.0
             data.loc[data.index[mask_down_data_df['yhat']==True],:] = 0.0
+            data.interpolate(inplace=True)
             '''import bz2 # Uncomment to save a serialized data for tests
             import _pickle as cPickle
             with bz2.BZ2File("test_response_solarforecast_method.pbz2", "w") as f: 
@@ -333,7 +333,7 @@ class forecast:
     def get_power_from_weather(self, df_weather: pd.DataFrame, 
                                set_mix_forecast:Optional[bool] = False,
                                df_now:Optional[pd.DataFrame] = pd.DataFrame()) -> pd.Series:
-        """
+        r"""
         Convert wheater forecast data into electrical power.
         
         :param df_weather: The DataFrame containing the weather forecasted data. \
@@ -408,7 +408,7 @@ class forecast:
         return P_PV_forecast
     
     def get_forecast_days_csv(self, timedelta_days: Optional[int] = 1) -> pd.date_range:
-        """
+        r"""
         Get the date range vector of forecast dates that will be used when \
         loading a CSV file.
         
@@ -437,7 +437,7 @@ class forecast:
     
     def get_forecast_out_from_csv(self, df_final: pd.DataFrame, forecast_dates_csv: pd.date_range,
                                   csv_path: str, data_list: Optional[list] = None) -> pd.DataFrame:
-        """
+        r"""
         Get the forecast data as a DataFrame from a CSV file. The data contained \
             in the CSV file should be a 24h forecast with the same frequency as \
             the main 'freq' parameter in the configuration file. The timestamp \
@@ -491,7 +491,7 @@ class forecast:
     def get_load_forecast(self, days_min_load_forecast: Optional[int] = 3, method: Optional[str] = 'naive',
                           csv_path: Optional[str] = "/data/data_load_forecast.csv",
                           set_mix_forecast:Optional[bool] = False, df_now:Optional[pd.DataFrame] = pd.DataFrame()) -> pd.Series:
-        """
+        r"""
         Get and generate the load forecast data.
         
         :param days_min_load_forecast: The number of last days to retrieve that \
@@ -583,7 +583,7 @@ class forecast:
     
     def get_load_cost_forecast(self, df_final: pd.DataFrame, method: Optional[str] = 'hp_hc_periods',
                                csv_path: Optional[str] = "/data/data_load_cost_forecast.csv") -> pd.DataFrame:
-        """
+        r"""
         Get the unit cost for the load consumption based on multiple tariff \
         periods. This is the cost of the energy from the utility in a vector \
         sampled at the fixed freq value.
@@ -637,7 +637,7 @@ class forecast:
     
     def get_prod_price_forecast(self, df_final: pd.DataFrame, method: Optional[str] = 'constant',
                                csv_path: Optional[str] = "/data/data_prod_price_forecast.csv") -> pd.DataFrame:
-        """
+        r"""
         Get the unit power production price for the energy injected to the grid.\
         This is the price of the energy injected to the utility in a vector \
         sampled at the fixed freq value.
