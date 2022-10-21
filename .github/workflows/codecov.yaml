@@ -26,4 +26,4 @@ jobs:
         pip install pytest
         coverage run -m pytest
     - name: Upload Coverage to Codecov
-      uses: codecov/codecov-action@v2
+      uses: codecov/codecov-action@v3.1.1
