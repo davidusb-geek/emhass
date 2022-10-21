@@ -9,7 +9,7 @@ from emhass.utils import set_df_index_freq
 
 
 class retrieve_hass:
-    """
+    r"""
     Retrieve data from Home Assistant using the restful API.
     
     This class allows the user to retrieve data from a Home Assistant instance \
@@ -62,7 +62,7 @@ class retrieve_hass:
 
     def get_data(self, days_list: pd.date_range, var_list: list, minimal_response: Optional[bool] = False,
                  significant_changes_only: Optional[bool] = False) -> None:
-        """
+        r"""
         Retrieve the actual data from hass.
         
         :param days_list: A list of days to retrieve. The ISO format should be used \
@@ -136,7 +136,7 @@ class retrieve_hass:
     
     def prepare_data(self, var_load: str, load_negative: Optional[bool] = False, set_zero_min: Optional[bool] = True,
                      var_replace_zero: Optional[list] = None, var_interp: Optional[list] = None) -> None:
-        """
+        r"""
         Apply some data treatment in preparation for the optimization task.
         
         :param var_load: The name of the variable for the household load consumption.
@@ -220,7 +220,7 @@ class retrieve_hass:
     
     def post_data(self, data_df: pd.DataFrame, idx: int, entity_id: str, 
                   unit_of_measurement: str, friendly_name: str) -> None:
-        """
+        r"""
         Post passed data to hass.
         
         :param data_df: The DataFrame containing the data that will be posted \

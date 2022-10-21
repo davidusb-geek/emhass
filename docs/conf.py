@@ -22,7 +22,7 @@ copyright = '2021-2022, David HERNANDEZ'
 author = 'David HERNANDEZ'
 
 # The full version, including alpha/beta/rc tags
-release = '0.3.20'
+release = '0.3.21'
 
 # -- General configuration ---------------------------------------------------
 

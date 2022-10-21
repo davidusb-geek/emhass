@@ -10,7 +10,7 @@ import logging, copy
 
 
 class optimization:
-    """
+    r"""
     Optimize the deferrable load and battery energy dispatch problem using \ 
     the linear programming optimization technique. All equipement equations, \
     including the battery equations are hence transformed in a linear form.
@@ -31,7 +31,7 @@ class optimization:
                  var_load_cost: str, var_prod_price: str, 
                  costfun: str, config_path: str, logger: logging.Logger, 
                  opt_time_delta: Optional[int] = 24) -> None:
-        """
+        r"""
         Define constructor for optimization class.
         
         :param retrieve_hass_conf: Configuration parameters used to retrieve data \
@@ -87,7 +87,7 @@ class optimization:
                              unit_load_cost: np.array, unit_prod_price: np.array,
                              soc_init: Optional[float] = None, soc_final: Optional[float] = None,
                              def_total_hours: Optional[list] = None) -> pd.DataFrame:
-        """
+        r"""
         Perform the actual optimization using linear programming (LP).
         
         :param data_tp: A DataFrame containing the input data. The results of the \
@@ -432,7 +432,7 @@ class optimization:
         return opt_tp
 
     def perform_perfect_forecast_optim(self, df_input_data: pd.DataFrame, days_list: pd.date_range) -> pd.DataFrame:
-        """
+        r"""
         Perform an optimization on historical data (perfectly known PV production).
         
         :param df_input_data: A DataFrame containing all the input data used for \
@@ -471,7 +471,7 @@ class optimization:
         
     def perform_dayahead_forecast_optim(self, df_input_data: pd.DataFrame, 
                                         P_PV: pd.Series, P_load: pd.Series) -> pd.DataFrame:
-        """
+        r"""
         Perform a day-ahead optimization task using real forecast data. \
         This type of optimization is intented to be launched once a day.
         
@@ -501,7 +501,7 @@ class optimization:
     def perform_naive_mpc_optim(self, df_input_data: pd.DataFrame, P_PV: pd.Series, P_load: pd.Series,
                                 prediction_horizon: int, soc_init: Optional[float] = None, soc_final: Optional[float] = None,
                                 def_total_hours: Optional[list] = None) -> pd.DataFrame:
-        """
+        r"""
         Perform a naive approach to a Model Predictive Control (MPC). \
         This implementaion is naive because we are not using the formal formulation \
         of a MPC. Only the sense of a receiding horizon is considered here. \

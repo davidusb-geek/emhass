@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.21] - 2022-10-21
+### Fix
+- Fixed docstrings
+- Added github worflows for coverage and automatic package compiling
+- Fixing interpolation for Forecast.Solar data
+
 ## [0.3.20] - 2022-10-05
 ### Improvement
 - Added more detailed examples to the forecast module documentation.
