@@ -22,10 +22,13 @@ jobs:
         python-version: 3.9
     - name: Generate Report
       run: |
+        python -m pip install --upgrade pip
         pip install pytest
-        pip install pytest-cov
+        pip install coverage
         python setup.py install
-        pytest --cov .
+        coverage run -m pytest
+        coverage report
+        coverage xml
     - name: Upload coverage reports to Codecov
       run: |
         # Replace `linux` below with the appropriate OS
