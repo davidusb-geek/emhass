@@ -23,10 +23,9 @@ jobs:
     - name: Generate Report
       run: |
         python -m pip install --upgrade pip
-        pip install pytest
         pip install coverage
         python setup.py install
-        coverage run -m pytest
+        coverage run -m --source=emhass unittest
         coverage report
         coverage xml
     - name: Upload coverage reports to Codecov
