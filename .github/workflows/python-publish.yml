@@ -20,6 +20,8 @@ jobs:
   deploy:
 
     runs-on: ubuntu-latest
+    env:
+      PYTHON: '3.8'
 
     steps:
     - uses: actions/checkout@v3
