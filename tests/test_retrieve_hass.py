@@ -2,8 +2,11 @@
 # -*- coding: utf-8 -*-
 
 import unittest
+import requests_mock
 import numpy as np, pandas as pd
 import pytz, pathlib, pickle, json, yaml, copy
+import bz2
+import _pickle as cPickle
 
 from emhass.retrieve_hass import retrieve_hass
 from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
@@ -31,7 +34,7 @@ class TestRetrieveHass(unittest.TestCase):
             self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
             self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
             self.rh.get_data(self.days_list, self.var_list,
-                            minimal_response=False, significant_changes_only=False)
+                             minimal_response=False, significant_changes_only=False)
             if save_data_to_file:
                 with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'wb') as outp:
                     pickle.dump((self.rh.df_final, self.days_list, self.var_list), 
@@ -61,6 +64,23 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertIsInstance(plant_conf, dict)
         
     def test_get_data(self):
+        with requests_mock.mock() as m:
+            days_list = get_days_list(1)
+            var_list = [self.retrieve_hass_conf['var_load']]
+            data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_get_data_get_method.pbz2')), "rb")
+            data, get_url = cPickle.load(data)
+            m.get(get_url, json=data.json())
+            self.rh.get_data(days_list, var_list,
+                             minimal_response=False, significant_changes_only=False,
+                             test_url=get_url)
+            self.assertIsInstance(self.rh.df_final, type(pd.DataFrame()))
+            self.assertIsInstance(self.rh.df_final.index, pd.core.indexes.datetimes.DatetimeIndex)
+            self.assertIsInstance(self.rh.df_final.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+            self.assertEqual(len(self.rh.df_final.columns), len(var_list))
+            self.assertEqual(self.rh.df_final.index.freq, self.retrieve_hass_conf['freq'])
+            self.assertEqual(self.rh.df_final.index.tz, pytz.UTC)
+        
+    def test_prepare_data(self):
         self.assertIsInstance(self.rh.df_final, type(pd.DataFrame()))
         self.assertIsInstance(self.rh.df_final.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(self.rh.df_final.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
@@ -68,8 +88,6 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertEqual(self.rh.df_final.index.isin(self.days_list).sum(), len(self.days_list))
         self.assertEqual(self.rh.df_final.index.freq, self.retrieve_hass_conf['freq'])
         self.assertEqual(self.rh.df_final.index.tz, pytz.UTC)
-        
-    def test_prepare_data(self):
         self.rh.prepare_data(self.retrieve_hass_conf['var_load'], 
                              load_negative = self.retrieve_hass_conf['load_negative'],
                              set_zero_min = self.retrieve_hass_conf['set_zero_min'], 
