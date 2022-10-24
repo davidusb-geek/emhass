@@ -61,7 +61,8 @@ class retrieve_hass:
         self.get_data_from_file = get_data_from_file
 
     def get_data(self, days_list: pd.date_range, var_list: list, minimal_response: Optional[bool] = False,
-                 significant_changes_only: Optional[bool] = False) -> None:
+                 significant_changes_only: Optional[bool] = False, 
+                 test_url: Optional[str] = 'empty') -> None:
         r"""
         Retrieve the actual data from hass.
         
@@ -91,19 +92,26 @@ class retrieve_hass:
         
             for i, var in enumerate(var_list):
                 
-                if self.hass_url == "http://supervisor/core/api": # If we are using the supervisor API
-                    url = self.hass_url+"/history/period/"+day.isoformat()+"?filter_entity_id="+var
-                else: # Otherwise the Home Assistant Core API it is
-                    url = self.hass_url+"api/history/period/"+day.isoformat()+"?filter_entity_id="+var
-                if minimal_response: # A support for minimal response
-                    url = url + "?minimal_response"
-                if significant_changes_only: # And for signicant changes only (check the HASS restful API for more info)
-                    url = url + "?significant_changes_only"
+                if test_url == 'empty':
+                    if self.hass_url == "http://supervisor/core/api": # If we are using the supervisor API
+                        url = self.hass_url+"/history/period/"+day.isoformat()+"?filter_entity_id="+var
+                    else: # Otherwise the Home Assistant Core API it is
+                        url = self.hass_url+"api/history/period/"+day.isoformat()+"?filter_entity_id="+var
+                    if minimal_response: # A support for minimal response
+                        url = url + "?minimal_response"
+                    if significant_changes_only: # And for signicant changes only (check the HASS restful API for more info)
+                        url = url + "?significant_changes_only"
+                else:
+                    url = test_url
                 headers = {
                     "Authorization": "Bearer " + self.long_lived_token,
                     "content-type": "application/json",
                 }
                 response = get(url, headers=headers)
+                '''import bz2 # Uncomment to save a serialized data for tests
+                import _pickle as cPickle
+                with bz2.BZ2File("data/test_response_get_data_get_method.pbz2", "w") as f: 
+                    cPickle.dump(response, f)'''
                 try: # Sometimes when there are connection problems we need to catch empty retrieved json
                     data = response.json()[0]
                 except IndexError:

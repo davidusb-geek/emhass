@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+### Improvement
+- Improved unittest for mock get requests
+- Improved coverage
+
 ## [0.3.21] - 2022-10-21
 ### Fix
 - Fixed docstrings

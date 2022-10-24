@@ -18,7 +18,7 @@ from emhass.retrieve_hass import retrieve_hass
 from emhass.utils import get_days_list
 
 
-class forecast:
+class forecast(object):
     r"""
     Generate weather, load and costs forecasts needed as inputs to the optimization.
     
@@ -172,6 +172,10 @@ class forecast:
                                                  freq=freq_scrap).round(freq_scrap)
             # Using the clearoutside webpage
             response = get("https://clearoutside.com/forecast/"+str(round(self.lat, 2))+"/"+str(round(self.lon, 2))+"?desktop=true")
+            '''import bz2 # Uncomment to save a serialized data for tests
+            import _pickle as cPickle
+            with bz2.BZ2File("data/test_response_scrapper_get_method.pbz2", "w") as f: 
+                cPickle.dump(response.content, f)'''
             soup = BeautifulSoup(response.content, 'html.parser')
             table = soup.find_all(id='day_0')[0]
             list_names = table.find_all(class_='fc_detail_label')
@@ -199,18 +203,24 @@ class forecast:
             data['relative_humidity'] = raw_data['Relative Humidity (%)']
             data['precipitable_water'] = pvlib.atmosphere.gueymard94_pw(
                 data['temp_air'], data['relative_humidity'])
-            '''import bz2 # Uncomment to save a serialized data for tests
-            import _pickle as cPickle
-            with bz2.BZ2File("test_response_scrapper_method.pbz2", "w") as f: 
-                cPickle.dump(data, f)'''
         elif method == 'solcast': # using solcast API
             # Retrieve data from the solcast API
+            if 'solcast_api_key' not in self.retrieve_hass_conf:
+                self.logger.warning("The solcast_api_key parameter was not defined, using dummy values for testing")
+                self.retrieve_hass_conf['solcast_api_key'] = "123456"
+            if 'solcast_rooftop_id' not in self.retrieve_hass_conf:
+                self.logger.warning("The solcast_rooftop_id parameter was not defined, using dummy values for testing")
+                self.retrieve_hass_conf['solcast_rooftop_id'] = "123456"
             headers = {
                 "Authorization": "Bearer " + self.retrieve_hass_conf['solcast_api_key'],
                 "content-type": "application/json",
                 }
             url = "https://api.solcast.com.au/rooftop_sites/"+self.retrieve_hass_conf['solcast_rooftop_id']+"/forecasts?hours=24"
             response = get(url, headers=headers)
+            '''import bz2 # Uncomment to save a serialized data for tests
+            import _pickle as cPickle
+            with bz2.BZ2File("data/test_response_solcast_get_method.pbz2", "w") as f: 
+                cPickle.dump(response, f)'''
             data = response.json()
             data_list = []
             for elm in data['forecasts']:
@@ -226,12 +236,11 @@ class forecast:
                 data = pd.DataFrame.from_dict(data_dict)
                 # Define index
                 data.set_index('ts', inplace=True)
-            '''import bz2 # Uncomment to save a serialized data for tests
-            import _pickle as cPickle
-            with bz2.BZ2File("test_response_solcast_method.pbz2", "w") as f: 
-                cPickle.dump(data, f)'''
         elif method == 'solar.forecast': # using the solar.forecast API
             # Retrieve data from the solar.forecast API
+            if 'solar_forecast_kwp' not in self.retrieve_hass_conf:
+                self.logger.warning("The solar_forecast_kwp parameter was not defined, using dummy values for testing")
+                self.retrieve_hass_conf['solar_forecast_kwp'] = 5
             headers = {
                 "Accept": "application/json"
                 }
@@ -239,6 +248,10 @@ class forecast:
                 "/"+str(self.plant_conf["surface_tilt"])+"/"+str(self.plant_conf["surface_azimuth"]-180)+\
                 "/"+str(self.retrieve_hass_conf["solar_forecast_kwp"])
             response = get(url, headers=headers)
+            '''import bz2 # Uncomment to save a serialized data for tests
+            import _pickle as cPickle
+            with bz2.BZ2File("data/test_response_solarforecast_get_method.pbz2", "w") as f: 
+                cPickle.dump(response.json(), f)'''
             data_raw = response.json()
             data_dict = {'ts':list(data_raw['result']['watts'].keys()), 'yhat':list(data_raw['result']['watts'].values())}
             # Form the final DataFrame
@@ -252,10 +265,6 @@ class forecast:
             data.loc[data.index[mask_up_data_df['yhat']==True],:] = 0.0
             data.loc[data.index[mask_down_data_df['yhat']==True],:] = 0.0
             data.interpolate(inplace=True)
-            '''import bz2 # Uncomment to save a serialized data for tests
-            import _pickle as cPickle
-            with bz2.BZ2File("test_response_solarforecast_method.pbz2", "w") as f: 
-                cPickle.dump(data, f)'''
         elif method == 'csv': # reading from a csv file
             weather_csv_file_path = self.root + csv_path
             # Loading the csv file, we will consider that this is the PV power in W

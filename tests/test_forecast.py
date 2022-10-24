@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import unittest
-from unittest.mock import MagicMock
+import requests_mock
 import pandas as pd
 import pathlib, pickle, json, copy, yaml
 import bz2
@@ -12,7 +12,6 @@ from emhass.retrieve_hass import retrieve_hass
 from emhass.forecast import forecast
 from emhass.optimization import optimization
 from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
-from emhass.command_line import dayahead_forecast_optim
 
 # the root folder
 root = str(get_root(__file__, num_parent=2))
@@ -53,8 +52,8 @@ class TestForecast(unittest.TestCase):
         self.df_input_data_dayahead = pd.concat([self.P_PV_forecast, self.P_load_forecast], axis=1)
         self.df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
         self.opt = optimization(retrieve_hass_conf, optim_conf, plant_conf, 
-                       self.fcst.var_load_cost, self.fcst.var_prod_price, 
-                       'profit', root, logger)
+                                self.fcst.var_load_cost, self.fcst.var_prod_price, 
+                                'profit', root, logger)
         self.input_data_dict = {
             'root': root,
             'retrieve_hass_conf': self.retrieve_hass_conf,
@@ -84,51 +83,53 @@ class TestForecast(unittest.TestCase):
         self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.df_weather_csv), len(P_PV_forecast))
+    
+    def test_get_weather_forecast_scrapper_method_mock(self):
+        with requests_mock.mock() as m:
+            data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_scrapper_get_method.pbz2')), "rb")
+            data = cPickle.load(data)
+            get_url = "https://clearoutside.com/forecast/"+str(round(self.fcst.lat, 2))+"/"+str(round(self.fcst.lon, 2))+"?desktop=true"
+            m.get(get_url, content=data)
+            df_weather_scrap = self.fcst.get_weather_forecast(method='scrapper')
+            self.assertIsInstance(df_weather_scrap, type(pd.DataFrame()))
+            self.assertIsInstance(df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex)
+            self.assertIsInstance(df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+            self.assertEqual(df_weather_scrap.index.tz, self.fcst.time_zone)
+            self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_scrap.index)
+            self.assertEqual(len(df_weather_scrap), 
+                            int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
 
-    def test_get_weather_forecast_scrapper_method(self):
-        data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_scrapper_method.pbz2')), "rb")
-        data = cPickle.load(data)
-        self.fcst.get_weather_forecast = MagicMock(return_value=data)
-        df_weather_scrap = self.fcst.get_weather_forecast(method='scrapper')
-        self.fcst.get_weather_forecast.assert_called_with(method='scrapper')
-        self.fcst.get_weather_forecast.assert_called_once()
-        self.assertIsInstance(df_weather_scrap, type(pd.DataFrame()))
-        self.assertIsInstance(df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex)
-        self.assertIsInstance(df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-        self.assertEqual(df_weather_scrap.index.tz, self.fcst.time_zone)
-        self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_scrap.index)
-        self.assertEqual(len(df_weather_scrap), 
-                         int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
-
-    def test_get_weather_forecast_solcast_method(self):
-        data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_solcast_method.pbz2')), "rb")
-        data = cPickle.load(data)
-        self.fcst.get_weather_forecast = MagicMock(return_value=data)
-        df_weather_solcast = self.fcst.get_weather_forecast(method='solcast')
-        self.fcst.get_weather_forecast.assert_called_with(method='solcast')
-        self.fcst.get_weather_forecast.assert_called_once()
-        self.assertIsInstance(df_weather_solcast, type(pd.DataFrame()))
-        self.assertIsInstance(df_weather_solcast.index, pd.core.indexes.datetimes.DatetimeIndex)
-        self.assertIsInstance(df_weather_solcast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-        self.assertEqual(df_weather_solcast.index.tz, self.fcst.time_zone)
-        self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_solcast.index)
-        self.assertEqual(len(df_weather_solcast), 
-                         int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
+    def test_get_weather_forecast_solcast_method_mock(self):
+        with requests_mock.mock() as m:
+            data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_solcast_get_method.pbz2')), "rb")
+            data = cPickle.load(data)
+            get_url = "https://api.solcast.com.au/rooftop_sites/123456/forecasts?hours=24"
+            m.get(get_url, json=data.json())
+            df_weather_scrap = self.fcst.get_weather_forecast(method='solcast')
+            self.assertIsInstance(df_weather_scrap, type(pd.DataFrame()))
+            self.assertIsInstance(df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex)
+            self.assertIsInstance(df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+            self.assertEqual(df_weather_scrap.index.tz, self.fcst.time_zone)
+            self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_scrap.index)
+            self.assertEqual(len(df_weather_scrap), 
+                            int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
         
     def test_get_weather_forecast_solarforecast_method(self):
-        data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_solarforecast_method.pbz2')), "rb")
-        data = cPickle.load(data)
-        self.fcst.get_weather_forecast = MagicMock(return_value=data)
-        df_weather_solarforecast = self.fcst.get_weather_forecast(method='solar.forecast')
-        self.fcst.get_weather_forecast.assert_called_with(method='solar.forecast')
-        self.fcst.get_weather_forecast.assert_called_once()
-        self.assertIsInstance(df_weather_solarforecast, type(pd.DataFrame()))
-        self.assertIsInstance(df_weather_solarforecast.index, pd.core.indexes.datetimes.DatetimeIndex)
-        self.assertIsInstance(df_weather_solarforecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-        self.assertEqual(df_weather_solarforecast.index.tz, self.fcst.time_zone)
-        self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_solarforecast.index)
-        self.assertEqual(len(df_weather_solarforecast), 
-                         int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
+        with requests_mock.mock() as m:
+            data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_solarforecast_get_method.pbz2')), "rb")
+            data = cPickle.load(data)
+            get_url = "https://api.forecast.solar/estimate/"+str(round(self.fcst.lat, 2))+"/"+str(round(self.fcst.lon, 2))+\
+                "/"+str(self.plant_conf["surface_tilt"])+"/"+str(self.plant_conf["surface_azimuth"]-180)+\
+                "/"+str(5)
+            m.get(get_url, json=data)
+            df_weather_solarforecast = self.fcst.get_weather_forecast(method='solar.forecast')
+            self.assertIsInstance(df_weather_solarforecast, type(pd.DataFrame()))
+            self.assertIsInstance(df_weather_solarforecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+            self.assertIsInstance(df_weather_solarforecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+            self.assertEqual(df_weather_solarforecast.index.tz, self.fcst.time_zone)
+            self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_solarforecast.index)
+            self.assertEqual(len(df_weather_solarforecast), 
+                            int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
 
     def test_get_forecasts_with_lists(self):
         with open(root+'/config_emhass.yaml', 'r') as file:
