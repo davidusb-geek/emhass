@@ -133,7 +133,7 @@ class TestOptimization(unittest.TestCase):
         self.optim_conf['treat_def_as_semi_cont'] = [False, False]
         self.optim_conf['set_total_pv_sell'] = True
         self.optim_conf['set_def_constant'] = [True, True]
-        self.optim_conf['lp_solver'] = 'GLPK_CMD'
+        # self.optim_conf['lp_solver'] = 'GLPK_CMD'
         self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
