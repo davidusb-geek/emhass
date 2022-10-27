@@ -260,22 +260,13 @@ class optimization:
                             for i in set_I})
             
         # Total time of deferrable load
-        if def_total_hours is None:
-            for k in range(self.optim_conf['num_def_loads']):
-                constraints.update({"constraint_defload{}_energy".format(k) :
-                                    plp.LpConstraint(
-                                        e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in set_I),
-                                        sense = plp.LpConstraintEQ,
-                                        rhs = self.optim_conf['def_total_hours'][k]*self.optim_conf['P_deferrable_nom'][k])
-                                    })
-        else:
-            for k in range(self.optim_conf['num_def_loads']):
-                constraints.update({"constraint_defload{}_energy".format(k) :
-                                    plp.LpConstraint(
-                                        e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in set_I),
-                                        sense = plp.LpConstraintEQ,
-                                        rhs = def_total_hours[k]*self.optim_conf['P_deferrable_nom'][k])
-                                    })
+        for k in range(self.optim_conf['num_def_loads']):
+            constraints.update({"constraint_defload{}_energy".format(k) :
+                                plp.LpConstraint(
+                                    e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in set_I),
+                                    sense = plp.LpConstraintEQ,
+                                    rhs = def_total_hours[k]*self.optim_conf['P_deferrable_nom'][k])
+                                })
             
         # Treat deferrable load as a semi-continuous variable
         for k in range(self.optim_conf['num_def_loads']):

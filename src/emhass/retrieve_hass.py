@@ -2,7 +2,9 @@
 # -*- coding: utf-8 -*-
 
 from typing import Optional
-import numpy as np, pandas as pd
+import numpy as np
+import pandas as pd
+import requests
 from requests import get, post
 import json, copy, datetime, logging
 from emhass.utils import set_df_index_freq
@@ -107,7 +109,10 @@ class retrieve_hass:
                     "Authorization": "Bearer " + self.long_lived_token,
                     "content-type": "application/json",
                 }
-                response = get(url, headers=headers)
+                try:
+                    response = get(url, headers=headers)
+                except Exception:
+                    return "Request Get Error"
                 '''import bz2 # Uncomment to save a serialized data for tests
                 import _pickle as cPickle
                 with bz2.BZ2File("data/test_response_get_data_get_method.pbz2", "w") as f: 

@@ -98,7 +98,52 @@ class TestOptimization(unittest.TestCase):
         opt_res = pd.read_csv(root+'/data/opt_res_latest.csv', index_col='timestamp')
         cost_cols = [i for i in opt_res.columns if 'cost_' in i]
         table = opt_res[cost_cols].reset_index().sum(numeric_only=True).to_frame(name='Cost Totals').reset_index()
+        self.assertTrue(table.columns[0]=='index')
+        self.assertTrue(table.columns[1]=='Cost Totals')
         
+    def test_perform_dayahead_forecast_optim_costfun_selfconso(self):
+        costfun = 'self-consumption'
+        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+                                self.fcst.var_load_cost, self.fcst.var_prod_price,  
+                                costfun, root, logger)
+        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
+            self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
+        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+        self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        self.assertTrue('cost_fun_selfcons' in self.opt_res_dayahead.columns)
+        
+    def test_perform_dayahead_forecast_optim_costfun_cost(self):
+        costfun = 'cost'
+        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+                                self.fcst.var_load_cost, self.fcst.var_prod_price,  
+                                costfun, root, logger)
+        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
+            self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
+        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+        self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        self.assertTrue('cost_fun_cost' in self.opt_res_dayahead.columns)
+        
+    def test_perform_dayahead_forecast_optim_aux(self):
+        self.optim_conf['treat_def_as_semi_cont'] = [False, False]
+        self.optim_conf['set_total_pv_sell'] = True
+        self.optim_conf['set_def_constant'] = [True, True]
+        self.optim_conf['lp_solver'] = 'GLPK_CMD'
+        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+                                self.fcst.var_load_cost, self.fcst.var_prod_price,  
+                                self.costfun, root, logger)
+        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
+            self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
+        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+        self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         
     def test_perform_naive_mpc_optim(self):
         self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)

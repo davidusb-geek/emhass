@@ -62,17 +62,23 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertTrue(retrieve_hass_conf['hass_url'] == 'http://supervisor/core/api')
         self.assertIsInstance(optim_conf, dict)
         self.assertIsInstance(plant_conf, dict)
-        
-    def test_get_data(self):
+
+    def test_get_data_failed(self):
+        days_list = get_days_list(1)
+        var_list = [self.retrieve_hass_conf['var_load']]
+        response = self.rh.get_data(days_list, var_list)
+        self.assertEqual(response, "Request Get Error")
+
+    def test_get_data_mock(self):
         with requests_mock.mock() as m:
             days_list = get_days_list(1)
             var_list = [self.retrieve_hass_conf['var_load']]
             data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_get_data_get_method.pbz2')), "rb")
-            data, get_url = cPickle.load(data)
-            m.get(get_url, json=data.json())
+            data = cPickle.load(data)
+            m.get(self.retrieve_hass_conf['hass_url'], json=data.json())
             self.rh.get_data(days_list, var_list,
                              minimal_response=False, significant_changes_only=False,
-                             test_url=get_url)
+                             test_url=self.retrieve_hass_conf['hass_url'])
             self.assertIsInstance(self.rh.df_final, type(pd.DataFrame()))
             self.assertIsInstance(self.rh.df_final.index, pd.core.indexes.datetimes.DatetimeIndex)
             self.assertIsInstance(self.rh.df_final.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)

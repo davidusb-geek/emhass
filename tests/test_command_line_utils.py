@@ -8,6 +8,7 @@ import pathlib, json, yaml, copy
 from emhass.command_line import set_input_data_dict
 from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim
 from emhass.command_line import publish_data
+from emhass.command_line import main
 from emhass import utils
 
 # the root folder
@@ -183,14 +184,6 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].isnull().sum().sum()==0)
         self.assertTrue(len(input_data_dict['df_input_data_dayahead'])==10) # The default value for prediction_horizon
-        # action = 'dayahead-optim'
-        # input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
-        #                                       action, logger, get_data_from_file=True)
-        # self.assertIsInstance(input_data_dict, dict)
-        # self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
-        # self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
-        # self.assertTrue(input_data_dict['df_input_data_dayahead'].isnull().sum().sum()==0)
-        # self.assertTrue(len(input_data_dict['df_input_data_dayahead'])==10) # The default value for prediction_horizon
         
     def test_dayahead_forecast_optim(self):
         config_path = pathlib.Path(root+'/config_emhass.yaml')
@@ -204,6 +197,21 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertTrue(opt_res.isnull().sum().sum()==0)
         self.assertTrue(len(opt_res)==len(params['passed_data']['pv_power_forecast']))
+        
+    def test_perfect_forecast_optim(self):
+        config_path = pathlib.Path(root+'/config_emhass.yaml')
+        base_path = str(config_path.parent)
+        costfun = 'profit'
+        action = 'perfect-optim'
+        params = copy.deepcopy(json.loads(self.params_json))
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
+        opt_res = perfect_forecast_optim(input_data_dict, logger, debug=True)
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertTrue(opt_res.isnull().sum().sum()==0)
+        self.assertIsInstance(opt_res.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(opt_res.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        self.assertTrue('cost_fun_'+input_data_dict["costfun"] in opt_res.columns)
         
     def test_naive_mpc_optim(self):
         config_path = pathlib.Path(root+'/config_emhass.yaml')
@@ -239,8 +247,8 @@ class TestCommandLineUtils(unittest.TestCase):
         opt_res_pub = publish_data(input_data_dict, logger)
         self.assertTrue(len(opt_res_pub)==1)
         
-    def test_publish_data(self):
-        config_path = pathlib.Path(root+'/config_emhass.yaml')
+    
+        config_path = pathlib.Path(root+'/confidef test_publish_data(self):g_emhass.yaml')
         base_path = str(config_path.parent)
         costfun = 'profit'
         action = 'naive-mpc-optim'
@@ -258,7 +266,6 @@ class TestCommandLineUtils(unittest.TestCase):
         opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
         opt_res_last = publish_data(input_data_dict, logger)
         self.assertTrue(len(opt_res_last)==1)
-        
         
 if __name__ == '__main__':
     unittest.main()
