@@ -19,7 +19,7 @@ jobs:
           python-version: '3.9'
 
       - name: install
-        run: pip install -U twine build packaging
+        run: pip install -U twine build packaging virtualenv
 
       - name: build
         run: python -m build
