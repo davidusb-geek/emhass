@@ -18,17 +18,14 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: install
-        run: pip install -U twine build packaging virtualenv
-
       - name: build
-        run: python -m build
-
-      - run: ls -lh dist
-      - run: twine check dist/*
-
-      - name: upload to pypi
-        run: twine upload dist/*
+        run: |
+          pip install virtualenv
+          virtualenv -p /usr/bin/python .venv
+          source .venv/bin/activate
+          pip install -U twine build packaging
+          python -m build
+          twine upload dist/*
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
