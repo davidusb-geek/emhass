@@ -17,8 +17,9 @@ root = str(utils.get_root(__file__, num_parent=2))
 logger, ch = utils.get_logger(__name__, root, save_to_file=False)
 
 class TestCommandLineUtils(unittest.TestCase):
-
-    def setUp(self):
+    
+    @staticmethod
+    def get_test_params():
         with open(root+'/config_emhass.yaml', 'r') as file:
             params = yaml.load(file, Loader=yaml.FullLoader)
         params.update({
@@ -31,6 +32,10 @@ class TestCommandLineUtils(unittest.TestCase):
                 'alt': 8000.0
             }
             })
+        return params
+
+    def setUp(self):
+        params = TestCommandLineUtils.get_test_params()
         runtimeparams = {
             'pv_power_forecast':[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48],
             'load_power_forecast':[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48],
@@ -113,6 +118,9 @@ class TestCommandLineUtils(unittest.TestCase):
         runtimeparams.update({'def_total_hours':[5, 8, 10]})
         runtimeparams.update({'treat_def_as_semi_cont':[True, True, True]})
         runtimeparams.update({'set_def_constant':[False, False, False]})
+        runtimeparams.update({'solcast_api_key':'yoursecretsolcastapikey'})
+        runtimeparams.update({'solcast_rooftop_id':'yourrooftopid'})
+        runtimeparams.update({'solar_forecast_kwp':5.0})
         runtimeparams_json = json.dumps(runtimeparams)
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
             pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True, params=self.params_json)
@@ -131,6 +139,60 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(optim_conf['def_total_hours'] == [5, 8, 10])
         self.assertTrue(optim_conf['treat_def_as_semi_cont'] == [True, True, True])
         self.assertTrue(optim_conf['set_def_constant'] == [False, False, False])
+    
+    def test_treat_runtimeparams_failed(self):
+        params = TestCommandLineUtils.get_test_params()
+        runtimeparams = {
+            'pv_power_forecast':[1,2,3,4,5,'nan',7,8,9,10],
+            'load_power_forecast':[1,2,'nan',4,5,6,7,8,9,10],
+            'load_cost_forecast':[1,2,3,4,5,6,7,8,'nan',10],
+            'prod_price_forecast':[1,2,3,4,'nan',6,7,8,9,10]
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params['passed_data'] = runtimeparams
+        params['optim_conf'][7]['weather_forecast_method'] = 'list'
+        params['optim_conf'][8]['load_forecast_method'] = 'list'
+        params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
+        params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
+        params_json = json.dumps(params)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
+            pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True, params=params_json)
+        set_type = 'dayahead-optim'
+        params, retrieve_hass_conf, optim_conf = utils.treat_runtimeparams(
+            runtimeparams_json, params_json,
+            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
+        params = json.loads(params)
+        runtimeparams = json.loads(runtimeparams_json)
+        self.assertTrue(len([x for x in runtimeparams['pv_power_forecast'] if not str(x).isdigit()])>0)
+        self.assertTrue(len([x for x in runtimeparams['load_power_forecast'] if not str(x).isdigit()])>0)
+        self.assertTrue(len([x for x in runtimeparams['load_cost_forecast'] if not str(x).isdigit()])>0)
+        self.assertTrue(len([x for x in runtimeparams['prod_price_forecast'] if not str(x).isdigit()])>0)
+        params = TestCommandLineUtils.get_test_params()
+        runtimeparams = {
+            'pv_power_forecast':'[1,2,3,4,5,6,7,8,9,10]',
+            'load_power_forecast':'[1,2,3,4,5,6,7,8,9,10]',
+            'load_cost_forecast':'[1,2,3,4,5,6,7,8,9,10]',
+            'prod_price_forecast':'[1,2,3,4,5,6,7,8,9,10]'
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params['passed_data'] = runtimeparams
+        params['optim_conf'][7]['weather_forecast_method'] = 'list'
+        params['optim_conf'][8]['load_forecast_method'] = 'list'
+        params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
+        params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
+        params_json = json.dumps(params)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
+            pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True, params=params_json)
+        set_type = 'dayahead-optim'
+        params, retrieve_hass_conf, optim_conf = utils.treat_runtimeparams(
+            runtimeparams_json, params_json,
+            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
+        params = json.loads(params)
+        runtimeparams = json.loads(runtimeparams_json)
+        self.assertIsInstance(runtimeparams['pv_power_forecast'], str)
+        self.assertIsInstance(runtimeparams['load_power_forecast'], str)
+        self.assertIsInstance(runtimeparams['load_cost_forecast'], str)
+        self.assertIsInstance(runtimeparams['prod_price_forecast'], str)
         
     def test_set_input_data_dict(self):
         config_path = pathlib.Path(root+'/config_emhass.yaml')
