@@ -40,7 +40,8 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
     """
     logger.info("Setting up needed data")
     # Parsing yaml
-    retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(config_path, params=params)
+    retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
+        config_path, use_secrets=not(get_data_from_file), params=params)
     # Treat runtimeparams
     params, retrieve_hass_conf, optim_conf = utils.treat_runtimeparams(
         runtimeparams, params, retrieve_hass_conf, 
@@ -118,6 +119,9 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         days_list = None
     else:
         logger.error("The passed action argument and hence the set_type parameter for setup is not valid")
+        df_input_data, df_input_data_dayahead = None, None
+        P_PV_forecast, P_load_forecast = None, None
+        days_list = None
 
     # The input data dictionnary to return
     input_data_dict = {
@@ -335,15 +339,22 @@ def main():
     parser.add_argument('--log2file', type=strtobool, default='False', help='Define if we should log to a file or not')
     parser.add_argument('--params', type=str, default=None, help='Configuration parameters passed from data/options.json')
     parser.add_argument('--runtimeparams', type=str, default=None, help='Pass runtime optimization parameters as dictionnary')
-    parser.add_argument('--version', action='version', version='%(prog)s '+version('emhass'))
+    parser.add_argument('--get_data_from_file', type=strtobool, default='False', help='Use True for testing purposes')
     args = parser.parse_args()
     # The path to the configuration files
     config_path = pathlib.Path(args.config)
     base_path = str(config_path.parent)
     # create logger
     logger, ch = utils.get_logger(__name__, base_path, save_to_file=bool(args.log2file))
+    # Additionnal argument
+    try:
+        parser.add_argument('--version', action='version', version='%(prog)s '+version('emhass'))
+    except Exception:
+        logger.info("Version not found for emhass package. Or importlib exited with PackageNotFoundError.")
     # Setup parameters
-    input_data_dict = set_input_data_dict(config_path, base_path, args.costfun, args.params, args.runtimeparams, args.action, logger)
+    input_data_dict = set_input_data_dict(config_path, base_path, 
+                                          args.costfun, args.params, args.runtimeparams, args.action, 
+                                          logger, args.get_data_from_file)
     # Perform selected action
     if args.action == 'perfect-optim':
         opt_res = perfect_forecast_optim(input_data_dict, logger)
@@ -360,6 +371,7 @@ def main():
     # Flush the logger
     ch.close()
     logger.removeHandler(ch)
+    return opt_res
 
 if __name__ == '__main__':
     main()
