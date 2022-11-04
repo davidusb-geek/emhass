@@ -340,17 +340,13 @@ def main():
     parser.add_argument('--params', type=str, default=None, help='Configuration parameters passed from data/options.json')
     parser.add_argument('--runtimeparams', type=str, default=None, help='Pass runtime optimization parameters as dictionnary')
     parser.add_argument('--get_data_from_file', type=strtobool, default='False', help='Use True for testing purposes')
+    parser.add_argument('--version', action='version', version='%(prog)s '+version('emhass'))
     args = parser.parse_args()
     # The path to the configuration files
     config_path = pathlib.Path(args.config)
     base_path = str(config_path.parent)
     # create logger
     logger, ch = utils.get_logger(__name__, base_path, save_to_file=bool(args.log2file))
-    # Additionnal argument
-    try:
-        parser.add_argument('--version', action='version', version='%(prog)s '+version('emhass'))
-    except Exception:
-        logger.info("Version not found for emhass package. Or importlib exited with PackageNotFoundError.")
     # Setup parameters
     input_data_dict = set_input_data_dict(config_path, base_path, 
                                           args.costfun, args.params, args.runtimeparams, args.action, 

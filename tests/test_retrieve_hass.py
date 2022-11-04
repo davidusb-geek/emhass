@@ -104,8 +104,19 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertEqual(len(self.rh.df_final.columns), len(self.df_raw.columns))
         self.assertEqual(self.rh.df_final.index.freq, self.retrieve_hass_conf['freq'])
         self.assertEqual(self.rh.df_final.index.tz, self.retrieve_hass_conf['time_zone'])
-        if self.retrieve_hass_conf['load_negative']:
-            self.assertEqual(self.rh.df_final[self.retrieve_hass_conf['var_load']+"_positive"].isnull().sum(), 0)
+        
+    def test_prepare_data_negative_load(self):
+        self.rh.df_final[self.retrieve_hass_conf['var_load']] = -self.rh.df_final[self.retrieve_hass_conf['var_load']]
+        self.rh.prepare_data(self.retrieve_hass_conf['var_load'], 
+                             load_negative = True,
+                             set_zero_min = self.retrieve_hass_conf['set_zero_min'], 
+                             var_replace_zero = self.retrieve_hass_conf['var_replace_zero'], 
+                             var_interp = None)
+        self.assertIsInstance(self.rh.df_final, type(pd.DataFrame()))
+        self.assertEqual(self.rh.df_final.index.isin(self.days_list).sum(), self.df_raw.index.isin(self.days_list).sum())
+        self.assertEqual(len(self.rh.df_final.columns), len(self.df_raw.columns))
+        self.assertEqual(self.rh.df_final.index.freq, self.retrieve_hass_conf['freq'])
+        self.assertEqual(self.rh.df_final.index.tz, self.retrieve_hass_conf['time_zone'])
         
     def test_publish_data(self):
         response, data = self.rh.post_data(self.df_raw[self.df_raw.columns[0]], 25, 'sensor.p_pv_forecast', "Unit", "Variable")
@@ -116,12 +127,22 @@ class TestRetrieveHass(unittest.TestCase):
         # Lets test publishing a forecast with more added attributes
         df = copy.deepcopy(self.df_raw.iloc[0:30])
         df.columns = ['P_PV', 'P_Load']
-        response, data = self.rh.post_data(df[df.columns[0]], 25, 'sensor.p_pv_forecast', "W", "PV Forecast")
+        df["P_batt"] = 1000.0
+        df["SOC_opt"] = 0.5
+        response, data = self.rh.post_data(df["P_PV"], 25, 'sensor.p_pv_forecast', "W", "PV Forecast")
         self.assertEqual(response.status_code, 200)
         self.assertTrue(data['state']==str(np.round(df.loc[df.index[25],df.columns[0]],2)))
         self.assertTrue(data['attributes']['unit_of_measurement']=='W')
         self.assertTrue(data['attributes']['friendly_name']=='PV Forecast')
         self.assertIsInstance(data['attributes']['forecasts'], list)
+        response, data = self.rh.post_data(df["P_batt"], 25, 'sensor.p_batt_forecast', "W", "Battery Power Forecast")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(data['attributes']['unit_of_measurement']=='W')
+        self.assertTrue(data['attributes']['friendly_name']=='Battery Power Forecast')
+        response, data = self.rh.post_data(df["SOC_opt"], 25, 'sensor.SOC_forecast', "%", "Battery SOC Forecast")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(data['attributes']['unit_of_measurement']=='%')
+        self.assertTrue(data['attributes']['friendly_name']=='Battery SOC Forecast')
         
     
 if __name__ == '__main__':

@@ -292,16 +292,6 @@ class retrieve_hass:
         # Treating the response status and posting them on the logger
         if response.status_code == 200:
             self.logger.info("Successfully posted to "+entity_id+" = "+str(state))
-        elif response.status_code == 201:
-            self.logger.info("Successfully posted value in a newly created entity_id")
-        elif response.status_code == 400:
-            self.logger.info("Error posting value to HASS: Bad Request")
-        elif response.status_code == 401:
-            self.logger.info("Error posting value to HASS: Unauthorized")
-        elif response.status_code == 404:
-            self.logger.info("Error posting value to HASS: Not Found")
-        elif response.status_code == 405:
-            self.logger.info("Error posting value to HASS: Method not allowed")
         else:
             self.logger.info("The received response code is not recognized")
         return response, data
