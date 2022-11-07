@@ -147,7 +147,7 @@ A MPC call may look like this for 4 deferrable loads:
           }},\"soc_final\":0.05,\"def_total_hours\":[2,0,0,0]}' http://localhost:5000/action/naive-mpc-optim"
 ```
 
-Thanks to [@purcell_labs](https://github.com/purcell-lab) for this example donfiguration.
+Thanks to [@purcell_labs](https://github.com/purcell-lab) for this example configuration.
 
 ### Example combining multiple SolCast configurations
 
