@@ -85,11 +85,11 @@ For this system the total value of the obtained cost function is -1.23 EUR, a su
 
 ## Configuration example to pass data at runtime
 
-As we showed in the forecast module section, we can pass our own forecast data using list of values passed at runtime usning templates. However, it is possible to also pass other data during runtime in order to automate the energy management.
+As we showed in the forecast module section, we can pass our own forecast data using lists of values passed at runtime using templates. However, it is possible to also pass other data during runtime in order to automate the energy management.
 
 For example, let's suppose that for the default configuration with two deferrable loads we want to correlate and control them to the outside temperature. This will be used to build a list of the total number of hours for each deferrable load (`def_total_hours`). In this example the first deferrable load is a water heater and the second is the pool pump.
 
-We will begin by defining a temperature sensor on 12 hours sliding window using the filter platform for the outside temperature:
+We will begin by defining a temperature sensor on a 12 hours sliding window using the filter platform for the outside temperature:
 ```
   - platform: filter
     name: "Outdoor temperature mean over last 12 hours"
@@ -101,6 +101,8 @@ We will begin by defining a temperature sensor on 12 hours sliding window using 
 ```
 Then we will use a template sensor to build our list of the total number of hours for each deferrable load:
 ```
+  - platform: template
+    sensors:
       list_operating_hours_of_each_deferrable_load:
         value_template: >-
           {% if states("sensor.outdoor_temperature_mean_over_last_12_hours") < "10" %}
@@ -115,7 +117,7 @@ Then we will use a template sensor to build our list of the total number of hour
             {{ [3, 12] | list }}
           {% endif %}
 ```
-The values for the total number of operating hours was tuned by trial and error throughout a whole year. These values work fine for a 3000W water heater (the first value of the list) and a 750W pool pump (the second value in the list).
+The values for the total number of operating hours were tuned by trial and error throughout a whole year. These values work fine for a 3000W water heater (the first value of the list) and a 750W pool pump (the second value in the list).
 
 Finally my two shell commands for EMHASS will look like:
 ```
