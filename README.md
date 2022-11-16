@@ -80,7 +80,7 @@ You can find the add-on with the installation instructions here: [https://github
 
 The add-on usage instructions can be found on the documentation pane of the add-on once installed or directly here: [EMHASS Add-on documentation](https://github.com/davidusb-geek/emhass-add-on/blob/main/emhass/DOCS.md)
 
-These architectures are supported: `amd64`, `armv7` and `aarch64`.
+These architectures are supported: `amd64`, `armv7`, `armhf` and `aarch64`.
 
 ### 2) Using Docker in standalone mode
 
