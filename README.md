@@ -10,7 +10,7 @@
     <img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/davidusb-geek/emhass">
   </a>
   <a href="https://github.com/davidusb-geek/emhass/actions">
-    <img alt="GitHub Workflow Status" src="https://img.shields.io/github/workflow/status/davidusb-geek/emhass/Python%20package">
+    <img alt="GitHub Workflow Status" src="https://img.shields.io/github/actions/workflow/status/davidusb-geek/emhass/python-test.yml?branch=master">
   </a>
   <a href="https://codecov.io/github/davidusb-geek/emhass" >
     <img src="https://codecov.io/github/davidusb-geek/emhass/branch/master/graph/badge.svg?token=BW7KSCHN90"/>
