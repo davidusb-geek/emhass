@@ -11,6 +11,7 @@ COPY README.md README.md
 # Setup
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        gcc \
         libhdf5-dev \
         libhdf5-serial-dev \
         netcdf-bin \
@@ -20,6 +21,7 @@ RUN apt-get update \
     && pip3 install netCDF4 \
     && pip3 install --no-cache-dir -r requirements_webserver.txt \
     && apt-get purge -y --auto-remove \
+        gcc \
         libhdf5-dev \
         libhdf5-serial-dev \
         netcdf-bin \
