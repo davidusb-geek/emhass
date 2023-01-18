@@ -54,7 +54,7 @@ setup(
         'pulp>=2.4',
         'pyyaml>=5.4.1',
         'netcdf4>=1.5.3',
-        'py-cpuinfo>=9.0.0'
+        'py-cpuinfo'
         'tables>=3.6.1',
     ],  # Optional
     entry_points={  # Optional
