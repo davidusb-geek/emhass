@@ -9,7 +9,6 @@ beautifulsoup4>=4.9.3
 pulp>=2.4
 pyyaml>=5.4.1
 netcdf4>=1.5.3
-py-cpuinfo
 tables>=3.6.1
 flask>=2.0.3
 waitress>=2.1.1
