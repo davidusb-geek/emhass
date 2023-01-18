@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import unittest
+from unittest.mock import patch
 import pandas as pd
 import pathlib, json, yaml, copy
 
@@ -308,8 +309,6 @@ class TestCommandLineUtils(unittest.TestCase):
         # Test publish after passing the forecast as list
         opt_res_pub = publish_data(input_data_dict, logger)
         self.assertTrue(len(opt_res_pub)==1)
-        
-    
         config_path = pathlib.Path(root+'/confidef test_publish_data(self):g_emhass.yaml')
         base_path = str(config_path.parent)
         costfun = 'profit'
@@ -328,7 +327,46 @@ class TestCommandLineUtils(unittest.TestCase):
         opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
         opt_res_last = publish_data(input_data_dict, logger)
         self.assertTrue(len(opt_res_last)==1)
+    
+    @patch('sys.argv', ['main', '--action', 'test', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
+                        '--get_data_from_file', 'True'])
+    def test_main_wrong_action(self):
+        opt_res = main()
+        self.assertEqual(opt_res, None)
         
+    @patch('sys.argv', ['main', '--action', 'perfect-optim', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
+                        '--get_data_from_file', 'True'])
+    def test_main_perfect_forecast_optim(self):
+        opt_res = main()
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertTrue(opt_res.isnull().sum().sum()==0)
+        self.assertIsInstance(opt_res.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(opt_res.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        
+    def test_main_dayahead_forecast_optim(self):
+        with patch('sys.argv', ['main', '--action', 'dayahead-optim', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
+                        '--params', self.params_json, '--runtimeparams', self.runtimeparams_json,
+                        '--get_data_from_file', 'True']):
+            opt_res = main()
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertTrue(opt_res.isnull().sum().sum()==0)
+        
+    def test_main_naive_mpc_optim(self):
+        with patch('sys.argv', ['main', '--action', 'naive-mpc-optim', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
+                        '--params', self.params_json, '--runtimeparams', self.runtimeparams_json,
+                        '--get_data_from_file', 'True']):
+            opt_res = main()
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertTrue(opt_res.isnull().sum().sum()==0)
+        self.assertTrue(len(opt_res)==10)
+        
+    @patch('sys.argv', ['main', '--action', 'publish-data', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
+                        '--get_data_from_file', 'True'])
+    def test_main_publish_data(self):
+        opt_res = main()
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertTrue(len(opt_res)==1)
+
 if __name__ == '__main__':
     unittest.main()
     ch.close()
