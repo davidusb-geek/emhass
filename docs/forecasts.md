@@ -147,13 +147,13 @@ A MPC call may look like this for 4 deferrable loads:
           }},\"soc_final\":0.05,\"def_total_hours\":[2,0,0,0]}' http://localhost:5000/action/naive-mpc-optim"
 ```
 
-Thanks to [@purcell_labs](https://github.com/purcell-lab) for this example donfiguration.
+Thanks to [@purcell_labs](https://github.com/purcell-lab) for this example configuration.
 
 ### Example combining multiple SolCast configurations
 
 If you have multiple rooftops, for example for east-west facing solar panels, then you will need to fuze the sensors providing the different forecasts on a single one using templates in Home Assistant. Then feed that single sensor data passing the data as a list when calling the shell command.
 
-Here is a sample configuration to achiee this, thanks to [@gieljnssns](https://github.com/gieljnssns) for sharing.
+Here is a sample configuration to achieve this, thanks to [@gieljnssns](https://github.com/gieljnssns) for sharing.
 
 The two sensors using rest sensors:
 

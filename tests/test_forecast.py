@@ -98,6 +98,24 @@ class TestForecast(unittest.TestCase):
             self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_scrap.index)
             self.assertEqual(len(df_weather_scrap), 
                             int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
+            P_PV_forecast = self.fcst.get_power_from_weather(df_weather_scrap)
+            self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
+            self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+            self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+            self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
+            self.assertEqual(len(df_weather_scrap), len(P_PV_forecast))
+            self.plant_conf['module_model'] = [self.plant_conf['module_model'], self.plant_conf['module_model']]
+            self.plant_conf['inverter_model'] = [self.plant_conf['inverter_model'], self.plant_conf['inverter_model']]
+            self.plant_conf['surface_tilt'] = [30, 45]
+            self.plant_conf['surface_azimuth'] = [270, 90]
+            self.plant_conf['modules_per_string'] = [8, 8]
+            self.plant_conf['strings_per_inverter'] = [1, 1]
+            P_PV_forecast = self.fcst.get_power_from_weather(df_weather_scrap)
+            self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
+            self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+            self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+            self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
+            self.assertEqual(len(df_weather_scrap), len(P_PV_forecast))
 
     def test_get_weather_forecast_solcast_method_mock(self):
         with requests_mock.mock() as m:
@@ -255,6 +273,13 @@ class TestForecast(unittest.TestCase):
         self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                              params, root, logger, get_data_from_file=self.get_data_from_file)
         self.P_load_forecast = self.fcst.get_load_forecast(set_mix_forecast=True, df_now=df_input_data)
+        self.assertIsInstance(self.P_load_forecast, pd.core.series.Series)
+        self.assertIsInstance(self.P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(self.P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        self.assertEqual(self.P_load_forecast.index.tz, self.fcst.time_zone)
+        self.assertEqual(len(self.P_PV_forecast), len(self.P_load_forecast))
+        # Test load forecast from csv
+        self.P_load_forecast = self.fcst.get_load_forecast(method="csv")
         self.assertIsInstance(self.P_load_forecast, pd.core.series.Series)
         self.assertIsInstance(self.P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(self.P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
