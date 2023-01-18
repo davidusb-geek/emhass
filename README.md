@@ -10,7 +10,7 @@
     <img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/davidusb-geek/emhass">
   </a>
   <a href="https://github.com/davidusb-geek/emhass/actions">
-    <img alt="GitHub Workflow Status" src="https://img.shields.io/github/workflow/status/davidusb-geek/emhass/Python%20package">
+    <img alt="GitHub Workflow Status" src="https://img.shields.io/github/actions/workflow/status/davidusb-geek/emhass/python-test.yml?branch=master">
   </a>
   <a href="https://codecov.io/github/davidusb-geek/emhass" >
     <img src="https://codecov.io/github/davidusb-geek/emhass/branch/master/graph/badge.svg?token=BW7KSCHN90"/>
@@ -80,7 +80,7 @@ You can find the add-on with the installation instructions here: [https://github
 
 The add-on usage instructions can be found on the documentation pane of the add-on once installed or directly here: [EMHASS Add-on documentation](https://github.com/davidusb-geek/emhass-add-on/blob/main/emhass/DOCS.md)
 
-These architectures are supported: `amd64`, `armv7` and `aarch64`.
+These architectures are supported: `amd64`, `armv7`, `armhf` and `aarch64`.
 
 ### 2) Using Docker in standalone mode
 
@@ -357,7 +357,7 @@ This can be controlled in the configuration file with parameters `lp_solver` and
 
 MIT License
 
-Copyright (c) 2021-2022 David HERNANDEZ
+Copyright (c) 2021-2023 David HERNANDEZ
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 

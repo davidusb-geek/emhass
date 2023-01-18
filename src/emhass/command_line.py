@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import argparse, os, pathlib, logging, json, copy, pickle
+import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
 from typing import Optional
@@ -78,9 +79,10 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
         P_PV_forecast = fcst.get_power_from_weather(df_weather)
         P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
-        df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
+        df_input_data_dayahead = pd.DataFrame(np.transpose(np.vstack([P_PV_forecast.values,P_load_forecast.values])),
+                                              index=P_PV_forecast.index,
+                                              columns=['P_PV_forecast', 'P_load_forecast'])
         df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
-        df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
         params = json.loads(params)
         if 'prediction_horizon' in params['passed_data'] and params['passed_data']['prediction_horizon'] is not None:
             prediction_horizon = params['passed_data']['prediction_horizon']
@@ -349,6 +351,7 @@ def main():
     # Additionnal argument
     try:
         parser.add_argument('--version', action='version', version='%(prog)s '+version('emhass'))
+        args = parser.parse_args()
     except Exception:
         logger.info("Version not found for emhass package. Or importlib exited with PackageNotFoundError.")
     # Setup parameters
