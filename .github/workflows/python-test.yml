@@ -22,13 +22,14 @@ jobs:
     - uses: actions/checkout@v3
     
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.python-version }}
         
     - name: Special dependencies for macos
       run: |
         brew install hdf5
+        pip install git+https://github.com/PyTables/PyTables.git@v3.6.1
       if: ${{ matrix.os == 'macOS-latest' }}
         
     - name: Install dependencies
