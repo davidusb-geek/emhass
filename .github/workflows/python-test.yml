@@ -32,7 +32,6 @@ jobs:
     - name: Special dependencies for macos
       run: |
         brew install hdf5
-        pip install git+https://github.com/PyTables/PyTables.git@v3.6.1
       if: ${{ matrix.os == 'macOS-latest' }}
         
     - name: Install dependencies
