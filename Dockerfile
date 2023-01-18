@@ -13,12 +13,17 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libhdf5-dev \
         libhdf5-serial-dev \
+        netcdf-bin \
+        libnetcdf-dev \
     && ln -s /usr/include/hdf5/serial /usr/include/hdf5/include \
     && export HDF5_DIR=/usr/include/hdf5 \
+    && pip3 install netCDF4 \
     && pip3 install --no-cache-dir -r requirements_webserver.txt \
     && apt-get purge -y --auto-remove \
         libhdf5-dev \
         libhdf5-serial-dev \
+        netcdf-bin \
+        libnetcdf-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Setup slim-buster
