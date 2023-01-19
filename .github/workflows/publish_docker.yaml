@@ -21,7 +21,7 @@ jobs:
             davidusb/emhass-docker-standalone
           # generate Docker tags based on the following events/attributes
           tags: |
-            type=semver,pattern={{raw}}
+            type=semver,pattern={{version}}
           #  type=raw,value=latest
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
