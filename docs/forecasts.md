@@ -229,6 +229,7 @@ dayahead_optim: "curl -i -H \"Content-Type:application/json\" -X POST -d '{\"pv_
 
 The Nordpool integration provides spot market electricity prices (consuption and production) for the Nordic, Baltic and part of Western Europe.
 An integration for Home Assistant can be found here: https://github.com/custom-components/nordpool
+
 After setup the sensors should appear in Home Assistant for raw `today` and `tomorrow` values.
 
 The subsequent shell command to concatenate `today` and `tomorrow` values can be for example (don't copy this code directly, you need to adpat it to your own Nordpool sensor names):
