@@ -168,8 +168,8 @@ To integrate with home assistant we will need to define some shell commands in t
 In `configuration.yaml`:
 ```
 shell_command:
-  dayahead_optim: "curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/dayahead-optim"
-  publish_data: "curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/publish-data"
+  dayahead_optim: "curl -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/dayahead-optim"
+  publish_data: "curl -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/publish-data"
 ```
 ### 2) Legacy method using a Python virtual environment
 
