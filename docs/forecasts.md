@@ -24,14 +24,14 @@ A second method uses the SolCast solar forecast service. Go to https://solcast.c
 
 For example:
 ```
-curl -i -H 'Content-Type:application/json' -X POST -d '{"solcast_rooftop_id":"<your_system_id>","solcast_api_key":"<your_secret_api_key>"}' http://localhost:5000/action/dayahead-optim
+curl -i -H "Content-Type:application/json" -X POST -d '{"solcast_rooftop_id":"<your_system_id>","solcast_api_key":"<your_secret_api_key>"}' http://localhost:5000/action/dayahead-optim
 ```
 
 A third method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the PV peak installed power in kW) that should be passed at runtime.
 
 For example, for a 5 kWp installation:
 ```
-curl -i -H 'Content-Type:application/json' -X POST -d '{"solar_forecast_kwp":5}' http://localhost:5000/action/dayahead-optim
+curl -i -H "Content-Type:application/json" -X POST -d '{"solar_forecast_kwp":5}' http://localhost:5000/action/dayahead-optim
 ```
 
 ## Load power forecast
@@ -222,7 +222,7 @@ And the fusion of the two sensors:
 And finally the shell command:
 
 ```
-dayahead_optim: curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":{{states('sensor.solcast_24hrs_forecast')}}}' http://localhost:5001/action/dayahead-optim
+dayahead_optim: "curl -i -H \"Content-Type:application/json\" -X POST -d '{\"pv_power_forecast\":{{states('sensor.solcast_24hrs_forecast')}}}' http://localhost:5001/action/dayahead-optim"
 ```
 
 ## Now/current values in forecasts
