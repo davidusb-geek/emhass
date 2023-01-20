@@ -122,8 +122,8 @@ The values for the total number of operating hours were tuned by trial and error
 Finally my two shell commands for EMHASS will look like:
 ```
 shell_command:
-  dayahead_optim: "curl -i -H 'Content-Type: application/json' -X POST -d '{'def_total_hours':{{states('sensor.list_operating_hours_of_each_deferrable_load')}}}' http://localhost:5000/action/dayahead-optim"
-  publish_data: "curl -i -H 'Content-Type: application/json' -X POST -d '{}' http://localhost:5000/action/publish-data"
+  dayahead_optim: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"def_total_hours\":{{states('sensor.list_operating_hours_of_each_deferrable_load')}}}' http://localhost:5000/action/dayahead-optim"
+  publish_data: "curl -i -H \"Content-Type: application/json\" -X POST -d '{}' http://localhost:5000/action/publish-data"
 ```
 The dedicated automations for these shell commands can be for example:
 ```
