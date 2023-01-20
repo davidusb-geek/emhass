@@ -225,6 +225,21 @@ And finally the shell command:
 dayahead_optim: "curl -i -H \"Content-Type:application/json\" -X POST -d '{\"pv_power_forecast\":{{states('sensor.solcast_24hrs_forecast')}}}' http://localhost:5001/action/dayahead-optim"
 ```
 
+### Example using the Nordpool integration
+
+The Nordpool integration provides spot market electricity prices (consuption and production) for the Nordic, Baltic and part of Western Europe.
+An integration for Home Assistant can be found here: https://github.com/custom-components/nordpool
+After setup the sensors should appear in Home Assistant for raw `today` and `tomorrow` values.
+
+The subsequent shell command to concatenate `today` and `tomorrow` values can be for example (don't copy this code directly, you need to adpat it to your own Nordpool sensor names):
+
+```
+shell_command:
+  trigger_nordpool_forecast: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{((state_attr('sensor.nordpool_kwh_krsand_nok_3_095_025', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool_kwh_krsand_nok_3_095_025', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24] }},\"prod_price_forecast\":{{((state_attr('sensor.nordpool_kwh_krsand_nok_3_10_0', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool_kwh_krsand_nok_3_10_0', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24]}}}' http://localhost:5000/action/dayahead-optim"
+```
+
+Thanks to **torstein** in the Home Assistant forum for sharing his code (https://community.home-assistant.io/t/emhass-add-on-an-energy-management-optimization-add-on-for-home-assistant-os-and-supervised/405649/94).
+
 ## Now/current values in forecasts
 
 When implementing MPC applications with high optimization frequencies it can be interesting if at each MPC iteration the forecast values are updated with the real now/current values measured from live data. This is useful to improve the accuracy of the short-term forecasts. As shown in some of the references below, mixing with a persistance model make sense since this type of model performs very good at low temporal resolutions (intra-hour).
