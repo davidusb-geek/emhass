@@ -236,7 +236,7 @@ The subsequent shell command to concatenate `today` and `tomorrow` values can be
 
 ```
 shell_command:
-  trigger_nordpool_forecast: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{((state_attr('sensor.nordpool_kwh_krsand_nok_3_095_025', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool_kwh_krsand_nok_3_095_025', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24] }},\"prod_price_forecast\":{{((state_attr('sensor.nordpool_kwh_krsand_nok_3_10_0', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool_kwh_krsand_nok_3_10_0', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24]}}}' http://localhost:5000/action/dayahead-optim"
+  trigger_nordpool_forecast: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{((state_attr('sensor.nordpool', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24] }},\"prod_price_forecast\":{{((state_attr('sensor.nordpool', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24]}}}' http://localhost:5000/action/dayahead-optim"
 ```
 
 Thanks to **torstein** in the Home Assistant forum for sharing his code (https://community.home-assistant.io/t/emhass-add-on-an-energy-management-optimization-add-on-for-home-assistant-os-and-supervised/405649/94).
