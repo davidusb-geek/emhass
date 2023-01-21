@@ -227,7 +227,7 @@ dayahead_optim: "curl -i -H \"Content-Type:application/json\" -X POST -d '{\"pv_
 
 ### Example using the Nordpool integration
 
-The Nordpool integration provides spot market electricity prices (consuption and production) for the Nordic, Baltic and part of Western Europe.
+The Nordpool integration provides spot market electricity prices (consumption and production) for the Nordic, Baltic and part of Western Europe.
 An integration for Home Assistant can be found here: https://github.com/custom-components/nordpool
 
 After setup the sensors should appear in Home Assistant for raw `today` and `tomorrow` values.
