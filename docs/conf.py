@@ -18,11 +18,11 @@ for x in os.walk('../src/'):
 # -- Project information -----------------------------------------------------
 
 project = 'emhass'
-copyright = '2021-2022, David HERNANDEZ'
+copyright = '2021-2023, David HERNANDEZ'
 author = 'David HERNANDEZ'
 
 # The full version, including alpha/beta/rc tags
-release = '0.3.21'
+release = '0.3.22'
 
 # -- General configuration ---------------------------------------------------
 

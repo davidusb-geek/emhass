@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.3.22] - 2023-01-26
 ### Improvement
 - Improved unittest for mock get requests
 - Improved coverage
@@ -294,6 +294,9 @@
 [0.3.17]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.17
 [0.3.18]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.18
 [0.3.19]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.19
+[0.3.20]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.20
+[0.3.21]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.21
+[0.3.22]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.2
 
 # Notes
 All notable changes to this project will be documented in this file.
