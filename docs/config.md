@@ -71,8 +71,10 @@ The following parameters and definitions are only needed if load_cost_forecast_m
 
 - prod_price_forecast_method: Define the method that will be used for PV power production price forecast. This is the price that is payed by the utility for energy injected to the grid. The options are 'constant' for a constant fixed value or 'csv' to load custom price forecast from a CSV file. The default CSV file path that will be used is '/data/data_prod_price_forecast.csv'.
 - prod_sell_price: The paid price for energy injected to the grid from excedent PV production in €/kWh. Defaults to 0.065. This parameter is only needed if prod_price_forecast_method='constant'.
+- set_total_pv_sell: Set this parameter to true to consider that all the PV power produced is injected to the grid. No direct self-consumption. The default is false, for as system with direct self-consumption.
 - lp_solver: Set the name of the linear programming solver that will be used. Defaults to 'COIN_CMD'. The options are 'PULP_CBC_CMD', 'GLPK_CMD' and 'COIN_CMD'. 
 - lp_solver_path: Set the path to the LP solver. Defaults to '/usr/bin/cbc'. 
+- set_nocharge_from_grid: Set this to true if you want to forbidden to charge the battery from the grid. The battery will only be charged from excess PV.
 
 ## System configuration parameters
 
