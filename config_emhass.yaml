@@ -16,6 +16,7 @@ retrieve_hass_conf:
 
 optim_conf:
   - set_use_battery: False # consider a battery storage
+  - set_nocharge_from_grid: False # avoid battery charging from the grid
   - delta_forecast: 1 # days
   - num_def_loads: 2
   - P_deferrable_nom: # Watts

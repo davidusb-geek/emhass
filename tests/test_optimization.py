@@ -85,6 +85,7 @@ class TestOptimization(unittest.TestCase):
         idx_closest = self.opt_res_dayahead.index.get_indexer([now_precise], method='nearest')[0]
         # Test the battery
         self.optim_conf.update({'set_use_battery': True})
+        self.optim_conf.update({'set_nocharge_from_grid': True})
         self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)

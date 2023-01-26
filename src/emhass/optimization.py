@@ -119,17 +119,18 @@ class optimization:
         :rtype: pd.DataFrame
 
         """
-        # Prepare some data
-        if soc_init is None:
-            if soc_final is not None:
-                soc_init = soc_final
-            else:
-                soc_init = self.plant_conf['SOCtarget']
-        if soc_final is None:
-            if soc_init is not None:
-                soc_final = soc_init
-            else:
-                soc_final = self.plant_conf['SOCtarget']
+        # Prepare some data in the case of a battery
+        if self.optim_conf['set_use_battery']:
+            if soc_init is None:
+                if soc_final is not None:
+                    soc_init = soc_final
+                else:
+                    soc_init = self.plant_conf['SOCtarget']
+            if soc_final is None:
+                if soc_init is not None:
+                    soc_final = soc_init
+                else:
+                    soc_final = self.plant_conf['SOCtarget']
         if def_total_hours is None:
             def_total_hours = self.optim_conf['def_total_hours']
         type_self_conso = 'bigm' # maxmin
@@ -228,6 +229,16 @@ class optimization:
                            sense = plp.LpConstraintEQ,
                            rhs = 0)
                        for i in set_I}
+        
+        # An optional constraint to avoid charging the battery from the grid
+        if self.optim_conf['set_use_battery']:
+            if self.optim_conf['set_nocharge_from_grid']:
+                constraints.update({"constraint_nocharge_from_grid_{}".format(i) : 
+                                plp.LpConstraint(
+                                    e = P_sto_neg[i] + P_PV[i],
+                                    sense = plp.LpConstraintGE,
+                                    rhs = 0)
+                                for i in set_I})
             
         # Two special constraints just for a self-consumption cost function
         if self.costfun == 'self-consumption':
