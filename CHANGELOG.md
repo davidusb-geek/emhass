@@ -4,6 +4,9 @@
 ### Improvement
 - Improved unittest for mock get requests
 - Improved coverage
+### Fix
+- Code works even if no battery data is configured
+- Added more explicit logging error message in the case of no data retrieved from Home Assistant
 
 ## [0.3.21] - 2022-10-21
 ### Fix
