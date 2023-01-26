@@ -17,7 +17,7 @@ from emhass.command_line import publish_data
 
 
 # Define the Flask instance
-app = Flask(__name__) #, static_url_path='/static'
+app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
 app.logger.propagate = False
 
@@ -86,6 +86,7 @@ def build_params(params, options, addon):
         params['optim_conf'][15]['set_total_pv_sell'] = options['set_total_pv_sell']
         params['optim_conf'][16]['lp_solver'] = options['lp_solver']
         params['optim_conf'][17]['lp_solver_path'] = options['lp_solver_path']
+        params['optim_conf'][18]['set_nocharge_from_grid'] = options['set_nocharge_from_grid']
         # Updating variables in plant_conf
         params['plant_conf'][0]['P_grid_max'] = options['maximum_power_from_grid']
         params['plant_conf'][1]['module_model'] = [i['pv_module_model'] for i in options['list_pv_module_model']]

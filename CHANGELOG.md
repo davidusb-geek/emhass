@@ -1,18 +1,23 @@
 # Changelog
 
+## [0.3.23] - 2023-01-26
+### Fix
+- Fixed missing integration of additional `set_nocharge_from_grid` in the web server.
+- Improved the documentation.
+
 ## [0.3.22] - 2023-01-26
 ### Improvement
-- Improved unittest for mock get requests
-- Improved coverage
+- Improved unittest for mock get requests.
+- Improved coverage.
 ### Fix
-- Code works even if no battery data is configured
-- Added more explicit logging error message in the case of no data retrieved from Home Assistant
+- Code works even if no battery data is configured.
+- Added more explicit logging error message in the case of no data retrieved from Home Assistant.
 
 ## [0.3.21] - 2022-10-21
 ### Fix
 - Fixed docstrings
-- Added github worflows for coverage and automatic package compiling
-- Fixing interpolation for Forecast.Solar data
+- Added github worflows for coverage and automatic package compiling.
+- Fixing interpolation for Forecast.Solar data.
 
 ## [0.3.20] - 2022-10-05
 ### Improvement
@@ -296,7 +301,8 @@
 [0.3.19]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.19
 [0.3.20]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.20
 [0.3.21]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.21
-[0.3.22]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.2
+[0.3.22]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.22
+[0.3.23]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.23
 
 # Notes
 All notable changes to this project will be documented in this file.
