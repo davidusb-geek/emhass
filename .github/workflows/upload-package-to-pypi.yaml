@@ -22,8 +22,7 @@ jobs:
         python-version: 3.9
     - name: build
       run: |
-        pip install virtualenv
-        virtualenv -p /usr/bin/python .venv
+        python -m venv .venv
         source .venv/bin/activate
         pip install -U twine build packaging
         python -m build
