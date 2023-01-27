@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.25] - 2023-01-27
+### Fix
+- Fixed dependencies, uniform working versions of Numpy, Pandas and Tables.
+
 ## [0.3.24] - 2023-01-27
 ### Fix
 - Fixed dependencies, rolled back to older fixed Numpy and Pandas versions.

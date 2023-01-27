@@ -19,7 +19,7 @@ long_description = (here / 'README.md').read_text(encoding='utf-8')
 
 setup(
     name='emhass',  # Required
-    version='0.3.24',  # Required
+    version='0.3.25',  # Required
     description='An Energy Management System for Home Assistant',  # Optional
     long_description=long_description,  # Optional
     long_description_content_type='text/markdown',  # Optional (see note above)
@@ -43,8 +43,8 @@ setup(
     packages=find_packages(where='src'),  # Required
     python_requires='>=3.8, <3.10',
     install_requires=[
-        'numpy==1.20.1',
-        'pandas==1.2.3',
+        'numpy==1.22.2',
+        'pandas==1.4.1',
         'pvlib>=0.8.1',
         'protobuf>=3.0.0',
         'siphon>=0.9',
@@ -54,7 +54,7 @@ setup(
         'pulp>=2.4',
         'pyyaml>=5.4.1',
         'netcdf4>=1.5.3',
-        'tables==3.6.1',
+        'tables==3.7.0',
     ],  # Optional
     entry_points={  # Optional
         'console_scripts': [
