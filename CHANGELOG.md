@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.24] - 2023-01-27
+### Fix
+- Fixed dependencies, rolled back to older fixed Numpy and Pandas versions.
+
 ## [0.3.23] - 2023-01-26
 ### Fix
 - Fixed missing integration of additional `set_nocharge_from_grid` in the web server.
@@ -303,6 +307,7 @@
 [0.3.21]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.21
 [0.3.22]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.22
 [0.3.23]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.23
+[0.3.24]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.24
 
 # Notes
 All notable changes to this project will be documented in this file.
