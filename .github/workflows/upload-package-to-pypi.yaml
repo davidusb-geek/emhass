@@ -24,7 +24,8 @@ jobs:
       run: |
         python -m venv .venv
         source .venv/bin/activate
-        pip install -U twine build packaging
+        pip install --upgrade pip
+        pip install --upgrade setuptools distlib twine build packaging
         python -m build
         twine upload dist/*
       env:
