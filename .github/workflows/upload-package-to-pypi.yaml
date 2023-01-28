@@ -6,26 +6,28 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  deploy:
-    name: Deploy
-    runs-on: ubuntu-latest
-
+  run:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    env:
+      OS: ${{ matrix.os }}
+      PYTHON: '3.9'
     steps:
-      - uses: actions/checkout@v3
-
-      - name: set up python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
-
-      - name: build
-        run: |
-          pip install virtualenv
-          virtualenv -p /usr/bin/python .venv
-          source .venv/bin/activate
-          pip install -U twine build packaging
-          python -m build
-          twine upload dist/*
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+    - uses: actions/checkout@master
+    - name: Setup Python
+      uses: actions/setup-python@master
+      with:
+        python-version: 3.9
+    - name: build
+      run: |
+        python -m venv .venv
+        source .venv/bin/activate
+        pip install --upgrade pip
+        pip install --upgrade setuptools distlib twine build packaging
+        python -m build
+        twine upload dist/*
+      env:
+        TWINE_USERNAME: __token__
+        TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
