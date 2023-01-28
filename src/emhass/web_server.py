@@ -118,16 +118,16 @@ def index():
     template = env.get_template('index.html')
     # template = render_template('index.html')
     # Load cache dict
-    with open(base_path+'/data/injection_dict.pkl', "rb") as fid:
+    with open(data_path_str+'injection_dict.pkl', "rb") as fid:
         injection_dict = pickle.load(fid)
     if injection_dict is None:
-        app.logger.warning("Oops.. The data dictionary is empty...")
+        app.logger.warning("Oops.. The data dictionary is empty... Please launch an optimization task")
         injection_dict={}
     return make_response(template.render(injection_dict=injection_dict))
 
 @app.route('/action/<action_name>', methods=['POST'])
 def action_call(action_name):
-    with open(base_path+'/data/params.pkl', "rb") as fid:
+    with open(data_path_str+'params.pkl', "rb") as fid:
         config_path, params = pickle.load(fid)
     runtimeparams = request.get_json(force=True)
     params = json.dumps(params)
@@ -143,7 +143,7 @@ def action_call(action_name):
         app.logger.info(" >> Performing perfect optimization...")
         opt_res = perfect_forecast_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
-        with open(base_path+'/data/injection_dict.pkl', "wb") as fid:
+        with open(data_path_str+'injection_dict.pkl', "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action perfect-optim executed... \n'
         return make_response(msg, 201)
@@ -151,7 +151,7 @@ def action_call(action_name):
         app.logger.info(" >> Performing dayahead optimization...")
         opt_res = dayahead_forecast_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
-        with open(base_path+'/data/injection_dict.pkl', "wb") as fid:
+        with open(data_path_str+'injection_dict.pkl', "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action dayahead-optim executed... \n'
         return make_response(msg, 201)
@@ -159,7 +159,7 @@ def action_call(action_name):
         app.logger.info(" >> Performing naive MPC optimization...")
         opt_res = naive_mpc_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
-        with open(base_path+'/data/injection_dict.pkl', "wb") as fid:
+        with open(data_path_str+'injection_dict.pkl', "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action naive-mpc-optim executed... \n'
         return make_response(msg, 201)
@@ -180,8 +180,7 @@ if __name__ == "__main__":
     if args.addon == 1:
         OPTIONS_PATH = "/data/options.json"
         options_json = Path(OPTIONS_PATH)
-        CONFIG_PATH = "/data/config_emhass.yaml"
-        config_path = Path(CONFIG_PATH)
+        CONFIG_PATH = "/usr/src/config_emhass.yaml"
         hass_url = args.url
         key = args.key
         # Read options info
@@ -190,11 +189,14 @@ if __name__ == "__main__":
                 options = json.load(data)
         else:
             app.logger.error("options.json does not exists")
+        DATA_PATH = "/app/data/"
     else:
         CONFIG_PATH = "/app/config_emhass.yaml"
-        config_path = Path(CONFIG_PATH)
         options = None
-    base_path = str(config_path.parent)
+        DATA_PATH = "/data/"
+    config_path = Path(CONFIG_PATH)
+    data_path = Path(DATA_PATH)
+    data_path_str = str(data_path)
     
     # Read example config file
     if config_path.exists():
@@ -214,9 +216,12 @@ if __name__ == "__main__":
     web_ui_url = '0.0.0.0'
 
     # Initialize this global dict
-    opt_res = pd.read_csv(base_path+'/data/opt_res_latest.csv', index_col='timestamp')
-    injection_dict = get_injection_dict(opt_res)
-    with open(base_path+'/data/injection_dict.pkl', "wb") as fid:
+    if (data_path / 'opt_res_latest.csv').exists():
+        opt_res = pd.read_csv(data_path_str+'opt_res_latest.csv', index_col='timestamp')
+        injection_dict = get_injection_dict(opt_res)
+    else:
+        injection_dict = None
+    with open(data_path_str+'injection_dict.pkl', "wb") as fid:
         pickle.dump(injection_dict, fid)
     
     if args.addon == 1:
@@ -256,13 +261,13 @@ if __name__ == "__main__":
         
     # Build params
     params = build_params(params, options, args.addon)
-    with open(base_path+'/data/params.pkl', "wb") as fid:
+    with open(data_path_str+'params.pkl', "wb") as fid:
         pickle.dump((config_path, params), fid)
 
     # Launch server
     port = int(os.environ.get('PORT', 5000))
     app.logger.info("Launching the emhass webserver at: http://"+web_ui_url+":"+str(port))
     app.logger.info("Home Assistant data fetch will be performed using url: "+hass_url)
-    app.logger.info("The base path is: "+base_path)
+    app.logger.info("The data path is: "+data_path_str)
     app.logger.info("Using core emhass version: "+version('emhass'))
     serve(app, host=web_ui_url, port=port, threads=8)
