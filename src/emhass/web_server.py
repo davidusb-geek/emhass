@@ -180,7 +180,7 @@ if __name__ == "__main__":
     if args.addon == 1:
         OPTIONS_PATH = "/data/options.json"
         options_json = Path(OPTIONS_PATH)
-        CONFIG_PATH = "/usr/src/config_emhass.yaml"
+        CONFIG_PATH = "/data/config_emhass.yaml"
         config_path = Path(CONFIG_PATH)
         hass_url = args.url
         key = args.key
