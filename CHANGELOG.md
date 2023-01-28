@@ -1,8 +1,8 @@
 # Changelog
 
-## [0.3.26] - 2023-01-28
+## [0.3.27] - 2023-01-28
 ### Improvement
-- 
+- Implemented data storage to survive add-on restarts.
 
 ## [0.3.25] - 2023-01-27
 ### Fix
@@ -317,7 +317,7 @@
 [0.3.23]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.23
 [0.3.24]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.24
 [0.3.25]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.25
-[0.3.26]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.26
+[0.3.27]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.27
 
 # Notes
 All notable changes to this project will be documented in this file.

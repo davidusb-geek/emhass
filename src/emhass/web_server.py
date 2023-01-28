@@ -128,11 +128,11 @@ def index():
 @app.route('/action/<action_name>', methods=['POST'])
 def action_call(action_name):
     with open(data_path_str+'params.pkl', "rb") as fid:
-        config_path, params = pickle.load(fid)
+        config_path, data_path_str, params = pickle.load(fid)
     runtimeparams = request.get_json(force=True)
     params = json.dumps(params)
     runtimeparams = json.dumps(runtimeparams)
-    input_data_dict = set_input_data_dict(config_path, str(config_path.parent), costfun, 
+    input_data_dict = set_input_data_dict(config_path, data_path_str, costfun, 
         params, runtimeparams, action_name, app.logger)
     if action_name == 'publish-data':
         app.logger.info(" >> Publishing data...")
@@ -262,7 +262,7 @@ if __name__ == "__main__":
     # Build params
     params = build_params(params, options, args.addon)
     with open(data_path_str+'params.pkl', "wb") as fid:
-        pickle.dump((config_path, params), fid)
+        pickle.dump((config_path, data_path_str, params), fid)
 
     # Launch server
     port = int(os.environ.get('PORT', 5000))
