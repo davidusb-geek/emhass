@@ -196,7 +196,7 @@ if __name__ == "__main__":
         DATA_PATH = "/app/data/"
     config_path = Path(CONFIG_PATH)
     data_path = Path(DATA_PATH)
-    data_path_str = str(data_path)
+    data_path_str = str(data_path)+"/"
     
     # Read example config file
     if config_path.exists():
