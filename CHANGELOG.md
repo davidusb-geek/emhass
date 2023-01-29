@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.31] - 2023-01-30
+## [0.3.32] - 2023-01-30
 ### Fix
 - Fixed bugs on handling data folder name.
 - Improved warning messages when passing list of values with items detected as non digits.

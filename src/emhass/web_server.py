@@ -215,13 +215,11 @@ if __name__ == "__main__":
     web_ui_url = '0.0.0.0'
 
     # Initialize this global dict
-    if (data_path / 'opt_res_latest.csv').exists():
-        opt_res = pd.read_csv(str(data_path / 'opt_res_latest.csv'), index_col='timestamp')
-        injection_dict = get_injection_dict(opt_res)
+    if (data_path / 'injection_dict.pkl').exists():
+        with open(str(data_path / 'injection_dict.pkl'), "rb") as fid:
+            injection_dict = pickle.load(fid)
     else:
         injection_dict = None
-    with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
-        pickle.dump(injection_dict, fid)
     
     if args.addon == 1:
         # The cost function
