@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.28] - 2023-01-28
+## [0.3.29] - 2023-01-28
 ### Improvement
 - Implemented data storage to survive add-on restarts.
 
