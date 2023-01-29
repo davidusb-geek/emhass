@@ -118,7 +118,7 @@ def index():
     template = env.get_template('index.html')
     # template = render_template('index.html')
     # Load cache dict
-    with open(data_path_str+'injection_dict.pkl', "rb") as fid:
+    with open(str(data_path / 'injection_dict.pkl'), "rb") as fid:
         injection_dict = pickle.load(fid)
     if injection_dict is None:
         app.logger.warning("Oops.. The data dictionary is empty... Please launch an optimization task")
@@ -127,12 +127,12 @@ def index():
 
 @app.route('/action/<action_name>', methods=['POST'])
 def action_call(action_name):
-    with open(data_path_str+'params.pkl', "rb") as fid:
+    with open(str(data_path / 'params.pkl'), "rb") as fid:
         config_path, params = pickle.load(fid)
     runtimeparams = request.get_json(force=True)
     params = json.dumps(params)
     runtimeparams = json.dumps(runtimeparams)
-    input_data_dict = set_input_data_dict(config_path, data_path_str, costfun, 
+    input_data_dict = set_input_data_dict(config_path, str(data_path), costfun, 
         params, runtimeparams, action_name, app.logger)
     if action_name == 'publish-data':
         app.logger.info(" >> Publishing data...")
@@ -143,7 +143,7 @@ def action_call(action_name):
         app.logger.info(" >> Performing perfect optimization...")
         opt_res = perfect_forecast_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
-        with open(data_path_str+'injection_dict.pkl', "wb") as fid:
+        with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action perfect-optim executed... \n'
         return make_response(msg, 201)
@@ -151,7 +151,7 @@ def action_call(action_name):
         app.logger.info(" >> Performing dayahead optimization...")
         opt_res = dayahead_forecast_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
-        with open(data_path_str+'injection_dict.pkl', "wb") as fid:
+        with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action dayahead-optim executed... \n'
         return make_response(msg, 201)
@@ -159,7 +159,7 @@ def action_call(action_name):
         app.logger.info(" >> Performing naive MPC optimization...")
         opt_res = naive_mpc_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
-        with open(data_path_str+'injection_dict.pkl', "wb") as fid:
+        with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action naive-mpc-optim executed... \n'
         return make_response(msg, 201)
@@ -196,7 +196,6 @@ if __name__ == "__main__":
         DATA_PATH = "/app/data/"
     config_path = Path(CONFIG_PATH)
     data_path = Path(DATA_PATH)
-    data_path_str = str(data_path)+"/"
     
     # Read example config file
     if config_path.exists():
@@ -217,11 +216,11 @@ if __name__ == "__main__":
 
     # Initialize this global dict
     if (data_path / 'opt_res_latest.csv').exists():
-        opt_res = pd.read_csv(data_path_str+'opt_res_latest.csv', index_col='timestamp')
+        opt_res = pd.read_csv(str(data_path / 'opt_res_latest.csv'), index_col='timestamp')
         injection_dict = get_injection_dict(opt_res)
     else:
         injection_dict = None
-    with open(data_path_str+'injection_dict.pkl', "wb") as fid:
+    with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
         pickle.dump(injection_dict, fid)
     
     if args.addon == 1:
@@ -261,13 +260,13 @@ if __name__ == "__main__":
         
     # Build params
     params = build_params(params, options, args.addon)
-    with open(data_path_str+'params.pkl', "wb") as fid:
+    with open(str(data_path / 'params.pkl'), "wb") as fid:
         pickle.dump((config_path, params), fid)
 
     # Launch server
     port = int(os.environ.get('PORT', 5000))
     app.logger.info("Launching the emhass webserver at: http://"+web_ui_url+":"+str(port))
     app.logger.info("Home Assistant data fetch will be performed using url: "+hass_url)
-    app.logger.info("The data path is: "+data_path_str)
+    app.logger.info("The data path is: "+str(data_path))
     app.logger.info("Using core emhass version: "+version('emhass'))
     serve(app, host=web_ui_url, port=port, threads=8)
