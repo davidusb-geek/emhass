@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.30] - 2023-01-30
+### Fix
+- Fixed bugs on handling data folder name.
+
 ## [0.3.29] - 2023-01-28
 ### Improvement
 - Implemented data storage to survive add-on restarts.
