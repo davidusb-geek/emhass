@@ -189,7 +189,7 @@ if __name__ == "__main__":
                 options = json.load(data)
         else:
             app.logger.error("options.json does not exists")
-        DATA_PATH = "/data/"
+        DATA_PATH = "/share/" #"/data/"
     else:
         CONFIG_PATH = "/app/config_emhass.yaml"
         options = None
