@@ -44,7 +44,7 @@ setup(
     python_requires='>=3.8, <3.10',
     install_requires=[
         'numpy==1.22.2',
-        'pandas==1.4.1',
+        'pandas==1.5.3',
         'pvlib>=0.8.1',
         'protobuf>=3.0.0',
         'siphon>=0.9',
