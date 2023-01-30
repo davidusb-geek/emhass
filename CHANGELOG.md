@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.33] - 2023-01-30
+## [0.3.34] - 2023-01-30
 ### Fix
 - Fixed bugs with paths again, now using the official pathlib everywhere.
 

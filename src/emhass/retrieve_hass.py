@@ -299,5 +299,5 @@ class retrieve_hass:
         if response.status_code == 200:
             self.logger.info("Successfully posted to "+entity_id+" = "+str(state))
         else:
-            self.logger.info("The received response code is not recognized")
+            self.logger.info("The status code for received curl command response is: "+str(response.status_code))
         return response, data
