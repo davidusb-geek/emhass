@@ -54,7 +54,7 @@ setup(
         'pulp>=2.4',
         'pyyaml>=5.4.1',
         'netcdf4>=1.5.3',
-        'tables==3.7.0',
+        'tables==3.8.0',
     ],  # Optional
     entry_points={  # Optional
         'console_scripts': [
