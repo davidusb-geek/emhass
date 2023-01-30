@@ -28,7 +28,7 @@ class retrieve_hass:
     """
 
     def __init__(self, hass_url: str, long_lived_token: str, freq: pd.Timedelta, 
-                 time_zone: datetime.timezone, params: str, config_path: str, logger: logging.Logger,
+                 time_zone: datetime.timezone, params: str, base_path: str, logger: logging.Logger,
                  get_data_from_file: Optional[bool] = False) -> None:
         """
         Define constructor for retrieve_hass class.
@@ -43,8 +43,8 @@ class retrieve_hass:
         :type time_zone: datetime.timezone
         :param params: Configuration parameters passed from data/options.json
         :type params: str
-        :param config_path: The path to the yaml configuration file
-        :type config_path: str
+        :param base_path: The path to the yaml configuration file
+        :type base_path: str
         :param logger: The passed logger object
         :type logger: logging object
         :param get_data_from_file: Select if data should be retrieved from a 
@@ -58,7 +58,7 @@ class retrieve_hass:
         self.freq = freq
         self.time_zone = time_zone
         self.params = params
-        self.config_path = config_path
+        self.base_path = base_path
         self.logger = logger
         self.get_data_from_file = get_data_from_file
 

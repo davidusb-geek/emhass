@@ -23,14 +23,14 @@ class TestForecast(unittest.TestCase):
     def setUp(self):
         self.get_data_from_file = True
         params = None
-        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=False)
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root) / 'config_emhass.yaml', use_secrets=False)
         self.retrieve_hass_conf, self.optim_conf, self.plant_conf = \
             retrieve_hass_conf, optim_conf, plant_conf
         self.rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                            self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
                            params, root, logger)
         if self.get_data_from_file:
-            with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'rb') as inp:
+            with open(pathlib.Path(root) / 'data' / 'test_df_final.pkl', 'rb') as inp:
                 self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
         else:
             self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])

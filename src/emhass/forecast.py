@@ -79,7 +79,7 @@ class forecast(object):
     """
 
     def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, 
-                 params: str, config_path: str, logger: logging.Logger, 
+                 params: str, base_path: str, logger: logging.Logger, 
                  opt_time_delta: Optional[int] = 24,
                  get_data_from_file: Optional[bool] = False) -> None:
         """
@@ -96,8 +96,8 @@ class forecast(object):
         :type plant_conf: dict
         :param params: Configuration parameters passed from data/options.json
         :type params: str
-        :param config_path: The path to the yaml configuration file
-        :type config_path: str
+        :param base_path: The path to the yaml configuration file
+        :type base_path: str
         :param logger: The passed logger object
         :type logger: logging object
         :param opt_time_delta: The time delta in hours used to generate forecasts, 
@@ -122,7 +122,7 @@ class forecast(object):
         self.var_load_new = self.var_load+'_positive'
         self.lat = self.retrieve_hass_conf['lat'] 
         self.lon = self.retrieve_hass_conf['lon']
-        self.root = config_path
+        self.root = base_path
         self.logger = logger
         self.get_data_from_file = get_data_from_file
         self.var_load_cost = 'unit_load_cost'
@@ -269,7 +269,7 @@ class forecast(object):
             weather_csv_file_path = self.root + csv_path
             # Loading the csv file, we will consider that this is the PV power in W
             data = pd.read_csv(weather_csv_file_path, header=None, names=['ts', 'yhat'])
-            # Check if the passed data has the correct length
+            # Check if the passed data has the correct length       
             if len(data) < len(self.forecast_dates):
                 self.logger.error("Passed data from CSV is not long enough")
             else:
@@ -531,7 +531,7 @@ class forecast(object):
             rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                                self.freq, time_zone_load_foreacast, self.params, self.root, self.logger)
             if self.get_data_from_file:
-                with open(pathlib.Path(self.root+'/data/test_df_final.pkl'), 'rb') as inp:
+                with open(pathlib.Path(self.root) / 'data' / 'test_df_final.pkl', 'rb') as inp:
                     rh.df_final, days_list, _ = pickle.load(inp)
             else:
                 days_list = get_days_list(days_min_load_forecast)
@@ -621,9 +621,7 @@ class forecast(object):
                 df_final.loc[df_hp.index, self.var_load_cost] = self.optim_conf['load_cost_hp']
         elif method == 'csv':
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
-            forecast_out = self.get_forecast_out_from_csv(df_final,
-                                                          forecast_dates_csv,
-                                                          csv_path)
+            forecast_out = self.get_forecast_out_from_csv(df_final, forecast_dates_csv, csv_path)
             df_final[self.var_load_cost] = forecast_out
         elif method == 'list': # reading a list of values
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)

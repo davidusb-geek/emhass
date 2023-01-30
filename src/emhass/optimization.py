@@ -29,7 +29,7 @@ class optimization:
 
     def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, 
                  var_load_cost: str, var_prod_price: str, 
-                 costfun: str, config_path: str, logger: logging.Logger, 
+                 costfun: str, base_path: str, logger: logging.Logger, 
                  opt_time_delta: Optional[int] = 24) -> None:
         r"""
         Define constructor for optimization class.
@@ -48,8 +48,8 @@ class optimization:
         :type var_prod_price: str
         :param costfun: The type of cost function to use for optimization problem
         :type costfun: str
-        :param config_path: The path to the yaml configuration file
-        :type config_path: str
+        :param base_path: The path to the yaml configuration file
+        :type base_path: str
         :param logger: The passed logger object
         :type logger: logging object
         :param opt_time_delta: The number of hours to optimize. If days_list has \
