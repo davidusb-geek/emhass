@@ -21,8 +21,10 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
     """
     Set up some of the data needed for the different actions.
     
-    :param config_path: The absolute path where the config.yaml file is located
-    :type config_path: str
+    :param config_path: The complete absolute path where the config.yaml file is located
+    :type config_path: pathlib.Path
+    :param base_path: The parent folder of the config_path
+    :type base_path: str
     :param costfun: The type of cost function to use for optimization problem
     :type costfun: str
     :param params: Configuration parameters passed from data/options.json
@@ -60,7 +62,7 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
     if set_type == "perfect-optim":
         # Retrieve data from hass
         if get_data_from_file:
-            with open(pathlib.Path(base_path+'/data/test_df_final.pkl'), 'rb') as inp:
+            with open(pathlib.Path(base_path) / 'data' / 'test_df_final.pkl', 'rb') as inp:
                 rh.df_final, days_list, var_list = pickle.load(inp)
         else:
             days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
@@ -92,7 +94,7 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
     elif set_type == "naive-mpc-optim":
         # Retrieve data from hass
         if get_data_from_file:
-            with open(pathlib.Path(base_path+'/data/test_df_final.pkl'), 'rb') as inp:
+            with open(pathlib.Path(base_path) / 'data' / 'test_df_final.pkl', 'rb') as inp:
                 rh.df_final, days_list, var_list = pickle.load(inp)
         else:
             days_list = utils.get_days_list(1)
@@ -169,11 +171,11 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     opt_res = input_data_dict['opt'].perform_perfect_forecast_optim(df_input_data, input_data_dict['days_list'])
     # Save CSV file for analysis
     if save_data_to_file:
-        filename = 'opt_res_perfect_optim_'+input_data_dict['costfun']
+        filename = 'opt_res_perfect_optim_'+input_data_dict['costfun']+'.csv'
     else: # Just save the latest optimization results
-        filename = 'opt_res_latest'
+        filename = 'opt_res_latest.csv'
     if not debug:
-        opt_res.to_csv(input_data_dict['root'] + filename + '.csv', index_label='timestamp')
+        opt_res.to_csv(pathlib.Path(input_data_dict['root']) / filename, index_label='timestamp')
     return opt_res
     
 def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
@@ -205,11 +207,11 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     # Save CSV file for publish_data
     if save_data_to_file:
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        filename = 'opt_res_dayahead_'+today.strftime("%Y_%m_%d")
+        filename = 'opt_res_dayahead_'+today.strftime("%Y_%m_%d")+'.csv'
     else: # Just save the latest optimization results
-        filename = 'opt_res_latest'
+        filename = 'opt_res_latest.csv'
     if not debug:
-        opt_res_dayahead.to_csv(input_data_dict['root'] + filename + '.csv', index_label='timestamp')
+        opt_res_dayahead.to_csv(pathlib.Path(input_data_dict['root']) / filename, index_label='timestamp')
     return opt_res_dayahead
 
 def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
@@ -247,11 +249,11 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     # Save CSV file for publish_data
     if save_data_to_file:
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        filename = 'opt_res_naive_mpc_'+today.strftime("%Y_%m_%d")
+        filename = 'opt_res_naive_mpc_'+today.strftime("%Y_%m_%d")+'.csv'
     else: # Just save the latest optimization results
-        filename = 'opt_res_latest'
+        filename = 'opt_res_latest.csv'
     if not debug:
-        opt_res_naive_mpc.to_csv(input_data_dict['root'] + filename + '.csv', index_label='timestamp')
+        opt_res_naive_mpc.to_csv(pathlib.Path(input_data_dict['root']) / filename, index_label='timestamp')
     return opt_res_naive_mpc
     
 def publish_data(input_data_dict: dict, logger: logging.Logger,
@@ -273,13 +275,13 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     # Check if a day ahead optimization has been performed (read CSV file)
     if save_data_to_file:
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        filename = 'opt_res_dayahead_'+today.strftime("%Y_%m_%d")
+        filename = 'opt_res_dayahead_'+today.strftime("%Y_%m_%d")+'.csv'
     else:
-        filename = 'opt_res_latest'
-    if not os.path.isfile(input_data_dict['root'] + filename + '.csv'):
+        filename = 'opt_res_latest.csv'
+    if not os.path.isfile(pathlib.Path(input_data_dict['root']) / filename):
         logger.error("File not found error, run an optimization task first.")
     else:
-        opt_res_latest = pd.read_csv(input_data_dict['root'] + filename + '.csv', index_col='timestamp')
+        opt_res_latest = pd.read_csv(pathlib.Path(input_data_dict['root']) / filename, index_col='timestamp')
         opt_res_latest.index = pd.to_datetime(opt_res_latest.index)
         opt_res_latest.index.freq = input_data_dict['retrieve_hass_conf']['freq']
     # Estimate the current index
