@@ -116,12 +116,12 @@ def index():
     file_loader = PackageLoader('emhass', 'templates')
     env = Environment(loader=file_loader)
     template = env.get_template('index.html')
-    # template = render_template('index.html')
     # Load cache dict
-    with open(str(data_path / 'injection_dict.pkl'), "rb") as fid:
-        injection_dict = pickle.load(fid)
-    if injection_dict is None:
-        app.logger.warning("Oops.. The data dictionary is empty... Please launch an optimization task")
+    if (data_path / 'injection_dict.pkl').exists():
+        with open(str(data_path / 'injection_dict.pkl'), "rb") as fid:
+            injection_dict = pickle.load(fid)
+    else:
+        app.logger.warning("The data container dictionary is empty... Please launch an optimization task")
         injection_dict={}
     return make_response(template.render(injection_dict=injection_dict))
 
