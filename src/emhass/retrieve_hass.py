@@ -293,10 +293,11 @@ class retrieve_hass:
         if self.get_data_from_file:
             class response: pass
             response.status_code = 200
+            response.ok = True
         else:
             response = post(url, headers=headers, data=json.dumps(data))
         # Treating the response status and posting them on the logger
-        if response.status_code == 200:
+        if response.ok:
             self.logger.info("Successfully posted to "+entity_id+" = "+str(state))
         else:
             self.logger.info("The status code for received curl command response is: "+str(response.status_code))
