@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.36] - 2023-01-31
+### Fix
+- Fixed message handling from request module.
+
 ## [0.3.35] - 2023-01-31
 ### Fix
 - Fixed access to injection_dict for the first time that emhass is used.
