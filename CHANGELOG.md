@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+### Fix
+- Fixed Solar.Forecast issues with lists of parameters.
+
 ## [0.3.36] - 2023-01-31
 ### Fix
 - Fixed message handling from request module.

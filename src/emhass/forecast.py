@@ -244,27 +244,33 @@ class forecast(object):
             headers = {
                 "Accept": "application/json"
                 }
-            url = "https://api.forecast.solar/estimate/"+str(round(self.lat, 2))+"/"+str(round(self.lon, 2))+\
-                "/"+str(self.plant_conf["surface_tilt"])+"/"+str(self.plant_conf["surface_azimuth"]-180)+\
-                "/"+str(self.retrieve_hass_conf["solar_forecast_kwp"])
-            response = get(url, headers=headers)
-            '''import bz2 # Uncomment to save a serialized data for tests
-            import _pickle as cPickle
-            with bz2.BZ2File("data/test_response_solarforecast_get_method.pbz2", "w") as f: 
-                cPickle.dump(response.json(), f)'''
-            data_raw = response.json()
-            data_dict = {'ts':list(data_raw['result']['watts'].keys()), 'yhat':list(data_raw['result']['watts'].values())}
-            # Form the final DataFrame
-            data = pd.DataFrame.from_dict(data_dict)
-            data.set_index('ts', inplace=True)
-            data.index = pd.to_datetime(data.index)
-            data = data.tz_localize(self.forecast_dates.tz)
-            data = data.reindex(index=self.forecast_dates)
-            mask_up_data_df = data.copy(deep=True).fillna(method = "ffill").isnull()
-            mask_down_data_df = data.copy(deep=True).fillna(method = "bfill").isnull()
-            data.loc[data.index[mask_up_data_df['yhat']==True],:] = 0.0
-            data.loc[data.index[mask_down_data_df['yhat']==True],:] = 0.0
-            data.interpolate(inplace=True)
+            data = pd.DataFrame()
+            for i in range(len(self.plant_conf['module_model'])):
+                url = "https://api.forecast.solar/estimate/"+str(round(self.lat, 2))+"/"+str(round(self.lon, 2))+\
+                    "/"+str(self.plant_conf["surface_tilt"][i])+"/"+str(self.plant_conf["surface_azimuth"][i]-180)+\
+                    "/"+str(self.retrieve_hass_conf["solar_forecast_kwp"])
+                response = get(url, headers=headers)
+                '''import bz2 # Uncomment to save a serialized data for tests
+                import _pickle as cPickle
+                with bz2.BZ2File("data/test_response_solarforecast_get_method.pbz2", "w") as f: 
+                    cPickle.dump(response.json(), f)'''
+                data_raw = response.json()
+                data_dict = {'ts':list(data_raw['result']['watts'].keys()), 'yhat':list(data_raw['result']['watts'].values())}
+                # Form the final DataFrame
+                data_tmp = pd.DataFrame.from_dict(data_dict)
+                data_tmp.set_index('ts', inplace=True)
+                data_tmp.index = pd.to_datetime(data_tmp.index)
+                data_tmp = data_tmp.tz_localize(self.forecast_dates.tz)
+                data_tmp = data_tmp.reindex(index=self.forecast_dates)
+                mask_up_data_df = data_tmp.copy(deep=True).fillna(method = "ffill").isnull()
+                mask_down_data_df = data_tmp.copy(deep=True).fillna(method = "bfill").isnull()
+                data_tmp.loc[data_tmp.index[mask_up_data_df['yhat']==True],:] = 0.0
+                data_tmp.loc[data_tmp.index[mask_down_data_df['yhat']==True],:] = 0.0
+                data_tmp.interpolate(inplace=True)
+                if len(data) == 0:
+                    data = copy.deepcopy(data_tmp)
+                else:
+                    data = data + data_tmp
         elif method == 'csv': # reading from a csv file
             weather_csv_file_path = self.root + csv_path
             # Loading the csv file, we will consider that this is the PV power in W
