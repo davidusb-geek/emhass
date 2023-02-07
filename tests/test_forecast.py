@@ -104,8 +104,8 @@ class TestForecast(unittest.TestCase):
             self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
             self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
             self.assertEqual(len(df_weather_scrap), len(P_PV_forecast))
-            self.plant_conf['module_model'] = [self.plant_conf['module_model'], self.plant_conf['module_model']]
-            self.plant_conf['inverter_model'] = [self.plant_conf['inverter_model'], self.plant_conf['inverter_model']]
+            self.plant_conf['module_model'] = [self.plant_conf['module_model'][0], self.plant_conf['module_model'][0]]
+            self.plant_conf['inverter_model'] = [self.plant_conf['inverter_model'][0], self.plant_conf['inverter_model'][0]]
             self.plant_conf['surface_tilt'] = [30, 45]
             self.plant_conf['surface_azimuth'] = [270, 90]
             self.plant_conf['modules_per_string'] = [8, 8]
@@ -136,18 +136,19 @@ class TestForecast(unittest.TestCase):
         with requests_mock.mock() as m:
             data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_solarforecast_get_method.pbz2')), "rb")
             data = cPickle.load(data)
-            get_url = "https://api.forecast.solar/estimate/"+str(round(self.fcst.lat, 2))+"/"+str(round(self.fcst.lon, 2))+\
-                "/"+str(self.plant_conf["surface_tilt"])+"/"+str(self.plant_conf["surface_azimuth"]-180)+\
-                "/"+str(5)
-            m.get(get_url, json=data)
-            df_weather_solarforecast = self.fcst.get_weather_forecast(method='solar.forecast')
-            self.assertIsInstance(df_weather_solarforecast, type(pd.DataFrame()))
-            self.assertIsInstance(df_weather_solarforecast.index, pd.core.indexes.datetimes.DatetimeIndex)
-            self.assertIsInstance(df_weather_solarforecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-            self.assertEqual(df_weather_solarforecast.index.tz, self.fcst.time_zone)
-            self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_solarforecast.index)
-            self.assertEqual(len(df_weather_solarforecast), 
-                            int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
+            for i in range(len(self.plant_conf['module_model'])):
+                get_url = "https://api.forecast.solar/estimate/"+str(round(self.fcst.lat, 2))+"/"+str(round(self.fcst.lon, 2))+\
+                    "/"+str(self.plant_conf["surface_tilt"][i])+"/"+str(self.plant_conf["surface_azimuth"][i]-180)+\
+                    "/"+str(5)
+                m.get(get_url, json=data)
+                df_weather_solarforecast = self.fcst.get_weather_forecast(method='solar.forecast')
+                self.assertIsInstance(df_weather_solarforecast, type(pd.DataFrame()))
+                self.assertIsInstance(df_weather_solarforecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+                self.assertIsInstance(df_weather_solarforecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+                self.assertEqual(df_weather_solarforecast.index.tz, self.fcst.time_zone)
+                self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_solarforecast.index)
+                self.assertEqual(len(df_weather_solarforecast), 
+                                int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
 
     def test_get_forecasts_with_lists(self):
         with open(root+'/config_emhass.yaml', 'r') as file:
