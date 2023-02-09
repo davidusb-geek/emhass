@@ -84,7 +84,12 @@ These architectures are supported: `amd64`, `armv7`, `armhf` and `aarch64`.
 
 ### 2) Using Docker in standalone mode
 
-To install using docker you will need to build your image locally. For this clone this repository, setup your `config_emhass.yaml` file and use the provided make file with this command:
+You can also install EMHASS using docker. This can be in the same machine as Home Assistant (if using the supervised install method) or in a different distant machine. To install first pull the latest image from docker hub:
+```
+docker pull davidusb/emhass-docker-standalone
+```
+
+You can also build your image locally. For this clone this repository, setup your `config_emhass.yaml` file and use the provided make file with this command:
 ```
 make -f deploy_docker.mk clean_deploy
 ```
@@ -92,7 +97,7 @@ Then load the image in the .tar file:
 ```
 docker load -i <TarFileName>.tar
 ```
-Finally launch the docker itself:
+Finally check your image tag with `docker images` and launch the docker itself:
 ```
 docker run -it --restart always -p 5000:5000 -e "LOCAL_COSTFUN=profit" -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
 ```
