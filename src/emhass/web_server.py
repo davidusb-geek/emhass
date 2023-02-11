@@ -6,7 +6,7 @@ from flask import Flask, request, make_response, render_template
 from jinja2 import Environment, PackageLoader
 from requests import get
 from waitress import serve
-from importlib.metadata import version
+from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 import os, json, argparse, pickle, yaml, logging
 from distutils.util import strtobool
@@ -268,5 +268,8 @@ if __name__ == "__main__":
     app.logger.info("Launching the emhass webserver at: http://"+web_ui_url+":"+str(port))
     app.logger.info("Home Assistant data fetch will be performed using url: "+hass_url)
     app.logger.info("The data path is: "+str(data_path))
-    app.logger.info("Using core emhass version: "+version('emhass'))
+    try:
+        app.logger.info("Using core emhass version: "+version('emhass'))
+    except PackageNotFoundError:
+        app.logger.info("Using development emhass version")
     serve(app, host=web_ui_url, port=port, threads=8)
