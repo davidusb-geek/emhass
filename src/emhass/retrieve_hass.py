@@ -113,6 +113,9 @@ class retrieve_hass:
                     response = get(url, headers=headers)
                 except Exception:
                     return "Request Get Error"
+                else:
+                    if response.status_code > 299:
+                        return f"Request Get Error: {response.status_code}"
                 '''import bz2 # Uncomment to save a serialized data for tests
                 import _pickle as cPickle
                 with bz2.BZ2File("data/test_response_get_data_get_method.pbz2", "w") as f: 
