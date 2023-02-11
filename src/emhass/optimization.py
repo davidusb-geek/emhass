@@ -371,9 +371,10 @@ class optimization:
         # The status of the solution is printed to the screen
         self.logger.info("Status: " + plp.LpStatus[opt_model.status])
         if plp.value(opt_model.objective) is None:
-            self.logger.warning("Cost function cannot be evaluated, probably None")
+            self.logger.warning("Cost function cannot be evaluated")
+            return
         else:
-            self.logger.info("Total value of the Cost function = " + str(round(plp.value(opt_model.objective),2)))
+            self.logger.info("Total value of the Cost function = %.02f", plp.value(opt_model.objective))
             
         # Build results Dataframe
         opt_tp = pd.DataFrame()
