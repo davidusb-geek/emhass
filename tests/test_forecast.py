@@ -84,13 +84,13 @@ class TestForecast(unittest.TestCase):
         self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.df_weather_csv), len(P_PV_forecast))
     
-    def test_get_weather_forecast_scrapper_method_mock(self):
+    def test_get_weather_forecast_scraper_method_mock(self):
         with requests_mock.mock() as m:
-            data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_scrapper_get_method.pbz2')), "rb")
+            data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_scraper_get_method.pbz2')), "rb")
             data = cPickle.load(data)
             get_url = "https://clearoutside.com/forecast/"+str(round(self.fcst.lat, 2))+"/"+str(round(self.fcst.lon, 2))+"?desktop=true"
             m.get(get_url, content=data)
-            df_weather_scrap = self.fcst.get_weather_forecast(method='scrapper')
+            df_weather_scrap = self.fcst.get_weather_forecast(method='scraper')
             self.assertIsInstance(df_weather_scrap, type(pd.DataFrame()))
             self.assertIsInstance(df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex)
             self.assertIsInstance(df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)

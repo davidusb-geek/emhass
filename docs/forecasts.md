@@ -12,7 +12,7 @@ EMHASS will basically need 4 forecasts to work properly:
 
 ## PV power production forecast
 
-The default method for PV power forecast is the scrapping of weather forecast data from the https://clearoutside.com/ website. This is obtained using `method=scrapper`. This site proposes detailed forecasts based on Lat/Lon locations. This method seems quite stable but as with any scrape method it will fail if any changes are made to the webpage API.
+The default method for PV power forecast is the scraping of weather forecast data from the https://clearoutside.com/ website. This is obtained using `method=scraper`. This site proposes detailed forecasts based on Lat/Lon locations. This method seems quite stable but as with any scrape method it will fail if any changes are made to the webpage API.
 
 This may change in the future to direct API's of weather forecast models as GFS or ECMWF, see:
 

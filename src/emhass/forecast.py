@@ -37,7 +37,7 @@ class forecast(object):
         is given in EUR/kWh.
     
     The weather forecast is obtained from several methods. The first method
-    uses a scrapper to the ClearOutside webpage which proposes detailed forecasts 
+    uses a scraper to the ClearOutside webpage which proposes detailed forecasts 
     based on Lat/Lon locations. This method seems quite stable but as with any scrape 
     method it will fail if any changes are made to the webpage API. A second method
     for weather forecast is using a direct read from a CSV file. With this method we
@@ -151,13 +151,13 @@ class forecast(object):
                     self.forecast_dates = self.forecast_dates[0:self.params['passed_data']['prediction_horizon']]
         
         
-    def get_weather_forecast(self, method: Optional[str] = 'scrapper',
+    def get_weather_forecast(self, method: Optional[str] = 'scraper',
                              csv_path: Optional[str] = "/data/data_weather_forecast.csv") -> pd.DataFrame:
         r"""
         Get and generate weather forecast data.
         
-        :param method: The desired method, options are 'scrapper', 'csv', 'list' and 'solcast'. \
-            defaults to 'scrapper'
+        :param method: The desired method, options are 'scraper', 'csv', 'list' and 'solcast'. \
+            defaults to 'scraper'
         :type method: str, optional
         :return: The DataFrame containing the forecasted data
         :rtype: pd.DataFrame
@@ -165,8 +165,8 @@ class forecast(object):
         """
         self.logger.info("Retrieving weather forecast data using method = "+method)
         self.weather_forecast_method = method # Saving this attribute for later use to identify csv method usage
-        if method == 'scrapper':
-            freq_scrap = pd.to_timedelta(60, "minutes") # The scrapping time step is 60min
+        if method in ('scraper', 'scraper'):  # typo compatibility
+            freq_scrap = pd.to_timedelta(60, "minutes") # The scraping time step is 60min
             forecast_dates_scrap = pd.date_range(start=self.start_forecast,
                                                  end=self.end_forecast-freq_scrap, 
                                                  freq=freq_scrap).round(freq_scrap)
@@ -174,7 +174,7 @@ class forecast(object):
             response = get("https://clearoutside.com/forecast/"+str(round(self.lat, 2))+"/"+str(round(self.lon, 2))+"?desktop=true")
             '''import bz2 # Uncomment to save a serialized data for tests
             import _pickle as cPickle
-            with bz2.BZ2File("data/test_response_scrapper_get_method.pbz2", "w") as f: 
+            with bz2.BZ2File("data/test_response_scraper_get_method.pbz2", "w") as f: 
                 cPickle.dump(response.content, f)'''
             soup = BeautifulSoup(response.content, 'html.parser')
             table = soup.find_all(id='day_0')[0]

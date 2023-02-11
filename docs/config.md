@@ -55,7 +55,7 @@ These are the parameters needed to properly define the optimization problem.
 - set_def_constant: Define if we should set each deferrable load as a constant fixed value variable with just one startup for each optimization task. For example:
 	- False
 	- False
-- weather_forecast_method: This will define the weather forecast method that will be used. The options are 'scrapper' for a scrapping method for weather forecast from clearoutside.com and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts. The default CSV file path that will be used is '/data/data_weather_forecast.csv'. Defaults to 'scrapper' method.
+- weather_forecast_method: This will define the weather forecast method that will be used. The options are 'scraper' for a scraping method for weather forecast from clearoutside.com and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts. The default CSV file path that will be used is '/data/data_weather_forecast.csv'. Defaults to 'scraper' method.
 - load_forecast_method: The load forecast method that will be used. The options are 'csv' to load a CSV file or 'naive' for a simple 1-day persistance model. The default CSV file path that will be used is '/data/data_load_forecast.csv'. Defaults to 'naive'.
 - load_cost_forecast_method: Define the method that will be used for load cost forecast. The options are 'hp_hc_periods' for peak and non-peak hours contracts and 'csv' to load custom cost from CSV file. The default CSV file path that will be used is '/data/data_load_cost_forecast.csv'.
 The following parameters and definitions are only needed if load_cost_forecast_method='hp_hc_periods':
