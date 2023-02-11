@@ -192,9 +192,9 @@ if __name__ == "__main__":
             app.logger.error("options.json does not exists")
         DATA_PATH = "/share/" #"/data/"
     else:
-        CONFIG_PATH = "/app/config_emhass.yaml"
+        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
         options = None
-        DATA_PATH = "/app/data/"
+        DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
     config_path = Path(CONFIG_PATH)
     data_path = Path(DATA_PATH)
     
@@ -254,7 +254,7 @@ if __name__ == "__main__":
         }
     else:
         costfun = os.getenv('LOCAL_COSTFUN', default='profit')
-        with open('/app/secrets_emhass.yaml', 'r') as file:
+        with open(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), 'r') as file:
             params_secrets = yaml.load(file, Loader=yaml.FullLoader)
         hass_url = params_secrets['hass_url']
         
