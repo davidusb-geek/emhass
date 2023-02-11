@@ -357,19 +357,15 @@ class optimization:
                                 })
         opt_model.constraints = constraints
     
-        ## Finally, we call the solver to solve our optimization model:
-        # solving with default solver CBC
-        try:
-            if self.lp_solver == 'PULP_CBC_CMD':
-                opt_model.solve(PULP_CBC_CMD(msg=0))
-            elif self.lp_solver == 'GLPK_CMD':
-                opt_model.solve(GLPK_CMD(msg=0))
-            elif self.lp_solver == 'COIN_CMD':
-                opt_model.solve(COIN_CMD(msg=0, path=self.lp_solver_path))
-            else:
-                self.logger.error("Invalid solver name passed")
-        except Exception:
-            self.logger.error("It was not possible to find a valid solver for Pulp package")
+        # Finally, we call the solver to solve our optimization model:
+        if self.lp_solver == 'PULP_CBC_CMD':
+            opt_model.solve(PULP_CBC_CMD(msg=0))
+        elif self.lp_solver == 'GLPK_CMD':
+            opt_model.solve(GLPK_CMD(msg=0))
+        elif self.lp_solver == 'COIN_CMD':
+            opt_model.solve(COIN_CMD(msg=0, path=self.lp_solver_path))
+        else:
+            self.logger.error("Invalid solver name passed")
         
         # The status of the solution is printed to the screen
         self.logger.info("Status: " + plp.LpStatus[opt_model.status])
