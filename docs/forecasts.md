@@ -50,15 +50,13 @@ When using this method you can provide a list of peak-hour periods, so you can a
 
 As an example for a two peak-hour periods contract you will need to define the following list in the configuration file:
 
-    - list_hp_periods:
-        - period_hp_1:
-            - start: '02:54'
-            - end: '15:24'
-        - period_hp_2:
-            - start: '17:24'
-            - end: '20:24'
-    - load_cost_hp: 0.1907
-    - load_cost_hc: 0.1419
+    hp_periods:
+    - start: '02:54'
+      end: '15:24'
+    - start: '17:24'
+      end: '20:24'
+    load_cost_hp: 0.1907
+    load_cost_hc: 0.1419
 
 This example is presented graphically here:
 

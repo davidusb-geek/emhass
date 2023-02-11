@@ -45,10 +45,10 @@ class TestCommandLineUtils(unittest.TestCase):
         }
         self.runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
-        params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        params['optim_conf'][8]['load_forecast_method'] = 'list'
-        params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
-        params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
+        params['optim_conf']['weather_forecast_method'] = 'list'
+        params['optim_conf']['load_forecast_method'] = 'list'
+        params['optim_conf']['load_cost_forecast_method'] = 'list'
+        params['optim_conf']['prod_price_forecast_method'] = 'list'
         self.params_json = json.dumps(params)
         
     def test_set_input_data_dict(self):
@@ -91,10 +91,10 @@ class TestCommandLineUtils(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params = copy.deepcopy(json.loads(self.params_json))
         params['passed_data'] = runtimeparams
-        params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        params['optim_conf'][8]['load_forecast_method'] = 'list'
-        params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
-        params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
+        params['optim_conf']['weather_forecast_method'] = 'list'
+        params['optim_conf']['load_forecast_method'] = 'list'
+        params['optim_conf']['load_cost_forecast_method'] = 'list'
+        params['optim_conf']['prod_price_forecast_method'] = 'list'
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
@@ -108,10 +108,10 @@ class TestCommandLineUtils(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params = copy.deepcopy(json.loads(self.params_json))
         params['passed_data'] = runtimeparams
-        params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        params['optim_conf'][8]['load_forecast_method'] = 'list'
-        params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
-        params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
+        params['optim_conf']['weather_forecast_method'] = 'list'
+        params['optim_conf']['load_forecast_method'] = 'list'
+        params['optim_conf']['load_cost_forecast_method'] = 'list'
+        params['optim_conf']['prod_price_forecast_method'] = 'list'
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
@@ -166,10 +166,10 @@ class TestCommandLineUtils(unittest.TestCase):
             "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3]}
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
-        params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        params['optim_conf'][8]['load_forecast_method'] = 'naive'
-        params['optim_conf'][9]['load_cost_forecast_method'] = 'hp_hc_periods'
-        params['optim_conf'][13]['prod_price_forecast_method'] = 'constant'
+        params['optim_conf']['weather_forecast_method'] = 'list'
+        params['optim_conf']['load_forecast_method'] = 'naive'
+        params['optim_conf']['load_cost_forecast_method'] = 'hp_hc_periods'
+        params['optim_conf']['prod_price_forecast_method'] = 'constant'
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
@@ -186,7 +186,7 @@ class TestCommandLineUtils(unittest.TestCase):
         costfun = 'profit'
         action = 'naive-mpc-optim'
         params = copy.deepcopy(json.loads(self.params_json))
-        params['retrieve_hass_conf'][8]['method_ts_round'] = 'first'
+        params['retrieve_hass_conf']['method_ts_round'] = 'first'
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
@@ -194,8 +194,8 @@ class TestCommandLineUtils(unittest.TestCase):
         opt_res_first = publish_data(input_data_dict, logger)
         self.assertTrue(len(opt_res_first)==1)
         params = copy.deepcopy(json.loads(self.params_json))
-        params['retrieve_hass_conf'][8]['method_ts_round'] = 'last'
-        params['optim_conf'][0]['set_use_battery'] = True
+        params['retrieve_hass_conf']['method_ts_round'] = 'last'
+        params['optim_conf']['set_use_battery'] = True
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)

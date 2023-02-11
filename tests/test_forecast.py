@@ -169,10 +169,10 @@ class TestForecast(unittest.TestCase):
             'load_cost_forecast':[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48],
             'prod_price_forecast':[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48]
         }
-        params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        params['optim_conf'][8]['load_forecast_method'] = 'list'
-        params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
-        params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
+        params['optim_conf']['weather_forecast_method'] = 'list'
+        params['optim_conf']['load_forecast_method'] = 'list'
+        params['optim_conf']['load_cost_forecast_method'] = 'list'
+        params['optim_conf']['prod_price_forecast_method'] = 'list'
         params_json = json.dumps(params)
         retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), 
                                                                     use_secrets=False, params=params_json)
