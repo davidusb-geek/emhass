@@ -365,7 +365,8 @@ class optimization:
         elif self.lp_solver == 'COIN_CMD':
             opt_model.solve(COIN_CMD(msg=0, path=self.lp_solver_path))
         else:
-            self.logger.error("Invalid solver name passed")
+            self.logger.warning("Solver %s unknown, using default", self.lp_solver)
+            opt_model.solve()
         
         # The status of the solution is printed to the screen
         self.logger.info("Status: " + plp.LpStatus[opt_model.status])
