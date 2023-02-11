@@ -174,17 +174,15 @@ class retrieve_hass:
         :rtype: pandas.DataFrame
         
         """
-        if load_negative: # Apply the correct sign to load power
-            try:
+        try:
+            if load_negative: # Apply the correct sign to load power
                 self.df_final[var_load+'_positive'] = -self.df_final[var_load]
-            except KeyError:
-                self.logger.error("Variable "+var_load+" was not found. This is typically because no data could be retrieved from Home Assistant")
-        else:
-            try:
+            else:
                 self.df_final[var_load+'_positive'] = self.df_final[var_load]
-            except KeyError:
-                self.logger.error("Variable "+var_load+" was not found. This is typically because no data could be retrieved from Home Assistant")
-        self.df_final.drop([var_load], inplace=True, axis=1)
+            self.df_final.drop([var_load], inplace=True, axis=1)
+        except KeyError:
+            self.logger.error("Variable "+var_load+" was not found. This is typically because no data could be retrieved from Home Assistant")
+
         if set_zero_min: # Apply minimum values
             self.df_final.clip(lower=0.0, inplace=True, axis=1)
             self.df_final.replace(to_replace=0.0, value=np.nan, inplace=True)
