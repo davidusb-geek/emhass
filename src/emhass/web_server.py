@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import sys
 from flask import Flask, request, make_response, render_template
 from jinja2 import Environment, PackageLoader
 from requests import get
@@ -207,6 +208,7 @@ if __name__ == "__main__":
     else:
         app.logger.error("config_emhass.json does not exists")
         app.logger.info("Falied config_path: "+str(config_path))
+        sys.exit(1)
 
     params = {}
     params['retrieve_hass_conf'] = retrieve_hass_conf
