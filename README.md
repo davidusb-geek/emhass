@@ -349,7 +349,7 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 
 
 ## Development
 
-Pull request are very much accepted on this project. For development you can find some instructions here [Development](develop.md)
+Pull request are very much accepted on this project. For development you can find some instructions here [Development](./docs/develop.md)
 
 ## Troubleshooting
 

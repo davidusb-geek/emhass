@@ -10,9 +10,9 @@ pulp>=2.4
 pyyaml>=5.4.1
 netcdf4>=1.5.3
 tables>=3.6.1
-markupsafe==2.1.2
-jinja2>=3.0
-sphinx==5.3.0
-sphinx-rtd-theme==1.1.1
-docutils<0.18
-myst-parser==0.18.1
+markupsafe==2.0.1
+jinja2<3.0
+sphinx==3.5.4
+sphinx-rtd-theme==0.5.2
+docutils==0.16
+myst-parser==0.17.0
