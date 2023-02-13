@@ -305,7 +305,8 @@ class forecast(object):
     
     def cloud_cover_to_irradiance(self, cloud_cover: pd.Series, 
                                   offset:Optional[int] = 35) -> pd.DataFrame:
-        """Estimates irradiance from cloud cover in the following steps:
+        """
+        Estimates irradiance from cloud cover in the following steps.
         
         1. Determine clear sky GHI using Ineichen model and
            climatological turbidity.
@@ -425,7 +426,7 @@ class forecast(object):
     def get_forecast_days_csv(self, timedelta_days: Optional[int] = 1) -> pd.date_range:
         r"""
         Get the date range vector of forecast dates that will be used when \
-        loading a CSV file.
+            loading a CSV file.
         
         :return: The forecast dates vector
         :rtype: pd.date_range
@@ -518,7 +519,7 @@ class forecast(object):
         :param csv_path: The path to the CSV file used when method = 'csv', \
             defaults to "/data/data_load_forecast.csv"
         :type csv_path: str, optional
-        param set_mix_forecast: Use a mixed forcast strategy to integra now/current values.
+        :param set_mix_forecast: Use a mixed forcast strategy to integra now/current values.
         :type set_mix_forecast: Bool, optional
         :param df_now: The DataFrame containing the now/current data.
         :type df_now: pd.DataFrame, optional
