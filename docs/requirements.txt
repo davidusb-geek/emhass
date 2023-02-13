@@ -13,6 +13,6 @@ tables>=3.6.1
 markupsafe==2.1.2
 jinja2>=3.0
 sphinx==5.3.0
-sphinx-rtd-theme==1.1.1
+sphinx-rtd-theme==1.2.0
 docutils<0.18
 myst-parser==0.18.1
