@@ -14,6 +14,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.linear_model import ElasticNet
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.metrics import r2_score
+
 from skforecast.ForecasterAutoreg import ForecasterAutoreg
 from skforecast.model_selection import bayesian_search_forecaster
 from skforecast.model_selection import backtesting_forecaster
@@ -30,13 +31,13 @@ logger, ch = get_logger(__name__, root, save_to_file=False)
 if __name__ == '__main__':
 
     params = None
-    data_path = pathlib.Path(root+'/data/data.pkl')
+    data_path = pathlib.Path(root+'/data/data_train.pkl')
     template = 'presentation'
 
     if data_path.is_file():
         logger.info("Loading a previous data file")
         with open(data_path, "rb") as fid:
-            data = pickle.load(fid)
+            data, var_model = pickle.load(fid)
     else:
         logger.info("Using EMHASS methods to retrieve the data")
         retrieve_hass_conf, _, _ = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True)
@@ -50,7 +51,7 @@ if __name__ == '__main__':
         rh.get_data(days_list, var_list)
         
         with open(data_path, 'wb') as fid:
-            pickle.dump(rh.df_final, fid, pickle.HIGHEST_PROTOCOL)
+            pickle.dump((rh.df_final, var_model), fid, pickle.HIGHEST_PROTOCOL)
 
         data = copy.deepcopy(rh.df_final)
         
@@ -96,13 +97,13 @@ if __name__ == '__main__':
     # Predictions
     predictions = forecaster.predict(steps=steps, exog=data_train.drop(var_model, axis=1))
     pred_metric = r2_score(data_test[var_model],predictions)
-    logger.info(f"Prediction error: {pred_metric}")
+    logger.info(f"Prediction R2 score: {pred_metric}")
     
     # Plot
-    df = pd.DataFrame(index=data_exo.index,columns=['train','test','predictions'])
+    df = pd.DataFrame(index=data_exo.index,columns=['train','test','pred'])
     df['train'] = data_train[var_model]
     df['test'] = data_test[var_model]
-    df['predictions'] = predictions
+    df['pred'] = predictions
     fig = df.plot()
     fig.layout.template = template
     fig.update_yaxes(title_text = "Power (W)")
@@ -120,16 +121,16 @@ if __name__ == '__main__':
         initial_train_size = None,
         fixed_train_size   = False,
         steps              = 48, #10
-        metric             = r2_score,
+        metric             = 'mean_absolute_percentage_error',
         refit              = False, #True
         verbose            = False
     )
     logger.info(f"Elapsed time: {time.time() - start_time}")
-    logger.info(f"Backtest error: {metric}")
+    logger.info(f"Backtest MAPE error: {metric}")
     
-    df = pd.DataFrame(index=data_exo.index,columns=['train','predictions'])
+    df = pd.DataFrame(index=data_exo.index,columns=['train','pred'])
     df['train'] = data_exo[var_model]
-    df['predictions'] = predictions_backtest
+    df['pred'] = predictions_backtest
     fig = df.plot()
     fig.layout.template = template
     fig.update_yaxes(title_text = "Power (W)")
@@ -156,7 +157,7 @@ if __name__ == '__main__':
         lags_grid          = lags_grid,
         search_space       = search_space,
         steps              = 48,
-        metric             = r2_score,
+        metric             = 'mean_absolute_percentage_error',
         refit              = True,
         initial_train_size = len(data_exo.loc[:date_train]),
         fixed_train_size   = True,
@@ -176,13 +177,13 @@ if __name__ == '__main__':
     forecaster_loaded = load_forecaster('forecaster.py', verbose=False)
     predictions_loaded = forecaster.predict(steps=steps, exog=data_train.drop(var_model, axis=1))
     pred_metric = r2_score(data_test[var_model],predictions_loaded)
-    logger.info(f"Prediction loaded and optimized model error: {pred_metric}")
+    logger.info(f"Prediction loaded and optimized model R2 score: {pred_metric}")
     
-    df = pd.DataFrame(index=data_exo.index,columns=['train','test','predictions'])
+    df = pd.DataFrame(index=data_exo.index,columns=['train','test','pred','pred_optim'])
     df['train'] = data_train[var_model]
     df['test'] = data_test[var_model]
-    df['predictions'] = predictions
-    df['predictions_optimized'] = predictions_loaded
+    df['pred'] = predictions
+    df['pred_optim'] = predictions_loaded
     fig = df.plot()
     fig.layout.template = template
     fig.update_yaxes(title_text = "Power (W)")
