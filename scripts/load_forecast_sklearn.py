@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import numpy as np
 import pandas as pd
 import pathlib, pickle, copy, time
 import plotly.io as pio
@@ -8,6 +9,7 @@ pio.renderers.default = 'browser'
 pd.options.plotting.backend = "plotly"
 
 from emhass.retrieve_hass import retrieve_hass
+from emhass.forecast import forecast
 from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
 from sklearn.linear_model import LinearRegression
@@ -24,9 +26,12 @@ from skopt.space import Categorical, Real, Integer
 
 
 # the root folder
-root = str(get_root(__file__, num_parent=1))
+root = str(get_root(__file__, num_parent=2))
 # create logger
 logger, ch = get_logger(__name__, root, save_to_file=False)
+
+def custom_metric(y_true, y_pred):
+    return -r2_score(y_true, y_pred)
 
 if __name__ == '__main__':
 
@@ -108,7 +113,7 @@ if __name__ == '__main__':
     fig.layout.template = template
     fig.update_yaxes(title_text = "Power (W)")
     fig.update_xaxes(title_text = "Time")
-    fig.update_xaxes(range=[date_train+pd.Timedelta('5days'), data_exo.index[-1]])
+    fig.update_xaxes(range=[date_train+pd.Timedelta('10days'), data_exo.index[-1]])
     fig.show()
     fig.write_image(root + "/docs/images/load_forecast_knn_bare.png", width=1080, height=0.8*1080)
     
@@ -121,7 +126,7 @@ if __name__ == '__main__':
         initial_train_size = None,
         fixed_train_size   = False,
         steps              = 48, #10
-        metric             = 'mean_absolute_percentage_error',
+        metric             = custom_metric, #'mean_absolute_percentage_error'
         refit              = False, #True
         verbose            = False
     )
@@ -157,7 +162,7 @@ if __name__ == '__main__':
         lags_grid          = lags_grid,
         search_space       = search_space,
         steps              = 48,
-        metric             = 'mean_absolute_percentage_error',
+        metric             = custom_metric, #'mean_absolute_percentage_error''mean_absolute_percentage_error',
         refit              = True,
         initial_train_size = len(data_exo.loc[:date_train]),
         fixed_train_size   = True,
@@ -179,15 +184,69 @@ if __name__ == '__main__':
     pred_metric = r2_score(data_test[var_model],predictions_loaded)
     logger.info(f"Prediction loaded and optimized model R2 score: {pred_metric}")
     
-    df = pd.DataFrame(index=data_exo.index,columns=['train','test','pred','pred_optim'])
+    df = pd.DataFrame(index=data_exo.index,columns=['train','test','pred','pred_naive','pred_optim'])
+    freq_hours = df.index.freq.delta.seconds/3600
+    lags_opt = int(np.round(len(results.iloc[0]['lags'])))
+    days_needed = int(np.round(lags_opt*freq_hours/24))
+    shift = int(24/freq_hours)
+    P_load_forecast_naive = pd.concat([data_exo.iloc[-shift:], data_exo.iloc[:-shift]])
     df['train'] = data_train[var_model]
     df['test'] = data_test[var_model]
     df['pred'] = predictions
+    df['pred_naive'] = P_load_forecast_naive[var_model].values
     df['pred_optim'] = predictions_loaded
     fig = df.plot()
     fig.layout.template = template
     fig.update_yaxes(title_text = "Power (W)")
     fig.update_xaxes(title_text = "Time")
-    fig.update_xaxes(range=[date_train+pd.Timedelta('5days'), data_exo.index[-1]])
+    fig.update_xaxes(range=[date_train+pd.Timedelta('10days'), data_exo.index[-1]])
     fig.show()
     fig.write_image(root + "/docs/images/load_forecast_knn_optimized.png", width=1080, height=0.8*1080)
+    
+    pred_metric_test = r2_score(df.loc[data_test.index[1:-1],'test'],df.loc[data_test[1:-1].index,'pred'])
+    logger.info(f"R2 score for non-optimized prediction in test period: {pred_metric_test}")
+    pred_naive_metric_test = r2_score(df.loc[data_test.index[1:-1],'test'],df.loc[data_test[1:-1].index,'pred_naive'])
+    logger.info(f"R2 score for naive persistance forecast in test period: {pred_naive_metric_test}")
+    pred_optim_metric_test = r2_score(df.loc[data_test.index[1:-1],'test'],df.loc[data_test[1:-1].index,'pred_optim'])
+    logger.info(f"R2 score for optimized prediction in test period: {pred_optim_metric_test}")
+    
+    logger.info("Prediction in production using last_window")
+    
+    # Let's perform a naive load forecast for comparison
+    retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True)
+    fcst = forecast(retrieve_hass_conf, optim_conf, plant_conf,
+                    params, root, logger)
+    P_load_forecast = fcst.get_load_forecast(method='naive')
+    
+    # Then retrieve some data and perform a prediction mocking a production env
+    rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
+        retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
+        params, root, logger, get_data_from_file=False)
+
+    days_list = get_days_list(days_needed)
+    var_model = retrieve_hass_conf['var_load']
+    var_list = [var_model]
+    rh.get_data(days_list, var_list)
+    data_last_window = copy.deepcopy(rh.df_final)
+    
+    data_last_window['year'] = [i.year for i in data_last_window.index]
+    data_last_window['month'] = [i.month for i in data_last_window.index]
+    data_last_window['day_of_week'] = [i.dayofweek for i in data_last_window.index]
+    data_last_window['day_of_year'] = [i.dayofyear for i in data_last_window.index]
+    data_last_window['day'] = [i.day for i in data_last_window.index]
+    data_last_window['hour'] = [i.hour for i in data_last_window.index]
+    data_last_window = data_last_window.interpolate(method='linear', axis=0, limit=None)
+    
+    predictions_prod = forecaster.predict(steps=lags_opt, 
+                                          last_window=data_last_window[var_model],
+                                          exog=data_last_window.drop(var_model, axis=1))
+    
+    df = pd.DataFrame(index=P_load_forecast.index,columns=['pred_naive','pred_prod'])
+    df['pred_naive'] = P_load_forecast
+    df['pred_prod'] = predictions_prod
+    fig = df.plot()
+    fig.layout.template = template
+    fig.update_yaxes(title_text = "Power (W)")
+    fig.update_xaxes(title_text = "Time")
+    fig.show()
+    fig.write_image(root + "/docs/images/load_forecast_production.png", width=1080, height=0.8*1080)

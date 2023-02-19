@@ -43,6 +43,7 @@ setup(
     packages=find_packages(where='src'),  # Required
     python_requires='>=3.8, <3.10',
     install_requires=[
+        'wheel>=0.38.4'
         'numpy==1.22.2',
         'pandas==1.4.1',
         'pvlib>=0.8.1',
@@ -55,6 +56,7 @@ setup(
         'pyyaml>=5.4.1',
         'netcdf4>=1.5.3',
         'tables==3.7.0',
+        'skforecast==0.6.0',
     ],  # Optional
     entry_points={  # Optional
         'console_scripts': [
