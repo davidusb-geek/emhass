@@ -1,4 +1,4 @@
-wheel>=0.38.4
+wheel
 numpy==1.22.2
 pandas==1.4.1
 pvlib>=0.9.0
