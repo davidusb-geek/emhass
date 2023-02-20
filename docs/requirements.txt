@@ -1,5 +1,6 @@
 numpy>=1.20.1
 pandas>=1.2.3
+scipy<1.9.0
 pvlib>=0.9.0
 protobuf>=3.0.0
 siphon>=0.9
@@ -10,6 +11,7 @@ pulp>=2.4
 pyyaml>=5.4.1
 netcdf4>=1.5.3
 tables>=3.6.1
+skforecast==0.6.0
 markupsafe==2.0.1
 Jinja2<3.1
 sphinx==5.3.0
