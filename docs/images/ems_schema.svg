@@ -25,7 +25,7 @@
         <dc:format>image/svg+xml</dc:format>
         <dc:type
            rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
-        <dc:title></dc:title>
+        <dc:title />
       </cc:Work>
     </rdf:RDF>
   </metadata>
@@ -43,7 +43,7 @@
      id="namedview135"
      showgrid="false"
      inkscape:zoom="0.35355339"
-     inkscape:cx="1388.3717"
+     inkscape:cx="865.11268"
      inkscape:cy="585.96847"
      inkscape:window-x="1366"
      inkscape:window-y="0"
@@ -2476,7 +2476,7 @@
        x="6"
        y="6.0022454"
        id="tspan75"><tspan
-         style="font-style:normal;font-variant:normal;font-weight:400;font-size:24px;font-family:Calibri;fill:#000000"
+         style="font-style:italic;font-variant:normal;font-weight:normal;font-size:24px;font-family:sans-serif;fill:#000000;-inkscape-font-specification:'sans-serif Italic';font-stretch:normal;"
          id="tspan73" /></tspan></text>
   <text
      xml:space="preserve"
@@ -2490,7 +2490,7 @@
        x="6"
        y="6.0022454"
        id="tspan93"><tspan
-         style="font-style:normal;font-variant:normal;font-weight:400;font-size:24px;font-family:Calibri;fill:#000000"
+         style="font-style:italic;font-variant:normal;font-weight:normal;font-size:24px;font-family:sans-serif;fill:#000000;-inkscape-font-specification:'sans-serif Italic';font-stretch:normal;"
          id="tspan91" /></tspan></text>
   <g
      clip-path="url(#clipEmfPath1)"
@@ -2560,7 +2560,7 @@
        x="1204.6143"
        y="777.50647"
        id="tspan63"
-       style="font-style:italic;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:96px;font-family:Calibri;-inkscape-font-specification:'Calibri Italic';stroke-width:2.23936009">EMHASS</tspan></text>
+       style="font-style:italic;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:96px;font-family:sans-serif;-inkscape-font-specification:'sans-serif Italic';stroke-width:2.23936009;">EMHASS</tspan></text>
   <path
      style="fill:#41bdf5;stroke:none;stroke-width:0.49990499"
      d="m 1593.4099,697.8164 v 112.47858 h 112.4786 V 697.8164 h -112.4786 m 79.9848,38.49266 c 10e-4,-1.44622 -0.3255,-3.57076 0.8013,-4.6974 1.4398,-1.43917 7.9555,-1.43937 9.3952,0 2.8005,2.80086 0.039,11.02175 0.9604,14.6955 1.2342,4.92256 16.7108,14.49224 3.8402,14.49724 h -3.9992 v 22.99562 l -0.8709,7.98448 -8.6273,0.51391 c -10.9375,0.0836 0.797,0 -50.4904,0 l -8.6272,-0.51391 -0.871,-7.98448 V 760.8044 c -2.2066,0 -8.3757,1.0688 -9.3701,-1.5737 -1.0202,-2.71149 5.092,-7.23063 6.7506,-9.08677 7.8986,-8.83892 16.7403,-16.94422 25.1153,-25.33267 2.7784,-2.78292 8.1064,-11.39873 12.4976,-11.03955 2.7185,0.22236 5.241,3.72319 6.9792,5.54059 5.4624,5.71262 10.9214,11.40163 16.5163,16.99676"

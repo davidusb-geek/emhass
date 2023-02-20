@@ -28,7 +28,8 @@ def get_root(file: str, num_parent: Optional[int] = 3) -> str:
         raise ValueError("num_parent value not valid, must be between 1 and 3")
     return root
 
-def get_logger(fun_name: str, config_path: str, save_to_file: Optional[bool] = True) -> Tuple[logging.Logger, logging.StreamHandler]:
+def get_logger(fun_name: str, config_path: str, save_to_file: Optional[bool] = True,
+               logging_level: Optional[str] = "DEBUG") -> Tuple[logging.Logger, logging.StreamHandler]:
     """
     Create a simple logger object.
     
@@ -45,13 +46,26 @@ def get_logger(fun_name: str, config_path: str, save_to_file: Optional[bool] = T
 	# create logger object
     logger = logging.getLogger(fun_name)
     logger.propagate = True
-    logger.setLevel(logging.DEBUG)
     logger.fileSetting = save_to_file
     if save_to_file:
         ch = logging.FileHandler(config_path + '/data/logger_emhass.log')
     else:
         ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
+    if logging_level == "DEBUG":
+        logger.setLevel(logging.DEBUG)
+        ch.setLevel(logging.DEBUG)
+    elif logging_level == "INFO":
+        logger.setLevel(logging.INFO)
+        ch.setLevel(logging.INFO)
+    elif logging_level == "WARNING":
+        logger.setLevel(logging.WARNING)
+        ch.setLevel(logging.WARNING)
+    elif logging_level == "ERROR":
+        logger.setLevel(logging.ERROR)
+        ch.setLevel(logging.ERROR)
+    else:
+        logger.setLevel(logging.DEBUG)
+        ch.setLevel(logging.DEBUG)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     ch.setFormatter(formatter)
     logger.addHandler(ch)

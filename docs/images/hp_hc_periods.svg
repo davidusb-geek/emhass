@@ -2,22 +2,22 @@
 <!-- Created with Inkscape (http://www.inkscape.org/) -->
 
 <svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
    width="478.7334"
    height="203.69887"
    id="svg2"
    version="1.1"
-   inkscape:version="1.1 (c68e22c387, 2021-05-23)"
+   inkscape:version="0.92.5 (2060ec1f9f, 2020-04-08)"
    sodipodi:docname="hp_hc_periods.svg"
    inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\hp_hc_periods.png"
    inkscape:export-xdpi="150"
-   inkscape:export-ydpi="150"
-   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
-   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
-   xmlns="http://www.w3.org/2000/svg"
-   xmlns:svg="http://www.w3.org/2000/svg"
-   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-   xmlns:cc="http://creativecommons.org/ns#"
-   xmlns:dc="http://purl.org/dc/elements/1.1/">
+   inkscape:export-ydpi="150">
   <sodipodi:namedview
      id="base"
      pagecolor="#ffffff"
@@ -26,16 +26,16 @@
      inkscape:pageopacity="0.0"
      inkscape:pageshadow="2"
      inkscape:zoom="2.2579236"
-     inkscape:cx="242.25798"
-     inkscape:cy="135.74419"
+     inkscape:cx="230.30009"
+     inkscape:cy="122.45765"
      inkscape:document-units="px"
      inkscape:current-layer="layer1"
      showgrid="false"
      inkscape:object-nodes="true"
-     inkscape:window-width="2400"
-     inkscape:window-height="1271"
-     inkscape:window-x="2391"
-     inkscape:window-y="-9"
+     inkscape:window-width="1920"
+     inkscape:window-height="1044"
+     inkscape:window-x="1366"
+     inkscape:window-y="0"
      inkscape:window-maximized="1"
      inkscape:snap-nodes="true"
      fit-margin-top="0"
@@ -1473,7 +1473,7 @@
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       style="font-style:normal;font-weight:500;line-height:0%;font-family:'Tw Cen MT Std';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;-inkscape-font-specification:'Tw Cen MT Std, Medium';font-stretch:normal;font-variant:normal;font-size:12.66666667px;text-anchor:start;text-align:start;writing-mode:lr;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;"
        x="764.61511"
        y="269.22791"
        id="text5398-3-38-8-2-8-8-6-3-8"
@@ -1482,12 +1482,12 @@
          id="tspan5400-1-7-6-8-1-7-8-2-1"
          x="764.61511"
          y="269.22791"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">0h</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-size:12.66666667px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std, Medium';text-align:start;writing-mode:lr;text-anchor:start;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;">0h</tspan></text>
     <text
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       style="font-style:normal;font-weight:500;line-height:0%;font-family:'Tw Cen MT Std';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;-inkscape-font-specification:'Tw Cen MT Std, Medium';font-stretch:normal;font-variant:normal;font-size:12.66666667px;text-anchor:start;text-align:start;writing-mode:lr;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;"
        x="1032.6151"
        y="269.22791"
        id="text5398-3-2-4-5-6-8-7-5-9-7"
@@ -1496,7 +1496,7 @@
          id="tspan5400-1-3-2-0-0-2-8-0-3-9"
          x="1032.6151"
          y="269.22791"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">24h</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-size:12.66666667px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std, Medium';text-align:start;writing-mode:lr;text-anchor:start;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;">24h</tspan></text>
     <text
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
@@ -1510,7 +1510,7 @@
          id="tspan5400-1-34-9-3-4-1-4-9-2-3"
          x="670.95319"
          y="92.991074"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">Past</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:start;writing-mode:lr-tb;text-anchor:start">Past</tspan></text>
     <path
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
@@ -1533,7 +1533,7 @@
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       style="font-style:normal;font-weight:500;line-height:0%;font-family:'Tw Cen MT Std';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;-inkscape-font-specification:'Tw Cen MT Std, Medium';font-stretch:normal;font-variant:normal;font-size:12.66666667px;text-anchor:start;text-align:start;writing-mode:lr;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;"
        x="840.61823"
        y="92.590042"
        id="text5398-3-389-2-1-5-6-3-9-7-5-20"
@@ -1542,12 +1542,12 @@
          id="tspan5400-1-34-9-3-4-1-4-9-2-5-8"
          x="840.61823"
          y="92.590042"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">Future</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-size:12.66666667px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std, Medium';text-align:start;writing-mode:lr;text-anchor:start;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;">Future</tspan></text>
     <text
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       style="font-style:normal;font-weight:500;line-height:0%;font-family:'Tw Cen MT Std';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;-inkscape-font-specification:'Tw Cen MT Std, Medium';font-stretch:normal;font-variant:normal;font-size:12.66666667px;text-anchor:start;text-align:start;writing-mode:lr;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;"
        x="848.42133"
        y="154.84961"
        id="text5398-3-389-2-1-5-6-3-9-7-5-20-0"
@@ -1556,12 +1556,12 @@
          id="tspan5400-1-34-9-3-4-1-4-9-2-5-8-3"
          x="848.42133"
          y="154.84961"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">Peak</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-size:12.66666667px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std, Medium';text-align:start;writing-mode:lr;text-anchor:start;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;">Peak</tspan></text>
     <text
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       style="font-style:normal;font-weight:500;line-height:0%;font-family:'Tw Cen MT Std';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;-inkscape-font-specification:'Tw Cen MT Std, Medium';font-stretch:normal;font-variant:normal;font-size:12.66666667px;text-anchor:start;text-align:start;writing-mode:lr;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;"
        x="984.42468"
        y="155.37456"
        id="text5398-3-389-2-1-5-6-3-9-7-5-20-0-4"
@@ -1570,7 +1570,7 @@
          id="tspan5400-1-34-9-3-4-1-4-9-2-5-8-3-7"
          x="984.42468"
          y="155.37456"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">Peak</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-size:12.66666667px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std, Medium';text-align:start;writing-mode:lr;text-anchor:start;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;">Peak</tspan></text>
     <path
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
@@ -1592,7 +1592,7 @@
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       style="font-style:normal;font-weight:500;line-height:0%;font-family:'Tw Cen MT Std';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;-inkscape-font-specification:'Tw Cen MT Std, Medium';font-stretch:normal;font-variant:normal;font-size:12.66666667px;text-anchor:start;text-align:start;writing-mode:lr;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;"
        x="-229.42601"
        y="722.30103"
        id="text5398-3-389-2-1-5-6-3-9-7-5-2-1"
@@ -1602,21 +1602,21 @@
          id="tspan5400-1-34-9-3-4-1-4-9-2-5-2-5"
          x="-229.42601"
          y="722.30103"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">Load cost (€/kWh)</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-size:12.66666667px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std, Medium';text-align:start;writing-mode:lr;text-anchor:start;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;">Load cost (€/kWh)</tspan></text>
     <text
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-size:12.66666698px;line-height:0%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std, Medium';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;text-align:start;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;text-anchor:start;fill:#000000;fill-opacity:1;stroke:none"
        x="1067.2184"
-       y="276.51312"
+       y="274.51312"
        id="text5398-3-389-2-1-5-6-3-9-7-5-22-3"
        inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
          sodipodi:role="line"
          id="tspan5400-1-34-9-3-4-1-4-9-2-5-6-6"
          x="1067.2184"
-         y="276.51312"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">Time</tspan></text>
+         y="274.51312"
+         style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-size:12.66666698px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std, Medium';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;text-align:start;writing-mode:lr-tb;text-anchor:start">Time</tspan></text>
     <path
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
@@ -1629,16 +1629,16 @@
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        xml:space="preserve"
-       style="font-style:normal;font-weight:normal;font-size:18.6667px;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-size:12.66666698px;line-height:0%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std, Medium';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;text-align:start;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;text-anchor:start;fill:#000000;fill-opacity:1;stroke:none"
        x="1028.1272"
-       y="96.569832"
+       y="94.569832"
        id="text5398-3-389-2-1-5-6-3-9-7-5-6-4-2-3-1"
        inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
          sodipodi:role="line"
          id="tspan5400-1-34-9-3-4-1-4-9-2-5-4-4-2-0-8"
          x="1028.1272"
-         y="96.569832"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:18.6667px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">Forecast</tspan></text>
+         y="94.569832"
+         style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-size:12.66666698px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std, Medium';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;text-align:start;writing-mode:lr-tb;text-anchor:start">Forecast</tspan></text>
     <path
        style="fill:none;stroke:#ff0000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;stroke-miterlimit:4;stroke-dasharray:none"
        d="M 772.01812,205.04857 H 804.3487"
@@ -1651,7 +1651,7 @@
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       style="font-style:normal;font-weight:500;line-height:0%;font-family:'Tw Cen MT Std';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;-inkscape-font-specification:'Tw Cen MT Std, Medium';font-stretch:normal;font-variant:normal;font-size:12.66666667px;text-anchor:start;text-align:start;writing-mode:lr;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;"
        x="913.9682"
        y="219.06793"
        id="text5398-3-389-2-1-5-6-3-9-7-5-20-2"
@@ -1660,12 +1660,12 @@
          id="tspan5400-1-34-9-3-4-1-4-9-2-5-8-4"
          x="913.9682"
          y="219.06793"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">Non-peak</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-size:12.66666667px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std, Medium';text-align:start;writing-mode:lr;text-anchor:start;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;">Non-peak</tspan></text>
     <text
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        xml:space="preserve"
-       style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       style="font-style:normal;font-weight:500;line-height:0%;font-family:'Tw Cen MT Std';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;-inkscape-font-specification:'Tw Cen MT Std, Medium';font-stretch:normal;font-variant:normal;font-size:12.66666667px;text-anchor:start;text-align:start;writing-mode:lr;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;"
        x="773.96967"
        y="218.88387"
        id="text5398-3-389-2-1-5-6-3-9-7-5-20-2-8"
@@ -1674,6 +1674,6 @@
          id="tspan5400-1-34-9-3-4-1-4-9-2-5-8-4-1"
          x="773.96967"
          y="218.88387"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">Non-peak</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-size:12.66666667px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std, Medium';text-align:start;writing-mode:lr;text-anchor:start;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;">Non-peak</tspan></text>
   </g>
 </svg>

@@ -40,7 +40,36 @@ The default method for load forecast is a naive method, also called persistence.
 
 This is presented graphically here:
 
-![](./images/naive_forecast.png)
+![](./images/naive_forecast.svg)
+
+Starting with v0.4.0 (to be published soon!), a new forecast framework is proposed within EMHASS. It provides a more efficient way to forecast the power load consumption. It is based on the `skforecast` module that uses `scikit-learn` regression models considering auto-regression lags as features. The hyperparameter optimization is proposed using bayesian optimization from the `skopt` module.
+
+The API provides fit and predict methods.
+
+Trained model using a KNN regressor:
+
+![](./images/load_forecast_knn_optimized.svg)
+
+Log extract for a load forecast model:
+
+    2023-02-20 22:05:22,658 - __main__ - INFO - Training a KNN regressor
+    2023-02-20 22:05:23,882 - __main__ - INFO - Elapsed time: 1.2236599922180176
+    2023-02-20 22:05:24,612 - __main__ - INFO - Prediction R2 score: 0.2654560762747957
+    2023-02-20 22:05:36,825 - __main__ - INFO - Simple backtesting
+    2023-02-20 22:06:32,162 - __main__ - INFO - Elapsed time: 55.33599829673767
+    2023-02-20 22:06:32,162 - __main__ - INFO - Backtest R2 score: 0.5851552394233677
+    2023-02-20 22:06:43,112 - __main__ - INFO - Backtesting and bayesian hyperparameter optimization
+    2023-02-20 22:25:29,987 - __main__ - INFO - Elapsed time: 1126.868682384491
+    2023-02-20 22:25:50,264 - __main__ - INFO - ### Train/Test R2 score comparison ###
+    2023-02-20 22:25:50,282 - __main__ - INFO - R2 score for naive prediction in train period (backtest): 0.22525145245617462
+    2023-02-20 22:25:50,284 - __main__ - INFO - R2 score for optimized prediction in train period: 0.7485208725102304
+    2023-02-20 22:25:50,312 - __main__ - INFO - R2 score for non-optimized prediction in test period: 0.7098996657492629
+    2023-02-20 22:25:50,337 - __main__ - INFO - R2 score for naive persistance forecast in test period: 0.8714987509894714
+    2023-02-20 22:25:50,352 - __main__ - INFO - R2 score for optimized prediction in test period: 0.7572325833767719
+
+The naive persistance model performs very well on the 2 day test period, however is well out-performed by the KNN regressor when back-testing on the complete training set (10 months of 30 minute time step data).
+
+The hyperparameter tuning using bayesian optimization improves the bare KNN regressor from $R^2=0.59$ to $R^2=0.75$. The optimized number of lags is $48$.
 
 ## Load cost forecast
 
@@ -62,7 +91,7 @@ As an example for a two peak-hour periods contract you will need to define the f
 
 This example is presented graphically here:
 
-![](./images/hp_hc_periods.png)
+![](./images/hp_hc_periods.svg)
 
 ## PV production selling price forecast
 

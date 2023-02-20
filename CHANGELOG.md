@@ -1,8 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+### Improvement
+- A brand new load forecast module and more... The new forecast module can actually be used to foreast any Home Assistant variable. The API provides fit and predict methods. By the default it provides a more efficient way to forecast the power load consumption. It is based on the skforecast module that uses scikit-learn regression models considering auto-regression lags as features. The hyperparameter optimization is proposed using bayesian optimization from the skopt module.
+- A new documentation section covering the new forecast module.
 ### Fix
 - Fixed Solar.Forecast issues with lists of parameters.
+- Fixed latex equations rendering on documentation, dropped Mathjax.
+- Refactored images in documentation, now using only SVG.
+- Bumped requirements to latest non-conflicting versions.
 
 ## [0.3.36] - 2023-01-31
 ### Fix
