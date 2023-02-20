@@ -13,7 +13,7 @@ netcdf4>=1.5.3
 tables>=3.6.1
 skforecast==0.6.0
 markupsafe==2.0.1
-Jinja2<3.1
+Jinja2<3.2
 sphinx==5.3.0
 sphinx-rtd-theme==1.2.0
 docutils<0.18
