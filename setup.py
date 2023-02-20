@@ -45,7 +45,7 @@ setup(
     install_requires=[
         'wheel', 
         'numpy==1.22.2',
-        'scipy<1.9.0',
+        'scipy<1.11.0',
         'pandas==1.4.1',
         'pvlib>=0.8.1',
         'protobuf>=3.0.0',
