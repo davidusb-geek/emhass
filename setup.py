@@ -43,7 +43,7 @@ setup(
     packages=find_packages(where='src'),  # Required
     python_requires='>=3.8, <3.10',
     install_requires=[
-        'wheel'
+        'wheel', 
         'numpy==1.22.2',
         'pandas==1.4.1',
         'pvlib>=0.8.1',
