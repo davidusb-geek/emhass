@@ -1,6 +1,7 @@
 wheel
 numpy==1.22.2
 pandas==1.4.1
+scipy<1.9.0
 pvlib>=0.9.0
 protobuf>=3.0.0
 siphon>=0.9
