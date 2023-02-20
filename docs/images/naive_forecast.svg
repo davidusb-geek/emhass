@@ -2,22 +2,22 @@
 <!-- Created with Inkscape (http://www.inkscape.org/) -->
 
 <svg
-   width="587.88684"
-   height="471.7496"
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   width="589.05701"
+   height="224.63292"
    id="svg2"
    version="1.1"
-   inkscape:version="1.1 (c68e22c387, 2021-05-23)"
+   inkscape:version="0.92.5 (2060ec1f9f, 2020-04-08)"
    sodipodi:docname="naive_forecast.svg"
    inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"
    inkscape:export-xdpi="150"
-   inkscape:export-ydpi="150"
-   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
-   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
-   xmlns="http://www.w3.org/2000/svg"
-   xmlns:svg="http://www.w3.org/2000/svg"
-   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-   xmlns:cc="http://creativecommons.org/ns#"
-   xmlns:dc="http://purl.org/dc/elements/1.1/">
+   inkscape:export-ydpi="150">
   <sodipodi:namedview
      id="base"
      pagecolor="#ffffff"
@@ -26,16 +26,16 @@
      inkscape:pageopacity="0.0"
      inkscape:pageshadow="2"
      inkscape:zoom="1.5965931"
-     inkscape:cx="269.32348"
-     inkscape:cy="158.77558"
+     inkscape:cx="328.70241"
+     inkscape:cy="45.757067"
      inkscape:document-units="px"
      inkscape:current-layer="layer1"
      showgrid="false"
      inkscape:object-nodes="true"
-     inkscape:window-width="2400"
-     inkscape:window-height="1271"
-     inkscape:window-x="2391"
-     inkscape:window-y="-9"
+     inkscape:window-width="1920"
+     inkscape:window-height="1044"
+     inkscape:window-x="1366"
+     inkscape:window-y="0"
      inkscape:window-maximized="1"
      inkscape:snap-nodes="true"
      fit-margin-top="0"
@@ -57,9 +57,10 @@
        inkscape:isstock="true">
       <path
          transform="matrix(-0.2,0,0,-0.2,-1.2,0)"
-         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1.00000003pt"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         id="path29095" />
+         id="path29095"
+         inkscape:connector-curvature="0" />
     </marker>
     <marker
        inkscape:stockid="Arrow1Lend"
@@ -71,7 +72,7 @@
       <path
          id="path3763"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.8,0,0,-0.8,-10,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -85,7 +86,7 @@
       <path
          id="path3766"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -99,7 +100,7 @@
       <path
          id="path3769"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -114,7 +115,7 @@
          inkscape:connector-curvature="0"
          id="path3766-7"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)" />
     </marker>
     <marker
@@ -128,7 +129,7 @@
          inkscape:connector-curvature="0"
          id="path3769-0"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)" />
     </marker>
     <marker
@@ -142,7 +143,7 @@
          inkscape:connector-curvature="0"
          id="path3766-2"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)" />
     </marker>
     <marker
@@ -156,7 +157,7 @@
          inkscape:connector-curvature="0"
          id="path3769-5"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)" />
     </marker>
     <marker
@@ -170,7 +171,7 @@
          inkscape:connector-curvature="0"
          id="path5353"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)" />
     </marker>
     <marker
@@ -184,7 +185,7 @@
          inkscape:connector-curvature="0"
          id="path5357"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)" />
     </marker>
     <marker
@@ -198,7 +199,7 @@
          inkscape:connector-curvature="0"
          id="path3766-21"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)" />
     </marker>
     <marker
@@ -212,7 +213,7 @@
          inkscape:connector-curvature="0"
          id="path3769-8"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)" />
     </marker>
     <marker
@@ -226,7 +227,7 @@
          inkscape:connector-curvature="0"
          id="path5481"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)" />
     </marker>
     <marker
@@ -240,7 +241,7 @@
          inkscape:connector-curvature="0"
          id="path5485"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)" />
     </marker>
     <marker
@@ -254,7 +255,7 @@
          inkscape:connector-curvature="0"
          id="path3763-6"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.8,0,0,-0.8,-10,0)" />
     </marker>
     <marker
@@ -268,7 +269,7 @@
          inkscape:connector-curvature="0"
          id="path3766-0"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)" />
     </marker>
     <marker
@@ -282,7 +283,7 @@
          inkscape:connector-curvature="0"
          id="path3769-1"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)" />
     </marker>
     <marker
@@ -296,7 +297,7 @@
          inkscape:connector-curvature="0"
          id="path7230"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)" />
     </marker>
     <marker
@@ -310,7 +311,7 @@
          inkscape:connector-curvature="0"
          id="path7234"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)" />
     </marker>
     <marker
@@ -324,7 +325,7 @@
          inkscape:connector-curvature="0"
          id="path3766-8"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)" />
     </marker>
     <marker
@@ -338,7 +339,7 @@
          inkscape:connector-curvature="0"
          id="path3769-4"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)" />
     </marker>
     <marker
@@ -351,7 +352,7 @@
       <path
          id="path3769-45"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -365,7 +366,7 @@
       <path
          id="path4355"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -379,7 +380,7 @@
       <path
          id="path3766-1"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -393,7 +394,7 @@
       <path
          id="path4361"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -407,7 +408,7 @@
       <path
          id="path3766-5"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -421,7 +422,7 @@
       <path
          id="path3769-06"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -435,7 +436,7 @@
       <path
          id="path4361-5"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -449,7 +450,7 @@
       <path
          id="path3769-47"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -463,7 +464,7 @@
       <path
          id="path3769-47-0"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -477,7 +478,7 @@
       <path
          id="path3769-47-0-2"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -491,7 +492,7 @@
       <path
          id="path3769-47-9"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -505,7 +506,7 @@
       <path
          id="path3769-3"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -519,7 +520,7 @@
       <path
          id="path4361-5-3"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -533,7 +534,7 @@
       <path
          id="path3766-5-6"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -547,7 +548,7 @@
       <path
          id="path3769-06-0"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -561,7 +562,7 @@
       <path
          id="path3769-47-9-5"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -575,7 +576,7 @@
       <path
          id="path3769-31"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -589,7 +590,7 @@
       <path
          id="path3769-31-0"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -603,7 +604,7 @@
       <path
          id="path3769-31-0-9"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -617,7 +618,7 @@
       <path
          id="path3769-31-7"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -631,7 +632,7 @@
       <path
          id="path3769-31-0-3"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -645,7 +646,7 @@
       <path
          id="path3769-31-2"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -659,7 +660,7 @@
       <path
          id="path3769-07"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -673,7 +674,7 @@
       <path
          id="path7590"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -687,7 +688,7 @@
       <path
          id="path3769-31-0-6"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -701,7 +702,7 @@
       <path
          id="path3769-31-1"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -715,7 +716,7 @@
       <path
          id="path3769-47-9-5-7"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -729,7 +730,7 @@
       <path
          id="path3769-47-9-3"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -743,7 +744,7 @@
       <path
          id="path3766-5-6-1"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -757,7 +758,7 @@
       <path
          id="path3769-06-0-7"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -771,7 +772,7 @@
       <path
          id="path3769-31-0-6-8"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -785,7 +786,7 @@
       <path
          id="path3769-07-1"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -799,7 +800,7 @@
       <path
          id="path8065"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -813,7 +814,7 @@
       <path
          id="path3769-31-0-6-2"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -827,7 +828,7 @@
       <path
          id="path3769-31-1-1"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -841,7 +842,7 @@
       <path
          id="path3769-47-9-5-7-9"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -855,7 +856,7 @@
       <path
          id="path3769-47-9-3-7"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -869,7 +870,7 @@
       <path
          id="path3766-5-6-1-3"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -883,7 +884,7 @@
       <path
          id="path3769-06-0-7-9"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -897,7 +898,7 @@
       <path
          id="path3769-07-1-5"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -911,7 +912,7 @@
       <path
          id="path8304"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -925,7 +926,7 @@
       <path
          id="path3769-31-0-6-2-4"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -939,7 +940,7 @@
       <path
          id="path3769-31-1-1-8"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -953,7 +954,7 @@
       <path
          id="path3769-47-9-5-7-9-6"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -967,7 +968,7 @@
       <path
          id="path3769-47-9-3-7-8"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -981,7 +982,7 @@
       <path
          id="path3766-5-6-1-3-5"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -995,7 +996,7 @@
       <path
          id="path3769-06-0-7-9-4"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1009,7 +1010,7 @@
       <path
          id="path3769-07-1-5-7"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1023,7 +1024,7 @@
       <path
          id="path8555"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1037,7 +1038,7 @@
       <path
          id="path3769-31-0-6-2-4-4"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1051,7 +1052,7 @@
       <path
          id="path3769-31-1-1-8-6"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1065,7 +1066,7 @@
       <path
          id="path3769-47-9-5-7-9-6-0"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1079,7 +1080,7 @@
       <path
          id="path3769-47-9-3-7-8-6"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1093,7 +1094,7 @@
       <path
          id="path3766-5-6-1-3-5-5"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1107,7 +1108,7 @@
       <path
          id="path3769-06-0-7-9-4-3"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1121,7 +1122,7 @@
       <path
          id="path3769-31-0-6-8-8"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1135,7 +1136,7 @@
       <path
          id="path3769-47-7"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1149,7 +1150,7 @@
       <path
          id="path3766-5-68"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1163,7 +1164,7 @@
       <path
          id="path3769-06-7"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1177,7 +1178,7 @@
       <path
          id="path3766-5-6-1-7"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1191,7 +1192,7 @@
       <path
          id="path3769-06-0-7-5"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1205,7 +1206,7 @@
       <path
          id="path3766-5-6-1-5"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1219,7 +1220,7 @@
       <path
          id="path3769-06-0-7-56"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1233,7 +1234,7 @@
       <path
          id="path3769-47-9-3-9"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1247,7 +1248,7 @@
       <path
          id="path3769-47-9-5-7-2"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1261,7 +1262,7 @@
       <path
          id="path3769-31-1-8"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1275,7 +1276,7 @@
       <path
          id="path3769-31-0-6-9"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1289,7 +1290,7 @@
       <path
          id="path3769-07-14"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1303,7 +1304,7 @@
       <path
          id="path8441"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1317,7 +1318,7 @@
       <path
          id="path3766-5-6-15"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(0.4,0,0,0.4,4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1331,7 +1332,7 @@
       <path
          id="path3769-06-0-0"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1345,7 +1346,7 @@
       <path
          id="path3769-47-9-7"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1359,7 +1360,7 @@
       <path
          id="path3769-47-9-5-5"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1373,7 +1374,7 @@
       <path
          id="path3769-31-11"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1387,7 +1388,7 @@
       <path
          id="path3769-31-0-2"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1401,7 +1402,7 @@
       <path
          id="path3769-14"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1415,7 +1416,7 @@
       <path
          id="path1624"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         style="fill-rule:evenodd;stroke:#000000;stroke-width:1pt;marker-start:none"
+         style="fill-rule:evenodd;stroke:#000000;stroke-width:1.00000003pt;marker-start:none"
          transform="matrix(-0.4,0,0,-0.4,-4,0)"
          inkscape:connector-curvature="0" />
     </marker>
@@ -1429,9 +1430,10 @@
        inkscape:isstock="true">
       <path
          transform="matrix(-0.2,0,0,-0.2,-1.2,0)"
-         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:#000004;stroke-width:1.00000003pt;stroke-opacity:1"
          d="M 0,0 5,-5 -12.5,0 5,5 Z"
-         id="path29095-5" />
+         id="path29095-5"
+         inkscape:connector-curvature="0" />
     </marker>
   </defs>
   <metadata
@@ -1442,6 +1444,7 @@
         <dc:format>image/svg+xml</dc:format>
         <dc:type
            rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <dc:title></dc:title>
       </cc:Work>
     </rdf:RDF>
   </metadata>
@@ -1449,126 +1452,7 @@
      inkscape:label="Calque 1"
      inkscape:groupmode="layer"
      id="layer1"
-     transform="translate(-713.11444,-58.453713)">
-    <g
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       transform="translate(708.2336,312.44488)"
-       id="g5297-9-1-1-7-3-9-2-0-5"
-       inkscape:export-filename="C:\Users\david.hernandez\Desktop\path8051-6-7.png">
-      <path
-         inkscape:connector-curvature="0"
-         id="path2985-4-5-8-1-9-0-0-5-2"
-         d="M 30.428572,33.505039 V 215.21932"
-         style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-start:url(#Arrow1Mstart-80-0-5-3);marker-end:none"
-         sodipodi:nodetypes="cc" />
-      <path
-         inkscape:connector-curvature="0"
-         id="path3755-8-2-9-7-8-7-0-1-2"
-         d="M 30.428572,215.21932 H 590.79703"
-         style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow1Mend-69-5-2-0)"
-         sodipodi:nodetypes="cc" />
-    </g>
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
-       d="M 1227.6253,527.20442 V 411.54197"
-       id="path5693-8-5-6-3-6-8-5-7"
-       inkscape:connector-curvature="0"
-       inkscape:export-filename="C:\Users\david.hernandez\Desktop\path8051-6-7.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
-       d="M 1136.9592,527.75759 V 412.09514"
-       id="path5693-8-5-6-3-6-8-1-0-1"
-       inkscape:connector-curvature="0"
-       inkscape:export-filename="C:\Users\david.hernandez\Desktop\path8051-6-7.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
-       d="M 1046.293,528.31076 V 412.64831"
-       id="path5693-8-5-6-3-6-8-1-3-73-5"
-       inkscape:connector-curvature="0"
-       inkscape:export-filename="C:\Users\david.hernandez\Desktop\path8051-6-7.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
-       d="M 955.6268,528.86393 V 413.20148"
-       id="path5693-8-5-6-3-6-8-1-3-7-8-5"
-       inkscape:connector-curvature="0"
-       inkscape:export-filename="C:\Users\david.hernandez\Desktop\path8051-6-7.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
-       d="M 864.9605,529.4171 V 413.75465"
-       id="path5693-8-5-6-3-6-8-1-3-77-3-1"
-       inkscape:connector-curvature="0"
-       inkscape:export-filename="C:\Users\david.hernandez\Desktop\path8051-6-7.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;stroke:#000000;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:4, 4;stroke-dashoffset:0;stroke-opacity:1"
-       d="M 774.2944,529.97027 V 414.30782"
-       id="path5693-8-5-6-3-6-8-1-3-1-8-0"
-       inkscape:connector-curvature="0"
-       inkscape:export-filename="C:\Users\david.hernandez\Desktop\path8051-6-7.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#0000ff;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       d="m 773.7699,526.73183 14.5,-0.5 5,-4.5 3.75,-13 1.25,-1.75 2.5,-22.25 3,-23.25 3.5,-16.25 1.75,6.25 3,-23.25001 2.75,-1.5 2,-8.75 4,1 5.75,11.5 5,24.25001 5,35.5 3.25,21.5 4.75,10.25 4.75,4.75 h 31.75 l 2.75,-4.75 4.5,-2.25 3.75,-37.5 1,6.75 1.25,-14 1.5,8.5 1.25,-26.75 1.5,5.5 0.75,-13.75 2.75,3.5 1.25,-28.25001 1.25,-4 2.25,95.00001 2,-17.25 1.25,23 2.5,-38 2,36.5 1.25,-32.5 3.5,-41 1.25,54 3.25,18.25 3.25,-29.5 2,20.5 2,-10.25 2.25,18.25 4.5,8 3.25,2 h 31.74999 l 2.5,-3.75 3.25,-23.75 4.25,20.25 2.75,-22.25 1.75,-23 2.25,34.25 3,-14.75 2.75,17.75 2.75,-13.75 2.75001,20.25 4.25,-53.5 2,37 2.5,-11.75 3.5,30.75 3,-10.5 1.25,11 3.5,-12.5 1.75,14 2.25,-3.75 5.75,8.25 h 15.75"
-       id="path6259-7-8"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="ccccccccccccccccccc"
-       inkscape:export-filename="C:\Users\david.hernandez\Desktop\path8051-6-7.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#0000ff;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       d="m 1046.2699,526.98183 14.5,-0.5 5,-4.5 3.75,-13 1.25,-1.75 2.5,-22.25 3,-23.25 3.5,-16.25 1.75,6.25 3,-23.25001"
-       id="path6259-3-1-2"
-       inkscape:connector-curvature="0"
-       sodipodi:nodetypes="cccccccccc"
-       inkscape:export-filename="C:\Users\david.hernandez\Desktop\path8051-6-7.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#0000ff;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       d="m 1084.5199,428.48182 2.75,35.50001 3,-16 4.75,41.75 3.25,-49.25 3.25,36.25 5.25,-23 5.75,28.5"
-       id="path6276-2-5"
-       inkscape:connector-curvature="0"
-       inkscape:export-filename="C:\Users\david.hernandez\Desktop\path8051-6-7.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       style="fill:none;fill-rule:evenodd;stroke:#ff0000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       d="m 773.8079,525.77469 14.1421,-0.53033 6.1872,-7.95495 10.0763,-61.34151 4.4194,-21.38999 6.7175,-13.96536 4.773,-1.06066 2.8284,2.65165 5.3033,15.90991 6.1872,32.17336 6.5407,42.42641 5.3033,9.54594 3.3588,3.88909 30.4056,-0.17678 5.6568,-3.0052 8.4853,-34.64824 3.8891,-13.43502 4.4194,-4.5962 4.2427,2.12132 3.0052,9.72272 8.8388,26.16295 5.1265,7.6014 3.7123,3.0052 2.4749,1.76777 4.5962,0.88388 5.8336,5.48008 31.99659,-0.70711 5.1266,-4.41941 7.6014,-7.07107 9.8995,-2.65165 6.71751,-2.12132 8.4853,-3.18198 7.4246,3.18198 6.7175,9.72272 6.7175,6.71751 28.9914,-0.17678 6.0104,-4.41941 5.4801,-15.02602 4.5962,-14.67247 7.4246,-21.74353 6.364,-3.18198 9.8994,0.53033 5.6569,4.06586 7.6014,9.72272"
-       id="path6278-9-64"
-       inkscape:connector-curvature="0"
-       inkscape:export-filename="C:\Users\david.hernandez\Desktop\path8051-6-7.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       sodipodi:nodetypes="cccccccccccccccc"
-       inkscape:connector-curvature="0"
-       id="path8049-0"
-       d="m 1113.0424,481.58052 2.2461,8.5238 5.6568,36.06245 h 15.9099 16.9706 l 5.3033,-4.5962 3.5355,-9.54594 7.4246,-19.79899 4.2427,-3.18198 4.9497,-6.01041 7.4246,1.76777 4.2427,6.01041 3.5355,5.3033 4.9498,1.41421 5.3033,7.77818 4.9497,20.85965 h 17.6777"
-       style="fill:none;fill-rule:evenodd;stroke:#ff0000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       inkscape:export-filename="C:\Users\david.hernandez\Desktop\path8051-6-7.png" />
-    <path
-       inkscape:export-ydpi="150"
-       inkscape:export-xdpi="150"
-       sodipodi:nodetypes="cccccccccccccc"
-       inkscape:connector-curvature="0"
-       id="path8051-6-2"
-       d="m 1113.0424,481.58052 4.75,44.75 h 39 l 2.25,-11.75 4.25,4.75 2.25,-38.75 2.75,26.75 4.75,-55.25 2.25,15 4.5,-25.5 8,71.5 3.5,-33.25 6,44.25 3.5,-34.25 3.75,33.75 1.25,-6.5 3.75,9 h 18.75"
-       style="fill:none;fill-rule:evenodd;stroke:#0000ff;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:2, 2;stroke-dashoffset:0;stroke-opacity:1"
-       inkscape:export-filename="C:\Users\david.hernandez\Desktop\path8051-6-7.png" />
+     transform="translate(-711.67798,-64.157116)">
     <g
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
@@ -1601,7 +1485,7 @@
          id="tspan5400-1-7-6-8-1-7-8-2-1"
          x="1126.6151"
          y="269.22791"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">0h</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:start;writing-mode:lr-tb;text-anchor:start;">0h</tspan></text>
     <text
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
@@ -1615,7 +1499,7 @@
          id="tspan5400-1-3-2-0-0-2-8-0-3-9"
          x="1214.6151"
          y="269.22791"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">24h</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:start;writing-mode:lr-tb;text-anchor:start;">24h</tspan></text>
     <path
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
@@ -1637,7 +1521,7 @@
          id="tspan5400-1-34-9-3-4-1-4-9-2-3"
          x="1030.9532"
          y="84.991074"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">Past</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:start;writing-mode:lr-tb;text-anchor:start;">Past</tspan></text>
     <path
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
@@ -1686,21 +1570,21 @@
          id="tspan5400-1-34-9-3-4-1-4-9-2-5-8"
          x="1200.6182"
          y="84.590042"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">Future</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:start;writing-mode:lr-tb;text-anchor:start;">Future</tspan></text>
     <text
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
-       x="1164.2202"
+       x="1166.2202"
        y="283.87793"
        id="text5398-3-389-2-1-5-6-3-9-7-5-4-1"
        inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
          sodipodi:role="line"
          id="tspan5400-1-34-9-3-4-1-4-9-2-5-1-1"
-         x="1164.2202"
+         x="1166.2202"
          y="283.87793"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">d-day</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:start;writing-mode:lr-tb;text-anchor:start">d-day</tspan></text>
     <path
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
@@ -1714,7 +1598,7 @@
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#Arrow1Mend-78-2-50)"
-       d="m 1199.6308,280.7531 h 23.2549"
+       d="m 1204.1717,280.7531 h 18.714"
        id="path5252-7-9-4"
        inkscape:connector-curvature="0"
        sodipodi:nodetypes="cc"
@@ -1756,15 +1640,15 @@
        inkscape:export-xdpi="150"
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
-       x="1067.7104"
-       y="285.87793"
+       x="1069.7104"
+       y="283.87793"
        id="text5398-3-389-2-1-5-6-3-9-7-5-4-4-7"
        inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"><tspan
          sodipodi:role="line"
          id="tspan5400-1-34-9-3-4-1-4-9-2-5-1-8-3"
-         x="1067.7104"
-         y="285.87793"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">day d-1</tspan></text>
+         x="1069.7104"
+         y="283.87793"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:start;writing-mode:lr-tb;text-anchor:start">day d-1</tspan></text>
     <path
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
@@ -1778,7 +1662,7 @@
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:1px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1;marker-end:url(#Arrow1Mend-70)"
-       d="m 1111.5855,280.7531 h 20.7904"
+       d="m 1116.6086,280.7531 h 15.7673"
        id="path5252-7-9-2-7"
        inkscape:connector-curvature="0"
        sodipodi:nodetypes="cc"
@@ -1797,7 +1681,7 @@
          id="tspan5400-1-34-9-3-4-1-4-9-2-5-2-5"
          x="-199.42601"
          y="722.30103"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">Power (W)</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:start;writing-mode:lr-tb;text-anchor:start;">Power (W)</tspan></text>
     <text
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
@@ -1811,7 +1695,7 @@
          id="tspan5400-1-34-9-3-4-1-4-9-2-5-6-6"
          x="1267.2184"
          y="276.51312"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">Time</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:14px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:start;writing-mode:lr-tb;text-anchor:start;">Time</tspan></text>
     <path
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
@@ -1832,7 +1716,7 @@
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        xml:space="preserve"
-       style="font-style:normal;font-weight:normal;font-size:18.6667px;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       style="font-style:normal;font-weight:normal;font-size:18.66670036px;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
        x="811.71655"
        y="77.765213"
        id="text5398-3-389-2-1-5-6-3-9-7-5-6-4-2-3-1"
@@ -1841,12 +1725,12 @@
          id="tspan5400-1-34-9-3-4-1-4-9-2-5-4-4-2-0-8"
          x="811.71655"
          y="77.765213"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:18.6667px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">Forecast</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:18.66670036px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:start;writing-mode:lr-tb;text-anchor:start;">Forecast</tspan></text>
     <text
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
        xml:space="preserve"
-       style="font-style:normal;font-weight:normal;font-size:18.6667px;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       style="font-style:normal;font-weight:normal;font-size:18.66670036px;line-height:0%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
        x="811.8197"
        y="99.723282"
        id="text5398-3-389-2-1-5-6-3-9-7-5-6-4-7-0-3-9"
@@ -1855,36 +1739,40 @@
          id="tspan5400-1-34-9-3-4-1-4-9-2-5-4-4-5-2-1-6"
          x="811.8197"
          y="99.723282"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:18.6667px;line-height:125%;font-family:'Tw Cen MT';-inkscape-font-specification:'Tw Cen MT';text-align:start;writing-mode:lr-tb;text-anchor:start">Real</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:18.66670036px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std';text-align:start;writing-mode:lr-tb;text-anchor:start;">Real</tspan></text>
     <path
-       style="font-variation-settings:normal;fill:none;fill-opacity:1;stroke:#000004;stroke-width:1.5;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;marker-end:url(#Arrow1Send-4);stop-color:#000000"
+       style="fill:none;fill-opacity:1;stroke:#000004;stroke-width:1.5;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;marker-end:url(#marker1626)"
        d="m 1087.7198,197.1116 c 0,0 40.2423,-86.18297 90,0"
        id="path28668-8"
        inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"
        inkscape:export-xdpi="150"
-       inkscape:export-ydpi="150" />
+       inkscape:export-ydpi="150"
+       inkscape:connector-curvature="0" />
     <path
-       style="font-variation-settings:normal;opacity:1;fill:none;fill-opacity:1;stroke:#0000ff;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;stop-color:#000000;stop-opacity:1"
+       style="opacity:1;fill:none;fill-opacity:1;stroke:#0000ff;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1"
        d="m 770.89331,238.22014 c 0,0 7.516,-18.79001 13.46617,-18.79001 5.95017,0 1.879,15.97151 21.60851,15.97151 19.72951,0 9.39501,-42.27752 32.56935,-42.27752 23.17435,0 11.90034,40.39852 22.54802,40.39852 10.64767,0 9.70817,-19.72951 19.72951,-19.72951 10.02133,0 5.32383,17.85051 19.41634,17.85051 14.09251,0 10.3345,-34.44835 20.35584,-34.44835 10.02134,0 4.38434,32.56935 14.09251,32.56935 9.70817,0 8.4555,-10.64767 18.47684,-10.64767 10.02134,0 5.95017,15.65834 15.34518,15.65834 9.395,0 7.20284,-20.66901 12.52667,-20.66901 5.32384,0 4.5903,20.79036 12.00332,20.79036 7.41303,0 7.09983,-33.31703 20.25283,-33.31703 13.153,0 7.516,30.69034 16.2847,30.69034 8.7687,0 6.8897,-5.32383 13.4662,-5.32383 6.5765,0 4.6975,4.38433 9.395,4.38433 4.6975,0 6.2633,-12.2135 11.9003,-12.2135 5.637,0 3.4449,15.97151 7.8292,15.97151 4.3843,0 5.3238,-33.82202 21.2953,-33.82202 15.9716,0 10.0214,31.62985 20.0427,31.62985 10.0214,0 4.4705,-11.86772 20.5555,-11.86772"
        id="path2930"
        inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"
        inkscape:export-xdpi="150"
-       inkscape:export-ydpi="150" />
+       inkscape:export-ydpi="150"
+       inkscape:connector-curvature="0" />
     <path
-       style="font-variation-settings:normal;fill:none;fill-opacity:1;stroke:#ff0000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;stop-color:#000000"
+       style="fill:none;fill-opacity:1;stroke:#ff0000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1"
        d="m 862.89331,238.22014 c 0,0 7.516,-18.79001 13.46617,-18.79001 5.95017,0 1.879,15.97151 21.60851,15.97151 19.72951,0 9.39501,-42.27752 32.56935,-42.27752 23.17435,0 11.90034,40.39852 22.54802,40.39852 10.64767,0 9.70817,-19.72951 19.72951,-19.72951 10.02133,0 5.32383,17.85051 19.41634,17.85051 14.09249,0 10.33449,-34.44835 20.35589,-34.44835 10.0213,0 4.3843,32.56935 14.0925,32.56935 9.7081,0 8.4555,-10.64767 18.4768,-10.64767 10.0213,0 5.9502,15.65834 15.3452,15.65834 9.395,0 7.2028,-20.66901 12.5267,-20.66901 5.3238,0 4.5903,20.79036 12.0033,20.79036 7.413,0 7.0998,-33.31703 20.2528,-33.31703 13.153,0 7.516,30.69034 16.2847,30.69034 7.5368,0 7.2075,-3.933 11.1421,-5.03811 0.356,-0.10001 0.747,-0.17687 1.182,-0.22555 0.3506,-0.0392 0.7297,-0.0602 1.1421,-0.0602"
        id="path2930-7"
        sodipodi:nodetypes="cssssssssssssssssc"
        inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"
        inkscape:export-xdpi="150"
-       inkscape:export-ydpi="150" />
+       inkscape:export-ydpi="150"
+       inkscape:connector-curvature="0" />
     <path
-       style="font-variation-settings:normal;fill:none;fill-opacity:1;stroke:#ff0000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:2, 2;stroke-dashoffset:0;stroke-opacity:1;stop-color:#000000"
+       style="fill:none;fill-opacity:1;stroke:#ff0000;stroke-width:2;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:2, 2;stroke-dashoffset:0;stroke-opacity:1"
        d="m 1133.0353,226.94611 c 0.3561,-0.10001 0.7471,-0.17687 1.182,-0.22555 0.3506,-0.0392 0.7297,-0.0602 1.1421,-0.0602 6.5765,0 4.6975,4.38433 9.395,4.38433 4.6975,0 6.2634,-12.2135 11.9004,-12.2135 5.637,0 3.4448,15.97151 7.8291,15.97151 4.3844,0 5.3239,-33.82202 21.2954,-33.82202 15.9715,0 10.0213,31.62985 20.0427,31.62985 10.0213,0 4.4704,-11.86772 20.5555,-11.86772"
        id="path2930-7-3"
        sodipodi:nodetypes="csssssssc"
        inkscape:export-filename="O:\code_dev\Personal\emhass-github\docs\images\naive_forecast.png"
        inkscape:export-xdpi="150"
-       inkscape:export-ydpi="150" />
+       inkscape:export-ydpi="150"
+       inkscape:connector-curvature="0" />
   </g>
 </svg>

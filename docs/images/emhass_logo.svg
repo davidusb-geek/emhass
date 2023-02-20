@@ -12,7 +12,7 @@
    height="29.759958mm"
    id="svg133"
    sodipodi:docname="emhass_logo.svg"
-   inkscape:version="1.0.1 (3bc2e813f5, 2020-09-07)"
+   inkscape:version="0.92.5 (2060ec1f9f, 2020-04-08)"
    inkscape:export-filename="O:\code_dev\emhass-github\docs\images\emhass_logo.png"
    inkscape:export-xdpi="75"
    inkscape:export-ydpi="75">
@@ -37,15 +37,15 @@
      guidetolerance="10"
      inkscape:pageopacity="0"
      inkscape:pageshadow="2"
-     inkscape:window-width="2400"
-     inkscape:window-height="1271"
+     inkscape:window-width="1920"
+     inkscape:window-height="1044"
      id="namedview135"
      showgrid="false"
-     inkscape:zoom="2.8284272"
-     inkscape:cx="224.50274"
-     inkscape:cy="44.32376"
-     inkscape:window-x="2391"
-     inkscape:window-y="-9"
+     inkscape:zoom="0.7071068"
+     inkscape:cx="-159.73699"
+     inkscape:cy="63.386313"
+     inkscape:window-x="1366"
+     inkscape:window-y="0"
      inkscape:window-maximized="1"
      inkscape:current-layer="svg133"
      inkscape:document-rotation="0"
@@ -482,8 +482,7 @@
          height="322.11633"
          x="-69.438248"
          y="-88.726639" /></flowRegion><flowPara
-       id="flowPara909" /></flowRoot>
-  <path
+       id="flowPara909" /></flowRoot>  <path
      style="fill:#000000"
      id="path243"
      d="" />
@@ -518,7 +517,7 @@
        x="23.759323"
        y="95.2854"
        id="tspan63"
-       style="font-style:italic;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:117.061px;font-family:Calibri;-inkscape-font-specification:'Calibri Italic';stroke-width:2.1949">EMHASS</tspan></text>
+       style="font-style:italic;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:96px;font-family:sans-serif;-inkscape-font-specification:'sans-serif Italic';stroke-width:2.1949">EMHASS</tspan></text>
   <path
      style="fill:#41bdf5;stroke:none;stroke-width:0.499905"
      d="M 433.7965,1.1230469e-7 V 112.47858 H 546.27511 V 1.1230469e-7 H 433.7965 M 513.78128,38.49266 c 10e-4,-1.44622 -0.32544,-3.57076 0.80135,-4.6974 1.43972,-1.43917 7.95548,-1.43937 9.39521,0 2.80047,2.80086 0.039,11.02175 0.96032,14.6955 1.23426,4.92256 16.71083,14.49224 3.84026,14.49724 h -3.99923 v 22.99562 l -0.87084,7.98448 -8.62736,0.51391 c -10.9375,0.08363 0.79698,0 -50.49035,0 l -8.6272,-0.51391 -0.87099,-7.98448 V 62.988 c -2.20668,0 -8.37575,1.0688 -9.37012,-1.5737 -1.02025,-2.71149 5.09199,-7.23063 6.75062,-9.08677 7.89855,-8.83892 16.74026,-16.94422 25.11522,-25.33267 2.77847,-2.78292 8.10646,-11.39873 12.49762,-11.03955 2.71848,0.22236 5.241,3.72319 6.97917,5.54059 5.46246,5.71262 10.92142,11.40163 16.51636,16.99676"

@@ -157,7 +157,7 @@ There are 3 different optimization types that are implemented in EMHASS.
 
 The following example diagram may help us understand the time frames of these optimizations:
 
-![](./images/optimization_graphics.png)
+![](./images/optimization_graphics.svg)
 
 ### Perfect forecast optimization
 
