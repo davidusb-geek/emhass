@@ -1,5 +1,7 @@
+wheel
 numpy==1.22.2
 pandas==1.4.1
+scipy<1.9.0
 pvlib>=0.9.0
 protobuf>=3.0.0
 siphon>=0.9
@@ -13,3 +15,4 @@ tables==3.7.0
 flask>=2.0.3
 waitress>=2.1.1
 plotly>=5.6.0
+skforecast==0.6.0
