@@ -46,7 +46,7 @@ The main study case is a household where we have solar panels, a grid connection
 
 The package flow can be graphically represented as follows:
 
-![](https://raw.githubusercontent.com/davidusb-geek/emhass/master/docs/images/ems_schema.svg)
+![](https://raw.githubusercontent.com/davidusb-geek/emhass/master/docs/images/ems_schema.png)
 
 So we have some data entering EMHASS (PV power, load, cost and selling prices forecasts), we have defined an objective function and some contraints (this is simply defined in a configuration file) and we have some controllable/deferrable loads. A call to an EMHASS optimization will yield the deferrable load schedule for future timestamps, the battery optimal power/SOC and the obtained value of the cost function. This information can published as sensors with attributes to Home Assistant and then we use the HA magic to automate our home energy consumption based on the optimization results.
 
@@ -68,7 +68,7 @@ You must follow these steps to make EMHASS work properly:
 
 A more detailed workflow is given below:
 
-![](https://raw.githubusercontent.com/davidusb-geek/emhass/master/docs/images/workflow.svg)
+![](https://raw.githubusercontent.com/davidusb-geek/emhass/master/docs/images/workflow.png)
 
 ## Installation
 
