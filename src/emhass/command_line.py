@@ -1,12 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import argparse, os, pathlib, logging, json, copy, pickle
+import argparse, os, pathlib, logging, json, copy, pickle, time
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
 from typing import Optional
 from distutils.util import strtobool
+
+from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import ElasticNet
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.metrics import r2_score
+
+from skforecast.ForecasterAutoreg import ForecasterAutoreg
+from skforecast.model_selection import bayesian_search_forecaster
+from skforecast.model_selection import backtesting_forecaster
+from skforecast.utils import save_forecaster
+from skforecast.utils import load_forecaster
+from skopt.space import Categorical, Real, Integer
 
 from importlib.metadata import version
 from emhass.retrieve_hass import retrieve_hass
@@ -117,6 +129,25 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         if 'prediction_horizon' in params['passed_data'] and params['passed_data']['prediction_horizon'] is not None:
             prediction_horizon = params['passed_data']['prediction_horizon']
             df_input_data_dayahead = copy.deepcopy(df_input_data_dayahead)[df_input_data_dayahead.index[0]:df_input_data_dayahead.index[prediction_horizon-1]]
+    elif set_type == "forecast-model-fit":
+        df_input_data_dayahead = None
+        P_PV_forecast, P_load_forecast = None, None
+        params = json.loads(params)
+        # Retrieve data from hass
+        days_to_retrieve = params['passed_data']['days_to_retrieve']
+        model_type = params['passed_data']['model_type']
+        var_model = params['passed_data']['var_model']
+        if get_data_from_file:
+            days_list = None
+            filename = 'data_train_'+model_type+'.pkl'
+            data_path = pathlib.Path(base_path) / 'data' / filename
+            with open(data_path, 'rb') as inp:
+                df_input_data, _ = pickle.load(inp)
+        else:
+            days_list = utils.get_days_list(days_to_retrieve)
+            var_list = [var_model]
+            rh.get_data(days_list, var_list)
+            df_input_data = rh.df_final.copy()
     elif set_type == "publish-data":
         df_input_data, df_input_data_dayahead = None, None
         P_PV_forecast, P_load_forecast = None, None
@@ -255,7 +286,107 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     if not debug:
         opt_res_naive_mpc.to_csv(pathlib.Path(input_data_dict['root']) / filename, index_label='timestamp')
     return opt_res_naive_mpc
-    
+
+def add_date_features(data):
+    df = copy.deepcopy(data)
+    df['year'] = [i.year for i in df.index]
+    df['month'] = [i.month for i in df.index]
+    df['day_of_week'] = [i.dayofweek for i in df.index]
+    df['day_of_year'] = [i.dayofyear for i in df.index]
+    df['day'] = [i.day for i in df.index]
+    df['hour'] = [i.hour for i in df.index]
+    return df
+
+def neg_r2_score(y_true, y_pred):
+    return -r2_score(y_true, y_pred)
+
+def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
+    debug: Optional[bool] = False) -> pd.DataFrame:
+    """
+    Perform a forecast model fit from training data retrieved from Home Assistant.
+    """
+    model_type = input_data_dict['params']['passed_data']['model_type']
+    var_model = input_data_dict['params']['passed_data']['var_model']
+    sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
+    num_lags = input_data_dict['params']['passed_data']['num_lags']
+    logger.info("Performing a forecast model fit for "+model_type)
+    data = copy.deepcopy(input_data_dict['df_input_data'])
+    # Preparing the data: adding features, train/test split
+    data.index = pd.to_datetime(data.index)
+    data.sort_index(inplace=True)
+    data = data[~data.index.duplicated(keep='first')]
+    data_exo = pd.DataFrame(index=data.index)
+    data_exo = add_date_features(data_exo)
+    data_exo[var_model] = data[var_model]
+    data_exo = data_exo.interpolate(method='linear', axis=0, limit=None)
+    date_train = data_exo.index[-1]-pd.Timedelta('15days')+data_exo.index.freq # The last 15 days
+    date_split = data_exo.index[-1]-pd.Timedelta('48h')+data_exo.index.freq # The last 48h
+    data_train = data_exo.loc[:date_split,:]
+    data_test  = data_exo.loc[date_split:,:]
+    steps = len(data_test)
+    if sklearn_model == 'LinearRegression':
+        base_model = LinearRegression()
+    elif sklearn_model == 'ElasticNet':
+        base_model = ElasticNet()
+    elif sklearn_model == 'KNeighborsRegressor':
+        base_model = KNeighborsRegressor()
+    else:
+        logger.error("Passed sklearn model "+sklearn_model+" is not valid")
+    forecaster = ForecasterAutoreg(
+        regressor = base_model,
+        lags      = num_lags
+        )
+    logger.info("Training a "+sklearn_model+" model")
+    start_time = time.time()
+    forecaster.fit(y=data_train[var_model], 
+                   exog=data_train.drop(var_model, axis=1))
+    logger.info(f"Elapsed time for model fit: {time.time() - start_time}")
+    # Make a prediction to print metrics
+    predictions = forecaster.predict(steps=steps, exog=data_train.drop(var_model, axis=1))
+    pred_metric = r2_score(data_test[var_model],predictions)
+    logger.info(f"Prediction R2 score on test data: {pred_metric}")
+    df_pred = pd.DataFrame(index=data_exo.index,columns=['train','test','pred'])
+    df_pred['train'] = data_train[var_model]
+    df_pred['test'] = data_test[var_model]
+    df_pred['pred'] = predictions
+    # Using backtesting tool to evaluate the model
+    logger.info("Performing simple backtesting of fitted model")
+    start_time = time.time()
+    metric, predictions_backtest = backtesting_forecaster(
+        forecaster         = forecaster,
+        y                  = data_train[var_model],
+        exog               = data_train.drop(var_model, axis=1),
+        initial_train_size = None,
+        fixed_train_size   = False,
+        steps              = num_lags,
+        metric             = neg_r2_score,
+        refit              = False,
+        verbose            = False
+    )
+    logger.info(f"Elapsed backtesting time: {time.time() - start_time}")
+    logger.info(f"Backtest R2 score: {-metric}")
+    df_pred_backtest = pd.DataFrame(index=data_exo.index,columns=['train','pred'])
+    df_pred_backtest['train'] = data_exo[var_model]
+    df_pred_backtest['pred'] = predictions_backtest
+    # Save model
+    filename = model_type+'_model.py'
+    save_forecaster(forecaster, file_name=pathlib.Path(input_data_dict['root']) / filename, verbose=False)
+    return df_pred, df_pred_backtest
+
+def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
+    debug: Optional[bool] = False) -> pd.DataFrame:
+    """
+    Perform a forecast model predict using a previously trained skforecast model.
+    """
+    pass
+
+def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
+    debug: Optional[bool] = False) -> pd.DataFrame:
+    """
+    Tune a forecast model hyperparameters using bayesian optimization.
+    """
+    pass
+
 def publish_data(input_data_dict: dict, logger: logging.Logger,
     save_data_to_file: Optional[bool] = False) -> pd.DataFrame:
     """
