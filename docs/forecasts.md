@@ -40,7 +40,7 @@ The default method for load forecast is a naive method, also called persistence.
 
 This is presented graphically here:
 
-![](./images/naive_forecast.svg)
+![](./images/naive_forecast.png)
 
 Starting with v0.4.0 (to be published soon!), a new forecast framework is proposed within EMHASS. It provides a more efficient way to forecast the power load consumption. It is based on the `skforecast` module that uses `scikit-learn` regression models considering auto-regression lags as features. The hyperparameter optimization is proposed using bayesian optimization from the `skopt` module.
 
@@ -91,7 +91,7 @@ As an example for a two peak-hour periods contract you will need to define the f
 
 This example is presented graphically here:
 
-![](./images/hp_hc_periods.svg)
+![](./images/hp_hc_periods.png)
 
 ## PV production selling price forecast
 
