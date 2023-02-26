@@ -27,9 +27,9 @@ Linear programming is an optimization method that can be used to obtain the best
 This can be mathematically written as:
 
 $$
-& \underset{x}{\text{Maximize  }}   && \mathbf{c}^\mathrm{T} \mathbf{x}\\
-& \text{subject to  } && A \mathbf{x} \leq \mathbf{b} \\
-& \text{and  } && \mathbf{x} \ge \mathbf{0}
+  & \underset{x}{\text{Maximize  }} && \mathbf{c}^\mathrm{T} \mathbf{x}\\
+  & \text{subject to  } && A \mathbf{x} \leq \mathbf{b} \\
+  & \text{and  } && \mathbf{x} \ge \mathbf{0}
 $$
 
 with $\mathbf{x}$  the variable vector that we want to find, $\mathbf{c}$ and $\mathbf{b}$ are vectors with known coefficients and $\mathbf{A}$ is a matrix with known values. Here the cost function is defined by $\mathbf{c}^\mathrm{T} \mathbf{x}$. The inequalities $A \mathbf{x} \leq \mathbf{b}$ and $\mathbf{x} \ge \mathbf{0}$ represent the convex region of feasible solutions. 
@@ -157,7 +157,7 @@ There are 3 different optimization types that are implemented in EMHASS.
 
 The following example diagram may help us understand the time frames of these optimizations:
 
-![](./images/optimization_graphics.svg)
+![](./images/optimization_graphics.png)
 
 ### Perfect forecast optimization
 
