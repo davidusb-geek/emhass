@@ -7,7 +7,7 @@
 ### Fix
 - Fixed Solar.Forecast issues with lists of parameters.
 - Fixed latex equations rendering on documentation, dropped Mathjax.
-- Refactored images in documentation, now using only SVG.
+- Refactored images in documentation, now using only SVG for plotly figures.
 - Bumped requirements to latest non-conflicting versions.
 
 ## [0.3.36] - 2023-01-31

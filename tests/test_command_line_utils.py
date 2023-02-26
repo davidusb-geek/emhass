@@ -7,7 +7,7 @@ import pandas as pd
 import pathlib, json, yaml, copy
 
 from emhass.command_line import set_input_data_dict
-from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim
+from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim, forecast_model_fit
 from emhass.command_line import publish_data
 from emhass.command_line import main
 from emhass import utils
@@ -173,7 +173,6 @@ class TestCommandLineUtils(unittest.TestCase):
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
-        
         opt_res = naive_mpc_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertTrue(opt_res.isnull().sum().sum()==0)
@@ -202,6 +201,44 @@ class TestCommandLineUtils(unittest.TestCase):
         opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
         opt_res_last = publish_data(input_data_dict, logger)
         self.assertTrue(len(opt_res_last)==1)
+    
+    def test_forecast_model_fit(self):
+        config_path = pathlib.Path(root+'/config_emhass.yaml')
+        base_path = str(config_path.parent)
+        costfun = 'profit'
+        action = 'forecast-model-fit' # fit, predict and tune methods
+        params = copy.deepcopy(json.loads(self.params_json))
+        runtimeparams = {
+            "days_to_retrieve": 240,
+            "model_type": "load_forecast",
+            "var_model": "sensor.power_load_no_var_loads",
+            "sklearn_model": "KNeighborsRegressor",
+            "num_lags": 48
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params['passed_data'] = runtimeparams
+        params['optim_conf'][8]['load_forecast_method'] = 'skforecast'
+        params_json = json.dumps(params)
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
+        self.assertTrue(input_data_dict['params']['passed_data']['model_type'] == 'load_forecast')
+        self.assertTrue(input_data_dict['params']['passed_data']['sklearn_model'] == 'KNeighborsRegressor')
+        # Check that the default params are loaded
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
+        self.assertTrue(input_data_dict['params']['passed_data']['model_type'] == 'load_forecast')
+        self.assertTrue(input_data_dict['params']['passed_data']['sklearn_model'] == 'KNeighborsRegressor')
+        self.assertIsInstance(input_data_dict['df_input_data'], pd.DataFrame)
+        # Test the fit routine
+        df_pred, df_pred_backtest = forecast_model_fit(input_data_dict, logger, debug=True)
+        self.assertIsInstance(df_pred, pd.DataFrame)
+        self.assertIsInstance(df_pred_backtest, pd.DataFrame)
+        
+    def test_forecast_model_predict(self):
+        pass
+    
+    def test_forecast_model_tune(self):
+        pass
     
     @patch('sys.argv', ['main', '--action', 'test', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
                         '--get_data_from_file', 'True'])
