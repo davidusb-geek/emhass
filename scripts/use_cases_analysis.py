@@ -22,7 +22,7 @@ from emhass.forecast import forecast
 from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
 # the root folder
-root = str(get_root(__file__, num_parent=3))
+root = str(get_root(__file__, num_parent=2))
 # create logger
 logger, ch = get_logger(__name__, root, save_to_file=False)
 
@@ -71,7 +71,7 @@ if __name__ == '__main__':
     fig_inputs1.update_yaxes(title_text = "Powers (W)")
     fig_inputs1.update_xaxes(title_text = "Time")
     fig_inputs1.show()
-    fig_inputs1.write_image(root + "/docs/images/inputs_power.png", 
+    fig_inputs1.write_image(root + "/docs/images/inputs_power.svg", 
                             width=1080, height=0.8*1080)
     
     fig_inputs2 = df_input_data[['unit_load_cost',
@@ -80,7 +80,7 @@ if __name__ == '__main__':
     fig_inputs2.update_yaxes(title_text = "Load cost and production sell price (EUR)")
     fig_inputs2.update_xaxes(title_text = "Time")
     fig_inputs2.show()
-    fig_inputs2.write_image(root + "/docs/images/inputs_cost_price.png", 
+    fig_inputs2.write_image(root + "/docs/images/inputs_cost_price.svg", 
                             width=1080, height=0.8*1080)
     
     fig_inputs_dah = df_input_data_dayahead.plot()
@@ -88,7 +88,7 @@ if __name__ == '__main__':
     fig_inputs_dah.update_yaxes(title_text = "Powers (W)")
     fig_inputs_dah.update_xaxes(title_text = "Time")
     fig_inputs_dah.show()
-    fig_inputs_dah.write_image(root + "/docs/images/inputs_dayahead.png", 
+    fig_inputs_dah.write_image(root + "/docs/images/inputs_dayahead.svg", 
                                width=1080, height=0.8*1080)
     
     # Let's first perform a perfect optimization
@@ -98,7 +98,7 @@ if __name__ == '__main__':
     fig_res.update_yaxes(title_text = "Powers (W)")
     fig_res.update_xaxes(title_text = "Time")
     fig_res.show()
-    fig_res.write_image(root + "/docs/images/optim_results_PV_defLoads_perfectOptim.png", 
+    fig_res.write_image(root + "/docs/images/optim_results_PV_defLoads_perfectOptim.svg", 
                         width=1080, height=0.8*1080)
     
     print("System with: PV, two deferrable loads, perfect optimization, profit >> total cost function sum: "+\
@@ -113,7 +113,7 @@ if __name__ == '__main__':
     fig_res_dah.update_yaxes(title_text = "Powers (W)")
     fig_res_dah.update_xaxes(title_text = "Time")
     fig_res_dah.show()
-    fig_res_dah.write_image(root + "/docs/images/optim_results_PV_defLoads_dayaheadOptim.png", 
+    fig_res_dah.write_image(root + "/docs/images/optim_results_PV_defLoads_dayaheadOptim.svg", 
                         width=1080, height=0.8*1080)
     
     print("System with: PV, two deferrable loads, dayahead optimization, profit >> total cost function sum: "+\
@@ -132,7 +132,7 @@ if __name__ == '__main__':
     fig_res_dah.update_yaxes(title_text = "Powers (W)")
     fig_res_dah.update_xaxes(title_text = "Time")
     fig_res_dah.show()
-    fig_res_dah.write_image(root + "/docs/images/optim_results_defLoads_dayaheadOptim.png", 
+    fig_res_dah.write_image(root + "/docs/images/optim_results_defLoads_dayaheadOptim.svg", 
                         width=1080, height=0.8*1080)
     
     print("System with: two deferrable loads, dayahead optimization, profit >> total cost function sum: "+\
@@ -152,14 +152,14 @@ if __name__ == '__main__':
     fig_res_dah.update_yaxes(title_text = "Powers (W)")
     fig_res_dah.update_xaxes(title_text = "Time")
     fig_res_dah.show()
-    fig_res_dah.write_image(root + "/docs/images/optim_results_PV_Batt_defLoads_dayaheadOptim.png", 
+    fig_res_dah.write_image(root + "/docs/images/optim_results_PV_Batt_defLoads_dayaheadOptim.svg", 
                         width=1080, height=0.8*1080)
     fig_res_dah = opt_res_dah[['SOC_opt']].plot()
     fig_res_dah.layout.template = template
     fig_res_dah.update_yaxes(title_text = "Battery State of Charge (%)")
     fig_res_dah.update_xaxes(title_text = "Time")
     fig_res_dah.show()
-    fig_res_dah.write_image(root + "/docs/images/optim_results_PV_Batt_defLoads_dayaheadOptim_SOC.png", 
+    fig_res_dah.write_image(root + "/docs/images/optim_results_PV_Batt_defLoads_dayaheadOptim_SOC.svg", 
                         width=1080, height=0.8*1080)
     
     print("System with: PV, Battery, two deferrable loads, dayahead optimization, profit >> total cost function sum: "+\
