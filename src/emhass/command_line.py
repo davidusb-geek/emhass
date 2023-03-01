@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import argparse, os, pathlib, logging, json, copy, pickle, time
+import argparse
+import os
+import pathlib
+import logging
+import json
+import copy
+import pickle
+import time
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
@@ -23,6 +30,7 @@ from skopt.space import Categorical, Real, Integer
 from importlib.metadata import version
 from emhass.retrieve_hass import retrieve_hass
 from emhass.forecast import forecast
+from emhass.machine_learning_forecaster import mlforecaster
 from emhass.optimization import optimization
 from emhass import utils
 
@@ -143,6 +151,7 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
             data_path = pathlib.Path(base_path) / 'data' / filename
             with open(data_path, 'rb') as inp:
                 df_input_data, _ = pickle.load(inp)
+            df_input_data = df_input_data[df_input_data.index[-1] - pd.offsets.Day(days_to_retrieve):]
         else:
             days_list = utils.get_days_list(days_to_retrieve)
             var_list = [var_model]
@@ -305,12 +314,13 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
     """
     Perform a forecast model fit from training data retrieved from Home Assistant.
     """
+    data = copy.deepcopy(input_data_dict['df_input_data'])
     model_type = input_data_dict['params']['passed_data']['model_type']
     var_model = input_data_dict['params']['passed_data']['var_model']
     sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
     num_lags = input_data_dict['params']['passed_data']['num_lags']
+    root = input_data_dict['root']
     logger.info("Performing a forecast model fit for "+model_type)
-    data = copy.deepcopy(input_data_dict['df_input_data'])
     # Preparing the data: adding features, train/test split
     data.index = pd.to_datetime(data.index)
     data.sort_index(inplace=True)
@@ -370,7 +380,7 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
     df_pred_backtest['pred'] = predictions_backtest
     # Save model
     filename = model_type+'_model.py'
-    save_forecaster(forecaster, file_name=pathlib.Path(input_data_dict['root']) / filename, verbose=False)
+    save_forecaster(forecaster, file_name=pathlib.Path(root) / filename, verbose=False)
     return df_pred, df_pred_backtest
 
 def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,

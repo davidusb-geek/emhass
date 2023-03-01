@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import json
+import copy
+import datetime
+import logging
 from typing import Optional
 import numpy as np
 import pandas as pd
-import requests
 from requests import get, post
-import json, copy, datetime, logging
+
 from emhass.utils import set_df_index_freq
 
 
