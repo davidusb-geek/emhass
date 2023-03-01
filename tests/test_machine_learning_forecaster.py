@@ -100,6 +100,13 @@ class TestMLForecaster(unittest.TestCase):
         predictions = self.mlf.predict(data_last_window)
         self.assertIsInstance(predictions, pd.Series)
         self.assertTrue(predictions.isnull().sum().sum() == 0)
+        # Emulate predict on optimized forecaster
+        self.mlf.is_tuned = True
+        self.mlf.lags_opt = 48
+        self.mlf.fit()
+        predictions = self.mlf.predict()
+        self.assertIsInstance(predictions, pd.Series)
+        self.assertTrue(predictions.isnull().sum().sum() == 0)
         
     def test_tune(self):
         self.mlf.fit()
