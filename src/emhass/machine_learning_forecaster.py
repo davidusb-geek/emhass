@@ -24,9 +24,15 @@ from skopt.space import Categorical, Real, Integer
 class mlforecaster:
     r"""
     A forecaster class using machine learning models with auto-regressive approach and features\
-    based on timestamp information (hour, day week, etc).
+    based on timestamp information (hour, day, week, etc).
     
     This class uses the `skforecast` module and the machine learning models are from `scikit-learn`.
+    
+    It exposes three main methods:
+    
+    - `fit`: to train a model with the passed data.
+    
+    - `predict`: to obtain a forecast from a pre-trained model.
     
     """
 
@@ -127,7 +133,7 @@ class mlforecaster:
         return df_pred, df_pred_backtest
     
     def predict(self, data_last_window: Optional[pd.DataFrame] = None
-            ) -> pd.DataFrame:
+            ) -> pd.Series:
         if data_last_window is None:
             predictions = self.forecaster.predict(steps=self.num_lags, exog=self.data_train.drop(self.var_model, axis=1))
         else:
@@ -135,15 +141,15 @@ class mlforecaster:
             data_last_window = data_last_window.interpolate(method='linear', axis=0, limit=None)
             if self.is_tuned:
                 predictions = self.forecaster.predict(steps=self.lags_opt, 
-                                                    last_window=data_last_window[self.var_model],
-                                                    exog=data_last_window.drop(self.var_model, axis=1))
+                                                      last_window=data_last_window[self.var_model],
+                                                      exog=data_last_window.drop(self.var_model, axis=1))
             else:
                 predictions = self.forecaster.predict(steps=self.num_lags, 
-                                                    last_window=data_last_window[self.var_model],
-                                                    exog=data_last_window.drop(self.var_model, axis=1))
+                                                      last_window=data_last_window[self.var_model],
+                                                      exog=data_last_window.drop(self.var_model, axis=1))
         return predictions
     
-    def tune(self) -> None:
+    def tune(self) -> pd.DataFrame:
         # Bayesian search hyperparameter and lags with Skopt
         # Lags used as predictors
         lags_grid = [6, 12, 24, 36, 48, 60, 72]
@@ -160,7 +166,8 @@ class mlforecaster:
                             'leaf_size': Integer(20, 40, "log-uniform", name='leaf_size'),
                             'weights': Categorical(['uniform', 'distance'], name='weights')
                             }
-        self.logger.info("Backtesting and bayesian hyperparameter optimization")
+        # The optimization routine call
+        self.logger.info("Bayesian hyperparameter optimization with backtesting")
         start_time = time.time()
         self.optimize_results, self.optimize_results_object = bayesian_search_forecaster(
             forecaster         = self.forecaster,
@@ -186,13 +193,14 @@ class mlforecaster:
         freq_hours = self.data_exo.index.freq.delta.seconds/3600
         self.lags_opt = int(np.round(len(self.optimize_results.iloc[0]['lags'])))
         self.days_needed = int(np.round(self.lags_opt*freq_hours/24))
-        df = pd.DataFrame(index=self.data_exo.index,columns=['train','test','pred_optim'])
-        df['train'] = self.data_train[self.var_model]
-        df['test'] = self.data_test[self.var_model]
-        df['pred_optim'] = predictions_opt
+        df_pred_opt = pd.DataFrame(index=self.data_exo.index,columns=['train','test','pred_optim'])
+        df_pred_opt['train'] = self.data_train[self.var_model]
+        df_pred_opt['test'] = self.data_test[self.var_model]
+        df_pred_opt['pred_optim'] = predictions_opt
         pred_optim_metric_train = -self.optimize_results.iloc[0]['neg_r2_score']
         self.logger.info(f"R2 score for optimized prediction in train period: {pred_optim_metric_train}")
-        pred_optim_metric_test = r2_score(df.loc[self.data_test.index[1:-1],'test'],df.loc[self.data_test[1:-1].index,'pred_optim'])
+        pred_optim_metric_test = r2_score(df_pred_opt.loc[self.data_test.index[1:-1],'test'],
+                                          df_pred_opt.loc[self.data_test[1:-1].index,'pred_optim'])
         self.logger.info(f"R2 score for optimized prediction in test period: {pred_optim_metric_test}")
         self.logger.info("Number of optimal lags obtained: "+str(self.lags_opt))
-        return df
+        return df_pred_opt
