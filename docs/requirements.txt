@@ -1,5 +1,6 @@
-numpy>=1.20.1
-pandas>=1.2.3
+wheel
+numpy==1.22.2
+pandas==1.4.1
 scipy<1.9.0
 pvlib>=0.9.0
 protobuf>=3.0.0
@@ -10,7 +11,7 @@ beautifulsoup4>=4.9.3
 pulp>=2.4
 pyyaml>=5.4.1
 netcdf4>=1.5.3
-tables>=3.6.1
+tables==3.7.0
 skforecast==0.6.0
 markupsafe==2.1.2
 Jinja2<3.2

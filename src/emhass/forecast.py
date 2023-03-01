@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import pathlib
+import pickle
+import copy
+import logging
+import json
 from typing import Optional
-import pathlib, pickle, copy, logging, json
-import pandas as pd, numpy as np
+import pandas as pd
+import numpy as np
 from datetime import datetime, timedelta
 from requests import get
 from bs4 import BeautifulSoup

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import logging
+import copy
 from typing import Optional
 import pandas as pd
 import numpy as np
 import pulp as plp
 from pulp import PULP_CBC_CMD, COIN_CMD, GLPK_CMD
-import logging, copy
 
 
 class optimization:
