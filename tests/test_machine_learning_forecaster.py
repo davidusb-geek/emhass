@@ -50,7 +50,7 @@ class TestMLForecaster(unittest.TestCase):
         action = 'forecast-model-fit' # fit, predict and tune methods
         params = copy.deepcopy(json.loads(params_json))
         runtimeparams = {
-            "days_to_retrieve": 30,
+            "days_to_retrieve": 20,
             "model_type": "load_forecast",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
@@ -110,9 +110,32 @@ class TestMLForecaster(unittest.TestCase):
         
     def test_tune(self):
         self.mlf.fit()
-        df_pred_optim = self.mlf.tune()
+        df_pred_optim = self.mlf.tune(debug=True)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
         self.assertTrue(self.mlf.is_tuned == True)
+        # Test LinearRegression
+        data = copy.deepcopy(self.input_data_dict['df_input_data'])
+        model_type = self.input_data_dict['params']['passed_data']['model_type']
+        var_model = self.input_data_dict['params']['passed_data']['var_model']
+        sklearn_model = 'LinearRegression'
+        num_lags = self.input_data_dict['params']['passed_data']['num_lags']
+        self.mlf = mlforecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
+        self.mlf.fit()
+        df_pred_optim = self.mlf.tune(debug=True)
+        self.assertIsInstance(df_pred_optim, pd.DataFrame)
+        self.assertTrue(self.mlf.is_tuned == True)
+        # Test ElasticNet
+        data = copy.deepcopy(self.input_data_dict['df_input_data'])
+        model_type = self.input_data_dict['params']['passed_data']['model_type']
+        var_model = self.input_data_dict['params']['passed_data']['var_model']
+        sklearn_model = 'ElasticNet'
+        num_lags = self.input_data_dict['params']['passed_data']['num_lags']
+        self.mlf = mlforecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
+        self.mlf.fit()
+        df_pred_optim = self.mlf.tune(debug=True)
+        self.assertIsInstance(df_pred_optim, pd.DataFrame)
+        self.assertTrue(self.mlf.is_tuned == True)
+        
         
 if __name__ == '__main__':
     unittest.main()
