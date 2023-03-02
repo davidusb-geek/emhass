@@ -46,8 +46,14 @@ def neg_r2_score(y_true, y_pred):
 
 if __name__ == '__main__':
 
+    days_to_retrieve = 240
+    model_type = "load_forecast"
+    var_model = "sensor.power_load_no_var_loads"
+    sklearn_model = "KNeighborsRegressor"
+    num_lags = 48
+    
+    data_path = pathlib.Path(root+'/data/data_train_'+model_type+'.pkl')
     params = None
-    data_path = pathlib.Path(root+'/data/data_train.pkl')
     template = 'presentation'
 
     if data_path.is_file():
@@ -55,14 +61,13 @@ if __name__ == '__main__':
         with open(data_path, "rb") as fid:
             data, var_model = pickle.load(fid)
     else:
-        logger.info("Using EMHASS methods to retrieve the data")
+        logger.info("Using EMHASS methods to retrieve the new forecast model train data")
         retrieve_hass_conf, _, _ = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True)
         rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
         retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
         params, root, logger, get_data_from_file=False)
 
-        days_list = get_days_list(retrieve_hass_conf['days_to_retrieve'])
-        var_model = retrieve_hass_conf['var_load']
+        days_list = get_days_list(days_to_retrieve)
         var_list = [var_model]
         rh.get_data(days_list, var_list)
         
@@ -94,9 +99,18 @@ if __name__ == '__main__':
     data_test  = data_exo.loc[date_split:,:]
     steps = len(data_test)
     
+    if sklearn_model == 'LinearRegression':
+        base_model = LinearRegression()
+    elif sklearn_model == 'ElasticNet':
+        base_model = ElasticNet()
+    elif sklearn_model == 'KNeighborsRegressor':
+        base_model = KNeighborsRegressor()
+    else:
+        logger.error("Passed sklearn model "+sklearn_model+" is not valid")
+    
     forecaster = ForecasterAutoreg(
-        regressor = KNeighborsRegressor(),
-        lags      = 48
+        regressor = base_model,
+        lags      = num_lags
         )
 
     logger.info("Training a KNN regressor")
@@ -131,9 +145,9 @@ if __name__ == '__main__':
         exog               = data_train.drop(var_model, axis=1),
         initial_train_size = None,
         fixed_train_size   = False,
-        steps              = 48, #10
-        metric             = neg_r2_score, #'mean_absolute_percentage_error'
-        refit              = False, #True
+        steps              = num_lags,
+        metric             = neg_r2_score,
+        refit              = False,
         verbose            = False
     )
     logger.info(f"Elapsed time: {time.time() - start_time}")
@@ -167,8 +181,8 @@ if __name__ == '__main__':
         exog               = data_train.drop(var_model, axis=1),
         lags_grid          = lags_grid,
         search_space       = search_space,
-        steps              = 48,
-        metric             = neg_r2_score, #'mean_absolute_percentage_error''mean_absolute_percentage_error',
+        steps              = num_lags,
+        metric             = neg_r2_score,
         refit              = True,
         initial_train_size = len(data_exo.loc[:date_train]),
         fixed_train_size   = True,

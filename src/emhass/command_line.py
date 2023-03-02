@@ -1,16 +1,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import argparse, os, pathlib, logging, json, copy, pickle
+import argparse
+import os
+import pathlib
+import logging
+import json
+import copy
+import pickle
+import time
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
 from typing import Optional
 from distutils.util import strtobool
 
+from skforecast.utils import save_forecaster
+from skforecast.utils import load_forecaster
+
 from importlib.metadata import version
 from emhass.retrieve_hass import retrieve_hass
 from emhass.forecast import forecast
+from emhass.machine_learning_forecaster import mlforecaster
 from emhass.optimization import optimization
 from emhass import utils
 
@@ -117,6 +128,26 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         if 'prediction_horizon' in params['passed_data'] and params['passed_data']['prediction_horizon'] is not None:
             prediction_horizon = params['passed_data']['prediction_horizon']
             df_input_data_dayahead = copy.deepcopy(df_input_data_dayahead)[df_input_data_dayahead.index[0]:df_input_data_dayahead.index[prediction_horizon-1]]
+    elif set_type == "forecast-model-fit" or set_type == "forecast-model-predict" or set_type == "forecast-model-tune":
+        df_input_data_dayahead = None
+        P_PV_forecast, P_load_forecast = None, None
+        params = json.loads(params)
+        # Retrieve data from hass
+        days_to_retrieve = params['passed_data']['days_to_retrieve']
+        model_type = params['passed_data']['model_type']
+        var_model = params['passed_data']['var_model']
+        if get_data_from_file:
+            days_list = None
+            filename = 'data_train_'+model_type+'.pkl'
+            data_path = pathlib.Path(base_path) / 'data' / filename
+            with open(data_path, 'rb') as inp:
+                df_input_data, _ = pickle.load(inp)
+            df_input_data = df_input_data[df_input_data.index[-1] - pd.offsets.Day(days_to_retrieve):]
+        else:
+            days_list = utils.get_days_list(days_to_retrieve)
+            var_list = [var_model]
+            rh.get_data(days_list, var_list)
+            df_input_data = rh.df_final.copy()
     elif set_type == "publish-data":
         df_input_data, df_input_data_dayahead = None, None
         P_PV_forecast, P_load_forecast = None, None
@@ -255,7 +286,71 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     if not debug:
         opt_res_naive_mpc.to_csv(pathlib.Path(input_data_dict['root']) / filename, index_label='timestamp')
     return opt_res_naive_mpc
-    
+
+def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
+    debug: Optional[bool] = False) -> pd.DataFrame:
+    """
+    Perform a forecast model fit from training data retrieved from Home Assistant.
+    """
+    data = copy.deepcopy(input_data_dict['df_input_data'])
+    model_type = input_data_dict['params']['passed_data']['model_type']
+    var_model = input_data_dict['params']['passed_data']['var_model']
+    sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
+    num_lags = input_data_dict['params']['passed_data']['num_lags']
+    root = input_data_dict['root']
+    # The ML forecaster object
+    mlf = mlforecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
+    # Fit the ML model
+    df_pred, df_pred_backtest = mlf.fit()
+    # Save model
+    filename = model_type+'_mlf.pkl'
+    with open(pathlib.Path(root) / filename, 'wb') as outp:
+        pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
+    return df_pred, df_pred_backtest
+
+def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
+    use_last_window: Optional[bool] = True, debug: Optional[bool] = False) -> pd.DataFrame:
+    """
+    Perform a forecast model predict using a previously trained skforecast model.
+    """
+    # Load model
+    model_type = input_data_dict['params']['passed_data']['model_type']
+    root = input_data_dict['root']
+    filename = model_type+'_mlf.pkl'
+    filename_path = pathlib.Path(root) / filename
+    if filename_path.is_file():
+        with open(filename_path, 'rb') as inp:
+            mlf = pickle.load(inp)
+    else:
+        logger.error("The ML forecaster file was not found, please run a model fit method before this predict method")
+    # Make predictions
+    if use_last_window:
+        data_last_window = copy.deepcopy(input_data_dict['df_input_data'])
+    else:
+        data_last_window = None
+    predictions = mlf.predict(data_last_window)
+    # TODO: add option for data_last_window!
+    return predictions
+
+def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
+    debug: Optional[bool] = False) -> pd.DataFrame:
+    """
+    Tune a forecast model hyperparameters using bayesian optimization.
+    """
+    # Load model
+    model_type = input_data_dict['params']['passed_data']['model_type']
+    root = input_data_dict['root']
+    filename = model_type+'_mlf.pkl'
+    filename_path = pathlib.Path(root) / filename
+    if filename_path.is_file():
+        with open(filename_path, 'rb') as inp:
+            mlf = pickle.load(inp)
+    else:
+        logger.error("The ML forecaster file was not found, please run a model fit method before this tune method")
+    # Tune the model
+    df_pred_optim = mlf.tune(debug=debug)
+    return df_pred_optim
+
 def publish_data(input_data_dict: dict, logger: logging.Logger,
     save_data_to_file: Optional[bool] = False) -> pd.DataFrame:
     """
