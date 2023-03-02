@@ -230,6 +230,33 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
         if 'solar_forecast_kwp' in runtimeparams.keys():
             retrieve_hass_conf['solar_forecast_kwp'] = runtimeparams['solar_forecast_kwp']
             optim_conf['weather_forecast_method'] = 'solar.forecast'
+        # Treat passed data for forecast model fit
+        if set_type == 'forecast-model-fit':
+            if 'days_to_retrieve' not in runtimeparams.keys():
+                days_to_retrieve = 240
+            else:
+                days_to_retrieve = runtimeparams['days_to_retrieve']
+            params['passed_data']['days_to_retrieve'] = days_to_retrieve
+            if 'model_type' not in runtimeparams.keys():
+                model_type = "load_forecast"
+            else:
+                model_type = runtimeparams['model_type']
+            params['passed_data']['model_type'] = model_type
+            if 'var_model' not in runtimeparams.keys():
+                var_model = "sensor.power_load_no_var_loads"
+            else:
+                var_model = runtimeparams['var_model']
+            params['passed_data']['var_model'] = var_model
+            if 'sklearn_model' not in runtimeparams.keys():
+                sklearn_model = "KNeighborsRegressor"
+            else:
+                sklearn_model = runtimeparams['sklearn_model']
+            params['passed_data']['sklearn_model'] = sklearn_model
+            if 'num_lags' not in runtimeparams.keys():
+                num_lags = 48
+            else:
+                num_lags = runtimeparams['num_lags']
+            params['passed_data']['num_lags'] = num_lags
         params = json.dumps(params)
     return params, retrieve_hass_conf, optim_conf
 
