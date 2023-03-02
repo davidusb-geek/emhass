@@ -20,6 +20,8 @@ from skforecast.utils import save_forecaster
 from skforecast.utils import load_forecaster
 from skopt.space import Categorical, Real, Integer
 
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
 class mlforecaster:
     r"""
@@ -149,23 +151,39 @@ class mlforecaster:
                                                       exog=data_last_window.drop(self.var_model, axis=1))
         return predictions
     
-    def tune(self) -> pd.DataFrame:
+    def tune(self, debug: Optional[bool] = False) -> pd.DataFrame:
         # Bayesian search hyperparameter and lags with Skopt
         # Lags used as predictors
-        lags_grid = [6, 12, 24, 36, 48, 60, 72]
+        if debug:
+            lags_grid = [3]
+            refit = False
+            num_lags = 3
+        else:
+            lags_grid = [6, 12, 24, 36, 48, 60, 72]
+            refit = True
+            num_lags = self.num_lags
         # Regressor hyperparameters search space
         if self.sklearn_model == 'LinearRegression':
-            search_space = {'fit_intercept': Categorical(['True', 'False'], name='fit_intercept')}
+            if debug:
+                search_space = {'fit_intercept': Categorical(['True'], name='fit_intercept')}
+            else:
+                search_space = {'fit_intercept': Categorical(['True', 'False'], name='fit_intercept')}
         elif self.sklearn_model == 'ElasticNet':
-            search_space = {'alpha': Real(0.0, 2.0, "uniform", name='alpha'),
-                            'l1_ratio': Real(0.0, 1.0, "uniform", name='l1_ratio'),
-                            'selection': Categorical(['cyclic', 'random'], name='selection')
-                            }
+            if debug:
+                search_space = {'selection': Categorical(['random'], name='selection')}
+            else:
+                search_space = {'alpha': Real(0.0, 2.0, "uniform", name='alpha'),
+                                'l1_ratio': Real(0.0, 1.0, "uniform", name='l1_ratio'),
+                                'selection': Categorical(['cyclic', 'random'], name='selection')
+                                }
         elif self.sklearn_model == 'KNeighborsRegressor':
-            search_space = {'n_neighbors': Integer(2, 20, "uniform", name='n_neighbors'),
-                            'leaf_size': Integer(20, 40, "log-uniform", name='leaf_size'),
-                            'weights': Categorical(['uniform', 'distance'], name='weights')
-                            }
+            if debug:
+                search_space = {'weights': Categorical(['uniform'], name='weights')}
+            else:
+                search_space = {'n_neighbors': Integer(2, 20, "uniform", name='n_neighbors'),
+                                'leaf_size': Integer(20, 40, "log-uniform", name='leaf_size'),
+                                'weights': Categorical(['uniform', 'distance'], name='weights')
+                                }
         # The optimization routine call
         self.logger.info("Bayesian hyperparameter optimization with backtesting")
         start_time = time.time()
@@ -175,9 +193,9 @@ class mlforecaster:
             exog               = self.data_train.drop(self.var_model, axis=1),
             lags_grid          = lags_grid,
             search_space       = search_space,
-            steps              = self.num_lags,
+            steps              = num_lags,
             metric             = mlforecaster.neg_r2_score,
-            refit              = True,
+            refit              = refit,
             initial_train_size = len(self.data_exo.loc[:self.date_train]),
             fixed_train_size   = True,
             n_trials           = 10,
@@ -199,8 +217,8 @@ class mlforecaster:
         df_pred_opt['pred_optim'] = predictions_opt
         pred_optim_metric_train = -self.optimize_results.iloc[0]['neg_r2_score']
         self.logger.info(f"R2 score for optimized prediction in train period: {pred_optim_metric_train}")
-        pred_optim_metric_test = r2_score(df_pred_opt.loc[self.data_test.index[1:-1],'test'],
-                                          df_pred_opt.loc[self.data_test[1:-1].index,'pred_optim'])
+        pred_optim_metric_test = r2_score(df_pred_opt.loc[predictions_opt.index,'test'],
+                                          df_pred_opt.loc[predictions_opt.index,'pred_optim'])
         self.logger.info(f"R2 score for optimized prediction in test period: {pred_optim_metric_test}")
         self.logger.info("Number of optimal lags obtained: "+str(self.lags_opt))
         return df_pred_opt

@@ -7,7 +7,8 @@ import pandas as pd
 import pathlib, json, yaml, copy
 
 from emhass.command_line import set_input_data_dict
-from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim, forecast_model_fit
+from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim
+from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune
 from emhass.command_line import publish_data
 from emhass.command_line import main
 from emhass import utils
@@ -202,14 +203,14 @@ class TestCommandLineUtils(unittest.TestCase):
         opt_res_last = publish_data(input_data_dict, logger)
         self.assertTrue(len(opt_res_last)==1)
     
-    def test_forecast_model_fit(self):
+    def test_forecast_model_fit_predict_tune(self):
         config_path = pathlib.Path(root+'/config_emhass.yaml')
         base_path = str(config_path.parent)
         costfun = 'profit'
         action = 'forecast-model-fit' # fit, predict and tune methods
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
-            "days_to_retrieve": 240,
+            "days_to_retrieve": 20,
             "model_type": "load_forecast",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
@@ -229,16 +230,21 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(input_data_dict['params']['passed_data']['model_type'] == 'load_forecast')
         self.assertTrue(input_data_dict['params']['passed_data']['sklearn_model'] == 'KNeighborsRegressor')
         self.assertIsInstance(input_data_dict['df_input_data'], pd.DataFrame)
-        # Test the fit routine
+        # Test the fit method
         df_pred, df_pred_backtest = forecast_model_fit(input_data_dict, logger, debug=True)
         self.assertIsInstance(df_pred, pd.DataFrame)
-        self.assertIsInstance(df_pred_backtest, pd.DataFrame)
-        
-    def test_forecast_model_predict(self):
-        pass
-    
-    def test_forecast_model_tune(self):
-        pass
+        self.assertTrue(df_pred_backtest == None)
+        # Test the predict method on observations following the train period
+        predictions = forecast_model_predict(input_data_dict, logger, use_last_window=False, debug=True)
+        self.assertIsInstance(predictions, pd.Series)
+        self.assertTrue(predictions.isnull().sum().sum() == 0)
+        # Now a predict using last_window
+        predictions = forecast_model_predict(input_data_dict, logger, debug=True)
+        self.assertIsInstance(predictions, pd.Series)
+        self.assertTrue(predictions.isnull().sum().sum() == 0)
+        # Test the tune method
+        df_pred_optim = forecast_model_tune(input_data_dict, logger, debug=True)
+        self.assertIsInstance(df_pred_optim, pd.DataFrame)
     
     @patch('sys.argv', ['main', '--action', 'test', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
                         '--get_data_from_file', 'True'])

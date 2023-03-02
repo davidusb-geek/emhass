@@ -128,7 +128,7 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         if 'prediction_horizon' in params['passed_data'] and params['passed_data']['prediction_horizon'] is not None:
             prediction_horizon = params['passed_data']['prediction_horizon']
             df_input_data_dayahead = copy.deepcopy(df_input_data_dayahead)[df_input_data_dayahead.index[0]:df_input_data_dayahead.index[prediction_horizon-1]]
-    elif set_type == "forecast-model-fit":
+    elif set_type == "forecast-model-fit" or set_type == "forecast-model-predict" or set_type == "forecast-model-tune":
         df_input_data_dayahead = None
         P_PV_forecast, P_load_forecast = None, None
         params = json.loads(params)
@@ -301,7 +301,7 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
     # The ML forecaster object
     mlf = mlforecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
     # Fit the ML model
-    df_pred, df_pred_backtest = self.mlf.fit()
+    df_pred, df_pred_backtest = mlf.fit()
     # Save model
     filename = model_type+'_mlf.pkl'
     with open(pathlib.Path(root) / filename, 'wb') as outp:
@@ -309,7 +309,7 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
     return df_pred, df_pred_backtest
 
 def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
-    debug: Optional[bool] = False) -> pd.DataFrame:
+    use_last_window: Optional[bool] = True, debug: Optional[bool] = False) -> pd.DataFrame:
     """
     Perform a forecast model predict using a previously trained skforecast model.
     """
@@ -324,7 +324,11 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     else:
         logger.error("The ML forecaster file was not found, please run a model fit method before this predict method")
     # Make predictions
-    predictions = mlf.predict()
+    if use_last_window:
+        data_last_window = copy.deepcopy(input_data_dict['df_input_data'])
+    else:
+        data_last_window = None
+    predictions = mlf.predict(data_last_window)
     # TODO: add option for data_last_window!
     return predictions
 
@@ -344,7 +348,7 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
     else:
         logger.error("The ML forecaster file was not found, please run a model fit method before this tune method")
     # Tune the model
-    df_pred_optim = mlf.tune()
+    df_pred_optim = mlf.tune(debug=debug)
     return df_pred_optim
 
 def publish_data(input_data_dict: dict, logger: logging.Logger,
