@@ -36,6 +36,8 @@ class mlforecaster:
     
     - `predict`: to obtain a forecast from a pre-trained model.
     
+    - `tune`: to optimize the models hyperparameters using bayesian optimization. 
+    
     """
 
     def __init__(self, data: pd.DataFrame, model_type: str, var_model: str, sklearn_model: str,
