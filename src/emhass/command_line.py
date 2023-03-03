@@ -329,7 +329,6 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     else:
         data_last_window = None
     predictions = mlf.predict(data_last_window)
-    # TODO: add option for data_last_window!
     return predictions
 
 def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
