@@ -294,14 +294,17 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
     var_model = input_data_dict['params']['passed_data']['var_model']
     sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
     num_lags = input_data_dict['params']['passed_data']['num_lags']
+    split_date_delta = input_data_dict['params']['passed_data']['split_date_delta']
+    perform_backtest = input_data_dict['params']['passed_data']['perform_backtest']
     root = input_data_dict['root']
     # The ML forecaster object
     mlf = mlforecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
     # Fit the ML model
-    df_pred, df_pred_backtest = mlf.fit()
+    df_pred, df_pred_backtest = mlf.fit(split_date_delta=split_date_delta, 
+                                        perform_backtest=perform_backtest)
     # Save model
     filename = model_type+'_mlf.pkl'
-    with open(pathlib.Path(root) / filename, 'wb') as outp:
+    with open(pathlib.Path(root) / 'data' / filename, 'wb') as outp:
         pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
     return df_pred, df_pred_backtest
 
@@ -314,7 +317,7 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     model_type = input_data_dict['params']['passed_data']['model_type']
     root = input_data_dict['root']
     filename = model_type+'_mlf.pkl'
-    filename_path = pathlib.Path(root) / filename
+    filename_path = pathlib.Path(root) / 'data' / filename
     if filename_path.is_file():
         with open(filename_path, 'rb') as inp:
             mlf = pickle.load(inp)
@@ -337,7 +340,7 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
     model_type = input_data_dict['params']['passed_data']['model_type']
     root = input_data_dict['root']
     filename = model_type+'_mlf.pkl'
-    filename_path = pathlib.Path(root) / filename
+    filename_path = pathlib.Path(root) / 'data' / filename
     if filename_path.is_file():
         with open(filename_path, 'rb') as inp:
             mlf = pickle.load(inp)

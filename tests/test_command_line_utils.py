@@ -46,10 +46,6 @@ class TestCommandLineUtils(unittest.TestCase):
         }
         self.runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
-        # params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        # params['optim_conf'][8]['load_forecast_method'] = 'list'
-        # params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
-        # params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
         self.params_json = json.dumps(params)
         
     def test_set_input_data_dict(self):
@@ -92,10 +88,6 @@ class TestCommandLineUtils(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params = copy.deepcopy(json.loads(self.params_json))
         params['passed_data'] = runtimeparams
-        # params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        # params['optim_conf'][8]['load_forecast_method'] = 'list'
-        # params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
-        # params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
@@ -109,10 +101,6 @@ class TestCommandLineUtils(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params = copy.deepcopy(json.loads(self.params_json))
         params['passed_data'] = runtimeparams
-        # params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        # params['optim_conf'][8]['load_forecast_method'] = 'list'
-        # params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
-        # params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
@@ -200,10 +188,10 @@ class TestCommandLineUtils(unittest.TestCase):
             "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3]}
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
-        # params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        # params['optim_conf'][8]['load_forecast_method'] = 'naive'
-        # params['optim_conf'][9]['load_cost_forecast_method'] = 'hp_hc_periods'
-        # params['optim_conf'][13]['prod_price_forecast_method'] = 'constant'
+        params['optim_conf'][7]['weather_forecast_method'] = 'list'
+        params['optim_conf'][8]['load_forecast_method'] = 'naive'
+        params['optim_conf'][9]['load_cost_forecast_method'] = 'hp_hc_periods'
+        params['optim_conf'][13]['prod_price_forecast_method'] = 'constant'
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
@@ -247,7 +235,9 @@ class TestCommandLineUtils(unittest.TestCase):
             "model_type": "load_forecast",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
-            "num_lags": 48
+            "num_lags": 48,
+            "split_date_delta": '48h',
+            "perform_backtest": False
         }
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
