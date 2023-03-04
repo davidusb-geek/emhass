@@ -15,9 +15,6 @@ from datetime import datetime, timezone
 from typing import Optional
 from distutils.util import strtobool
 
-from skforecast.utils import save_forecaster
-from skforecast.utils import load_forecaster
-
 from importlib.metadata import version
 from emhass.retrieve_hass import retrieve_hass
 from emhass.forecast import forecast

@@ -16,9 +16,6 @@ from sklearn.metrics import r2_score
 from skforecast.ForecasterAutoreg import ForecasterAutoreg
 from skforecast.model_selection import bayesian_search_forecaster
 from skforecast.model_selection import backtesting_forecaster
-from skforecast.utils import save_forecaster
-from skforecast.utils import load_forecaster
-from skopt.space import Categorical, Real, Integer
 
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning) 
@@ -167,25 +164,38 @@ class mlforecaster:
         # Regressor hyperparameters search space
         if self.sklearn_model == 'LinearRegression':
             if debug:
-                search_space = {'fit_intercept': Categorical(['True'], name='fit_intercept')}
+                def search_space(trial):
+                    search_space  = {'fit_intercept': trial.suggest_categorical('fit_intercept', ['True'])} 
+                    return search_space
             else:
-                search_space = {'fit_intercept': Categorical(['True', 'False'], name='fit_intercept')}
+                def search_space(trial):
+                    search_space  = {'fit_intercept': trial.suggest_categorical('fit_intercept', ['True', 'False'])} 
+                    return search_space
         elif self.sklearn_model == 'ElasticNet':
             if debug:
-                search_space = {'selection': Categorical(['random'], name='selection')}
+                def search_space(trial):
+                    search_space  = {'selection': trial.suggest_categorical('selection', ['random'])} 
+                    return search_space
             else:
-                search_space = {'alpha': Real(0.0, 2.0, "uniform", name='alpha'),
-                                'l1_ratio': Real(0.0, 1.0, "uniform", name='l1_ratio'),
-                                'selection': Categorical(['cyclic', 'random'], name='selection')
-                                }
+                def search_space(trial):
+                    search_space  = {'alpha': trial.suggest_float('alpha', 0.0, 2.0),
+                                    'l1_ratio': trial.suggest_float('l1_ratio', 0.0, 1.0),
+                                    'selection': trial.suggest_categorical('selection', ['cyclic', 'random'])
+                                    } 
+                    return search_space
         elif self.sklearn_model == 'KNeighborsRegressor':
             if debug:
-                search_space = {'weights': Categorical(['uniform'], name='weights')}
+                def search_space(trial):
+                    search_space  = {'weights': trial.suggest_categorical('weights', ['uniform'])} 
+                    return search_space
             else:
-                search_space = {'n_neighbors': Integer(2, 20, "uniform", name='n_neighbors'),
-                                'leaf_size': Integer(20, 40, "log-uniform", name='leaf_size'),
-                                'weights': Categorical(['uniform', 'distance'], name='weights')
-                                }
+                def search_space(trial):
+                    search_space  = {'n_neighbors': trial.suggest_int('n_neighbors', 2, 20),
+                                    'leaf_size': trial.suggest_int('leaf_size', 20, 40),
+                                    'weights': trial.suggest_categorical('weights', ['uniform', 'distance'])
+                                    } 
+                    return search_space
+        
         # The optimization routine call
         self.logger.info("Bayesian hyperparameter optimization with backtesting")
         start_time = time.time()
@@ -204,7 +214,7 @@ class mlforecaster:
             random_state       = 123,
             return_best        = True,
             verbose            = False,
-            engine             = 'skopt',
+            engine             = 'optuna',
             kwargs_gp_minimize = {}
         )
         self.logger.info(f"Elapsed time: {time.time() - start_time}")
