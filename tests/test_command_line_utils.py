@@ -46,10 +46,10 @@ class TestCommandLineUtils(unittest.TestCase):
         }
         self.runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
-        params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        params['optim_conf'][8]['load_forecast_method'] = 'list'
-        params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
-        params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
+        # params['optim_conf'][7]['weather_forecast_method'] = 'list'
+        # params['optim_conf'][8]['load_forecast_method'] = 'list'
+        # params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
+        # params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
         self.params_json = json.dumps(params)
         
     def test_set_input_data_dict(self):
@@ -92,10 +92,10 @@ class TestCommandLineUtils(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params = copy.deepcopy(json.loads(self.params_json))
         params['passed_data'] = runtimeparams
-        params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        params['optim_conf'][8]['load_forecast_method'] = 'list'
-        params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
-        params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
+        # params['optim_conf'][7]['weather_forecast_method'] = 'list'
+        # params['optim_conf'][8]['load_forecast_method'] = 'list'
+        # params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
+        # params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
@@ -109,10 +109,10 @@ class TestCommandLineUtils(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params = copy.deepcopy(json.loads(self.params_json))
         params['passed_data'] = runtimeparams
-        params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        params['optim_conf'][8]['load_forecast_method'] = 'list'
-        params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
-        params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
+        # params['optim_conf'][7]['weather_forecast_method'] = 'list'
+        # params['optim_conf'][8]['load_forecast_method'] = 'list'
+        # params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
+        # params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
@@ -121,6 +121,20 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].isnull().sum().sum()==0)
         self.assertTrue(len(input_data_dict['df_input_data_dayahead'])==10) # The fixed value for prediction_horizon
+        # Test passing just load cost and prod price as lists
+        action = 'dayahead-optim'
+        params = TestCommandLineUtils.get_test_params()
+        runtimeparams = {
+            'load_cost_forecast':[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48],
+            'prod_price_forecast':[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48]
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params['passed_data'] = runtimeparams
+        params_json = json.dumps(params)
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
+        self.assertTrue(input_data_dict['fcst'].optim_conf['load_cost_forecast_method']=='list')
+        self.assertTrue(input_data_dict['fcst'].optim_conf['prod_price_forecast_method']=='list')
         
     def test_dayahead_forecast_optim(self):
         config_path = pathlib.Path(root+'/config_emhass.yaml')
@@ -134,6 +148,25 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertTrue(opt_res.isnull().sum().sum()==0)
         self.assertTrue(len(opt_res)==len(params['passed_data']['pv_power_forecast']))
+        # Test passing just load cost and prod price as lists
+        action = 'dayahead-optim'
+        params = TestCommandLineUtils.get_test_params()
+        runtimeparams = {
+            'load_cost_forecast':[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48],
+            'prod_price_forecast':[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48]
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params['passed_data'] = runtimeparams
+        params_json = json.dumps(params)
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
+        opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertTrue(opt_res.isnull().sum().sum()==0)
+        self.assertTrue(input_data_dict['fcst'].optim_conf['load_cost_forecast_method']=='list')
+        self.assertTrue(input_data_dict['fcst'].optim_conf['prod_price_forecast_method']=='list')
+        self.assertEqual(opt_res['unit_load_cost'].values.tolist(), runtimeparams['load_cost_forecast'])
+        self.assertEqual(opt_res['unit_prod_price'].values.tolist(), runtimeparams['prod_price_forecast'])
         
     def test_perfect_forecast_optim(self):
         config_path = pathlib.Path(root+'/config_emhass.yaml')
@@ -167,10 +200,10 @@ class TestCommandLineUtils(unittest.TestCase):
             "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3]}
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
-        params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        params['optim_conf'][8]['load_forecast_method'] = 'naive'
-        params['optim_conf'][9]['load_cost_forecast_method'] = 'hp_hc_periods'
-        params['optim_conf'][13]['prod_price_forecast_method'] = 'constant'
+        # params['optim_conf'][7]['weather_forecast_method'] = 'list'
+        # params['optim_conf'][8]['load_forecast_method'] = 'naive'
+        # params['optim_conf'][9]['load_cost_forecast_method'] = 'hp_hc_periods'
+        # params['optim_conf'][13]['prod_price_forecast_method'] = 'constant'
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
