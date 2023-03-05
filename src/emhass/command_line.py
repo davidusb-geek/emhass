@@ -303,13 +303,15 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
     df_pred, df_pred_backtest = mlf.fit(split_date_delta=split_date_delta, 
                                         perform_backtest=perform_backtest)
     # Save model
-    filename = model_type+'_mlf.pkl'
-    with open(pathlib.Path(root) / 'data' / filename, 'wb') as outp:
-        pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
-    return df_pred, df_pred_backtest
+    if not debug:
+        filename = model_type+'_mlf.pkl'
+        with open(pathlib.Path(root) / 'data' / filename, 'wb') as outp:
+            pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
+    return df_pred, df_pred_backtest, mlf
 
 def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
-    use_last_window: Optional[bool] = True, debug: Optional[bool] = False) -> pd.DataFrame:
+    use_last_window: Optional[bool] = True, debug: Optional[bool] = False,
+    mlf: Optional[mlforecaster] = None) -> pd.DataFrame:
     """
     Perform a forecast model predict using a previously trained skforecast model.
     """
@@ -318,11 +320,12 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     root = input_data_dict['root']
     filename = model_type+'_mlf.pkl'
     filename_path = pathlib.Path(root) / 'data' / filename
-    if filename_path.is_file():
-        with open(filename_path, 'rb') as inp:
-            mlf = pickle.load(inp)
-    else:
-        logger.error("The ML forecaster file was not found, please run a model fit method before this predict method")
+    if not debug:
+        if filename_path.is_file():
+            with open(filename_path, 'rb') as inp:
+                mlf = pickle.load(inp)
+        else:
+            logger.error("The ML forecaster file was not found, please run a model fit method before this predict method")
     # Make predictions
     if use_last_window:
         data_last_window = copy.deepcopy(input_data_dict['df_input_data'])
@@ -332,7 +335,7 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     return predictions
 
 def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
-    debug: Optional[bool] = False) -> pd.DataFrame:
+    debug: Optional[bool] = False, mlf: Optional[mlforecaster] = None) -> pd.DataFrame:
     """
     Tune a forecast model hyperparameters using bayesian optimization.
     """
@@ -341,11 +344,12 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
     root = input_data_dict['root']
     filename = model_type+'_mlf.pkl'
     filename_path = pathlib.Path(root) / 'data' / filename
-    if filename_path.is_file():
-        with open(filename_path, 'rb') as inp:
-            mlf = pickle.load(inp)
-    else:
-        logger.error("The ML forecaster file was not found, please run a model fit method before this tune method")
+    if not debug:
+        if filename_path.is_file():
+            with open(filename_path, 'rb') as inp:
+                mlf = pickle.load(inp)
+        else:
+            logger.error("The ML forecaster file was not found, please run a model fit method before this tune method")
     # Tune the model
     df_pred_optim = mlf.tune(debug=debug)
     return df_pred_optim
@@ -464,6 +468,23 @@ def main():
         opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=args.get_data_from_file)
     elif args.action == 'naive-mpc-optim':
         opt_res = naive_mpc_optim(input_data_dict, logger, debug=args.get_data_from_file)
+    elif args.action == 'forecast-model-fit':
+        df_fit_pred, df_fit_pred_backtest, mlf = forecast_model_fit(input_data_dict, logger, debug=args.get_data_from_file)
+        opt_res = None
+    elif args.action == 'forecast-model-predict':
+        if args.get_data_from_file:
+            _, _, mlf = forecast_model_fit(input_data_dict, logger, debug=args.get_data_from_file)
+        else:
+            mlf = None
+        df_pred = forecast_model_predict(input_data_dict, logger, debug=args.get_data_from_file, mlf=mlf)
+        opt_res = None
+    elif args.action == 'forecast-model-tune':
+        if args.get_data_from_file:
+            _, _, mlf = forecast_model_fit(input_data_dict, logger, debug=args.get_data_from_file)
+        else:
+            mlf = None
+        df_pred_optim = forecast_model_tune(input_data_dict, logger, debug=args.get_data_from_file, mlf=mlf)
+        opt_res = None
     elif args.action == 'publish-data':
         opt_res = publish_data(input_data_dict, logger)
     else:
@@ -473,7 +494,15 @@ def main():
     # Flush the logger
     ch.close()
     logger.removeHandler(ch)
-    return opt_res
+    if args.action == 'perfect-optim' or args.action == 'dayahead-optim' or \
+        args.action == 'naive-mpc-optim' or args.action == 'publish-data':
+        return opt_res
+    elif args.action == 'forecast-model-fit':
+        return df_fit_pred, df_fit_pred_backtest, mlf
+    elif args.action == 'forecast-model-predict':
+        return df_pred
+    elif args.action == 'forecast-model-tune':
+        return df_pred_optim
 
 if __name__ == '__main__':
     main()

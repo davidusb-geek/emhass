@@ -13,6 +13,7 @@ import pandas as pd
 import plotly.express as px
 from emhass.command_line import set_input_data_dict
 from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim
+from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune
 from emhass.command_line import publish_data
 
 
@@ -56,6 +57,20 @@ def get_injection_dict(df, plot_size = 1366):
     injection_dict['table1'] = table1
     injection_dict['subsubtitle2'] = '<h4>Cost totals for latest optimization results</h4>'
     injection_dict['table2'] = table2
+    return injection_dict
+
+def get_injection_dict_forecast_model_fit(df_fit_pred, mlf):
+    fig = df_fit_pred.plot()
+    fig.layout.template = 'plotly_white'
+    fig.update_yaxes(title_text = mlf.model_type)
+    fig.update_xaxes(title_text = "Time")
+    image_path_0 = fig.to_html(full_html=False, default_width='75%')
+    # The dict of plots
+    injection_dict = {}
+    injection_dict['title'] = '<h2>Custom machine learning forecast model fit</h2>'
+    injection_dict['subsubtitle0'] = '<h4>Plotting train/test forecast model results for '+mlf.model_type+'</h4>'
+    injection_dict['subsubtitle0'] = '<h4>Forecasting variable '+mlf.var_model+'</h4>'
+    injection_dict['figure_0'] = image_path_0
     return injection_dict
 
 def build_params(params, options, addon):
@@ -162,6 +177,39 @@ def action_call(action_name):
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action naive-mpc-optim executed... \n'
+        return make_response(msg, 201)
+    elif action_name == 'forecast-model-fit':
+        app.logger.info(" >> Performing a machine learning forecast model fit...")
+        df_fit_pred, _, mlf = forecast_model_fit(input_data_dict, app.logger)
+        injection_dict = get_injection_dict_forecast_model_fit(
+            df_fit_pred, mlf)
+        with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
+            pickle.dump(injection_dict, fid)
+        msg = f'EMHASS >> Action forecast-model-fit executed... \n'
+        return make_response(msg, 201)
+    elif action_name == 'forecast-model-predict':
+        app.logger.info(" >> Performing a machine learning forecast model predict...")
+        df_pred = forecast_model_predict(input_data_dict, app.logger)
+        table1 = df_pred.reset_index().to_html(classes='mystyle', index=False)
+        injection_dict = {}
+        injection_dict['title'] = '<h2>Custom machine learning forecast model predict</h2>'
+        injection_dict['subsubtitle0'] = '<h4>Performed a prediction using a pre-trained model</h4>'
+        injection_dict['table1'] = table1
+        with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
+            pickle.dump(injection_dict, fid)
+        msg = f'EMHASS >> Action forecast-model-fit executed... \n'
+        return make_response(msg, 201)
+    elif action_name == 'forecast-model-tune':
+        app.logger.info(" >> Performing a machine learning forecast model tune...")
+        df_pred_optim = forecast_model_tune(input_data_dict, app.logger)
+        table1 = df_pred_optim.reset_index().to_html(classes='mystyle', index=False)
+        injection_dict = {}
+        injection_dict['title'] = '<h2>Custom machine learning forecast model tuning</h2>'
+        injection_dict['subsubtitle0'] = '<h4>Performed a tuning routine using bayesian optimization</h4>'
+        injection_dict['table1'] = table1
+        with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
+            pickle.dump(injection_dict, fid)
+        msg = f'EMHASS >> Action forecast-model-fit executed... \n'
         return make_response(msg, 201)
     else:
         app.logger.error("ERROR: passed action is not valid")
