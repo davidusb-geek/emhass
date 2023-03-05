@@ -252,19 +252,19 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(input_data_dict['params']['passed_data']['sklearn_model'] == 'KNeighborsRegressor')
         self.assertIsInstance(input_data_dict['df_input_data'], pd.DataFrame)
         # Test the fit method
-        df_pred, df_pred_backtest = forecast_model_fit(input_data_dict, logger, debug=True)
-        self.assertIsInstance(df_pred, pd.DataFrame)
-        self.assertTrue(df_pred_backtest == None)
+        df_fit_pred, df_fit_pred_backtest, mlf = forecast_model_fit(input_data_dict, logger, debug=True)
+        self.assertIsInstance(df_fit_pred, pd.DataFrame)
+        self.assertTrue(df_fit_pred_backtest == None)
         # Test the predict method on observations following the train period
-        predictions = forecast_model_predict(input_data_dict, logger, use_last_window=False, debug=True)
-        self.assertIsInstance(predictions, pd.Series)
-        self.assertTrue(predictions.isnull().sum().sum() == 0)
+        df_pred = forecast_model_predict(input_data_dict, logger, use_last_window=False, debug=True, mlf=mlf)
+        self.assertIsInstance(df_pred, pd.Series)
+        self.assertTrue(df_pred.isnull().sum().sum() == 0)
         # Now a predict using last_window
-        predictions = forecast_model_predict(input_data_dict, logger, debug=True)
-        self.assertIsInstance(predictions, pd.Series)
-        self.assertTrue(predictions.isnull().sum().sum() == 0)
+        df_pred = forecast_model_predict(input_data_dict, logger, debug=True, mlf=mlf)
+        self.assertIsInstance(df_pred, pd.Series)
+        self.assertTrue(df_pred.isnull().sum().sum() == 0)
         # Test the tune method
-        df_pred_optim = forecast_model_tune(input_data_dict, logger, debug=True)
+        df_pred_optim = forecast_model_tune(input_data_dict, logger, debug=True, mlf=mlf)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
     
     @patch('sys.argv', ['main', '--action', 'test', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
@@ -284,20 +284,85 @@ class TestCommandLineUtils(unittest.TestCase):
         
     def test_main_dayahead_forecast_optim(self):
         with patch('sys.argv', ['main', '--action', 'dayahead-optim', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
-                        '--params', self.params_json, '--runtimeparams', self.runtimeparams_json,
-                        '--get_data_from_file', 'True']):
+                                '--params', self.params_json, '--runtimeparams', self.runtimeparams_json,
+                                '--get_data_from_file', 'True']):
             opt_res = main()
         self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertTrue(opt_res.isnull().sum().sum()==0)
         
     def test_main_naive_mpc_optim(self):
         with patch('sys.argv', ['main', '--action', 'naive-mpc-optim', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
-                        '--params', self.params_json, '--runtimeparams', self.runtimeparams_json,
-                        '--get_data_from_file', 'True']):
+                                '--params', self.params_json, '--runtimeparams', self.runtimeparams_json,
+                                '--get_data_from_file', 'True']):
             opt_res = main()
         self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertTrue(opt_res.isnull().sum().sum()==0)
         self.assertTrue(len(opt_res)==10)
+        
+    def test_main_forecast_model_fit(self):
+        params = copy.deepcopy(json.loads(self.params_json))
+        runtimeparams = {
+            "days_to_retrieve": 20,
+            "model_type": "load_forecast",
+            "var_model": "sensor.power_load_no_var_loads",
+            "sklearn_model": "KNeighborsRegressor",
+            "num_lags": 48,
+            "split_date_delta": '48h',
+            "perform_backtest": False
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params['passed_data'] = runtimeparams
+        params['optim_conf'][8]['load_forecast_method'] = 'skforecast'
+        params_json = json.dumps(params)
+        with patch('sys.argv', ['main', '--action', 'forecast-model-fit', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
+                                '--params', params_json, '--runtimeparams', runtimeparams_json,
+                                '--get_data_from_file', 'True']):
+            df_fit_pred, df_fit_pred_backtest, mlf = main()
+        self.assertIsInstance(df_fit_pred, pd.DataFrame)
+        self.assertTrue(df_fit_pred_backtest == None)
+        
+    def test_main_forecast_model_predict(self):
+        params = copy.deepcopy(json.loads(self.params_json))
+        runtimeparams = {
+            "days_to_retrieve": 20,
+            "model_type": "load_forecast",
+            "var_model": "sensor.power_load_no_var_loads",
+            "sklearn_model": "KNeighborsRegressor",
+            "num_lags": 48,
+            "split_date_delta": '48h',
+            "perform_backtest": False
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params['passed_data'] = runtimeparams
+        params['optim_conf'][8]['load_forecast_method'] = 'skforecast'
+        params_json = json.dumps(params)
+        with patch('sys.argv', ['main', '--action', 'forecast-model-predict', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
+                                '--params', params_json, '--runtimeparams', runtimeparams_json,
+                                '--get_data_from_file', 'True']):
+            df_pred = main()
+        self.assertIsInstance(df_pred, pd.Series)
+        self.assertTrue(df_pred.isnull().sum().sum() == 0)
+        
+    def test_main_forecast_model_tune(self):
+        params = copy.deepcopy(json.loads(self.params_json))
+        runtimeparams = {
+            "days_to_retrieve": 20,
+            "model_type": "load_forecast",
+            "var_model": "sensor.power_load_no_var_loads",
+            "sklearn_model": "KNeighborsRegressor",
+            "num_lags": 48,
+            "split_date_delta": '48h',
+            "perform_backtest": False
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params['passed_data'] = runtimeparams
+        params['optim_conf'][8]['load_forecast_method'] = 'skforecast'
+        params_json = json.dumps(params)
+        with patch('sys.argv', ['main', '--action', 'forecast-model-tune', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
+                                '--params', params_json, '--runtimeparams', runtimeparams_json,
+                                '--get_data_from_file', 'True']):
+            df_pred_optim = main()
+        self.assertIsInstance(df_pred_optim, pd.DataFrame)
         
     @patch('sys.argv', ['main', '--action', 'publish-data', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
                         '--get_data_from_file', 'True'])

@@ -43,7 +43,6 @@ class TestMLForecaster(unittest.TestCase):
     def setUp(self):
         params = TestMLForecaster.get_test_params()
         params_json = json.dumps(params)
-        
         config_path = pathlib.Path(root+'/config_emhass.yaml')
         base_path = str(config_path.parent)
         costfun = 'profit'
