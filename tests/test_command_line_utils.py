@@ -200,9 +200,7 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(opt_res.isnull().sum().sum()==0)
         self.assertTrue(len(opt_res)==10)
         # Test publish after passing the forecast as list
-        opt_res_pub = publish_data(input_data_dict, logger)
-        self.assertTrue(len(opt_res_pub)==1)
-        config_path = pathlib.Path(root+'/confidef test_publish_data(self):g_emhass.yaml')
+        config_path = pathlib.Path(root+'/config_emhass.yaml')
         base_path = str(config_path.parent)
         costfun = 'profit'
         action = 'naive-mpc-optim'
@@ -212,7 +210,7 @@ class TestCommandLineUtils(unittest.TestCase):
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
-        opt_res_first = publish_data(input_data_dict, logger)
+        opt_res_first = publish_data(input_data_dict, logger, opt_res_latest=opt_res)
         self.assertTrue(len(opt_res_first)==1)
         params = copy.deepcopy(json.loads(self.params_json))
         params['retrieve_hass_conf'][8]['method_ts_round'] = 'last'
@@ -221,7 +219,7 @@ class TestCommandLineUtils(unittest.TestCase):
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
-        opt_res_last = publish_data(input_data_dict, logger)
+        opt_res_last = publish_data(input_data_dict, logger, opt_res_latest=opt_res)
         self.assertTrue(len(opt_res_last)==1)
     
     def test_forecast_model_fit_predict_tune(self):

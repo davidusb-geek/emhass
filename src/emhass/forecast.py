@@ -645,20 +645,12 @@ class forecast(object):
             else:
                 # Ensure correct length
                 data_list = data_list[0:len(self.forecast_dates)]
-                '''
-                # Define DataFrame
-                data_dict = {'ts':self.forecast_dates, self.var_load_cost:data_list}
-                data = pd.DataFrame.from_dict(data_dict)
-                # Define index
-                data.set_index('ts', inplace=True)
-                forecast_out = data.copy().loc[self.forecast_dates]
-                '''
-
+                # Define the correct dates
                 forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
                 forecast_out = self.get_forecast_out_from_csv(
                     df_final, forecast_dates_csv, None, data_list=data_list)
+                # Fill the final DF
                 df_final[self.var_load_cost] = forecast_out
-                
         else:
             self.logger.error("Passed method is not valid")
             
@@ -695,16 +687,19 @@ class forecast(object):
                                                           csv_path)
             df_final[self.var_prod_price] = forecast_out
         elif method == 'list': # reading a list of values
-            forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
+            # Loading data from passed list
             data_list = self.params['passed_data']['prod_price_forecast']
-            if 'prediction_horizon' in list(self.params['passed_data'].keys()):
-                if self.params['passed_data']['prediction_horizon'] is not None:
-                    data_list = data_list[0:self.params['passed_data']['prediction_horizon']]
-            if len(data_list) < len(forecast_dates_csv) and self.params['passed_data']['prediction_horizon'] is None:
+            # Check if the passed data has the correct length
+            if len(data_list) < len(self.forecast_dates) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from passed list is not long enough")
             else:
+                # Ensure correct length
+                data_list = data_list[0:len(self.forecast_dates)]
+                # Define the correct dates
+                forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
                 forecast_out = self.get_forecast_out_from_csv(
                     df_final, forecast_dates_csv, None, data_list=data_list)
+                # Fill the final DF
                 df_final[self.var_prod_price] = forecast_out
         else:
             self.logger.error("Passed method is not valid")

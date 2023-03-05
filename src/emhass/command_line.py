@@ -351,7 +351,8 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
     return df_pred_optim
 
 def publish_data(input_data_dict: dict, logger: logging.Logger,
-    save_data_to_file: Optional[bool] = False) -> pd.DataFrame:
+    save_data_to_file: Optional[bool] = False, 
+    opt_res_latest: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """
     Publish the data obtained from the optimization results.
     
@@ -372,12 +373,13 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         filename = 'opt_res_dayahead_'+today.strftime("%Y_%m_%d")+'.csv'
     else:
         filename = 'opt_res_latest.csv'
-    if not os.path.isfile(pathlib.Path(input_data_dict['root']) / filename):
-        logger.error("File not found error, run an optimization task first.")
-    else:
-        opt_res_latest = pd.read_csv(pathlib.Path(input_data_dict['root']) / filename, index_col='timestamp')
-        opt_res_latest.index = pd.to_datetime(opt_res_latest.index)
-        opt_res_latest.index.freq = input_data_dict['retrieve_hass_conf']['freq']
+    if opt_res_latest is None:
+        if not os.path.isfile(pathlib.Path(input_data_dict['root']) / filename):
+            logger.error("File not found error, run an optimization task first.")
+        else:
+            opt_res_latest = pd.read_csv(pathlib.Path(input_data_dict['root']) / filename, index_col='timestamp')
+            opt_res_latest.index = pd.to_datetime(opt_res_latest.index)
+            opt_res_latest.index.freq = input_data_dict['retrieve_hass_conf']['freq']
     # Estimate the current index
     now_precise = datetime.now(input_data_dict['retrieve_hass_conf']['time_zone']).replace(second=0, microsecond=0)
     if input_data_dict['retrieve_hass_conf']['method_ts_round'] == 'nearest':
