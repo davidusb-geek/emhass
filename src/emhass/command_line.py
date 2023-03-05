@@ -376,6 +376,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     if opt_res_latest is None:
         if not os.path.isfile(pathlib.Path(input_data_dict['root']) / filename):
             logger.error("File not found error, run an optimization task first.")
+            return
         else:
             opt_res_latest = pd.read_csv(pathlib.Path(input_data_dict['root']) / filename, index_col='timestamp')
             opt_res_latest.index = pd.to_datetime(opt_res_latest.index)
@@ -458,11 +459,11 @@ def main():
                                           logger, args.get_data_from_file)
     # Perform selected action
     if args.action == 'perfect-optim':
-        opt_res = perfect_forecast_optim(input_data_dict, logger)
+        opt_res = perfect_forecast_optim(input_data_dict, logger, debug=args.get_data_from_file)
     elif args.action == 'dayahead-optim':
-        opt_res = dayahead_forecast_optim(input_data_dict, logger)
+        opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=args.get_data_from_file)
     elif args.action == 'naive-mpc-optim':
-        opt_res = naive_mpc_optim(input_data_dict, logger)
+        opt_res = naive_mpc_optim(input_data_dict, logger, debug=args.get_data_from_file)
     elif args.action == 'publish-data':
         opt_res = publish_data(input_data_dict, logger)
     else:
