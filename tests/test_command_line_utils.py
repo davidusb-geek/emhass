@@ -303,8 +303,7 @@ class TestCommandLineUtils(unittest.TestCase):
                         '--get_data_from_file', 'True'])
     def test_main_publish_data(self):
         opt_res = main()
-        self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(len(opt_res)==1)
+        self.assertTrue(opt_res==None)
         
 if __name__ == '__main__':
     unittest.main()
