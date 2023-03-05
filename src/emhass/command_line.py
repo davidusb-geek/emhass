@@ -294,19 +294,24 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
     var_model = input_data_dict['params']['passed_data']['var_model']
     sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
     num_lags = input_data_dict['params']['passed_data']['num_lags']
+    split_date_delta = input_data_dict['params']['passed_data']['split_date_delta']
+    perform_backtest = input_data_dict['params']['passed_data']['perform_backtest']
     root = input_data_dict['root']
     # The ML forecaster object
     mlf = mlforecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
     # Fit the ML model
-    df_pred, df_pred_backtest = mlf.fit()
+    df_pred, df_pred_backtest = mlf.fit(split_date_delta=split_date_delta, 
+                                        perform_backtest=perform_backtest)
     # Save model
-    filename = model_type+'_mlf.pkl'
-    with open(pathlib.Path(root) / filename, 'wb') as outp:
-        pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
-    return df_pred, df_pred_backtest
+    if not debug:
+        filename = model_type+'_mlf.pkl'
+        with open(pathlib.Path(root) / 'data' / filename, 'wb') as outp:
+            pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
+    return df_pred, df_pred_backtest, mlf
 
 def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
-    use_last_window: Optional[bool] = True, debug: Optional[bool] = False) -> pd.DataFrame:
+    use_last_window: Optional[bool] = True, debug: Optional[bool] = False,
+    mlf: Optional[mlforecaster] = None) -> pd.DataFrame:
     """
     Perform a forecast model predict using a previously trained skforecast model.
     """
@@ -314,12 +319,13 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     model_type = input_data_dict['params']['passed_data']['model_type']
     root = input_data_dict['root']
     filename = model_type+'_mlf.pkl'
-    filename_path = pathlib.Path(root) / filename
-    if filename_path.is_file():
-        with open(filename_path, 'rb') as inp:
-            mlf = pickle.load(inp)
-    else:
-        logger.error("The ML forecaster file was not found, please run a model fit method before this predict method")
+    filename_path = pathlib.Path(root) / 'data' / filename
+    if not debug:
+        if filename_path.is_file():
+            with open(filename_path, 'rb') as inp:
+                mlf = pickle.load(inp)
+        else:
+            logger.error("The ML forecaster file was not found, please run a model fit method before this predict method")
     # Make predictions
     if use_last_window:
         data_last_window = copy.deepcopy(input_data_dict['df_input_data'])
@@ -329,7 +335,7 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     return predictions
 
 def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
-    debug: Optional[bool] = False) -> pd.DataFrame:
+    debug: Optional[bool] = False, mlf: Optional[mlforecaster] = None) -> pd.DataFrame:
     """
     Tune a forecast model hyperparameters using bayesian optimization.
     """
@@ -337,18 +343,20 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
     model_type = input_data_dict['params']['passed_data']['model_type']
     root = input_data_dict['root']
     filename = model_type+'_mlf.pkl'
-    filename_path = pathlib.Path(root) / filename
-    if filename_path.is_file():
-        with open(filename_path, 'rb') as inp:
-            mlf = pickle.load(inp)
-    else:
-        logger.error("The ML forecaster file was not found, please run a model fit method before this tune method")
+    filename_path = pathlib.Path(root) / 'data' / filename
+    if not debug:
+        if filename_path.is_file():
+            with open(filename_path, 'rb') as inp:
+                mlf = pickle.load(inp)
+        else:
+            logger.error("The ML forecaster file was not found, please run a model fit method before this tune method")
     # Tune the model
     df_pred_optim = mlf.tune(debug=debug)
     return df_pred_optim
 
 def publish_data(input_data_dict: dict, logger: logging.Logger,
-    save_data_to_file: Optional[bool] = False) -> pd.DataFrame:
+    save_data_to_file: Optional[bool] = False, 
+    opt_res_latest: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """
     Publish the data obtained from the optimization results.
     
@@ -369,12 +377,14 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         filename = 'opt_res_dayahead_'+today.strftime("%Y_%m_%d")+'.csv'
     else:
         filename = 'opt_res_latest.csv'
-    if not os.path.isfile(pathlib.Path(input_data_dict['root']) / filename):
-        logger.error("File not found error, run an optimization task first.")
-    else:
-        opt_res_latest = pd.read_csv(pathlib.Path(input_data_dict['root']) / filename, index_col='timestamp')
-        opt_res_latest.index = pd.to_datetime(opt_res_latest.index)
-        opt_res_latest.index.freq = input_data_dict['retrieve_hass_conf']['freq']
+    if opt_res_latest is None:
+        if not os.path.isfile(pathlib.Path(input_data_dict['root']) / filename):
+            logger.error("File not found error, run an optimization task first.")
+            return
+        else:
+            opt_res_latest = pd.read_csv(pathlib.Path(input_data_dict['root']) / filename, index_col='timestamp')
+            opt_res_latest.index = pd.to_datetime(opt_res_latest.index)
+            opt_res_latest.index.freq = input_data_dict['retrieve_hass_conf']['freq']
     # Estimate the current index
     now_precise = datetime.now(input_data_dict['retrieve_hass_conf']['time_zone']).replace(second=0, microsecond=0)
     if input_data_dict['retrieve_hass_conf']['method_ts_round'] == 'nearest':
@@ -453,11 +463,28 @@ def main():
                                           logger, args.get_data_from_file)
     # Perform selected action
     if args.action == 'perfect-optim':
-        opt_res = perfect_forecast_optim(input_data_dict, logger)
+        opt_res = perfect_forecast_optim(input_data_dict, logger, debug=args.get_data_from_file)
     elif args.action == 'dayahead-optim':
-        opt_res = dayahead_forecast_optim(input_data_dict, logger)
+        opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=args.get_data_from_file)
     elif args.action == 'naive-mpc-optim':
-        opt_res = naive_mpc_optim(input_data_dict, logger)
+        opt_res = naive_mpc_optim(input_data_dict, logger, debug=args.get_data_from_file)
+    elif args.action == 'forecast-model-fit':
+        df_fit_pred, df_fit_pred_backtest, mlf = forecast_model_fit(input_data_dict, logger, debug=args.get_data_from_file)
+        opt_res = None
+    elif args.action == 'forecast-model-predict':
+        if args.get_data_from_file:
+            _, _, mlf = forecast_model_fit(input_data_dict, logger, debug=args.get_data_from_file)
+        else:
+            mlf = None
+        df_pred = forecast_model_predict(input_data_dict, logger, debug=args.get_data_from_file, mlf=mlf)
+        opt_res = None
+    elif args.action == 'forecast-model-tune':
+        if args.get_data_from_file:
+            _, _, mlf = forecast_model_fit(input_data_dict, logger, debug=args.get_data_from_file)
+        else:
+            mlf = None
+        df_pred_optim = forecast_model_tune(input_data_dict, logger, debug=args.get_data_from_file, mlf=mlf)
+        opt_res = None
     elif args.action == 'publish-data':
         opt_res = publish_data(input_data_dict, logger)
     else:
@@ -467,7 +494,15 @@ def main():
     # Flush the logger
     ch.close()
     logger.removeHandler(ch)
-    return opt_res
+    if args.action == 'perfect-optim' or args.action == 'dayahead-optim' or \
+        args.action == 'naive-mpc-optim' or args.action == 'publish-data':
+        return opt_res
+    elif args.action == 'forecast-model-fit':
+        return df_fit_pred, df_fit_pred_backtest, mlf
+    elif args.action == 'forecast-model-predict':
+        return df_pred
+    elif args.action == 'forecast-model-tune':
+        return df_pred_optim
 
 if __name__ == '__main__':
     main()
