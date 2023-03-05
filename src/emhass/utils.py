@@ -233,7 +233,7 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
         # Treat passed data for forecast model fit
         if set_type == 'forecast-model-fit':
             if 'days_to_retrieve' not in runtimeparams.keys():
-                days_to_retrieve = 240
+                days_to_retrieve = 30
             else:
                 days_to_retrieve = runtimeparams['days_to_retrieve']
             params['passed_data']['days_to_retrieve'] = days_to_retrieve
@@ -257,6 +257,16 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
             else:
                 num_lags = runtimeparams['num_lags']
             params['passed_data']['num_lags'] = num_lags
+            if 'split_date_delta' not in runtimeparams.keys():
+                split_date_delta = '48h'
+            else:
+                split_date_delta = runtimeparams['split_date_delta']
+            params['passed_data']['split_date_delta'] = split_date_delta
+            if 'perform_backtest' not in runtimeparams.keys():
+                perform_backtest = False
+            else:
+                perform_backtest = runtimeparams['perform_backtest']
+            params['passed_data']['perform_backtest'] = perform_backtest
         params = json.dumps(params)
     return params, retrieve_hass_conf, optim_conf
 

@@ -20,6 +20,7 @@ from pvlib.temperature import TEMPERATURE_MODEL_PARAMETERS
 from pvlib.irradiance import disc
 
 from emhass.retrieve_hass import retrieve_hass
+from emhass.machine_learning_forecaster import mlforecaster
 from emhass.utils import get_days_list
 
 
@@ -132,12 +133,10 @@ class forecast(object):
         self.get_data_from_file = get_data_from_file
         self.var_load_cost = 'unit_load_cost'
         self.var_prod_price = 'unit_prod_price'
-        
         if params is None:
             self.params = params
         else:
             self.params = json.loads(params)
-        
         if self.method_ts_round == 'nearest':
             self.start_forecast = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(microsecond=0)
         elif self.method_ts_round == 'first':
@@ -420,12 +419,10 @@ class forecast(object):
                     mc.run_model(df_weather)
                     # Extracting results for AC power
                     P_PV_forecast = mc.results.ac
-        
         if set_mix_forecast:
             P_PV_forecast = forecast.get_mix_forecast(
                 df_now, P_PV_forecast, 
                 self.params['passed_data']['alpha'], self.params['passed_data']['beta'], self.var_PV)
-        
         return P_PV_forecast
     
     def get_forecast_days_csv(self, timedelta_days: Optional[int] = 1) -> pd.date_range:
@@ -476,7 +473,6 @@ class forecast(object):
 
         """
         days_list = df_final.index.day.unique().tolist()
-        
         if csv_path is None:
             data_dict = {'ts':forecast_dates_csv, 'yhat':data_list}
             df_csv = pd.DataFrame.from_dict(data_dict)
@@ -487,7 +483,6 @@ class forecast(object):
             df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
             df_csv.index = forecast_dates_csv
             df_csv.drop(['ts'], axis=1, inplace=True)
-        
         forecast_out = pd.DataFrame()
         for day in days_list:
             first_elm_index = [i for i, x in enumerate(df_final.index.day == day) if x][0]
@@ -506,12 +501,13 @@ class forecast(object):
                     df_csv.between_time(first_hour, last_hour).values,
                     index=fcst_index)
                 forecast_out = pd.concat([forecast_out, forecast_tp], axis=0)
-        
         return forecast_out
     
     def get_load_forecast(self, days_min_load_forecast: Optional[int] = 3, method: Optional[str] = 'naive',
                           csv_path: Optional[str] = "/data/data_load_forecast.csv",
-                          set_mix_forecast:Optional[bool] = False, df_now:Optional[pd.DataFrame] = pd.DataFrame()) -> pd.Series:
+                          set_mix_forecast:Optional[bool] = False, df_now:Optional[pd.DataFrame] = pd.DataFrame(),
+                          use_last_window: Optional[bool] = True, mlf: Optional[mlforecaster] = None,
+                          debug: Optional[bool] = False) -> pd.Series:
         r"""
         Get and generate the load forecast data.
         
@@ -532,8 +528,7 @@ class forecast(object):
         :rtype: pd.DataFrame
 
         """
-        
-        if method == 'naive': # using a naive approach
+        if method == 'naive' or method == 'mlforecaster': # retrieving needed data for these methods
             self.logger.info("Retrieving data from hass for load forecast using method = "+method)
             var_list = [self.var_load]
             var_replace_zero = None
@@ -552,16 +547,37 @@ class forecast(object):
                             set_zero_min = self.retrieve_hass_conf['set_zero_min'], 
                             var_replace_zero = var_replace_zero, 
                             var_interp = var_interp)
-            
             df = rh.df_final.copy()[[self.var_load_new]]
-            
+        if method == 'naive': # using a naive approach
             mask_forecast_out = (df.index > days_list[-1] - self.optim_conf['delta_forecast'])
             forecast_out = df.copy().loc[mask_forecast_out]
             forecast_out = forecast_out.rename(columns={self.var_load_new: 'yhat'})
             # Force forecast_out length to avoid mismatches
             forecast_out = forecast_out.iloc[0:len(self.forecast_dates)]
             forecast_out.index = self.forecast_dates
-        
+        elif method == 'mlforecaster': # using a custom forecast model with machine learning
+            # Load model
+            model_type = self.params['passed_data']['model_type']
+            filename = model_type+'_mlf.pkl'
+            filename_path = pathlib.Path(self.root) / 'data' / filename
+            if not debug:
+                if filename_path.is_file():
+                    with open(filename_path, 'rb') as inp:
+                        mlf = pickle.load(inp)
+                else:
+                    self.logger.error("The ML forecaster file was not found, please run a model fit method before this predict method")
+            # Make predictions
+            if use_last_window:
+                data_last_window = copy.deepcopy(df)
+            else:
+                data_last_window = None
+            forecast_out = mlf.predict(data_last_window)
+            # Define DataFrame
+            data_dict = {'ts':self.forecast_dates, 'yhat':forecast_out.values.tolist()}
+            data = pd.DataFrame.from_dict(data_dict)
+            # Define index
+            data.set_index('ts', inplace=True)
+            forecast_out = data.copy().loc[self.forecast_dates]
         elif method == 'csv': # reading from a csv file
             load_csv_file_path = self.root + csv_path
             df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
@@ -574,7 +590,6 @@ class forecast(object):
                 df_csv.index = self.forecast_dates
                 df_csv.drop(['ts'], axis=1, inplace=True)
                 forecast_out = df_csv.copy().loc[self.forecast_dates]
-        
         elif method == 'list': # reading a list of values
             # Loading data from passed list
             data_list = self.params['passed_data']['load_power_forecast']
@@ -590,16 +605,13 @@ class forecast(object):
                 # Define index
                 data.set_index('ts', inplace=True)
                 forecast_out = data.copy().loc[self.forecast_dates]
-
         else:
             self.logger.error("Passed method is not valid")
-        
         P_Load_forecast = copy.deepcopy(forecast_out['yhat'])
         if set_mix_forecast:
             P_Load_forecast = forecast.get_mix_forecast(
                 df_now, P_Load_forecast, 
                 self.params['passed_data']['alpha'], self.params['passed_data']['beta'], self.var_load_new)
-
         return P_Load_forecast
     
     def get_load_cost_forecast(self, df_final: pd.DataFrame, method: Optional[str] = 'hp_hc_periods',
@@ -645,20 +657,12 @@ class forecast(object):
             else:
                 # Ensure correct length
                 data_list = data_list[0:len(self.forecast_dates)]
-                '''
-                # Define DataFrame
-                data_dict = {'ts':self.forecast_dates, self.var_load_cost:data_list}
-                data = pd.DataFrame.from_dict(data_dict)
-                # Define index
-                data.set_index('ts', inplace=True)
-                forecast_out = data.copy().loc[self.forecast_dates]
-                '''
-
+                # Define the correct dates
                 forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
                 forecast_out = self.get_forecast_out_from_csv(
                     df_final, forecast_dates_csv, None, data_list=data_list)
+                # Fill the final DF
                 df_final[self.var_load_cost] = forecast_out
-                
         else:
             self.logger.error("Passed method is not valid")
             
@@ -695,16 +699,19 @@ class forecast(object):
                                                           csv_path)
             df_final[self.var_prod_price] = forecast_out
         elif method == 'list': # reading a list of values
-            forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
+            # Loading data from passed list
             data_list = self.params['passed_data']['prod_price_forecast']
-            if 'prediction_horizon' in list(self.params['passed_data'].keys()):
-                if self.params['passed_data']['prediction_horizon'] is not None:
-                    data_list = data_list[0:self.params['passed_data']['prediction_horizon']]
-            if len(data_list) < len(forecast_dates_csv) and self.params['passed_data']['prediction_horizon'] is None:
+            # Check if the passed data has the correct length
+            if len(data_list) < len(self.forecast_dates) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from passed list is not long enough")
             else:
+                # Ensure correct length
+                data_list = data_list[0:len(self.forecast_dates)]
+                # Define the correct dates
+                forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
                 forecast_out = self.get_forecast_out_from_csv(
                     df_final, forecast_dates_csv, None, data_list=data_list)
+                # Fill the final DF
                 df_final[self.var_prod_price] = forecast_out
         else:
             self.logger.error("Passed method is not valid")

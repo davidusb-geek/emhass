@@ -9,6 +9,8 @@ import bz2
 import _pickle as cPickle
 
 from emhass.retrieve_hass import retrieve_hass
+from emhass.command_line import set_input_data_dict
+from emhass.machine_learning_forecaster import mlforecaster
 from emhass.forecast import forecast
 from emhass.optimization import optimization
 from emhass.utils import get_root, get_logger, get_yaml_parse, treat_runtimeparams, get_days_list
@@ -19,6 +21,22 @@ root = str(get_root(__file__, num_parent=2))
 logger, ch = get_logger(__name__, root, save_to_file=False)
 
 class TestForecast(unittest.TestCase):
+    
+    @staticmethod
+    def get_test_params():
+        with open(root+'/config_emhass.yaml', 'r') as file:
+            params = yaml.load(file, Loader=yaml.FullLoader)
+        params.update({
+            'params_secrets': {
+                'hass_url': 'http://supervisor/core/api',
+                'long_lived_token': '${SUPERVISOR_TOKEN}',
+                'time_zone': 'Europe/Paris',
+                'lat': 45.83,
+                'lon': 6.86,
+                'alt': 8000.0
+            }
+            })
+        return params
 
     def setUp(self):
         self.get_data_from_file = True
@@ -67,7 +85,7 @@ class TestForecast(unittest.TestCase):
             'params': params
         }
     
-    def test_get_weather_forecast(self):
+    def test_get_weather_forecast_csv(self):
         self.df_weather_csv = self.fcst.get_weather_forecast(method='csv')
         self.assertEqual(self.fcst.weather_forecast_method, 'csv')
         self.assertIsInstance(self.df_weather_csv, type(pd.DataFrame()))
@@ -83,6 +101,9 @@ class TestForecast(unittest.TestCase):
         self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.df_weather_csv), len(P_PV_forecast))
+        
+    def test_get_weather_forecast_mlforecaster(self):
+        pass
     
     def test_get_weather_forecast_scrapper_method_mock(self):
         with requests_mock.mock() as m:
@@ -325,31 +346,67 @@ class TestForecast(unittest.TestCase):
         self.assertEqual(len(self.df_weather_scrap), len(P_PV_forecast))
     
     def test_get_load_forecast(self):
-        self.P_load_forecast = self.fcst.get_load_forecast()
-        self.assertIsInstance(self.P_load_forecast, pd.core.series.Series)
-        self.assertIsInstance(self.P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
-        self.assertIsInstance(self.P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-        self.assertEqual(self.P_load_forecast.index.tz, self.fcst.time_zone)
-        self.assertEqual(len(self.P_PV_forecast), len(self.P_load_forecast))
-        print(">> The length of the load forecast = "+str(len(self.P_load_forecast)))
+        P_load_forecast = self.fcst.get_load_forecast()
+        self.assertIsInstance(P_load_forecast, pd.core.series.Series)
+        self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
+        self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
+        print(">> The length of the load forecast = "+str(len(P_load_forecast)))
         # Test the mixed forecast
         params = json.dumps({'passed_data':{'alpha':0.5,'beta':0.5}})
         df_input_data = self.input_data_dict['rh'].df_final.copy()
         self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                              params, root, logger, get_data_from_file=self.get_data_from_file)
-        self.P_load_forecast = self.fcst.get_load_forecast(set_mix_forecast=True, df_now=df_input_data)
-        self.assertIsInstance(self.P_load_forecast, pd.core.series.Series)
-        self.assertIsInstance(self.P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
-        self.assertIsInstance(self.P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-        self.assertEqual(self.P_load_forecast.index.tz, self.fcst.time_zone)
-        self.assertEqual(len(self.P_PV_forecast), len(self.P_load_forecast))
+        P_load_forecast = self.fcst.get_load_forecast(set_mix_forecast=True, df_now=df_input_data)
+        self.assertIsInstance(P_load_forecast, pd.core.series.Series)
+        self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
+        self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
         # Test load forecast from csv
-        self.P_load_forecast = self.fcst.get_load_forecast(method="csv")
-        self.assertIsInstance(self.P_load_forecast, pd.core.series.Series)
-        self.assertIsInstance(self.P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
-        self.assertIsInstance(self.P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-        self.assertEqual(self.P_load_forecast.index.tz, self.fcst.time_zone)
-        self.assertEqual(len(self.P_PV_forecast), len(self.P_load_forecast))
+        P_load_forecast = self.fcst.get_load_forecast(method="csv")
+        self.assertIsInstance(P_load_forecast, pd.core.series.Series)
+        self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
+        self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
+        
+    def test_get_load_forecast_mlforecaster(self):
+        params = TestForecast.get_test_params()
+        params_json = json.dumps(params)
+        config_path = pathlib.Path(root+'/config_emhass.yaml')
+        base_path = str(config_path.parent)
+        costfun = 'profit'
+        action = 'forecast-model-fit' # fit, predict and tune methods
+        params = copy.deepcopy(json.loads(params_json))
+        runtimeparams = {
+            "days_to_retrieve": 20,
+            "model_type": "load_forecast",
+            "var_model": "sensor.power_load_no_var_loads",
+            "sklearn_model": "KNeighborsRegressor",
+            "num_lags": 48
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params['passed_data'] = runtimeparams
+        params['optim_conf'][8]['load_forecast_method'] = 'skforecast'
+        params_json = json.dumps(params)
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
+        data = copy.deepcopy(input_data_dict['df_input_data'])
+        model_type = input_data_dict['params']['passed_data']['model_type']
+        var_model = input_data_dict['params']['passed_data']['var_model']
+        sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
+        num_lags = input_data_dict['params']['passed_data']['num_lags']
+        mlf = mlforecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
+        mlf.fit()
+        P_load_forecast = input_data_dict['fcst'].get_load_forecast(method="mlforecaster", use_last_window=False, 
+                                                                    debug=True, mlf=mlf)
+        self.assertIsInstance(P_load_forecast, pd.core.series.Series)
+        self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
+        self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
         
     def test_get_load_cost_forecast(self):
         df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data)
