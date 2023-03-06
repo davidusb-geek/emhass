@@ -340,10 +340,10 @@ def set_df_index_freq(df: pd.DataFrame) -> pd.DataFrame:
     """
     Set the freq of a DataFrame DateTimeIndex.
     
-    Args:
-        df (pd.DataFrame): Input DataFrame
-    Returns:
-        pd.DataFrame: Input DataFrame with freq defined
+    :param df: Input DataFrame
+    :type df: pd.DataFrame
+    :return: Input DataFrame with freq defined
+    :rtype: pd.DataFrame
     
     """
     idx_diff = np.diff(df.index)
