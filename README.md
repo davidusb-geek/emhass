@@ -72,7 +72,7 @@ A more detailed workflow is given below:
 
 ## Installation
 
-### 1) The EMHASS add-on for Home Assistant OS and supervised users
+### Method 1) The EMHASS add-on for Home Assistant OS and supervised users
 
 For Home Assistant OS and HA Supervised users, I've developed an add-on that will help you use EMHASS. The add-on is more user friendly as the configuration can be modified directly in the add-on options pane and as with the standalone docker it exposes a web ui that can be used to inspect the optimization results and manually trigger a new optimization.
 
@@ -82,7 +82,7 @@ The add-on usage instructions can be found on the documentation pane of the add-
 
 These architectures are supported: `amd64`, `armv7`, `armhf` and `aarch64`.
 
-### 2) Using Docker in standalone mode
+### Method 2) Using Docker in standalone mode
 
 You can also install EMHASS using docker. This can be in the same machine as Home Assistant (if using the supervised install method) or in a different distant machine. To install first pull the latest image from docker hub:
 ```
@@ -102,7 +102,7 @@ Finally check your image tag with `docker images` and launch the docker itself:
 docker run -it --restart always -p 5000:5000 -e "LOCAL_COSTFUN=profit" -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
 ```
 
-### 3) Legacy method using a Python virtual environment
+### Method 3) Legacy method using a Python virtual environment
 
 With this method it is recommended to install on a virtual environment.
 For this you will need `virtualenv`, install it using:
@@ -133,7 +133,7 @@ python3 -m pip install --upgrade emhass
 
 ## Usage
 
-### 1) Add-on and docker standalone
+### Method 1) Add-on and docker standalone
 
 If using the add-on or the standalone docker installation, it exposes a simple webserver on port 5000. You can access it directly using your brower, ex: http://localhost:5000.
 
@@ -146,7 +146,7 @@ With this web server you can perform RESTful POST commands on one ENDPOINT calle
 
 A `curl` command can then be used to launch an optimization task like this: `curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/dayahead-optim`.
 
-### 2) Legacy method using a Python virtual environment
+### Method 2) Legacy method using a Python virtual environment
 
 To run a command simply use the `emhass` CLI command followed by the needed arguments.
 The available arguments are:
@@ -168,7 +168,7 @@ Before running any valuable command you need to modify the `config_emhass.yaml` 
 
 To integrate with home assistant we will need to define some shell commands in the `configuration.yaml` file and some basic automations in the `automations.yaml` file.
 
-### 1) Add-on and docker standalone
+### Method 1) Add-on and docker standalone
 
 In `configuration.yaml`:
 ```
@@ -176,7 +176,7 @@ shell_command:
   dayahead_optim: "curl -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/dayahead-optim"
   publish_data: "curl -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/publish-data"
 ```
-### 2) Legacy method using a Python virtual environment
+### Method 2) Legacy method using a Python virtual environment
 
 In `configuration.yaml`:
 ```
@@ -318,7 +318,7 @@ Here is the list of the other additional dictionnary keys that can be passed at 
 
 - `solar_forecast_kwp` for the PV peak installed power in kW used for the solar.forecast API call. 
 
-### A naive Model Predictive Controller
+## A naive Model Predictive Controller
 
 A MPC controller was introduced in v0.3.0. This is an informal/naive representation of a MPC controller. 
 
@@ -346,6 +346,10 @@ A correct call for a MPC optimization should look like:
 ```
 curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3]}' http://localhost:5000/action/naive-mpc-optim
 ```
+
+## A machine learning forecaster
+
+Starting in v0.4.0 a new machine learning forecaster class was introduced. Check the dedicated section in the documentation here: [https://emhass.readthedocs.io/en/latest/mlforecaster.html](https://emhass.readthedocs.io/en/latest/mlforecaster.html)
 
 ## Development
 
