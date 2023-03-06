@@ -19,6 +19,7 @@ To get started go ahead and look at the installation procedure and usage instruc
 intro.md
 lpems.md
 forecasts.md
+mlforecaster.md
 study_case.md
 config.md
 emhass.md
