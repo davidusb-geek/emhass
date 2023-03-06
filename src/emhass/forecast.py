@@ -68,6 +68,13 @@ class forecast(object):
     uses an internal custom forecasting model using machine learning. There is a section
     in the documentation explaining how to use this method.
     
+    .. note:: This custom machine learning model is introduced from v0.4.0. EMHASS \
+        proposed this new `mlforecaster` class with `fit`, `predict` and `tune` methods. \
+        Only the `predict` method is used here to generate new forecasts, but it is \
+        necessary to previously fit a forecaster model and it is a good idea to \
+        optimize the model hyperparameters using the `tune` method. See the dedicated \
+        section in the documentation for more help.
+    
     For the PV production selling price and Load cost forecasts the privileged method
     is a direct read from a user provided list of values. The list should be passed
     as a runtime parameter during the `curl` to the EMHASS API.
