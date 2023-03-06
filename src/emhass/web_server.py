@@ -197,7 +197,7 @@ def action_call(action_name):
         injection_dict['table1'] = table1
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
-        msg = f'EMHASS >> Action forecast-model-fit executed... \n'
+        msg = f'EMHASS >> Action forecast-model-predict executed... \n'
         return make_response(msg, 201)
     elif action_name == 'forecast-model-tune':
         app.logger.info(" >> Performing a machine learning forecast model tune...")
@@ -209,7 +209,7 @@ def action_call(action_name):
         injection_dict['table1'] = table1
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
-        msg = f'EMHASS >> Action forecast-model-fit executed... \n'
+        msg = f'EMHASS >> Action forecast-model-tune executed... \n'
         return make_response(msg, 201)
     else:
         app.logger.error("ERROR: passed action is not valid")

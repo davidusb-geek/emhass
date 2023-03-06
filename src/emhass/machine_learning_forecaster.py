@@ -39,6 +39,28 @@ class mlforecaster:
 
     def __init__(self, data: pd.DataFrame, model_type: str, var_model: str, sklearn_model: str,
                  num_lags: int, root: str, logger: logging.Logger) -> None:
+        r"""Define constructor for the forecast class.
+
+        :param data: The data that will be used for train/test
+        :type data: pd.DataFrame
+        :param model_type: A unique name defining this model and useful to identify \
+            for what it will be used for.
+        :type model_type: str
+        :param var_model: The name of the sensor to retrieve data from Home Assistant. \
+            Example: `sensor.power_load_no_var_loads`.
+        :type var_model: str
+        :param sklearn_model: The `scikit-learn` model that will be used. For now only \
+            this options are possible: `LinearRegression`, `ElasticNet` and `KNeighborsRegressor`.
+        :type sklearn_model: str
+        :param num_lags: The number of auto-regression lags to consider. A good starting point \
+            is to fix this as one day. For example if your time step is 30 minutes, then fix this \
+            to 48, if the time step is 1 hour the fix this to 24 and so on.
+        :type num_lags: int
+        :param root: The parent folder of the path where the config.yaml file is located
+        :type root: str
+        :param logger: The passed logger object
+        :type logger: logging.Logger
+        """
         self.data = data
         self.model_type = model_type
         self.var_model = var_model
@@ -53,7 +75,14 @@ class mlforecaster:
         self.data = self.data[~self.data.index.duplicated(keep='first')]
     
     @staticmethod
-    def add_date_features(data):
+    def add_date_features(data: pd.DataFrame) -> pd.DataFrame:
+        """Add date features from the input DataFrame timestamp
+
+        :param data: The input DataFrame
+        :type data: pd.DataFrame
+        :return: The DataFrame with the added features
+        :rtype: pd.DataFrame
+        """
         df = copy.deepcopy(data)
         df['year'] = [i.year for i in df.index]
         df['month'] = [i.month for i in df.index]
@@ -65,10 +94,22 @@ class mlforecaster:
 
     @staticmethod
     def neg_r2_score(y_true, y_pred):
+        """The negative of the r2 score."""
         return -r2_score(y_true, y_pred)
     
     def fit(self, split_date_delta: Optional[str] = '48h', perform_backtest: Optional[bool] = False
             ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        r"""The fit method to train the ML model.
+
+        :param split_date_delta: The delta from now to `split_date_delta` that will be used \
+            as the test period to evaluate the model, defaults to '48h'
+        :type split_date_delta: Optional[str], optional
+        :param perform_backtest: If `True` then a back testing routine is performed to evaluate \
+            the performance of the model on the complete train set, defaults to False
+        :type perform_backtest: Optional[bool], optional
+        :return: The DataFrame containing the forecast data results without and with backtest
+        :rtype: Tuple[pd.DataFrame, pd.DataFrame]
+        """
         self.logger.info("Performing a forecast model fit for "+self.model_type)
         # Preparing the data: adding exogenous features
         self.data_exo = pd.DataFrame(index=self.data.index)
@@ -135,6 +176,16 @@ class mlforecaster:
     
     def predict(self, data_last_window: Optional[pd.DataFrame] = None
             ) -> pd.Series:
+        """The predict method to generate forecasts from a previously fitted ML model.
+
+        :param data_last_window: The data that will be used to generate the new forecast, this \
+            will be freshly retrieved from Home Assistant. This data is needed because the forecast \
+            model is an auto-regressive model with lags. If not passed then the data used during the \
+            model train is used, defaults to None
+        :type data_last_window: Optional[pd.DataFrame], optional
+        :return: A pandas series containing the generated forecasts.
+        :rtype: pd.Series
+        """
         if data_last_window is None:
             predictions = self.forecaster.predict(steps=self.num_lags, exog=self.data_train.drop(self.var_model, axis=1))
         else:
@@ -151,7 +202,14 @@ class mlforecaster:
         return predictions
     
     def tune(self, debug: Optional[bool] = False) -> pd.DataFrame:
-        # Bayesian search hyperparameter and lags with Skopt
+        """Tuning a previously fitted model using bayesian optimization.
+
+        :param debug: Set to True for testing and faster optimizations, defaults to False
+        :type debug: Optional[bool], optional
+        :return: The DataFrame with the forecasts using the optimized model.
+        :rtype: pd.DataFrame
+        """
+        # Bayesian search hyperparameter and lags with skforecast/optuna
         # Lags used as predictors
         if debug:
             lags_grid = [3]
@@ -214,8 +272,7 @@ class mlforecaster:
             random_state       = 123,
             return_best        = True,
             verbose            = False,
-            engine             = 'optuna',
-            kwargs_gp_minimize = {}
+            engine             = 'optuna'
         )
         self.logger.info(f"Elapsed time: {time.time() - start_time}")
         self.is_tuned = True

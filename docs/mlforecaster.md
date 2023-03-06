@@ -91,6 +91,28 @@ curl -i -H "Content-Type:application/json" -X POST -d '{"model_type": "load_fore
 ```
 The resulting forecast DataFrame is shown in the webui.
 
+It is possible to publish the predict method results to a Home Assistant. By default this is desactivated but it can be activated by using runtime parameters.
+
+The list of parameters needed to set the data publish task is:
+
+- `model_predict_publish`: set to `True` to activate the publish action when calling the `forecast-model-predict` end point.
+
+- `model_predict_entity_id`: the unique `entity_id` to be used.
+
+- `model_predict_unit_of_measurement`: the `unit_of_measurement` to be used.
+
+- `model_predict_friendly_name`: the `friendly_name` to be used.
+
+The default values for these parameters are:
+```
+runtimeparams = {
+    "model_predict_publish": False,
+    "model_predict_entity_id": "sensor.p_load_forecast_custom_model",
+    "model_predict_unit_of_measurement": "W",
+    "model_predict_friendly_name": "Load Power Forecast custom ML model"
+}
+```
+
 ## The tuning method with Bayesian hyperparameter optimization
 
 With a previously fitted model you can use the `forecast-model-tune` end point to tune its hyperparameters. This will be using bayeasian optimization with a wrapper of `optuna` in the `skforecast` module.
@@ -134,3 +156,12 @@ https://joaquinamatrodrigo.github.io/skforecast/0.6.0/user_guides/autoregresive-
 ![](https://joaquinamatrodrigo.github.io/skforecast/0.6.0/img/diagram-recursive-mutistep-forecasting.png) 
 
 With this type of model what we do in EMHASS is to create new features based on the timestamps of the data retrieved from Home Assistant. We create new features based on the day, the hour of the day, the day of the week, the month of the year, among others. 
+
+What is interesting is that these added features are based on the timestamps, they always known in advance and useful for generating forecasts. These are the so-called future known covariates.
+
+In the future we may test to expand using other possible known future covariates from Home Assistant, for example a known (forecasted) temperature, a scheduled presence sensor, etc.
+
+## Going further?
+This class can be gebneralized to actually forecasting any given sensor variable present in Home Assistant. It has been tested and the main initial motivation for this development was for a better load power consumption forecasting. But in reality is has been coded in a flexible way so that you can control what variable is used, how many lags, the amount of data used to train the model, etc.
+
+So you can really go further and try to forecast other types of variables and possible use the results for some interesting automations in Home Assistant. If doing this, was is important is to evaluate the pertinence of the obtained forecasts. The hope is that the tools proposed here can be used for that purpose.
