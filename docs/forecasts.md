@@ -10,24 +10,35 @@ EMHASS will basically need 4 forecasts to work properly:
 
 - PV production selling price forecast: at what price are you selling your excess PV production on the next 24h. This is given in EUR/kWh.
 
+There are methods that are generalized to the 4 forecast needed. For all there forecasts it is possible to pass the data either as a passed list of values or by reading from a CSV file. With these methods it is then possible to use data from external forecast providers.
+    
+Then there are the methods that are specific to each type of forecast and that proposed forecast treated and generated internally by this EMHASS forecast class. For the weather forecast a first method (`scrapper`) uses a scrapping to the ClearOutside webpage which proposes detailed forecasts based on Lat/Lon locations. This method seems stable but as with any scrape method it will fail if any changes are made to the webpage API. Another method (`solcast`) is using the SolCast PV production forecast service. A final method (`solar.forecast`) is using another external service: Solar.Forecast, for which just the nominal PV peak installed power should be provided. Search the forecast section on the documentation for examples on how to implement these different methods.
+
+The `get_power_from_weather` method is proposed here to convert from irradiance data to electrical power. The PVLib module is used to model the PV plant.
+
+The specific methods for the load forecast are a first method (`naive`) that uses a naive approach, also called persistance. It simply assumes that the forecast for 
+a future period will be equal to the observed values in a past period. The past period is controlled using parameter `delta_forecast`. A second method (`mlforecaster`)
+uses an internal custom forecasting model using machine learning. There is a section in the documentation explaining how to use this method.
+    
+```{note} 
+
+This custom machine learning model is introduced from v0.4.0. EMHASS proposed this new `mlforecaster` class with `fit`, `predict` and `tune` methods. Only the `predict` method is used here to generate new forecasts, but it is necessary to previously fit a forecaster model and it is a good idea to optimize the model hyperparameters using the `tune` method. See the dedicated section in the documentation for more help.
+```
+
+For the PV production selling price and Load cost forecasts the privileged method is a direct read from a user provided list of values. The list should be passed as a runtime parameter during the `curl` to the EMHASS API.
+
 ## PV power production forecast
 
-The default method for PV power forecast is the scrapping of weather forecast data from the https://clearoutside.com/ website. This is obtained using `method=scrapper`. This site proposes detailed forecasts based on Lat/Lon locations. This method seems quite stable but as with any scrape method it will fail if any changes are made to the webpage API.
+The default method for PV power forecast is the scrapping of weather forecast data from the [https://clearoutside.com/](https://clearoutside.com/) website. This is obtained using `method=scrapper`. This site proposes detailed forecasts based on Lat/Lon locations. This method seems quite stable but as with any scrape method it will fail if any changes are made to the webpage API.
 
-This may change in the future to direct API's of weather forecast models as GFS or ECMWF, see:
-
-- GFS: https://github.com/jagoosw/getgfs
-
-- ECMWF: https://pypi.org/project/ecmwf-api-client/
-
-A second method uses the SolCast solar forecast service. Go to https://solcast.com/ and configure your system. You will need to set `method=solcast` and basically use two parameters `solcast_rooftop_id` and `solcast_api_key` that should be passed as parameters at runtime.
+A second method uses the SolCast solar forecast service. Go to [https://solcast.com/](https://solcast.com/) and configure your system. You will need to set `method=solcast` and basically use two parameters `solcast_rooftop_id` and `solcast_api_key` that should be passed as parameters at runtime. This will be limited to 10 API requests per day, the granularity will be 30 min and the forecast is updated every 6h. If needed, better performances may be obtained with paid plans: [https://solcast.com/pricing/live-and-forecast](https://solcast.com/pricing/live-and-forecast).
 
 For example:
 ```
 curl -i -H "Content-Type:application/json" -X POST -d '{"solcast_rooftop_id":"<your_system_id>","solcast_api_key":"<your_secret_api_key>"}' http://localhost:5000/action/dayahead-optim
 ```
 
-A third method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the PV peak installed power in kW) that should be passed at runtime.
+A third method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the PV peak installed power in kW) that should be passed at runtime. This will be using the free public Solar.Forecast account with 12 API requests per day and 1h data resolution. As with SolCast, there are paid account services that may results in better forecasts.
 
 For example, for a 5 kWp installation:
 ```
@@ -42,34 +53,24 @@ This is presented graphically here:
 
 ![](./images/naive_forecast.png)
 
-Starting with v0.4.0 (to be published soon!), a new forecast framework is proposed within EMHASS. It provides a more efficient way to forecast the power load consumption. It is based on the `skforecast` module that uses `scikit-learn` regression models considering auto-regression lags as features. The hyperparameter optimization is proposed using bayesian optimization from the `skopt` module.
+```{note} 
 
-The API provides fit and predict methods.
+New in EMHASS v0.4.0: machine learning forecast models!
+```
 
-Trained model using a KNN regressor:
+Starting with v0.4.0, a new forecast framework is proposed within EMHASS. It provides a more efficient way to forecast the power load consumption. It is based on the `skforecast` module that uses `scikit-learn` regression models considering auto-regression lags as features. The hyperparameter optimization is proposed using bayesian optimization from the `optuna` module.
+
+The API provides fit, predict and tune methods.
+
+The following is an example of a trained model using a KNN regressor:
 
 ![](./images/load_forecast_knn_optimized.svg)
-
-Log extract for a load forecast model:
-
-    2023-02-20 22:05:22,658 - __main__ - INFO - Training a KNN regressor
-    2023-02-20 22:05:23,882 - __main__ - INFO - Elapsed time: 1.2236599922180176
-    2023-02-20 22:05:24,612 - __main__ - INFO - Prediction R2 score: 0.2654560762747957
-    2023-02-20 22:05:36,825 - __main__ - INFO - Simple backtesting
-    2023-02-20 22:06:32,162 - __main__ - INFO - Elapsed time: 55.33599829673767
-    2023-02-20 22:06:32,162 - __main__ - INFO - Backtest R2 score: 0.5851552394233677
-    2023-02-20 22:06:43,112 - __main__ - INFO - Backtesting and bayesian hyperparameter optimization
-    2023-02-20 22:25:29,987 - __main__ - INFO - Elapsed time: 1126.868682384491
-    2023-02-20 22:25:50,264 - __main__ - INFO - ### Train/Test R2 score comparison ###
-    2023-02-20 22:25:50,282 - __main__ - INFO - R2 score for naive prediction in train period (backtest): 0.22525145245617462
-    2023-02-20 22:25:50,284 - __main__ - INFO - R2 score for optimized prediction in train period: 0.7485208725102304
-    2023-02-20 22:25:50,312 - __main__ - INFO - R2 score for non-optimized prediction in test period: 0.7098996657492629
-    2023-02-20 22:25:50,337 - __main__ - INFO - R2 score for naive persistance forecast in test period: 0.8714987509894714
-    2023-02-20 22:25:50,352 - __main__ - INFO - R2 score for optimized prediction in test period: 0.7572325833767719
 
 The naive persistance model performs very well on the 2 day test period, however is well out-performed by the KNN regressor when back-testing on the complete training set (10 months of 30 minute time step data).
 
 The hyperparameter tuning using bayesian optimization improves the bare KNN regressor from $R^2=0.59$ to $R^2=0.75$. The optimized number of lags is $48$.
+
+See the [machine learning forecaster](mlforecaster.md) section for more details.
 
 ## Load cost forecast
 
