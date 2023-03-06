@@ -19,4 +19,4 @@ sphinx==5.3.0
 sphinx-rtd-theme==1.2.0
 docutils<0.18
 attrs==21.4.0
-myst-parser==0.18.1
+myst-parser==0.19.1
