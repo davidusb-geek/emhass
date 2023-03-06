@@ -91,7 +91,7 @@ curl -i -H "Content-Type:application/json" -X POST -d '{"model_type": "load_fore
 ```
 The resulting forecast DataFrame is shown in the webui.
 
-It is possible to publish the predict method results to a Home Assistant. By default this is desactivated but it can be activated by using runtime parameters.
+It is possible to publish the predict method results to a Home Assistant sensor. By default this is desactivated but it can be activated by using runtime parameters.
 
 The list of parameters needed to set the data publish task is:
 
@@ -143,7 +143,7 @@ The hyperparameter tuning using bayesian optimization improves the bare KNN regr
 
 ```{warning} 
 
-The tuning routine can be computing intense. If you have problems with computation times, try to reduce the `days_to_retrieve` paramter. In the example shown, for a 240 days train period, the optimization routine took almost 20 min to finish on an amd64 Linux architecture machine with a i5 processor and 8 Gb of RAM. This is a task that should be performed once in a while, for example every week.
+The tuning routine can be computing intense. If you have problems with computation times, try to reduce the `days_to_retrieve` parameter. In the example shown, for a 240 days train period, the optimization routine took almost 20 min to finish on an amd64 Linux architecture machine with a i5 processor and 8 Gb of RAM. This is a task that should be performed once in a while, for example every week.
 ```
 
 ## How does this works? 
