@@ -42,34 +42,38 @@ class forecast(object):
     - Load cost forecast: the price of the energy from the grid on the next 24h. This
       is given in EUR/kWh.
     
-    The weather forecast is obtained from several methods. The first method
-    uses a scrapper to the ClearOutside webpage which proposes detailed forecasts 
-    based on Lat/Lon locations. This method seems quite stable but as with any scrape 
-    method it will fail if any changes are made to the webpage API. A second method
-    for weather forecast is using a direct read from a CSV file. With this method we
-    will consider that we are reading the PV power directly. Another method is implemented
-    by passing the forecast values directly using a list of values. Another method is
-    using the external SolCast PV production forecast service. A final method is using 
-    another external service: Solar.Forecast, for which just the nominal PV peak installed 
+    There are methods that are generalized to the 4 forecast needed. For all there
+    forecasts it is possible to pass the data either as a passed list of values or by
+    reading from a CSV file. With these methods it is then possible to use data from
+    external forecast providers.
+    
+    Then there are the methods that are specific to each type of forecast and that 
+    proposed forecast treated and generated internally by this EMHASS forecast class.
+    For the weather forecast a first method (`scrapper`) uses a scrapping to the 
+    ClearOutside webpage which proposes detailed forecasts based on Lat/Lon locations. 
+    This method seems stable but as with any scrape method it will fail if any changes 
+    are made to the webpage API. Another method (`solcast`) is using the SolCast PV 
+    production forecast service. A final method (`solar.forecast`) is using another 
+    external service: Solar.Forecast, for which just the nominal PV peak installed 
     power should be provided. Search the forecast section on the documentation for examples 
-    on how to apply these different methods.
+    on how to implement these different methods.
     
-    The 'get_power_from_weather' method is proposed here to convert from irradiance
-    data to electrical power. Again PVLib is used to model the PV plant.
+    The `get_power_from_weather` method is proposed here to convert from irradiance
+    data to electrical power. The PVLib module is used to model the PV plant.
     
-    For the load forecast two methods are available. The first method allows the user 
-    to use a CSV file with their own forecast. With this method a more powerful 
-    external package for time series forecast may be used to create your own detailed 
-    load forecast. The second method is a naive method, also called persistance.
-    It simply assumes that the forecast for a future period will be equal to the
-    observed values in a past period. The past period is controlled using 
-    parameter 'delta_forecast'.
+    The specific methods for the load forecast are a first method (`naive`) that uses 
+    a naive approach, also called persistance. It simply assumes that the forecast for 
+    a future period will be equal to the observed values in a past period. The past 
+    period is controlled using parameter `delta_forecast`. A second method (`mlforecaster`)
+    uses an internal custom forecasting model using machine learning. There is a section
+    in the documentation explaining how to use this method.
     
     For the PV production selling price and Load cost forecasts the privileged method
-    is a direct read from a user provided CSV file. 
+    is a direct read from a user provided list of values. The list should be passed
+    as a runtime parameter during the `curl` to the EMHASS API.
     
-    For all the forecasting methods, the CSV file should contain no header and the 
-    timestamped data should have the following format:
+    I reading from a CSV file, it should contain no header and the timestamped data 
+    should have the following format:
     
     2021-04-29 00:00:00+00:00,287.07
     
@@ -427,8 +431,7 @@ class forecast(object):
     
     def get_forecast_days_csv(self, timedelta_days: Optional[int] = 1) -> pd.date_range:
         r"""
-        Get the date range vector of forecast dates that will be used when \
-            loading a CSV file.
+        Get the date range vector of forecast dates that will be used when loading a CSV file.
         
         :return: The forecast dates vector
         :rtype: pd.date_range
@@ -456,11 +459,11 @@ class forecast(object):
     def get_forecast_out_from_csv(self, df_final: pd.DataFrame, forecast_dates_csv: pd.date_range,
                                   csv_path: str, data_list: Optional[list] = None) -> pd.DataFrame:
         r"""
-        Get the forecast data as a DataFrame from a CSV file. The data contained \
-            in the CSV file should be a 24h forecast with the same frequency as \
-            the main 'freq' parameter in the configuration file. The timestamp \
-            will not be used and a new DateTimeIndex is generated to fit the \
-            timestamp index of the input data in 'df_final'.
+        Get the forecast data as a DataFrame from a CSV file. 
+        
+        The data contained in the CSV file should be a 24h forecast with the same frequency as 
+        the main 'freq' parameter in the configuration file. The timestamp will not be used and 
+        a new DateTimeIndex is generated to fit the timestamp index of the input data in 'df_final'.
         
         :param df_final: The DataFrame containing the input data.
         :type df_final: pd.DataFrame
