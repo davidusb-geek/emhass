@@ -241,7 +241,8 @@ class retrieve_hass:
         return data
     
     def post_data(self, data_df: pd.DataFrame, idx: int, entity_id: str, 
-                  unit_of_measurement: str, friendly_name: str) -> None:
+                  unit_of_measurement: str, friendly_name: str,
+                  from_mlforecaster: Optional[bool]=False) -> None:
         r"""
         Post passed data to hass.
         
@@ -284,6 +285,9 @@ class retrieve_hass:
         elif 'SOC' in entity_id:
             data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "battery_scheduled_soc", state)
+        elif from_mlforecaster:
+            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+                                                    friendly_name, "scheduled_forecast", state)
         else:
             data = {
                 "state": str(state),

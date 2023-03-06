@@ -313,7 +313,7 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
     # Save model
     if not debug:
         filename = model_type+'_mlf.pkl'
-        with open(pathlib.Path(root) / 'data' / filename, 'wb') as outp:
+        with open(pathlib.Path(root) / filename, 'wb') as outp:
             pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
     return df_pred, df_pred_backtest, mlf
 
@@ -344,19 +344,42 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     model_type = input_data_dict['params']['passed_data']['model_type']
     root = input_data_dict['root']
     filename = model_type+'_mlf.pkl'
-    filename_path = pathlib.Path(root) / 'data' / filename
+    filename_path = pathlib.Path(root) / filename
     if not debug:
         if filename_path.is_file():
             with open(filename_path, 'rb') as inp:
                 mlf = pickle.load(inp)
         else:
             logger.error("The ML forecaster file was not found, please run a model fit method before this predict method")
+            return
     # Make predictions
     if use_last_window:
         data_last_window = copy.deepcopy(input_data_dict['df_input_data'])
     else:
         data_last_window = None
     predictions = mlf.predict(data_last_window)
+    # Publish data to a Home Assistant sensor
+    model_predict_publish = input_data_dict['params']['passed_data']['model_predict_publish']
+    model_predict_entity_id = input_data_dict['params']['passed_data']['model_predict_entity_id']
+    model_predict_unit_of_measurement = input_data_dict['params']['passed_data']['model_predict_unit_of_measurement']
+    model_predict_friendly_name = input_data_dict['params']['passed_data']['model_predict_friendly_name']
+    if model_predict_publish:
+        # Estimate the current index
+        now_precise = datetime.now(input_data_dict['retrieve_hass_conf']['time_zone']).replace(second=0, microsecond=0)
+        if input_data_dict['retrieve_hass_conf']['method_ts_round'] == 'nearest':
+            idx_closest = predictions.index.get_indexer([now_precise], method='nearest')[0]
+        elif input_data_dict['retrieve_hass_conf']['method_ts_round'] == 'first':
+            idx_closest = predictions.index.get_indexer([now_precise], method='ffill')[0]
+        elif input_data_dict['retrieve_hass_conf']['method_ts_round'] == 'last':
+            idx_closest = predictions.index.get_indexer([now_precise], method='bfill')[0]
+        if idx_closest == -1:
+            idx_closest = predictions.index.get_indexer([now_precise], method='nearest')[0]
+        # Publish Load forecast
+        input_data_dict['rh'].post_data(predictions, idx_closest, 
+                                        model_predict_entity_id,
+                                        model_predict_unit_of_measurement, 
+                                        model_predict_friendly_name,
+                                        from_mlforecaster=True)
     return predictions
 
 def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
@@ -379,15 +402,21 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
     model_type = input_data_dict['params']['passed_data']['model_type']
     root = input_data_dict['root']
     filename = model_type+'_mlf.pkl'
-    filename_path = pathlib.Path(root) / 'data' / filename
+    filename_path = pathlib.Path(root) / filename
     if not debug:
         if filename_path.is_file():
             with open(filename_path, 'rb') as inp:
                 mlf = pickle.load(inp)
         else:
             logger.error("The ML forecaster file was not found, please run a model fit method before this tune method")
+            return
     # Tune the model
     df_pred_optim = mlf.tune(debug=debug)
+    # Save model
+    if not debug:
+        filename = model_type+'_mlf.pkl'
+        with open(pathlib.Path(root) / filename, 'wb') as outp:
+            pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
     return df_pred_optim
 
 def publish_data(input_data_dict: dict, logger: logging.Logger,
@@ -432,39 +461,60 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     if idx_closest == -1:
         idx_closest = opt_res_latest.index.get_indexer([now_precise], method='nearest')[0]
     # Publish PV forecast
+    custom_pv_forecast_id = input_data_dict['params']['passed_data']['custom_pv_forecast_id']
     input_data_dict['rh'].post_data(opt_res_latest['P_PV'], idx_closest, 
-                                    'sensor.p_pv_forecast', "W", "PV Power Forecast")
+                                    custom_pv_forecast_id["entity_id"], 
+                                    custom_pv_forecast_id["unit_of_measurement"],
+                                    custom_pv_forecast_id["friendly_name"])
     # Publish Load forecast
+    custom_load_forecast_id = input_data_dict['params']['passed_data']['custom_load_forecast_id']
     input_data_dict['rh'].post_data(opt_res_latest['P_Load'], idx_closest, 
-                                    'sensor.p_load_forecast', "W", "Load Power Forecast")
+                                    custom_load_forecast_id["entity_id"], 
+                                    custom_load_forecast_id["unit_of_measurement"],
+                                    custom_load_forecast_id["friendly_name"])
     cols_published = ['P_PV', 'P_Load']
     # Publish deferrable loads
+    custom_deferrable_forecast_id = input_data_dict['params']['passed_data']['custom_deferrable_forecast_id']
     for k in range(input_data_dict['opt'].optim_conf['num_def_loads']):
         if "P_deferrable{}".format(k) not in opt_res_latest.columns:
             logger.error("P_deferrable{}".format(k)+" was not found in results DataFrame. Optimization task may need to be relaunched or it did not converged to a solution.")
         else:
             input_data_dict['rh'].post_data(opt_res_latest["P_deferrable{}".format(k)], idx_closest, 
-                                            'sensor.p_deferrable{}'.format(k), "W", "Deferrable Load {}".format(k))
+                                            custom_deferrable_forecast_id[k]["entity_id"], 
+                                            custom_deferrable_forecast_id[k]["unit_of_measurement"],
+                                            custom_deferrable_forecast_id[k]["friendly_name"])
             cols_published = cols_published+["P_deferrable{}".format(k)]
     # Publish battery power
     if input_data_dict['opt'].optim_conf['set_use_battery']:
         if 'P_batt' not in opt_res_latest.columns:
             logger.error("P_batt was not found in results DataFrame. Optimization task may need to be relaunched or it did not converged to a solution.")
         else:
+            custom_batt_forecast_id = input_data_dict['params']['passed_data']['custom_batt_forecast_id']
             input_data_dict['rh'].post_data(opt_res_latest['P_batt'], idx_closest,
-                                            'sensor.p_batt_forecast', "W", "Battery Power Forecast")
+                                            custom_batt_forecast_id["entity_id"], 
+                                            custom_batt_forecast_id["unit_of_measurement"],
+                                            custom_batt_forecast_id["friendly_name"])
             cols_published = cols_published+["P_batt"]
+            custom_batt_soc_forecast_id = input_data_dict['params']['passed_data']['custom_batt_soc_forecast_id']
             input_data_dict['rh'].post_data(opt_res_latest['SOC_opt']*100, idx_closest,
-                                            'sensor.soc_batt_forecast', "%", "Battery SOC Forecast")
+                                            custom_batt_soc_forecast_id["entity_id"], 
+                                            custom_batt_soc_forecast_id["unit_of_measurement"],
+                                            custom_batt_soc_forecast_id["friendly_name"])
             cols_published = cols_published+["SOC_opt"]
     # Publish grid power
+    custom_grid_forecast_id = input_data_dict['params']['passed_data']['custom_grid_forecast_id']
     input_data_dict['rh'].post_data(opt_res_latest['P_grid'], idx_closest, 
-                                    'sensor.p_grid_forecast', "W", "Grid Power Forecast")
+                                    custom_grid_forecast_id["entity_id"], 
+                                    custom_grid_forecast_id["unit_of_measurement"],
+                                    custom_grid_forecast_id["friendly_name"])
     cols_published = cols_published+["P_grid"]
     # Publish total value of cost function
+    custom_cost_fun_id = input_data_dict['params']['passed_data']['custom_cost_fun_id']
     col_cost_fun = [i for i in opt_res_latest.columns if 'cost_fun_' in i]
     input_data_dict['rh'].post_data(opt_res_latest[col_cost_fun], idx_closest, 
-                                    'sensor.total_cost_fun_value', "", "Total cost function value")
+                                    custom_cost_fun_id["entity_id"], 
+                                    custom_cost_fun_id["unit_of_measurement"],
+                                    custom_cost_fun_id["friendly_name"])
     # Create a DF resuming what has been published
     opt_res = opt_res_latest[cols_published].loc[[opt_res_latest.index[idx_closest]]]
     return opt_res

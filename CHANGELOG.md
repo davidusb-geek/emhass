@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1] - 2023-03-06
+### Improvement
+- Improved the documentation and the in-code docstrings.
+- Added the possibility to save the optimized model after a tuning routine.
+- Added the possibility to publish predict results to a Home Assistant sensor.
+- Added the possibility to provide custom entity_id, unit_of_measurement and friendly_name for each published data.
+
 ## [0.4.0] - 2023-03-06
 ### Improvement
 - A brand new load forecast module and more... The new forecast module can actually be used to foreast any Home Assistant variable. The API provides fit, predict and tune methods. By the default it provides a more efficient way to forecast the power load consumption. It is based on the skforecast module that uses scikit-learn regression models considering auto-regression lags as features. The hyperparameter optimization is proposed using bayesian optimization from the optuna module.
@@ -344,7 +351,13 @@
 [0.3.23]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.23
 [0.3.24]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.24
 [0.3.25]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.25
-[0.3.27]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.27
+[0.3.29]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.29
+[0.3.32]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.32
+[0.3.34]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.34
+[0.3.35]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.35
+[0.3.36]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.36
+[0.4.0]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.0
+[0.4.1]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.1
 
 # Notes
 All notable changes to this project will be documented in this file.

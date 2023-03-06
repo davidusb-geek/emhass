@@ -235,7 +235,11 @@ class TestCommandLineUtils(unittest.TestCase):
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
             "split_date_delta": '48h',
-            "perform_backtest": False
+            "perform_backtest": False,
+            "model_predict_publish": True,
+            "model_predict_entity_id": "sensor.p_load_forecast_knn",
+            "model_predict_unit_of_measurement": "W",
+            "model_predict_friendly_name": "Load Power Forecast KNN regressor"
         }
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
@@ -256,6 +260,8 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(df_fit_pred, pd.DataFrame)
         self.assertTrue(df_fit_pred_backtest == None)
         # Test the predict method on observations following the train period
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
         df_pred = forecast_model_predict(input_data_dict, logger, use_last_window=False, debug=True, mlf=mlf)
         self.assertIsInstance(df_pred, pd.Series)
         self.assertTrue(df_pred.isnull().sum().sum() == 0)
