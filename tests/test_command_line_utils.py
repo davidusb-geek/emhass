@@ -268,13 +268,13 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
     
     @patch('sys.argv', ['main', '--action', 'test', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
-                        '--get_data_from_file', 'True'])
+                        '--debug', 'True'])
     def test_main_wrong_action(self):
         opt_res = main()
         self.assertEqual(opt_res, None)
         
     @patch('sys.argv', ['main', '--action', 'perfect-optim', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
-                        '--get_data_from_file', 'True'])
+                        '--debug', 'True'])
     def test_main_perfect_forecast_optim(self):
         opt_res = main()
         self.assertIsInstance(opt_res, pd.DataFrame)
@@ -285,7 +285,7 @@ class TestCommandLineUtils(unittest.TestCase):
     def test_main_dayahead_forecast_optim(self):
         with patch('sys.argv', ['main', '--action', 'dayahead-optim', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
                                 '--params', self.params_json, '--runtimeparams', self.runtimeparams_json,
-                                '--get_data_from_file', 'True']):
+                                '--debug', 'True']):
             opt_res = main()
         self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertTrue(opt_res.isnull().sum().sum()==0)
@@ -293,7 +293,7 @@ class TestCommandLineUtils(unittest.TestCase):
     def test_main_naive_mpc_optim(self):
         with patch('sys.argv', ['main', '--action', 'naive-mpc-optim', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
                                 '--params', self.params_json, '--runtimeparams', self.runtimeparams_json,
-                                '--get_data_from_file', 'True']):
+                                '--debug', 'True']):
             opt_res = main()
         self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertTrue(opt_res.isnull().sum().sum()==0)
@@ -316,7 +316,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params_json = json.dumps(params)
         with patch('sys.argv', ['main', '--action', 'forecast-model-fit', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
                                 '--params', params_json, '--runtimeparams', runtimeparams_json,
-                                '--get_data_from_file', 'True']):
+                                '--debug', 'True']):
             df_fit_pred, df_fit_pred_backtest, mlf = main()
         self.assertIsInstance(df_fit_pred, pd.DataFrame)
         self.assertTrue(df_fit_pred_backtest == None)
@@ -338,7 +338,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params_json = json.dumps(params)
         with patch('sys.argv', ['main', '--action', 'forecast-model-predict', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
                                 '--params', params_json, '--runtimeparams', runtimeparams_json,
-                                '--get_data_from_file', 'True']):
+                                '--debug', 'True']):
             df_pred = main()
         self.assertIsInstance(df_pred, pd.Series)
         self.assertTrue(df_pred.isnull().sum().sum() == 0)
@@ -360,12 +360,12 @@ class TestCommandLineUtils(unittest.TestCase):
         params_json = json.dumps(params)
         with patch('sys.argv', ['main', '--action', 'forecast-model-tune', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
                                 '--params', params_json, '--runtimeparams', runtimeparams_json,
-                                '--get_data_from_file', 'True']):
+                                '--debug', 'True']):
             df_pred_optim = main()
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
         
     @patch('sys.argv', ['main', '--action', 'publish-data', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
-                        '--get_data_from_file', 'True'])
+                        '--debug', 'True'])
     def test_main_publish_data(self):
         opt_res = main()
         self.assertTrue(opt_res==None)
