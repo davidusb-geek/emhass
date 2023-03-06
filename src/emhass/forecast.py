@@ -171,8 +171,8 @@ class forecast(object):
         r"""
         Get and generate weather forecast data.
         
-        :param method: The desired method, options are 'scrapper', 'csv', 'list' and 'solcast'. \
-            defaults to 'scrapper'
+        :param method: The desired method, options are 'scrapper', 'csv', 'list', 'solcast' and \
+            'solar.forecast'. Defaults to 'scrapper'.
         :type method: str, optional
         :return: The DataFrame containing the forecasted data
         :rtype: pd.DataFrame
@@ -356,7 +356,23 @@ class forecast(object):
         return irrads
     
     @staticmethod
-    def get_mix_forecast(df_now, df_forecast, alpha, beta, col):
+    def get_mix_forecast(df_now: pd.DataFrame, df_forecast: pd.DataFrame, 
+                         alpha:float, beta:float, col:str) -> pd.DataFrame:
+        """A simple correction method for forecasted data using the current real values of a variable.
+
+        :param df_now: The DataFrame containing the current/real values
+        :type df_now: pd.DataFrame
+        :param df_forecast: The DataFrame containing the forecast data
+        :type df_forecast: pd.DataFrame
+        :param alpha: A weight for the forecast data side
+        :type alpha: float
+        :param beta: A weight for the current/real values sied
+        :type beta: float
+        :param col: The column variable name
+        :type col: str
+        :return: The output DataFrame with the corrected values
+        :rtype: pd.DataFrame
+        """
         first_fcst = alpha*df_forecast.iloc[0] + beta*df_now[col].iloc[-1]
         df_forecast.iloc[0] = first_fcst
         return df_forecast
@@ -525,7 +541,10 @@ class forecast(object):
             will be used to generate a naive forecast, defaults to 3
         :type days_min_load_forecast: int, optional
         :param method: The method to be used to generate load forecast, the options \
-            are 'csv' to load a CSV file or 'naive' for a persistance model, defaults to 'naive'
+            are 'naive' for a persistance model, 'mlforecaster' for using a custom \
+            previously fitted machine learning model, 'csv' to read the forecast from \
+            a CSV file and 'list' to use data directly passed at runtime as a list of \
+            values. Defaults to 'naive'.
         :type method: str, optional
         :param csv_path: The path to the CSV file used when method = 'csv', \
             defaults to "/data/data_load_forecast.csv"
@@ -534,6 +553,17 @@ class forecast(object):
         :type set_mix_forecast: Bool, optional
         :param df_now: The DataFrame containing the now/current data.
         :type df_now: pd.DataFrame, optional
+        :param use_last_window: True if the 'last_window' option should be used for the \
+            custom machine learning forecast model. The 'last_window=True' means that the data \
+            that will be used to generate the new forecast will be freshly retrieved from \
+            Home Assistant. This data is needed because the forecast model is an auto-regressive \
+            model with lags. If 'False' then the data using during the model train is used.
+        :type use_last_window: Bool, optional
+        :param mlf: The 'mlforecaster' object previously trained. This is mainly used for debug \
+            and unit testing. In production the actual model will be read from a saved pickle file.
+        :type mlf: mlforecaster, optional
+        :param debug: The DataFrame containing the now/current data.
+        :type debug: Bool, optional
         :return: The DataFrame containing the electrical load power in Watts
         :rtype: pd.DataFrame
 
