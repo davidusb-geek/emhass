@@ -18,6 +18,15 @@
    :show-inheritance:
 ```
 
+## emhass.machine_learning_forecaster module
+
+```{eval-rst}
+.. automodule:: emhass.machine_learning_forecaster
+   :members:
+   :undoc-members:
+   :show-inheritance:
+```
+
 ## emhass.optimization module
 
 ```{eval-rst}
