@@ -48,7 +48,7 @@ A correct `curl` call to launch a model fit can look like this:
 curl -i -H "Content-Type:application/json" -X POST -d '{}' http://localhost:5000/action/forecast-model-fit
 ```
 
-As an example, the following figure show a 240 days load power data retrieved from EMHASS and that will be used for a model fit:
+As an example, the following figure shows a 240 days load power data retrieved from EMHASS and that will be used for a model fit:
 
 ![](./images/inputs_power_load_forecast.svg)
 
@@ -63,7 +63,7 @@ A quick prediction graph using the fitted model should be available in the webui
 
 ![](./images/load_forecast_knn_bare.svg)
 
-Visually the prediction look quite acceptable but we need to evaluate this further. For this we can use the `"perform_backtest": True` option to perform a backtest evaluation using this syntax:
+Visually the prediction looks quite acceptable but we need to evaluate this further. For this we can use the `"perform_backtest": True` option to perform a backtest evaluation using this syntax:
 ```
 curl -i -H "Content-Type:application/json" -X POST -d '{"perform_backtest": True}' http://localhost:5000/action/forecast-model-fit
 ```
@@ -75,7 +75,7 @@ The results of the backtest will be shown in the logs:
 
 So the mean backtest metric of our model is $R^2=0.59$. 
 
-Here is the grpahic result of the backtesting routine:
+Here is the graphic result of the backtesting routine:
 
 ![](./images/load_forecast_knn_bare_backtest.svg)
 
@@ -121,5 +121,13 @@ The hyperparameter tuning using bayesian optimization improves the bare KNN regr
 
 ```{warning} 
 
-The tuning routine can be computing intense. If you have problems with computation times, try to reduce the `days_to_retrieve` paramter. In the example shown, for a 240 days train period, the optimization routine took almost 20 min to finish on a amd64 architecture machine. This is a task that should be performed once in a while, for example every week.
+The tuning routine can be computing intense. If you have problems with computation times, try to reduce the `days_to_retrieve` paramter. In the example shown, for a 240 days train period, the optimization routine took almost 20 min to finish on an amd64 Linux architecture machine with a i5 processor and 8 Gb of RAM. This is a task that should be performed once in a while, for example every week.
 ```
+
+## How does this works? 
+This machine learning forecast class is based on the `skforecast` module. 
+We use the recursive autoregresive forecaster with added features. 
+
+I will borrow this image from the `skforecast` [documentation](
+https://joaquinamatrodrigo.github.io/skforecast/0.6.0/user_guides/autoregresive-forecaster.html) that help us understand the working principles of this type of model. 
+
