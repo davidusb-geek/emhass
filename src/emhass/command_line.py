@@ -471,16 +471,36 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     
         
 def main():
-    """Define the main command line entry function."""
+    r"""Define the main command line entry function.
+
+    This function may take several arguments as inputs. You can type `emhass --help` to see the list of options:
+    
+    - action: Set the desired action, options are: perfect-optim, dayahead-optim,
+      naive-mpc-optim, publish-data, forecast-model-fit, forecast-model-predict, forecast-model-tune
+      
+    - config: Define path to the config.yaml file
+    
+    - costfun: Define the type of cost function, options are: profit, cost, self-consumption
+    
+    - log2file: Define if we should log to a file or not
+    
+    - params: Configuration parameters passed from data/options.json if using the add-on
+    
+    - runtimeparams: Pass runtime optimization parameters as dictionnary
+    
+    - debug: Use True for testing purposes
+    
+    """
     # Parsing arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('--action', type=str, help='Set the desired action, options are: perfect-optim, dayahead-optim, naive-mpc-optim and publish-data')
+    parser.add_argument('--action', type=str, help='Set the desired action, options are: perfect-optim, dayahead-optim,\
+        naive-mpc-optim, publish-data, forecast-model-fit, forecast-model-predict, forecast-model-tune')
     parser.add_argument('--config', type=str, help='Define path to the config.yaml file')
     parser.add_argument('--costfun', type=str, default='profit', help='Define the type of cost function, options are: profit, cost, self-consumption')
     parser.add_argument('--log2file', type=strtobool, default='False', help='Define if we should log to a file or not')
     parser.add_argument('--params', type=str, default=None, help='Configuration parameters passed from data/options.json')
     parser.add_argument('--runtimeparams', type=str, default=None, help='Pass runtime optimization parameters as dictionnary')
-    parser.add_argument('--get_data_from_file', type=strtobool, default='False', help='Use True for testing purposes')
+    parser.add_argument('--debug', type=strtobool, default='False', help='Use True for testing purposes')
     args = parser.parse_args()
     # The path to the configuration files
     config_path = pathlib.Path(args.config)
@@ -496,30 +516,30 @@ def main():
     # Setup parameters
     input_data_dict = set_input_data_dict(config_path, base_path, 
                                           args.costfun, args.params, args.runtimeparams, args.action, 
-                                          logger, args.get_data_from_file)
+                                          logger, args.debug)
     # Perform selected action
     if args.action == 'perfect-optim':
-        opt_res = perfect_forecast_optim(input_data_dict, logger, debug=args.get_data_from_file)
+        opt_res = perfect_forecast_optim(input_data_dict, logger, debug=args.debug)
     elif args.action == 'dayahead-optim':
-        opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=args.get_data_from_file)
+        opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=args.debug)
     elif args.action == 'naive-mpc-optim':
-        opt_res = naive_mpc_optim(input_data_dict, logger, debug=args.get_data_from_file)
+        opt_res = naive_mpc_optim(input_data_dict, logger, debug=args.debug)
     elif args.action == 'forecast-model-fit':
-        df_fit_pred, df_fit_pred_backtest, mlf = forecast_model_fit(input_data_dict, logger, debug=args.get_data_from_file)
+        df_fit_pred, df_fit_pred_backtest, mlf = forecast_model_fit(input_data_dict, logger, debug=args.debug)
         opt_res = None
     elif args.action == 'forecast-model-predict':
-        if args.get_data_from_file:
-            _, _, mlf = forecast_model_fit(input_data_dict, logger, debug=args.get_data_from_file)
+        if args.debug:
+            _, _, mlf = forecast_model_fit(input_data_dict, logger, debug=args.debug)
         else:
             mlf = None
-        df_pred = forecast_model_predict(input_data_dict, logger, debug=args.get_data_from_file, mlf=mlf)
+        df_pred = forecast_model_predict(input_data_dict, logger, debug=args.debug, mlf=mlf)
         opt_res = None
     elif args.action == 'forecast-model-tune':
-        if args.get_data_from_file:
-            _, _, mlf = forecast_model_fit(input_data_dict, logger, debug=args.get_data_from_file)
+        if args.debug:
+            _, _, mlf = forecast_model_fit(input_data_dict, logger, debug=args.debug)
         else:
             mlf = None
-        df_pred_optim = forecast_model_tune(input_data_dict, logger, debug=args.get_data_from_file, mlf=mlf)
+        df_pred_optim = forecast_model_tune(input_data_dict, logger, debug=args.debug, mlf=mlf)
         opt_res = None
     elif args.action == 'publish-data':
         opt_res = publish_data(input_data_dict, logger)
