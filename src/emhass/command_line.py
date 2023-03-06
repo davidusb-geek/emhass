@@ -12,7 +12,7 @@ import time
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Tuple
 from distutils.util import strtobool
 
 from importlib.metadata import version
@@ -285,9 +285,17 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     return opt_res_naive_mpc
 
 def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
-    debug: Optional[bool] = False) -> pd.DataFrame:
-    """
-    Perform a forecast model fit from training data retrieved from Home Assistant.
+    debug: Optional[bool] = False) -> Tuple[pd.DataFrame, pd.DataFrame, mlforecaster]:
+    """Perform a forecast model fit from training data retrieved from Home Assistant.
+
+    :param input_data_dict: A dictionnary with multiple data used by the action functions
+    :type input_data_dict: dict
+    :param logger: The passed logger object
+    :type logger: logging.Logger
+    :param debug: True to debug, useful for unit testing, defaults to False
+    :type debug: Optional[bool], optional
+    :return: The DataFrame containing the forecast data results without and with backtest and the `mlforecaster` object
+    :rtype: Tuple[pd.DataFrame, pd.DataFrame, mlforecaster]
     """
     data = copy.deepcopy(input_data_dict['df_input_data'])
     model_type = input_data_dict['params']['passed_data']['model_type']
@@ -312,8 +320,25 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
 def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     use_last_window: Optional[bool] = True, debug: Optional[bool] = False,
     mlf: Optional[mlforecaster] = None) -> pd.DataFrame:
-    """
-    Perform a forecast model predict using a previously trained skforecast model.
+    r"""Perform a forecast model predict using a previously trained skforecast model.
+
+    :param input_data_dict: A dictionnary with multiple data used by the action functions
+    :type input_data_dict: dict
+    :param logger: The passed logger object
+    :type logger: logging.Logger
+    :param use_last_window: True if the 'last_window' option should be used for the \
+        custom machine learning forecast model. The 'last_window=True' means that the data \
+        that will be used to generate the new forecast will be freshly retrieved from \
+        Home Assistant. This data is needed because the forecast model is an auto-regressive \
+        model with lags. If 'False' then the data using during the model train is used. Defaults to True
+    :type use_last_window: Optional[bool], optional
+    :param debug: True to debug, useful for unit testing, defaults to False
+    :type debug: Optional[bool], optional
+    :param mlf: The 'mlforecaster' object previously trained. This is mainly used for debug \
+        and unit testing. In production the actual model will be read from a saved pickle file. Defaults to None
+    :type mlf: Optional[mlforecaster], optional
+    :return: The DataFrame containing the forecast prediction data
+    :rtype: pd.DataFrame
     """
     # Load model
     model_type = input_data_dict['params']['passed_data']['model_type']
@@ -336,8 +361,19 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
 
 def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
     debug: Optional[bool] = False, mlf: Optional[mlforecaster] = None) -> pd.DataFrame:
-    """
-    Tune a forecast model hyperparameters using bayesian optimization.
+    """Tune a forecast model hyperparameters using bayesian optimization.
+
+    :param input_data_dict: A dictionnary with multiple data used by the action functions
+    :type input_data_dict: dict
+    :param logger: The passed logger object
+    :type logger: logging.Logger
+    :param debug: True to debug, useful for unit testing, defaults to False
+    :type debug: Optional[bool], optional
+    :param mlf: The 'mlforecaster' object previously trained. This is mainly used for debug \
+        and unit testing. In production the actual model will be read from a saved pickle file. Defaults to None
+    :type mlf: Optional[mlforecaster], optional
+    :return: The DataFrame containing the forecast data results using the optimized model
+    :rtype: pd.DataFrame
     """
     # Load model
     model_type = input_data_dict['params']['passed_data']['model_type']
