@@ -31,16 +31,16 @@ class forecast(object):
     In EMHASS we have basically 4 forecasts to deal with:
     
     - PV power production forecast (internally based on the weather forecast and the
-    characteristics of your PV plant). This is given in Watts.
+      characteristics of your PV plant). This is given in Watts.
     
     - Load power forecast: how much power your house will demand on the next 24h. This
-    is given in Watts.
+      is given in Watts.
     
     - PV production selling price forecast: at what price are you selling your excess
-    PV production on the next 24h. This is given in EUR/kWh.
+      PV production on the next 24h. This is given in EUR/kWh.
     
     - Load cost forecast: the price of the energy from the grid on the next 24h. This
-    is given in EUR/kWh.
+      is given in EUR/kWh.
     
     The weather forecast is obtained from several methods. The first method
     uses a scrapper to the ClearOutside webpage which proposes detailed forecasts 
