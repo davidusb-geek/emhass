@@ -461,20 +461,21 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     if idx_closest == -1:
         idx_closest = opt_res_latest.index.get_indexer([now_precise], method='nearest')[0]
     # Publish PV forecast
-    custom_pv_forecast_id = input_data_dict['params']['passed_data']['custom_pv_forecast_id']
+    params = json.loads(input_data_dict['params'])
+    custom_pv_forecast_id = params['passed_data']['custom_pv_forecast_id']
     input_data_dict['rh'].post_data(opt_res_latest['P_PV'], idx_closest, 
                                     custom_pv_forecast_id["entity_id"], 
                                     custom_pv_forecast_id["unit_of_measurement"],
                                     custom_pv_forecast_id["friendly_name"])
     # Publish Load forecast
-    custom_load_forecast_id = input_data_dict['params']['passed_data']['custom_load_forecast_id']
+    custom_load_forecast_id = params['passed_data']['custom_load_forecast_id']
     input_data_dict['rh'].post_data(opt_res_latest['P_Load'], idx_closest, 
                                     custom_load_forecast_id["entity_id"], 
                                     custom_load_forecast_id["unit_of_measurement"],
                                     custom_load_forecast_id["friendly_name"])
     cols_published = ['P_PV', 'P_Load']
     # Publish deferrable loads
-    custom_deferrable_forecast_id = input_data_dict['params']['passed_data']['custom_deferrable_forecast_id']
+    custom_deferrable_forecast_id = params['passed_data']['custom_deferrable_forecast_id']
     for k in range(input_data_dict['opt'].optim_conf['num_def_loads']):
         if "P_deferrable{}".format(k) not in opt_res_latest.columns:
             logger.error("P_deferrable{}".format(k)+" was not found in results DataFrame. Optimization task may need to be relaunched or it did not converged to a solution.")
@@ -489,27 +490,27 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         if 'P_batt' not in opt_res_latest.columns:
             logger.error("P_batt was not found in results DataFrame. Optimization task may need to be relaunched or it did not converged to a solution.")
         else:
-            custom_batt_forecast_id = input_data_dict['params']['passed_data']['custom_batt_forecast_id']
+            custom_batt_forecast_id = params['passed_data']['custom_batt_forecast_id']
             input_data_dict['rh'].post_data(opt_res_latest['P_batt'], idx_closest,
                                             custom_batt_forecast_id["entity_id"], 
                                             custom_batt_forecast_id["unit_of_measurement"],
                                             custom_batt_forecast_id["friendly_name"])
             cols_published = cols_published+["P_batt"]
-            custom_batt_soc_forecast_id = input_data_dict['params']['passed_data']['custom_batt_soc_forecast_id']
+            custom_batt_soc_forecast_id = params['passed_data']['custom_batt_soc_forecast_id']
             input_data_dict['rh'].post_data(opt_res_latest['SOC_opt']*100, idx_closest,
                                             custom_batt_soc_forecast_id["entity_id"], 
                                             custom_batt_soc_forecast_id["unit_of_measurement"],
                                             custom_batt_soc_forecast_id["friendly_name"])
             cols_published = cols_published+["SOC_opt"]
     # Publish grid power
-    custom_grid_forecast_id = input_data_dict['params']['passed_data']['custom_grid_forecast_id']
+    custom_grid_forecast_id = params['passed_data']['custom_grid_forecast_id']
     input_data_dict['rh'].post_data(opt_res_latest['P_grid'], idx_closest, 
                                     custom_grid_forecast_id["entity_id"], 
                                     custom_grid_forecast_id["unit_of_measurement"],
                                     custom_grid_forecast_id["friendly_name"])
     cols_published = cols_published+["P_grid"]
     # Publish total value of cost function
-    custom_cost_fun_id = input_data_dict['params']['passed_data']['custom_cost_fun_id']
+    custom_cost_fun_id = params['passed_data']['custom_cost_fun_id']
     col_cost_fun = [i for i in opt_res_latest.columns if 'cost_fun_' in i]
     input_data_dict['rh'].post_data(opt_res_latest[col_cost_fun], idx_closest, 
                                     custom_cost_fun_id["entity_id"], 

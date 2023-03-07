@@ -95,7 +95,7 @@ def get_forecast_dates(freq: int, delta_forecast: int,
         freq=freq).round(freq)
     return forecast_dates
 
-def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict,
+def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict,
                         set_type: str, logger: logging.Logger) -> Tuple[str, dict]:
     """
     Treat the passed optimization runtime parameters. 
@@ -118,13 +118,32 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
     :rtype: Tuple[str, dict]
     
     """
+    if (params != None) and (params != 'null'):
+        params = json.loads(params)
+    else:
+        params = {}
+    # Some default data needed
+    custom_deferrable_forecast_id = []
+    for k in range(optim_conf['num_def_loads']):
+        custom_deferrable_forecast_id.append({
+            "entity_id": "sensor.p_deferrable{}".format(k), 
+            "unit_of_measurement": "W", 
+            "friendly_name": "Deferrable Load {}".format(k)
+        })
+    default_passed_dict = {'custom_pv_forecast_id': {"entity_id": "sensor.p_pv_forecast", "unit_of_measurement": "W", "friendly_name": "PV Power Forecast"},
+                           'custom_load_forecast_id': {"entity_id": "sensor.p_load_forecast", "unit_of_measurement": "W", "friendly_name": "Load Power Forecast"},
+                           'custom_batt_forecast_id': {"entity_id": "sensor.p_batt_forecast", "unit_of_measurement": "W", "friendly_name": "Battery Power Forecast"},
+                           'custom_batt_soc_forecast_id': {"entity_id": "sensor.soc_batt_forecast", "unit_of_measurement": "%", "friendly_name": "Battery SOC Forecast"},
+                           'custom_grid_forecast_id': {"entity_id": "sensor.p_grid_forecast", "unit_of_measurement": "W", "friendly_name": "Grid Power Forecast"},
+                           'custom_cost_fun_id': {"entity_id": "sensor.total_cost_fun_value", "unit_of_measurement": "", "friendly_name": "Total cost function value"},
+                           'custom_deferrable_forecast_id': custom_deferrable_forecast_id}
+    if 'passed_data' in params.keys():
+        for key, value in default_passed_dict.items():
+            params['passed_data'][key] = value
+    else:
+        params['passed_data'] = default_passed_dict
     if runtimeparams is not None:
         runtimeparams = json.loads(runtimeparams)
-        if (params != None) and (params != 'null'):
-            params = json.loads(params)
-        else:
-            params = {'passed_data':{'pv_power_forecast':None,'load_power_forecast':None,'load_cost_forecast':None,'prod_price_forecast':None,
-                                     'prediction_horizon':None,'soc_init':None,'soc_final':None,'def_total_hours':None,'alpha':None,'beta':None}}
         freq = int(retrieve_hass_conf['freq'].seconds/60.0)
         delta_forecast = int(optim_conf['delta_forecast'].days)
         forecast_dates = get_forecast_dates(freq, delta_forecast)
@@ -161,6 +180,13 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
                 beta = runtimeparams['beta']
             params['passed_data']['beta'] = beta
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
+        else:
+            params['passed_data']['prediction_horizon'] = None
+            params['passed_data']['soc_init'] = None
+            params['passed_data']['soc_final'] = None
+            params['passed_data']['def_total_hours'] = None
+            params['passed_data']['alpha'] = None
+            params['passed_data']['beta'] = None
         # Treat passed forecast data lists
         if 'pv_power_forecast' in runtimeparams.keys():
             if type(runtimeparams['pv_power_forecast']) == list and len(runtimeparams['pv_power_forecast']) >= len(forecast_dates):
@@ -174,6 +200,8 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
                 logger.warning("There are non numeric values on the passed data for pv_power_forecast, check for missing values (nans, null, etc)")
                 for x in list_non_digits:
                     logger.warning("This value in pv_power_forecast was detected as non digits: "+str(x))
+        else:
+            params['passed_data']['pv_power_forecast'] = None
         if 'load_power_forecast' in runtimeparams.keys():
             if type(runtimeparams['load_power_forecast']) == list and len(runtimeparams['load_power_forecast']) >= len(forecast_dates):
                 params['passed_data']['load_power_forecast'] = runtimeparams['load_power_forecast']
@@ -186,6 +214,8 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
                 logger.warning("There are non numeric values on the passed data for load_power_forecast, check for missing values (nans, null, etc)")
                 for x in list_non_digits:
                     logger.warning("This value in load_power_forecast was detected as non digits: "+str(x))
+        else:
+            params['passed_data']['load_power_forecast'] = None
         if 'load_cost_forecast' in runtimeparams.keys():
             if type(runtimeparams['load_cost_forecast']) == list and len(runtimeparams['load_cost_forecast']) >= len(forecast_dates):
                 params['passed_data']['load_cost_forecast'] = runtimeparams['load_cost_forecast']
@@ -198,6 +228,8 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
                 logger.warning("There are non numeric values on the passed data or load_cost_forecast, check for missing values (nans, null, etc)")
                 for x in list_non_digits:
                     logger.warning("This value in load_cost_forecast was detected as non digits: "+str(x))
+        else:
+            params['passed_data']['load_cost_forecast'] = None
         if 'prod_price_forecast' in runtimeparams.keys():
             if type(runtimeparams['prod_price_forecast']) == list and len(runtimeparams['prod_price_forecast']) >= len(forecast_dates):
                 params['passed_data']['prod_price_forecast'] = runtimeparams['prod_price_forecast']
@@ -210,8 +242,10 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
                 logger.warning("There are non numeric values on the passed data for prod_price_forecast, check for missing values (nans, null, etc)")
                 for x in list_non_digits:
                     logger.warning("This value in prod_price_forecast was detected as non digits: "+str(x))
-        # Treat passed data for forecast model fit
-        if set_type == 'forecast-model-fit':
+        else:
+            params['passed_data']['prod_price_forecast'] = None
+        # Treat passed data for forecast model fit/predict/tune
+        if set_type == 'forecast-model-fit' or set_type == 'forecast-model-predict' or set_type == 'forecast-model-tune':
             if 'days_to_retrieve' not in runtimeparams.keys():
                 days_to_retrieve = 30
             else:
@@ -247,8 +281,6 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
             else:
                 perform_backtest = runtimeparams['perform_backtest']
             params['passed_data']['perform_backtest'] = perform_backtest
-        # Treat passed data for forecast model predict
-        if set_type == 'forecast-model-predict':
             if 'model_predict_publish' not in runtimeparams.keys():
                 model_predict_publish = False
             else:
@@ -290,79 +322,22 @@ def treat_runtimeparams(runtimeparams: str, params:str, retrieve_hass_conf: dict
             retrieve_hass_conf['solar_forecast_kwp'] = runtimeparams['solar_forecast_kwp']
             optim_conf['weather_forecast_method'] = 'solar.forecast'
         # Treat custom entities id's and friendly names for variables
-        if 'custom_pv_forecast_id' not in runtimeparams.keys():
-            custom_pv_forecast_id = {
-                "entity_id": "sensor.p_pv_forecast", 
-                "unit_of_measurement": "W", 
-                "friendly_name": "PV Power Forecast"
-            }
-        else:
-            custom_pv_forecast_id = runtimeparams['custom_pv_forecast_id']
-        params['passed_data']['custom_pv_forecast_id'] = custom_pv_forecast_id
-        
-        if 'custom_load_forecast_id' not in runtimeparams.keys():
-            custom_load_forecast_id = {
-                "entity_id": "sensor.p_load_forecast", 
-                "unit_of_measurement": "W", 
-                "friendly_name": "Load Power Forecast"
-            }
-        else:
-            custom_load_forecast_id = runtimeparams['custom_load_forecast_id']
-        params['passed_data']['custom_load_forecast_id'] = custom_load_forecast_id
-        
-        if 'custom_batt_forecast_id' not in runtimeparams.keys():
-            custom_batt_forecast_id = {
-                "entity_id": "sensor.p_batt_forecast", 
-                "unit_of_measurement": "W", 
-                "friendly_name": "Battery Power Forecast"
-            }
-        else:
-            custom_batt_forecast_id = runtimeparams['custom_batt_forecast_id']
-        params['passed_data']['custom_batt_forecast_id'] = custom_batt_forecast_id
-        
-        if 'custom_batt_soc_forecast_id' not in runtimeparams.keys():
-            custom_batt_soc_forecast_id = {
-                "entity_id": "sensor.soc_batt_forecast", 
-                "unit_of_measurement": "%", 
-                "friendly_name": "Battery SOC Forecast"
-            }
-        else:
-            custom_batt_soc_forecast_id = runtimeparams['custom_batt_soc_forecast_id']
-        params['passed_data']['custom_batt_soc_forecast_id'] = custom_batt_soc_forecast_id
-        
-        if 'custom_grid_forecast_id' not in runtimeparams.keys():
-            custom_grid_forecast_id = {
-                "entity_id": "sensor.p_grid_forecast", 
-                "unit_of_measurement": "W", 
-                "friendly_name": "Grid Power Forecast"
-            }
-        else:
-            custom_grid_forecast_id = runtimeparams['custom_grid_forecast_id']
-        params['passed_data']['custom_grid_forecast_id'] = custom_grid_forecast_id
-        
-        if 'custom_cost_fun_id' not in runtimeparams.keys():
-            custom_cost_fun_id = {
-                "entity_id": "sensor.total_cost_fun_value", 
-                "unit_of_measurement": "", 
-                "friendly_name": "Total cost function value"
-            }
-        else:
-            custom_cost_fun_id = runtimeparams['custom_cost_fun_id']
-        params['passed_data']['custom_cost_fun_id'] = custom_cost_fun_id
-        
-        if 'custom_deferrable_forecast_id' not in runtimeparams.keys():
-            custom_deferrable_forecast_id = []
-            for k in range(optim_conf['num_def_loads']):
-                custom_deferrable_forecast_id.append({
-                    "entity_id": "sensor.p_deferrable{}".format(k), 
-                    "unit_of_measurement": "W", 
-                    "friendly_name": "Deferrable Load {}".format(k)
-                })
-        else:
-            custom_deferrable_forecast_id = runtimeparams['custom_deferrable_forecast_id']
-        params['passed_data']['custom_deferrable_forecast_id'] = custom_deferrable_forecast_id
-        
-        params = json.dumps(params)
+        if 'custom_pv_forecast_id' in runtimeparams.keys():
+            params['passed_data']['custom_pv_forecast_id'] = runtimeparams['custom_pv_forecast_id']
+        if 'custom_load_forecast_id' in runtimeparams.keys():
+            params['passed_data']['custom_load_forecast_id'] = runtimeparams['custom_load_forecast_id']
+        if 'custom_batt_forecast_id' in runtimeparams.keys():
+            params['passed_data']['custom_batt_forecast_id'] = runtimeparams['custom_batt_forecast_id']
+        if 'custom_batt_soc_forecast_id' in runtimeparams.keys():
+            params['passed_data']['custom_batt_soc_forecast_id'] = runtimeparams['custom_batt_soc_forecast_id']
+        if 'custom_grid_forecast_id' in runtimeparams.keys():
+            params['passed_data']['custom_grid_forecast_id'] = runtimeparams['custom_grid_forecast_id']
+        if 'custom_cost_fun_id' in runtimeparams.keys():
+            params['passed_data']['custom_cost_fun_id'] = runtimeparams['custom_cost_fun_id']
+        if 'custom_deferrable_forecast_id' in runtimeparams.keys():
+            params['passed_data']['custom_deferrable_forecast_id'] = runtimeparams['custom_deferrable_forecast_id']
+    # Serialize the final params
+    params = json.dumps(params)
     return params, retrieve_hass_conf, optim_conf
 
 def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
