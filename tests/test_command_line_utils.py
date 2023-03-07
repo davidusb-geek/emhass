@@ -96,7 +96,7 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(input_data_dict['df_input_data_dayahead'].index.freq is not None)
         self.assertTrue(input_data_dict['df_input_data_dayahead'].isnull().sum().sum()==0)
         self.assertTrue(len(input_data_dict['df_input_data_dayahead'])==10) # The default value for prediction_horizon
-        action = 'dayahead-optim'
+        action = 'naive-mpc-optim'
         runtimeparams['prediction_horizon'] = 10
         runtimeparams_json = json.dumps(runtimeparams)
         params = copy.deepcopy(json.loads(self.params_json))
@@ -209,16 +209,29 @@ class TestCommandLineUtils(unittest.TestCase):
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
-        opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
+        opt_res = naive_mpc_optim(input_data_dict, logger, debug=True)
+        action = 'publish-data'
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, None, 
+                                              action, logger, get_data_from_file=True)
         opt_res_first = publish_data(input_data_dict, logger, opt_res_latest=opt_res)
         self.assertTrue(len(opt_res_first)==1)
+        action = 'naive-mpc-optim'
         params = copy.deepcopy(json.loads(self.params_json))
         params['retrieve_hass_conf'][8]['method_ts_round'] = 'last'
         params['optim_conf'][0]['set_use_battery'] = True
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
-        opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
+        opt_res = naive_mpc_optim(input_data_dict, logger, debug=True)
+        action = 'publish-data'
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, None, 
+                                              action, logger, get_data_from_file=True)
+        opt_res_last = publish_data(input_data_dict, logger, opt_res_latest=opt_res)
+        self.assertTrue(len(opt_res_last)==1)
+        # Reproduce when trying to publish data but params=None and runtimeparams=None
+        action = 'publish-data'
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, None, None, 
+                                              action, logger, get_data_from_file=True)
         opt_res_last = publish_data(input_data_dict, logger, opt_res_latest=opt_res)
         self.assertTrue(len(opt_res_last)==1)
     
@@ -227,7 +240,7 @@ class TestCommandLineUtils(unittest.TestCase):
         base_path = str(config_path.parent)
         costfun = 'profit'
         action = 'forecast-model-fit' # fit, predict and tune methods
-        params = copy.deepcopy(json.loads(self.params_json))
+        params = TestCommandLineUtils.get_test_params()
         runtimeparams = {
             "days_to_retrieve": 20,
             "model_type": "load_forecast",
@@ -242,7 +255,7 @@ class TestCommandLineUtils(unittest.TestCase):
             "model_predict_friendly_name": "Load Power Forecast KNN regressor"
         }
         runtimeparams_json = json.dumps(runtimeparams)
-        params['passed_data'] = runtimeparams
+        # params['passed_data'] = runtimeparams
         params['optim_conf'][8]['load_forecast_method'] = 'skforecast'
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 

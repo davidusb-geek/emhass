@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.4.2] - 2023-03-07
+### Fix
+- Fixed handling of default passed params.
+
 ## [0.4.1] - 2023-03-06
 ### Improvement
 - Improved the documentation and the in-code docstrings.
