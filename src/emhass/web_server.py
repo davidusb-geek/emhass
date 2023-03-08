@@ -18,9 +18,9 @@ from emhass.command_line import publish_data
 
 
 # Define the Flask instance
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(message)s')
 app = Flask(__name__)
-app.logger.setLevel(logging.INFO)
-app.logger.propagate = False
+
 
 def get_injection_dict(df, plot_size = 1366):
     # Create plots
