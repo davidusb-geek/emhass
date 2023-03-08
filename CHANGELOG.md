@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.3] - 2023-03-09
+### Fix
+- Fixed logging.
+- Fixed missing module on docker standalone mode.
+
 ## [0.4.2] - 2023-03-07
 ### Fix
 - Fixed handling of default passed params.
@@ -362,6 +367,8 @@
 [0.3.36]: https://github.com/davidusb-geek/emhass/releases/tag/v0.3.36
 [0.4.0]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.0
 [0.4.1]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.1
+[0.4.2]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.2
+[0.4.3]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.3
 
 # Notes
 All notable changes to this project will be documented in this file.

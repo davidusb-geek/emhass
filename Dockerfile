@@ -35,6 +35,7 @@ RUN pip3 install --no-cache-dir -r requirements_webserver.txt
 COPY src/emhass/__init__.py /app/src/emhass/__init__.py
 COPY src/emhass/command_line.py /app/src/emhass/command_line.py
 COPY src/emhass/forecast.py /app/src/emhass/forecast.py
+COPY src/emhass/machine_learning_forecaster.py /app/src/emhass/machine_learning_forecaster.py
 COPY src/emhass/optimization.py /app/src/emhass/optimization.py
 COPY src/emhass/retrieve_hass.py /app/src/emhass/retrieve_hass.py
 COPY src/emhass/utils.py /app/src/emhass/utils.py
