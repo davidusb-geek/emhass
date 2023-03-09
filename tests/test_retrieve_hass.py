@@ -62,6 +62,22 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertTrue(retrieve_hass_conf['hass_url'] == 'http://supervisor/core/api')
         self.assertIsInstance(optim_conf, dict)
         self.assertIsInstance(plant_conf, dict)
+    
+    def test_yaml_parse_wab_server(self):
+        with open(pathlib.Path(root) / "config_emhass.yaml", 'r') as file:
+            config = yaml.load(file, Loader=yaml.FullLoader)
+        retrieve_hass_conf = config['retrieve_hass_conf']
+        optim_conf = config['optim_conf']
+        plant_conf = config['plant_conf']
+        params = {}
+        params['retrieve_hass_conf'] = retrieve_hass_conf
+        params['optim_conf'] = optim_conf
+        params['plant_conf'] = plant_conf
+        # Just check forecast methods
+        self.assertTrue(list(params['optim_conf'][7].keys())[0] == 'weather_forecast_method')
+        self.assertTrue(list(params['optim_conf'][8].keys())[0] == 'load_forecast_method')
+        self.assertTrue(list(params['optim_conf'][9].keys())[0] == 'load_cost_forecast_method')
+        self.assertTrue(list(params['optim_conf'][13].keys())[0] == 'prod_price_forecast_method')
 
     def test_get_data_failed(self):
         days_list = get_days_list(1)

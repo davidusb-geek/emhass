@@ -11,6 +11,7 @@ import os, json, argparse, pickle, yaml, logging
 from distutils.util import strtobool
 import pandas as pd
 import plotly.express as px
+pd.options.plotting.backend = "plotly"
 from emhass.command_line import set_input_data_dict
 from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim
 from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune
@@ -18,9 +19,13 @@ from emhass.command_line import publish_data
 
 
 # Define the Flask instance
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(message)s')
 app = Flask(__name__)
-
+app.logger.setLevel(logging.DEBUG)
+app.logger.propagate = False
+ch = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+ch.setFormatter(formatter)
+app.logger.addHandler(ch)
 
 def get_injection_dict(df, plot_size = 1366):
     # Create plots
@@ -90,6 +95,7 @@ def build_params(params, options, addon):
         params['optim_conf'][4]['def_total_hours'] = [i['operating_hours_of_each_deferrable_load'] for i in options['list_operating_hours_of_each_deferrable_load']]
         params['optim_conf'][5]['treat_def_as_semi_cont'] = [i['treat_deferrable_load_as_semi_cont'] for i in options['list_treat_deferrable_load_as_semi_cont']]
         params['optim_conf'][6]['set_def_constant'] = [False for i in range(len(params['optim_conf'][3]['P_deferrable_nom']))]
+        params['optim_conf'][8]['load_forecast_method'] = options['load_forecast_method']
         start_hours_list = [i['peak_hours_periods_start_hours'] for i in options['list_peak_hours_periods_start_hours']]
         end_hours_list = [i['peak_hours_periods_end_hours'] for i in options['list_peak_hours_periods_end_hours']]
         num_peak_hours = len(start_hours_list)
