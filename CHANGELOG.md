@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.4] - 2023-03-09
+### Fix
+- Added missing possibility to set the method for load forecast to 'mlforecaster'.
+- Fixed logging formatting.
+
 ## [0.4.3] - 2023-03-09
 ### Fix
 - Fixed logging.
@@ -369,6 +374,7 @@
 [0.4.1]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.1
 [0.4.2]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.2
 [0.4.3]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.3
+[0.4.4]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.4
 
 # Notes
 All notable changes to this project will be documented in this file.

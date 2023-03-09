@@ -3,6 +3,7 @@
     <head>
         <script src="http://ajax.googleapis.com/ajax/libs/jquery/2.0.0/jquery.min.js"></script>
         <title>EMHASS: Energy Management Optimization for Home Assistant</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <link rel="stylesheet" type="text/css" href="../static/style.css">
     </head>
     <body>
@@ -15,9 +16,12 @@
                     <h4 style="font-family: Helvetica;color: darkblue;">Use the buttons below to manually  launch different optimization tasks</h4>
                     <button type="button" id="perfect-optimization" class="button button1" >Perfect Optimization</button>
                     <button type="button" id="dayahead-optimization" class="button button2" >Day-ahead Optimization</button>
-                    <!-- <button type="button" id="naive-mpc-optimization" class="button button3" >Naive MPC Optimization</button> -->
                     <h4 style="font-family: Helvetica;color: darkblue;">Use the button below to publish the optimized variables at the current timestamp</h4>
                     <button type="button" id="publish-data" class="button button1" >Publish Optimization Results</button>
+                    <h4 style="font-family: Helvetica;color: darkblue;">Use the buttons below to fit, predict and tune a machine learning model for testing</h4>
+                    <button type="button" id="forecast-model-fit" class="button button1" >ML forecast model fit</button>
+                    <button type="button" id="forecast-model-predict" class="button button2" >ML forecast model predict</button>
+                    <button type="button" id="forecast-model-tune" class="button button3" >ML forecast model tune</button>
                     <br>
                 </form>
                 <br><br>
@@ -30,7 +34,7 @@
         {% endfor %}
         <footer class="footer">
             <center>
-                <p style="font-family: Helvetica;color: darkblue;">&copy; MIT License | Copyright (c) 2021-2022 David HERNANDEZ</p>
+                <p style="font-family: Helvetica;color: darkblue;">&copy; MIT License | Copyright (c) 2021-2023 David HERNANDEZ</p>
             </center>
         </footer>
     </body>
@@ -67,24 +71,56 @@
             $.ajax(settings).done(function (response) {
             });
         });
-        // document.getElementById('naive-mpc-optimization').addEventListener('click', function() {
-        //     var url = "/action/naive-mpc-optim"
-        //     var settings = {
-        //     "async": true,
-        //     "crossDomain": true,
-        //     "url": url,
-        //     "method": "POST",
-        //     "headers": {
-        //         'Content-Type':'application/json'
-        //     },
-        //     "dataType": 'json',
-        //     "data": '{}'
-        //     }
-        //     $.ajax(settings).done(function (response) {
-        //     });
-        // });
         document.getElementById('publish-data').addEventListener('click', function() {
             var url = "/action/publish-data"
+            var settings = {
+            "async": true,
+            "crossDomain": true,
+            "url": url,
+            "method": "POST",
+            "headers": {
+                'Content-Type':'application/json'
+            },
+            "dataType": 'json',
+            "data": '{}'
+            }
+            $.ajax(settings).done(function (response) {
+            });
+        });
+        document.getElementById('forecast-model-fit').addEventListener('click', function() {
+            var url = "/action/forecast-model-fit"
+            var settings = {
+            "async": true,
+            "crossDomain": true,
+            "url": url,
+            "method": "POST",
+            "headers": {
+                'Content-Type':'application/json'
+            },
+            "dataType": 'json',
+            "data": '{}'
+            }
+            $.ajax(settings).done(function (response) {
+            });
+        });
+        document.getElementById('forecast-model-predict').addEventListener('click', function() {
+            var url = "/action/forecast-model-predict"
+            var settings = {
+            "async": true,
+            "crossDomain": true,
+            "url": url,
+            "method": "POST",
+            "headers": {
+                'Content-Type':'application/json'
+            },
+            "dataType": 'json',
+            "data": '{}'
+            }
+            $.ajax(settings).done(function (response) {
+            });
+        });
+        document.getElementById('forecast-model-tune').addEventListener('click', function() {
+            var url = "/action/forecast-model-tune"
             var settings = {
             "async": true,
             "crossDomain": true,
