@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.5] - 2023-03-10
+### Fix
+- Fixed default behavior for passed data.
+- Added a new graph for tune results.
+
 ## [0.4.4] - 2023-03-09
 ### Fix
 - Added missing possibility to set the method for load forecast to 'mlforecaster'.
