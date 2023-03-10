@@ -244,63 +244,62 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
                     logger.warning("This value in prod_price_forecast was detected as non digits: "+str(x))
         else:
             params['passed_data']['prod_price_forecast'] = None
-        # Treat passed data for forecast model fit/predict/tune
-        if set_type == 'forecast-model-fit' or set_type == 'forecast-model-predict' or set_type == 'forecast-model-tune':
-            if 'days_to_retrieve' not in runtimeparams.keys():
-                days_to_retrieve = 30
-            else:
-                days_to_retrieve = runtimeparams['days_to_retrieve']
-            params['passed_data']['days_to_retrieve'] = days_to_retrieve
-            if 'model_type' not in runtimeparams.keys():
-                model_type = "load_forecast"
-            else:
-                model_type = runtimeparams['model_type']
-            params['passed_data']['model_type'] = model_type
-            if 'var_model' not in runtimeparams.keys():
-                var_model = "sensor.power_load_no_var_loads"
-            else:
-                var_model = runtimeparams['var_model']
-            params['passed_data']['var_model'] = var_model
-            if 'sklearn_model' not in runtimeparams.keys():
-                sklearn_model = "KNeighborsRegressor"
-            else:
-                sklearn_model = runtimeparams['sklearn_model']
-            params['passed_data']['sklearn_model'] = sklearn_model
-            if 'num_lags' not in runtimeparams.keys():
-                num_lags = 48
-            else:
-                num_lags = runtimeparams['num_lags']
-            params['passed_data']['num_lags'] = num_lags
-            if 'split_date_delta' not in runtimeparams.keys():
-                split_date_delta = '48h'
-            else:
-                split_date_delta = runtimeparams['split_date_delta']
-            params['passed_data']['split_date_delta'] = split_date_delta
-            if 'perform_backtest' not in runtimeparams.keys():
-                perform_backtest = False
-            else:
-                perform_backtest = runtimeparams['perform_backtest']
-            params['passed_data']['perform_backtest'] = perform_backtest
-            if 'model_predict_publish' not in runtimeparams.keys():
-                model_predict_publish = False
-            else:
-                model_predict_publish = runtimeparams['model_predict_publish']
-            params['passed_data']['model_predict_publish'] = model_predict_publish
-            if 'model_predict_entity_id' not in runtimeparams.keys():
-                model_predict_entity_id = "sensor.p_load_forecast_custom_model"
-            else:
-                model_predict_entity_id = runtimeparams['model_predict_entity_id']
-            params['passed_data']['model_predict_entity_id'] = model_predict_entity_id
-            if 'model_predict_unit_of_measurement' not in runtimeparams.keys():
-                model_predict_unit_of_measurement = "W"
-            else:
-                model_predict_unit_of_measurement = runtimeparams['model_predict_unit_of_measurement']
-            params['passed_data']['model_predict_unit_of_measurement'] = model_predict_unit_of_measurement
-            if 'model_predict_friendly_name' not in runtimeparams.keys():
-                model_predict_friendly_name = "Load Power Forecast custom ML model"
-            else:
-                model_predict_friendly_name = runtimeparams['model_predict_friendly_name']
-            params['passed_data']['model_predict_friendly_name'] = model_predict_friendly_name
+        # Treat passed data for forecast model fit/predict/tune at runtime
+        if 'days_to_retrieve' not in runtimeparams.keys():
+            days_to_retrieve = 30
+        else:
+            days_to_retrieve = runtimeparams['days_to_retrieve']
+        params['passed_data']['days_to_retrieve'] = days_to_retrieve
+        if 'model_type' not in runtimeparams.keys():
+            model_type = "load_forecast"
+        else:
+            model_type = runtimeparams['model_type']
+        params['passed_data']['model_type'] = model_type
+        if 'var_model' not in runtimeparams.keys():
+            var_model = "sensor.power_load_no_var_loads"
+        else:
+            var_model = runtimeparams['var_model']
+        params['passed_data']['var_model'] = var_model
+        if 'sklearn_model' not in runtimeparams.keys():
+            sklearn_model = "KNeighborsRegressor"
+        else:
+            sklearn_model = runtimeparams['sklearn_model']
+        params['passed_data']['sklearn_model'] = sklearn_model
+        if 'num_lags' not in runtimeparams.keys():
+            num_lags = 48
+        else:
+            num_lags = runtimeparams['num_lags']
+        params['passed_data']['num_lags'] = num_lags
+        if 'split_date_delta' not in runtimeparams.keys():
+            split_date_delta = '48h'
+        else:
+            split_date_delta = runtimeparams['split_date_delta']
+        params['passed_data']['split_date_delta'] = split_date_delta
+        if 'perform_backtest' not in runtimeparams.keys():
+            perform_backtest = False
+        else:
+            perform_backtest = runtimeparams['perform_backtest']
+        params['passed_data']['perform_backtest'] = perform_backtest
+        if 'model_predict_publish' not in runtimeparams.keys():
+            model_predict_publish = False
+        else:
+            model_predict_publish = runtimeparams['model_predict_publish']
+        params['passed_data']['model_predict_publish'] = model_predict_publish
+        if 'model_predict_entity_id' not in runtimeparams.keys():
+            model_predict_entity_id = "sensor.p_load_forecast_custom_model"
+        else:
+            model_predict_entity_id = runtimeparams['model_predict_entity_id']
+        params['passed_data']['model_predict_entity_id'] = model_predict_entity_id
+        if 'model_predict_unit_of_measurement' not in runtimeparams.keys():
+            model_predict_unit_of_measurement = "W"
+        else:
+            model_predict_unit_of_measurement = runtimeparams['model_predict_unit_of_measurement']
+        params['passed_data']['model_predict_unit_of_measurement'] = model_predict_unit_of_measurement
+        if 'model_predict_friendly_name' not in runtimeparams.keys():
+            model_predict_friendly_name = "Load Power Forecast custom ML model"
+        else:
+            model_predict_friendly_name = runtimeparams['model_predict_friendly_name']
+        params['passed_data']['model_predict_friendly_name'] = model_predict_friendly_name
         # Treat optimization configuration parameters passed at runtime 
         if 'num_def_loads' in runtimeparams.keys():
             optim_conf['num_def_loads'] = runtimeparams['num_def_loads']

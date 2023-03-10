@@ -283,8 +283,9 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(df_pred, pd.Series)
         self.assertTrue(df_pred.isnull().sum().sum() == 0)
         # Test the tune method
-        df_pred_optim = forecast_model_tune(input_data_dict, logger, debug=True, mlf=mlf)
+        df_pred_optim, mlf = forecast_model_tune(input_data_dict, logger, debug=True, mlf=mlf)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
+        self.assertTrue(mlf.is_tuned == True)
     
     @patch('sys.argv', ['main', '--action', 'test', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
                         '--debug', 'True'])
@@ -380,8 +381,9 @@ class TestCommandLineUtils(unittest.TestCase):
         with patch('sys.argv', ['main', '--action', 'forecast-model-tune', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
                                 '--params', params_json, '--runtimeparams', runtimeparams_json,
                                 '--debug', 'True']):
-            df_pred_optim = main()
+            df_pred_optim, mlf = main()
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
+        self.assertTrue(mlf.is_tuned == True)
         
     @patch('sys.argv', ['main', '--action', 'publish-data', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
                         '--debug', 'True'])

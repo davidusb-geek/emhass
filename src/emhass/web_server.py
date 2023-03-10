@@ -31,15 +31,15 @@ def get_injection_dict(df, plot_size = 1366):
     # Create plots
     cols_p = [i for i in df.columns.to_list() if 'P_' in i]
     fig_0 = px.line(df[cols_p], title='Systems powers schedule after optimization results', 
-                    template='plotly_white', width=plot_size, height=0.5*plot_size, line_shape="hv")
+                    template='presentation', width=plot_size, height=0.5*plot_size, line_shape="hv")
     fig_0.update_layout(xaxis_title='Timestamp', yaxis_title='System powers (W)')
     if 'SOC_opt' in df.columns.to_list():
         fig_1 = px.line(df['SOC_opt'], title='Battery state of charge schedule after optimization results', 
-                        template='plotly_white', width=plot_size, height=0.5*plot_size, line_shape="hv")
+                        template='presentation', width=plot_size, height=0.5*plot_size, line_shape="hv")
         fig_1.update_layout(xaxis_title='Timestamp', yaxis_title='Battery SOC (%)')
     cols_cost = [i for i in df.columns.to_list() if 'cost_' in i or 'unit_' in i]
     fig_2 = px.line(df[cols_cost], title='Systems costs obtained from optimization results', 
-                      template='plotly_white', width=plot_size, height=0.5*plot_size, line_shape="hv")
+                      template='presentation', width=plot_size, height=0.5*plot_size, line_shape="hv")
     fig_2.update_layout(xaxis_title='Timestamp', yaxis_title='System costs (currency)')
     # Get full path to image
     image_path_0 = fig_0.to_html(full_html=False, default_width='75%')
@@ -66,7 +66,7 @@ def get_injection_dict(df, plot_size = 1366):
 
 def get_injection_dict_forecast_model_fit(df_fit_pred, mlf):
     fig = df_fit_pred.plot()
-    fig.layout.template = 'plotly_white'
+    fig.layout.template = 'presentation'
     fig.update_yaxes(title_text = mlf.model_type)
     fig.update_xaxes(title_text = "Time")
     image_path_0 = fig.to_html(full_html=False, default_width='75%')
@@ -74,6 +74,20 @@ def get_injection_dict_forecast_model_fit(df_fit_pred, mlf):
     injection_dict = {}
     injection_dict['title'] = '<h2>Custom machine learning forecast model fit</h2>'
     injection_dict['subsubtitle0'] = '<h4>Plotting train/test forecast model results for '+mlf.model_type+'</h4>'
+    injection_dict['subsubtitle0'] = '<h4>Forecasting variable '+mlf.var_model+'</h4>'
+    injection_dict['figure_0'] = image_path_0
+    return injection_dict
+
+def get_injection_dict_forecast_model_tune(df_pred_optim, mlf):
+    fig = df_pred_optim.plot()
+    fig.layout.template = 'presentation'
+    fig.update_yaxes(title_text = mlf.model_type)
+    fig.update_xaxes(title_text = "Time")
+    image_path_0 = fig.to_html(full_html=False, default_width='75%')
+    # The dict of plots
+    injection_dict = {}
+    injection_dict['title'] = '<h2>Custom machine learning forecast model tune</h2>'
+    injection_dict['subsubtitle0'] = '<h4>Performed a tuning routine using bayesian optimization for '+mlf.model_type+'</h4>'
     injection_dict['subsubtitle0'] = '<h4>Forecasting variable '+mlf.var_model+'</h4>'
     injection_dict['figure_0'] = image_path_0
     return injection_dict
@@ -207,12 +221,9 @@ def action_call(action_name):
         return make_response(msg, 201)
     elif action_name == 'forecast-model-tune':
         app.logger.info(" >> Performing a machine learning forecast model tune...")
-        df_pred_optim = forecast_model_tune(input_data_dict, app.logger)
-        table1 = df_pred_optim.reset_index().to_html(classes='mystyle', index=False)
-        injection_dict = {}
-        injection_dict['title'] = '<h2>Custom machine learning forecast model tuning</h2>'
-        injection_dict['subsubtitle0'] = '<h4>Performed a tuning routine using bayesian optimization</h4>'
-        injection_dict['table1'] = table1
+        df_pred_optim, mlf = forecast_model_tune(input_data_dict, app.logger)
+        injection_dict = get_injection_dict_forecast_model_tune(
+            df_pred_optim, mlf)
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action forecast-model-tune executed... \n'

@@ -383,7 +383,8 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     return predictions
 
 def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
-    debug: Optional[bool] = False, mlf: Optional[mlforecaster] = None) -> pd.DataFrame:
+    debug: Optional[bool] = False, mlf: Optional[mlforecaster] = None
+    ) -> Tuple[pd.DataFrame, mlforecaster]:
     """Tune a forecast model hyperparameters using bayesian optimization.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
@@ -417,7 +418,7 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
         filename = model_type+'_mlf.pkl'
         with open(pathlib.Path(root) / filename, 'wb') as outp:
             pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
-    return df_pred_optim
+    return df_pred_optim, mlf
 
 def publish_data(input_data_dict: dict, logger: logging.Logger,
     save_data_to_file: Optional[bool] = False, 
@@ -590,7 +591,7 @@ def main():
             _, _, mlf = forecast_model_fit(input_data_dict, logger, debug=args.debug)
         else:
             mlf = None
-        df_pred_optim = forecast_model_tune(input_data_dict, logger, debug=args.debug, mlf=mlf)
+        df_pred_optim, mlf = forecast_model_tune(input_data_dict, logger, debug=args.debug, mlf=mlf)
         opt_res = None
     elif args.action == 'publish-data':
         opt_res = publish_data(input_data_dict, logger)
@@ -609,7 +610,7 @@ def main():
     elif args.action == 'forecast-model-predict':
         return df_pred
     elif args.action == 'forecast-model-tune':
-        return df_pred_optim
+        return df_pred_optim, mlf
 
 if __name__ == '__main__':
     main()
