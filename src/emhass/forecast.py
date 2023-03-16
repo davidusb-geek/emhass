@@ -609,6 +609,7 @@ class forecast(object):
             # Make predictions
             if use_last_window:
                 data_last_window = copy.deepcopy(df)
+                data_last_window = data_last_window.rename(columns={self.var_load_new: self.var_load})
             else:
                 data_last_window = None
             forecast_out = mlf.predict(data_last_window)
