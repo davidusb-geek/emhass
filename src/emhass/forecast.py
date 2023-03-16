@@ -599,7 +599,7 @@ class forecast(object):
             # Load model
             model_type = self.params['passed_data']['model_type']
             filename = model_type+'_mlf.pkl'
-            filename_path = pathlib.Path(self.root) / 'data' / filename
+            filename_path = pathlib.Path(self.root) / filename
             if not debug:
                 if filename_path.is_file():
                     with open(filename_path, 'rb') as inp:
