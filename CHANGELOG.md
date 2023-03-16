@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.4.6] - 2023-03-16
+### Fix
+- Fixed wrong path for saved ML forecaster model.
+
 ## [0.4.5] - 2023-03-10
 ### Fix
 - Fixed default behavior for passed data.
@@ -380,6 +384,8 @@
 [0.4.2]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.2
 [0.4.3]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.3
 [0.4.4]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.4
+[0.4.5]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.5
+[0.4.6]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.6
 
 # Notes
 All notable changes to this project will be documented in this file.
