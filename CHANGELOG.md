@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.4.7] - 2023-03-16
+### Fix
+- Fixed wrong column name for var_load when using predict with ML forecaster.
+
 ## [0.4.6] - 2023-03-16
 ### Fix
 - Fixed wrong path for saved ML forecaster model.
