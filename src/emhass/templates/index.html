@@ -22,6 +22,10 @@
                     <button type="button" id="forecast-model-fit" class="button button1" >ML forecast model fit</button>
                     <button type="button" id="forecast-model-predict" class="button button2" >ML forecast model predict</button>
                     <button type="button" id="forecast-model-tune" class="button button3" >ML forecast model tune</button>
+                    <<!-- h4 style="font-family: Helvetica;color: darkblue;">Pass any needed data dictionary here</h4>
+                    <div class="input-group">
+                      <textarea id="runtimeparams" name="runtimeparams" rows="6" cols="65"></textarea>
+                    </div> -->
                     <br>
                 </form>
                 <br><br>
@@ -87,6 +91,23 @@
             $.ajax(settings).done(function (response) {
             });
         });
+        // document.getElementById('forecast-model-fit').addEventListener('click', function() {
+        //     var formData = $("runtimeparams").serialize();
+        //     // send ajax
+        //     $.ajax({
+        //         url: "/action/forecast-model-fit",
+        //         type : "POST",
+        //         contentType : "application/json;charset=UTF-8",
+        //         dataType : 'json',
+        //         data : formData,
+        //         success : function(result) {
+        //             console.log(result);
+        //         },
+        //         error: function(xhr, resp, text) {
+        //             console.log(xhr, resp, text);
+        //         }
+        //     })
+        // });
         document.getElementById('forecast-model-fit').addEventListener('click', function() {
             var url = "/action/forecast-model-fit"
             var settings = {
