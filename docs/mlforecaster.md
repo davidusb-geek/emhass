@@ -65,7 +65,7 @@ A quick prediction graph using the fitted model should be available in the webui
 
 Visually the prediction looks quite acceptable but we need to evaluate this further. For this we can use the `"perform_backtest": True` option to perform a backtest evaluation using this syntax:
 ```
-curl -i -H "Content-Type:application/json" -X POST -d '{"perform_backtest": True}' http://localhost:5000/action/forecast-model-fit
+curl -i -H "Content-Type:application/json" -X POST -d '{"perform_backtest": "True"}' http://localhost:5000/action/forecast-model-fit
 ```
 
 The results of the backtest will be shown in the logs:
