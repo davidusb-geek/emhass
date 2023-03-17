@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.4.8] - 2023-03-17
+### Fix
+- Fixed to correct index length for ML forecaster prediction series.
+
 ## [0.4.7] - 2023-03-16
 ### Fix
 - Fixed wrong column name for var_load when using predict with ML forecaster.
