@@ -613,6 +613,8 @@ class forecast(object):
             else:
                 data_last_window = None
             forecast_out = mlf.predict(data_last_window)
+            # Force forecast_out length to avoid mismatches
+            forecast_out = forecast_out.iloc[0:len(self.forecast_dates)]
             # Define DataFrame
             data_dict = {'ts':self.forecast_dates, 'yhat':forecast_out.values.tolist()}
             data = pd.DataFrame.from_dict(data_dict)
