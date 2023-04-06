@@ -117,7 +117,7 @@ class mlforecaster:
         self.data_exo[self.var_model] = self.data[self.var_model]
         self.data_exo = self.data_exo.interpolate(method='linear', axis=0, limit=None)
         # train/test split
-        self.date_train = self.data_exo.index[-1]-pd.Timedelta('15days')+self.data_exo.index.freq # The last 15 days
+        self.date_train = self.data_exo.index[-1]-pd.Timedelta('5days')+self.data_exo.index.freq # The last 5 days
         self.date_split = self.data_exo.index[-1]-pd.Timedelta(split_date_delta)+self.data_exo.index.freq # The last 48h
         self.data_train = self.data_exo.loc[:self.date_split,:]
         self.data_test  = self.data_exo.loc[self.date_split:,:]
