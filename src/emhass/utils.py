@@ -246,7 +246,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             params['passed_data']['prod_price_forecast'] = None
         # Treat passed data for forecast model fit/predict/tune at runtime
         if 'days_to_retrieve' not in runtimeparams.keys():
-            days_to_retrieve = 30
+            days_to_retrieve = 9
         else:
             days_to_retrieve = runtimeparams['days_to_retrieve']
         params['passed_data']['days_to_retrieve'] = days_to_retrieve
