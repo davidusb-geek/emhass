@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+### Fix
+- Updated default value for total number of days for ML model training.
+- Added publish of unit_load_cost and unit_prod_price sensors.
+- Improved docs intro.
+
 ## [0.4.8] - 2023-03-17
 ### Fix
 - Fixed to correct index length for ML forecaster prediction series.

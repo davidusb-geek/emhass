@@ -136,6 +136,8 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
                            'custom_batt_soc_forecast_id': {"entity_id": "sensor.soc_batt_forecast", "unit_of_measurement": "%", "friendly_name": "Battery SOC Forecast"},
                            'custom_grid_forecast_id': {"entity_id": "sensor.p_grid_forecast", "unit_of_measurement": "W", "friendly_name": "Grid Power Forecast"},
                            'custom_cost_fun_id': {"entity_id": "sensor.total_cost_fun_value", "unit_of_measurement": "", "friendly_name": "Total cost function value"},
+                           'custom_unit_load_cost_id': {"entity_id": "sensor.unit_load_cost", "unit_of_measurement": "€", "friendly_name": "Unit Load Cost"},
+                           'custom_unit_prod_price_id': {"entity_id": "sensor.unit_load_cost", "unit_of_measurement": "€", "friendly_name": "Unit Prod Price"},
                            'custom_deferrable_forecast_id': custom_deferrable_forecast_id}
     if 'passed_data' in params.keys():
         for key, value in default_passed_dict.items():
@@ -333,6 +335,10 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             params['passed_data']['custom_grid_forecast_id'] = runtimeparams['custom_grid_forecast_id']
         if 'custom_cost_fun_id' in runtimeparams.keys():
             params['passed_data']['custom_cost_fun_id'] = runtimeparams['custom_cost_fun_id']
+        if 'custom_unit_load_cost_id' in runtimeparams.keys():
+            params['passed_data']['custom_unit_load_cost_id'] = runtimeparams['custom_unit_load_cost_id']
+        if 'custom_unit_prod_price_id' in runtimeparams.keys():
+            params['passed_data']['custom_unit_prod_price_id'] = runtimeparams['custom_unit_prod_price_id']
         if 'custom_deferrable_forecast_id' in runtimeparams.keys():
             params['passed_data']['custom_deferrable_forecast_id'] = runtimeparams['custom_deferrable_forecast_id']
     # Serialize the final params

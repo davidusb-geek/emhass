@@ -517,6 +517,20 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                                     custom_cost_fun_id["entity_id"], 
                                     custom_cost_fun_id["unit_of_measurement"],
                                     custom_cost_fun_id["friendly_name"])
+    # Publish unit_load_cost
+    custom_unit_load_cost_id = params['passed_data']['custom_unit_load_cost_id']
+    input_data_dict['rh'].post_data(opt_res_latest['unit_load_cost'], idx_closest, 
+                                    custom_unit_load_cost_id["entity_id"], 
+                                    custom_unit_load_cost_id["unit_of_measurement"],
+                                    custom_unit_load_cost_id["friendly_name"])
+    cols_published = cols_published+["unit_load_cost"]
+    # Publish unit_prod_price
+    custom_unit_prod_price_id = params['passed_data']['custom_unit_prod_price_id']
+    input_data_dict['rh'].post_data(opt_res_latest['unit_prod_price'], idx_closest, 
+                                    custom_unit_prod_price_id["entity_id"], 
+                                    custom_unit_prod_price_id["unit_of_measurement"],
+                                    custom_unit_prod_price_id["friendly_name"])
+    cols_published = cols_published+["unit_prod_price"]
     # Create a DF resuming what has been published
     opt_res = opt_res_latest[cols_published].loc[[opt_res_latest.index[idx_closest]]]
     return opt_res
