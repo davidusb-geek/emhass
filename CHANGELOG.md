@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## [0.4.9] - 2023-05-20
 ### Fix
 - Updated default value for total number of days for ML model training.
 - Added publish of unit_load_cost and unit_prod_price sensors.
 - Improved docs intro.
+- Bump myst-parser from 0.18.1 to 1.0.0
 
 ## [0.4.8] - 2023-03-17
 ### Fix
