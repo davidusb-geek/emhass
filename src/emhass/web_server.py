@@ -30,16 +30,23 @@ app.logger.addHandler(ch)
 def get_injection_dict(df, plot_size = 1366):
     # Create plots
     cols_p = [i for i in df.columns.to_list() if 'P_' in i]
+    n_colors = len(cols_p)
+    colors = px.colors.sample_colorscale("jet", [n/(n_colors -1) for n in range(n_colors)])
     fig_0 = px.line(df[cols_p], title='Systems powers schedule after optimization results', 
-                    template='presentation', width=plot_size, height=0.5*plot_size, line_shape="hv")
+                    template='presentation', width=plot_size, height=0.5*plot_size, line_shape="hv",
+                    color_discrete_sequence=colors)
     fig_0.update_layout(xaxis_title='Timestamp', yaxis_title='System powers (W)')
     if 'SOC_opt' in df.columns.to_list():
         fig_1 = px.line(df['SOC_opt'], title='Battery state of charge schedule after optimization results', 
-                        template='presentation', width=plot_size, height=0.5*plot_size, line_shape="hv")
+                        template='presentation', width=plot_size, height=0.5*plot_size, line_shape="hv",
+                        color_discrete_sequence=colors)
         fig_1.update_layout(xaxis_title='Timestamp', yaxis_title='Battery SOC (%)')
     cols_cost = [i for i in df.columns.to_list() if 'cost_' in i or 'unit_' in i]
+    n_colors = len(cols_cost)
+    colors = px.colors.sample_colorscale("jet", [n/(n_colors -1) for n in range(n_colors)])
     fig_2 = px.line(df[cols_cost], title='Systems costs obtained from optimization results', 
-                      template='presentation', width=plot_size, height=0.5*plot_size, line_shape="hv")
+                    template='presentation', width=plot_size, height=0.5*plot_size, line_shape="hv",
+                    color_discrete_sequence=colors)
     fig_2.update_layout(xaxis_title='Timestamp', yaxis_title='System costs (currency)')
     # Get full path to image
     image_path_0 = fig_0.to_html(full_html=False, default_width='75%')
