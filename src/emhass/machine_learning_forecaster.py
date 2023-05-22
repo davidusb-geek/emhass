@@ -119,7 +119,7 @@ class mlforecaster:
         # train/test split
         self.date_train = self.data_exo.index[-1]-pd.Timedelta('5days')+self.data_exo.index.freq # The last 5 days
         self.date_split = self.data_exo.index[-1]-pd.Timedelta(split_date_delta)+self.data_exo.index.freq # The last 48h
-        self.data_train = self.data_exo.loc[:self.date_split,:]
+        self.data_train = self.data_exo.loc[:self.date_split-self.data_exo.index.freq,:]
         self.data_test  = self.data_exo.loc[self.date_split:,:]
         self.steps = len(self.data_test)
         # Pick correct sklearn model
@@ -143,7 +143,7 @@ class mlforecaster:
                             exog=self.data_train.drop(self.var_model, axis=1))
         self.logger.info(f"Elapsed time for model fit: {time.time() - start_time}")
         # Make a prediction to print metrics
-        predictions = self.forecaster.predict(steps=self.steps, exog=self.data_train.drop(self.var_model, axis=1))
+        predictions = self.forecaster.predict(steps=self.steps, exog=self.data_test.drop(self.var_model, axis=1))
         pred_metric = r2_score(self.data_test[self.var_model],predictions)
         self.logger.info(f"Prediction R2 score of fitted model on test data: {pred_metric}")
         # Packing results in a DataFrame
@@ -187,7 +187,7 @@ class mlforecaster:
         :rtype: pd.Series
         """
         if data_last_window is None:
-            predictions = self.forecaster.predict(steps=self.num_lags, exog=self.data_train.drop(self.var_model, axis=1))
+            predictions = self.forecaster.predict(steps=self.num_lags, exog=self.data_test.drop(self.var_model, axis=1))
         else:
             data_last_window = mlforecaster.add_date_features(data_last_window)
             data_last_window = data_last_window.interpolate(method='linear', axis=0, limit=None)
@@ -276,7 +276,7 @@ class mlforecaster:
         )
         self.logger.info(f"Elapsed time: {time.time() - start_time}")
         self.is_tuned = True
-        predictions_opt = self.forecaster.predict(steps=self.num_lags, exog=self.data_train.drop(self.var_model, axis=1))
+        predictions_opt = self.forecaster.predict(steps=self.num_lags, exog=self.data_test.drop(self.var_model, axis=1))
         freq_hours = self.data_exo.index.freq.delta.seconds/3600
         self.lags_opt = int(np.round(len(self.optimize_results.iloc[0]['lags'])))
         self.days_needed = int(np.round(self.lags_opt*freq_hours/24))
