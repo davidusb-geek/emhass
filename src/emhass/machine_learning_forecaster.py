@@ -234,11 +234,11 @@ class mlforecaster:
         if self.sklearn_model == 'LinearRegression':
             if debug:
                 def search_space(trial):
-                    search_space  = {'fit_intercept': trial.suggest_categorical('fit_intercept', ['True'])} 
+                    search_space  = {'fit_intercept': trial.suggest_categorical('fit_intercept', [True])} 
                     return search_space
             else:
                 def search_space(trial):
-                    search_space  = {'fit_intercept': trial.suggest_categorical('fit_intercept', ['True', 'False'])} 
+                    search_space  = {'fit_intercept': trial.suggest_categorical('fit_intercept', [True, False])} 
                     return search_space
         elif self.sklearn_model == 'ElasticNet':
             if debug:
