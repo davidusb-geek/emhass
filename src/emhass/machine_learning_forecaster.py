@@ -97,6 +97,17 @@ class mlforecaster:
         """The negative of the r2 score."""
         return -r2_score(y_true, y_pred)
     
+    @staticmethod
+    def generate_exog(data_last_window, periods, var_name):
+        """Generate the exogenous data for future timestamps."""
+        forecast_dates = pd.date_range(start=data_last_window.index[-1]+data_last_window.index.freq, 
+                                       periods=periods, 
+                                       freq=data_last_window.index.freq)
+        exog = pd.DataFrame({var_name:[np.nan]*periods},
+                            index=forecast_dates)
+        exog = mlforecaster.add_date_features(exog)
+        return exog
+    
     def fit(self, split_date_delta: Optional[str] = '48h', perform_backtest: Optional[bool] = False
             ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         r"""The fit method to train the ML model.
@@ -189,16 +200,16 @@ class mlforecaster:
         if data_last_window is None:
             predictions = self.forecaster.predict(steps=self.num_lags, exog=self.data_test.drop(self.var_model, axis=1))
         else:
-            data_last_window = mlforecaster.add_date_features(data_last_window)
-            data_last_window = data_last_window.interpolate(method='linear', axis=0, limit=None)
             if self.is_tuned:
+                exog = mlforecaster.generate_exog(data_last_window, self.lags_opt, self.var_model)
                 predictions = self.forecaster.predict(steps=self.lags_opt, 
                                                       last_window=data_last_window[self.var_model],
-                                                      exog=data_last_window.drop(self.var_model, axis=1))
+                                                      exog=exog.drop(self.var_model, axis=1))
             else:
+                exog = mlforecaster.generate_exog(data_last_window, self.num_lags, self.var_model)
                 predictions = self.forecaster.predict(steps=self.num_lags, 
                                                       last_window=data_last_window[self.var_model],
-                                                      exog=data_last_window.drop(self.var_model, axis=1))
+                                                      exog=exog.drop(self.var_model, axis=1))
         return predictions
     
     def tune(self, debug: Optional[bool] = False) -> pd.DataFrame:
