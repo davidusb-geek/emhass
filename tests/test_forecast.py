@@ -406,6 +406,7 @@ class TestForecast(unittest.TestCase):
         self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
+        self.assertTrue((P_load_forecast.index == self.fcst.forecast_dates).all())
         self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
         
     def test_get_load_cost_forecast(self):
