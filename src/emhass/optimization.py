@@ -230,28 +230,6 @@ class optimization:
                 sense = plp.LpConstraintEQ,
                 rhs = 0)
             for i in set_I}
-        
-        # Optional constraints to avoid charging the battery from the grid and to limit kW/s
-        if self.optim_conf['set_use_battery']:
-            if self.optim_conf['set_nocharge_from_grid']:
-                constraints.update({"constraint_nocharge_from_grid_{}".format(i) : 
-                    plp.LpConstraint(
-                        e = P_sto_neg[i] + P_PV[i],
-                        sense = plp.LpConstraintGE,
-                        rhs = 0)
-                    for i in set_I})
-            set_battery_dynamic = True
-            dyn_max = 1000
-            dyn_min = -1000
-            if set_battery_dynamic:
-                constraints.update({"constraint_batt_dynamic_max_{}".format(i) : 
-                    plp.LpConstraint(e = P_sto_pos[i+1] - P_sto_pos[i], 
-                                     sense = plp.LpConstraintLE, 
-                                     rhs = self.timeStep*dyn_max) for i in range(n-1)})
-                constraints.update({"constraint_batt_dynamic_min_{}".format(i) : 
-                    plp.LpConstraint(e = P_sto_pos[i+1] - P_sto_pos[i], 
-                                     sense = plp.LpConstraintGE, 
-                                     rhs = self.timeStep*dyn_min) for i in range(n-1)})
             
         # Two special constraints just for a self-consumption cost function
         if self.costfun == 'self-consumption':
@@ -283,17 +261,16 @@ class optimization:
                 rhs = 0)
             for i in set_I})
             
-        # Total time of deferrable load
+        # Treat deferrable loads constraints
         for k in range(self.optim_conf['num_def_loads']):
+            # Total time of deferrable load
             constraints.update({"constraint_defload{}_energy".format(k) :
                 plp.LpConstraint(
                     e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in set_I),
                     sense = plp.LpConstraintEQ,
                     rhs = def_total_hours[k]*self.optim_conf['P_deferrable_nom'][k])
                 })
-            
-        # Treat deferrable load as a semi-continuous variable
-        for k in range(self.optim_conf['num_def_loads']):
+            # Treat deferrable load as a semi-continuous variable
             if self.optim_conf['treat_def_as_semi_cont'][k]:
                 constraints.update({"constraint_pdef{}_semicont1_{}".format(k, i) : 
                     plp.LpConstraint(
@@ -307,9 +284,7 @@ class optimization:
                         sense=plp.LpConstraintLE,
                         rhs=0)
                     for i in set_I})
-                
-        # Treat the number of starts for a deferrable load
-        for k in range(self.optim_conf['num_def_loads']):
+            # Treat the number of starts for a deferrable load
             if self.optim_conf['set_def_constant'][k]:
                 constraints.update({"constraint_pdef{}_start1".format(k) : 
                     plp.LpConstraint(
@@ -338,6 +313,45 @@ class optimization:
         
         # The battery constraints
         if self.optim_conf['set_use_battery']:
+            # Optional constraints to avoid charging the battery from the grid
+            if self.optim_conf['set_nocharge_from_grid']:
+                constraints.update({"constraint_nocharge_from_grid_{}".format(i) : 
+                    plp.LpConstraint(
+                        e = P_sto_neg[i] + P_PV[i],
+                        sense = plp.LpConstraintGE,
+                        rhs = 0)
+                    for i in set_I})
+            # Optional constraints to avoid discharging the battery to the grid
+            if self.optim_conf['set_nodischarge_to_grid']:
+                constraints.update({"constraint_nodischarge_to_grid_{}".format(i) : 
+                    plp.LpConstraint(
+                        e = P_grid_neg[i] + P_PV[i],
+                        sense = plp.LpConstraintGE,
+                        rhs = 0)
+                    for i in set_I})
+            # Limitation of power dynamics in power per unit of time
+            if self.optim_conf['set_battery_dynamic']:
+                constraints.update({"constraint_pos_batt_dynamic_max_{}".format(i) : 
+                    plp.LpConstraint(e = P_sto_pos[i+1] - P_sto_pos[i], 
+                                     sense = plp.LpConstraintLE, 
+                                     rhs = self.timeStep*self.optim_conf['battery_dynamic_max']*self.plant_conf['Pd_max']) 
+                    for i in range(n-1)})
+                constraints.update({"constraint_pos_batt_dynamic_min_{}".format(i) : 
+                    plp.LpConstraint(e = P_sto_pos[i+1] - P_sto_pos[i], 
+                                     sense = plp.LpConstraintGE, 
+                                     rhs = self.timeStep*self.optim_conf['battery_dynamic_min']*self.plant_conf['Pd_max']) 
+                    for i in range(n-1)})
+                constraints.update({"constraint_neg_batt_dynamic_max_{}".format(i) : 
+                    plp.LpConstraint(e = P_sto_neg[i+1] - P_sto_neg[i], 
+                                     sense = plp.LpConstraintLE, 
+                                     rhs = self.timeStep*self.optim_conf['battery_dynamic_max']*self.plant_conf['Pc_max']) 
+                    for i in range(n-1)})
+                constraints.update({"constraint_neg_batt_dynamic_min_{}".format(i) : 
+                    plp.LpConstraint(e = P_sto_neg[i+1] - P_sto_neg[i], 
+                                     sense = plp.LpConstraintGE, 
+                                     rhs = self.timeStep*self.optim_conf['battery_dynamic_min']*self.plant_conf['Pc_max']) 
+                    for i in range(n-1)})
+            # Then the classic battery constraints
             constraints.update({"constraint_pstopos_{}".format(i) : 
                 plp.LpConstraint(
                     e=P_sto_pos[i] - self.plant_conf['eta_disch']*self.plant_conf['Pd_max']*E[i],
