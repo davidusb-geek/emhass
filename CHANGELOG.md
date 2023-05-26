@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+### Improvement
+- Adding new constraints to limit the dynamics (kW/sec) of deferrable loads and battery power. The LP formulation works correctly and a work should be done on integrating the user input parameters to control this functionality.
+- Added new constraint to avoid battery discharging to the grid
+### Fix
+- Bumped version of skforecast from 0.6.0 to 0.8.0. Doing this mainly implies changing how the exogenous data is passed to fit and predict methods.
+
 ## [0.4.10] - 2023-05-21
 ### Fix
 - Fixed wrong name of new cost sensor.
