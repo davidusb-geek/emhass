@@ -83,9 +83,11 @@ class TestOptimization(unittest.TestCase):
         now_precise = datetime.now(self.input_data_dict['retrieve_hass_conf']['time_zone']).replace(second=0, microsecond=0)
         idx_closest = self.opt_res_dayahead.index.get_indexer([now_precise], method='ffill')[0]
         idx_closest = self.opt_res_dayahead.index.get_indexer([now_precise], method='nearest')[0]
-        # Test the battery
+        # Test the battery, dynamics and grid exchange contraints
         self.optim_conf.update({'set_use_battery': True})
         self.optim_conf.update({'set_nocharge_from_grid': True})
+        self.optim_conf.update({'set_battery_dynamic': True})
+        self.optim_conf.update({'set_nodischarge_to_grid': True})
         self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)

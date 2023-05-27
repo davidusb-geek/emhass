@@ -97,6 +97,17 @@ class mlforecaster:
         """The negative of the r2 score."""
         return -r2_score(y_true, y_pred)
     
+    @staticmethod
+    def generate_exog(data_last_window, periods, var_name):
+        """Generate the exogenous data for future timestamps."""
+        forecast_dates = pd.date_range(start=data_last_window.index[-1]+data_last_window.index.freq, 
+                                       periods=periods, 
+                                       freq=data_last_window.index.freq)
+        exog = pd.DataFrame({var_name:[np.nan]*periods},
+                            index=forecast_dates)
+        exog = mlforecaster.add_date_features(exog)
+        return exog
+    
     def fit(self, split_date_delta: Optional[str] = '48h', perform_backtest: Optional[bool] = False
             ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         r"""The fit method to train the ML model.
@@ -119,7 +130,7 @@ class mlforecaster:
         # train/test split
         self.date_train = self.data_exo.index[-1]-pd.Timedelta('5days')+self.data_exo.index.freq # The last 5 days
         self.date_split = self.data_exo.index[-1]-pd.Timedelta(split_date_delta)+self.data_exo.index.freq # The last 48h
-        self.data_train = self.data_exo.loc[:self.date_split,:]
+        self.data_train = self.data_exo.loc[:self.date_split-self.data_exo.index.freq,:]
         self.data_test  = self.data_exo.loc[self.date_split:,:]
         self.steps = len(self.data_test)
         # Pick correct sklearn model
@@ -143,7 +154,7 @@ class mlforecaster:
                             exog=self.data_train.drop(self.var_model, axis=1))
         self.logger.info(f"Elapsed time for model fit: {time.time() - start_time}")
         # Make a prediction to print metrics
-        predictions = self.forecaster.predict(steps=self.steps, exog=self.data_train.drop(self.var_model, axis=1))
+        predictions = self.forecaster.predict(steps=self.steps, exog=self.data_test.drop(self.var_model, axis=1))
         pred_metric = r2_score(self.data_test[self.var_model],predictions)
         self.logger.info(f"Prediction R2 score of fitted model on test data: {pred_metric}")
         # Packing results in a DataFrame
@@ -187,18 +198,18 @@ class mlforecaster:
         :rtype: pd.Series
         """
         if data_last_window is None:
-            predictions = self.forecaster.predict(steps=self.num_lags, exog=self.data_train.drop(self.var_model, axis=1))
+            predictions = self.forecaster.predict(steps=self.num_lags, exog=self.data_test.drop(self.var_model, axis=1))
         else:
-            data_last_window = mlforecaster.add_date_features(data_last_window)
-            data_last_window = data_last_window.interpolate(method='linear', axis=0, limit=None)
             if self.is_tuned:
+                exog = mlforecaster.generate_exog(data_last_window, self.lags_opt, self.var_model)
                 predictions = self.forecaster.predict(steps=self.lags_opt, 
                                                       last_window=data_last_window[self.var_model],
-                                                      exog=data_last_window.drop(self.var_model, axis=1))
+                                                      exog=exog.drop(self.var_model, axis=1))
             else:
+                exog = mlforecaster.generate_exog(data_last_window, self.num_lags, self.var_model)
                 predictions = self.forecaster.predict(steps=self.num_lags, 
                                                       last_window=data_last_window[self.var_model],
-                                                      exog=data_last_window.drop(self.var_model, axis=1))
+                                                      exog=exog.drop(self.var_model, axis=1))
         return predictions
     
     def tune(self, debug: Optional[bool] = False) -> pd.DataFrame:
@@ -223,11 +234,11 @@ class mlforecaster:
         if self.sklearn_model == 'LinearRegression':
             if debug:
                 def search_space(trial):
-                    search_space  = {'fit_intercept': trial.suggest_categorical('fit_intercept', ['True'])} 
+                    search_space  = {'fit_intercept': trial.suggest_categorical('fit_intercept', [True])} 
                     return search_space
             else:
                 def search_space(trial):
-                    search_space  = {'fit_intercept': trial.suggest_categorical('fit_intercept', ['True', 'False'])} 
+                    search_space  = {'fit_intercept': trial.suggest_categorical('fit_intercept', [True, False])} 
                     return search_space
         elif self.sklearn_model == 'ElasticNet':
             if debug:
@@ -276,7 +287,7 @@ class mlforecaster:
         )
         self.logger.info(f"Elapsed time: {time.time() - start_time}")
         self.is_tuned = True
-        predictions_opt = self.forecaster.predict(steps=self.num_lags, exog=self.data_train.drop(self.var_model, axis=1))
+        predictions_opt = self.forecaster.predict(steps=self.num_lags, exog=self.data_test.drop(self.var_model, axis=1))
         freq_hours = self.data_exo.index.freq.delta.seconds/3600
         self.lags_opt = int(np.round(len(self.optimize_results.iloc[0]['lags'])))
         self.days_needed = int(np.round(self.lags_opt*freq_hours/24))

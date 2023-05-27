@@ -17,15 +17,8 @@ from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim,
 from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune
 from emhass.command_line import publish_data
 
-
 # Define the Flask instance
 app = Flask(__name__)
-app.logger.setLevel(logging.DEBUG)
-app.logger.propagate = False
-ch = logging.StreamHandler()
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-ch.setFormatter(formatter)
-app.logger.addHandler(ch)
 
 def get_injection_dict(df, plot_size = 1366):
     # Create plots
@@ -129,6 +122,10 @@ def build_params(params, options, addon):
         params['optim_conf'][16]['lp_solver'] = options['lp_solver']
         params['optim_conf'][17]['lp_solver_path'] = options['lp_solver_path']
         params['optim_conf'][18]['set_nocharge_from_grid'] = options['set_nocharge_from_grid']
+        params['optim_conf'][19]['set_nodischarge_to_grid'] = options['set_nodischarge_to_grid']
+        params['optim_conf'][20]['set_battery_dynamic'] = options['set_battery_dynamic']
+        params['optim_conf'][21]['battery_dynamic_max'] = options['battery_dynamic_max']
+        params['optim_conf'][22]['battery_dynamic_min'] = options['battery_dynamic_min']
         # Updating variables in plant_conf
         params['plant_conf'][0]['P_grid_max'] = options['maximum_power_from_grid']
         params['plant_conf'][1]['module_model'] = [i['pv_module_model'] for i in options['list_pv_module_model']]
@@ -297,6 +294,7 @@ if __name__ == "__main__":
         # The cost function
         costfun = options['costfun']
         # Some data from options
+        logging_level = options['logging_level']
         url_from_options = options['hass_url']
         if url_from_options == 'empty':
             url = hass_url+"/config"
@@ -324,6 +322,7 @@ if __name__ == "__main__":
         }
     else:
         costfun = os.getenv('LOCAL_COSTFUN', default='profit')
+        logging_level = os.getenv('LOGGING_LEVEL', default='INFO')
         with open('/app/secrets_emhass.yaml', 'r') as file:
             params_secrets = yaml.load(file, Loader=yaml.FullLoader)
         hass_url = params_secrets['hass_url']
@@ -333,6 +332,28 @@ if __name__ == "__main__":
     with open(str(data_path / 'params.pkl'), "wb") as fid:
         pickle.dump((config_path, params), fid)
 
+    # Define logger
+    ch = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    ch.setFormatter(formatter)
+    if logging_level == "DEBUG":
+        app.logger.setLevel(logging.DEBUG)
+        ch.setLevel(logging.DEBUG)
+    elif logging_level == "INFO":
+        app.logger.setLevel(logging.INFO)
+        ch.setLevel(logging.INFO)
+    elif logging_level == "WARNING":
+        app.logger.setLevel(logging.WARNING)
+        ch.setLevel(logging.WARNING)
+    elif logging_level == "ERROR":
+        app.logger.setLevel(logging.ERROR)
+        ch.setLevel(logging.ERROR)
+    else:
+        app.logger.setLevel(logging.DEBUG)
+        ch.setLevel(logging.DEBUG)
+    app.logger.propagate = False
+    app.logger.addHandler(ch)
+    
     # Launch server
     port = int(os.environ.get('PORT', 5000))
     app.logger.info("Launching the emhass webserver at: http://"+web_ui_url+":"+str(port))

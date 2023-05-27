@@ -658,7 +658,7 @@ class forecast(object):
         return P_Load_forecast
     
     def get_load_cost_forecast(self, df_final: pd.DataFrame, method: Optional[str] = 'hp_hc_periods',
-                               csv_path: Optional[str] = "/data/data_load_cost_forecast.csv") -> pd.DataFrame:
+                               csv_path: Optional[str] = "data_load_cost_forecast.csv") -> pd.DataFrame:
         r"""
         Get the unit cost for the load consumption based on multiple tariff \
         periods. This is the cost of the energy from the utility in a vector \
@@ -671,7 +671,7 @@ class forecast(object):
             and 'csv' to load a CSV file, defaults to 'hp_hc_periods'
         :type method: str, optional
         :param csv_path: The path to the CSV file used when method = 'csv', \
-            defaults to "/data/data_load_cost_forecast.csv"
+            defaults to "data_load_cost_forecast.csv"
         :type csv_path: str, optional
         :return: The input DataFrame with one additionnal column appended containing
             the load cost for each time observation.

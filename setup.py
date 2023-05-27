@@ -19,7 +19,7 @@ long_description = (here / 'README.md').read_text(encoding='utf-8')
 
 setup(
     name='emhass',  # Required
-    version='0.4.10',  # Required
+    version='0.4.11',  # Required
     description='An Energy Management System for Home Assistant',  # Optional
     long_description=long_description,  # Optional
     long_description_content_type='text/markdown',  # Optional (see note above)
@@ -57,7 +57,7 @@ setup(
         'pyyaml>=5.4.1',
         'netcdf4>=1.5.3',
         'tables==3.7.0',
-        'skforecast==0.6.0',
+        'skforecast==0.8.0',
     ],  # Optional
     entry_points={  # Optional
         'console_scripts': [
