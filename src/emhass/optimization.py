@@ -225,137 +225,163 @@ class optimization:
         ## Setting constraints
         # The main constraint: power balance
         constraints = {"constraint_main1_{}".format(i) :
-                       plp.LpConstraint(
-                           e = P_PV[i] - P_def_sum[i] - P_load[i] + P_grid_neg[i] + P_grid_pos[i] + P_sto_pos[i] + P_sto_neg[i],
-                           sense = plp.LpConstraintEQ,
-                           rhs = 0)
-                       for i in set_I}
-        
-        # An optional constraint to avoid charging the battery from the grid
-        if self.optim_conf['set_use_battery']:
-            if self.optim_conf['set_nocharge_from_grid']:
-                constraints.update({"constraint_nocharge_from_grid_{}".format(i) : 
-                                plp.LpConstraint(
-                                    e = P_sto_neg[i] + P_PV[i],
-                                    sense = plp.LpConstraintGE,
-                                    rhs = 0)
-                                for i in set_I})
+            plp.LpConstraint(
+                e = P_PV[i] - P_def_sum[i] - P_load[i] + P_grid_neg[i] + P_grid_pos[i] + P_sto_pos[i] + P_sto_neg[i],
+                sense = plp.LpConstraintEQ,
+                rhs = 0)
+            for i in set_I}
             
         # Two special constraints just for a self-consumption cost function
         if self.costfun == 'self-consumption':
             if type_self_conso == 'maxmin': # maxmin linear problem
                 constraints.update({"constraint_selfcons_PV_{}".format(i) : 
-                                    plp.LpConstraint(
-                                        e = SC[i] - P_PV[i],
-                                        sense = plp.LpConstraintLE,
-                                        rhs = 0)
-                                    for i in set_I})
+                    plp.LpConstraint(
+                        e = SC[i] - P_PV[i],
+                        sense = plp.LpConstraintLE,
+                        rhs = 0)
+                    for i in set_I})
                 constraints.update({"constraint_selfcons_PV_{}".format(i) : 
-                                    plp.LpConstraint(
-                                        e = SC[i] - P_load[i] - P_def_sum[i],
-                                        sense = plp.LpConstraintLE,
-                                        rhs = 0)
-                                    for i in set_I})
+                    plp.LpConstraint(
+                        e = SC[i] - P_load[i] - P_def_sum[i],
+                        sense = plp.LpConstraintLE,
+                        rhs = 0)
+                    for i in set_I})
         
         # Avoid injecting and consuming from grid at the same time
         constraints.update({"constraint_pgridpos_{}".format(i) : 
-                            plp.LpConstraint(
-                                e = P_grid_pos[i] - self.plant_conf['P_grid_max']*D[i],
-                                sense = plp.LpConstraintLE,
-                                rhs = 0)
-                            for i in set_I})
+            plp.LpConstraint(
+                e = P_grid_pos[i] - self.plant_conf['P_grid_max']*D[i],
+                sense = plp.LpConstraintLE,
+                rhs = 0)
+            for i in set_I})
         constraints.update({"constraint_pgridneg_{}".format(i) : 
-                            plp.LpConstraint(
-                                e = -P_grid_neg[i] - self.plant_conf['P_grid_max']*(1-D[i]),
-                                sense = plp.LpConstraintLE,
-                                rhs = 0)
-                            for i in set_I})
+            plp.LpConstraint(
+                e = -P_grid_neg[i] - self.plant_conf['P_grid_max']*(1-D[i]),
+                sense = plp.LpConstraintLE,
+                rhs = 0)
+            for i in set_I})
             
-        # Total time of deferrable load
+        # Treat deferrable loads constraints
         for k in range(self.optim_conf['num_def_loads']):
+            # Total time of deferrable load
             constraints.update({"constraint_defload{}_energy".format(k) :
-                                plp.LpConstraint(
-                                    e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in set_I),
-                                    sense = plp.LpConstraintEQ,
-                                    rhs = def_total_hours[k]*self.optim_conf['P_deferrable_nom'][k])
-                                })
-            
-        # Treat deferrable load as a semi-continuous variable
-        for k in range(self.optim_conf['num_def_loads']):
+                plp.LpConstraint(
+                    e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in set_I),
+                    sense = plp.LpConstraintEQ,
+                    rhs = def_total_hours[k]*self.optim_conf['P_deferrable_nom'][k])
+                })
+            # Treat deferrable load as a semi-continuous variable
             if self.optim_conf['treat_def_as_semi_cont'][k]:
                 constraints.update({"constraint_pdef{}_semicont1_{}".format(k, i) : 
-                                    plp.LpConstraint(
-                                        e=P_deferrable[k][i] - self.optim_conf['P_deferrable_nom'][k]*P_def_bin1[k][i],
-                                        sense=plp.LpConstraintGE,
-                                        rhs=0)
-                                    for i in set_I})
+                    plp.LpConstraint(
+                        e=P_deferrable[k][i] - self.optim_conf['P_deferrable_nom'][k]*P_def_bin1[k][i],
+                        sense=plp.LpConstraintGE,
+                        rhs=0)
+                    for i in set_I})
                 constraints.update({"constraint_pdef{}_semicont2_{}".format(k, i) :
-                                    plp.LpConstraint(
-                                        e=P_deferrable[k][i] - self.optim_conf['P_deferrable_nom'][k]*P_def_bin1[k][i],
-                                        sense=plp.LpConstraintLE,
-                                        rhs=0)
-                                    for i in set_I})
-                
-        # Treat the number of starts for a deferrable load
-        for k in range(self.optim_conf['num_def_loads']):
+                    plp.LpConstraint(
+                        e=P_deferrable[k][i] - self.optim_conf['P_deferrable_nom'][k]*P_def_bin1[k][i],
+                        sense=plp.LpConstraintLE,
+                        rhs=0)
+                    for i in set_I})
+            # Treat the number of starts for a deferrable load
             if self.optim_conf['set_def_constant'][k]:
                 constraints.update({"constraint_pdef{}_start1".format(k) : 
-                                    plp.LpConstraint(
-                                        e=P_def_start[k][0],
-                                        sense=plp.LpConstraintEQ,
-                                        rhs=0)
-                                    })
+                    plp.LpConstraint(
+                        e=P_def_start[k][0],
+                        sense=plp.LpConstraintEQ,
+                        rhs=0)
+                    })
                 constraints.update({"constraint_pdef{}_start2_{}".format(k, i) : 
-                                    plp.LpConstraint(
-                                        e=P_def_start[k][i] - P_def_bin2[k][i] + P_def_bin2[k][i-1],
-                                        sense=plp.LpConstraintEQ,
-                                        rhs=0)
-                                    for i in set_I[1:]})
+                    plp.LpConstraint(
+                        e=P_def_start[k][i] - P_def_bin2[k][i] + P_def_bin2[k][i-1],
+                        sense=plp.LpConstraintEQ,
+                        rhs=0)
+                    for i in set_I[1:]})
                 constraints.update({"constraint_pdef{}_start4_{}".format(k, i) : 
-                                    plp.LpConstraint(
-                                        e=P_deferrable[k][i] - P_def_bin2[k][i]*M,
-                                        sense=plp.LpConstraintLE,
-                                        rhs=0)
-                                    for i in set_I})
+                    plp.LpConstraint(
+                        e=P_deferrable[k][i] - P_def_bin2[k][i]*M,
+                        sense=plp.LpConstraintLE,
+                        rhs=0)
+                    for i in set_I})
                 constraints.update({"constraint_pdef{}_start5_{}".format(k, i) : 
-                                    plp.LpConstraint(
-                                        e=-P_deferrable[k][i] + M*(P_def_bin2[k][i]-1) + 1,
-                                        sense=plp.LpConstraintLE,
-                                        rhs=0)
-                                    for i in set_I})
+                    plp.LpConstraint(
+                        e=-P_deferrable[k][i] + M*(P_def_bin2[k][i]-1) + 1,
+                        sense=plp.LpConstraintLE,
+                        rhs=0)
+                    for i in set_I})
         
         # The battery constraints
         if self.optim_conf['set_use_battery']:
+            # Optional constraints to avoid charging the battery from the grid
+            if self.optim_conf['set_nocharge_from_grid']:
+                constraints.update({"constraint_nocharge_from_grid_{}".format(i) : 
+                    plp.LpConstraint(
+                        e = P_sto_neg[i] + P_PV[i],
+                        sense = plp.LpConstraintGE,
+                        rhs = 0)
+                    for i in set_I})
+            # Optional constraints to avoid discharging the battery to the grid
+            if self.optim_conf['set_nodischarge_to_grid']:
+                constraints.update({"constraint_nodischarge_to_grid_{}".format(i) : 
+                    plp.LpConstraint(
+                        e = P_grid_neg[i] + P_PV[i],
+                        sense = plp.LpConstraintGE,
+                        rhs = 0)
+                    for i in set_I})
+            # Limitation of power dynamics in power per unit of time
+            if self.optim_conf['set_battery_dynamic']:
+                constraints.update({"constraint_pos_batt_dynamic_max_{}".format(i) : 
+                    plp.LpConstraint(e = P_sto_pos[i+1] - P_sto_pos[i], 
+                                     sense = plp.LpConstraintLE, 
+                                     rhs = self.timeStep*self.optim_conf['battery_dynamic_max']*self.plant_conf['Pd_max']) 
+                    for i in range(n-1)})
+                constraints.update({"constraint_pos_batt_dynamic_min_{}".format(i) : 
+                    plp.LpConstraint(e = P_sto_pos[i+1] - P_sto_pos[i], 
+                                     sense = plp.LpConstraintGE, 
+                                     rhs = self.timeStep*self.optim_conf['battery_dynamic_min']*self.plant_conf['Pd_max']) 
+                    for i in range(n-1)})
+                constraints.update({"constraint_neg_batt_dynamic_max_{}".format(i) : 
+                    plp.LpConstraint(e = P_sto_neg[i+1] - P_sto_neg[i], 
+                                     sense = plp.LpConstraintLE, 
+                                     rhs = self.timeStep*self.optim_conf['battery_dynamic_max']*self.plant_conf['Pc_max']) 
+                    for i in range(n-1)})
+                constraints.update({"constraint_neg_batt_dynamic_min_{}".format(i) : 
+                    plp.LpConstraint(e = P_sto_neg[i+1] - P_sto_neg[i], 
+                                     sense = plp.LpConstraintGE, 
+                                     rhs = self.timeStep*self.optim_conf['battery_dynamic_min']*self.plant_conf['Pc_max']) 
+                    for i in range(n-1)})
+            # Then the classic battery constraints
             constraints.update({"constraint_pstopos_{}".format(i) : 
-                                plp.LpConstraint(
-                                    e=P_sto_pos[i] - self.plant_conf['eta_disch']*self.plant_conf['Pd_max']*E[i],
-                                    sense=plp.LpConstraintLE,
-                                    rhs=0)
-                                for i in set_I})
+                plp.LpConstraint(
+                    e=P_sto_pos[i] - self.plant_conf['eta_disch']*self.plant_conf['Pd_max']*E[i],
+                    sense=plp.LpConstraintLE,
+                    rhs=0)
+                for i in set_I})
             constraints.update({"constraint_pstoneg_{}".format(i) : 
-                                plp.LpConstraint(
-                                    e=-P_sto_neg[i] - (1/self.plant_conf['eta_ch'])*self.plant_conf['Pc_max']*(1-E[i]),
-                                    sense=plp.LpConstraintLE,
-                                    rhs=0)
-                                for i in set_I})
+                plp.LpConstraint(
+                    e=-P_sto_neg[i] - (1/self.plant_conf['eta_ch'])*self.plant_conf['Pc_max']*(1-E[i]),
+                    sense=plp.LpConstraintLE,
+                    rhs=0)
+                for i in set_I})
             constraints.update({"constraint_socmax_{}".format(i) : 
-                                plp.LpConstraint(
-                                    e=-plp.lpSum(P_sto_pos[j]*(1/self.plant_conf['eta_disch']) + self.plant_conf['eta_ch']*P_sto_neg[j] for j in range(i)),
-                                    sense=plp.LpConstraintLE,
-                                    rhs=(self.plant_conf['Enom']/self.timeStep)*(self.plant_conf['SOCmax'] - soc_init))
-                                for i in set_I})
+                plp.LpConstraint(
+                    e=-plp.lpSum(P_sto_pos[j]*(1/self.plant_conf['eta_disch']) + self.plant_conf['eta_ch']*P_sto_neg[j] for j in range(i)),
+                    sense=plp.LpConstraintLE,
+                    rhs=(self.plant_conf['Enom']/self.timeStep)*(self.plant_conf['SOCmax'] - soc_init))
+                for i in set_I})
             constraints.update({"constraint_socmin_{}".format(i) : 
-                                plp.LpConstraint(
-                                    e=plp.lpSum(P_sto_pos[j]*(1/self.plant_conf['eta_disch']) + self.plant_conf['eta_ch']*P_sto_neg[j] for j in range(i)),
-                                    sense=plp.LpConstraintLE,
-                                    rhs=(self.plant_conf['Enom']/self.timeStep)*(soc_init - self.plant_conf['SOCmin']))
-                                for i in set_I})
+                plp.LpConstraint(
+                    e=plp.lpSum(P_sto_pos[j]*(1/self.plant_conf['eta_disch']) + self.plant_conf['eta_ch']*P_sto_neg[j] for j in range(i)),
+                    sense=plp.LpConstraintLE,
+                    rhs=(self.plant_conf['Enom']/self.timeStep)*(soc_init - self.plant_conf['SOCmin']))
+                for i in set_I})
             constraints.update({"constraint_socfinal_{}".format(0) : 
-                                plp.LpConstraint(
-                                    e=plp.lpSum(P_sto_pos[i]*(1/self.plant_conf['eta_disch']) + self.plant_conf['eta_ch']*P_sto_neg[i] for i in set_I),
-                                    sense=plp.LpConstraintEQ,
-                                    rhs=(soc_init - soc_final)*self.plant_conf['Enom']/self.timeStep)
-                                })
+                plp.LpConstraint(
+                    e=plp.lpSum(P_sto_pos[i]*(1/self.plant_conf['eta_disch']) + self.plant_conf['eta_ch']*P_sto_neg[i] for i in set_I),
+                    sense=plp.LpConstraintEQ,
+                    rhs=(soc_init - soc_final)*self.plant_conf['Enom']/self.timeStep)
+                })
         opt_model.constraints = constraints
     
         ## Finally, we call the solver to solve our optimization model:

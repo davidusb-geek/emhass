@@ -406,13 +406,15 @@ class TestForecast(unittest.TestCase):
         self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
+        self.assertTrue((P_load_forecast.index == self.fcst.forecast_dates).all())
         self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
         
     def test_get_load_cost_forecast(self):
         df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data)
         self.assertTrue(self.fcst.var_load_cost in df_input_data.columns)
         self.assertTrue(df_input_data.isnull().sum().sum()==0)
-        df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data, method='csv')
+        df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data, method='csv',
+                                                         csv_path='/data/data_load_cost_forecast.csv')
         self.assertTrue(self.fcst.var_load_cost in df_input_data.columns)
         self.assertTrue(df_input_data.isnull().sum().sum()==0)
         
@@ -420,7 +422,8 @@ class TestForecast(unittest.TestCase):
         df_input_data = self.fcst.get_prod_price_forecast(self.df_input_data)
         self.assertTrue(self.fcst.var_prod_price in df_input_data.columns)
         self.assertTrue(df_input_data.isnull().sum().sum()==0)
-        df_input_data = self.fcst.get_prod_price_forecast(self.df_input_data, method='csv')
+        df_input_data = self.fcst.get_prod_price_forecast(self.df_input_data, method='csv',
+                                                          csv_path='/data/data_load_cost_forecast.csv')
         self.assertTrue(self.fcst.var_prod_price in df_input_data.columns)
         self.assertTrue(df_input_data.isnull().sum().sum()==0)
         
