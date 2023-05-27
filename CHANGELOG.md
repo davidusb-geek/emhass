@@ -6,6 +6,7 @@
 - Added new constraint to avoid battery discharging to the grid
 ### Fix
 - Bumped version of skforecast from 0.6.0 to 0.8.0. Doing this mainly implies changing how the exogenous data is passed to fit and predict methods.
+- Fixed wrong path for csv files when using load cost and prod price forecasts.
 
 ## [0.4.10] - 2023-05-21
 ### Fix
