@@ -285,6 +285,12 @@ class retrieve_hass:
         elif 'SOC' in entity_id:
             data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "battery_scheduled_soc", state)
+        elif 'unit_load_cost' in entity_id:
+            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+                                                    friendly_name, "unit_load_cost_forecasts", state)
+        elif 'unit_prod_price' in entity_id:
+            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+                                                    friendly_name, "unit_load_cost_forecasts", state)
         elif from_mlforecaster:
             data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "scheduled_forecast", state)
