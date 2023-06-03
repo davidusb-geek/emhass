@@ -4,6 +4,8 @@
 ### Improvement
 - Added forecasts for unit_prod_price and unit_load_cost.
 - Improved documentation.
+### Fix
+- Bump skforecast from 0.8.0 to 0.8.1
 
 ## [0.4.11] - 2023-05-27
 ### Improvement
