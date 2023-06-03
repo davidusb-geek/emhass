@@ -30,7 +30,7 @@
 </p>
 <br>
 <p align="center">
-If you like my work please consider buying a coffee ;-) 
+If you like this work please consider buying a coffee ;-) 
 </p>
 <p align="center">
   <a href="https://www.buymeacoffee.com/davidusbgeek" target="_blank">
