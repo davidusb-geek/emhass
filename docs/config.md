@@ -75,6 +75,10 @@ The following parameters and definitions are only needed if load_cost_forecast_m
 - lp_solver: Set the name of the linear programming solver that will be used. Defaults to 'COIN_CMD'. The options are 'PULP_CBC_CMD', 'GLPK_CMD' and 'COIN_CMD'. 
 - lp_solver_path: Set the path to the LP solver. Defaults to '/usr/bin/cbc'. 
 - set_nocharge_from_grid: Set this to true if you want to forbidden to charge the battery from the grid. The battery will only be charged from excess PV.
+- set_nodischarge_to_grid: Set this to true if you want to forbidden to discharge the battery power to the grid.
+- set_battery_dynamic: Set a power dynamic limiting condition to the battery power. This is an additional constraint on the battery dynamic in power per unit of time.
+- battery_dynamic_max: The maximum positive battery power dynamic. This is the power variation in percentage of battery maximum power.
+- battery_dynamic_min: The minimum negative battery power dynamic. This is the power variation in percentage of battery maximum power.
 
 ## System configuration parameters
 
