@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.12] - 2023-06-03
+### Improvement
+- Added forecasts for unit_prod_price and unit_load_cost.
+- Improved documentation.
+
 ## [0.4.11] - 2023-05-27
 ### Improvement
 - Adding new constraints to limit the dynamics (kW/sec) of deferrable loads and battery power. The LP formulation works correctly and a work should be done on integrating the user input parameters to control this functionality.
