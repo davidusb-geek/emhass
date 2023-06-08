@@ -19,7 +19,7 @@ Some paramters can be optionally defined at runtime:
 - `days_to_retrieve`: the total days to retrieve from Home Assistant for model training. Defined this in order to retrieve as much history data as possible.
 
 ```{note}
-The minimum number of `days_to_retrieve` is hard coded to 15. If needed, modify your Home Assistant recorder settings to provide at least 15 days of data. But try to provide more for better accuracy. 
+The minimum number of `days_to_retrieve` is hard coded to 9 by default. But it is adviced to provide more data for better accuracy by modifying your Home Assistant recorder settings. 
 ```
 
 - `model_type`: define the type of model forecast that this will be used for. For example: `load_forecast`. This should be an unique name is you are using multiple custom forecast models.
