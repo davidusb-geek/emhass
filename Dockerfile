@@ -16,6 +16,8 @@ RUN apt-get update \
         libhdf5-serial-dev \
         netcdf-bin \
         libnetcdf-dev \
+        coinor-cbc \
+        coinor-libcbc-dev \
     && ln -s /usr/include/hdf5/serial /usr/include/hdf5/include \
     && export HDF5_DIR=/usr/include/hdf5 \
     && pip3 install netCDF4 \
