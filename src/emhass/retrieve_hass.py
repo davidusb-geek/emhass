@@ -271,6 +271,8 @@ class retrieve_hass:
         # Preparing the data dict to be published
         if 'cost_fun_' in entity_id:
             state = np.round(data_df.sum()[0],2)
+        elif 'unit_' in entity_id:
+            state = np.round(data_df.loc[data_df.index[idx]],4)
         else:
             state = np.round(data_df.loc[data_df.index[idx]],2)
         if 'p_pv' in entity_id or 'p_load' in entity_id or 'p_grid' in entity_id:
