@@ -118,6 +118,7 @@ class TestCommandLineUtils(unittest.TestCase):
         runtimeparams.update({'solcast_rooftop_id':'yourrooftopid'})
         runtimeparams.update({'solar_forecast_kwp':5.0})
         runtimeparams.update({'SOCtarget':0.4})
+        runtimeparams.update({'publish_prefix':'emhass_'})
         runtimeparams_json = json.dumps(runtimeparams)
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
             pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True, params=self.params_json)
@@ -140,6 +141,7 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(retrieve_hass_conf['solcast_rooftop_id'] == 'yourrooftopid')
         self.assertTrue(retrieve_hass_conf['solar_forecast_kwp'] == 5.0)
         self.assertTrue(plant_conf['SOCtarget'] == 0.4)
+        self.assertTrue(params['passed_data']['publish_prefix'] == 'emhass_')
     
     def test_treat_runtimeparams_failed(self):
         params = TestCommandLineUtils.get_test_params()
