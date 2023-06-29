@@ -4,9 +4,11 @@
 ### Improvement
 - Added support for data reconstruction when missing values on last window for ML forecaster prediction.
 - Added treatment of SOCtarget passed at runtime for day-ahead optimization.
+- Added publish_prefix key to pass a common prefix to all published data.
 ### Fix
 - Patched sensor rounding problem.
 - Bump myst-parser from 1.0.0 to 2.0.0
+- Fixed missing attributes is the sensors when using the custom IDs.
 
 ## [0.4.12] - 2023-06-03
 ### Improvement

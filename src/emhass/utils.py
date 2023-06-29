@@ -138,7 +138,8 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
                            'custom_cost_fun_id': {"entity_id": "sensor.total_cost_fun_value", "unit_of_measurement": "", "friendly_name": "Total cost function value"},
                            'custom_unit_load_cost_id': {"entity_id": "sensor.unit_load_cost", "unit_of_measurement": "€/kWh", "friendly_name": "Unit Load Cost"},
                            'custom_unit_prod_price_id': {"entity_id": "sensor.unit_prod_price", "unit_of_measurement": "€/kWh", "friendly_name": "Unit Prod Price"},
-                           'custom_deferrable_forecast_id': custom_deferrable_forecast_id}
+                           'custom_deferrable_forecast_id': custom_deferrable_forecast_id,
+                           'publish_prefix': ""}
     if 'passed_data' in params.keys():
         for key, value in default_passed_dict.items():
             params['passed_data'][key] = value
@@ -344,6 +345,12 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             params['passed_data']['custom_unit_prod_price_id'] = runtimeparams['custom_unit_prod_price_id']
         if 'custom_deferrable_forecast_id' in runtimeparams.keys():
             params['passed_data']['custom_deferrable_forecast_id'] = runtimeparams['custom_deferrable_forecast_id']
+        # A condition to put a prefix on all published data
+        if 'publish_prefix' not in runtimeparams.keys():
+            publish_prefix = ""
+        else:
+            publish_prefix = runtimeparams['publish_prefix']
+        params['passed_data']['publish_prefix'] = publish_prefix
     # Serialize the final params
     params = json.dumps(params)
     return params, retrieve_hass_conf, optim_conf, plant_conf

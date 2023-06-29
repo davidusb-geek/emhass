@@ -242,7 +242,9 @@ class retrieve_hass:
     
     def post_data(self, data_df: pd.DataFrame, idx: int, entity_id: str, 
                   unit_of_measurement: str, friendly_name: str,
-                  from_mlforecaster: Optional[bool]=False) -> None:
+                  type_var: str,
+                  from_mlforecaster: Optional[bool]=False,
+                  publish_prefix: Optional[str]="") -> None:
         r"""
         Post passed data to hass.
         
@@ -258,8 +260,15 @@ class retrieve_hass:
         :type unit_of_measurement: str
         :param friendly_name: The friendly name that will be used in the hass frontend.
         :type friendly_name: str
+        :param type_var: A variable to indicate the type of variable: power, SOC, etc.
+        :type type_var: str
+        :param publish_prefix: A common prefix for all published data entity_id.
+        :type publish_prefix: str, optional
 
         """
+        # Add a possible prefix to the entity ID
+        entity_id = entity_id.replace('sensor.', 'sensor.'+publish_prefix)
+        # Set the URL
         if self.hass_url == "http://supervisor/core/api": # If we are using the supervisor API
             url = self.hass_url+"/states/"+entity_id
         else: # Otherwise the Home Assistant Core API it is
@@ -269,31 +278,31 @@ class retrieve_hass:
             "content-type": "application/json",
         }
         # Preparing the data dict to be published
-        if 'cost_fun_' in entity_id:
+        if type_var == 'cost_fun':
             state = np.round(data_df.sum()[0],2)
-        elif 'unit_' in entity_id:
+        elif type_var == 'unit_load_cost' or type_var == 'unit_prod_price':
             state = np.round(data_df.loc[data_df.index[idx]],4)
         else:
             state = np.round(data_df.loc[data_df.index[idx]],2)
-        if 'p_pv' in entity_id or 'p_load' in entity_id or 'p_grid' in entity_id:
+        if type_var == 'power':
             data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "forecasts", state)
-        elif 'deferrable' in entity_id:
+        elif type_var == 'deferrable':
             data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "deferrables_schedule", state)
-        elif 'batt' in entity_id:
+        elif type_var == 'batt':
             data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "battery_scheduled_power", state)
-        elif 'SOC' in entity_id:
+        elif type_var == 'SOC':
             data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "battery_scheduled_soc", state)
-        elif 'unit_load_cost' in entity_id:
+        elif type_var == 'unit_load_cost':
             data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "unit_load_cost_forecasts", state)
-        elif 'unit_prod_price' in entity_id:
+        elif type_var == 'unit_prod_price':
             data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
-                                                    friendly_name, "unit_load_cost_forecasts", state)
-        elif from_mlforecaster:
+                                                    friendly_name, "unit_prod_price_forecasts", state)
+        elif type_var == 'mlforecaster':
             data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "scheduled_forecast", state)
         else:

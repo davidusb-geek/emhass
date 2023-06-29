@@ -355,6 +355,8 @@ Here is the list of the other additional dictionnary keys that can be passed at 
 
 - `SOCtarget` for the desired target value of initial and final SOC.
 
+- `publish_prefix` use this key to pass a common prefix to all published data.
+
 ## A naive Model Predictive Controller
 
 A MPC controller was introduced in v0.3.0. This is an informal/naive representation of a MPC controller. 
