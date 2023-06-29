@@ -200,6 +200,7 @@ class mlforecaster:
         if data_last_window is None:
             predictions = self.forecaster.predict(steps=self.num_lags, exog=self.data_test.drop(self.var_model, axis=1))
         else:
+            data_last_window = data_last_window.interpolate(method='linear', axis=0, limit=None)
             if self.is_tuned:
                 exog = mlforecaster.generate_exog(data_last_window, self.lags_opt, self.var_model)
                 predictions = self.forecaster.predict(steps=self.lags_opt, 

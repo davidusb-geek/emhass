@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.13] - 2023-06-29
+### Improvement
+- Added support for data reconstruction when missing values on last window for ML forecaster prediction.
+- Added treatment of SOCtarget passed at runtime for day-ahead optimization.
+### Fix
+- Patched sensor rounding problem.
+- Bump myst-parser from 1.0.0 to 2.0.0
+
+
 ## [0.4.12] - 2023-06-03
 ### Improvement
 - Added forecasts for unit_prod_price and unit_load_cost.
