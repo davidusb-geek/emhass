@@ -353,6 +353,8 @@ Here is the list of the other additional dictionnary keys that can be passed at 
 
 - `solar_forecast_kwp` for the PV peak installed power in kW used for the solar.forecast API call. 
 
+- `SOCtarget` for the desired target value of initial and final SOC.
+
 ## A naive Model Predictive Controller
 
 A MPC controller was introduced in v0.3.0. This is an informal/naive representation of a MPC controller. 

@@ -196,7 +196,7 @@ class TestForecast(unittest.TestCase):
         retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), 
                                                                     use_secrets=False, params=params_json)
         set_type = "dayahead-optim"
-        params, retrieve_hass_conf, optim_conf = treat_runtimeparams(
+        params, retrieve_hass_conf, optim_conf, plant_conf = treat_runtimeparams(
             runtimeparams_json, params_json, retrieve_hass_conf, 
             optim_conf, plant_conf, set_type, logger)
         rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
@@ -271,7 +271,7 @@ class TestForecast(unittest.TestCase):
         retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), 
                                                                     use_secrets=False, params=params_json)
         set_type = "dayahead-optim"
-        params, retrieve_hass_conf, optim_conf = treat_runtimeparams(
+        params, retrieve_hass_conf, optim_conf, plant_conf = treat_runtimeparams(
             runtimeparams_json, params_json, retrieve_hass_conf, 
             optim_conf, plant_conf, set_type, logger)
         rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
