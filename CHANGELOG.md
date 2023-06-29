@@ -433,6 +433,13 @@
 [0.4.4]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.4
 [0.4.5]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.5
 [0.4.6]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.6
+[0.4.7]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.7
+[0.4.8]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.8
+[0.4.9]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.9
+[0.4.10]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.10
+[0.4.11]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.11
+[0.4.12]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.12
+[0.4.13]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.13
 
 # Notes
 All notable changes to this project will be documented in this file.
