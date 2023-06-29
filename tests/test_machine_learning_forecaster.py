@@ -9,6 +9,7 @@ import yaml
 import copy
 import pickle
 import pandas as pd
+import numpy as np
 
 from skforecast.ForecasterAutoreg import ForecasterAutoreg
 
@@ -96,6 +97,13 @@ class TestMLForecaster(unittest.TestCase):
         # Test predict in production env using last_window
         data_tmp = copy.deepcopy(self.rh.df_final)[[self.mlf.var_model]]
         data_last_window = data_tmp[data_tmp.index[-1] - pd.offsets.Day(2):]
+        predictions = self.mlf.predict(data_last_window)
+        self.assertIsInstance(predictions, pd.Series)
+        self.assertTrue(predictions.isnull().sum().sum() == 0)
+        # Test again with last_window data but with NaNs
+        data_last_window.at[data_last_window.index[10],self.mlf.var_model] = np.nan
+        data_last_window.at[data_last_window.index[11],self.mlf.var_model] = np.nan
+        data_last_window.at[data_last_window.index[12],self.mlf.var_model] = np.nan
         predictions = self.mlf.predict(data_last_window)
         self.assertIsInstance(predictions, pd.Series)
         self.assertTrue(predictions.isnull().sum().sum() == 0)

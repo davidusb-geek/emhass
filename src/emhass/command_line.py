@@ -54,7 +54,7 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
     retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
         config_path, use_secrets=not(get_data_from_file), params=params)
     # Treat runtimeparams
-    params, retrieve_hass_conf, optim_conf = utils.treat_runtimeparams(
+    params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
         runtimeparams, params, retrieve_hass_conf, 
         optim_conf, plant_conf, set_type, logger)
     # Define main objects

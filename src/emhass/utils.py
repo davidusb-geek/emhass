@@ -322,6 +322,9 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         if 'solar_forecast_kwp' in runtimeparams.keys():
             retrieve_hass_conf['solar_forecast_kwp'] = runtimeparams['solar_forecast_kwp']
             optim_conf['weather_forecast_method'] = 'solar.forecast'
+        # Treat plant configuration parameters passed at runtime
+        if 'SOCtarget' in runtimeparams.keys():
+            plant_conf['SOCtarget'] = runtimeparams['SOCtarget']
         # Treat custom entities id's and friendly names for variables
         if 'custom_pv_forecast_id' in runtimeparams.keys():
             params['passed_data']['custom_pv_forecast_id'] = runtimeparams['custom_pv_forecast_id']
@@ -343,7 +346,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             params['passed_data']['custom_deferrable_forecast_id'] = runtimeparams['custom_deferrable_forecast_id']
     # Serialize the final params
     params = json.dumps(params)
-    return params, retrieve_hass_conf, optim_conf
+    return params, retrieve_hass_conf, optim_conf, plant_conf
 
 def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
                    params: Optional[str] = None) -> Tuple[dict, dict, dict]:
