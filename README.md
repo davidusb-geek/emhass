@@ -355,7 +355,7 @@ Here is the list of the other additional dictionnary keys that can be passed at 
 
 - `SOCtarget` for the desired target value of initial and final SOC.
 
-- `publish_prefix` use this key to pass a common prefix to all published data.
+- `publish_prefix` use this key to pass a common prefix to all published data. This will add a prefix to the sensor name but also to the forecasts attributes keys within the sensor.
 
 ## A naive Model Predictive Controller
 
