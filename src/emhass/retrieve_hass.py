@@ -223,7 +223,7 @@ class retrieve_hass:
         list_df = copy.deepcopy(data_df).loc[data_df.index[idx]:].reset_index()
         list_df.columns = ['timestamps', entity_id]
         ts_list = [str(i) for i in list_df['timestamps'].tolist()]
-        vals_list = [str(np.round(i)) for i in list_df[entity_id].tolist()]
+        vals_list = [str(np.round(i,2)) for i in list_df[entity_id].tolist()]
         forecast_list = []
         for i, ts in enumerate(ts_list):
             datum = {}
@@ -231,7 +231,7 @@ class retrieve_hass:
             datum[entity_id.split('sensor.')[1]] = vals_list[i]
             forecast_list.append(datum)
         data = {
-            "state": str(state),
+            "state": "{:.2f}".format(state),
             "attributes": {
                 "unit_of_measurement": unit_of_measurement,
                 "friendly_name": friendly_name,
@@ -307,7 +307,7 @@ class retrieve_hass:
                                                     friendly_name, "scheduled_forecast", state)
         else:
             data = {
-                "state": str(state),
+                "state": "{:.2f}".format(state),
                 "attributes": {
                     "unit_of_measurement": unit_of_measurement,
                     "friendly_name": friendly_name
