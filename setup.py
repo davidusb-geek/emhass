@@ -53,7 +53,7 @@ setup(
         'pyyaml>=5.4.1',
         'netcdf4>=1.5.3',
         'tables==3.7.0',
-        'skforecast==0.9.0',
+        'skforecast==0.9.1',
     ],  # Optional
     entry_points={  # Optional
         'console_scripts': [
