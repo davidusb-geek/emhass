@@ -197,7 +197,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
                 optim_conf['weather_forecast_method'] = 'list'
             else:
                 logger.error("ERROR: The passed data is either not a list or the length is not correct, length should be "+str(len(forecast_dates)))
-                logger.error("Passed type is "+str(type(runtimeparams['pv_power_forecast']))+" and length is "+str(len(forecast_dates)))
+                logger.error("Passed type is "+str(type(runtimeparams['pv_power_forecast']))+" and length is "+str(len(runtimeparams['pv_power_forecast'])))
             list_non_digits = [x for x in runtimeparams['pv_power_forecast'] if not (isinstance(x, int) or isinstance(x, float))]
             if len(list_non_digits) > 0:
                 logger.warning("There are non numeric values on the passed data for pv_power_forecast, check for missing values (nans, null, etc)")
@@ -211,7 +211,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
                 optim_conf['load_forecast_method'] = 'list'
             else:
                 logger.error("ERROR: The passed data is either not a list or the length is not correct, length should be "+str(len(forecast_dates)))
-                logger.error("Passed type is "+str(type(runtimeparams['load_power_forecast']))+" and length is "+str(len(forecast_dates)))
+                logger.error("Passed type is "+str(type(runtimeparams['load_power_forecast']))+" and length is "+str(len(runtimeparams['load_power_forecast'])))
             list_non_digits = [x for x in runtimeparams['load_power_forecast'] if not (isinstance(x, int) or isinstance(x, float))]
             if len(list_non_digits) > 0:
                 logger.warning("There are non numeric values on the passed data for load_power_forecast, check for missing values (nans, null, etc)")
@@ -225,7 +225,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
                 optim_conf['load_cost_forecast_method'] = 'list'
             else:
                 logger.error("ERROR: The passed data is either not a list or the length is not correct, length should be "+str(len(forecast_dates)))
-                logger.error("Passed type is "+str(type(runtimeparams['load_cost_forecast']))+" and length is "+str(len(forecast_dates)))
+                logger.error("Passed type is "+str(type(runtimeparams['load_cost_forecast']))+" and length is "+str(len(runtimeparams['load_cost_forecast'])))
             list_non_digits = [x for x in runtimeparams['load_cost_forecast'] if not (isinstance(x, int) or isinstance(x, float))]
             if len(list_non_digits) > 0:
                 logger.warning("There are non numeric values on the passed data or load_cost_forecast, check for missing values (nans, null, etc)")
@@ -239,7 +239,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
                 optim_conf['prod_price_forecast_method'] = 'list'
             else:
                 logger.error("ERROR: The passed data is either not a list or the length is not correct, length should be "+str(len(forecast_dates)))
-                logger.error("Passed type is "+str(type(runtimeparams['prod_price_forecast']))+" and length is "+str(len(forecast_dates)))
+                logger.error("Passed type is "+str(type(runtimeparams['prod_price_forecast']))+" and length is "+str(len(runtimeparams['prod_price_forecast'])))
             list_non_digits = [x for x in runtimeparams['prod_price_forecast'] if not (isinstance(x, int) or isinstance(x, float))]
             if len(list_non_digits) > 0:
                 logger.warning("There are non numeric values on the passed data for prod_price_forecast, check for missing values (nans, null, etc)")
