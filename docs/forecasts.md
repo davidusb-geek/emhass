@@ -58,7 +58,7 @@ This is presented graphically here:
 New in EMHASS v0.4.0: machine learning forecast models!
 ```
 
-Starting with v0.4.0, a new forecast framework is proposed within EMHASS. It provides a more efficient way to forecast the power load consumption. It is based on the `skforecast` module that uses `scikit-learn` regression models considering auto-regression lags as features. The hyperparameter optimization is proposed using bayesian optimization from the `optuna` module.
+Starting with v0.4.0, a new forecast framework is proposed within EMHASS. It provides a more efficient way to forecast the power load consumption. It is based on the `skforecast` module that uses `scikit-learn` regression models considering auto-regression lags as features. The hyperparameter optimization is proposed using bayesian optimization from the `optuna` module. To use this change to `method=mlforecaster` in the configuration.
 
 The API provides fit, predict and tune methods.
 
