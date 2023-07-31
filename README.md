@@ -310,9 +310,9 @@ The valid values to pass for both forecast data and MPC related data are explain
 
 ### Forecast data
 
-It is possible to provide EMHASS with your own forecast data. For this just add the data as list of values to a data dictionnary during the call to `emhass` using the `runtimeparams` option. 
+It is possible to provide EMHASS with your own forecast data. For this just add the data as list of values to a data dictionary during the call to `emhass` using the `runtimeparams` option. 
 
-For example if using the add-on or the standalone docker installation you can pass this data as list of values to the data dictionnary during the `curl` POST:
+For example if using the add-on or the standalone docker installation you can pass this data as list of values to the data dictionary during the `curl` POST:
 ```
 curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}' http://localhost:5000/action/dayahead-optim
 ```
@@ -321,7 +321,7 @@ Or if using the legacy method using a Python virtual environment:
 emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.yaml' --runtimeparams '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}'
 ```
 
-The possible dictionnary keys to pass data are:
+The possible dictionary keys to pass data are:
 
 - `pv_power_forecast` for the PV power production forecast.
 
@@ -335,7 +335,7 @@ The possible dictionnary keys to pass data are:
 
 It is possible to also pass other data during runtime in order to automate the energy management. For example, it could be useful to dynamically update the total number of hours for each deferrable load (`def_total_hours`) using for instance a correlation with the outdoor temperature (useful for water heater for example). 
 
-Here is the list of the other additional dictionnary keys that can be passed at runtime:
+Here is the list of the other additional dictionary keys that can be passed at runtime:
 
 - `num_def_loads` for the number of deferrable loads to consider.
 
