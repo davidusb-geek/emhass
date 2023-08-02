@@ -2,14 +2,12 @@ wheel
 numpy==1.22.2
 pandas==1.4.1
 scipy<1.9.0
-pvlib>=0.9.0
+pvlib>=0.10.1
 protobuf>=3.0.0
-siphon>=0.9
 pytz>=2021.1
 requests>=2.25.1
 beautifulsoup4>=4.9.3
 pulp>=2.4
 pyyaml>=5.4.1
-netcdf4>=1.5.3
 tables==3.7.0
 skforecast==0.9.1
