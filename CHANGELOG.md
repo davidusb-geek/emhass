@@ -454,6 +454,8 @@
 [0.4.11]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.11
 [0.4.12]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.12
 [0.4.13]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.13
+[0.4.14]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.14
+[0.4.15]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.15
 
 # Notes
 All notable changes to this project will be documented in this file.
