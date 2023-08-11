@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.15] - 2023-08-11
+### Improvement
+- Bumped pvlib to 0.10.1
+- Updated documentation for forecasts methods.
+### Fix
+- Fixed error message on utils.py
+
 ## [0.4.14] - 2023-07-17
 ### Improvement
 - Bumped skforecast to latest 0.9.1.
