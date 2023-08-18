@@ -21,8 +21,12 @@ from emhass.command_line import publish_data
 app = Flask(__name__)
 
 def get_injection_dict(df, plot_size = 1366):
-    # Create plots
     cols_p = [i for i in df.columns.to_list() if 'P_' in i]
+    # Let's round the data in the DF
+    cols_else = [i for i in df.columns.to_list() if 'P_' not in i]
+    df.loc[:, cols_p] = df[cols_p].astype(int)
+    df.loc[:, cols_else] = df[cols_else].round(2)
+    # Create plots
     n_colors = len(cols_p)
     colors = px.colors.sample_colorscale("jet", [n/(n_colors -1) for n in range(n_colors)])
     fig_0 = px.line(df[cols_p], title='Systems powers schedule after optimization results', 
