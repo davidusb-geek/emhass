@@ -166,7 +166,8 @@ def index():
     else:
         app.logger.warning("The data container dictionary is empty... Please launch an optimization task")
         injection_dict={}
-    return make_response(template.render(injection_dict=injection_dict))
+    basename = request.headers.get("X-Ingress-Path", "")
+    return make_response(template.render(injection_dict=injection_dict, basename=basename))
 
 @app.route('/action/<action_name>', methods=['POST'])
 def action_call(action_name):
