@@ -4,6 +4,7 @@ FROM python:3.8-slim-buster
 WORKDIR /app
 
 # copy the requirements file into the image
+COPY requirements.txt requirements.txt
 COPY requirements_webserver.txt requirements_webserver.txt
 COPY setup.py setup.py
 COPY README.md README.md
