@@ -1,10 +1,9 @@
 <!DOCTYPE html>
 <html>
     <head>
-        <script src="http://ajax.googleapis.com/ajax/libs/jquery/2.0.0/jquery.min.js"></script>
         <title>EMHASS: Energy Management Optimization for Home Assistant</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <link rel="stylesheet" type="text/css" href="../static/style.css">
+        <link rel="stylesheet" type="text/css" href="{{ basename }}/static/style.css">
     </head>
     <body>
         <center>
@@ -14,8 +13,8 @@
             <div align="center" class="form">
                 <form action="" method="get">
                     <h4 style="font-family: Helvetica;color: darkblue;">Use the buttons below to manually  launch different optimization tasks</h4>
-                    <button type="button" id="perfect-optimization" class="button button1" >Perfect Optimization</button>
-                    <button type="button" id="dayahead-optimization" class="button button2" >Day-ahead Optimization</button>
+                    <button type="button" id="perfect-optim" class="button button1" >Perfect Optimization</button>
+                    <button type="button" id="dayahead-optim" class="button button2" >Day-ahead Optimization</button>
                     <h4 style="font-family: Helvetica;color: darkblue;">Use the button below to publish the optimized variables at the current timestamp</h4>
                     <button type="button" id="publish-data" class="button button1" >Publish Optimization Results</button>
                     <h4 style="font-family: Helvetica;color: darkblue;">Use the buttons below to fit, predict and tune a machine learning model for testing</h4>
@@ -43,118 +42,23 @@
         </footer>
     </body>
     <script>
-        document.getElementById('perfect-optimization').addEventListener('click', function() {
-            var url = "/action/perfect-optim"
-            var settings = {
-            "async": true,
-            "crossDomain": true,
-            "url": url,
-            "method": "POST",
-            "headers": {
-                'Content-Type':'application/json'
-            },
-            "dataType": 'json',
-            "data": '{}'
-            }
-            $.ajax(settings).done(function (response) {
+        async function performAction(action) {
+            await fetch(`{{ basename }}/action/${action}`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: "{}",
             });
-        });
-        document.getElementById('dayahead-optimization').addEventListener('click', function() {
-            var url = "/action/dayahead-optim"
-            var settings = {
-            "async": true,
-            "crossDomain": true,
-            "url": url,
-            "method": "POST",
-            "headers": {
-                'Content-Type':'application/json'
-            },
-            "dataType": 'json',
-            "data": '{}'
-            }
-            $.ajax(settings).done(function (response) {
-            });
-        });
-        document.getElementById('publish-data').addEventListener('click', function() {
-            var url = "/action/publish-data"
-            var settings = {
-            "async": true,
-            "crossDomain": true,
-            "url": url,
-            "method": "POST",
-            "headers": {
-                'Content-Type':'application/json'
-            },
-            "dataType": 'json',
-            "data": '{}'
-            }
-            $.ajax(settings).done(function (response) {
-            });
-        });
-        // document.getElementById('forecast-model-fit').addEventListener('click', function() {
-        //     var formData = $("runtimeparams").serialize();
-        //     // send ajax
-        //     $.ajax({
-        //         url: "/action/forecast-model-fit",
-        //         type : "POST",
-        //         contentType : "application/json;charset=UTF-8",
-        //         dataType : 'json',
-        //         data : formData,
-        //         success : function(result) {
-        //             console.log(result);
-        //         },
-        //         error: function(xhr, resp, text) {
-        //             console.log(xhr, resp, text);
-        //         }
-        //     })
-        // });
-        document.getElementById('forecast-model-fit').addEventListener('click', function() {
-            var url = "/action/forecast-model-fit"
-            var settings = {
-            "async": true,
-            "crossDomain": true,
-            "url": url,
-            "method": "POST",
-            "headers": {
-                'Content-Type':'application/json'
-            },
-            "dataType": 'json',
-            "data": '{}'
-            }
-            $.ajax(settings).done(function (response) {
-            });
-        });
-        document.getElementById('forecast-model-predict').addEventListener('click', function() {
-            var url = "/action/forecast-model-predict"
-            var settings = {
-            "async": true,
-            "crossDomain": true,
-            "url": url,
-            "method": "POST",
-            "headers": {
-                'Content-Type':'application/json'
-            },
-            "dataType": 'json',
-            "data": '{}'
-            }
-            $.ajax(settings).done(function (response) {
-            });
-        });
-        document.getElementById('forecast-model-tune').addEventListener('click', function() {
-            var url = "/action/forecast-model-tune"
-            var settings = {
-            "async": true,
-            "crossDomain": true,
-            "url": url,
-            "method": "POST",
-            "headers": {
-                'Content-Type':'application/json'
-            },
-            "dataType": 'json',
-            "data": '{}'
-            }
-            $.ajax(settings).done(function (response) {
-            });
-        });
+        }
+
+        [
+            "dayahead-optim",
+            "forecast-model-fit",
+            "forecast-model-predict",
+            "forecast-model-tune",
+            "perfect-optim",
+            "publish-data",
+        ].forEach((id) => document.getElementById(id).addEventListener('click', () => performAction(id)));
     </script>
 </html>
