@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0] - 2023-09-03
+### Improvement
+- Finally added support for ingress thanks to the work from @siku2
+- Added a devcontainer and pave the way for ingress access
+### Fix
+- Added some code to fix some numerical syntax issues in tables
+
 ## [0.4.15] - 2023-08-11
 ### Improvement
 - Bumped pvlib to 0.10.1

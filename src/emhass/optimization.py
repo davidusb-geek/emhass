@@ -73,6 +73,7 @@ class optimization:
         self.logger = logger
         self.var_load_cost = var_load_cost
         self.var_prod_price = var_prod_price
+        self.optim_status = None
         if 'lp_solver' in optim_conf.keys():
             self.lp_solver = optim_conf['lp_solver']
         else:
@@ -399,7 +400,8 @@ class optimization:
             self.logger.error("It was not possible to find a valid solver for Pulp package")
         
         # The status of the solution is printed to the screen
-        self.logger.info("Status: " + plp.LpStatus[opt_model.status])
+        self.optim_status = plp.LpStatus[opt_model.status]
+        self.logger.info("Status: " + self.optim_status)
         if plp.value(opt_model.objective) is None:
             self.logger.warning("Cost function cannot be evaluated, probably None")
         else:

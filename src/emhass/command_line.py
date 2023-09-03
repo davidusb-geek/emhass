@@ -474,7 +474,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                                     custom_pv_forecast_id["unit_of_measurement"],
                                     custom_pv_forecast_id["friendly_name"],
                                     type_var = 'power',
-                                    publish_prefix=publish_prefix)
+                                    publish_prefix = publish_prefix)
     # Publish Load forecast
     custom_load_forecast_id = params['passed_data']['custom_load_forecast_id']
     input_data_dict['rh'].post_data(opt_res_latest['P_Load'], idx_closest, 
@@ -482,7 +482,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                                     custom_load_forecast_id["unit_of_measurement"],
                                     custom_load_forecast_id["friendly_name"],
                                     type_var = 'power',
-                                    publish_prefix=publish_prefix)
+                                    publish_prefix = publish_prefix)
     cols_published = ['P_PV', 'P_Load']
     # Publish deferrable loads
     custom_deferrable_forecast_id = params['passed_data']['custom_deferrable_forecast_id']
@@ -495,7 +495,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                                             custom_deferrable_forecast_id[k]["unit_of_measurement"],
                                             custom_deferrable_forecast_id[k]["friendly_name"],
                                             type_var = 'deferrable',
-                                            publish_prefix=publish_prefix)
+                                            publish_prefix = publish_prefix)
             cols_published = cols_published+["P_deferrable{}".format(k)]
     # Publish battery power
     if input_data_dict['opt'].optim_conf['set_use_battery']:
@@ -508,7 +508,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                                             custom_batt_forecast_id["unit_of_measurement"],
                                             custom_batt_forecast_id["friendly_name"],
                                             type_var = 'batt',
-                                            publish_prefix=publish_prefix)
+                                            publish_prefix = publish_prefix)
             cols_published = cols_published+["P_batt"]
             custom_batt_soc_forecast_id = params['passed_data']['custom_batt_soc_forecast_id']
             input_data_dict['rh'].post_data(opt_res_latest['SOC_opt']*100, idx_closest,
@@ -516,7 +516,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                                             custom_batt_soc_forecast_id["unit_of_measurement"],
                                             custom_batt_soc_forecast_id["friendly_name"],
                                             type_var = 'SOC',
-                                            publish_prefix=publish_prefix)
+                                            publish_prefix = publish_prefix)
             cols_published = cols_published+["SOC_opt"]
     # Publish grid power
     custom_grid_forecast_id = params['passed_data']['custom_grid_forecast_id']
@@ -525,7 +525,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                                     custom_grid_forecast_id["unit_of_measurement"],
                                     custom_grid_forecast_id["friendly_name"],
                                     type_var = 'power',
-                                    publish_prefix=publish_prefix)
+                                    publish_prefix = publish_prefix)
     cols_published = cols_published+["P_grid"]
     # Publish total value of cost function
     custom_cost_fun_id = params['passed_data']['custom_cost_fun_id']
@@ -535,7 +535,16 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                                     custom_cost_fun_id["unit_of_measurement"],
                                     custom_cost_fun_id["friendly_name"],
                                     type_var = 'cost_fun',
-                                    publish_prefix=publish_prefix)
+                                    publish_prefix = publish_prefix)
+    # Publish the optimization status (A work in progress, will be available on future release)
+    '''
+    custom_cost_fun_id = params['passed_data']['custom_optim_status_id']
+    input_data_dict['rh'].post_data(input_data_dict['opt'].optim_status, idx_closest, 
+                                    custom_cost_fun_id["entity_id"], 
+                                    custom_cost_fun_id["unit_of_measurement"],
+                                    custom_cost_fun_id["friendly_name"],
+                                    type_var = 'optim_status',
+                                    publish_prefix = publish_prefix)'''
     # Publish unit_load_cost
     custom_unit_load_cost_id = params['passed_data']['custom_unit_load_cost_id']
     input_data_dict['rh'].post_data(opt_res_latest['unit_load_cost'], idx_closest, 
@@ -543,7 +552,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                                     custom_unit_load_cost_id["unit_of_measurement"],
                                     custom_unit_load_cost_id["friendly_name"],
                                     type_var = 'unit_load_cost',
-                                    publish_prefix=publish_prefix)
+                                    publish_prefix = publish_prefix)
     cols_published = cols_published+["unit_load_cost"]
     # Publish unit_prod_price
     custom_unit_prod_price_id = params['passed_data']['custom_unit_prod_price_id']
@@ -552,7 +561,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                                     custom_unit_prod_price_id["unit_of_measurement"],
                                     custom_unit_prod_price_id["friendly_name"],
                                     type_var = 'unit_prod_price',
-                                    publish_prefix=publish_prefix)
+                                    publish_prefix = publish_prefix)
     cols_published = cols_published+["unit_prod_price"]
     # Create a DF resuming what has been published
     opt_res = opt_res_latest[cols_published].loc[[opt_res_latest.index[idx_closest]]]
