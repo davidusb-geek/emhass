@@ -51,7 +51,7 @@ setup(
         'pulp>=2.4',
         'pyyaml>=5.4.1',
         'tables==3.7.0',
-        'skforecast==0.9.1',
+        'skforecast==0.10.0',
     ],  # Optional
     entry_points={  # Optional
         'console_scripts': [
