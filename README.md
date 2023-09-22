@@ -183,8 +183,10 @@ Before running any valuable command you need to modify the `config_emhass.yaml` 
 ## Home Assistant integration
 
 To integrate with home assistant we will need to define some shell commands in the `configuration.yaml` file and some basic automations in the `automations.yaml` file.
+In the next few paragraphs we are going to consider the `dayahead-optim` optimization strategy, which is also the first that was implemented, and we will also cover how to publish the results.
+Then additional optimization strategies were developed, that can be used in combination with/replace the `dayahead-optim` strategy, such as MPC, or to expland the funcitonalities such as the Machine Learning method to predict your hosehold consumption. Each of them has some specificities and features and will be considered in dedicated sections.
 
-### Method 1) Add-on and docker standalone
+### Dayahead Optimization - Method 1) Add-on and docker standalone
 
 In `configuration.yaml`:
 ```
@@ -192,7 +194,7 @@ shell_command:
   dayahead_optim: "curl -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/dayahead-optim"
   publish_data: "curl -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/publish-data"
 ```
-### Method 2) Legacy method using a Python virtual environment
+### Dayahead Optimization - Method 2) Legacy method using a Python virtual environment
 
 In `configuration.yaml`:
 ```
@@ -359,7 +361,7 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 ## A naive Model Predictive Controller
 
-A MPC controller was introduced in v0.3.0. This is an informal/naive representation of a MPC controller. 
+A MPC controller was introduced in v0.3.0. This is an informal/naive representation of a MPC controller. This can be used in combination with/as a replacement of the Dayahead Optimization.
 
 A MPC controller performs the following actions:
 
@@ -388,7 +390,9 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 
 
 ## A machine learning forecaster
 
-Starting in v0.4.0 a new machine learning forecaster class was introduced. Check the dedicated section in the documentation here: [https://emhass.readthedocs.io/en/latest/mlforecaster.html](https://emhass.readthedocs.io/en/latest/mlforecaster.html)
+Starting in v0.4.0 a new machine learning forecaster class was introduced.
+This is intedned to provide a new and alternative method to forecast your household consumption and use it when such forecast is needed to optimize your energy through the available strategies.
+Check the dedicated section in the documentation here: [https://emhass.readthedocs.io/en/latest/mlforecaster.html](https://emhass.readthedocs.io/en/latest/mlforecaster.html)
 
 ## Development
 
