@@ -121,9 +121,9 @@ runtimeparams = {
 
 With a previously fitted model you can use the `forecast-model-tune` end point to tune its hyperparameters. This will be using bayeasian optimization with a wrapper of `optuna` in the `skforecast` module.
 
-The syntax will be:
+You can pass the same parameter you defined during the fit step, but `var_model` has to be defined at least. According to the example, the syntax will be:
 ```
-curl -i -H "Content-Type:application/json" -X POST -d '{}' http://localhost:5000/action/forecast-model-tune
+curl -i -H "Content-Type:application/json" -X POST -d '{"var_model": "sensor.power_load_no_var_loads"}' http://localhost:5000/action/forecast-model-tune
 ```
 This will launch the optimization routine and optimize the internal hyperparamters of the `scikit-learn` regressor and it will find the optimal number of lags.
 The following are the logs with the results obtained after the optimization for a KNN regressor:
