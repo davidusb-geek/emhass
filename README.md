@@ -391,7 +391,7 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 
 ## A machine learning forecaster
 
 Starting in v0.4.0 a new machine learning forecaster class was introduced.
-This is intedned to provide a new and alternative method to forecast your household consumption and use it when such forecast is needed to optimize your energy through the available strategies.
+This is intended to provide a new and alternative method to forecast your household consumption and use it when such forecast is needed to optimize your energy through the available strategies.
 Check the dedicated section in the documentation here: [https://emhass.readthedocs.io/en/latest/mlforecaster.html](https://emhass.readthedocs.io/en/latest/mlforecaster.html)
 
 ## Development
