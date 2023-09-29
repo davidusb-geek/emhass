@@ -29,7 +29,7 @@ For the PV production selling price and Load cost forecasts the privileged metho
 
 ## PV power production forecast
 
-The default method for PV power forecast is the scrapping of weather forecast data from the [https://clearoutside.com/](https://clearoutside.com/) website. This is obtained using `method=scrapper`. This site proposes detailed forecasts based on Lat/Lon locations. This method seems quite stable but as with any scrape method it will fail if any changes are made to the webpage API.
+The default method for PV power forecast is the scrapping of weather forecast data from the [https://clearoutside.com/](https://clearoutside.com/) website. This is obtained using `method=scrapper`. This site proposes detailed forecasts based on Lat/Lon locations. This method seems quite stable but as with any scrape method it will fail if any changes are made to the webpage API. The weather forecast data is then converted into PV power production using the `list_pv_module_model` and `list_pv_inverter_model` paramters defined in the configuration.
 
 A second method uses the SolCast solar forecast service. Go to [https://solcast.com/](https://solcast.com/) and configure your system. You will need to set `method=solcast` and basically use two parameters `solcast_rooftop_id` and `solcast_api_key` that should be passed as parameters at runtime. This will be limited to 10 API requests per day, the granularity will be 30 min and the forecast is updated every 6h. If needed, better performances may be obtained with paid plans: [https://solcast.com/pricing/live-and-forecast](https://solcast.com/pricing/live-and-forecast).
 
@@ -43,6 +43,11 @@ A third method uses the Solar.Forecast service. You will need to set `method=sol
 For example, for a 5 kWp installation:
 ```
 curl -i -H "Content-Type:application/json" -X POST -d '{"solar_forecast_kwp":5}' http://localhost:5000/action/dayahead-optim
+```
+
+```{note} 
+
+If you use the Solar.Forecast or Solcast methods, or explicitly pass the PV power forecast values (see below), the list_pv_module_model and list_pv_inverter_model paramters defined in the configuration will be ignored.
 ```
 
 ## Load power forecast
