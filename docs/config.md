@@ -77,8 +77,8 @@ The following parameters and definitions are only needed if load_cost_forecast_m
 - set_nocharge_from_grid: Set this to true if you want to forbidden to charge the battery from the grid. The battery will only be charged from excess PV.
 - set_nodischarge_to_grid: Set this to true if you want to forbidden to discharge the battery power to the grid.
 - set_battery_dynamic: Set a power dynamic limiting condition to the battery power. This is an additional constraint on the battery dynamic in power per unit of time, which allows you to set a percentage of the battery nominal full power as the maximum power allowed for (dis)charge.
-- battery_dynamic_max: The maximum positive (for charge) battery power dynamic. This is the allowed power variation (in percentage) of battery maximum power per unit of time.
-- battery_dynamic_min: The minimum negative (for discharge) battery power dynamic. This is the allowed power variation (in percentage) of battery maximum power per unit of time.
+- battery_dynamic_max: The maximum positive (for discharge) battery power dynamic. This is the allowed power variation (in percentage) of battery maximum power per unit of time.
+- battery_dynamic_min: The minimum negative (for charge) battery power dynamic. This is the allowed power variation (in percentage) of battery maximum power per unit of time.
 
 ## System configuration parameters
 
