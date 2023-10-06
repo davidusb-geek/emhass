@@ -49,7 +49,7 @@ These are the parameters needed to properly define the optimization problem.
 - def_total_hours: The total number of hours that each deferrable load should operate. For example:
 	- 5
 	- 8
-- treat_def_as_semi_cont: Define if we should treat each deferrable load as a semi-continuous variable. Semi-continuous variables are variables that must take a value between their minimum and maximum or zero. For example:
+- treat_def_as_semi_cont: Define if we should treat each deferrable load as a semi-continuous variable. Semi-continuous variables (`True`) are variables that must take a value that can be either their maximum or minimum/zero (for example On = Maximum load, Off = 0 W). Non semi-continuous (which means continuous) variables (`False`) can take any values between their maximum and minimum. For example:
 	- True
 	- True
 - set_def_constant: Define if we should set each deferrable load as a constant fixed value variable with just one startup for each optimization task. For example:
