@@ -180,7 +180,7 @@ This type of controller performs the following actions:
 - Apply the first element of the obtained optimized control variables.
 - Repeat at a relatively high frequency, ex: 5 min.
 
-On the example diagram presented before, the MPC is performed on 6h intervals at 6h, 12h and 18h. The prediction horizon is redecing to keep the one-day energy optimization notion. This type of optimization is used to take advantage of actualized forecast values during throughout the day. The user can of course choose higher implementation intervals.
+On the example diagram presented before, the MPC is performed on 6h intervals at 6h, 12h and 18h. The prediction horizon is progressively reducing during the day to keep the one-day energy optimization notion (it should not just be a fixed rolling window as, for example, you would like to know when you want to reach the desired `soc_final`). This type of optimization is used to take advantage of actualized forecast values during throughout the day. The user can of course choose higher/lower implementation intervals, keeping in mind the contraints below on the `prediction_horizon`.
 
 When applying this controller, the following `runtimeparams` should be defined:
 
