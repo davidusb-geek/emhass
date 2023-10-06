@@ -10,7 +10,7 @@ beautifulsoup4>=4.9.3
 pulp>=2.4
 pyyaml>=5.4.1
 tables==3.7.0
-skforecast==0.10.0
+skforecast==0.10.1
 markupsafe==2.1.3
 Jinja2<3.2
 sphinx==6.2.1
