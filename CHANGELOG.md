@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1] - 2023-10-19
+### Improvement
+- Improved documentation, thanks to @g1za
+- Bumped skforecast to 0.10.1
+- Added a new initial script for exploration of time series clustering. This will one day replace the need to configure the house load sensor with substracted deferrable load consumption
+### Fix
+- Updated automated tesing, dropped support for Python 3.8
+
 ## [0.5.0] - 2023-09-03
 ### Improvement
 - Finally added support for ingress thanks to the work from @siku2
