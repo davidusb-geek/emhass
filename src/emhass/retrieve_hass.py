@@ -131,8 +131,8 @@ class retrieve_hass:
                     self.logger.error("Retrieved empty Dataframe, check that correct day or variable names are passed")
                     self.logger.error("Either the names of the passed variables are not correct or days_to_retrieve is larger than the recorded history of your sensor (check your recorder settings)")
                 if i == 0: # Defining the DataFrame container
-                    from_date = pd.to_datetime(df_raw['last_changed']).min()
-                    to_date = pd.to_datetime(df_raw['last_changed']).max()
+                    from_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").min()
+                    to_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").max()
                     ts = pd.to_datetime(pd.date_range(start=from_date, end=to_date, freq=self.freq), 
                                         format='%Y-%d-%m %H:%M').round(self.freq)
                     df_day = pd.DataFrame(index = ts)
@@ -140,7 +140,7 @@ class retrieve_hass:
                 df_tp = df_raw.copy()[['state']].replace(
                     ['unknown', 'unavailable', ''], np.nan).astype(float).rename(columns={'state': var})
                 # Setting index, resampling and concatenation
-                df_tp.set_index(pd.to_datetime(df_raw['last_changed']), inplace=True)
+                df_tp.set_index(pd.to_datetime(df_raw['last_changed'], format="ISO8601"), inplace=True)
                 df_tp = df_tp.resample(self.freq).mean()
                 df_day = pd.concat([df_day, df_tp], axis=1)
             

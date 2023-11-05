@@ -37,7 +37,7 @@ setup(
     keywords='energy, management, optimization, hass',  # Optional
     package_dir={'': 'src'},  # Optional
     packages=find_packages(where='src'),  # Required
-    python_requires='>=3.9, <=3.10',
+    python_requires='>=3.9, <=3.11',
     install_requires=[
         'wheel', 
         'numpy==1.22.2',
