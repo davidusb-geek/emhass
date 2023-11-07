@@ -55,6 +55,7 @@ optim_conf:
 
 plant_conf:
   - P_grid_max: 9000 # The maximum power that can be supplied by the utility grid in Watts
+  - P_to_grid_max: 9000 # The maximum power that can be supplied to the utility grid in Watts
   - module_model: # The PV module model
     - 'CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M'
   - inverter_model: # The PV inverter model
