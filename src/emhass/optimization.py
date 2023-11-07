@@ -146,7 +146,7 @@ class optimization:
         
         ## Add decision variables
         P_grid_neg  = {(i):plp.LpVariable(cat='Continuous',
-                                          lowBound=-self.plant_conf['P_grid_max'], upBound=0,
+                                          lowBound=-self.plant_conf['P_to_grid_max'], upBound=0,
                                           name="P_grid_neg{}".format(i)) for i in set_I}
         P_grid_pos  = {(i):plp.LpVariable(cat='Continuous',
                                           lowBound=0, upBound=self.plant_conf['P_grid_max'],
