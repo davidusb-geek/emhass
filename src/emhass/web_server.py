@@ -146,6 +146,7 @@ def build_params(params, options, addon):
         params['plant_conf'][12]['SOCmin'] = options['battery_minimum_state_of_charge']
         params['plant_conf'][13]['SOCmax'] = options['battery_maximum_state_of_charge']
         params['plant_conf'][14]['SOCtarget'] = options['battery_target_state_of_charge']
+        params['plant_conf'][15]['P_to_grid_max'] = options['maximum_power_to_grid']
     # The params dict
     params['params_secrets'] = params_secrets
     params['passed_data'] = {'pv_power_forecast':None,'load_power_forecast':None,'load_cost_forecast':None,'prod_price_forecast':None,
