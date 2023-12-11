@@ -204,10 +204,10 @@ class optimization:
                                       for i in set_I)
         elif self.costfun == 'cost':
             if self.optim_conf['set_total_pv_sell']:
-                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*P_grid_pos[i]
+                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum[i])
                                       for i in set_I)
             else:
-                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum[i])
+                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*P_grid_pos[i]
                                       for i in set_I)
         elif self.costfun == 'self-consumption':
             if type_self_conso == 'bigm':
