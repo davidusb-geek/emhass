@@ -450,7 +450,10 @@ class optimization:
                 opt_tp["cost_fun_profit"] = [-0.001*self.timeStep*(unit_load_cost[i]*P_grid_pos[i].varValue + \
                     unit_prod_price[i]*P_grid_neg[i].varValue) for i in set_I]
         elif self.costfun == 'cost':
-            opt_tp["cost_fun_cost"] = [-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) for i in set_I]
+            if self.optim_conf['set_total_pv_sell']:
+                opt_tp["cost_fun_cost"] = [-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) for i in set_I]
+            else:
+                opt_tp["cost_fun_cost"] = [-0.001*self.timeStep*unit_load_cost[i]*P_grid_pos[i].varValue for i in set_I]
         elif self.costfun == 'self-consumption':
             if type_self_conso == 'maxmin':
                 opt_tp["cost_fun_selfcons"] = [-0.001*self.timeStep*unit_load_cost[i]*SC[i].varValue for i in set_I]
