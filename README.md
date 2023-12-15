@@ -296,7 +296,7 @@ And you should be careful that the list of dictionaries has the correct length, 
 
 Below you can find a list of the variables resulting from EMHASS computation, showed in the charts, and then published to Home Assistant through the ```publish_data``` command:
 
-| EMHASS varibale | Definition | Home Assistant published sensor |
+| EMHASS variable | Definition | Home Assistant published sensor |
 | --------------- | ---------- | --------------------------------|
 | P_PV | Forecasted power generation from your solar panels (Watts). This helps you predict how much solar energy you will produce during the forecast period. | sensor.p_pv_forecast |
 | P_Load | Forecasted household power consumption (Watts). This gives you an idea of how much energy your appliances are expected to use. | sensor.p_load_forecast |
