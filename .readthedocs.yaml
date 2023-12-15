@@ -21,8 +21,7 @@ formats:
    - htmlzip
    - epub
 
-# Optionally set the version of Python and requirements required to build your docs
+# Optionally set the requirements required to build your docs
 python:
-   version: "3.9"
    install:
    - requirements: docs/requirements.txt
