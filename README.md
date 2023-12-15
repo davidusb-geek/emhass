@@ -294,7 +294,7 @@ And you should be careful that the list of dictionaries has the correct length, 
 
 ### Computed variables and published data
 
-Below you can find a list of the variables resulting from EMHASS computation, showed in the charts, and then published to Home Assistant through the ```publish_data``` command:
+Below you can find a list of the variables resulting from EMHASS computation, shown in the charts, and then published to Home Assistant through the ```publish_data``` command:
 
 | EMHASS variable | Definition | Home Assistant published sensor |
 | --------------- | ---------- | --------------------------------|
