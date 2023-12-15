@@ -488,7 +488,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     custom_deferrable_forecast_id = params['passed_data']['custom_deferrable_forecast_id']
     for k in range(input_data_dict['opt'].optim_conf['num_def_loads']):
         if "P_deferrable{}".format(k) not in opt_res_latest.columns:
-            logger.error("P_deferrable{}".format(k)+" was not found in results DataFrame. Optimization task may need to be relaunched or it did not converged to a solution.")
+            logger.error("P_deferrable{}".format(k)+" was not found in results DataFrame. Optimization task may need to be relaunched or it did not converge to a solution.")
         else:
             input_data_dict['rh'].post_data(opt_res_latest["P_deferrable{}".format(k)], idx_closest, 
                                             custom_deferrable_forecast_id[k]["entity_id"], 
@@ -500,7 +500,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     # Publish battery power
     if input_data_dict['opt'].optim_conf['set_use_battery']:
         if 'P_batt' not in opt_res_latest.columns:
-            logger.error("P_batt was not found in results DataFrame. Optimization task may need to be relaunched or it did not converged to a solution.")
+            logger.error("P_batt was not found in results DataFrame. Optimization task may need to be relaunched or it did not converge to a solution.")
         else:
             custom_batt_forecast_id = params['passed_data']['custom_batt_forecast_id']
             input_data_dict['rh'].post_data(opt_res_latest['P_batt'], idx_closest,
