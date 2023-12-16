@@ -102,7 +102,6 @@ class TestRetrieveHass(unittest.TestCase):
             self.assertEqual(len(self.rh.df_final.columns), len(var_list))
             self.assertEqual(self.rh.df_final.index.freq, self.retrieve_hass_conf['freq'])
             self.assertEqual(self.rh.df_final.index.tz, datetime.timezone.utc)
-#            self.assertEqual(self.rh.df_final.index.tz, pytz.UTC)
         
     def test_prepare_data(self):
         self.assertIsInstance(self.rh.df_final, type(pd.DataFrame()))
