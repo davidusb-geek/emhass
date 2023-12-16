@@ -40,7 +40,7 @@ setup(
     python_requires='>=3.9, <3.12',
     install_requires=[
         'wheel', 
-        'numpy==1.25.2',
+        'numpy==1.26',
         'scipy==1.11.3',
         'pandas==2.0.3',
         'pvlib>=0.10.1',
