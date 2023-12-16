@@ -7,7 +7,7 @@ import requests_mock
 import numpy as np, pandas as pd
 import pytz, pathlib, pickle, json, yaml, copy
 import bz2
-import _pickle as cPickle
+import pickle as cPickle
 
 from emhass.retrieve_hass import retrieve_hass
 from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger

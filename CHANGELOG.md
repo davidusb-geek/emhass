@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0] - 2023-12-16
+### Improvement
+- Now Python 3.11 is fully supported, thanks to @pail23
+- Bumped setuptools, skforecast, numpy, scipy, pandas
+- A good bunch of documentation improvements thanks to @g1za
+### Fix
+- Some fixes managing time zones, thanks to @pail23
+- Bug fix on grid cost function equation, thanks to @michaelpiron
+- Applying a first set of fixes proposed by @smurfix:
+  - Don't ignore HTTP errors
+  - Handle missing variable correctly
+  - Slight error message improvement
+  - Just use the default solver
+  - Get locations from environment in non-app mode
+  - Tolerate running directly from source
+
 ## [0.5.1] - 2023-10-19
 ### Improvement
 - Improved documentation, thanks to @g1za
@@ -471,6 +487,9 @@
 [0.4.13]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.13
 [0.4.14]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.14
 [0.4.15]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.15
+[0.5.0]: https://github.com/davidusb-geek/emhass/releases/tag/v0.5.0
+[0.5.1]: https://github.com/davidusb-geek/emhass/releases/tag/v0.5.1
+[0.6.0]: https://github.com/davidusb-geek/emhass/releases/tag/v0.6.0
 
 # Notes
 All notable changes to this project will be documented in this file.
