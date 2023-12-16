@@ -149,11 +149,11 @@ class forecast(object):
         else:
             self.params = json.loads(params)
         if self.method_ts_round == 'nearest':
-            self.start_forecast = pd.Timestamp(datetime.now(tz=self.time_zone)).replace(microsecond=0)
+            self.start_forecast = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(microsecond=0)
         elif self.method_ts_round == 'first':
-            self.start_forecast = pd.Timestamp(datetime.now(tz=self.time_zone)).replace(microsecond=0).floor(freq=self.freq)
+            self.start_forecast = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(microsecond=0).floor(freq=self.freq)
         elif self.method_ts_round == 'last':
-            self.start_forecast = pd.Timestamp(datetime.now(tz=self.time_zone)).replace(microsecond=0).ceil(freq=self.freq)
+            self.start_forecast = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(microsecond=0).ceil(freq=self.freq)
         else:
             self.logger.error("Wrong method_ts_round passed parameter")
         self.end_forecast = (self.start_forecast + self.optim_conf['delta_forecast']).replace(microsecond=0)
