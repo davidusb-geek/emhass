@@ -315,7 +315,7 @@ class forecast(object):
                 # Define index
                 data.set_index('ts', inplace=True)
         else:
-            self.logger.error("Passed method is not valid")
+            self.logger.error("Method %r is not valid", method)
         return data
     
     def cloud_cover_to_irradiance(self, cloud_cover: pd.Series, 
