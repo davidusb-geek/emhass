@@ -536,15 +536,15 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                                     custom_cost_fun_id["friendly_name"],
                                     type_var = 'cost_fun',
                                     publish_prefix = publish_prefix)
-    # Publish the optimization status (A work in progress, will be available on future release)
-    '''
+    # Publish the optimization status
     custom_cost_fun_id = params['passed_data']['custom_optim_status_id']
-    input_data_dict['rh'].post_data(input_data_dict['opt'].optim_status, idx_closest, 
+    input_data_dict['rh'].post_data(opt_res_latest['optim_status'], idx_closest, 
                                     custom_cost_fun_id["entity_id"], 
                                     custom_cost_fun_id["unit_of_measurement"],
                                     custom_cost_fun_id["friendly_name"],
                                     type_var = 'optim_status',
-                                    publish_prefix = publish_prefix)'''
+                                    publish_prefix = publish_prefix)
+    cols_published = cols_published+["optim_status"]
     # Publish unit_load_cost
     custom_unit_load_cost_id = params['passed_data']['custom_unit_load_cost_id']
     input_data_dict['rh'].post_data(opt_res_latest['unit_load_cost'], idx_closest, 
