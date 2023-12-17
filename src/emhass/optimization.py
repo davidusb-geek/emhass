@@ -387,25 +387,24 @@ class optimization:
     
         ## Finally, we call the solver to solve our optimization model:
         # solving with default solver CBC
-        try:
-            if self.lp_solver == 'PULP_CBC_CMD':
-                opt_model.solve(PULP_CBC_CMD(msg=0))
-            elif self.lp_solver == 'GLPK_CMD':
-                opt_model.solve(GLPK_CMD(msg=0))
-            elif self.lp_solver == 'COIN_CMD':
-                opt_model.solve(COIN_CMD(msg=0, path=self.lp_solver_path))
-            else:
-                self.logger.error("Invalid solver name passed")
-        except Exception:
-            self.logger.error("It was not possible to find a valid solver for Pulp package")
+        if self.lp_solver == 'PULP_CBC_CMD':
+            opt_model.solve(PULP_CBC_CMD(msg=0))
+        elif self.lp_solver == 'GLPK_CMD':
+            opt_model.solve(GLPK_CMD(msg=0))
+        elif self.lp_solver == 'COIN_CMD':
+            opt_model.solve(COIN_CMD(msg=0, path=self.lp_solver_path))
+        else:
+            self.logger.warning("Solver %s unknown, using default", self.lp_solver)
+            opt_model.solve()
         
         # The status of the solution is printed to the screen
         self.optim_status = plp.LpStatus[opt_model.status]
         self.logger.info("Status: " + self.optim_status)
         if plp.value(opt_model.objective) is None:
-            self.logger.warning("Cost function cannot be evaluated, probably None")
+            self.logger.warning("Cost function cannot be evaluated")
+            return
         else:
-            self.logger.info("Total value of the Cost function = " + str(round(plp.value(opt_model.objective),2)))
+            self.logger.info("Total value of the Cost function = %.02f", plp.value(opt_model.objective))
             
         # Build results Dataframe
         opt_tp = pd.DataFrame()
@@ -462,6 +461,9 @@ class optimization:
                     unit_prod_price[i]*P_grid_neg[i].varValue) for i in set_I]
         else:
             self.logger.error("The cost function specified type is not valid")
+            
+        # Add the optimization status
+        opt_tp["optim_status"] = self.optim_status
         
         return opt_tp
 

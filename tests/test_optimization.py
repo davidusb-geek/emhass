@@ -79,10 +79,6 @@ class TestOptimization(unittest.TestCase):
         self.assertTrue('cost_fun_'+self.costfun in self.opt_res_dayahead.columns)
         self.assertTrue(self.opt_res_dayahead['P_deferrable0'].sum()*(
             self.retrieve_hass_conf['freq'].seconds/3600) == self.optim_conf['P_deferrable_nom'][0]*self.optim_conf['def_total_hours'][0])
-        # Testing estimation of the current index
-        now_precise = datetime.now(self.input_data_dict['retrieve_hass_conf']['time_zone']).replace(second=0, microsecond=0)
-        idx_closest = self.opt_res_dayahead.index.get_indexer([now_precise], method='ffill')[0]
-        idx_closest = self.opt_res_dayahead.index.get_indexer([now_precise], method='nearest')[0]
         # Test the battery, dynamics and grid exchange contraints
         self.optim_conf.update({'set_use_battery': True})
         self.optim_conf.update({'set_nocharge_from_grid': True})
@@ -103,6 +99,8 @@ class TestOptimization(unittest.TestCase):
         table = opt_res[cost_cols].reset_index().sum(numeric_only=True).to_frame(name='Cost Totals').reset_index()
         self.assertTrue(table.columns[0]=='index')
         self.assertTrue(table.columns[1]=='Cost Totals')
+        # Check status
+        self.assertTrue('optim_status' in self.opt_res_dayahead.columns)
         
     def test_perform_dayahead_forecast_optim_costfun_selfconso(self):
         costfun = 'self-consumption'
@@ -136,7 +134,6 @@ class TestOptimization(unittest.TestCase):
         self.optim_conf['treat_def_as_semi_cont'] = [False, False]
         self.optim_conf['set_total_pv_sell'] = True
         self.optim_conf['set_def_constant'] = [True, True]
-        # self.optim_conf['lp_solver'] = 'GLPK_CMD'
         self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
@@ -147,6 +144,20 @@ class TestOptimization(unittest.TestCase):
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
         self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        import pulp as pl
+        solver_list = pl.listSolvers(onlyAvailable=True)
+        for solver in solver_list:
+            self.optim_conf['lp_solver'] = solver
+            self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+                                    self.fcst.var_load_cost, self.fcst.var_prod_price,  
+                                    self.costfun, root, logger)
+            self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
+            self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+            self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
+                self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
+            self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+            self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
+            self.assertIsInstance(self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         
     def test_perform_naive_mpc_optim(self):
         self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)

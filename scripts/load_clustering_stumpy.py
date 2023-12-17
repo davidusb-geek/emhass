@@ -93,7 +93,7 @@ if __name__ == '__main__':
     # fig = (px.line(df, x='Clusters', y='Distortions', template=template)).update_traces(mode='lines+markers')
     # fig.show()
     
-    # The silouhette metod
+    # The silouhette method
     silhouette_scores = []
     K = range(2,12)
 
@@ -111,7 +111,7 @@ if __name__ == '__main__':
     # The clustering
     kmeans = KMeans(n_clusters=6, init='k-means++')
     kmeans = kmeans.fit(data_lag)
-    data['cluster_group'] = kmeans.labels_
+    data_lag['cluster_group'] = kmeans.labels_
 
-    fig = px.scatter(data, x='power_load y(t)', y='power_load y(t+1)', color='cluster_group', template=template)
+    fig = px.scatter(data_lag, x='power_load y(t)', y='power_load y(t+1)', color='cluster_group', template=template)
     fig.show()
