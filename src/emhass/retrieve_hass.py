@@ -116,6 +116,9 @@ class retrieve_hass:
                     response = get(url, headers=headers)
                 except Exception:
                     return "Request Get Error"
+                else:
+                    if response.status_code > 299:
+                        return f"Request Get Error: {response.status_code}"
                 '''import bz2 # Uncomment to save a serialized data for tests
                 import _pickle as cPickle
                 with bz2.BZ2File("data/test_response_get_data_get_method.pbz2", "w") as f: 
@@ -174,17 +177,14 @@ class retrieve_hass:
         :rtype: pandas.DataFrame
         
         """
-        if load_negative: # Apply the correct sign to load power
-            try:
+        try:
+            if load_negative: # Apply the correct sign to load power
                 self.df_final[var_load+'_positive'] = -self.df_final[var_load]
-            except KeyError:
-                self.logger.error("Variable "+var_load+" was not found. This is typically because no data could be retrieved from Home Assistant")
-        else:
-            try:
+            else:
                 self.df_final[var_load+'_positive'] = self.df_final[var_load]
-            except KeyError:
-                self.logger.error("Variable "+var_load+" was not found. This is typically because no data could be retrieved from Home Assistant")
-        self.df_final.drop([var_load], inplace=True, axis=1)
+            self.df_final.drop([var_load], inplace=True, axis=1)
+        except KeyError:
+            self.logger.error("Variable "+var_load+" was not found. This is typically because no data could be retrieved from Home Assistant")
         if set_zero_min: # Apply minimum values
             self.df_final.clip(lower=0.0, inplace=True, axis=1)
             self.df_final.replace(to_replace=0.0, value=np.nan, inplace=True)
@@ -282,6 +282,8 @@ class retrieve_hass:
             state = np.round(data_df.sum()[0],2)
         elif type_var == 'unit_load_cost' or type_var == 'unit_prod_price':
             state = np.round(data_df.loc[data_df.index[idx]],4)
+        elif type_var == 'optim_status':
+            state = data_df.loc[data_df.index[idx]]
         else:
             state = np.round(data_df.loc[data_df.index[idx]],2)
         if type_var == 'power':
@@ -305,6 +307,14 @@ class retrieve_hass:
         elif type_var == 'mlforecaster':
             data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "scheduled_forecast", state)
+        elif type_var == 'optim_status':
+            data = {
+                "state": state,
+                "attributes": {
+                    "unit_of_measurement": unit_of_measurement,
+                    "friendly_name": friendly_name
+                }
+            }
         else:
             data = {
                 "state": "{:.2f}".format(state),

@@ -234,6 +234,20 @@ class TestCommandLineUtils(unittest.TestCase):
                                               action, logger, get_data_from_file=True)
         opt_res_last = publish_data(input_data_dict, logger, opt_res_latest=opt_res)
         self.assertTrue(len(opt_res_last)==1)
+        # Check if status is published
+        from datetime import datetime
+        now_precise = datetime.now(input_data_dict['retrieve_hass_conf']['time_zone']).replace(second=0, microsecond=0)
+        idx_closest = opt_res.index.get_indexer([now_precise], method='nearest')[0]
+        custom_cost_fun_id = {"entity_id": "sensor.optim_status", "unit_of_measurement": "", "friendly_name": "EMHASS optimization status"}
+        publish_prefix = ""
+        response, data = input_data_dict['rh'].post_data(opt_res['optim_status'], idx_closest, 
+                                        custom_cost_fun_id["entity_id"], 
+                                        custom_cost_fun_id["unit_of_measurement"],
+                                        custom_cost_fun_id["friendly_name"],
+                                        type_var = 'optim_status',
+                                        publish_prefix = publish_prefix)
+        self.assertTrue(hasattr(response, '__class__'))
+        self.assertTrue(data['attributes']['friendly_name'] == 'EMHASS optimization status')
     
     def test_forecast_model_fit_predict_tune(self):
         config_path = pathlib.Path(root+'/config_emhass.yaml')
