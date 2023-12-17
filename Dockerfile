@@ -1,4 +1,5 @@
-FROM python:3.9-slim-buster
+FROM python:3.11-slim-buster
+#FROM ghcr.io/home-assistant/amd64-base-debian:bookworm # Uncomment to test add-on
 
 # switch working directory
 WORKDIR /app
@@ -12,17 +13,23 @@ COPY README.md README.md
 # Setup
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        # libc-bin \ # Uncomment to test add-on
+        # libffi-dev \ # Uncomment to test add-on
+        # python3 \ # Uncomment to test add-on
+        # python3-pip \ # Uncomment to test add-on
+        # python3-dev \ # Uncomment to test add-on
+        # git \ # Uncomment to test add-on
+        # build-essential \ # Uncomment to test add-on
         gcc \
+        coinor-cbc \
+        coinor-libcbc-dev \
         libhdf5-dev \
         libhdf5-serial-dev \
         netcdf-bin \
         libnetcdf-dev \
-        coinor-cbc \
-        coinor-libcbc-dev \
     && ln -s /usr/include/hdf5/serial /usr/include/hdf5/include \
     && export HDF5_DIR=/usr/include/hdf5 \
-    && pip3 install netCDF4 \
-    && pip3 install --no-cache-dir -r requirements_webserver.txt \
+    && pip3 install --no-cache-dir --break-system-packages -r requirements_webserver.txt \
     && apt-get purge -y --auto-remove \
         gcc \
         libhdf5-dev \
@@ -30,9 +37,6 @@ RUN apt-get update \
         netcdf-bin \
         libnetcdf-dev \
     && rm -rf /var/lib/apt/lists/*
-
-# Setup slim-buster
-RUN pip3 install --no-cache-dir -r requirements_webserver.txt
 
 # copy contents
 COPY src/emhass/__init__.py /app/src/emhass/__init__.py

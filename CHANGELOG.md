@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.1] - 2023-12-18
+### Fix
+- Patching EMHASS for Python 3.11. New explicit dependecy h5py==3.10.0
+- Updated Dockerfile to easily test add-on build
+
 ## [0.6.0] - 2023-12-16
 ### Improvement
 - Now Python 3.11 is fully supported, thanks to @pail23
