@@ -101,6 +101,8 @@ class TestForecast(unittest.TestCase):
         self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.df_weather_csv), len(P_PV_forecast))
+        df_weather_none = self.fcst.get_weather_forecast(method='none')
+        self.assertTrue(df_weather_none == None)
         
     def test_get_weather_forecast_mlforecaster(self):
         pass

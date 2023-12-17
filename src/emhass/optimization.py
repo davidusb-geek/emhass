@@ -461,6 +461,9 @@ class optimization:
                     unit_prod_price[i]*P_grid_neg[i].varValue) for i in set_I]
         else:
             self.logger.error("The cost function specified type is not valid")
+            
+        # Add the optimization status
+        opt_tp["optim_status"] = self.optim_status
         
         return opt_tp
 

@@ -3,8 +3,10 @@
 ## [0.6.0] - 2023-12-16
 ### Improvement
 - Now Python 3.11 is fully supported, thanks to @pail23
+- We now publish the optimization status on sensor.optim_status
 - Bumped setuptools, skforecast, numpy, scipy, pandas
 - A good bunch of documentation improvements thanks to @g1za
+- Improved code coverage (a little bit ;-)
 ### Fix
 - Some fixes managing time zones, thanks to @pail23
 - Bug fix on grid cost function equation, thanks to @michaelpiron
