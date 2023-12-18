@@ -5,7 +5,7 @@ from flask import Flask, request, make_response, render_template
 from jinja2 import Environment, PackageLoader
 from requests import get
 from waitress import serve
-from importlib.metadata import version
+from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 import os, json, argparse, pickle, yaml, logging
 from distutils.util import strtobool
@@ -265,9 +265,9 @@ if __name__ == "__main__":
             app.logger.error("options.json does not exists")
         DATA_PATH = "/share/" #"/data/"
     else:
-        CONFIG_PATH = "/app/config_emhass.yaml"
+        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
         options = None
-        DATA_PATH = "/app/data/"
+        DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
     config_path = Path(CONFIG_PATH)
     data_path = Path(DATA_PATH)
     
@@ -328,7 +328,7 @@ if __name__ == "__main__":
     else:
         costfun = os.getenv('LOCAL_COSTFUN', default='profit')
         logging_level = os.getenv('LOGGING_LEVEL', default='INFO')
-        with open('/app/secrets_emhass.yaml', 'r') as file:
+        with open(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), 'r') as file:
             params_secrets = yaml.load(file, Loader=yaml.FullLoader)
         hass_url = params_secrets['hass_url']
         
@@ -364,5 +364,8 @@ if __name__ == "__main__":
     app.logger.info("Launching the emhass webserver at: http://"+web_ui_url+":"+str(port))
     app.logger.info("Home Assistant data fetch will be performed using url: "+hass_url)
     app.logger.info("The data path is: "+str(data_path))
-    app.logger.info("Using core emhass version: "+version('emhass'))
+    try:
+        app.logger.info("Using core emhass version: "+version('emhass'))
+    except PackageNotFoundError:
+        app.logger.info("Using development emhass version")
     serve(app, host=web_ui_url, port=port, threads=8)

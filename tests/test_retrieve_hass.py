@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import datetime
 import unittest
 import requests_mock
 import numpy as np, pandas as pd
 import pytz, pathlib, pickle, json, yaml, copy
 import bz2
-import _pickle as cPickle
+import pickle as cPickle
 
 from emhass.retrieve_hass import retrieve_hass
 from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
@@ -100,7 +101,7 @@ class TestRetrieveHass(unittest.TestCase):
             self.assertIsInstance(self.rh.df_final.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
             self.assertEqual(len(self.rh.df_final.columns), len(var_list))
             self.assertEqual(self.rh.df_final.index.freq, self.retrieve_hass_conf['freq'])
-            self.assertEqual(self.rh.df_final.index.tz, pytz.UTC)
+            self.assertEqual(self.rh.df_final.index.tz, datetime.timezone.utc)
         
     def test_prepare_data(self):
         self.assertIsInstance(self.rh.df_final, type(pd.DataFrame()))
