@@ -32,8 +32,8 @@ jobs:
     - name: Special dependencies for macos
       run: |
         brew install hdf5
-        pip3 install numpy==1.22.2
-        pip3 install tables==3.7.0
+        pip3 install numpy==1.26.0
+        pip3 install tables==3.9.1
       if: ${{ matrix.os == 'macos-latest' }}
         
     - name: Install dependencies
