@@ -310,7 +310,7 @@ Below you can find a list of the variables resulting from EMHASS computation, sh
 | unit_prod_price | Forecasted price you receive for selling excess solar energy back to the grid (typically "Currency"/kWh). This helps you understand the potential income from your solar production. | sensor.unit_prod_price |
 | cost_profit | Forecasted profit or loss from your energy usage for the forecast period. This is calculated as unit_load_cost * P_Load - unit_prod_price * P_grid_pos. A positive value indicates a profit, while a negative value indicates a loss. | sensor.total_cost_profit_value |
 | cost_fun_cost | Forecasted cost associated with deferring loads to maximize solar self-consumption. This helps you evaluate the trade-off between managing the load and not managing and potential cost savings. | sensor.total_cost_fun_value |
-| - | This contains the status of the latest execution and is the same you can see in the Log following an optimization job. The values can be Optimal or Infeasible | sensor.optim_status |
+| - | This contains the status of the latest execution and is the same you can see in the Log following an optimization job. Its values can be Optimal or Infeasible. | sensor.optim_status |
 
 
 ## Passing your own data
