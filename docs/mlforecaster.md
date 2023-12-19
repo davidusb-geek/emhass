@@ -37,7 +37,7 @@ The minimum number of `days_to_retrieve` is hard coded to 9 by default. But it i
 The default values for these parameters are:
 ```
 runtimeparams = {
-    "days_to_retrieve": 30,
+    "days_to_retrieve": 9,
     "model_type": "load_forecast",
     "var_model": "sensor.power_load_no_var_loads",
     "sklearn_model": "KNeighborsRegressor",
