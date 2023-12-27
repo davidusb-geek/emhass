@@ -551,7 +551,8 @@ class optimization:
         :param P_load: The forecasted Load power consumption. This power should \
             not include the power from the deferrable load that we want to find.
         :type P_load: pandas.DataFrame
-        :param prediction_horizon: The prediction horizon of the MPC controller in minutes.
+        :param prediction_horizon: The prediction horizon of the MPC controller in number \
+            of optimization time steps.
         :type prediction_horizon: int
         :param soc_init: The initial battery SOC for the optimization. This parameter \
             is optional, if not given soc_init = soc_final = soc_target from the configuration file.
