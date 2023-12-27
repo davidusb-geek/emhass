@@ -48,32 +48,40 @@ Three main cost functions are proposed.
 
 **The profit cost function:** 
 
-In this case the cost function is posed to maximize the profit. In this case this is defined by the revenues from selling PV power to the grid minus the consummed energy cost. This can be represented with the following obtective function:
+In this case the cost function is posed to maximize the profit. The profit is defined by the revenues from selling PV power to the grid minus the cost of consumed energy from the grid. 
+This can be represented with the following objective function:
 
 $$
-\sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t(unit_{LoadCost}[i]*P_{gridPos}[i] + prod_{SellPrice}*P_{gridNeg}[i])
+\sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t*(unit_{LoadCost}[i]*P_{gridPos}[i] + prod_{SellPrice}*P_{gridNeg}[i])
 $$
 
-For the special case of an energy contract where the totality of the PV produced energy is injected into the grid this will be:
-
-$$
-\sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t(unit_{LoadCost}[i]*(P_{load}[i]+P_{defSum}[i]) + prod_{SellPrice}*P_{gridNeg}[i])
-$$
+> For the special case of an energy contract where the totality of the PV produced energy is injected into the grid this will be:
+> 
+> $$
+> \sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t*(unit_{LoadCost}[i]*(P_{load}[i]+P_{defSum}[i]) + prod_{SellPrice}*P_{gridNeg}[i])
+> $$
 
 where $\Delta_{opt}$ is the total period of optimization in hours, $\Delta_t$ is the optimization time step in hours, $unit_{LoadCost_i}$ is the cost of the energy from the utility in EUR/kWh, $P_{load}$ is the electricity load consumption (positive defined), $P_{defSum}$ is the sum of the deferrable loads defined, $prod_{SellPrice}$ is the price of the energy sold to the utility, $P_{gridNeg}$ is the negative component of the grid power, this is the power exported to the grid. All these power are expressed in Watts.
 
 **The energy from the grid cost:** 
 
-In this case the cost function is computed as the cost of the energy comming from the grid. 
+In this case the cost function is computed as the cost of the energy coming from the grid. The PV power injected into the grid is not valorized.
 This is:
 
 $$
-\sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t unit_{LoadCost}[i]*(P_{load}[i]+P_{defSum}[i])
+\sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t*unit_{LoadCost}[i]*P_{gridPos}[i]
 $$
+
+> Again, for the special case of an energy contract where the totality of the PV produced energy is injected into the grid this will be:
+> 
+> $$
+> \sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t* unit_{LoadCost}[i]*(P_{load}[i]+P_{defSum}[i])
+> $$
 
 **The self-consumption cost function:**
 
-This is a cost function designed to maximize the self-consumption of the PV plant. 
+This is a cost function designed to maximize the self-consumption of the PV plant. The cost function is computed as the revenues from selling PV power to the grid, plus the avoided cost of consuming PV power locally (the latter means: valorizing the self-consumed cost at the grid offtake price).
+
 The self-consumption is defined as:
 
 $$
@@ -99,8 +107,15 @@ $$
 SC[i] \leq P_{load}[i]+P_{defSum}[i]
 $$
 
+> [!CAUTION]
+> Note: To be checked:
+> 
+> 1/ The code has a hard-coded parameter that selects the "bigm" self-consumption method. However, the method described here above is the "maxmin" method, which is never called in the code.
+> 
+> 2/ In the "maxmin" in the code, the cost function contains the valorization of the self-consumed energy at grid offtake price. This is wrong. Correct: self-consumed energy valorized at the difference between offtake and injection price; adding the revenue of the energy injected in the grid (valorized at grid injection price); and adding the cost of the energy taken from the grid (valorized at grid offtake price).
+
 All these cost functions can be chosen by the user with the `--costfun` tag with the `emhass` command. The options are: `profit`, `cost`, `self-consumption`.
-They are all set in the LP formualtion as cost function to maximize.
+They are all set in the LP formulation as cost function to maximize.
 
 The problem constraints are written as follows.
 
