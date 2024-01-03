@@ -287,30 +287,31 @@ class optimization:
                     for i in set_I})
             # Treat the number of starts for a deferrable load
             if self.optim_conf['set_def_constant'][k]:
-                constraints.update({"constraint_pdef{}_start1".format(k) : 
-                    plp.LpConstraint(
-                        e=P_def_start[k][0],
-                        sense=plp.LpConstraintEQ,
-                        rhs=0)
-                    })
-                constraints.update({"constraint_pdef{}_start2_{}".format(k, i) : 
-                    plp.LpConstraint(
-                        e=P_def_start[k][i] - P_def_bin2[k][i] + P_def_bin2[k][i-1],
-                        sense=plp.LpConstraintEQ,
-                        rhs=0)
-                    for i in set_I[1:]})
-                constraints.update({"constraint_pdef{}_start4_{}".format(k, i) : 
+                
+                constraints.update({"constraint_pdef{}_start1_{}".format(k, i) : 
                     plp.LpConstraint(
                         e=P_deferrable[k][i] - P_def_bin2[k][i]*M,
                         sense=plp.LpConstraintLE,
                         rhs=0)
                     for i in set_I})
-                constraints.update({"constraint_pdef{}_start5_{}".format(k, i) : 
+                constraints.update({"constraint_pdef{}_start2_{}".format(k, i) : 
                     plp.LpConstraint(
-                        e=-P_deferrable[k][i] + M*(P_def_bin2[k][i]-1) + 1,
-                        sense=plp.LpConstraintLE,
+                        e=P_def_start[k][i] - P_def_bin2[k][i] + P_def_bin2[k][i-1],
+                        sense=plp.LpConstraintGE,
                         rhs=0)
-                    for i in set_I})
+                    for i in set_I[1:]})
+                constraints.update({"constraint_pdef{}_start3".format(k) :
+                plp.LpConstraint(
+                    e = plp.lpSum(P_def_start[k][i] for i in set_I),
+                    sense = plp.LpConstraintEQ,
+                    rhs = 1)
+                })
+                constraints.update({"constraint_pdef{}_start4".format(k) :
+                plp.LpConstraint(
+                    e = plp.lpSum(P_def_bin2[k][i] for i in set_I),
+                    sense = plp.LpConstraintEQ,
+                    rhs = self.optim_conf['def_total_hours'][k]/self.timeStep)
+                })
         
         # The battery constraints
         if self.optim_conf['set_use_battery']:
@@ -464,6 +465,12 @@ class optimization:
             
         # Add the optimization status
         opt_tp["optim_status"] = self.optim_status
+        
+        # Debug variables
+        opt_tp["P_def_start_0"] = [P_def_start[0][i].varValue for i in set_I]
+        opt_tp["P_def_start_1"] = [P_def_start[1][i].varValue for i in set_I]
+        opt_tp["P_def_bin2_0"] = [P_def_bin2[0][i].varValue for i in set_I]
+        opt_tp["P_def_bin2_1"] = [P_def_bin2[1][i].varValue for i in set_I]
         
         return opt_tp
 

@@ -40,9 +40,9 @@ setup(
     python_requires='>=3.9, <3.12',
     install_requires=[
         'wheel', 
-        'numpy==1.26',
-        'scipy==1.11.3',
-        'pandas==2.0.3',
+        'numpy<=1.26',
+        'scipy<=1.11.3',
+        'pandas<=2.0.3',
         'pvlib>=0.10.1',
         'protobuf>=3.0.0',
         'pytz>=2021.1',
@@ -50,7 +50,7 @@ setup(
         'beautifulsoup4>=4.9.3',
         'pulp>=2.4',
         'pyyaml>=5.4.1',
-        'tables==3.9.1',
+        'tables<=3.9.1',
         'skforecast==0.11.0',
     ],  # Optional
     entry_points={  # Optional
