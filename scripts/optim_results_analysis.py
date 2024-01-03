@@ -93,7 +93,13 @@ if __name__ == '__main__':
     df_input_data_dayahead = fcst.get_prod_price_forecast(df_input_data_dayahead)
     optim_conf['treat_def_as_semi_cont'] = [True, True]
     optim_conf['set_def_constant'] = [True, True]
-    opt_res_dah = opt.perform_dayahead_forecast_optim(df_input_data_dayahead, P_PV_forecast, P_load_forecast)
+    unit_load_cost = df_input_data[opt.var_load_cost].values
+    unit_prod_price = df_input_data[opt.var_prod_price].values
+    opt_res_dah = opt.perform_optimization(df_input_data_dayahead, P_PV_forecast.values.ravel(), 
+                                           P_load_forecast.values.ravel(), 
+                                           unit_load_cost, unit_prod_price,
+                                           debug = True)
+    # opt_res_dah = opt.perform_dayahead_forecast_optim(df_input_data_dayahead, P_PV_forecast, P_load_forecast)
     opt_res_dah['P_PV'] = df_input_data_dayahead[['P_PV_forecast']]
     fig_res_dah = opt_res_dah[['P_deferrable0', 'P_deferrable1', 'P_grid', 'P_PV',
                                'P_def_start_0', 'P_def_start_1', 'P_def_bin2_0', 'P_def_bin2_1']].plot()

@@ -88,7 +88,8 @@ class optimization:
     def perform_optimization(self, data_opt: pd.DataFrame, P_PV: np.array, P_load: np.array, 
                              unit_load_cost: np.array, unit_prod_price: np.array,
                              soc_init: Optional[float] = None, soc_final: Optional[float] = None,
-                             def_total_hours: Optional[list] = None) -> pd.DataFrame:
+                             def_total_hours: Optional[list] = None, 
+                             debug: Optional[bool] = False) -> pd.DataFrame:
         r"""
         Perform the actual optimization using linear programming (LP).
         
@@ -467,10 +468,11 @@ class optimization:
         opt_tp["optim_status"] = self.optim_status
         
         # Debug variables
-        opt_tp["P_def_start_0"] = [P_def_start[0][i].varValue for i in set_I]
-        opt_tp["P_def_start_1"] = [P_def_start[1][i].varValue for i in set_I]
-        opt_tp["P_def_bin2_0"] = [P_def_bin2[0][i].varValue for i in set_I]
-        opt_tp["P_def_bin2_1"] = [P_def_bin2[1][i].varValue for i in set_I]
+        if debug:
+            opt_tp["P_def_start_0"] = [P_def_start[0][i].varValue for i in set_I]
+            opt_tp["P_def_start_1"] = [P_def_start[1][i].varValue for i in set_I]
+            opt_tp["P_def_bin2_0"] = [P_def_bin2[0][i].varValue for i in set_I]
+            opt_tp["P_def_bin2_1"] = [P_def_bin2[1][i].varValue for i in set_I]
         
         return opt_tp
 
