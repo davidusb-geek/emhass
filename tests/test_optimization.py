@@ -101,6 +101,47 @@ class TestOptimization(unittest.TestCase):
         self.assertTrue(table.columns[1]=='Cost Totals')
         # Check status
         self.assertTrue('optim_status' in self.opt_res_dayahead.columns)
+        # Test treat_def_as_semi_cont and set_def_constant constraints
+        self.optim_conf.update({'treat_def_as_semi_cont': [True, True]})
+        self.optim_conf.update({'set_def_constant': [True, True]})
+        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+                                self.fcst.var_load_cost, self.fcst.var_prod_price,  
+                                self.costfun, root, logger)
+        self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
+        self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
+        self.assertTrue(self.opt.optim_status == 'Optimal')
+        self.optim_conf.update({'treat_def_as_semi_cont': [False, True]})
+        self.optim_conf.update({'set_def_constant': [True, True]})
+        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+                                self.fcst.var_load_cost, self.fcst.var_prod_price,  
+                                self.costfun, root, logger)
+        self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
+        self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
+        self.assertTrue(self.opt.optim_status == 'Optimal')
+        self.optim_conf.update({'treat_def_as_semi_cont': [False, True]})
+        self.optim_conf.update({'set_def_constant': [False, True]})
+        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+                                self.fcst.var_load_cost, self.fcst.var_prod_price,  
+                                self.costfun, root, logger)
+        self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
+        self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
+        self.assertTrue(self.opt.optim_status == 'Optimal')
+        self.optim_conf.update({'treat_def_as_semi_cont': [False, False]})
+        self.optim_conf.update({'set_def_constant': [False, True]})
+        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+                                self.fcst.var_load_cost, self.fcst.var_prod_price,  
+                                self.costfun, root, logger)
+        self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
+        self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
+        self.assertTrue(self.opt.optim_status == 'Optimal')
+        self.optim_conf.update({'treat_def_as_semi_cont': [False, False]})
+        self.optim_conf.update({'set_def_constant': [False, False]})
+        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+                                self.fcst.var_load_cost, self.fcst.var_prod_price,  
+                                self.costfun, root, logger)
+        self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
+        self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
+        self.assertTrue(self.opt.optim_status == 'Optimal')
         
     def test_perform_dayahead_forecast_optim_costfun_selfconso(self):
         costfun = 'self-consumption'
