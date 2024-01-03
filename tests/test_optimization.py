@@ -108,7 +108,7 @@ class TestOptimization(unittest.TestCase):
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
-        self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
+            self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
         self.assertTrue(self.opt.optim_status == 'Optimal')
         self.optim_conf.update({'treat_def_as_semi_cont': [False, True]})
         self.optim_conf.update({'set_def_constant': [True, True]})
@@ -116,7 +116,7 @@ class TestOptimization(unittest.TestCase):
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
-        self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
+            self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
         self.assertTrue(self.opt.optim_status == 'Optimal')
         self.optim_conf.update({'treat_def_as_semi_cont': [False, True]})
         self.optim_conf.update({'set_def_constant': [False, True]})
@@ -124,7 +124,7 @@ class TestOptimization(unittest.TestCase):
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
-        self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
+            self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
         self.assertTrue(self.opt.optim_status == 'Optimal')
         self.optim_conf.update({'treat_def_as_semi_cont': [False, False]})
         self.optim_conf.update({'set_def_constant': [False, True]})
@@ -132,7 +132,7 @@ class TestOptimization(unittest.TestCase):
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
-        self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
+            self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
         self.assertTrue(self.opt.optim_status == 'Optimal')
         self.optim_conf.update({'treat_def_as_semi_cont': [False, False]})
         self.optim_conf.update({'set_def_constant': [False, False]})
@@ -140,7 +140,29 @@ class TestOptimization(unittest.TestCase):
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
-        self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
+            self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast)
+        self.assertTrue(self.opt.optim_status == 'Optimal')
+        # Test with different default solver, debug mode and batt SOC conditions
+        del self.optim_conf['lp_solver']
+        del self.optim_conf['lp_solver_path']
+        self.optim_conf['set_use_battery'] = True
+        soc_init = None
+        soc_final = 0.3
+        self.optim_conf['set_total_pv_sell'] = True
+        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+                                self.fcst.var_load_cost, self.fcst.var_prod_price,  
+                                self.costfun, root, logger)
+        
+        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
+        self.opt_res_dayahead = self.opt.perform_optimization(
+            self.df_input_data_dayahead, self.P_PV_forecast.values.ravel(), 
+            self.P_load_forecast.values.ravel(), unit_load_cost, unit_prod_price,
+            soc_init = soc_init, soc_final = soc_final, debug = True)
+        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+        self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        self.assertTrue('cost_fun_'+self.costfun in self.opt_res_dayahead.columns)
         self.assertTrue(self.opt.optim_status == 'Optimal')
         
     def test_perform_dayahead_forecast_optim_costfun_selfconso(self):
