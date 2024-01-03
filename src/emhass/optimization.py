@@ -77,7 +77,7 @@ class optimization:
         if 'lp_solver' in optim_conf.keys():
             self.lp_solver = optim_conf['lp_solver']
         else:
-            self.lp_solver = 'PULP_CBC_CMD'
+            self.lp_solver = 'default'
         if 'lp_solver_path' in optim_conf.keys():
             self.lp_solver_path = optim_conf['lp_solver_path']
         else:
