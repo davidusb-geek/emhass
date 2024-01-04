@@ -46,7 +46,7 @@ Three main cost functions are proposed.
 
 ### Cost functions
 
-**The profit cost function:** 
+#### **1/ The _profit_ cost function:** 
 
 In this case the cost function is posed to maximize the profit. The profit is defined by the revenues from selling PV power to the grid minus the cost of consumed energy from the grid. 
 This can be represented with the following objective function:
@@ -63,7 +63,7 @@ $$
 
 where $\Delta_{opt}$ is the total period of optimization in hours, $\Delta_t$ is the optimization time step in hours, $unit_{LoadCost_i}$ is the cost of the energy from the utility in EUR/kWh, $P_{load}$ is the electricity load consumption (positive defined), $P_{defSum}$ is the sum of the deferrable loads defined, $prod_{SellPrice}$ is the price of the energy sold to the utility, $P_{gridNeg}$ is the negative component of the grid power, this is the power exported to the grid. All these power are expressed in Watts.
 
-**The energy from the grid cost:** 
+#### **2/ The energy from the grid _cost_:** 
 
 In this case the cost function is computed as the cost of the energy coming from the grid. The PV power injected into the grid is not valorized.
 This is:
@@ -78,41 +78,53 @@ $$
 > \sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t* unit_{LoadCost}[i]*(P_{load}[i]+P_{defSum}[i])
 > $$
 
-**The self-consumption cost function:**
+#### **3/ The _self-consumption_ cost function:**
 
-This is a cost function designed to maximize the self-consumption of the PV plant. The cost function is computed as the revenues from selling PV power to the grid, plus the avoided cost of consuming PV power locally (the latter means: valorizing the self-consumed cost at the grid offtake price).
+This is a cost function designed to maximize the self-consumption of the PV plant. 
+> [!NOTE]
+> EMHASS has two methods for defining a self-consumption cost function: **bigm** and **maxmin**. In the current version, only the **bigm** method is used, as the maxmin method has convergence issues.
 
-The self-consumption is defined as:
-
-$$
-SC = \min(P_{PV}, (P_{load}+P_{defSum}))
-$$
-
-To convert this to a linear cost function, an additional continuous variable $SC$ is added. This is the so-called maximin problem.
-The cost function is defined as:
+##### **bigM self-consumption method**
+In this case, the cost function is based on the profit cost function, but the energy offtake cost is weighted more heavily than the energy injection revenue. 
+This can be represented with the following objective function:
 
 $$
-\sum_{i=1}^{\Delta_{opt}/\Delta_t} SC[i]
+\sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t*(bigM*unit_{LoadCost}[i]*P_{gridPos}[i] + prod_{SellPrice}*P_{gridNeg}[i])
 $$
 
-With the following set of constraints:
+where bigM equals 1000.
+Adding this bigM factor will give more weight to the cost of grid offtake, or formulated differently: avoiding offtake through self-consumption will have strong influence on the calculated cost.
 
-$$
-SC[i] \leq P_{PV}[i]
-$$
+Please note that the bigM factor is not used in the calculated cost that comes out of the optimizer results. It is only used to drive the optimizer.
 
-and
-
-$$
-SC[i] \leq P_{load}[i]+P_{defSum}[i]
-$$
-
-> [!CAUTION]
-> Note: To be checked:
+> ##### **Maxmin self-consumption method** (currently disabled)
+>
+> The cost function is computed as the revenues from selling PV power to the grid, plus the avoided cost of consuming PV power locally (the latter means: valorizing the self-consumed cost at the grid offtake price).
+>
+> The self-consumption is defined as:
 > 
-> 1/ The code has a hard-coded parameter that selects the "bigm" self-consumption method. However, the method described here above is the "maxmin" method, which is never called in the code.
+> $$
+> SC = \min(P_{PV}, (P_{load}+P_{defSum}))
+> $$
 > 
-> 2/ In the "maxmin" in the code, the cost function contains the valorization of the self-consumed energy at grid offtake price. This is wrong. Correct: self-consumed energy valorized at the difference between offtake and injection price; adding the revenue of the energy injected in the grid (valorized at grid injection price); and adding the cost of the energy taken from the grid (valorized at grid offtake price).
+> To convert this to a linear cost function, an additional continuous variable $SC$ is added. This is the so-called maximin problem.
+> The cost function is defined as:
+> 
+> $$
+> \sum_{i=1}^{\Delta_{opt}/\Delta_t} SC[i]
+> $$
+> 
+> With the following set of constraints:
+> 
+> $$
+> SC[i] \leq P_{PV}[i]
+> $$
+> 
+> and
+> 
+> $$
+> SC[i] \leq P_{load}[i]+P_{defSum}[i]
+> $$
 
 All these cost functions can be chosen by the user with the `--costfun` tag with the `emhass` command. The options are: `profit`, `cost`, `self-consumption`.
 They are all set in the LP formulation as cost function to maximize.
