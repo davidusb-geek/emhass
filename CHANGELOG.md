@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2] - 2024-01-04
+### Improvement
+- Added option to pass additional weight for battery usage
+- Improved coverage
+### Fix
+- Updated optimization constraints to solve conflict for `set_def_constant` and `treat_def_as_semi_cont` cases
+
 ## [0.6.1] - 2023-12-18
 ### Fix
 - Patching EMHASS for Python 3.11. New explicit dependecy h5py==3.10.0
