@@ -1,6 +1,9 @@
 # Changelog
 
 ## [0.6.2] - Unreleased
+### Improvement
+- Added option to pass additional weight for battery usage
+- Improved coverage
 ### Fix
 - Updated optimization constraints to solve conflict for `set_def_constant` and `treat_def_as_semi_cont` cases
 
