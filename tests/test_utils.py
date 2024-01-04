@@ -159,7 +159,7 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(params['passed_data']['publish_prefix'] == 'emhass_')
         self.assertTrue(params['passed_data']['custom_pv_forecast_id'] == 'my_custom_pv_forecast_id')
         self.assertTrue(params['passed_data']['custom_load_forecast_id'] == 'my_custom_load_forecast_id')
-        self.assertTrue(params['passed_data']['custom_batt_forecast_id'] == 'my_custom_battforecast_id')
+        self.assertTrue(params['passed_data']['custom_batt_forecast_id'] == 'my_custom_batt_forecast_id')
         self.assertTrue(params['passed_data']['custom_batt_soc_forecast_id'] == 'my_custom_batt_soc_forecast_id')
         self.assertTrue(params['passed_data']['custom_grid_forecast_id'] == 'my_custom_grid_forecast_id')
         self.assertTrue(params['passed_data']['custom_cost_fun_id'] == 'my_custom_cost_fun_id')

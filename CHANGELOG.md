@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.6.2] - Unreleased
+## [0.6.2] - 2024-01-04
 ### Improvement
 - Added option to pass additional weight for battery usage
 - Improved coverage
