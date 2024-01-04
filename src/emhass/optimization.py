@@ -115,7 +115,8 @@ class optimization:
         :param soc_final: The final battery SOC for the optimization. This parameter \
             is optional, if not given soc_init = soc_final = soc_target from the configuration file.
         :type soc_final: 
-        :param def_total_hours: The functioning hours for this iteration for each deferrable load.
+        :param def_total_hours: The functioning hours for this iteration for each deferrable load. \
+            (For continuous deferrable loads: functioning hours at nominal power)
         :type def_total_hours: list
         :return: The input DataFrame with all the different results from the \
             optimization appended
@@ -560,7 +561,8 @@ class optimization:
         :param P_load: The forecasted Load power consumption. This power should \
             not include the power from the deferrable load that we want to find.
         :type P_load: pandas.DataFrame
-        :param prediction_horizon: The prediction horizon of the MPC controller in minutes.
+        :param prediction_horizon: The prediction horizon of the MPC controller in number \
+            of optimization time steps.
         :type prediction_horizon: int
         :param soc_init: The initial battery SOC for the optimization. This parameter \
             is optional, if not given soc_init = soc_final = soc_target from the configuration file.
@@ -568,7 +570,8 @@ class optimization:
         :param soc_final: The final battery SOC for the optimization. This parameter \
             is optional, if not given soc_init = soc_final = soc_target from the configuration file.
         :type soc_final: 
-        :param def_total_hours: The functioning hours for this iteration for each deferrable load.
+        :param def_total_hours: The functioning hours for this iteration for each deferrable load. \
+            (For continuous deferrable loads: functioning hours at nominal power)
         :type def_total_hours: list
         :return: opt_res: A DataFrame containing the optimization results
         :rtype: pandas.DataFrame
