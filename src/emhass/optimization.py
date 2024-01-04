@@ -77,7 +77,7 @@ class optimization:
         if 'lp_solver' in optim_conf.keys():
             self.lp_solver = optim_conf['lp_solver']
         else:
-            self.lp_solver = 'PULP_CBC_CMD'
+            self.lp_solver = 'default'
         if 'lp_solver_path' in optim_conf.keys():
             self.lp_solver_path = optim_conf['lp_solver_path']
         else:
@@ -88,7 +88,8 @@ class optimization:
     def perform_optimization(self, data_opt: pd.DataFrame, P_PV: np.array, P_load: np.array, 
                              unit_load_cost: np.array, unit_prod_price: np.array,
                              soc_init: Optional[float] = None, soc_final: Optional[float] = None,
-                             def_total_hours: Optional[list] = None) -> pd.DataFrame:
+                             def_total_hours: Optional[list] = None, 
+                             debug: Optional[bool] = False) -> pd.DataFrame:
         r"""
         Perform the actual optimization using linear programming (LP).
         
@@ -196,31 +197,31 @@ class optimization:
         if self.costfun == 'profit':
             if self.optim_conf['set_total_pv_sell']:
                 objective = plp.lpSum(-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum[i]) + \
-                                                            unit_prod_price[i]*P_grid_neg[i])
-                                      for i in set_I)
+                    unit_prod_price[i]*P_grid_neg[i]) for i in set_I)
             else:
                 objective = plp.lpSum(-0.001*self.timeStep*(unit_load_cost[i]*P_grid_pos[i] + \
-                                                            unit_prod_price[i]*P_grid_neg[i])
-                                      for i in set_I)
+                    unit_prod_price[i]*P_grid_neg[i]) for i in set_I)
         elif self.costfun == 'cost':
             if self.optim_conf['set_total_pv_sell']:
-                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum[i])
-                                      for i in set_I)
+                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum[i]) for i in set_I)
             else:
-                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*P_grid_pos[i]
-                                      for i in set_I)
+                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*P_grid_pos[i] for i in set_I)
         elif self.costfun == 'self-consumption':
             if type_self_conso == 'bigm':
                 bigm = 1e3
                 objective = plp.lpSum(-0.001*self.timeStep*(bigm*unit_load_cost[i]*P_grid_pos[i] + \
-                                                            unit_prod_price[i]*P_grid_neg[i])
-                                      for i in set_I)
+                    unit_prod_price[i]*P_grid_neg[i]) for i in set_I)
             elif type_self_conso == 'maxmin':
                 objective = plp.lpSum(0.001*self.timeStep*unit_load_cost[i]*SC[i] for i in set_I)
             else:
                 self.logger.error("Not a valida option for type_self_conso parameter")
         else:
             self.logger.error("The cost function specified type is not valid")
+        # Add more terms to the objective function in the case of battery use
+        if self.optim_conf['set_use_battery']:
+            objective = objective + plp.lpSum(-0.001*self.timeStep*(
+                self.optim_conf['weight_battery_discharge']*P_sto_pos[i] + \
+                    self.optim_conf['weight_battery_charge']*P_sto_neg[i]) for i in set_I)
         opt_model.setObjective(objective)
         
         ## Setting constraints
@@ -287,30 +288,31 @@ class optimization:
                     for i in set_I})
             # Treat the number of starts for a deferrable load
             if self.optim_conf['set_def_constant'][k]:
-                constraints.update({"constraint_pdef{}_start1".format(k) : 
-                    plp.LpConstraint(
-                        e=P_def_start[k][0],
-                        sense=plp.LpConstraintEQ,
-                        rhs=0)
-                    })
-                constraints.update({"constraint_pdef{}_start2_{}".format(k, i) : 
-                    plp.LpConstraint(
-                        e=P_def_start[k][i] - P_def_bin2[k][i] + P_def_bin2[k][i-1],
-                        sense=plp.LpConstraintEQ,
-                        rhs=0)
-                    for i in set_I[1:]})
-                constraints.update({"constraint_pdef{}_start4_{}".format(k, i) : 
+                
+                constraints.update({"constraint_pdef{}_start1_{}".format(k, i) : 
                     plp.LpConstraint(
                         e=P_deferrable[k][i] - P_def_bin2[k][i]*M,
                         sense=plp.LpConstraintLE,
                         rhs=0)
                     for i in set_I})
-                constraints.update({"constraint_pdef{}_start5_{}".format(k, i) : 
+                constraints.update({"constraint_pdef{}_start2_{}".format(k, i) : 
                     plp.LpConstraint(
-                        e=-P_deferrable[k][i] + M*(P_def_bin2[k][i]-1) + 1,
-                        sense=plp.LpConstraintLE,
+                        e=P_def_start[k][i] - P_def_bin2[k][i] + P_def_bin2[k][i-1],
+                        sense=plp.LpConstraintGE,
                         rhs=0)
-                    for i in set_I})
+                    for i in set_I[1:]})
+                constraints.update({"constraint_pdef{}_start3".format(k) :
+                plp.LpConstraint(
+                    e = plp.lpSum(P_def_start[k][i] for i in set_I),
+                    sense = plp.LpConstraintEQ,
+                    rhs = 1)
+                })
+                constraints.update({"constraint_pdef{}_start4".format(k) :
+                plp.LpConstraint(
+                    e = plp.lpSum(P_def_bin2[k][i] for i in set_I),
+                    sense = plp.LpConstraintEQ,
+                    rhs = self.optim_conf['def_total_hours'][k]/self.timeStep)
+                })
         
         # The battery constraints
         if self.optim_conf['set_use_battery']:
@@ -464,6 +466,13 @@ class optimization:
             
         # Add the optimization status
         opt_tp["optim_status"] = self.optim_status
+        
+        # Debug variables
+        if debug:
+            opt_tp["P_def_start_0"] = [P_def_start[0][i].varValue for i in set_I]
+            opt_tp["P_def_start_1"] = [P_def_start[1][i].varValue for i in set_I]
+            opt_tp["P_def_bin2_0"] = [P_def_bin2[0][i].varValue for i in set_I]
+            opt_tp["P_def_bin2_1"] = [P_def_bin2[1][i].varValue for i in set_I]
         
         return opt_tp
 

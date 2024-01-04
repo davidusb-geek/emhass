@@ -130,6 +130,8 @@ def build_params(params, options, addon):
         params['optim_conf'][20]['set_battery_dynamic'] = options['set_battery_dynamic']
         params['optim_conf'][21]['battery_dynamic_max'] = options['battery_dynamic_max']
         params['optim_conf'][22]['battery_dynamic_min'] = options['battery_dynamic_min']
+        params['optim_conf'][23]['weight_battery_discharge'] = options['weight_battery_discharge']
+        params['optim_conf'][24]['weight_battery_charge'] = options['weight_battery_charge']
         # Updating variables in plant_conf
         params['plant_conf'][0]['P_grid_max'] = options['maximum_power_from_grid']
         params['plant_conf'][1]['module_model'] = [i['pv_module_model'] for i in options['list_pv_module_model']]
