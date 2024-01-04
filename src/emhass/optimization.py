@@ -197,31 +197,31 @@ class optimization:
         if self.costfun == 'profit':
             if self.optim_conf['set_total_pv_sell']:
                 objective = plp.lpSum(-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum[i]) + \
-                                                            unit_prod_price[i]*P_grid_neg[i])
-                                      for i in set_I)
+                    unit_prod_price[i]*P_grid_neg[i]) for i in set_I)
             else:
                 objective = plp.lpSum(-0.001*self.timeStep*(unit_load_cost[i]*P_grid_pos[i] + \
-                                                            unit_prod_price[i]*P_grid_neg[i])
-                                      for i in set_I)
+                    unit_prod_price[i]*P_grid_neg[i]) for i in set_I)
         elif self.costfun == 'cost':
             if self.optim_conf['set_total_pv_sell']:
-                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum[i])
-                                      for i in set_I)
+                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum[i]) for i in set_I)
             else:
-                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*P_grid_pos[i]
-                                      for i in set_I)
+                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*P_grid_pos[i] for i in set_I)
         elif self.costfun == 'self-consumption':
             if type_self_conso == 'bigm':
                 bigm = 1e3
                 objective = plp.lpSum(-0.001*self.timeStep*(bigm*unit_load_cost[i]*P_grid_pos[i] + \
-                                                            unit_prod_price[i]*P_grid_neg[i])
-                                      for i in set_I)
+                    unit_prod_price[i]*P_grid_neg[i]) for i in set_I)
             elif type_self_conso == 'maxmin':
                 objective = plp.lpSum(0.001*self.timeStep*unit_load_cost[i]*SC[i] for i in set_I)
             else:
                 self.logger.error("Not a valida option for type_self_conso parameter")
         else:
             self.logger.error("The cost function specified type is not valid")
+        # Add more terms to the objective function in the case of battery use
+        if self.optim_conf['set_use_battery']:
+            objective = objective + plp.lpSum(-0.001*self.timeStep*(
+                self.optim_conf['weight_battery_discharge']*P_sto_pos[i] + \
+                    self.optim_conf['weight_battery_charge']*P_sto_neg[i]) for i in set_I)
         opt_model.setObjective(objective)
         
         ## Setting constraints

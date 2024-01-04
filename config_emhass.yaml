@@ -52,6 +52,8 @@ optim_conf:
   - set_battery_dynamic: False # add a constraint to limit the dynamic of the battery power in power per time unit
   - battery_dynamic_max: 0.9 # maximum dynamic positive power variation in percentage of battery maximum power
   - battery_dynamic_min: -0.9 # minimum dynamic negative power variation in percentage of battery maximum power
+  - weight_battery_discharge: 1.0 # weight applied in cost function to battery usage for discharge
+  - weight_battery_charge: 1.0 # weight applied in cost function to battery usage for charge
 
 plant_conf:
   - P_grid_max: 9000 # The maximum power that can be supplied by the utility grid in Watts
