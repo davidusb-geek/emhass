@@ -16,7 +16,6 @@ import pandas as pd
 
 from distutils.util import strtobool
 
-
 from emhass.retrieve_hass import RetrieveHass
 from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
