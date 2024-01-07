@@ -11,6 +11,7 @@ secrets_emhass.yaml
 *.html
 *.pkl
 data/actionLogs.txt
+**/app
 
 
 # Byte-compiled / optimized / DLL files
