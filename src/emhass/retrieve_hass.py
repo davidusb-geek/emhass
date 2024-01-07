@@ -307,6 +307,8 @@ class RetrieveHass:
             state = np.round(data_df.loc[data_df.index[idx]],4)
         elif type_var == 'optim_status':
             state = data_df.loc[data_df.index[idx]]
+        elif type_var == 'csv_predictor':
+            state = data_df[idx]
         else:
             state = np.round(data_df.loc[data_df.index[idx]],2)
         if type_var == 'power':
@@ -331,6 +333,14 @@ class RetrieveHass:
             data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "scheduled_forecast", state)
         elif type_var == 'optim_status':
+            data = {
+                "state": state,
+                "attributes": {
+                    "unit_of_measurement": unit_of_measurement,
+                    "friendly_name": friendly_name
+                }
+            }
+        elif type_var == 'csv_predictor':
             data = {
                 "state": state,
                 "attributes": {
