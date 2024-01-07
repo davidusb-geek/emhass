@@ -20,6 +20,7 @@ from emhass.retrieve_hass import RetrieveHass
 from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.optimization import Optimization
+from emhass.csv_predictor import CsvPredictor
 from emhass import utils
 
 
@@ -154,6 +155,12 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
             if not rh.get_data(days_list, var_list):
                 return False
             df_input_data = rh.df_final.copy()
+    elif set_type == "csv-predict":
+        df_input_data, df_input_data_dayahead = None, None
+        P_PV_forecast, P_load_forecast = None, None
+        days_list = None
+        params = json.loads(params)
+       
     elif set_type == "publish-data":
         df_input_data, df_input_data_dayahead = None, None
         P_PV_forecast, P_load_forecast = None, None
@@ -446,6 +453,45 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
         with open(filename_path, 'wb') as outp:
             pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)       
     return df_pred_optim, mlf
+
+def csv_predict(input_data_dict: dict, logger: logging.Logger,
+    debug: Optional[bool] = False) -> Tuple[pd.DataFrame, pd.DataFrame, CsvPredictor]:
+    """Perform a forecast model fit from training data retrieved from Home Assistant.
+
+    :param input_data_dict: A dictionnary with multiple data used by the action functions
+    :type input_data_dict: dict
+    :param logger: The passed logger object
+    :type logger: logging.Logger
+    :param debug: True to debug, useful for unit testing, defaults to False
+    :type debug: Optional[bool], optional
+    :return: The DataFrame containing the forecast data results without and with backtest and the `CsvPredictor` object
+    :rtype: Tuple[pd.DataFrame, pd.DataFrame, CsvPredictor]
+    """
+    data = copy.deepcopy(input_data_dict['df_input_data'])
+    model_type = input_data_dict['params']['passed_data']['model_type']
+    csv_file = input_data_dict['params']['passed_data']['csv_file']
+    sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
+    perform_backtest = input_data_dict['params']['passed_data']['perform_backtest']
+    independent_variables = input_data_dict['params']['passed_data']['independent_variables']
+    dependent_variable = input_data_dict['params']['passed_data']['dependent_variable']
+    new_values = input_data_dict['params']['passed_data']['new_values']
+    root = input_data_dict['root']
+    # The ML forecaster object
+    csv = CsvPredictor(data, model_type, csv_file, independent_variables, dependent_variable, sklearn_model, new_values, root, logger)
+    # Fit the ML model
+    prediction = csv.predict(perform_backtest=perform_backtest)
+
+    csv_predict_entity_id = input_data_dict['params']['passed_data']['csv_predict_entity_id']
+    csv_predict_unit_of_measurement = input_data_dict['params']['passed_data']['csv_predict_unit_of_measurement']
+    csv_predict_friendly_name = input_data_dict['params']['passed_data']['csv_predict_friendly_name']
+    # Publish Load forecast
+    idx = 0
+    input_data_dict['rh'].post_data(prediction, idx,
+                                    csv_predict_entity_id,
+                                    csv_predict_unit_of_measurement, 
+                                    csv_predict_friendly_name,
+                                    type_var = 'csv_predictor')
+    return prediction
 
 def publish_data(input_data_dict: dict, logger: logging.Logger,
     save_data_to_file: Optional[bool] = False, 
