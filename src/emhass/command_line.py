@@ -467,19 +467,21 @@ def csv_predict(input_data_dict: dict, logger: logging.Logger,
     :return: The DataFrame containing the forecast data results without and with backtest and the `CsvPredictor` object
     :rtype: Tuple[pd.DataFrame, pd.DataFrame, CsvPredictor]
     """
-    data = copy.deepcopy(input_data_dict['df_input_data'])
-    model_type = input_data_dict['params']['passed_data']['model_type']
+    # data = copy.deepcopy(input_data_dict['df_input_data'])
+    # model_type = input_data_dict['params']['passed_data']['model_type']
     csv_file = input_data_dict['params']['passed_data']['csv_file']
     sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
-    perform_backtest = input_data_dict['params']['passed_data']['perform_backtest']
+    # perform_backtest = input_data_dict['params']['passed_data']['perform_backtest']
     independent_variables = input_data_dict['params']['passed_data']['independent_variables']
     dependent_variable = input_data_dict['params']['passed_data']['dependent_variable']
     new_values = input_data_dict['params']['passed_data']['new_values']
     root = input_data_dict['root']
     # The ML forecaster object
-    csv = CsvPredictor(data, model_type, csv_file, independent_variables, dependent_variable, sklearn_model, new_values, root, logger)
+    # csv = CsvPredictor(data, model_type, csv_file, independent_variables, dependent_variable, sklearn_model, new_values, root, logger)
+    csv = CsvPredictor(csv_file, independent_variables, dependent_variable, sklearn_model, new_values, root, logger)
     # Fit the ML model
-    prediction = csv.predict(perform_backtest=perform_backtest)
+    prediction = csv.predict()
+    # prediction = csv.predict(perform_backtest=perform_backtest)
 
     csv_predict_entity_id = input_data_dict['params']['passed_data']['csv_predict_entity_id']
     csv_predict_unit_of_measurement = input_data_dict['params']['passed_data']['csv_predict_unit_of_measurement']
