@@ -24,12 +24,6 @@ h2 {
   color: #111111
 }
 
-button {
-  border-radius: 3px;
-  padding: 11px;
-  margin: 3p;
-}
-
 
 button:hover {
 color: darkblue;
@@ -233,7 +227,7 @@ samp {
 
 pre, code {
   background-color: #f7f7f7;
-  border-radius: 3px;
+  border-radius: 7px;
 }
 
 pre {
@@ -277,7 +271,7 @@ kbd {
   background-image: linear-gradient(#fafafa, #e6e6e6);
   background-repeat: repeat-x;
   border: 1px solid #d6d6d6;
-  border-radius: 2px;
+  border-radius: 7px;
   box-shadow: 0 1px 0 #d6d6d6;
   color: #303030;
   display: inline-block;
@@ -501,20 +495,46 @@ template {
   display: none;
 }
 
+
+button, .main-svg, .mystyle, table  {
+  border-radius: 7px;
+  margin: 10px;
+  overflow: visible;
+}
+
+button {
+  padding: 10px;
+  margin: 0px;
+}
+
+.svg-container {
+  margin-bottom: 10px;
+}
+
+.table_div {
+  margin: 15px 5px 0px 0px;
+}
+
 /* Special style for DataFrmae tables */
 /* includes alternating gray and white with on-hover color */
 
-.mystyle {
+.mystyle, .main-svg {
     font-size: 11pt; 
     font-family: Arial;
     border-collapse: collapse; 
-    border: 1px solid silver;
-
+    border-radius: 7px;
+    border-style: hidden;
+    /* box-shadow: 0 0 0 1px rgb(192, 192, 192, 50%); */
 }
 
-.mystyle td, th {
+.mystyle td {
     padding: 5px;
 }
+
+th {
+  padding: 5px 7.77px ;
+}
+
 
 .mystyle tr:nth-child(even) {
     background: #E0E0E0;
@@ -524,6 +544,7 @@ template {
     background: silver;
     cursor: pointer;
 }
+
 
 /* Dark Theme Support */
 @media (prefers-color-scheme: dark) {
@@ -543,9 +564,36 @@ template {
     color: #ccf3ff;
     background-color: #3f3f3f;
   }
-  h2, kbd, a, .mystyle  {
+  h2, kbd, a  {
     background-color: #111111;
     color: #ccf3ff;
     border: rgb(71, 71, 71);
+  }
+  .modebar-btn {
+    background-color: #e1e1e1;
   }  
+  .main-svg svg, legend {
+    background-color: rgb(73, 73, 73, 5%);  
+    background: rgb(73, 73, 73, 5%);  
+  }
+  .g-gtitle, .g-xtitle, .g-ytitle, legend, th {
+    color: #e1e1e1;
+  }
+  tr td:nth-child(even), .mystyle tr td:nth-child(even) {
+    background-color:#3d3d3d;
+  }
+  tr:nth-child(odd), .mystyle tr:nth-child(odd) {
+    background-color:#111111;
+  }
+  tr:nth-child(even), .mystyle tr:nth-child(even) {
+    background-color:#181818;
+  }
+  tr:hover td, th {
+    background-color:#3f3f3f; 
+  }
+  .mystyle, .main-svg {
+  box-shadow: 0 0 0 1px silver;
+  }
 }
+
+

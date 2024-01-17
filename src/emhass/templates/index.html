@@ -4,11 +4,11 @@
         <title>EMHASS: Energy Management Optimization for Home Assistant</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <link rel="stylesheet" type="text/css" href="{{ basename }}/static/style.css">
-        <link rel="stylesheet" type="text/css" href="../static/style.css">
+        <link rel="icon" href="{{ basename }}/static/img/emhass_logo_short.svg">
     </head>
     <body>
         <center>
-            <img src="../img/emhass_icon.png" alt="">
+            <img src="{{ basename }}/static/img/emhass_icon.png" alt="">
             <h2 >EMHASS: Energy Management Optimization for Home Assistant</h2>
         </center>
         <div class="center">
@@ -33,13 +33,13 @@
             </div>
         </div>
         {% for plot in injection_dict %}
-            <div align="center">
+            <div class="table_div" align="center">
                 {{injection_dict[plot]}}
             </div> 
         {% endfor %}
         <footer class="footer">
             <center>
-                <p>&copy; MIT License | Copyright (c) 2021-2023 David HERNANDEZ</p>
+                <p style="padding-top: 5px;">&copy; MIT License | Copyright (c) 2021-2023 David HERNANDEZ</p>
             </center>
         </footer>
     </body>
