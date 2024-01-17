@@ -53,6 +53,8 @@ COPY src/emhass/utils.py /app/src/emhass/utils.py
 COPY src/emhass/web_server.py /app/src/emhass/web_server.py
 COPY src/emhass/templates/index.html /app/src/emhass/templates/index.html
 COPY src/emhass/static/style.css /app/src/emhass/static/style.css
+COPY src/emhass/static/img/emhass_logo_short.svg /app/src/emhass/static/img/emhass_logo_short.svg
+COPY src/emhass/static/img/emhass_icon.png /app/src/emhass/static/img/emhass_icon.png
 COPY data/opt_res_latest.csv /app/data/opt_res_latest.csv
 
 RUN python3 setup.py install
