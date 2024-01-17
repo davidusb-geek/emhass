@@ -1,23 +1,25 @@
 <!DOCTYPE html>
-<html>
+<html class="adaptive">
     <head>
         <title>EMHASS: Energy Management Optimization for Home Assistant</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <link rel="stylesheet" type="text/css" href="{{ basename }}/static/style.css">
+        <link rel="stylesheet" type="text/css" href="../static/style.css">
     </head>
     <body>
         <center>
-            <h2 style="font-family: Helvetica;color: darkblue;">EMHASS: Energy Management Optimization for Home Assistant</h2>
+            <img src="../img/emhass_icon.png" alt="">
+            <h2 >EMHASS: Energy Management Optimization for Home Assistant</h2>
         </center>
         <div class="center">
             <div align="center" class="form">
                 <form action="" method="get">
-                    <h4 style="font-family: Helvetica;color: darkblue;">Use the buttons below to manually  launch different optimization tasks</h4>
+                    <h4>Use the buttons below to manually  launch different optimization tasks</h4>
                     <button type="button" id="perfect-optim" class="button button1" >Perfect Optimization</button>
                     <button type="button" id="dayahead-optim" class="button button2" >Day-ahead Optimization</button>
-                    <h4 style="font-family: Helvetica;color: darkblue;">Use the button below to publish the optimized variables at the current timestamp</h4>
+                    <h4 >Use the button below to publish the optimized variables at the current timestamp</h4>
                     <button type="button" id="publish-data" class="button button1" >Publish Optimization Results</button>
-                    <h4 style="font-family: Helvetica;color: darkblue;">Use the buttons below to fit, predict and tune a machine learning model for testing</h4>
+                    <h4 >Use the buttons below to fit, predict and tune a machine learning model for testing</h4>
                     <button type="button" id="forecast-model-fit" class="button button1" >ML forecast model fit</button>
                     <button type="button" id="forecast-model-predict" class="button button2" >ML forecast model predict</button>
                     <button type="button" id="forecast-model-tune" class="button button3" >ML forecast model tune</button>
@@ -37,7 +39,7 @@
         {% endfor %}
         <footer class="footer">
             <center>
-                <p style="font-family: Helvetica;color: darkblue;">&copy; MIT License | Copyright (c) 2021-2023 David HERNANDEZ</p>
+                <p>&copy; MIT License | Copyright (c) 2021-2023 David HERNANDEZ</p>
             </center>
         </footer>
     </body>
