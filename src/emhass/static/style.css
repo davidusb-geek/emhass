@@ -3,7 +3,7 @@ html {
   color: #303030;
   background-color: white;
   box-sizing: border-box;
-  font-family: -apple-system, BlinkMacSystemFont, "avenir next", avenir, "segoe ui", "fira sans", roboto, noto, "droid sans", "liberation sans", "lucida grande", "helvetica neue", helvetica, "franklin gothic medium", "century gothic", cantarell, oxygen, ubuntu, sans-serif;
+  font-family: Roboto,Noto,Noto Sans,sans-serif;
   font-size: calc(14px + 0.25vw);
   line-height: 1.55;
   -webkit-font-kerning: normal;
@@ -14,6 +14,27 @@ html {
   -ms-text-size-adjust: 100%;
   -webkit-text-size-adjust: 100%;
 }
+
+h2 {
+  color: darkblue;
+}
+
+
+.text.adaptive {
+  color: #111111
+}
+
+button {
+  border-radius: 3px;
+  padding: 11px;
+  margin: 3p;
+}
+
+
+button:hover {
+color: darkblue;
+}
+
 
 body {
   margin: 0 auto;
@@ -107,7 +128,7 @@ h5 {
 
 h6 {
   font-size: 1.15em;
-  color: #575757;
+  /* color: #575757; */
 }
 
 p {
@@ -117,7 +138,7 @@ p {
 a {
   background-color: transparent;
   -webkit-text-decoration-skip: objects;
-  color: #0074d9;
+  color: darkblue;
   text-decoration: none;
 }
 
@@ -206,7 +227,7 @@ code,
 pre,
 kbd,
 samp {
-  font-family: menlo, inconsolata, consolas, "fira mono", "noto mono", "droid sans mono", "liberation mono", "dejavu sans mono", "ubuntu mono", monaco, "courier new", monospace;
+  font-family: Roboto,Noto,Noto Sans,sans-serif;
   font-size: 90%;
 }
 
@@ -502,4 +523,29 @@ template {
 .mystyle tr:hover {
     background: silver;
     cursor: pointer;
+}
+
+/* Dark Theme Support */
+@media (prefers-color-scheme: dark) {
+  html.adaptive {
+    background: #111111;
+    color: #e1e1e1;
+  }
+  img, figure {
+    -webkit-filter: invert(90%);
+    filter: invert(90%);
+  }
+  button {
+    color: #e1e1e1;
+    background-color: rgb(40, 41, 40);
+  }
+  button:hover {
+    color: #ccf3ff;
+    background-color: #3f3f3f;
+  }
+  h2, kbd, a, .mystyle  {
+    background-color: #111111;
+    color: #ccf3ff;
+    border: rgb(71, 71, 71);
+  }  
 }
