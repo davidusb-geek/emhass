@@ -563,6 +563,10 @@ button {
   min-width: 800px !important;
 }
 
+.modebar-container {
+  width:auto !important;
+}
+
 /* Special style for DataFrmae tables */
 /* includes alternating gray and white with on-hover color */
 .mystyle,
