@@ -441,8 +441,8 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
     return df_pred_optim, mlf
 
 def csv_predict(input_data_dict: dict, logger: logging.Logger,
-    debug: Optional[bool] = False) -> Tuple[pd.DataFrame, pd.DataFrame, CsvPredictor]:
-    """Perform a forecast model fit from training data retrieved from Home Assistant.
+    debug: Optional[bool] = False) -> np.ndarray:
+    """Perform a prediction from csv file.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
     :type input_data_dict: dict
@@ -450,29 +450,24 @@ def csv_predict(input_data_dict: dict, logger: logging.Logger,
     :type logger: logging.Logger
     :param debug: True to debug, useful for unit testing, defaults to False
     :type debug: Optional[bool], optional
-    :return: The DataFrame containing the forecast data results without and with backtest and the `CsvPredictor` object
-    :rtype: Tuple[pd.DataFrame, pd.DataFrame, CsvPredictor]
+    :return: The np.ndarray containing the predicted value.
+    :rtype: np.ndarray
     """
-    # data = copy.deepcopy(input_data_dict['df_input_data'])
-    # model_type = input_data_dict['params']['passed_data']['model_type']
     csv_file = input_data_dict['params']['passed_data']['csv_file']
     sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
-    # perform_backtest = input_data_dict['params']['passed_data']['perform_backtest']
     independent_variables = input_data_dict['params']['passed_data']['independent_variables']
     dependent_variable = input_data_dict['params']['passed_data']['dependent_variable']
     new_values = input_data_dict['params']['passed_data']['new_values']
     root = input_data_dict['root']
     # The ML forecaster object
-    # csv = CsvPredictor(data, model_type, csv_file, independent_variables, dependent_variable, sklearn_model, new_values, root, logger)
     csv = CsvPredictor(csv_file, independent_variables, dependent_variable, sklearn_model, new_values, root, logger)
-    # Fit the ML model
+    # Predict from csv file
     prediction = csv.predict()
-    # prediction = csv.predict(perform_backtest=perform_backtest)
 
     csv_predict_entity_id = input_data_dict['params']['passed_data']['csv_predict_entity_id']
     csv_predict_unit_of_measurement = input_data_dict['params']['passed_data']['csv_predict_unit_of_measurement']
     csv_predict_friendly_name = input_data_dict['params']['passed_data']['csv_predict_friendly_name']
-    # Publish Load forecast
+    # Publish prediction
     idx = 0
     input_data_dict['rh'].post_data(prediction, idx,
                                     csv_predict_entity_id,
