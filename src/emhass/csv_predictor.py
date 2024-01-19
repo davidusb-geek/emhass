@@ -66,7 +66,7 @@ class CsvPredictor:
         filename_path = pathlib.Path(self.root) / self.csv_file
         if filename_path.is_file():
             with open(filename_path, 'rb') as inp:
-                data = pd.read_csv(filename_path)
+                data = pd.read_csv(inp)
         else:
             self.logger.error("The cvs file was not found.")
             raise ValueError(
