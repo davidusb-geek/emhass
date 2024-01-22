@@ -370,5 +370,4 @@ if __name__ == "__main__":
         app.logger.info("Using core emhass version: "+version('emhass'))
     except PackageNotFoundError:
         app.logger.info("Using development emhass version")
-    app.logger.info("Using onion test version")
     serve(app, host=web_ui_url, port=port, threads=8)
