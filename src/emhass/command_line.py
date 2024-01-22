@@ -272,9 +272,10 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     soc_init = input_data_dict['params']['passed_data']['soc_init']
     soc_final = input_data_dict['params']['passed_data']['soc_final']
     def_total_hours = input_data_dict['params']['passed_data']['def_total_hours']
+    def_end_timestamp = input_data_dict['params']['passed_data']['def_end_timestamp']
     opt_res_naive_mpc = input_data_dict['opt'].perform_naive_mpc_optim(
         df_input_data_dayahead, input_data_dict['P_PV_forecast'], input_data_dict['P_load_forecast'],
-        prediction_horizon, soc_init, soc_final, def_total_hours)
+        prediction_horizon, soc_init, soc_final, def_total_hours, def_end_timestamp)
     # Save CSV file for publish_data
     if save_data_to_file:
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
