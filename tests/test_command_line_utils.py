@@ -185,7 +185,7 @@ class TestCommandLineUtils(unittest.TestCase):
         # A test similar to the docs
         runtimeparams = {"pv_power_forecast":
             [1,2,3,4,5,6,7,8,9,10], 
-            "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3]}
+            "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3],"def_end_timestep":[8,0]}
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
         params['optim_conf'][7]['weather_forecast_method'] = 'list'
