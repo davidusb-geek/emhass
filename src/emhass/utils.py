@@ -173,7 +173,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             else:
                 def_total_hours = runtimeparams['def_total_hours']
             params['passed_data']['def_total_hours'] = def_total_hours
-	    if 'def_end_timestamp' not in runtimeparams.keys():
+            if 'def_end_timestamp' not in runtimeparams.keys():
                 def_end_timestamp = optim_conf['def_end_timestamp']
             else:
                 def_end_timestamp = runtimeparams['def_end_timestamp']
