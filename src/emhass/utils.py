@@ -317,7 +317,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             optim_conf['P_deferrable_nom'] = runtimeparams['P_deferrable_nom']
         if 'def_total_hours' in runtimeparams.keys():
             optim_conf['def_total_hours'] = runtimeparams['def_total_hours']
-	if 'def_end_timestamp' in runtimeparams.keys():
+        if 'def_end_timestamp' in runtimeparams.keys():
             optim_conf['def_end_timestamp'] = runtimeparams['def_end_timestamp']
         if 'treat_def_as_semi_cont' in runtimeparams.keys():
             optim_conf['treat_def_as_semi_cont'] = runtimeparams['treat_def_as_semi_cont']
