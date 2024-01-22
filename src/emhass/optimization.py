@@ -283,7 +283,7 @@ class optimization:
             if def_end_timestep[k] > 0:
                 # If the available timeframe (between now and def_end_timestep) is < number of timesteps to meet the hours to operate (def_total_hours), enlarge the timeframe.
                 if def_end_timestep[k] < def_total_hours[k]/self.timeStep:
-                    def_end_timestep[k] = math.ceil(def_total_hours[k]/self.timeStep)
+                    def_end_timestep[k] = ceil(def_total_hours[k]/self.timeStep)
                     self.logger.warning("Available timeframe for deferrable load %s is shorter than the specified number of hours to operate. Enlarging timeframe to def_total_hours.", k)
                     
                 constraints.update({"constraint_defload{}_end_timestep".format(k) :
