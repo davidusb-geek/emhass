@@ -140,6 +140,8 @@ class optimization:
                     soc_final = self.plant_conf['SOCtarget']
         if def_total_hours is None:
             def_total_hours = self.optim_conf['def_total_hours']
+        if def_end_timestep is None:
+            def_end_timestemp = self.optim_conf['def_end_timestep']
         type_self_conso = 'bigm' # maxmin
         
         #### The LP problem using Pulp ####
@@ -277,12 +279,13 @@ class optimization:
                     rhs = def_total_hours[k]*self.optim_conf['P_deferrable_nom'][k])
                 })
             # Ensure deferrable loads consume energy before def_end_timestep
-            constraints.update({"constraint_defload{}_end_timestep".format(k) :
-                plp.LpConstraint(
-                    e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in range(def_end_timestep[k], n)),
-                    sense = plp.LpConstraintEQ,
-                    rhs = 0)
-                })
+            if def_end_timestep[k] > 0:
+                constraints.update({"constraint_defload{}_end_timestep".format(k) :
+                    plp.LpConstraint(
+                        e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in range(def_end_timestep[k], n)),
+                        sense = plp.LpConstraintEQ,
+                        rhs = 0)
+                    })
             # Treat deferrable load as a semi-continuous variable
             if self.optim_conf['treat_def_as_semi_cont'][k]:
                 constraints.update({"constraint_pdef{}_semicont1_{}".format(k, i) : 
