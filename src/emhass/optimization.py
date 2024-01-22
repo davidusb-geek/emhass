@@ -141,7 +141,7 @@ class optimization:
         if def_total_hours is None:
             def_total_hours = self.optim_conf['def_total_hours']
         if def_end_timestep is None:
-            def_end_timestemp = self.optim_conf['def_end_timestep']
+            def_end_timestep = self.optim_conf['def_end_timestep']
         type_self_conso = 'bigm' # maxmin
         
         #### The LP problem using Pulp ####
@@ -280,6 +280,11 @@ class optimization:
                 })
             # Ensure deferrable loads consume energy before def_end_timestep
             if def_end_timestep[k] > 0:
+                # If the available timeframe (between now and def_end_timestep) is < number of timesteps to meet the hours to operate (def_total_hours), enlarge the timeframe.
+                if def_end_timestep[k] < def_total_hours[k]/self.timeStep:
+                    def_end_timestep[k] = def_total_hours[k]/self.timeStep
+                    self.logger.warning("Available timeframe for deferrable load %s is shorter than the specified number of hours to operate. Enlarging timeframe to def_total_hours.", k)
+                    
                 constraints.update({"constraint_defload{}_end_timestep".format(k) :
                     plp.LpConstraint(
                         e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in range(def_end_timestep[k], n)),
