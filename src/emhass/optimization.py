@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import pulp as plp
 from pulp import PULP_CBC_CMD, COIN_CMD, GLPK_CMD
+from math import ceil
 
 
 class optimization:
