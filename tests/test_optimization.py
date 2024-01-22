@@ -234,9 +234,10 @@ class TestOptimization(unittest.TestCase):
         soc_init = 0.4
         soc_final = 0.6
         def_total_hours = [2, 3]
+        def_end_timestep = [4, 0]
         self.opt_res_dayahead = self.opt.perform_naive_mpc_optim(
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast, prediction_horizon,
-            soc_init=soc_init, soc_final=soc_final, def_total_hours=def_total_hours)
+            soc_init=soc_init, soc_final=soc_final, def_total_hours=def_total_hours, def_end_timestep=def_end_timestep)
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
         self.assertTrue('P_batt' in self.opt_res_dayahead.columns)
         self.assertTrue('SOC_opt' in self.opt_res_dayahead.columns)
