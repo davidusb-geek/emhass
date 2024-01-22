@@ -89,7 +89,7 @@ class optimization:
                              unit_load_cost: np.array, unit_prod_price: np.array,
                              soc_init: Optional[float] = None, soc_final: Optional[float] = None,
                              def_total_hours: Optional[list] = None, 
-                             timestamp_limit: Optional[int] = None,
+                             def_end_timestamp: Optional[list] = None,
                              debug: Optional[bool] = False) -> pd.DataFrame:
         r"""
         Perform the actual optimization using linear programming (LP).
@@ -119,8 +119,8 @@ class optimization:
         :param def_total_hours: The functioning hours for this iteration for each deferrable load. \
             (For continuous deferrable loads: functioning hours at nominal power)
         :type def_total_hours: list
-        :param timestamp_limit: The timestamp before which deferrable loads should consume their energy.
-        :type timestamp_limit: int
+        :param def_end_timestamp: The timestamp before which each deferrable load should consume their energy.
+        :type def_end_timestamp: list
         :return: The input DataFrame with all the different results from the \
             optimization appended
         :rtype: pd.DataFrame
@@ -276,10 +276,10 @@ class optimization:
                     sense = plp.LpConstraintEQ,
                     rhs = def_total_hours[k]*self.optim_conf['P_deferrable_nom'][k])
                 })
-            # Ensure deferrable loads consume energy before timestamp_limit
-            constraints.update({"constraint_defload{}_timestamp_limit".format(k) :
+            # Ensure deferrable loads consume energy before def_end_timestamp
+            constraints.update({"constraint_defload{}_end_timestamp".format(k) :
                 plp.LpConstraint(
-                    e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in range(timestamp_limit)),
+                    e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in range(def_end_timestamp[k], n)),
                     sense = plp.LpConstraintEQ,
                     rhs = 0)
                 })
