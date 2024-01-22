@@ -89,6 +89,7 @@ class optimization:
                              unit_load_cost: np.array, unit_prod_price: np.array,
                              soc_init: Optional[float] = None, soc_final: Optional[float] = None,
                              def_total_hours: Optional[list] = None, 
+                             def_end_timestamp: Optional[list] = None,
                              debug: Optional[bool] = False) -> pd.DataFrame:
         r"""
         Perform the actual optimization using linear programming (LP).
@@ -118,6 +119,8 @@ class optimization:
         :param def_total_hours: The functioning hours for this iteration for each deferrable load. \
             (For continuous deferrable loads: functioning hours at nominal power)
         :type def_total_hours: list
+        :param def_end_timestamp: The timestamp before which each deferrable load should consume their energy.
+        :type def_end_timestamp: list
         :return: The input DataFrame with all the different results from the \
             optimization appended
         :rtype: pd.DataFrame
@@ -272,6 +275,13 @@ class optimization:
                     e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in set_I),
                     sense = plp.LpConstraintEQ,
                     rhs = def_total_hours[k]*self.optim_conf['P_deferrable_nom'][k])
+                })
+            # Ensure deferrable loads consume energy before def_end_timestamp
+            constraints.update({"constraint_defload{}_end_timestamp".format(k) :
+                plp.LpConstraint(
+                    e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in range(def_end_timestamp[k], n)),
+                    sense = plp.LpConstraintEQ,
+                    rhs = 0)
                 })
             # Treat deferrable load as a semi-continuous variable
             if self.optim_conf['treat_def_as_semi_cont'][k]:
@@ -546,7 +556,8 @@ class optimization:
         
     def perform_naive_mpc_optim(self, df_input_data: pd.DataFrame, P_PV: pd.Series, P_load: pd.Series,
                                 prediction_horizon: int, soc_init: Optional[float] = None, soc_final: Optional[float] = None,
-                                def_total_hours: Optional[list] = None) -> pd.DataFrame:
+                                def_total_hours: Optional[list] = None,
+                                def_end_timestamp: Optional[list] = None) -> pd.DataFrame:
         r"""
         Perform a naive approach to a Model Predictive Control (MPC). \
         This implementaion is naive because we are not using the formal formulation \
@@ -573,6 +584,8 @@ class optimization:
         :param def_total_hours: The functioning hours for this iteration for each deferrable load. \
             (For continuous deferrable loads: functioning hours at nominal power)
         :type def_total_hours: list
+        :param def_end_timestamp: The timestamp before which each deferrable load should consume their energy.
+        :type def_end_timestamp: list
         :return: opt_res: A DataFrame containing the optimization results
         :rtype: pandas.DataFrame
 
@@ -591,6 +604,7 @@ class optimization:
         # Call optimization function
         self.opt_res = self.perform_optimization(df_input_data, P_PV.values.ravel(), P_load.values.ravel(), 
                                                  unit_load_cost, unit_prod_price, soc_init=soc_init, 
-                                                 soc_final=soc_final, def_total_hours=def_total_hours)
+                                                 soc_final=soc_final, def_total_hours=def_total_hours,
+                                                def_end_timestamp=def_end_timestamp)
         return self.opt_res
     
