@@ -89,7 +89,7 @@ class optimization:
                              unit_load_cost: np.array, unit_prod_price: np.array,
                              soc_init: Optional[float] = None, soc_final: Optional[float] = None,
                              def_total_hours: Optional[list] = None, 
-                             def_end_timestamp: Optional[list] = None,
+                             def_end_timestep: Optional[list] = None,
                              debug: Optional[bool] = False) -> pd.DataFrame:
         r"""
         Perform the actual optimization using linear programming (LP).
