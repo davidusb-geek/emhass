@@ -194,7 +194,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             params['passed_data']['soc_init'] = None
             params['passed_data']['soc_final'] = None
             params['passed_data']['def_total_hours'] = None
-	    params['passed_data']['def_end_timestamp'] = None
+            params['passed_data']['def_end_timestamp'] = None
             params['passed_data']['alpha'] = None
             params['passed_data']['beta'] = None
         # Treat passed forecast data lists
