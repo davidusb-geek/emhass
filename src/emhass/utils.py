@@ -173,11 +173,11 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             else:
                 def_total_hours = runtimeparams['def_total_hours']
             params['passed_data']['def_total_hours'] = def_total_hours
-            if 'def_end_timestamp' not in runtimeparams.keys():
-                def_end_timestamp = optim_conf['def_end_timestamp']
+            if 'def_end_timestep' not in runtimeparams.keys():
+                def_end_timestep = optim_conf['def_end_timestep']
             else:
-                def_end_timestamp = runtimeparams['def_end_timestamp']
-            params['passed_data']['def_end_timestamp'] = def_end_timestamp
+                def_end_timestep = runtimeparams['def_end_timestep']
+            params['passed_data']['def_end_timestep'] = def_end_timestep
             if 'alpha' not in runtimeparams.keys():
                 alpha = 0.5
             else:
@@ -194,7 +194,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             params['passed_data']['soc_init'] = None
             params['passed_data']['soc_final'] = None
             params['passed_data']['def_total_hours'] = None
-            params['passed_data']['def_end_timestamp'] = None
+            params['passed_data']['def_end_timestep'] = None
             params['passed_data']['alpha'] = None
             params['passed_data']['beta'] = None
         # Treat passed forecast data lists
@@ -317,8 +317,8 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             optim_conf['P_deferrable_nom'] = runtimeparams['P_deferrable_nom']
         if 'def_total_hours' in runtimeparams.keys():
             optim_conf['def_total_hours'] = runtimeparams['def_total_hours']
-        if 'def_end_timestamp' in runtimeparams.keys():
-            optim_conf['def_end_timestamp'] = runtimeparams['def_end_timestamp']
+        if 'def_end_timestep' in runtimeparams.keys():
+            optim_conf['def_end_timestep'] = runtimeparams['def_end_timestep']
         if 'treat_def_as_semi_cont' in runtimeparams.keys():
             optim_conf['treat_def_as_semi_cont'] = runtimeparams['treat_def_as_semi_cont']
         if 'set_def_constant' in runtimeparams.keys():
