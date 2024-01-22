@@ -1,10 +1,13 @@
 {                                                                                                                                                                                                                
   "hass_url": "empty",                                                                                                                                                                                           
-  "long_lived_token": "empty",                                                                                                                                                                                   
+  "long_lived_token": "empty",
   "costfun": "profit",                                                                                                                                                                                           
   "optimization_time_step": 30,                                                                                                                                                                                  
   "historic_days_to_retrieve": 2,                                                                                                                                                                                
-  "method_ts_round": "nearest",                                                                                                                                                                                  
+  "method_ts_round": "nearest",
+  "optional_solcast_api_key": "empty",
+  "optional_solcast_rooftop_id": "empty",
+  "optional_solar_forecast_kwp": 0,                                                                                                                                                                                  
   "set_total_pv_sell": false,                                                                                                                                                                                    
   "lp_solver": "COIN_CMD",                                                                                                                                                                                       
   "lp_solver_path": "/usr/bin/cbc",                                                                                                                                                                              
@@ -16,7 +19,9 @@
   "weight_battery_discharge": 1.0,
   "weight_battery_charge": 1.0,
   "sensor_power_photovoltaics": "sensor.power_photovoltaics",                                                                                                                                                    
-  "sensor_power_load_no_var_loads": "sensor.power_load_no_var_loads",                                                                                                                                            
+  "sensor_power_load_no_var_loads": "sensor.power_load_no_var_loads",        
+  "load_negative": false,        
+  "set_zero_min": true,                                                                                                                       
   "number_of_deferrable_loads": 3,                                                                                                                                                                               
   "list_nominal_power_of_deferrable_loads": [                                                                                                                                                                    
     {                                                                                                                                                                                                            
@@ -39,7 +44,11 @@
     {                                                                                                                                                                                                            
       "operating_hours_of_each_deferrable_load": 5                                                                                                                                                               
     }                                                                                                                                                                                                            
-  ],                                                                                                                                                                                                             
+  ],
+  "weather_forecast_method": "scrapper",
+  "load_forecast_method": "naive",    
+  "delta_forecast_daily": 1,
+  "load_cost_forecast_method": "hp_hc_periods",                                                                                                                                                                                                           
   "list_peak_hours_periods_start_hours": [                                                                                                                                                                       
     {                                                                                                                                                                                                            
       "peak_hours_periods_start_hours": "02:54"                                                                                                                                                                  
@@ -67,8 +76,20 @@
       "treat_deferrable_load_as_semi_cont": true
     }
   ],
+  "list_set_deferrable_load_single_constant": [
+    {
+      "set_deferrable_load_single_constant": false
+    },
+    {
+      "set_deferrable_load_single_constant": false
+    },
+    {
+      "set_deferrable_load_single_constant": false
+    }
+  ],
   "load_peak_hours_cost": 0.1907,                                                                                                                                                                                
-  "load_offpeak_hours_cost": 0.1419,                                                                                                                                                                             
+  "load_offpeak_hours_cost": 0.1419,  
+  "production_price_forecast_method": "constant",                                                                                                                                                                           
   "photovoltaic_production_sell_price": 0.1419,                                                                                                                                                                  
   "maximum_power_from_grid": 9000,
   "list_pv_module_model": [

@@ -23,7 +23,7 @@ def get_forecast_optim_objects(retrieve_hass_conf, optim_conf, plant_conf,
                                params, get_data_from_file):
     fcst = forecast(retrieve_hass_conf, optim_conf, plant_conf,
                     params, root, logger, get_data_from_file=get_data_from_file)
-    df_weather = fcst.get_weather_forecast(method='csv')
+    df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
     P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
     df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
