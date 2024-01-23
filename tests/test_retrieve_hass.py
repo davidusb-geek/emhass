@@ -75,10 +75,10 @@ class TestRetrieveHass(unittest.TestCase):
         params['optim_conf'] = optim_conf
         params['plant_conf'] = plant_conf
         # Just check forecast methods
-        self.assertTrue(list(params['optim_conf'][6].keys())[0] == 'weather_forecast_method')
-        self.assertTrue(list(params['optim_conf'][7].keys())[0] == 'load_forecast_method')
-        self.assertTrue(list(params['optim_conf'][9].keys())[0] == 'load_cost_forecast_method')
-        self.assertTrue(list(params['optim_conf'][12].keys())[0] == 'prod_price_forecast_method')
+        self.assertFalse(params['optim_conf'].get('weather_forecast_method') == None)
+        self.assertFalse(params['optim_conf'].get('load_forecast_method') == None)
+        self.assertFalse(params['optim_conf'].get('load_cost_forecast_method') == None)
+        self.assertFalse(params['optim_conf'].get('prod_price_forecast_method') == None)
 
     def test_get_data_failed(self):
         days_list = get_days_list(1)
