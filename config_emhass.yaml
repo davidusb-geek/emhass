@@ -1,82 +1,85 @@
 # Configuration file for EMHASS
 
 retrieve_hass_conf:
-  - freq: 30 # The time step to resample retrieved data from hass in minutes
-  - days_to_retrieve: 8 # We will retrieve data from now and up to days_to_retrieve days
-  - var_PV: 'sensor.power_photovoltaics' # Photovoltaic produced power sensor in Watts
-  - var_load: 'sensor.power_load_no_var_loads' # Household power consumption sensor in Watts (deferrable loads should be substracted)
-  - load_negative: False # Set to True if the retrived load variable is negative by convention
-  - set_zero_min: True # A special treatment for a minimum value saturation to zero. Values below zero are replaced by nans
-  - var_replace_zero: # A list of retrived variables that we would want  to replace nans with zeros
-    - 'sensor.power_photovoltaics'
-  - var_interp: # A list of retrived variables that we would want to interpolate nan values using linear interpolation
-    - 'sensor.power_photovoltaics'
-    - 'sensor.power_load_no_var_loads'
-  - method_ts_round: 'nearest' # Set the method for timestamp rounding, options are: first, last and nearest
+  freq: 30 # The time step to resample retrieved data from hass in minutes
+  days_to_retrieve: 8 # We will retrieve data from now and up to days_to_retrieve days
+  var_PV: 'sensor.power_photovoltaics' # Photovoltaic produced power sensor in Watts
+  var_load: 'sensor.power_load_no_var_loads' # Household power consumption sensor in Watts (deferrable loads should be substracted)
+  load_negative: False # Set to True if the retrived load variable is negative by convention
+  set_zero_min: True # A special treatment for a minimum value saturation to zero. Values below zero are replaced by nans
+  var_replace_zero: # A list of retrived variables that we would want  to replace nans with zeros
+  - 'sensor.power_photovoltaics'
+  var_interp: # A list of retrived variables that we would want to interpolate nan values using linear interpolation
+  - 'sensor.power_photovoltaics'
+  - 'sensor.power_load_no_var_loads'
+  method_ts_round: 'nearest' # Set the method for timestamp rounding, options are: first, last and nearest
 
 optim_conf:
-  - set_use_battery: False # consider a battery storage
-  - delta_forecast: 1 # days
-  - num_def_loads: 2
-  - P_deferrable_nom: # Watts
-    - 3000.0
-    - 750.0
-  - def_total_hours: # hours
-    - 5
-    - 8
-  - def_end_timestep: # timesteps
-    - 0
-    - 0
-  - treat_def_as_semi_cont: # treat this variable as semi continuous 
-    - True
-    - True
-  - set_def_constant: # set as a constant fixed value variable with just one startup for each 24h
-    - False
-    - False
-  - weather_forecast_method: 'scrapper' # options are 'scrapper' and 'csv'
-  - load_forecast_method: 'naive' # options are 'csv' to load a custom load forecast from a CSV file or 'naive' for a persistance model
-  - load_cost_forecast_method: 'hp_hc_periods' # options are 'hp_hc_periods' for peak and non-peak hours contracts and 'csv' to load custom cost from CSV file 
-  - list_hp_periods: # list of different tariff periods (only needed if load_cost_forecast_method='hp_hc_periods')
-    - period_hp_1:
-      - start: '02:54'
-      - end: '15:24'
-    - period_hp_2:
-      - start: '17:24'
-      - end: '20:24'
-  - load_cost_hp: 0.1907 # peak hours load cost in €/kWh (only needed if load_cost_forecast_method='hp_hc_periods')
-  - load_cost_hc: 0.1419 # non-peak hours load cost in €/kWh (only needed if load_cost_forecast_method='hp_hc_periods')
-  - prod_price_forecast_method: 'constant' # options are 'constant' for constant fixed value or 'csv' to load custom price forecast from a CSV file
-  - prod_sell_price: 0.065 # power production selling price in €/kWh (only needed if prod_price_forecast_method='constant')
-  - set_total_pv_sell: False # consider that all PV power is injected to the grid (self-consumption with total sell)
-  - lp_solver: 'default' # set the name of the linear programming solver that will be used
-  - lp_solver_path: 'empty' # set the path to the LP solver
-  - set_nocharge_from_grid: False # avoid battery charging from the grid
-  - set_nodischarge_to_grid: True # avoid battery discharging to the grid
-  - set_battery_dynamic: False # add a constraint to limit the dynamic of the battery power in power per time unit
-  - battery_dynamic_max: 0.9 # maximum dynamic positive power variation in percentage of battery maximum power
-  - battery_dynamic_min: -0.9 # minimum dynamic negative power variation in percentage of battery maximum power
-  - weight_battery_discharge: 1.0 # weight applied in cost function to battery usage for discharge
-  - weight_battery_charge: 1.0 # weight applied in cost function to battery usage for charge
+  set_use_battery: False # consider a battery storage
+  delta_forecast: 1 # days
+  num_def_loads: 2
+  P_deferrable_nom: # Watts
+  - 3000.0
+  - 750.0
+  def_total_hours: # hours
+  - 5
+  - 8
+  def_start_timestep: # timesteps
+  - 0
+  - 0
+  def_end_timestep: # timesteps
+  - 0
+  - 0
+  treat_def_as_semi_cont: # treat this variable as semi continuous 
+  - True
+  - True
+  set_def_constant: # set as a constant fixed value variable with just one startup for each 24h
+  - False
+  - False
+  weather_forecast_method: 'scrapper' # options are 'scrapper' and 'csv'
+  load_forecast_method: 'naive' # options are 'csv' to load a custom load forecast from a CSV file or 'naive' for a persistance model
+  load_cost_forecast_method: 'hp_hc_periods' # options are 'hp_hc_periods' for peak and non-peak hours contracts and 'csv' to load custom cost from CSV file 
+  list_hp_periods: # list of different tariff periods (only needed if load_cost_forecast_method='hp_hc_periods')
+  - period_hp_1:
+    - start: '02:54'
+    - end: '15:24'
+  - period_hp_2:
+    - start: '17:24'
+    - end: '20:24'
+  load_cost_hp: 0.1907 # peak hours load cost in €/kWh (only needed if load_cost_forecast_method='hp_hc_periods')
+  load_cost_hc: 0.1419 # non-peak hours load cost in €/kWh (only needed if load_cost_forecast_method='hp_hc_periods')
+  prod_price_forecast_method: 'constant' # options are 'constant' for constant fixed value or 'csv' to load custom price forecast from a CSV file
+  prod_sell_price: 0.065 # power production selling price in €/kWh (only needed if prod_price_forecast_method='constant')
+  set_total_pv_sell: False # consider that all PV power is injected to the grid (self-consumption with total sell)
+  lp_solver: 'default' # set the name of the linear programming solver that will be used
+  lp_solver_path: 'empty' # set the path to the LP solver
+  set_nocharge_from_grid: False # avoid battery charging from the grid
+  set_nodischarge_to_grid: True # avoid battery discharging to the grid
+  set_battery_dynamic: False # add a constraint to limit the dynamic of the battery power in power per time unit
+  battery_dynamic_max: 0.9 # maximum dynamic positive power variation in percentage of battery maximum power
+  battery_dynamic_min: -0.9 # minimum dynamic negative power variation in percentage of battery maximum power
+  weight_battery_discharge: 1.0 # weight applied in cost function to battery usage for discharge
+  weight_battery_charge: 1.0 # weight applied in cost function to battery usage for charge
 
 plant_conf:
-  - P_grid_max: 9000 # The maximum power that can be supplied by the utility grid in Watts
-  - module_model: # The PV module model
-    - 'CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M'
-  - inverter_model: # The PV inverter model
-    - 'Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_'
-  - surface_tilt: # The tilt angle of your solar panels
-    - 30
-  - surface_azimuth: # The azimuth angle of your PV installation
-    - 205
-  - modules_per_string: # The number of modules per string
-    - 16 
-  - strings_per_inverter: # The number of used strings per inverter
-    - 1
-  - Pd_max: 1000 # If your system has a battery (set_use_battery=True), the maximum discharge power in Watts
-  - Pc_max: 1000 # If your system has a battery (set_use_battery=True), the maximum charge power in Watts
-  - eta_disch: 0.95 # If your system has a battery (set_use_battery=True), the discharge efficiency
-  - eta_ch: 0.95 # If your system has a battery (set_use_battery=True), the charge efficiency
-  - Enom: 5000 # If your system has a battery (set_use_battery=True), the total capacity of the battery stack in Wh
-  - SOCmin: 0.3 # If your system has a battery (set_use_battery=True), the minimun allowable battery state of charge
-  - SOCmax: 0.9 # If your system has a battery (set_use_battery=True), the minimun allowable battery state of charge
-  - SOCtarget: 0.6 # If your system has a battery (set_use_battery=True), the desired battery state of charge at the end of each optimization cycle
+  P_grid_max: 9000 # The maximum power that can be supplied by the utility grid in Watts
+  module_model: # The PV module model
+  - 'CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M'
+  inverter_model: # The PV inverter model
+  - 'Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_'
+  surface_tilt: # The tilt angle of your solar panels
+  - 30
+  surface_azimuth: # The azimuth angle of your PV installation
+  - 205
+  modules_per_string: # The number of modules per string
+  - 16 
+  strings_per_inverter: # The number of used strings per inverter
+  - 1
+  Pd_max: 1000 # If your system has a battery (set_use_battery=True), the maximum discharge power in Watts
+  Pc_max: 1000 # If your system has a battery (set_use_battery=True), the maximum charge power in Watts
+  eta_disch: 0.95 # If your system has a battery (set_use_battery=True), the discharge efficiency
+  eta_ch: 0.95 # If your system has a battery (set_use_battery=True), the charge efficiency
+  Enom: 5000 # If your system has a battery (set_use_battery=True), the total capacity of the battery stack in Wh
+  SOCmin: 0.3 # If your system has a battery (set_use_battery=True), the minimun allowable battery state of charge
+  SOCmax: 0.9 # If your system has a battery (set_use_battery=True), the minimun allowable battery state of charge
+  SOCtarget: 0.6 # If your system has a battery (set_use_battery=True), the desired battery state of charge at the end of each optimization cycle

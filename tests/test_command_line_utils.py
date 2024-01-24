@@ -185,13 +185,13 @@ class TestCommandLineUtils(unittest.TestCase):
         # A test similar to the docs
         runtimeparams = {"pv_power_forecast":
             [1,2,3,4,5,6,7,8,9,10], 
-            "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3],"def_end_timestep":[8,0]}
+            "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3],"def_start_timestep":[-3,0],"def_end_timestep":[8,0]}
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
-        params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        params['optim_conf'][8]['load_forecast_method'] = 'naive'
-        params['optim_conf'][9]['load_cost_forecast_method'] = 'hp_hc_periods'
-        params['optim_conf'][13]['prod_price_forecast_method'] = 'constant'
+        params['optim_conf']['weather_forecast_method'] = 'list'
+        params['optim_conf']['load_forecast_method'] = 'naive'
+        params['optim_conf']['load_cost_forecast_method'] = 'hp_hc_periods'
+        params['optim_conf']['prod_price_forecast_method'] = 'constant'
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
@@ -205,7 +205,7 @@ class TestCommandLineUtils(unittest.TestCase):
         costfun = 'profit'
         action = 'naive-mpc-optim'
         params = copy.deepcopy(json.loads(self.params_json))
-        params['retrieve_hass_conf'][8]['method_ts_round'] = 'first'
+        params['retrieve_hass_conf']['method_ts_round'] = 'first'
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
@@ -217,8 +217,8 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(len(opt_res_first)==1)
         action = 'naive-mpc-optim'
         params = copy.deepcopy(json.loads(self.params_json))
-        params['retrieve_hass_conf'][8]['method_ts_round'] = 'last'
-        params['optim_conf'][0]['set_use_battery'] = True
+        params['retrieve_hass_conf']['method_ts_round'] = 'last'
+        params['optim_conf']['set_use_battery'] = True
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
@@ -270,7 +270,7 @@ class TestCommandLineUtils(unittest.TestCase):
         }
         runtimeparams_json = json.dumps(runtimeparams)
         # params['passed_data'] = runtimeparams
-        params['optim_conf'][8]['load_forecast_method'] = 'skforecast'
+        params['optim_conf']['load_forecast_method'] = 'skforecast'
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
@@ -346,7 +346,7 @@ class TestCommandLineUtils(unittest.TestCase):
         }
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
-        params['optim_conf'][8]['load_forecast_method'] = 'skforecast'
+        params['optim_conf']['load_forecast_method'] = 'skforecast'
         params_json = json.dumps(params)
         with patch('sys.argv', ['main', '--action', 'forecast-model-fit', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
                                 '--params', params_json, '--runtimeparams', runtimeparams_json,
@@ -368,7 +368,7 @@ class TestCommandLineUtils(unittest.TestCase):
         }
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
-        params['optim_conf'][8]['load_forecast_method'] = 'skforecast'
+        params['optim_conf']['load_forecast_method'] = 'skforecast'
         params_json = json.dumps(params)
         with patch('sys.argv', ['main', '--action', 'forecast-model-predict', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
                                 '--params', params_json, '--runtimeparams', runtimeparams_json,
@@ -390,7 +390,7 @@ class TestCommandLineUtils(unittest.TestCase):
         }
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
-        params['optim_conf'][8]['load_forecast_method'] = 'skforecast'
+        params['optim_conf']['load_forecast_method'] = 'skforecast'
         params_json = json.dumps(params)
         with patch('sys.argv', ['main', '--action', 'forecast-model-tune', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
                                 '--params', params_json, '--runtimeparams', runtimeparams_json,
