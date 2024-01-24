@@ -112,7 +112,7 @@ def build_params(params, options, addon):
         params['optim_conf']['P_deferrable_nom'] = [i['nominal_power_of_deferrable_loads'] for i in options['list_nominal_power_of_deferrable_loads']]
         params['optim_conf']['def_total_hours'] = [i['operating_hours_of_each_deferrable_load'] for i in options['list_operating_hours_of_each_deferrable_load']]
         params['optim_conf']['treat_def_as_semi_cont'] = [i['treat_deferrable_load_as_semi_cont'] for i in options['list_treat_deferrable_load_as_semi_cont']]
-        params['optim_conf']['set_def_constant'] = [False for i in range(len(params['optim_conf'][3]['P_deferrable_nom']))]
+        params['optim_conf']['set_def_constant'] = [False for i in range(len(params['optim_conf']['P_deferrable_nom']))]
         params['optim_conf']['load_forecast_method'] = options['load_forecast_method']
         start_hours_list = [i['peak_hours_periods_start_hours'] for i in options['list_peak_hours_periods_start_hours']]
         end_hours_list = [i['peak_hours_periods_end_hours'] for i in options['list_peak_hours_periods_end_hours']]
