@@ -407,7 +407,7 @@ def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
         else:
             input_secrets = input_conf.pop('params_secrets', None)
         
-    retrieve_hass_conf = dict((key,d[key]) for d in input_conf['retrieve_hass_conf'] for key in d)
+    retrieve_hass_conf = input_conf.get('retrieve_hass_conf', {})
     if use_secrets:
         retrieve_hass_conf = {**retrieve_hass_conf, **input_secrets}
     else:
