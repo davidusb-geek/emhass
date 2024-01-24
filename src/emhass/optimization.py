@@ -286,7 +286,7 @@ class optimization:
                 })
             # Ensure deferrable loads consume energy between def_start_timestep & def_end_timestep
             self.logger.debug("Deferrable load {}: Proposed optimization window: {} --> {}".format(k, def_start_timestep[k], def_end_timestep[k]))
-            def_start, def_end, warning = validate_def_timewindow(def_start_timestep[k], def_end_timestep[k], ceil(def_total_hours[k]/self.timeStep), n)
+            def_start, def_end, warning = optimization.validate_def_timewindow(def_start_timestep[k], def_end_timestep[k], ceil(def_total_hours[k]/self.timeStep), n)
             if warning is not None: 
                 self.logger.warning("Deferrable load {} : {}".format(k, warning))
             self.logger.debug("Deferrable load {}: Validated optimization window: {} --> {}".format(k, def_start, def_end))
