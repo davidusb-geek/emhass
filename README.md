@@ -366,7 +366,7 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `def_total_hours` for the total number of hours that each deferrable load should operate.
 
-- `def_end_timestep` for the timestep before which each deferrable load should consume their energy (if you don't want the deferrable load to use the whole optimization timewindow).
+- `def_end_timestep` for the timestep before which each deferrable load should operate (if you don't want the deferrable load to use the whole optimization timewindow).
 
 - `treat_def_as_semi_cont` to define if we should treat each deferrable load as a semi-continuous variable.
 
@@ -405,7 +405,7 @@ When applying this controller, the following `runtimeparams` should be defined:
 
 - `def_total_hours` for the list of deferrable loads functioning hours. These values can decrease as the day advances to take into account receding horizon daily energy objectives for each deferrable load.
 
-- `def_end_timestep` for the timestep before which each deferrable load should consume their energy (if you don't want the deferrable load to use the whole optimization timewindow). If you specify a value of 0 (or negative), the deferrable load will be optimized over the complete prediction horizon window. 
+- `def_end_timestep` for the timestep before which each deferrable load should operate (if you don't want the deferrable load to use the whole optimization timewindow). If you specify a value of 0 (or negative), the deferrable load will be optimized over the complete prediction horizon window. 
 
 A correct call for a MPC optimization should look like:
 
