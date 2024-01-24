@@ -407,7 +407,7 @@ def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
         else:
             input_secrets = input_conf.pop('params_secrets', None)
         
-    retrieve_hass_conf = dict({key:d[key] for d in input_conf['retrieve_hass_conf'] for key in d})
+    retrieve_hass_conf = dict((key,d[key]) for d in input_conf['retrieve_hass_conf'] for key in d)
     if use_secrets:
         retrieve_hass_conf = {**retrieve_hass_conf, **input_secrets}
     else:
@@ -420,11 +420,11 @@ def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
     retrieve_hass_conf['freq'] = pd.to_timedelta(retrieve_hass_conf['freq'], "minutes")
     retrieve_hass_conf['time_zone'] = pytz.timezone(retrieve_hass_conf['time_zone'])
     
-    optim_conf = dict({key:d[key] for d in input_conf['optim_conf'] for key in d})
+    optim_conf = dict((key,d[key]) for d in input_conf['optim_conf'] for key in d)
     optim_conf['list_hp_periods'] = dict((key,d[key]) for d in optim_conf['list_hp_periods'] for key in d)
     optim_conf['delta_forecast'] = pd.Timedelta(days=optim_conf['delta_forecast'])
     
-    plant_conf = dict({key:d[key] for d in input_conf['plant_conf'] for key in d})
+    plant_conf = dict((key,d[key]) for d in input_conf['plant_conf'] for key in d)
     
     return retrieve_hass_conf, optim_conf, plant_conf
 
