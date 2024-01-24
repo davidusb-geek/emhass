@@ -634,7 +634,7 @@ class optimization:
         return self.opt_res
 
     @staticmethod
-    def validate_def_timewindow(start: int, end: int, min_steps: int, window: int) -> Tuple[int,int, string]:
+    def validate_def_timewindow(start: int, end: int, min_steps: int, window: int) -> Tuple[int,int,str]:
         r"""
         Helper function to validate (and if necessary: correct) the defined optimization window of a deferrable load.
         
