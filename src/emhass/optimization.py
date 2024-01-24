@@ -3,7 +3,7 @@
 
 import logging
 import copy
-from typing import Optional
+from typing import Optional, Tuple
 import pandas as pd
 import numpy as np
 import pulp as plp
