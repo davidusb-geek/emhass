@@ -112,6 +112,10 @@ def build_params(params, options, addon):
         params['retrieve_hass_conf']['solcast_api_key'] = options['optional_solcast_api_key']
         params['retrieve_hass_conf']['solcast_rooftop_id'] = options['optional_solcast_rooftop_id']
         params['retrieve_hass_conf']['solar_forecast_kwp'] = options['optional_solar_forecast_kwp']
+        params['retrieve_hass_conf']['time_zone'] = options['time_zone']
+        params['retrieve_hass_conf']['lat'] = options['Latitude']
+        params['retrieve_hass_conf']['lon'] = options['Longitude']
+        params['retrieve_hass_conf']['alt'] = options['Altitude']
         # Updating variables in optim_conf
         params['optim_conf']['set_use_battery'] = options['set_use_battery']
         params['optim_conf']['num_def_loads'] = options['number_of_deferrable_loads']
@@ -120,10 +124,6 @@ def build_params(params, options, addon):
         params['optim_conf']['treat_def_as_semi_cont'] = [i['treat_deferrable_load_as_semi_cont'] for i in options['list_treat_deferrable_load_as_semi_cont']]
         params['optim_conf']['set_def_constant'] = [i['set_deferrable_load_single_constant'] for i in options['list_set_deferrable_load_single_constant']]
         params['optim_conf']['weather_forecast_method'] = options['weather_forecast_method']
-        params['optim_conf']['time_zone'] = options['time_zone']
-        params['optim_conf']['lat'] = options['Latitude']
-        params['optim_conf']['lon'] = options['Longitude']
-        params['optim_conf']['alt'] = options['Altitude']
         params['optim_conf']['load_forecast_method'] = options['load_forecast_method']
         params['optim_conf']['delta_forecast'] = options['delta_forecast_daily']
         params['optim_conf']['load_cost_forecast_method'] = options['load_cost_forecast_method']
@@ -297,7 +297,8 @@ if __name__ == "__main__":
         DATA_PATH = "/share/" #"/data/"
     else:
         CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
-        options = {}
+        options = None
+        DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
 
     config_path = Path(CONFIG_PATH)
     
@@ -325,7 +326,7 @@ if __name__ == "__main__":
     else:
         injection_dict = None
     
-    if hass_url:
+    if args.addon==1:
         # The cost function
         costfun = options.get('costfun', 'profit')
         # Some data from options
