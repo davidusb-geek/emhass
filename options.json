@@ -46,6 +46,10 @@
     }                                                                                                                                                                                                            
   ],
   "weather_forecast_method": "scrapper",
+  "time_zone": "Europe/Paris",
+  "Latitude": 45.83,
+  "Longitude": 6.86,
+  "Altitude": 4807.8,
   "load_forecast_method": "naive",    
   "delta_forecast_daily": 1,
   "load_cost_forecast_method": "hp_hc_periods",                                                                                                                                                                                                           
