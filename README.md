@@ -366,6 +366,8 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `def_total_hours` for the total number of hours that each deferrable load should operate.
 
+- `def_start_timestep` for the timestep as from which each deferrable load is allowed to operate (if you don't want the deferrable load to use the whole optimization timewindow).
+
 - `def_end_timestep` for the timestep before which each deferrable load should operate (if you don't want the deferrable load to use the whole optimization timewindow).
 
 - `treat_def_as_semi_cont` to define if we should treat each deferrable load as a semi-continuous variable.
@@ -405,12 +407,14 @@ When applying this controller, the following `runtimeparams` should be defined:
 
 - `def_total_hours` for the list of deferrable loads functioning hours. These values can decrease as the day advances to take into account receding horizon daily energy objectives for each deferrable load.
 
-- `def_end_timestep` for the timestep before which each deferrable load should operate (if you don't want the deferrable load to use the whole optimization timewindow). If you specify a value of 0 (or negative), the deferrable load will be optimized over the complete prediction horizon window. 
+- `def_start_timestep` for the timestep as from which each deferrable load is allowed to operate (if you don't want the deferrable load to use the whole optimization timewindow). If you specify a value of 0 (or negative), the deferrable load will be optimized as from the beginning of the complete prediction horizon window.
+
+- `def_end_timestep` for the timestep before which each deferrable load should operate (if you don't want the deferrable load to use the whole optimization timewindow). If you specify a value of 0 (or negative), the deferrable load optimization window will extend up to the end of the prediction horizon window. 
 
 A correct call for a MPC optimization should look like:
 
 ```
-curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3],"def_end_timestep":[0,6],}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3],"def_start_timestep":[0,3],"def_end_timestep":[0,6],}' http://localhost:5000/action/naive-mpc-optim
 ```
 
 ## A machine learning forecaster

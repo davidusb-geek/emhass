@@ -49,6 +49,9 @@ These are the parameters needed to properly define the optimization problem.
 - `def_total_hours`: The total number of hours that each deferrable load should operate. For example:
 	- 5
 	- 8
+- `def_start_timestep`: The timestep as from which each deferrable load is allowed to operate (if you don't want the deferrable load to use the whole optimization timewindow). If you specify a value of 0 (or negative), the deferrable load will be optimized as from the beginning of the complete prediction horizon window. For example:
+    - 0
+    - 1 
 - `def_end_timestep`: The timestep before which each deferrable load should operate. The deferrable load is not allowed to operate after the specified timestep. If a value of 0 (or negative) is provided, the deferrable load is allowed to operate in the complete optimization window). For example:
 	- 0
 	- 3
