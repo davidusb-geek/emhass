@@ -40,10 +40,10 @@ class TestCommandLineUtils(unittest.TestCase):
         }
         self.runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
-        params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        params['optim_conf'][8]['load_forecast_method'] = 'list'
-        params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
-        params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
+        params['optim_conf']['weather_forecast_method'] = 'list'
+        params['optim_conf']['load_forecast_method'] = 'list'
+        params['optim_conf']['load_cost_forecast_method'] = 'list'
+        params['optim_conf']['prod_price_forecast_method'] = 'list'
         self.params_json = json.dumps(params)
         
     def test_get_yaml_parse(self):
@@ -178,10 +178,10 @@ class TestCommandLineUtils(unittest.TestCase):
         }
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
-        params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        params['optim_conf'][8]['load_forecast_method'] = 'list'
-        params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
-        params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
+        params['optim_conf']['weather_forecast_method'] = 'list'
+        params['optim_conf']['load_forecast_method'] = 'list'
+        params['optim_conf']['load_cost_forecast_method'] = 'list'
+        params['optim_conf']['prod_price_forecast_method'] = 'list'
         params_json = json.dumps(params)
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
             pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True, params=params_json)
@@ -204,10 +204,10 @@ class TestCommandLineUtils(unittest.TestCase):
         }
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
-        params['optim_conf'][7]['weather_forecast_method'] = 'list'
-        params['optim_conf'][8]['load_forecast_method'] = 'list'
-        params['optim_conf'][9]['load_cost_forecast_method'] = 'list'
-        params['optim_conf'][13]['prod_price_forecast_method'] = 'list'
+        params['optim_conf']['weather_forecast_method'] = 'list'
+        params['optim_conf']['load_forecast_method'] = 'list'
+        params['optim_conf']['load_cost_forecast_method'] = 'list'
+        params['optim_conf']['prod_price_forecast_method'] = 'list'
         params_json = json.dumps(params)
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
             pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True, params=params_json)
