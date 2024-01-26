@@ -391,7 +391,7 @@ class TestForecast(unittest.TestCase):
         }
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
-        params['optim_conf'][8]['load_forecast_method'] = 'mlforecaster'
+        params['optim_conf']['load_forecast_method'] = 'mlforecaster'
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
