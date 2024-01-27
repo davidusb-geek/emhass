@@ -122,11 +122,11 @@ def build_params(params, options, addon):
         params['optim_conf']['P_deferrable_nom'] = [i['nominal_power_of_deferrable_loads'] for i in options['list_nominal_power_of_deferrable_loads']]
         params['optim_conf']['def_total_hours'] = [i['operating_hours_of_each_deferrable_load'] for i in options['list_operating_hours_of_each_deferrable_load']]
         params['optim_conf']['treat_def_as_semi_cont'] = [i['treat_deferrable_load_as_semi_cont'] for i in options['list_treat_deferrable_load_as_semi_cont']]
-        params['optim_conf']['set_def_constant'] = [i['set_deferrable_load_single_constant'] for i in options['list_set_deferrable_load_single_constant']]
         params['optim_conf']['weather_forecast_method'] = options['weather_forecast_method']
         params['optim_conf']['load_forecast_method'] = options['load_forecast_method']
         params['optim_conf']['delta_forecast'] = options['delta_forecast_daily']
         params['optim_conf']['load_cost_forecast_method'] = options['load_cost_forecast_method']
+        params['optim_conf']['set_def_constant'] = [i['set_deferrable_load_single_constant'] for i in options['list_set_deferrable_load_single_constant']]
         start_hours_list = [i['peak_hours_periods_start_hours'] for i in options['list_peak_hours_periods_start_hours']]
         end_hours_list = [i['peak_hours_periods_end_hours'] for i in options['list_peak_hours_periods_end_hours']]
         num_peak_hours = len(start_hours_list)
@@ -146,6 +146,8 @@ def build_params(params, options, addon):
         params['optim_conf']['battery_dynamic_min'] = options['battery_dynamic_min']
         params['optim_conf']['weight_battery_discharge'] = options['weight_battery_discharge']
         params['optim_conf']['weight_battery_charge'] = options['weight_battery_charge']
+        params['optim_conf']['def_start_timestep'] = [i['start_timesteps_of_each_deferrable_load'] for i in options['list_start_timesteps_of_each_deferrable_load']]
+        params['optim_conf']['def_end_timestep'] = [i['end_timesteps_of_each_deferrable_load'] for i in options['list_end_timesteps_of_each_deferrable_load']]
         # Updating variables in plant_conf
         params['plant_conf']['P_grid_max'] = options['maximum_power_from_grid']
         params['plant_conf']['module_model'] = [i['pv_module_model'] for i in options['list_pv_module_model']]
@@ -165,7 +167,7 @@ def build_params(params, options, addon):
     # The params dict
     params['params_secrets'] = params_secrets
     params['passed_data'] = {'pv_power_forecast':None,'load_power_forecast':None,'load_cost_forecast':None,'prod_price_forecast':None,
-                             'prediction_horizon':None,'soc_init':None,'soc_final':None,'def_total_hours':None,'alpha':None,'beta':None}
+                             'prediction_horizon':None,'soc_init':None,'soc_final':None,'def_total_hours':None,'def_start_timestep':None,'def_end_timestep':None,'alpha':None,'beta':None}
     return params
 
 @app.route('/')
@@ -280,19 +282,7 @@ if __name__ == "__main__":
             with options_json.open('r') as data:
                 options = json.load(data)
         else:
-            app.logger.warning("options.json does not exists")
-            options = defaultdict(lambda: 0)
-            options['list_nominal_power_of_deferrable_loads'] = []
-            options['list_operating_hours_of_each_deferrable_load'] = []
-            options['list_treat_deferrable_load_as_semi_cont'] = []
-            options['list_peak_hours_periods_start_hours'] = []
-            options['list_peak_hours_periods_end_hours'] = []
-            options['list_pv_module_model'] = []
-            options['list_pv_inverter_model'] = []
-            options['list_surface_tilt'] = []
-            options['list_surface_azimuth'] = []
-            options['list_modules_per_string'] = []
-            options['list_strings_per_inverter'] = []
+            app.logger.error("options.json does not exists")
 
         DATA_PATH = "/share/" #"/data/"
     else:
@@ -303,15 +293,15 @@ if __name__ == "__main__":
     config_path = Path(CONFIG_PATH)
     
     # Read example config file
-    try:
+    if config_path.exists():
         with open(config_path, 'r') as file:
             config = yaml.load(file, Loader=yaml.FullLoader)
         retrieve_hass_conf = config['retrieve_hass_conf']
         optim_conf = config['optim_conf']
         plant_conf = config['plant_conf']
-    except FileNotFoundError:
-        app.logger.error("CONFIG_PATH: %r does not exist", str(config_path))
-        sys.exit(1)
+    else:
+        app.logger.error("config_emhass.json does not exists")
+        app.logger.info("Failed config_path: "+str(config_path))
 
     params = {}
     params['retrieve_hass_conf'] = retrieve_hass_conf
