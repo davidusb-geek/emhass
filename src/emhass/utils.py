@@ -173,6 +173,16 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             else:
                 def_total_hours = runtimeparams['def_total_hours']
             params['passed_data']['def_total_hours'] = def_total_hours
+            if 'def_start_timestep' not in runtimeparams.keys():
+                def_start_timestep = optim_conf['def_start_timestep']
+            else:
+                def_start_timestep = runtimeparams['def_start_timestep']
+            params['passed_data']['def_start_timestep'] = def_start_timestep
+            if 'def_end_timestep' not in runtimeparams.keys():
+                def_end_timestep = optim_conf['def_end_timestep']
+            else:
+                def_end_timestep = runtimeparams['def_end_timestep']
+            params['passed_data']['def_end_timestep'] = def_end_timestep
             if 'alpha' not in runtimeparams.keys():
                 alpha = 0.5
             else:
@@ -189,6 +199,8 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             params['passed_data']['soc_init'] = None
             params['passed_data']['soc_final'] = None
             params['passed_data']['def_total_hours'] = None
+            params['passed_data']['def_start_timestep'] = None
+            params['passed_data']['def_end_timestep'] = None
             params['passed_data']['alpha'] = None
             params['passed_data']['beta'] = None
         # Treat passed forecast data lists
@@ -311,6 +323,10 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             optim_conf['P_deferrable_nom'] = runtimeparams['P_deferrable_nom']
         if 'def_total_hours' in runtimeparams.keys():
             optim_conf['def_total_hours'] = runtimeparams['def_total_hours']
+        if 'def_start_timestep' in runtimeparams.keys():
+            optim_conf['def_start_timestep'] = runtimeparams['def_start_timestep']
+        if 'def_end_timestep' in runtimeparams.keys():
+            optim_conf['def_end_timestep'] = runtimeparams['def_end_timestep']
         if 'treat_def_as_semi_cont' in runtimeparams.keys():
             optim_conf['treat_def_as_semi_cont'] = runtimeparams['treat_def_as_semi_cont']
         if 'set_def_constant' in runtimeparams.keys():
@@ -390,12 +406,12 @@ def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
                 input_secrets = yaml.load(file, Loader=yaml.FullLoader)
         else:
             input_secrets = input_conf.pop('params_secrets', None)
-
-    if (type(input_conf['retrieve_hass_conf']) == list):
+   
+    if (type(input_conf['retrieve_hass_conf']) == list): #if using old config version 
         retrieve_hass_conf = dict({key:d[key] for d in input_conf['retrieve_hass_conf'] for key in d})
-    else: 
-       retrieve_hass_conf =  input_conf['retrieve_hass_conf']       
-
+    else:
+        retrieve_hass_conf = input_conf.get('retrieve_hass_conf', {})
+        
     if use_secrets:
         retrieve_hass_conf.update(input_secrets)
     else:
@@ -409,17 +425,17 @@ def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
     retrieve_hass_conf['time_zone'] = pytz.timezone(retrieve_hass_conf['time_zone'])
     
     if (type(input_conf['optim_conf']) == list):
-        optim_conf = dict({key:d[key] for d in input_conf['optim_conf'] for key in d}) 
-    else: 
-        optim_conf =  input_conf['optim_conf']         
-    
-    optim_conf['list_hp_periods'] = dict({key:d[key] for d in optim_conf['list_hp_periods'] for key in d})   
-    optim_conf['delta_forecast'] = pd.Timedelta(days=optim_conf['delta_forecast'])
+        optim_conf = dict({key:d[key] for d in input_conf['optim_conf'] for key in d})
+    else:
+        optim_conf = input_conf.get('optim_conf', {})
 
+    optim_conf['list_hp_periods'] = dict((key,d[key]) for d in optim_conf['list_hp_periods'] for key in d)
+    optim_conf['delta_forecast'] = pd.Timedelta(days=optim_conf['delta_forecast'])
+    
     if (type(input_conf['plant_conf']) == list):
-        plant_conf = dict({key:d[key] for d in input_conf['plant_conf'] for key in d})  
-    else: 
-        plant_conf =  input_conf['plant_conf']               
+        plant_conf = dict({key:d[key] for d in input_conf['plant_conf'] for key in d})
+    else:
+        plant_conf = input_conf.get('plant_conf', {})
     
     return retrieve_hass_conf, optim_conf, plant_conf
 

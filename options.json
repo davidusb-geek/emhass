@@ -53,6 +53,28 @@
   "load_forecast_method": "naive",    
   "delta_forecast_daily": 1,
   "load_cost_forecast_method": "hp_hc_periods",                                                                                                                                                                                                           
+  "list_start_timesteps_of_each_deferrable_load": [
+    {
+      "start_timesteps_of_each_deferrable_load": 0
+    },
+    {
+      "start_timesteps_of_each_deferrable_load": 0
+    },
+    {
+      "start_timesteps_of_each_deferrable_load": 0
+    }
+  ],
+  "list_end_timesteps_of_each_deferrable_load": [
+    {
+      "end_timesteps_of_each_deferrable_load": 0
+    },
+    {
+      "end_timesteps_of_each_deferrable_load": 0
+    },
+    {
+      "end_timesteps_of_each_deferrable_load": 0
+    }
+  ],
   "list_peak_hours_periods_start_hours": [                                                                                                                                                                       
     {                                                                                                                                                                                                            
       "peak_hours_periods_start_hours": "02:54"                                                                                                                                                                  

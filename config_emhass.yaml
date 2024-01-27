@@ -24,6 +24,12 @@ optim_conf:
   def_total_hours: # hours
   - 5
   - 8
+  def_start_timestep: # timesteps
+  - 0
+  - 0
+  def_end_timestep: # timesteps
+  - 0
+  - 0
   treat_def_as_semi_cont: # treat this variable as semi continuous 
   - True
   - True
