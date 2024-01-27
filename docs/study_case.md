@@ -1,11 +1,10 @@
-# A real study case
+# Example configurations
 
-In this section a study case using real data is presented.
-
+In this section example configurations are presented as study cases using real data.
 
 ## First test system: a simple system with no PV and two deferrable loads
 
-In this example we will consider an even more simple system with no PV installation and just two deferrable loads that we want to optimize their schedule.
+In this example we will consider a simple system with no PV installation and just two deferrable loads that we want to optimize their schedule.
 
 For this the following parameters can be added to the `secrets.yaml` file: `solar_forecast_kwp: 0`. And also we will set the PV forecast method to `method='solar.forecast'`. This is a simple way to just set a vector with zero values on the PV forecast power, emulating the case where there is no PV installation. The other values on the configuration file are set to their default values.
 
