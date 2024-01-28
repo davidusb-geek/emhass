@@ -1,0 +1,21 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "EMHASS install",
+            "command": "sudo",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "args": [
+                "python3", "setup.py", "install"
+            ],
+            "presentation": {
+                "echo": true,
+                "panel": "shared",
+                "focus": true
+            }
+        }
+    ]
+}
