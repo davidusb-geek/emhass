@@ -24,7 +24,12 @@ from skforecast.model_selection import bayesian_search_forecaster
 from skforecast.model_selection import backtesting_forecaster
 from skforecast.utils import save_forecaster
 from skforecast.utils import load_forecaster
-from skopt.space import Categorical, Real, Integer
+# from skopt.space import Categorical, Real, Integer
+
+from tslearn.clustering import TimeSeriesKMeans
+from tslearn.datasets import CachedDatasets
+from tslearn.preprocessing import TimeSeriesScalerMeanVariance, \
+    TimeSeriesResampler
 
 
 # the root folder
@@ -115,3 +120,24 @@ if __name__ == '__main__':
 
     fig = px.scatter(data_lag, x='power_load y(t)', y='power_load y(t+1)', color='cluster_group', template=template)
     fig.show()
+    
+    km = TimeSeriesKMeans(n_clusters=6, verbose=True, random_state=200)
+    y_pred = km.fit_predict(data_lag)
+    data_lag['cluster_group_tslearn_euclidean'] = y_pred
+    
+    fig = px.scatter(data_lag, x='power_load y(t)', y='power_load y(t+1)', color='cluster_group_tslearn_euclidean', template=template)
+    fig.show()
+    
+    # dba_km = TimeSeriesKMeans(n_clusters=6, n_init=2, metric="dtw", verbose=True, max_iter_barycenter=10, random_state=200)
+    # y_pred = dba_km.fit_predict(data_lag)
+    # data_lag['cluster_group_tslearn_dba'] = y_pred
+    
+    # fig = px.scatter(data_lag, x='power_load y(t)', y='power_load y(t+1)', color='cluster_group_tslearn_dba', template=template)
+    # fig.show()
+    
+    # sdtw_km = TimeSeriesKMeans(n_clusters=6, metric="softdtw", metric_params={"gamma": .01}, verbose=True, random_state=200)
+    # y_pred = sdtw_km.fit_predict(data_lag)
+    # data_lag['cluster_group_tslearn_sdtw'] = y_pred
+    
+    # fig = px.scatter(data_lag, x='power_load y(t)', y='power_load y(t+1)', color='cluster_group_tslearn_sdtw', template=template)
+    # fig.show()
