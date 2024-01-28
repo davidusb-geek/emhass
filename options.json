@@ -1,6 +1,7 @@
 {                                                                                                                                                                                                                
   "hass_url": "empty",                                                                                                                                                                                           
   "long_lived_token": "empty",
+  "logging_level": "INFO",
   "costfun": "profit",                                                                                                                                                                                           
   "optimization_time_step": 30,                                                                                                                                                                                  
   "historic_days_to_retrieve": 2,                                                                                                                                                                                
