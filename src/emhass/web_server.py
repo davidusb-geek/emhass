@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import sys
 from flask import Flask, request, make_response, render_template
 from jinja2 import Environment, PackageLoader
 from requests import get
@@ -103,17 +104,29 @@ def build_params(params, options, addon):
         params['retrieve_hass_conf']['days_to_retrieve'] = options['historic_days_to_retrieve']
         params['retrieve_hass_conf']['var_PV'] = options['sensor_power_photovoltaics']
         params['retrieve_hass_conf']['var_load'] = options['sensor_power_load_no_var_loads']
+        params['retrieve_hass_conf']['load_negative'] = [options['load_negative']]
+        params['retrieve_hass_conf']['set_zero_min'] = [options['set_zero_min']]
         params['retrieve_hass_conf']['var_replace_zero'] = [options['sensor_power_photovoltaics']]
         params['retrieve_hass_conf']['var_interp'] = [options['sensor_power_photovoltaics'], options['sensor_power_load_no_var_loads']]
         params['retrieve_hass_conf']['method_ts_round'] = options['method_ts_round']
+        params['retrieve_hass_conf']['solcast_api_key'] = options['optional_solcast_api_key']
+        params['retrieve_hass_conf']['solcast_rooftop_id'] = options['optional_solcast_rooftop_id']
+        params['retrieve_hass_conf']['solar_forecast_kwp'] = options['optional_solar_forecast_kwp']
+        params['retrieve_hass_conf']['time_zone'] = options['time_zone']
+        params['retrieve_hass_conf']['lat'] = options['Latitude']
+        params['retrieve_hass_conf']['lon'] = options['Longitude']
+        params['retrieve_hass_conf']['alt'] = options['Altitude']
         # Updating variables in optim_conf
         params['optim_conf']['set_use_battery'] = options['set_use_battery']
         params['optim_conf']['num_def_loads'] = options['number_of_deferrable_loads']
         params['optim_conf']['P_deferrable_nom'] = [i['nominal_power_of_deferrable_loads'] for i in options['list_nominal_power_of_deferrable_loads']]
         params['optim_conf']['def_total_hours'] = [i['operating_hours_of_each_deferrable_load'] for i in options['list_operating_hours_of_each_deferrable_load']]
         params['optim_conf']['treat_def_as_semi_cont'] = [i['treat_deferrable_load_as_semi_cont'] for i in options['list_treat_deferrable_load_as_semi_cont']]
-        params['optim_conf']['set_def_constant'] = [False for i in range(len(params['optim_conf']['P_deferrable_nom']))]
+        params['optim_conf']['weather_forecast_method'] = options['weather_forecast_method']
         params['optim_conf']['load_forecast_method'] = options['load_forecast_method']
+        params['optim_conf']['delta_forecast'] = options['delta_forecast_daily']
+        params['optim_conf']['load_cost_forecast_method'] = options['load_cost_forecast_method']
+        params['optim_conf']['set_def_constant'] = [i['set_deferrable_load_single_constant'] for i in options['list_set_deferrable_load_single_constant']]
         start_hours_list = [i['peak_hours_periods_start_hours'] for i in options['list_peak_hours_periods_start_hours']]
         end_hours_list = [i['peak_hours_periods_end_hours'] for i in options['list_peak_hours_periods_end_hours']]
         num_peak_hours = len(start_hours_list)
@@ -121,6 +134,7 @@ def build_params(params, options, addon):
         params['optim_conf']['list_hp_periods'] = list_hp_periods_list
         params['optim_conf']['load_cost_hp'] = options['load_peak_hours_cost']
         params['optim_conf']['load_cost_hc'] = options['load_offpeak_hours_cost']
+        params['optim_conf']['prod_price_forecast_method'] = options['production_price_forecast_method']
         params['optim_conf']['prod_sell_price'] = options['photovoltaic_production_sell_price']
         params['optim_conf']['set_total_pv_sell'] = options['set_total_pv_sell']
         params['optim_conf']['lp_solver'] = options['lp_solver']
@@ -255,10 +269,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # Define the paths
-    if args.addon == 1:
-        OPTIONS_PATH = "/data/options.json"
+    DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
+    data_path = Path(DATA_PATH)
+    if args.addon:
+        OPTIONS_PATH = os.getenv('OPTIONS_PATH', default=data_path / "options.json")
         options_json = Path(OPTIONS_PATH)
-        CONFIG_PATH = "/usr/src/config_emhass.yaml"
+        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/usr/src/config_emhass.yaml")
         hass_url = args.url
         key = args.key
         # Read options info
@@ -267,13 +283,14 @@ if __name__ == "__main__":
                 options = json.load(data)
         else:
             app.logger.error("options.json does not exists")
+
         DATA_PATH = "/share/" #"/data/"
     else:
         CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
         options = None
         DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
+
     config_path = Path(CONFIG_PATH)
-    data_path = Path(DATA_PATH)
     
     # Read example config file
     if config_path.exists():
@@ -299,18 +316,18 @@ if __name__ == "__main__":
     else:
         injection_dict = None
     
-    if args.addon == 1:
+    if args.addon==1:
         # The cost function
-        costfun = options['costfun']
+        costfun = options.get('costfun', 'profit')
         # Some data from options
         logging_level = options['logging_level']
-        url_from_options = options['hass_url']
+        url_from_options = options.get('hass_url', 'empty')
         if url_from_options == 'empty':
             url = hass_url+"/config"
         else:
             hass_url = url_from_options
             url = hass_url+"/api/config"
-        token_from_options = options['long_lived_token']
+        token_from_options = options.get('long_lived_token', 'empty')
         if token_from_options == 'empty':
             long_lived_token = key
         else:

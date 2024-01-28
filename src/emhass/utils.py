@@ -406,10 +406,14 @@ def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
                 input_secrets = yaml.load(file, Loader=yaml.FullLoader)
         else:
             input_secrets = input_conf.pop('params_secrets', None)
+   
+    if (type(input_conf['retrieve_hass_conf']) == list): #if using old config version 
+        retrieve_hass_conf = dict({key:d[key] for d in input_conf['retrieve_hass_conf'] for key in d})
+    else:
+        retrieve_hass_conf = input_conf.get('retrieve_hass_conf', {})
         
-    retrieve_hass_conf = input_conf.get('retrieve_hass_conf', {})
     if use_secrets:
-        retrieve_hass_conf = {**retrieve_hass_conf, **input_secrets}
+        retrieve_hass_conf.update(input_secrets)
     else:
         retrieve_hass_conf['hass_url'] = 'http://supervisor/core/api'
         retrieve_hass_conf['long_lived_token'] = '${SUPERVISOR_TOKEN}'
@@ -420,11 +424,18 @@ def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
     retrieve_hass_conf['freq'] = pd.to_timedelta(retrieve_hass_conf['freq'], "minutes")
     retrieve_hass_conf['time_zone'] = pytz.timezone(retrieve_hass_conf['time_zone'])
     
-    optim_conf = input_conf.get('optim_conf', {})
+    if (type(input_conf['optim_conf']) == list):
+        optim_conf = dict({key:d[key] for d in input_conf['optim_conf'] for key in d})
+    else:
+        optim_conf = input_conf.get('optim_conf', {})
+
     optim_conf['list_hp_periods'] = dict((key,d[key]) for d in optim_conf['list_hp_periods'] for key in d)
     optim_conf['delta_forecast'] = pd.Timedelta(days=optim_conf['delta_forecast'])
     
-    plant_conf = input_conf.get('plant_conf', {})
+    if (type(input_conf['plant_conf']) == list):
+        plant_conf = dict({key:d[key] for d in input_conf['plant_conf'] for key in d})
+    else:
+        plant_conf = input_conf.get('plant_conf', {})
     
     return retrieve_hass_conf, optim_conf, plant_conf
 
