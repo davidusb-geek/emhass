@@ -19,12 +19,12 @@ from pvlib.modelchain import ModelChain
 from pvlib.temperature import TEMPERATURE_MODEL_PARAMETERS
 from pvlib.irradiance import disc
 
-from emhass.retrieve_hass import retrieve_hass
-from emhass.machine_learning_forecaster import mlforecaster
+from emhass.retrieve_hass import RetrieveHass
+from emhass.machine_learning_forecaster import MLForecaster
 from emhass.utils import get_days_list
 
 
-class forecast(object):
+class Forecast(object):
     r"""
     Generate weather, load and costs forecasts needed as inputs to the optimization.
     
@@ -448,7 +448,7 @@ class forecast(object):
                     # Extracting results for AC power
                     P_PV_forecast = mc.results.ac
         if set_mix_forecast:
-            P_PV_forecast = forecast.get_mix_forecast(
+            P_PV_forecast = Forecast.get_mix_forecast(
                 df_now, P_PV_forecast, 
                 self.params['passed_data']['alpha'], self.params['passed_data']['beta'], self.var_PV)
         return P_PV_forecast
@@ -533,7 +533,7 @@ class forecast(object):
     def get_load_forecast(self, days_min_load_forecast: Optional[int] = 3, method: Optional[str] = 'naive',
                           csv_path: Optional[str] = "/data/data_load_forecast.csv",
                           set_mix_forecast:Optional[bool] = False, df_now:Optional[pd.DataFrame] = pd.DataFrame(),
-                          use_last_window: Optional[bool] = True, mlf: Optional[mlforecaster] = None,
+                          use_last_window: Optional[bool] = True, mlf: Optional[MLForecaster] = None,
                           debug: Optional[bool] = False) -> pd.Series:
         r"""
         Get and generate the load forecast data.
@@ -576,7 +576,7 @@ class forecast(object):
             var_interp = [self.var_load]
             time_zone_load_foreacast = None
             # We will need to retrieve a new set of load data according to the days_min_load_forecast parameter
-            rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
+            rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                                self.freq, time_zone_load_foreacast, self.params, self.root, self.logger)
             if self.get_data_from_file:
                 with open(pathlib.Path(self.root) / 'data' / 'test_df_final.pkl', 'rb') as inp:
@@ -653,7 +653,7 @@ class forecast(object):
             self.logger.error("Passed method is not valid")
         P_Load_forecast = copy.deepcopy(forecast_out['yhat'])
         if set_mix_forecast:
-            P_Load_forecast = forecast.get_mix_forecast(
+            P_Load_forecast = Forecast.get_mix_forecast(
                 df_now, P_Load_forecast, 
                 self.params['passed_data']['alpha'], self.params['passed_data']['beta'], self.var_load_new)
         return P_Load_forecast

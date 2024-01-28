@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0] - 2024-01-28
+### Improvement
+- Added a new feature to provide operating time windows for deferrable loads. Thanks to @michaelpiron
+- Added lots of new options to be configured by the user. Thanks to @GeoDerp
+- Updated stylesheet with mobile & dark theme by @GeoDerp
+- Improved launch.json to fully test EMHASS on different configurations. Thanks to @GeoDerp
+- Added new script to debug and develop new time series clustering feature
+- Improved documentation. Thanks to @g1za
+### Fix
+- Updated github workflow actions/checkout to v4 and actions/setup-python to v5
+- Changed default values for weight_battery_discharge and weight_battery_charge to zero
+- Renamed classes to conform to PEP8
+- Bump markupsafe from 2.1.3 to 2.1.4 
+
 ## [0.6.2] - 2024-01-04
 ### Improvement
 - Added option to pass additional weight for battery usage

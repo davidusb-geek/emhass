@@ -1,7 +1,7 @@
 wheel
 numpy<=1.26.0
-pandas<=2.0.3
 scipy<=1.11.3
+pandas<=2.0.3
 pvlib>=0.10.2
 protobuf>=3.0.0
 pytz>=2021.1
