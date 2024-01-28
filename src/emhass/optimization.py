@@ -11,7 +11,7 @@ from pulp import PULP_CBC_CMD, COIN_CMD, GLPK_CMD
 from math import ceil
 
 
-class optimization:
+class Optimization:
     r"""
     Optimize the deferrable load and battery energy dispatch problem using \ 
     the linear programming optimization technique. All equipement equations, \
@@ -34,7 +34,7 @@ class optimization:
                  costfun: str, base_path: str, logger: logging.Logger, 
                  opt_time_delta: Optional[int] = 24) -> None:
         r"""
-        Define constructor for optimization class.
+        Define constructor for Optimization class.
         
         :param retrieve_hass_conf: Configuration parameters used to retrieve data \
             from hass
@@ -286,7 +286,7 @@ class optimization:
                 })
             # Ensure deferrable loads consume energy between def_start_timestep & def_end_timestep
             self.logger.debug("Deferrable load {}: Proposed optimization window: {} --> {}".format(k, def_start_timestep[k], def_end_timestep[k]))
-            def_start, def_end, warning = optimization.validate_def_timewindow(def_start_timestep[k], def_end_timestep[k], ceil(def_total_hours[k]/self.timeStep), n)
+            def_start, def_end, warning = Optimization.validate_def_timewindow(def_start_timestep[k], def_end_timestep[k], ceil(def_total_hours[k]/self.timeStep), n)
             if warning is not None: 
                 self.logger.warning("Deferrable load {} : {}".format(k, warning))
             self.logger.debug("Deferrable load {}: Validated optimization window: {} --> {}".format(k, def_start, def_end))

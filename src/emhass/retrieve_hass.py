@@ -13,7 +13,7 @@ from requests import get, post
 from emhass.utils import set_df_index_freq
 
 
-class retrieve_hass:
+class RetrieveHass:
     r"""
     Retrieve data from Home Assistant using the restful API.
     
@@ -34,7 +34,7 @@ class retrieve_hass:
                  time_zone: datetime.timezone, params: str, base_path: str, logger: logging.Logger,
                  get_data_from_file: Optional[bool] = False) -> None:
         """
-        Define constructor for retrieve_hass class.
+        Define constructor for RetrieveHass class.
         
         :param hass_url: The URL of the Home Assistant instance
         :type hass_url: str
@@ -287,25 +287,25 @@ class retrieve_hass:
         else:
             state = np.round(data_df.loc[data_df.index[idx]],2)
         if type_var == 'power':
-            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "forecasts", state)
         elif type_var == 'deferrable':
-            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "deferrables_schedule", state)
         elif type_var == 'batt':
-            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "battery_scheduled_power", state)
         elif type_var == 'SOC':
-            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "battery_scheduled_soc", state)
         elif type_var == 'unit_load_cost':
-            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "unit_load_cost_forecasts", state)
         elif type_var == 'unit_prod_price':
-            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "unit_prod_price_forecasts", state)
         elif type_var == 'mlforecaster':
-            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "scheduled_forecast", state)
         elif type_var == 'optim_status':
             data = {

@@ -1,20 +1,28 @@
 {
   "configurations": [
     {
-        "name": "EMHASS run",
-        "type": "python",
-        "request": "launch",
-        "program": "web_server.py",
-        "console": "integratedTerminal",
-        "cwd": "${workspaceFolder}/src/emhass/",
-        "purpose":["debug-in-terminal"],
-        "justMyCode": true,
-        "env": {
-          "CONFIG_PATH": "/workspaces/emhass/config_emhass.yaml",
-          "OPTIONS_PATH": "/workspaces/emhass/options.json",
-          "SECRETS_PATH": "/workspaces/emhass/secrets_emhass.yaml",
-          "DATA_PATH": "/workspaces/emhass/data/",
-        }
+      "name": "Python: Current File",
+      "type": "python",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "EMHASS run",
+      "type": "python",
+      "request": "launch",
+      "program": "web_server.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}/src/emhass/",
+      "purpose":["debug-in-terminal"],
+      "justMyCode": true,
+      "env": {
+        "CONFIG_PATH": "/workspaces/emhass/config_emhass.yaml",
+        "OPTIONS_PATH": "/workspaces/emhass/options.json",
+        "SECRETS_PATH": "/workspaces/emhass/secrets_emhass.yaml",
+        "DATA_PATH": "/workspaces/emhass/data/",
+      }
     },
     {
       "name": "EMHASS run ADDON",
