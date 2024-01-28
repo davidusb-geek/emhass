@@ -322,13 +322,13 @@ if __name__ == "__main__":
         # Some data from options
         logging_level = options['logging_level']
         url_from_options = options.get('hass_url', 'empty')
-        if url_from_options == 'empty':
+        if url_from_options == 'empty' or url_from_options == '':
             url = hass_url+"/config"
         else:
             hass_url = url_from_options
             url = hass_url+"/api/config"
         token_from_options = options.get('long_lived_token', 'empty')
-        if token_from_options == 'empty':
+        if token_from_options == 'empty' or token_from_options == '':
             long_lived_token = key
         else:
             long_lived_token = token_from_options
@@ -336,7 +336,7 @@ if __name__ == "__main__":
             "Authorization": "Bearer " + long_lived_token,
             "content-type": "application/json"
         }
-        response = get(url, headers=headers)
+        response = get(url, headers=headers)  
         config_hass = response.json()
         params_secrets = {
             'hass_url': hass_url,
