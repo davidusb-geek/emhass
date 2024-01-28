@@ -19,9 +19,9 @@ import plotly.io as pio
 pio.renderers.default = 'browser'
 pd.options.plotting.backend = "plotly"
 
-from emhass.retrieve_hass import retrieve_hass
-from emhass.optimization import optimization
-from emhass.forecast import forecast
+from emhass.retrieve_hass import RetrieveHass
+from emhass.optimization import Optimization
+from emhass.forecast import Forecast
 from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
 # the root folder
@@ -31,14 +31,14 @@ logger, ch = get_logger(__name__, root, save_to_file=False)
 
 def get_forecast_optim_objects(retrieve_hass_conf, optim_conf, plant_conf,
                                params, get_data_from_file):
-    fcst = forecast(retrieve_hass_conf, optim_conf, plant_conf,
+    fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
                     params, root, logger, get_data_from_file=get_data_from_file)
     df_weather = fcst.get_weather_forecast(method='solar.forecast')
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
     P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
     df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
     df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
-    opt = optimization(retrieve_hass_conf, optim_conf, plant_conf, 
+    opt = Optimization(retrieve_hass_conf, optim_conf, plant_conf, 
                        fcst.var_load_cost, fcst.var_prod_price,  
                        'cost', root, logger)
     return fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt
@@ -152,9 +152,9 @@ if __name__ == '__main__':
     else:
     
         retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(config_path, use_secrets=True, params = json.dumps(params))
-        rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
-                            retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
-                            params, root, logger)
+        rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
+                          retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
+                          params, root, logger)
         days_list = get_days_list(retrieve_hass_conf['days_to_retrieve'])
         var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
         rh.get_data(days_list, var_list,

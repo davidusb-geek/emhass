@@ -11,6 +11,7 @@ from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim,
 from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune
 from emhass.command_line import publish_data
 from emhass.command_line import main
+from emhass.web_server import get_injection_dict
 from emhass import utils
 
 # the root folder
@@ -123,7 +124,22 @@ class TestCommandLineUtils(unittest.TestCase):
                                               action, logger, get_data_from_file=True)
         self.assertTrue(input_data_dict['fcst'].optim_conf['load_cost_forecast_method']=='list')
         self.assertTrue(input_data_dict['fcst'].optim_conf['prod_price_forecast_method']=='list')
-        
+    
+    def test_webserver_get_injection_dict(self):
+        # First perform a day-ahead optimization
+        config_path = pathlib.Path(root+'/config_emhass.yaml')
+        base_path = str(config_path.parent)
+        costfun = 'profit'
+        action = 'dayahead-optim'
+        params = copy.deepcopy(json.loads(self.params_json))
+        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+                                              action, logger, get_data_from_file=True)
+        opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
+        injection_dict = get_injection_dict(opt_res)
+        self.assertIsInstance(injection_dict, dict)
+        self.assertIsInstance(injection_dict['table1'], str)
+        self.assertIsInstance(injection_dict['table2'], str)
+    
     def test_dayahead_forecast_optim(self):
         config_path = pathlib.Path(root+'/config_emhass.yaml')
         base_path = str(config_path.parent)

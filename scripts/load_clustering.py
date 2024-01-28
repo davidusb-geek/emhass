@@ -9,8 +9,8 @@ import plotly.io as pio
 pio.renderers.default = 'browser'
 pd.options.plotting.backend = "plotly"
 
-from emhass.retrieve_hass import retrieve_hass
-from emhass.forecast import forecast
+from emhass.retrieve_hass import RetrieveHass
+from emhass.forecast import Forecast
 from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
 from sklearn.cluster import KMeans
@@ -55,7 +55,7 @@ if __name__ == '__main__':
     else:
         logger.info("Using EMHASS methods to retrieve the new forecast model train data")
         retrieve_hass_conf, _, _ = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True)
-        rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
+        rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
         retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
         params, root, logger, get_data_from_file=False)
 

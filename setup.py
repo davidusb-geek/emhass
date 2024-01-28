@@ -19,7 +19,7 @@ long_description = (here / 'README.md').read_text(encoding='utf-8')
 
 setup(
     name='emhass',  # Required
-    version='0.6.2',  # Required
+    version='0.7.0',  # Required
     description='An Energy Management System for Home Assistant',  # Optional
     long_description=long_description,  # Optional
     long_description_content_type='text/markdown',  # Optional (see note above)
@@ -31,7 +31,7 @@ setup(
         'Intended Audience :: Developers',
         'Topic :: Software Development :: Build Tools',
         'License :: OSI Approved :: MIT License',
-        'Programming Language :: Python :: 3.10',
+        'Programming Language :: Python :: 3.11',
         "Operating System :: OS Independent",
     ],
     keywords='energy, management, optimization, hass',  # Optional
@@ -43,15 +43,19 @@ setup(
         'numpy<=1.26',
         'scipy<=1.11.3',
         'pandas<=2.0.3',
-        'pvlib>=0.10.1',
+        'pvlib>=0.10.2',
         'protobuf>=3.0.0',
         'pytz>=2021.1',
         'requests>=2.25.1',
         'beautifulsoup4>=4.9.3',
+        'h5py==3.10.0',
         'pulp>=2.4',
         'pyyaml>=5.4.1',
         'tables<=3.9.1',
         'skforecast==0.11.0',
+        'flask>=2.0.3',
+        'waitress>=2.1.1',
+        'plotly>=5.6.0'
     ],  # Optional
     entry_points={  # Optional
         'console_scripts': [
