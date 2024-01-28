@@ -16,10 +16,10 @@ from typing import Optional, Tuple
 from distutils.util import strtobool
 
 from importlib.metadata import version
-from emhass.retrieve_hass import retrieve_hass
-from emhass.forecast import forecast
-from emhass.machine_learning_forecaster import mlforecaster
-from emhass.optimization import optimization
+from emhass.retrieve_hass import RetrieveHass
+from emhass.forecast import Forecast
+from emhass.machine_learning_forecaster import MLForecaster
+from emhass.optimization import Optimization
 from emhass import utils
 
 
@@ -58,12 +58,12 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         runtimeparams, params, retrieve_hass_conf, 
         optim_conf, plant_conf, set_type, logger)
     # Define main objects
-    rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
+    rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
                        retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'], 
                        params, base_path, logger, get_data_from_file=get_data_from_file)
-    fcst = forecast(retrieve_hass_conf, optim_conf, plant_conf,
+    fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
                     params, base_path, logger, get_data_from_file=get_data_from_file)
-    opt = optimization(retrieve_hass_conf, optim_conf, plant_conf, 
+    opt = Optimization(retrieve_hass_conf, optim_conf, plant_conf, 
                        fcst.var_load_cost, fcst.var_prod_price, 
                        costfun, base_path, logger)
     # Perform setup based on type of action
@@ -288,7 +288,7 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     return opt_res_naive_mpc
 
 def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
-    debug: Optional[bool] = False) -> Tuple[pd.DataFrame, pd.DataFrame, mlforecaster]:
+    debug: Optional[bool] = False) -> Tuple[pd.DataFrame, pd.DataFrame, MLForecaster]:
     """Perform a forecast model fit from training data retrieved from Home Assistant.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
@@ -309,7 +309,7 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
     perform_backtest = input_data_dict['params']['passed_data']['perform_backtest']
     root = input_data_dict['root']
     # The ML forecaster object
-    mlf = mlforecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
+    mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
     # Fit the ML model
     df_pred, df_pred_backtest = mlf.fit(split_date_delta=split_date_delta, 
                                         perform_backtest=perform_backtest)
@@ -322,7 +322,7 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
 
 def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     use_last_window: Optional[bool] = True, debug: Optional[bool] = False,
-    mlf: Optional[mlforecaster] = None) -> pd.DataFrame:
+    mlf: Optional[MLForecaster] = None) -> pd.DataFrame:
     r"""Perform a forecast model predict using a previously trained skforecast model.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
@@ -388,8 +388,8 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     return predictions
 
 def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
-    debug: Optional[bool] = False, mlf: Optional[mlforecaster] = None
-    ) -> Tuple[pd.DataFrame, mlforecaster]:
+    debug: Optional[bool] = False, mlf: Optional[MLForecaster] = None
+    ) -> Tuple[pd.DataFrame, MLForecaster]:
     """Tune a forecast model hyperparameters using bayesian optimization.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions

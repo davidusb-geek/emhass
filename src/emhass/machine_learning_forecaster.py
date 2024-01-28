@@ -20,7 +20,7 @@ from skforecast.model_selection import backtesting_forecaster
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
-class mlforecaster:
+class MLForecaster:
     r"""
     A forecaster class using machine learning models with auto-regressive approach and features\
     based on timestamp information (hour, day, week, etc).
@@ -105,7 +105,7 @@ class mlforecaster:
                                        freq=data_last_window.index.freq)
         exog = pd.DataFrame({var_name:[np.nan]*periods},
                             index=forecast_dates)
-        exog = mlforecaster.add_date_features(exog)
+        exog = MLForecaster.add_date_features(exog)
         return exog
     
     def fit(self, split_date_delta: Optional[str] = '48h', perform_backtest: Optional[bool] = False
@@ -124,7 +124,7 @@ class mlforecaster:
         self.logger.info("Performing a forecast model fit for "+self.model_type)
         # Preparing the data: adding exogenous features
         self.data_exo = pd.DataFrame(index=self.data.index)
-        self.data_exo = mlforecaster.add_date_features(self.data_exo)
+        self.data_exo = MLForecaster.add_date_features(self.data_exo)
         self.data_exo[self.var_model] = self.data[self.var_model]
         self.data_exo = self.data_exo.interpolate(method='linear', axis=0, limit=None)
         # train/test split
@@ -174,7 +174,7 @@ class mlforecaster:
                 initial_train_size = None,
                 fixed_train_size   = False,
                 steps              = self.num_lags,
-                metric             = mlforecaster.neg_r2_score,
+                metric             = MLForecaster.neg_r2_score,
                 refit              = False,
                 verbose            = False
             )
@@ -202,12 +202,12 @@ class mlforecaster:
         else:
             data_last_window = data_last_window.interpolate(method='linear', axis=0, limit=None)
             if self.is_tuned:
-                exog = mlforecaster.generate_exog(data_last_window, self.lags_opt, self.var_model)
+                exog = MLForecaster.generate_exog(data_last_window, self.lags_opt, self.var_model)
                 predictions = self.forecaster.predict(steps=self.lags_opt, 
                                                       last_window=data_last_window[self.var_model],
                                                       exog=exog.drop(self.var_model, axis=1))
             else:
-                exog = mlforecaster.generate_exog(data_last_window, self.num_lags, self.var_model)
+                exog = MLForecaster.generate_exog(data_last_window, self.num_lags, self.var_model)
                 predictions = self.forecaster.predict(steps=self.num_lags, 
                                                       last_window=data_last_window[self.var_model],
                                                       exog=exog.drop(self.var_model, axis=1))
@@ -276,7 +276,7 @@ class mlforecaster:
             lags_grid          = lags_grid,
             search_space       = search_space,
             steps              = num_lags,
-            metric             = mlforecaster.neg_r2_score,
+            metric             = MLForecaster.neg_r2_score,
             refit              = refit,
             initial_train_size = len(self.data_exo.loc[:self.date_train]),
             fixed_train_size   = True,

@@ -24,9 +24,12 @@ app = Flask(__name__)
 def get_injection_dict(df, plot_size = 1366):
     cols_p = [i for i in df.columns.to_list() if 'P_' in i]
     # Let's round the data in the DF
+    optim_status = df['optim_status'].unique().item()
+    df.drop('optim_status', axis=1, inplace=True)
     cols_else = [i for i in df.columns.to_list() if 'P_' not in i]
-    df.loc[:, cols_p] = df[cols_p].astype(int)
-    df.loc[:, cols_else] = df[cols_else].round(2)
+    df = df.apply(pd.to_numeric)
+    df[cols_p] = df[cols_p].astype(int)
+    df[cols_else] = df[cols_else].round(3)
     # Create plots
     n_colors = len(cols_p)
     colors = px.colors.sample_colorscale("jet", [n/(n_colors -1) for n in range(n_colors)])
@@ -54,7 +57,9 @@ def get_injection_dict(df, plot_size = 1366):
     # The tables
     table1 = df.reset_index().to_html(classes='mystyle', index=False)
     cost_cols = [i for i in df.columns if 'cost_' in i]
-    table2 = df[cost_cols].reset_index().sum(numeric_only=True).to_frame(name='Cost Totals').reset_index().to_html(classes='mystyle', index=False)
+    table2 = df[cost_cols].reset_index().sum(numeric_only=True)
+    table2['optim_status'] = optim_status
+    table2 = table2.to_frame(name='Value').reset_index(names='Variable').to_html(classes='mystyle', index=False)
     # The dict of plots
     injection_dict = {}
     injection_dict['title'] = '<h2>EMHASS optimization results</h2>'
@@ -142,7 +147,7 @@ def build_params(params, params_secrets, options, addon):
         try:
             params['optim_conf']['set_def_constant'] = [i['set_deferrable_load_single_constant'] for i in options.get('list_set_deferrable_load_single_constant')]
         except:
-            app.logger.debug("no list_set_deferrable_load_single_constant, defaulting to config file")    
+            app.logger.debug("no list_set_deferrable_load_single_constant, defaulting to config file")
         try:
             start_hours_list = [i['peak_hours_periods_start_hours'] for i in options['list_peak_hours_periods_start_hours']]
             end_hours_list = [i['peak_hours_periods_end_hours'] for i in options['list_peak_hours_periods_end_hours']]
@@ -150,7 +155,7 @@ def build_params(params, params_secrets, options, addon):
             list_hp_periods_list = [{'period_hp_'+str(i+1):[{'start':start_hours_list[i]},{'end':end_hours_list[i]}]} for i in range(num_peak_hours)]
             params['optim_conf']['list_hp_periods'] = list_hp_periods_list
         except:
-            app.logger.debug("no list_peak_hours_periods_start_hours, defaulting to config file")    
+            app.logger.debug("no list_peak_hours_periods_start_hours, defaulting to config file")
         params['optim_conf']['load_cost_hp'] = options.get('load_peak_hours_cost',params['optim_conf']['load_cost_hp'])
         params['optim_conf']['load_cost_hc'] = options.get('load_offpeak_hours_cost', params['optim_conf']['load_cost_hc'])
         params['optim_conf']['prod_price_forecast_method'] = options.get('production_price_forecast_method', params['optim_conf']['prod_price_forecast_method'])
@@ -168,37 +173,37 @@ def build_params(params, params_secrets, options, addon):
         try:
             params['optim_conf']['def_start_timestep'] = [i['start_timesteps_of_each_deferrable_load'] for i in options.get('list_start_timesteps_of_each_deferrable_load')]
         except:
-            app.logger.debug("no list_start_timesteps_of_each_deferrable_load, defaulting to config file")        
+            app.logger.debug("no list_start_timesteps_of_each_deferrable_load, defaulting to config file")
         try:
             params['optim_conf']['def_end_timestep'] = [i['end_timesteps_of_each_deferrable_load'] for i in options.get('list_end_timesteps_of_each_deferrable_load')]
         except:
-            app.logger.debug("no list_end_timesteps_of_each_deferrable_load, defaulting to config file")   
+            app.logger.debug("no list_end_timesteps_of_each_deferrable_load, defaulting to config file")
         # Updating variables in plant_con
         params['plant_conf']['P_grid_max'] = options.get('maximum_power_from_grid',params['plant_conf']['P_grid_max'])
         try:
             params['plant_conf']['module_model'] = [i['pv_module_model'] for i in options.get('list_pv_module_model')]
         except:
-            app.logger.debug("no list_pv_module_model, defaulting to config file")       
+            app.logger.debug("no list_pv_module_model, defaulting to config file")
         try:
             params['plant_conf']['inverter_model'] = [i['pv_inverter_model'] for i in options.get('list_pv_inverter_model')]
         except:
-            app.logger.debug("no list_pv_inverter_model, defaulting to config file")          
+            app.logger.debug("no list_pv_inverter_model, defaulting to config file")
         try:
             params['plant_conf']['surface_tilt'] = [i['surface_tilt'] for i in options.get('list_surface_tilt')]
         except:
-            app.logger.debug("no list_surface_tilt, defaulting to config file")        
+            app.logger.debug("no list_surface_tilt, defaulting to config file")
         try:
             params['plant_conf']['surface_azimuth'] = [i['surface_azimuth'] for i in options.get('list_surface_azimuth')]
         except:
-            app.logger.debug("no list_surface_azimuth, defaulting to config file")      
+            app.logger.debug("no list_surface_azimuth, defaulting to config file")
         try:
             params['plant_conf']['modules_per_string'] = [i['modules_per_string'] for i in options.get('list_modules_per_string')]
         except:
-            app.logger.debug("no list_modules_per_string, defaulting to config file")      
+            app.logger.debug("no list_modules_per_string, defaulting to config file")
         try:
             params['plant_conf']['strings_per_inverter'] = [i['strings_per_inverter'] for i in options.get('list_strings_per_inverter')]
         except:
-            app.logger.debug("no list_strings_per_inverter, defaulting to config file")        
+            app.logger.debug("no list_strings_per_inverter, defaulting to config file")
         params['plant_conf']['Pd_max'] = options.get('battery_discharge_power_max',params['plant_conf']['Pd_max']) 
         params['plant_conf']['Pc_max'] = options.get('battery_charge_power_max',params['plant_conf']['Pc_max'])
         params['plant_conf']['eta_disch'] = options.get('battery_discharge_efficiency',params['plant_conf']['eta_disch'])

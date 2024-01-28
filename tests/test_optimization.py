@@ -8,9 +8,9 @@ import pathlib
 import pickle
 from datetime import datetime, timezone
 
-from emhass.retrieve_hass import retrieve_hass
-from emhass.optimization import optimization
-from emhass.forecast import forecast
+from emhass.retrieve_hass import RetrieveHass
+from emhass.optimization import Optimization
+from emhass.forecast import Forecast
 from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
 # the root folder
@@ -26,9 +26,9 @@ class TestOptimization(unittest.TestCase):
         retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=False)
         self.retrieve_hass_conf, self.optim_conf, self.plant_conf = \
             retrieve_hass_conf, optim_conf, plant_conf
-        self.rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
-                           self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
-                           params, root, logger)
+        self.rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
+                               self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
+                               params, root, logger)
         if get_data_from_file:
             with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'rb') as inp:
                 self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
@@ -43,7 +43,7 @@ class TestOptimization(unittest.TestCase):
                              var_interp = self.retrieve_hass_conf['var_interp'])
         self.df_input_data = self.rh.df_final.copy()
         
-        self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf,
+        self.fcst = Forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf,
                              params, root, logger, get_data_from_file=get_data_from_file)
         self.df_weather = self.fcst.get_weather_forecast(method='csv')
         self.P_PV_forecast = self.fcst.get_power_from_weather(self.df_weather)
@@ -52,7 +52,7 @@ class TestOptimization(unittest.TestCase):
         self.df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
         
         self.costfun = 'profit'
-        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
         self.df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data)
@@ -84,7 +84,7 @@ class TestOptimization(unittest.TestCase):
         self.optim_conf.update({'set_nocharge_from_grid': True})
         self.optim_conf.update({'set_battery_dynamic': True})
         self.optim_conf.update({'set_nodischarge_to_grid': True})
-        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
@@ -104,7 +104,7 @@ class TestOptimization(unittest.TestCase):
         # Test treat_def_as_semi_cont and set_def_constant constraints
         self.optim_conf.update({'treat_def_as_semi_cont': [True, True]})
         self.optim_conf.update({'set_def_constant': [True, True]})
-        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
@@ -112,7 +112,7 @@ class TestOptimization(unittest.TestCase):
         self.assertTrue(self.opt.optim_status == 'Optimal')
         self.optim_conf.update({'treat_def_as_semi_cont': [False, True]})
         self.optim_conf.update({'set_def_constant': [True, True]})
-        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
@@ -120,7 +120,7 @@ class TestOptimization(unittest.TestCase):
         self.assertTrue(self.opt.optim_status == 'Optimal')
         self.optim_conf.update({'treat_def_as_semi_cont': [False, True]})
         self.optim_conf.update({'set_def_constant': [False, True]})
-        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
@@ -128,7 +128,7 @@ class TestOptimization(unittest.TestCase):
         self.assertTrue(self.opt.optim_status == 'Optimal')
         self.optim_conf.update({'treat_def_as_semi_cont': [False, False]})
         self.optim_conf.update({'set_def_constant': [False, True]})
-        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
@@ -136,7 +136,7 @@ class TestOptimization(unittest.TestCase):
         self.assertTrue(self.opt.optim_status == 'Optimal')
         self.optim_conf.update({'treat_def_as_semi_cont': [False, False]})
         self.optim_conf.update({'set_def_constant': [False, False]})
-        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
@@ -149,7 +149,7 @@ class TestOptimization(unittest.TestCase):
         soc_init = None
         soc_final = 0.3
         self.optim_conf['set_total_pv_sell'] = True
-        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
         
@@ -167,7 +167,7 @@ class TestOptimization(unittest.TestCase):
         
     def test_perform_dayahead_forecast_optim_costfun_selfconso(self):
         costfun = 'self-consumption'
-        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 costfun, root, logger)
         self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
@@ -181,7 +181,7 @@ class TestOptimization(unittest.TestCase):
         
     def test_perform_dayahead_forecast_optim_costfun_cost(self):
         costfun = 'cost'
-        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 costfun, root, logger)
         self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
@@ -197,7 +197,7 @@ class TestOptimization(unittest.TestCase):
         self.optim_conf['treat_def_as_semi_cont'] = [False, False]
         self.optim_conf['set_total_pv_sell'] = True
         self.optim_conf['set_def_constant'] = [True, True]
-        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
         self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
@@ -211,7 +211,7 @@ class TestOptimization(unittest.TestCase):
         solver_list = pl.listSolvers(onlyAvailable=True)
         for solver in solver_list:
             self.optim_conf['lp_solver'] = solver
-            self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+            self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                     self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                     self.costfun, root, logger)
             self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
@@ -227,7 +227,7 @@ class TestOptimization(unittest.TestCase):
         self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
         # Test the battery
         self.optim_conf.update({'set_use_battery': True})
-        self.opt = optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, root, logger)
         prediction_horizon = 10

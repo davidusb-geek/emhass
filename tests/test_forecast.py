@@ -8,11 +8,11 @@ import pathlib, pickle, json, copy, yaml
 import bz2
 import _pickle as cPickle
 
-from emhass.retrieve_hass import retrieve_hass
+from emhass.retrieve_hass import RetrieveHass
 from emhass.command_line import set_input_data_dict
-from emhass.machine_learning_forecaster import mlforecaster
-from emhass.forecast import forecast
-from emhass.optimization import optimization
+from emhass.machine_learning_forecaster import MLForecaster
+from emhass.forecast import Forecast
+from emhass.optimization import Optimization
 from emhass.utils import get_root, get_logger, get_yaml_parse, treat_runtimeparams, get_days_list
 
 # the root folder
@@ -44,9 +44,9 @@ class TestForecast(unittest.TestCase):
         retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root) / 'config_emhass.yaml', use_secrets=False)
         self.retrieve_hass_conf, self.optim_conf, self.plant_conf = \
             retrieve_hass_conf, optim_conf, plant_conf
-        self.rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
-                           self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
-                           params, root, logger)
+        self.rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
+                               self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
+                               params, root, logger)
         if self.get_data_from_file:
             with open(pathlib.Path(root) / 'data' / 'test_df_final.pkl', 'rb') as inp:
                 self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
@@ -61,7 +61,7 @@ class TestForecast(unittest.TestCase):
                              var_interp = self.retrieve_hass_conf['var_interp'])
         self.df_input_data = self.rh.df_final.copy()
         
-        self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+        self.fcst = Forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                              params, root, logger, get_data_from_file=self.get_data_from_file)
         # The default for test is csv read
         self.df_weather_scrap = self.fcst.get_weather_forecast(method='csv')
@@ -69,7 +69,7 @@ class TestForecast(unittest.TestCase):
         self.P_load_forecast = self.fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
         self.df_input_data_dayahead = pd.concat([self.P_PV_forecast, self.P_load_forecast], axis=1)
         self.df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
-        self.opt = optimization(retrieve_hass_conf, optim_conf, plant_conf, 
+        self.opt = Optimization(retrieve_hass_conf, optim_conf, plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price, 
                                 'profit', root, logger)
         self.input_data_dict = {
@@ -201,9 +201,9 @@ class TestForecast(unittest.TestCase):
         params, retrieve_hass_conf, optim_conf, plant_conf = treat_runtimeparams(
             runtimeparams_json, params_json, retrieve_hass_conf, 
             optim_conf, plant_conf, set_type, logger)
-        rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
-                           retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
-                           params, root, logger)
+        rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
+                          retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
+                          params, root, logger)
         if self.get_data_from_file:
             with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'rb') as inp:
                 rh.df_final, days_list, var_list = pickle.load(inp)
@@ -218,7 +218,7 @@ class TestForecast(unittest.TestCase):
                         var_interp = retrieve_hass_conf['var_interp'])
         df_input_data = rh.df_final.copy()
         
-        fcst = forecast(retrieve_hass_conf, optim_conf, plant_conf, 
+        fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf, 
                         params_json, root, logger, get_data_from_file=True)
         df_input_data = copy.deepcopy(df_input_data).iloc[-49:-1]
         P_PV_forecast = fcst.get_weather_forecast(method='list')
@@ -276,9 +276,9 @@ class TestForecast(unittest.TestCase):
         params, retrieve_hass_conf, optim_conf, plant_conf = treat_runtimeparams(
             runtimeparams_json, params_json, retrieve_hass_conf, 
             optim_conf, plant_conf, set_type, logger)
-        rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
-                           retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
-                           params, root, logger)
+        rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
+                          retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
+                          params, root, logger)
         if self.get_data_from_file:
             with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'rb') as inp:
                 rh.df_final, days_list, var_list = pickle.load(inp)
@@ -293,7 +293,7 @@ class TestForecast(unittest.TestCase):
                         var_interp = retrieve_hass_conf['var_interp'])
         df_input_data = rh.df_final.copy()
         
-        fcst = forecast(retrieve_hass_conf, optim_conf, plant_conf, 
+        fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf, 
                         params_json, root, logger, get_data_from_file=True)
         df_input_data = copy.deepcopy(df_input_data).iloc[-49:-1]
         P_PV_forecast = fcst.get_weather_forecast()
@@ -325,7 +325,7 @@ class TestForecast(unittest.TestCase):
         self.plant_conf['surface_azimuth'] = [270, 90]
         self.plant_conf['modules_per_string'] = [8, 8]
         self.plant_conf['strings_per_inverter'] = [1, 1]
-        self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+        self.fcst = Forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                              None, root, logger, get_data_from_file=self.get_data_from_file)
         df_weather_scrap = self.fcst.get_weather_forecast(method='csv')
         P_PV_forecast = self.fcst.get_power_from_weather(df_weather_scrap)
@@ -337,7 +337,7 @@ class TestForecast(unittest.TestCase):
         # Test the mixed forecast
         params = json.dumps({'passed_data':{'alpha':0.5,'beta':0.5}})
         df_input_data = self.input_data_dict['rh'].df_final.copy()
-        self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+        self.fcst = Forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                              params, root, logger, get_data_from_file=self.get_data_from_file)
         df_weather_scrap = self.fcst.get_weather_forecast(method='csv')
         P_PV_forecast = self.fcst.get_power_from_weather(df_weather_scrap, set_mix_forecast=True, df_now=df_input_data)
@@ -358,7 +358,7 @@ class TestForecast(unittest.TestCase):
         # Test the mixed forecast
         params = json.dumps({'passed_data':{'alpha':0.5,'beta':0.5}})
         df_input_data = self.input_data_dict['rh'].df_final.copy()
-        self.fcst = forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+        self.fcst = Forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                              params, root, logger, get_data_from_file=self.get_data_from_file)
         P_load_forecast = self.fcst.get_load_forecast(set_mix_forecast=True, df_now=df_input_data)
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
@@ -400,7 +400,7 @@ class TestForecast(unittest.TestCase):
         var_model = input_data_dict['params']['passed_data']['var_model']
         sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
         num_lags = input_data_dict['params']['passed_data']['num_lags']
-        mlf = mlforecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
+        mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
         mlf.fit()
         P_load_forecast = input_data_dict['fcst'].get_load_forecast(method="mlforecaster", use_last_window=False, 
                                                                     debug=True, mlf=mlf)
