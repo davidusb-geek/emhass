@@ -5,6 +5,8 @@ import logging
 import pathlib
 import time
 from typing import Tuple
+import warnings
+
 import pandas as pd
 import numpy as np
 
@@ -13,14 +15,14 @@ from sklearn.linear_model import ElasticNet
 from sklearn.model_selection import train_test_split
 from sklearn.neighbors import KNeighborsRegressor
 
-import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning) 
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 class CsvPredictor:
     r"""
     A forecaster class using machine learning models.
     
-    This class uses the `skforecast` module and the machine learning models are from `scikit-learn`.
+    This class uses the `sklearn` module and the machine learning models are from `scikit-learn`.
     
     It exposes one main method:
     
@@ -28,11 +30,11 @@ class CsvPredictor:
     
     """
     def __init__(self, csv_file: str, independent_variables: list, dependent_variable: str, sklearn_model: str, new_values:list, root: str,
-                  logger: logging.Logger) -> None:
+                logger: logging.Logger) -> None:
         r"""Define constructor for the forecast class.
 
         :param csv_file: The name of the csv file to retrieve data from. \
-            Example: `prediction.csv`.
+            Example: `input_train_data.csv`.
         :type csv_file: str
         :param independent_variables: A list of independent variables. \
             Example: [`solar`, `degree_days`].
@@ -60,7 +62,6 @@ class CsvPredictor:
         self.logger = logger
         self.is_tuned = False
 
-    
     def load_data(self) -> pd.DataFrame:
         """Load the data."""
         filename_path = pathlib.Path(self.root) / self.csv_file
@@ -69,18 +70,16 @@ class CsvPredictor:
                 data = pd.read_csv(inp)
         else:
             self.logger.error("The cvs file was not found.")
-            raise ValueError(
-                f"The CSV file "+ self.csv_file +" was not found."
-            )
+            raise ValueError("The CSV file " + self.csv_file + " was not found.")
 
         required_columns = self.independent_variables
-        
+
         if not set(required_columns).issubset(data.columns):
             raise ValueError(
                 f"CSV file should contain the following columns: {', '.join(required_columns)}"
             )
         return data
-    
+
     def prepare_data(self, data) -> Tuple[np.ndarray, np.ndarray]:
         """
         Prepare the data.
@@ -94,10 +93,10 @@ class CsvPredictor:
         X = data[self.independent_variables].values
         y = data[self.dependent_variable].values
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-        
+
         return X_train, y_train
-    
-    
+
+
     def predict(self) -> np.ndarray:
         r"""The predict method to generate a forecast from a csv file.
 
@@ -109,7 +108,7 @@ class CsvPredictor:
         data = self.load_data()
         if data is not None:
             X, y = self.prepare_data(data)
-        
+
             if self.sklearn_model == 'LinearRegression':
                 base_model = LinearRegression()
             elif self.sklearn_model == 'ElasticNet':
@@ -127,9 +126,5 @@ class CsvPredictor:
             self.logger.info(f"Elapsed time for model fit: {time.time() - start_time}")
             new_values = np.array([self.new_values])
             prediction = self.forecaster.predict(new_values)
-        
+
             return prediction
-    
-    
-    
-    
