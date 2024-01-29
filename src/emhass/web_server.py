@@ -318,9 +318,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # Define the paths
-    DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
+    DATA_PATH = os.getenv("DATA_PATH", default="/data/")
     data_path = Path(DATA_PATH)
-    if args.addon:
+    if args.addon==1:
         OPTIONS_PATH = os.getenv('OPTIONS_PATH', default=data_path / "options.json")
         options_json = Path(OPTIONS_PATH)
         CONFIG_PATH = os.getenv("CONFIG_PATH", default="/usr/src/config_emhass.yaml")
@@ -333,11 +333,10 @@ if __name__ == "__main__":
         else:
             app.logger.error("options.json does not exists")
 
-        DATA_PATH = "/share/" #"/data/"
     else:
-        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
+        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/config_emhass.yaml")
         options = None
-        DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
+        DATA_PATH = os.getenv("DATA_PATH", default="/data/")
 
     config_path = Path(CONFIG_PATH)
     
@@ -398,14 +397,14 @@ if __name__ == "__main__":
                 'alt': config_hass['elevation']
             }
         except: #if addon testing (use secrets)
-            with open(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), 'r') as file:
+            with open(os.getenv('SECRETS_PATH', default='secrets_emhass.yaml'), 'r') as file:
                 params_secrets = yaml.load(file, Loader=yaml.FullLoader)
                 params_secrets['hass_url'] = hass_url
                 params_secrets['long_lived_token'] = long_lived_token
     else:
         costfun = os.getenv('LOCAL_COSTFUN', default='profit')
         logging_level = os.getenv('LOGGING_LEVEL', default='INFO')
-        with open(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), 'r') as file:
+        with open(os.getenv('SECRETS_PATH', default='secrets_emhass.yaml'), 'r') as file:
             params_secrets = yaml.load(file, Loader=yaml.FullLoader)
         hass_url = params_secrets['hass_url']
         
