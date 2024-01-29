@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.7.1] - 2024-01-29
+### Fix
+- Patched new version wer server issues accessing correct paths
+
 ## [0.7.0] - 2024-01-28
 ### Improvement
 - Added a new feature to provide operating time windows for deferrable loads. Thanks to @michaelpiron
