@@ -5,6 +5,10 @@ from typing import Tuple, Optional
 import numpy as np, pandas as pd
 import yaml, pytz, logging, pathlib, json, copy
 from datetime import datetime, timedelta, timezone
+import plotly.express as px
+pd.options.plotting.backend = "plotly"
+
+from emhass.machine_learning_forecaster import MLForecaster
 
 
 def get_root(file: str, num_parent: Optional[int] = 3) -> str:
@@ -438,6 +442,118 @@ def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
         plant_conf = input_conf.get('plant_conf', {})
     
     return retrieve_hass_conf, optim_conf, plant_conf
+
+def get_injection_dict(df: pd.DataFrame, plot_size: Optional[int] = 1366) -> dict:
+    """
+    Build a dictionary with graphs and tables for the webui.
+
+    :param df: The optimization result DataFrame
+    :type df: pd.DataFrame
+    :param plot_size: Size of the plot figure in pixels, defaults to 1366
+    :type plot_size: Optional[int], optional
+    :return: A dictionary containing the graphs and tables in html format
+    :rtype: dict
+    
+    """
+    cols_p = [i for i in df.columns.to_list() if 'P_' in i]
+    # Let's round the data in the DF
+    optim_status = df['optim_status'].unique().item()
+    df.drop('optim_status', axis=1, inplace=True)
+    cols_else = [i for i in df.columns.to_list() if 'P_' not in i]
+    df = df.apply(pd.to_numeric)
+    df[cols_p] = df[cols_p].astype(int)
+    df[cols_else] = df[cols_else].round(3)
+    # Create plots
+    n_colors = len(cols_p)
+    colors = px.colors.sample_colorscale("jet", [n/(n_colors -1) for n in range(n_colors)])
+    fig_0 = px.line(df[cols_p], title='Systems powers schedule after optimization results', 
+                    template='presentation', line_shape="hv",
+                    color_discrete_sequence=colors)
+    fig_0.update_layout(xaxis_title='Timestamp', yaxis_title='System powers (W)')
+    if 'SOC_opt' in df.columns.to_list():
+        fig_1 = px.line(df['SOC_opt'], title='Battery state of charge schedule after optimization results', 
+                        template='presentation',  line_shape="hv",
+                        color_discrete_sequence=colors)
+        fig_1.update_layout(xaxis_title='Timestamp', yaxis_title='Battery SOC (%)')
+    cols_cost = [i for i in df.columns.to_list() if 'cost_' in i or 'unit_' in i]
+    n_colors = len(cols_cost)
+    colors = px.colors.sample_colorscale("jet", [n/(n_colors -1) for n in range(n_colors)])
+    fig_2 = px.line(df[cols_cost], title='Systems costs obtained from optimization results', 
+                    template='presentation', line_shape="hv",
+                    color_discrete_sequence=colors)
+    fig_2.update_layout(xaxis_title='Timestamp', yaxis_title='System costs (currency)')
+    # Get full path to image
+    image_path_0 = fig_0.to_html(full_html=False, default_width='75%')
+    if 'SOC_opt' in df.columns.to_list():
+        image_path_1 = fig_1.to_html(full_html=False, default_width='75%')
+    image_path_2 = fig_2.to_html(full_html=False, default_width='75%')
+    # The tables
+    table1 = df.reset_index().to_html(classes='mystyle', index=False)
+    cost_cols = [i for i in df.columns if 'cost_' in i]
+    table2 = df[cost_cols].reset_index().sum(numeric_only=True)
+    table2['optim_status'] = optim_status
+    table2 = table2.to_frame(name='Value').reset_index(names='Variable').to_html(classes='mystyle', index=False)
+    # The dict of plots
+    injection_dict = {}
+    injection_dict['title'] = '<h2>EMHASS optimization results</h2>'
+    injection_dict['subsubtitle0'] = '<h4>Plotting latest optimization results</h4>'
+    injection_dict['figure_0'] = image_path_0
+    if 'SOC_opt' in df.columns.to_list():
+        injection_dict['figure_1'] = image_path_1
+    injection_dict['figure_2'] = image_path_2
+    injection_dict['subsubtitle1'] = '<h4>Last run optimization results table</h4>'
+    injection_dict['table1'] = table1
+    injection_dict['subsubtitle2'] = '<h4>Cost totals for latest optimization results</h4>'
+    injection_dict['table2'] = table2
+    return injection_dict
+
+def get_injection_dict_forecast_model_fit(df_fit_pred: pd.DataFrame, mlf: MLForecaster) -> dict:
+    """
+    Build a dictionary with graphs and tables for the webui for special MLF fit case.
+
+    :param df_fit_pred: The fit result DataFrame
+    :type df_fit_pred: pd.DataFrame
+    :param mlf: The MLForecaster object
+    :type mlf: MLForecaster
+    :return: A dictionary containing the graphs and tables in html format
+    :rtype: dict
+    """
+    fig = df_fit_pred.plot()
+    fig.layout.template = 'presentation'
+    fig.update_yaxes(title_text = mlf.model_type)
+    fig.update_xaxes(title_text = "Time")
+    image_path_0 = fig.to_html(full_html=False, default_width='75%')
+    # The dict of plots
+    injection_dict = {}
+    injection_dict['title'] = '<h2>Custom machine learning forecast model fit</h2>'
+    injection_dict['subsubtitle0'] = '<h4>Plotting train/test forecast model results for '+mlf.model_type+'</h4>'
+    injection_dict['subsubtitle0'] = '<h4>Forecasting variable '+mlf.var_model+'</h4>'
+    injection_dict['figure_0'] = image_path_0
+    return injection_dict
+
+def get_injection_dict_forecast_model_tune(df_pred_optim: pd.DataFrame, mlf: MLForecaster) -> dict:
+    """
+    Build a dictionary with graphs and tables for the webui for special MLF tune case.
+
+    :param df_pred_optim: The tune result DataFrame
+    :type df_pred_optim: pd.DataFrame
+    :param mlf: The MLForecaster object
+    :type mlf: MLForecaster
+    :return: A dictionary containing the graphs and tables in html format
+    :rtype: dict
+    """
+    fig = df_pred_optim.plot()
+    fig.layout.template = 'presentation'
+    fig.update_yaxes(title_text = mlf.model_type)
+    fig.update_xaxes(title_text = "Time")
+    image_path_0 = fig.to_html(full_html=False, default_width='75%')
+    # The dict of plots
+    injection_dict = {}
+    injection_dict['title'] = '<h2>Custom machine learning forecast model tune</h2>'
+    injection_dict['subsubtitle0'] = '<h4>Performed a tuning routine using bayesian optimization for '+mlf.model_type+'</h4>'
+    injection_dict['subsubtitle0'] = '<h4>Forecasting variable '+mlf.var_model+'</h4>'
+    injection_dict['figure_0'] = image_path_0
+    return injection_dict
 
 def get_days_list(days_to_retrieve: int) -> pd.date_range:
     """
