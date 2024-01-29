@@ -320,10 +320,10 @@ if __name__ == "__main__":
     # Define the paths
     DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
     data_path = Path(DATA_PATH)
-    if args.addon:
+    if args.addon==1:
         OPTIONS_PATH = os.getenv('OPTIONS_PATH', default=data_path / "options.json")
         options_json = Path(OPTIONS_PATH)
-        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/usr/src/config_emhass.yaml")
+        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
         hass_url = args.url
         key = args.key
         # Read options info
@@ -332,7 +332,7 @@ if __name__ == "__main__":
                 options = json.load(data)
         else:
             app.logger.error("options.json does not exists")
-
+        
         DATA_PATH = "/share/" #"/data/"
     else:
         CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
