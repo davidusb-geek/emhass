@@ -11,96 +11,16 @@ from pathlib import Path
 import os, json, argparse, pickle, yaml, logging
 from distutils.util import strtobool
 import pandas as pd
-import plotly.express as px
-pd.options.plotting.backend = "plotly"
+
 from emhass.command_line import set_input_data_dict
 from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim
 from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune
 from emhass.command_line import publish_data
+from emhass.utils import get_injection_dict, get_injection_dict_forecast_model_fit, get_injection_dict_forecast_model_tune
 
 # Define the Flask instance
 app = Flask(__name__)
 
-def get_injection_dict(df, plot_size = 1366):
-    cols_p = [i for i in df.columns.to_list() if 'P_' in i]
-    # Let's round the data in the DF
-    optim_status = df['optim_status'].unique().item()
-    df.drop('optim_status', axis=1, inplace=True)
-    cols_else = [i for i in df.columns.to_list() if 'P_' not in i]
-    df = df.apply(pd.to_numeric)
-    df[cols_p] = df[cols_p].astype(int)
-    df[cols_else] = df[cols_else].round(3)
-    # Create plots
-    n_colors = len(cols_p)
-    colors = px.colors.sample_colorscale("jet", [n/(n_colors -1) for n in range(n_colors)])
-    fig_0 = px.line(df[cols_p], title='Systems powers schedule after optimization results', 
-                    template='presentation', line_shape="hv",
-                    color_discrete_sequence=colors)
-    fig_0.update_layout(xaxis_title='Timestamp', yaxis_title='System powers (W)')
-    if 'SOC_opt' in df.columns.to_list():
-        fig_1 = px.line(df['SOC_opt'], title='Battery state of charge schedule after optimization results', 
-                        template='presentation',  line_shape="hv",
-                        color_discrete_sequence=colors)
-        fig_1.update_layout(xaxis_title='Timestamp', yaxis_title='Battery SOC (%)')
-    cols_cost = [i for i in df.columns.to_list() if 'cost_' in i or 'unit_' in i]
-    n_colors = len(cols_cost)
-    colors = px.colors.sample_colorscale("jet", [n/(n_colors -1) for n in range(n_colors)])
-    fig_2 = px.line(df[cols_cost], title='Systems costs obtained from optimization results', 
-                    template='presentation', line_shape="hv",
-                    color_discrete_sequence=colors)
-    fig_2.update_layout(xaxis_title='Timestamp', yaxis_title='System costs (currency)')
-    # Get full path to image
-    image_path_0 = fig_0.to_html(full_html=False, default_width='75%')
-    if 'SOC_opt' in df.columns.to_list():
-        image_path_1 = fig_1.to_html(full_html=False, default_width='75%')
-    image_path_2 = fig_2.to_html(full_html=False, default_width='75%')
-    # The tables
-    table1 = df.reset_index().to_html(classes='mystyle', index=False)
-    cost_cols = [i for i in df.columns if 'cost_' in i]
-    table2 = df[cost_cols].reset_index().sum(numeric_only=True)
-    table2['optim_status'] = optim_status
-    table2 = table2.to_frame(name='Value').reset_index(names='Variable').to_html(classes='mystyle', index=False)
-    # The dict of plots
-    injection_dict = {}
-    injection_dict['title'] = '<h2>EMHASS optimization results</h2>'
-    injection_dict['subsubtitle0'] = '<h4>Plotting latest optimization results</h4>'
-    injection_dict['figure_0'] = image_path_0
-    if 'SOC_opt' in df.columns.to_list():
-        injection_dict['figure_1'] = image_path_1
-    injection_dict['figure_2'] = image_path_2
-    injection_dict['subsubtitle1'] = '<h4>Last run optimization results table</h4>'
-    injection_dict['table1'] = table1
-    injection_dict['subsubtitle2'] = '<h4>Cost totals for latest optimization results</h4>'
-    injection_dict['table2'] = table2
-    return injection_dict
-
-def get_injection_dict_forecast_model_fit(df_fit_pred, mlf):
-    fig = df_fit_pred.plot()
-    fig.layout.template = 'presentation'
-    fig.update_yaxes(title_text = mlf.model_type)
-    fig.update_xaxes(title_text = "Time")
-    image_path_0 = fig.to_html(full_html=False, default_width='75%')
-    # The dict of plots
-    injection_dict = {}
-    injection_dict['title'] = '<h2>Custom machine learning forecast model fit</h2>'
-    injection_dict['subsubtitle0'] = '<h4>Plotting train/test forecast model results for '+mlf.model_type+'</h4>'
-    injection_dict['subsubtitle0'] = '<h4>Forecasting variable '+mlf.var_model+'</h4>'
-    injection_dict['figure_0'] = image_path_0
-    return injection_dict
-
-def get_injection_dict_forecast_model_tune(df_pred_optim, mlf):
-    fig = df_pred_optim.plot()
-    fig.layout.template = 'presentation'
-    fig.update_yaxes(title_text = mlf.model_type)
-    fig.update_xaxes(title_text = "Time")
-    image_path_0 = fig.to_html(full_html=False, default_width='75%')
-    # The dict of plots
-    injection_dict = {}
-    injection_dict['title'] = '<h2>Custom machine learning forecast model tune</h2>'
-    injection_dict['subsubtitle0'] = '<h4>Performed a tuning routine using bayesian optimization for '+mlf.model_type+'</h4>'
-    injection_dict['subsubtitle0'] = '<h4>Forecasting variable '+mlf.var_model+'</h4>'
-    injection_dict['figure_0'] = image_path_0
-    return injection_dict
 
 def build_params(params, params_secrets, options, addon):
     if addon == 1:
@@ -318,12 +238,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # Define the paths
-    DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
-    data_path = Path(DATA_PATH)
     if args.addon==1:
-        OPTIONS_PATH = os.getenv('OPTIONS_PATH', default=data_path / "options.json")
+        OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/data/options.json")
         options_json = Path(OPTIONS_PATH)
-        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
+        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/usr/src/config_emhass.yaml")
         hass_url = args.url
         key = args.key
         # Read options info
@@ -332,16 +250,27 @@ if __name__ == "__main__":
                 options = json.load(data)
         else:
             app.logger.error("options.json does not exists")
-        
         DATA_PATH = "/share/" #"/data/"
     else:
+        use_options = os.getenv('USE_OPTIONS', default=False)
+        if use_options:
+            OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
+            options_json = Path(OPTIONS_PATH)
+            # Read options info
+            if options_json.exists():
+                with options_json.open('r') as data:
+                    options = json.load(data)
+            else:
+                app.logger.error("options.json does not exists")
+        else:
+            options = None
         CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
-        options = None
         DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
 
     config_path = Path(CONFIG_PATH)
+    data_path = Path(DATA_PATH)
     
-    # Read example config file
+    # Read the example default config file
     if config_path.exists():
         with open(config_path, 'r') as file:
             config = yaml.load(file, Loader=yaml.FullLoader)
@@ -349,7 +278,7 @@ if __name__ == "__main__":
         optim_conf = config['optim_conf']
         plant_conf = config['plant_conf']
     else:
-        app.logger.error("config_emhass.json does not exists")
+        app.logger.error("Unable to open the default configuration yaml file")
         app.logger.info("Failed config_path: "+str(config_path))
 
     params = {}
@@ -385,23 +314,16 @@ if __name__ == "__main__":
             "Authorization": "Bearer " + long_lived_token,
             "content-type": "application/json"
         }
-        response = get(url, headers=headers)  
-        try:
-            config_hass = response.json()
-            
-            params_secrets = {
-                'hass_url': hass_url,
-                'long_lived_token': long_lived_token,
-                'time_zone': config_hass['time_zone'],
-                'lat': config_hass['latitude'],
-                'lon': config_hass['longitude'],
-                'alt': config_hass['elevation']
-            }
-        except: #if addon testing (use secrets)
-            with open(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), 'r') as file:
-                params_secrets = yaml.load(file, Loader=yaml.FullLoader)
-                params_secrets['hass_url'] = hass_url
-                params_secrets['long_lived_token'] = long_lived_token
+        response = get(url, headers=headers)
+        config_hass = response.json()
+        params_secrets = {
+            'hass_url': hass_url,
+            'long_lived_token': long_lived_token,
+            'time_zone': config_hass['time_zone'],
+            'lat': config_hass['latitude'],
+            'lon': config_hass['longitude'],
+            'alt': config_hass['elevation']
+        }
     else:
         costfun = os.getenv('LOCAL_COSTFUN', default='profit')
         logging_level = os.getenv('LOGGING_LEVEL', default='INFO')
