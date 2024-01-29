@@ -503,7 +503,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: Optional[int] = 1366) -> dic
     injection_dict['figure_2'] = image_path_2
     injection_dict['subsubtitle1'] = '<h4>Last run optimization results table</h4>'
     injection_dict['table1'] = table1
-    injection_dict['subsubtitle2'] = '<h4>Cost totals for latest optimization results</h4>'
+    injection_dict['subsubtitle2'] = '<h4>Summary table for latest optimization results</h4>'
     injection_dict['table2'] = table2
     return injection_dict
 
@@ -554,6 +554,139 @@ def get_injection_dict_forecast_model_tune(df_pred_optim: pd.DataFrame, mlf: MLF
     injection_dict['subsubtitle0'] = '<h4>Forecasting variable '+mlf.var_model+'</h4>'
     injection_dict['figure_0'] = image_path_0
     return injection_dict
+
+def build_params(params: dict, params_secrets: dict, options: dict, addon: int, logger: logging.Logger) -> dict:
+    """
+    Build the main params dictionary from the loaded options.json when using the add-on.
+
+    :param params: The main params dictionary
+    :type params: dict
+    :param params_secrets: The dictionary containing the secret protected variables
+    :type params_secrets: dict
+    :param options: The load dictionary from options.json
+    :type options: dict
+    :param addon: A "bool" to select if we are using the add-on
+    :type addon: int
+    :param logger: The logger object
+    :type logger: logging.Logger
+    :return: The builded dictionary
+    :rtype: dict
+    """
+    if addon == 1:
+        # Updating variables in retrieve_hass_conf
+        params['retrieve_hass_conf']['freq'] = options.get('optimization_time_step',params['retrieve_hass_conf']['freq'])
+        params['retrieve_hass_conf']['days_to_retrieve'] = options.get('historic_days_to_retrieve',params['retrieve_hass_conf']['days_to_retrieve'])
+        params['retrieve_hass_conf']['var_PV'] = options.get('sensor_power_photovoltaics',params['retrieve_hass_conf']['var_PV'])
+        params['retrieve_hass_conf']['var_load'] = options.get('sensor_power_load_no_var_loads',params['retrieve_hass_conf']['var_load'])
+        params['retrieve_hass_conf']['load_negative'] = options.get('load_negative',params['retrieve_hass_conf']['load_negative'])
+        params['retrieve_hass_conf']['set_zero_min'] = options.get('set_zero_min',params['retrieve_hass_conf']['set_zero_min'])
+        params['retrieve_hass_conf']['var_replace_zero'] = options.get('sensor_power_photovoltaics',params['retrieve_hass_conf']['var_replace_zero'])
+        params['retrieve_hass_conf']['var_interp'] = options.get('sensor_power_photovoltaics',params['retrieve_hass_conf']['var_PV']), options.get('sensor_power_load_no_var_loads',params['retrieve_hass_conf']['var_load'])
+        params['retrieve_hass_conf']['method_ts_round'] = options.get('method_ts_round',params['retrieve_hass_conf']['method_ts_round'])
+        # Update params Secrets if specified
+        params['params_secrets'] = params_secrets
+        params['params_secrets']['time_zone'] = options.get('time_zone',params_secrets['time_zone'])
+        params['params_secrets']['lat'] = options.get('Latitude',params_secrets['lat'])
+        params['params_secrets']['lon'] = options.get('Longitude',params_secrets['lon'])
+        params['params_secrets']['alt'] = options.get('Altitude',params_secrets['alt'])
+        # Updating variables in optim_conf
+        params['optim_conf']['set_use_battery'] = options.get('set_use_battery',params['optim_conf']['set_use_battery'])
+        params['optim_conf']['num_def_loads'] = options.get('number_of_deferrable_loads',params['optim_conf']['num_def_loads'])
+        try:
+            params['optim_conf']['P_deferrable_nom'] = [i['nominal_power_of_deferrable_loads'] for i in options.get('list_nominal_power_of_deferrable_loads')]
+        except:
+            logger.debug("no list_nominal_power_of_deferrable_loads, defaulting to config file")
+        try:    
+            params['optim_conf']['def_total_hours'] = [i['operating_hours_of_each_deferrable_load'] for i in options.get('list_operating_hours_of_each_deferrable_load')]
+        except:
+            logger.debug("no list_operating_hours_of_each_deferrable_load, defaulting to config file")
+        try:
+            params['optim_conf']['treat_def_as_semi_cont'] = [i['treat_deferrable_load_as_semi_cont'] for i in options.get('list_treat_deferrable_load_as_semi_cont')]
+        except:
+            logger.debug("no list_treat_deferrable_load_as_semi_cont, defaulting to config file")
+        params['optim_conf']['weather_forecast_method'] = options.get('weather_forecast_method',params['optim_conf']['weather_forecast_method'])
+        if params['optim_conf']['weather_forecast_method'] == "solcast":
+            params['retrieve_hass_conf']['solcast_api_key'] = options.get('optional_solcast_api_key',params['retrieve_hass_conf']['solcast_api_key'])
+            params['retrieve_hass_conf']['solcast_rooftop_id'] = options.get('optional_solcast_rooftop_id',params['retrieve_hass_conf']['solcast_rooftop_id'])
+        elif params['optim_conf']['weather_forecast_method'] == "solar.forecast":    
+            params['retrieve_hass_conf']['solar_forecast_kwp'] = options.get('optional_solar_forecast_kwp',params['retrieve_hass_conf']['solar_forecast_kwp'])
+        params['optim_conf']['load_forecast_method'] = options.get('load_forecast_method',params['optim_conf']['load_forecast_method'])
+        params['optim_conf']['delta_forecast'] = options.get('delta_forecast_daily',params['optim_conf']['delta_forecast'])
+        params['optim_conf']['load_cost_forecast_method'] = options.get('load_cost_forecast_method',params['optim_conf']['load_cost_forecast_method'])
+        try:
+            params['optim_conf']['set_def_constant'] = [i['set_deferrable_load_single_constant'] for i in options.get('list_set_deferrable_load_single_constant')]
+        except:
+            logger.debug("no list_set_deferrable_load_single_constant, defaulting to config file")
+        try:
+            start_hours_list = [i['peak_hours_periods_start_hours'] for i in options['list_peak_hours_periods_start_hours']]
+            end_hours_list = [i['peak_hours_periods_end_hours'] for i in options['list_peak_hours_periods_end_hours']]
+            num_peak_hours = len(start_hours_list)
+            list_hp_periods_list = [{'period_hp_'+str(i+1):[{'start':start_hours_list[i]},{'end':end_hours_list[i]}]} for i in range(num_peak_hours)]
+            params['optim_conf']['list_hp_periods'] = list_hp_periods_list
+        except:
+            logger.debug("no list_peak_hours_periods_start_hours, defaulting to config file")
+        params['optim_conf']['load_cost_hp'] = options.get('load_peak_hours_cost',params['optim_conf']['load_cost_hp'])
+        params['optim_conf']['load_cost_hc'] = options.get('load_offpeak_hours_cost', params['optim_conf']['load_cost_hc'])
+        params['optim_conf']['prod_price_forecast_method'] = options.get('production_price_forecast_method', params['optim_conf']['prod_price_forecast_method'])
+        params['optim_conf']['prod_sell_price'] = options.get('photovoltaic_production_sell_price',params['optim_conf']['prod_sell_price'])
+        params['optim_conf']['set_total_pv_sell'] = options.get('set_total_pv_sell',params['optim_conf']['set_total_pv_sell'])
+        params['optim_conf']['lp_solver'] = options.get('lp_solver',params['optim_conf']['lp_solver'])
+        params['optim_conf']['lp_solver_path'] = options.get('lp_solver_path',params['optim_conf']['lp_solver_path'])
+        params['optim_conf']['set_nocharge_from_grid'] = options.get('set_nocharge_from_grid',params['optim_conf']['set_nocharge_from_grid'])
+        params['optim_conf']['set_nodischarge_to_grid'] = options.get('set_nodischarge_to_grid',params['optim_conf']['set_nodischarge_to_grid'])
+        params['optim_conf']['set_battery_dynamic'] = options.get('set_battery_dynamic',params['optim_conf']['set_battery_dynamic'])
+        params['optim_conf']['battery_dynamic_max'] = options.get('battery_dynamic_max',params['optim_conf']['battery_dynamic_max'])
+        params['optim_conf']['battery_dynamic_min'] = options.get('battery_dynamic_min',params['optim_conf']['battery_dynamic_min'])
+        params['optim_conf']['weight_battery_discharge'] = options.get('weight_battery_discharge',params['optim_conf']['weight_battery_discharge'])
+        params['optim_conf']['weight_battery_charge'] = options.get('weight_battery_charge',params['optim_conf']['weight_battery_charge'])
+        try:
+            params['optim_conf']['def_start_timestep'] = [i['start_timesteps_of_each_deferrable_load'] for i in options.get('list_start_timesteps_of_each_deferrable_load')]
+        except:
+            logger.debug("no list_start_timesteps_of_each_deferrable_load, defaulting to config file")
+        try:
+            params['optim_conf']['def_end_timestep'] = [i['end_timesteps_of_each_deferrable_load'] for i in options.get('list_end_timesteps_of_each_deferrable_load')]
+        except:
+            logger.debug("no list_end_timesteps_of_each_deferrable_load, defaulting to config file")
+        # Updating variables in plant_con
+        params['plant_conf']['P_grid_max'] = options.get('maximum_power_from_grid',params['plant_conf']['P_grid_max'])
+        try:
+            params['plant_conf']['module_model'] = [i['pv_module_model'] for i in options.get('list_pv_module_model')]
+        except:
+            logger.debug("no list_pv_module_model, defaulting to config file")
+        try:
+            params['plant_conf']['inverter_model'] = [i['pv_inverter_model'] for i in options.get('list_pv_inverter_model')]
+        except:
+            logger.debug("no list_pv_inverter_model, defaulting to config file")
+        try:
+            params['plant_conf']['surface_tilt'] = [i['surface_tilt'] for i in options.get('list_surface_tilt')]
+        except:
+            logger.debug("no list_surface_tilt, defaulting to config file")
+        try:
+            params['plant_conf']['surface_azimuth'] = [i['surface_azimuth'] for i in options.get('list_surface_azimuth')]
+        except:
+            logger.debug("no list_surface_azimuth, defaulting to config file")
+        try:
+            params['plant_conf']['modules_per_string'] = [i['modules_per_string'] for i in options.get('list_modules_per_string')]
+        except:
+            logger.debug("no list_modules_per_string, defaulting to config file")
+        try:
+            params['plant_conf']['strings_per_inverter'] = [i['strings_per_inverter'] for i in options.get('list_strings_per_inverter')]
+        except:
+            logger.debug("no list_strings_per_inverter, defaulting to config file")
+        params['plant_conf']['Pd_max'] = options.get('battery_discharge_power_max',params['plant_conf']['Pd_max']) 
+        params['plant_conf']['Pc_max'] = options.get('battery_charge_power_max',params['plant_conf']['Pc_max'])
+        params['plant_conf']['eta_disch'] = options.get('battery_discharge_efficiency',params['plant_conf']['eta_disch'])
+        params['plant_conf']['eta_ch'] = options.get('battery_charge_efficiency',params['plant_conf']['eta_ch'])
+        params['plant_conf']['Enom'] = options.get('battery_nominal_energy_capacity',params['plant_conf']['Enom'])
+        params['plant_conf']['SOCmin'] = options.get('battery_minimum_state_of_charge',params['plant_conf']['SOCmin']) 
+        params['plant_conf']['SOCmax'] = options.get('battery_maximum_state_of_charge',params['plant_conf']['SOCmax']) 
+        params['plant_conf']['SOCtarget'] = options.get('battery_target_state_of_charge',params['plant_conf']['SOCtarget'])
+    else:
+        params['params_secrets'] = params_secrets
+    # The params dict
+    params['passed_data'] = {'pv_power_forecast':None,'load_power_forecast':None,'load_cost_forecast':None,'prod_price_forecast':None,
+                             'prediction_horizon':None,'soc_init':None,'soc_final':None,'def_total_hours':None,'def_start_timestep':None,'def_end_timestep':None,'alpha':None,'beta':None}
+    return params
 
 def get_days_list(days_to_retrieve: int) -> pd.date_range:
     """
