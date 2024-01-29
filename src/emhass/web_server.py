@@ -397,14 +397,14 @@ if __name__ == "__main__":
                 'alt': config_hass['elevation']
             }
         except: #if addon testing (use secrets)
-            with open(os.getenv('SECRETS_PATH', default='secrets_emhass.yaml'), 'r') as file:
+            with open(os.getenv('SECRETS_PATH', default='/secrets_emhass.yaml'), 'r') as file:
                 params_secrets = yaml.load(file, Loader=yaml.FullLoader)
                 params_secrets['hass_url'] = hass_url
                 params_secrets['long_lived_token'] = long_lived_token
     else:
         costfun = os.getenv('LOCAL_COSTFUN', default='profit')
         logging_level = os.getenv('LOGGING_LEVEL', default='INFO')
-        with open(os.getenv('SECRETS_PATH', default='secrets_emhass.yaml'), 'r') as file:
+        with open(os.getenv('SECRETS_PATH', default='/secrets_emhass.yaml'), 'r') as file:
             params_secrets = yaml.load(file, Loader=yaml.FullLoader)
         hass_url = params_secrets['hass_url']
         
