@@ -121,6 +121,7 @@ if __name__ == "__main__":
     parser.add_argument('--addon', type=strtobool, default='False', help='Define if we are usinng EMHASS with the add-on or in standalone mode')
     args = parser.parse_args()
     
+    use_options = os.getenv('USE_OPTIONS', default=False)
     # Define the paths
     if args.addon==1:
         OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/data/options.json")
@@ -136,7 +137,6 @@ if __name__ == "__main__":
             app.logger.error("options.json does not exists")
         DATA_PATH = "/share/" #"/data/"
     else:
-        use_options = os.getenv('USE_OPTIONS', default=False)
         if use_options:
             OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
             options_json = Path(OPTIONS_PATH)
@@ -216,7 +216,10 @@ if __name__ == "__main__":
         hass_url = params_secrets['hass_url']
         
     # Build params
-    params = build_params(params, params_secrets, options, args.addon, app.logger)
+    if use_options:
+        params = build_params(params, params_secrets, options, 1, app.logger)
+    else:
+        params = build_params(params, params_secrets, options, args.addon, app.logger)
     with open(str(data_path / 'params.pkl'), "wb") as fid:
         pickle.dump((config_path, params), fid)
 
