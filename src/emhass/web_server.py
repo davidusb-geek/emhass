@@ -134,7 +134,7 @@ if __name__ == "__main__":
                 options = json.load(data)
         else:
             app.logger.error("options.json does not exists")
-        DATA_PATH = "/share/" #"/data/"
+        DATA_PATH = os.getenv("DATA_PATH", default="/share/")
     else:
         use_options = os.getenv('USE_OPTIONS', default=False)
         if use_options:
@@ -199,15 +199,24 @@ if __name__ == "__main__":
             "content-type": "application/json"
         }
         response = get(url, headers=headers)
-        config_hass = response.json()
-        params_secrets = {
+        try:
+            config_hass = response.json()
+
+            params_secrets = {
             'hass_url': hass_url,
             'long_lived_token': long_lived_token,
             'time_zone': config_hass['time_zone'],
             'lat': config_hass['latitude'],
             'lon': config_hass['longitude'],
             'alt': config_hass['elevation']
-        }
+            }
+        except:
+            costfun = os.getenv('LOCAL_COSTFUN', default='profit')
+            logging_level = os.getenv('LOGGING_LEVEL', default='INFO')
+            with open(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), 'r') as file:
+                params_secrets = yaml.load(file, Loader=yaml.FullLoader)
+            hass_url = params_secrets['hass_url']
+
     else:
         costfun = os.getenv('LOCAL_COSTFUN', default='profit')
         logging_level = os.getenv('LOGGING_LEVEL', default='INFO')
