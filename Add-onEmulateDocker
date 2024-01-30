@@ -1,0 +1,72 @@
+#Test Add-on via Docker Emulation
+#Docker run example: 
+## docker build . -t emhass-addon -f AddonEmulateDocker && docker run  -e CONFIG_PATH="/usr/src/config_emhass.yaml" -e "SECRETS_PATH=/usr/src/secrets_emhass.yaml"  -e DATA_PATH="/data/" -e OPTIONS_PATH="/data/options.json" emhass-addon --url $URL --key $KEY
+FROM --platform=$BUILDPLATFORM debian:stable AS build
+WORKDIR /usr/src
+
+# copy the requirements file into the image
+COPY ./requirements.txt /usr/src/requirements.txt
+
+# Setup
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libffi-dev \
+        python3.11 \
+        python3 \
+        python3-pip \
+        python3-dev \
+        git \
+        build-essential \
+        gcc \
+        coinor-cbc \
+        coinor-libcbc-dev \
+        libglpk-dev \
+        glpk-utils \
+        libhdf5-dev \
+        libhdf5-serial-dev \
+        netcdf-bin \
+        libnetcdf-dev \
+        pkg-config \
+        gfortran \
+        libatlas-base-dev \
+    && ln -s /usr/include/hdf5/serial /usr/include/hdf5/include \
+    && export HDF5_DIR=/usr/include/hdf5 \
+    && pip3 install --extra-index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -U setuptools wheel \
+    && pip3 install --extra-index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -r requirements.txt \
+    && apt-get purge -y --auto-remove \
+        python3-pip \
+        python3-dev \
+        git \
+        build-essential \
+        libhdf5-dev \
+        libhdf5-serial-dev \
+        pkg-config \
+        gfortran \
+    && rm -rf /var/lib/apt/lists/*
+
+#install local emhass 
+#RUN git clone https://github.com/davidusb-geek/emhass.git
+#pip install emhass (original)
+COPY ./. /tmp/emhass
+WORKDIR /tmp/emhass
+RUN python3 setup.py install
+
+
+WORKDIR /
+
+# copy contentsusr/src
+COPY config_emhass.yaml /usr/src
+COPY options.json /data/
+
+#unused in production, used temporarily for testing
+COPY secrets_emhass.yaml /usr/src/ 
+
+# Labels
+LABEL \
+  io.hass.name="emhass" \
+  io.hass.description="EMHASS: Energy Management for Home Assistant" \
+  io.hass.version=${BUILD_VERSION} \
+  io.hass.type="addon" \
+  io.hass.arch="aarch64|amd64|armhf|armv7"
+
+ENTRYPOINT [ "python3", "-m", "emhass.web_server", "--addon", "True" ]
