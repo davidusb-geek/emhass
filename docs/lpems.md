@@ -225,6 +225,25 @@ When applying this controller, the following `runtimeparams` should be defined:
 
 In a practical use case, the values for `soc_init` and `soc_final` for each MPC optimization can be taken from the initial day-ahead optimization performed at the beginning of each day.
 
+### Timewindows for deferrable loads
+Since v0.7.0, the user has the possibility to limit the operation of each deferrable load to a specific timewindow, which can be smaller than the prediction horizon. This is done by means of the `def_start_timestep` and `def_end_timestep` parameters. These parameters can either be set in the configuration screen of the Home Assistant EMHASS add-on, in the config_emhass.yaml file, or provided as runtime parameters.
+
+Taking the example of two electric vehicle that need to charge, but which are not available during the whole prediction horizon:
+![image](./images/deferrable_timewindow_evexample.png)
+
+For this example, the settings could look like this:
+Either in the Home assistant add-on config screen:
+![image](./images/deferrable_timewindow_addon_config.png)
+
+Either as runtime parameter:
+
+`curl -i -H 'Content-Type:application/json' -X POST -d '{"prediction_horizon":30, "def_total_hours":[4,2],"def_start_timestep":[4,0],"def_end_timestep":[27,23]}' http://localhost:5000/action/naive-mpc-optim`
+
+Please note that the proposed deferrable load time windows will be submitted to a validation step & can be automatically corrected.
+Possible cases are depicted below:
+![image](./images/deferrable_timewindow_edge_cases.png)
+
+
 We are now ready to configure our system using the proposed configuration file and link our package to Home Assistant!
 
 ## References
