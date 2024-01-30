@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.7.2] - 2024-01-30
+### Fix
+- Patched new version wer server issues of missing list types
+
 ## [0.7.1] - 2024-01-29
 ### Fix
 - Patched new version wer server issues accessing correct paths
