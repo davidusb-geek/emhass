@@ -270,7 +270,7 @@ class Optimization:
             for i in set_I})
         constraints.update({"constraint_pgridneg_{}".format(i) : 
             plp.LpConstraint(
-                e = -P_grid_neg[i] - self.plant_conf['P_grid_max']*(1-D[i]),
+                e = -P_grid_neg[i] - self.plant_conf['P_to_grid_max']*(1-D[i]),
                 sense = plp.LpConstraintLE,
                 rhs = 0)
             for i in set_I})

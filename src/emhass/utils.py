@@ -649,6 +649,7 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int, 
             logger.debug("no list_end_timesteps_of_each_deferrable_load, defaulting to config file")
         # Updating variables in plant_con
         params['plant_conf']['P_grid_max'] = options.get('maximum_power_from_grid',params['plant_conf']['P_grid_max'])
+        params['plant_conf']['P_to_grid_max'] = options.get('maximum_power_from_grid',params['plant_conf']['P_to_grid_max'])
         try:
             params['plant_conf']['module_model'] = [i['pv_module_model'] for i in options.get('list_pv_module_model')]
         except:
