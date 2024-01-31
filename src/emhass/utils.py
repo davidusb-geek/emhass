@@ -606,10 +606,19 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int, 
             logger.debug("no list_treat_deferrable_load_as_semi_cont, defaulting to config file")
         params['optim_conf']['weather_forecast_method'] = options.get('weather_forecast_method',params['optim_conf']['weather_forecast_method'])
         if params['optim_conf']['weather_forecast_method'] == "solcast":
-            params['params_secrets']['solcast_api_key'] = options.get('optional_solcast_api_key',params['params_secrets']['solcast_api_key'])
-            params['params_secrets']['solcast_rooftop_id'] = options.get('optional_solcast_rooftop_id',params['params_secrets']['solcast_rooftop_id'])
+            try:
+                params['params_secrets']['solcast_api_key'] = options.get('optional_solcast_api_key',params['params_secrets']['solcast_api_key'])
+            except: #If no secrets file, set a default
+                params['params_secrets']['solcast_api_key'] = '123456'
+            try:
+                params['params_secrets']['solcast_rooftop_id'] = options.get('optional_solcast_rooftop_id',params['params_secrets']['solcast_rooftop_id'])
+            except:
+                params['params_secrets']['solcast_rooftop_id'] = '123456'
         elif params['optim_conf']['weather_forecast_method'] == "solar.forecast":    
-            params['params_secrets']['solar_forecast_kwp'] = options.get('optional_solar_forecast_kwp',params['params_secrets']['solar_forecast_kwp'])
+            try:
+                params['params_secrets']['solar_forecast_kwp'] = options.get('optional_solar_forecast_kwp',params['params_secrets']['solar_forecast_kwp'] )
+            except:
+                params['params_secrets']['solar_forecast_kwp'] = 5
         params['optim_conf']['load_forecast_method'] = options.get('load_forecast_method',params['optim_conf']['load_forecast_method'])
         params['optim_conf']['delta_forecast'] = options.get('delta_forecast_daily',params['optim_conf']['delta_forecast'])
         params['optim_conf']['load_cost_forecast_method'] = options.get('load_cost_forecast_method',params['optim_conf']['load_cost_forecast_method'])
