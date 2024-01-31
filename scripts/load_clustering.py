@@ -9,8 +9,8 @@ import plotly.io as pio
 pio.renderers.default = 'browser'
 pd.options.plotting.backend = "plotly"
 
-from emhass.retrieve_hass import retrieve_hass
-from emhass.forecast import forecast
+from emhass.retrieve_hass import RetrieveHass
+from emhass.forecast import Forecast
 from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
 from sklearn.cluster import KMeans
@@ -24,7 +24,12 @@ from skforecast.model_selection import bayesian_search_forecaster
 from skforecast.model_selection import backtesting_forecaster
 from skforecast.utils import save_forecaster
 from skforecast.utils import load_forecaster
-from skopt.space import Categorical, Real, Integer
+# from skopt.space import Categorical, Real, Integer
+
+from tslearn.clustering import TimeSeriesKMeans
+from tslearn.datasets import CachedDatasets
+from tslearn.preprocessing import TimeSeriesScalerMeanVariance, \
+    TimeSeriesResampler
 
 
 # the root folder
@@ -50,7 +55,7 @@ if __name__ == '__main__':
     else:
         logger.info("Using EMHASS methods to retrieve the new forecast model train data")
         retrieve_hass_conf, _, _ = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True)
-        rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
+        rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
         retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
         params, root, logger, get_data_from_file=False)
 
@@ -93,7 +98,7 @@ if __name__ == '__main__':
     # fig = (px.line(df, x='Clusters', y='Distortions', template=template)).update_traces(mode='lines+markers')
     # fig.show()
     
-    # The silouhette metod
+    # The silouhette method
     silhouette_scores = []
     K = range(2,12)
 
@@ -111,7 +116,28 @@ if __name__ == '__main__':
     # The clustering
     kmeans = KMeans(n_clusters=6, init='k-means++')
     kmeans = kmeans.fit(data_lag)
-    data['cluster_group'] = kmeans.labels_
+    data_lag['cluster_group'] = kmeans.labels_
 
-    fig = px.scatter(data, x='power_load y(t)', y='power_load y(t+1)', color='cluster_group', template=template)
+    fig = px.scatter(data_lag, x='power_load y(t)', y='power_load y(t+1)', color='cluster_group', template=template)
     fig.show()
+    
+    km = TimeSeriesKMeans(n_clusters=6, verbose=True, random_state=200)
+    y_pred = km.fit_predict(data_lag)
+    data_lag['cluster_group_tslearn_euclidean'] = y_pred
+    
+    fig = px.scatter(data_lag, x='power_load y(t)', y='power_load y(t+1)', color='cluster_group_tslearn_euclidean', template=template)
+    fig.show()
+    
+    # dba_km = TimeSeriesKMeans(n_clusters=6, n_init=2, metric="dtw", verbose=True, max_iter_barycenter=10, random_state=200)
+    # y_pred = dba_km.fit_predict(data_lag)
+    # data_lag['cluster_group_tslearn_dba'] = y_pred
+    
+    # fig = px.scatter(data_lag, x='power_load y(t)', y='power_load y(t+1)', color='cluster_group_tslearn_dba', template=template)
+    # fig.show()
+    
+    # sdtw_km = TimeSeriesKMeans(n_clusters=6, metric="softdtw", metric_params={"gamma": .01}, verbose=True, random_state=200)
+    # y_pred = sdtw_km.fit_predict(data_lag)
+    # data_lag['cluster_group_tslearn_sdtw'] = y_pred
+    
+    # fig = px.scatter(data_lag, x='power_load y(t)', y='power_load y(t+1)', color='cluster_group_tslearn_sdtw', template=template)
+    # fig.show()

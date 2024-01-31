@@ -1,18 +1,57 @@
 /*! style.css v1.0.0 (modified version) | ISC License | https://github.com/ungoldman/style.css */
+
+/* color reference css */
+.light {
+  color: darkblue;
+  color: #ccf3ff;
+  color: white;  
+  color: #e1e1e1;
+  color: silver;
+  color: #7d7d7d;
+  color: #3d3d3d;
+  color: #111111;
+}
+
+
+.dark {
+  color: #ccf3ff;
+  color: #e1e1e1;
+  color: silver;
+  color: #7d7d7d;
+  color: #3f3f3f;
+  color: #181818;
+  color: #111111;
+}
+/* -------------- */
+
+
 html {
-  color: #303030;
+  color: #3d3d3d;
   background-color: white;
   box-sizing: border-box;
-  font-family: -apple-system, BlinkMacSystemFont, "avenir next", avenir, "segoe ui", "fira sans", roboto, noto, "droid sans", "liberation sans", "lucida grande", "helvetica neue", helvetica, "franklin gothic medium", "century gothic", cantarell, oxygen, ubuntu, sans-serif;
+  font-family: Roboto, Noto, Noto Sans, sans-serif;
   font-size: calc(14px + 0.25vw);
   line-height: 1.55;
   -webkit-font-kerning: normal;
-          font-kerning: normal;
+  font-kerning: normal;
   text-rendering: optimizeLegibility;
   -webkit-font-feature-settings: "kern", "liga" 1, "calt" 0;
-          font-feature-settings: "kern", "liga" 1, "calt" 0;
+  font-feature-settings: "kern", "liga" 1, "calt" 0;
   -ms-text-size-adjust: 100%;
   -webkit-text-size-adjust: 100%;
+  overflow-x: hidden;
+}
+
+h2 {
+  color: darkblue;
+}
+
+.text.adaptive {
+  color: #111111;
+}
+
+button:hover {
+  color: darkblue;
 }
 
 body {
@@ -45,7 +84,7 @@ dl,
 table,
 pre {
   margin-top: 0;
-  margin-bottom: 1.25em;
+  margin-bottom: 1.22em;
 }
 
 small {
@@ -71,7 +110,7 @@ h3 small,
 h4 small,
 h5 small,
 h6 small {
-  color: #777;
+  color: #7d7d7d;
   font-size: 0.7em;
   font-weight: 300;
 }
@@ -107,7 +146,7 @@ h5 {
 
 h6 {
   font-size: 1.15em;
-  color: #575757;
+  /* color: #575757; */
 }
 
 p {
@@ -117,16 +156,19 @@ p {
 a {
   background-color: transparent;
   -webkit-text-decoration-skip: objects;
-  color: #0074d9;
+  color: darkblue;
   text-decoration: none;
 }
 
-a:active, a:hover {
+a:active,
+a:hover {
   outline-width: 0;
   outline: 0;
 }
 
-a:active, a:focus, a:hover {
+a:active,
+a:focus,
+a:hover {
   text-decoration: underline;
 }
 
@@ -164,7 +206,7 @@ blockquote {
   margin: 0 0 1rem;
   padding: 0 1rem;
   color: #7d7d7d;
-  border-left: 4px solid #d6d6d6;
+  border-left: 4px solid silver;
 }
 
 blockquote > :first-child {
@@ -182,8 +224,8 @@ strong {
 }
 
 mark {
-  background-color: #ff0;
-  color: #000;
+  background-color: darkblue;
+  color: #3d3d3d;
 }
 
 sub,
@@ -206,13 +248,14 @@ code,
 pre,
 kbd,
 samp {
-  font-family: menlo, inconsolata, consolas, "fira mono", "noto mono", "droid sans mono", "liberation mono", "dejavu sans mono", "ubuntu mono", monaco, "courier new", monospace;
+  font-family: Roboto, Noto, Noto Sans, sans-serif;
   font-size: 90%;
 }
 
-pre, code {
-  background-color: #f7f7f7;
-  border-radius: 3px;
+pre,
+code {
+  background-color: silver;
+  border-radius: 7px;
 }
 
 pre {
@@ -230,7 +273,8 @@ pre code {
   word-wrap: normal;
 }
 
-pre code::before, pre code::after {
+pre code::before,
+pre code::after {
   content: normal;
 }
 
@@ -246,19 +290,20 @@ code {
   margin: 0;
 }
 
-code::before, code::after {
+code::before,
+code::after {
   letter-spacing: -0.2em;
-  content: '\00a0';
+  content: "\00a0";
 }
 
 kbd {
-  background-color: #e6e6e6;
-  background-image: linear-gradient(#fafafa, #e6e6e6);
+  background-color: silver;
+  background-image: linear-gradient(#ccf3ff, silver);
   background-repeat: repeat-x;
-  border: 1px solid #d6d6d6;
-  border-radius: 2px;
-  box-shadow: 0 1px 0 #d6d6d6;
-  color: #303030;
+  border: 1px solid silver;
+  border-radius: 7px;
+  box-shadow: 0 1px 0 silver;
+  color: #3d3d3d;
   display: inline-block;
   line-height: 0.95em;
   margin: 0 1px;
@@ -277,25 +322,25 @@ hr {
   height: 4px;
   padding: 0;
   margin: 1em 0;
-  background-color: #e7e7e7;
+  background-color: silver;
   border: 0 none;
 }
 
 hr::before {
   display: table;
-  content: '';
+  content: "";
 }
 
 hr::after {
   display: table;
   clear: both;
-  content: '';
+  content: "";
 }
 
 img {
   border-style: none;
   border: 0;
-  max-width: 100%;
+  max-width: 50%;
 }
 
 svg:not(:root) {
@@ -307,7 +352,7 @@ figure {
 }
 
 figure img {
-  background: white;
+  background: #e1e1e1;
   border: 1px solid #c7c7c7;
   padding: 0.25em;
 }
@@ -408,7 +453,7 @@ button:-moz-focusring,
 }
 
 fieldset {
-  border: 1px solid #c0c0c0;
+  border: 1px solid #7d7d7d;
   margin: 0 2px;
   padding: 0.35em 0.625em 0.75em;
 }
@@ -480,26 +525,136 @@ template {
   display: none;
 }
 
-/* Special style for DataFrmae tables */
-/* includes alternating gray and white with on-hover color */
-
-.mystyle {
-    font-size: 11pt; 
-    font-family: Arial;
-    border-collapse: collapse; 
-    border: 1px solid silver;
-
+button,
+.main-svg,
+.mystyle,
+table {
+  border-radius: 7px;
+  margin: 15px 10px;
+  /* overflow: visible; */
 }
 
-.mystyle td, th {
-    padding: 5px;
+table {
+  max-width: 50%;
+}
+
+button {
+  padding: 10px;
+  margin: 0px;
+}
+
+.svg-container {
+  margin-bottom: 10px;
+}
+
+.table_div {
+  /* margin: 15px 5px 0px 0px; */
+  margin: 15px 5px 0px 0px;
+}
+
+.plotly-graph-div,
+.table_div {
+  overflow-x: auto !important;
+}
+
+.svg-container,
+.main-svg,
+.table_div div {
+  min-width: 800px !important;
+}
+
+.modebar-container {
+  width:auto !important;
+}
+
+/* Special style for DataFrmae tables */
+/* includes alternating gray and white with on-hover color */
+.mystyle,
+.main-svg {
+  font-size: 11pt;
+  font-family: Arial;
+  border-collapse: collapse;
+  border-radius: 7px;
+  border-style: hidden;
+  /* box-shadow: 0 0 0 1px rgb(192, 192, 192, 50%); */
+}
+
+.mystyle td {
+  padding: 5px;
+}
+
+th {
+  padding: 5px 7.77px;
 }
 
 .mystyle tr:nth-child(even) {
-    background: #E0E0E0;
+  background: #e1e1e1;
 }
 
 .mystyle tr:hover {
-    background: silver;
-    cursor: pointer;
+  background: silver;
+  cursor: pointer;
+}
+
+/* Dark Theme Support */
+@media (prefers-color-scheme: dark) {
+  html.adaptive {
+    background: #111111;
+    color: #e1e1e1;
+  }
+  img,
+  figure {
+    -webkit-filter: invert(90%);
+    filter: invert(90%);
+  }
+  button {
+    color: #e1e1e1;
+    background-color: rgb(40, 41, 40);
+  }
+  button:hover {
+    color: #ccf3ff;
+    background-color: #3d3d3d;
+  }
+  h2,
+  kbd,
+  a {
+    background-color: #111111;
+    color: #ccf3ff;
+    border: rgb(71, 71, 71);
+  }
+  .modebar-btn {
+    background-color: #e1e1e1;
+  }
+  .main-svg svg,
+  legend {
+    background-color: rgb(73, 73, 73, 5%);
+    background: rgb(73, 73, 73, 5%);
+  }
+  .g-gtitle,
+  .g-xtitle,
+  .g-ytitle,
+  legend,
+  th {
+    color: #e1e1e1;
+  }
+  tr td:nth-child(even),
+  .mystyle tr td:nth-child(even) {
+    background-color: #3d3d3d;
+  }
+  tr:nth-child(odd),
+  .mystyle tr:nth-child(odd) {
+    background-color: #111111;
+  }
+  tr:nth-child(even),
+  .mystyle tr:nth-child(even) {
+    background-color: #181818;
+  }
+  tr:hover td,
+  th {
+    background-color: #3f3f3f;
+  }
+  .mystyle,
+  .main-svg {
+    box-shadow: 0 0 0 1px silver;
+  }
 }

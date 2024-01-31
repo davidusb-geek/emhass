@@ -16,10 +16,10 @@ from typing import Optional, Tuple
 from distutils.util import strtobool
 
 from importlib.metadata import version
-from emhass.retrieve_hass import retrieve_hass
-from emhass.forecast import forecast
-from emhass.machine_learning_forecaster import mlforecaster
-from emhass.optimization import optimization
+from emhass.retrieve_hass import RetrieveHass
+from emhass.forecast import Forecast
+from emhass.machine_learning_forecaster import MLForecaster
+from emhass.optimization import Optimization
 from emhass import utils
 
 
@@ -58,12 +58,12 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         runtimeparams, params, retrieve_hass_conf, 
         optim_conf, plant_conf, set_type, logger)
     # Define main objects
-    rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
+    rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
                        retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'], 
                        params, base_path, logger, get_data_from_file=get_data_from_file)
-    fcst = forecast(retrieve_hass_conf, optim_conf, plant_conf,
+    fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
                     params, base_path, logger, get_data_from_file=get_data_from_file)
-    opt = optimization(retrieve_hass_conf, optim_conf, plant_conf, 
+    opt = Optimization(retrieve_hass_conf, optim_conf, plant_conf, 
                        fcst.var_load_cost, fcst.var_prod_price, 
                        costfun, base_path, logger)
     # Perform setup based on type of action
@@ -272,9 +272,11 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     soc_init = input_data_dict['params']['passed_data']['soc_init']
     soc_final = input_data_dict['params']['passed_data']['soc_final']
     def_total_hours = input_data_dict['params']['passed_data']['def_total_hours']
+    def_start_timestep = input_data_dict['params']['passed_data']['def_start_timestep']
+    def_end_timestep = input_data_dict['params']['passed_data']['def_end_timestep']
     opt_res_naive_mpc = input_data_dict['opt'].perform_naive_mpc_optim(
         df_input_data_dayahead, input_data_dict['P_PV_forecast'], input_data_dict['P_load_forecast'],
-        prediction_horizon, soc_init, soc_final, def_total_hours)
+        prediction_horizon, soc_init, soc_final, def_total_hours, def_start_timestep, def_end_timestep)
     # Save CSV file for publish_data
     if save_data_to_file:
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -286,7 +288,7 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     return opt_res_naive_mpc
 
 def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
-    debug: Optional[bool] = False) -> Tuple[pd.DataFrame, pd.DataFrame, mlforecaster]:
+    debug: Optional[bool] = False) -> Tuple[pd.DataFrame, pd.DataFrame, MLForecaster]:
     """Perform a forecast model fit from training data retrieved from Home Assistant.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
@@ -307,7 +309,7 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
     perform_backtest = input_data_dict['params']['passed_data']['perform_backtest']
     root = input_data_dict['root']
     # The ML forecaster object
-    mlf = mlforecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
+    mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
     # Fit the ML model
     df_pred, df_pred_backtest = mlf.fit(split_date_delta=split_date_delta, 
                                         perform_backtest=perform_backtest)
@@ -320,7 +322,7 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
 
 def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     use_last_window: Optional[bool] = True, debug: Optional[bool] = False,
-    mlf: Optional[mlforecaster] = None) -> pd.DataFrame:
+    mlf: Optional[MLForecaster] = None) -> pd.DataFrame:
     r"""Perform a forecast model predict using a previously trained skforecast model.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
@@ -386,8 +388,8 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     return predictions
 
 def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
-    debug: Optional[bool] = False, mlf: Optional[mlforecaster] = None
-    ) -> Tuple[pd.DataFrame, mlforecaster]:
+    debug: Optional[bool] = False, mlf: Optional[MLForecaster] = None
+    ) -> Tuple[pd.DataFrame, MLForecaster]:
     """Tune a forecast model hyperparameters using bayesian optimization.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
@@ -488,7 +490,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     custom_deferrable_forecast_id = params['passed_data']['custom_deferrable_forecast_id']
     for k in range(input_data_dict['opt'].optim_conf['num_def_loads']):
         if "P_deferrable{}".format(k) not in opt_res_latest.columns:
-            logger.error("P_deferrable{}".format(k)+" was not found in results DataFrame. Optimization task may need to be relaunched or it did not converged to a solution.")
+            logger.error("P_deferrable{}".format(k)+" was not found in results DataFrame. Optimization task may need to be relaunched or it did not converge to a solution.")
         else:
             input_data_dict['rh'].post_data(opt_res_latest["P_deferrable{}".format(k)], idx_closest, 
                                             custom_deferrable_forecast_id[k]["entity_id"], 
@@ -500,7 +502,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     # Publish battery power
     if input_data_dict['opt'].optim_conf['set_use_battery']:
         if 'P_batt' not in opt_res_latest.columns:
-            logger.error("P_batt was not found in results DataFrame. Optimization task may need to be relaunched or it did not converged to a solution.")
+            logger.error("P_batt was not found in results DataFrame. Optimization task may need to be relaunched or it did not converge to a solution.")
         else:
             custom_batt_forecast_id = params['passed_data']['custom_batt_forecast_id']
             input_data_dict['rh'].post_data(opt_res_latest['P_batt'], idx_closest,
@@ -536,15 +538,15 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                                     custom_cost_fun_id["friendly_name"],
                                     type_var = 'cost_fun',
                                     publish_prefix = publish_prefix)
-    # Publish the optimization status (A work in progress, will be available on future release)
-    '''
+    # Publish the optimization status
     custom_cost_fun_id = params['passed_data']['custom_optim_status_id']
-    input_data_dict['rh'].post_data(input_data_dict['opt'].optim_status, idx_closest, 
+    input_data_dict['rh'].post_data(opt_res_latest['optim_status'], idx_closest, 
                                     custom_cost_fun_id["entity_id"], 
                                     custom_cost_fun_id["unit_of_measurement"],
                                     custom_cost_fun_id["friendly_name"],
                                     type_var = 'optim_status',
-                                    publish_prefix = publish_prefix)'''
+                                    publish_prefix = publish_prefix)
+    cols_published = cols_published+["optim_status"]
     # Publish unit_load_cost
     custom_unit_load_cost_id = params['passed_data']['custom_unit_load_cost_id']
     input_data_dict['rh'].post_data(opt_res_latest['unit_load_cost'], idx_closest, 

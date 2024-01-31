@@ -1,0 +1,91 @@
+{                                                                                                                                                                                                                
+  "hass_url": "empty",                                                                                                                                                                                           
+  "long_lived_token": "empty",                                                                                                                                                                                   
+  "costfun": "cost",
+  "logging_level": "INFO",                                                                                                                                                                                           
+  "optimization_time_step": 60,                                                                                                                                                                                  
+  "historic_days_to_retrieve": 2,                                                                                                                                                                                
+  "method_ts_round": "first",                                                                                                                                                                                  
+  "set_total_pv_sell": true,                                                                                                                                                                                    
+  "lp_solver": "default",                                                                                                                                                                                       
+  "lp_solver_path": "empty",                                                                                                                                                                              
+  "set_nocharge_from_grid": false,                                                                                                                                                                               
+  "set_nodischarge_to_grid": false,
+  "set_battery_dynamic": false,
+  "battery_dynamic_max": 0.9,
+  "battery_dynamic_min": -0.9,
+  "weight_battery_discharge": 0.0,
+  "weight_battery_charge": 0.0,
+  "load_forecast_method": "naive",
+  "sensor_power_photovoltaics": "sensor.power_photovoltaics",                                                                                                                                                    
+  "sensor_power_load_no_var_loads": "sensor.power_load_no_var_loads",                                                                                                                                            
+  "number_of_deferrable_loads": 1,                                                                                                                                                                               
+  "list_nominal_power_of_deferrable_loads": [                                                                                                                                                                    
+    {                                                                                                                                                                                                            
+      "nominal_power_of_deferrable_loads": 1.0                                                                                                                                                                  
+    }                                                                                                                                                                                                    
+  ],                                                                                                                                                                                                             
+  "list_operating_hours_of_each_deferrable_load": [                                                                                                                                                              
+    {                                                                                                                                                                                                            
+      "operating_hours_of_each_deferrable_load": 1                                                                                                                                                              
+    }                                                                                                                                                                                                         
+  ],                                                                                                                                                                                                             
+  "list_peak_hours_periods_start_hours": [                                                                                                                                                                       
+    {                                                                                                                                                                                                            
+      "peak_hours_periods_start_hours": "05:54"                                                                                                                                                                  
+    }                                                                                                                                                                                                            
+  ],                                                                                                                                                                                                             
+  "list_peak_hours_periods_end_hours": [                                                                                                                                                                                                                                                                                                                                                                                 
+    {                                                                                                                                                                                                            
+      "peak_hours_periods_end_hours": "05:54"                                                                                                                                                                    
+    }                                                                                                                                                                                                            
+  ],  
+  "list_treat_deferrable_load_as_semi_cont": [
+    {
+      "treat_deferrable_load_as_semi_cont": false
+    }
+  ],
+  "load_peak_hours_cost": 0,                                                                                                                                                                                
+  "load_offpeak_hours_cost": 0,                                                                                                                                                                             
+  "photovoltaic_production_sell_price": 0,                                                                                                                                                                  
+  "maximum_power_from_grid": 15000,
+  "list_pv_module_model": [
+    {
+      "pv_module_model": "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M"
+    }
+  ],
+  "list_pv_inverter_model": [
+    {
+      "pv_inverter_model": "Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_"
+    }
+  ],
+  "list_surface_tilt": [
+    {
+      "surface_tilt": 43
+    }
+  ],
+  "list_surface_azimuth": [
+    {
+      "surface_azimuth": 160
+    }
+  ],
+  "list_modules_per_string": [
+    {
+      "modules_per_string": 9
+    }
+  ],
+  "list_strings_per_inverter": [
+    {
+      "strings_per_inverter": 3
+    }
+  ],
+  "set_use_battery": true,
+  "battery_discharge_power_max": 8000,
+  "battery_charge_power_max": 7000,
+  "battery_discharge_efficiency": 0.95,
+  "battery_charge_efficiency": 0.92,
+  "battery_nominal_energy_capacity": 30000,
+  "battery_minimum_state_of_charge": 0.2,
+  "battery_maximum_state_of_charge": 1.0,
+  "battery_target_state_of_charge": 0.5
+}

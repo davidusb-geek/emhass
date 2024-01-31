@@ -8,8 +8,8 @@ import plotly.io as pio
 pio.renderers.default = 'browser'
 pd.options.plotting.backend = "plotly"
 
-from emhass.retrieve_hass import retrieve_hass
-from emhass.forecast import forecast
+from emhass.retrieve_hass import RetrieveHass
+from emhass.forecast import Forecast
 from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
 from sklearn.linear_model import LinearRegression
@@ -63,7 +63,7 @@ if __name__ == '__main__':
     else:
         logger.info("Using EMHASS methods to retrieve the new forecast model train data")
         retrieve_hass_conf, _, _ = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True)
-        rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
+        rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
         retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
         params, root, logger, get_data_from_file=False)
 
@@ -240,14 +240,14 @@ if __name__ == '__main__':
     
     # Let's perform a naive load forecast for comparison
     retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True)
-    fcst = forecast(retrieve_hass_conf, optim_conf, plant_conf,
+    fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
                     params, root, logger)
     P_load_forecast = fcst.get_load_forecast(method='naive')
     
     # Then retrieve some data and perform a prediction mocking a production env
-    rh = retrieve_hass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
-        retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
-        params, root, logger, get_data_from_file=False)
+    rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
+                      retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
+                      params, root, logger, get_data_from_file=False)
 
     days_list = get_days_list(days_needed)
     var_model = retrieve_hass_conf['var_load']

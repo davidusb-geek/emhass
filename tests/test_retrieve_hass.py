@@ -1,14 +1,15 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import datetime
 import unittest
 import requests_mock
 import numpy as np, pandas as pd
 import pytz, pathlib, pickle, json, yaml, copy
 import bz2
-import _pickle as cPickle
+import pickle as cPickle
 
-from emhass.retrieve_hass import retrieve_hass
+from emhass.retrieve_hass import RetrieveHass
 from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
 # the root folder
@@ -24,9 +25,9 @@ class TestRetrieveHass(unittest.TestCase):
         params = None
         retrieve_hass_conf, _, _ = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=False)
         self.retrieve_hass_conf = retrieve_hass_conf
-        self.rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
-                                self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
-                                params, root, logger, get_data_from_file=get_data_from_file)
+        self.rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
+                               self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
+                               params, root, logger, get_data_from_file=get_data_from_file)
         if get_data_from_file:
             with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'rb') as inp:
                 self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
@@ -74,10 +75,10 @@ class TestRetrieveHass(unittest.TestCase):
         params['optim_conf'] = optim_conf
         params['plant_conf'] = plant_conf
         # Just check forecast methods
-        self.assertTrue(list(params['optim_conf'][7].keys())[0] == 'weather_forecast_method')
-        self.assertTrue(list(params['optim_conf'][8].keys())[0] == 'load_forecast_method')
-        self.assertTrue(list(params['optim_conf'][9].keys())[0] == 'load_cost_forecast_method')
-        self.assertTrue(list(params['optim_conf'][13].keys())[0] == 'prod_price_forecast_method')
+        self.assertFalse(params['optim_conf'].get('weather_forecast_method') == None)
+        self.assertFalse(params['optim_conf'].get('load_forecast_method') == None)
+        self.assertFalse(params['optim_conf'].get('load_cost_forecast_method') == None)
+        self.assertFalse(params['optim_conf'].get('prod_price_forecast_method') == None)
 
     def test_get_data_failed(self):
         days_list = get_days_list(1)
@@ -100,7 +101,7 @@ class TestRetrieveHass(unittest.TestCase):
             self.assertIsInstance(self.rh.df_final.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
             self.assertEqual(len(self.rh.df_final.columns), len(var_list))
             self.assertEqual(self.rh.df_final.index.freq, self.retrieve_hass_conf['freq'])
-            self.assertEqual(self.rh.df_final.index.tz, pytz.UTC)
+            self.assertEqual(self.rh.df_final.index.tz, datetime.timezone.utc)
         
     def test_prepare_data(self):
         self.assertIsInstance(self.rh.df_final, type(pd.DataFrame()))

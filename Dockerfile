@@ -1,4 +1,6 @@
-FROM python:3.8-slim-buster
+FROM python:3.11-slim-buster
+# FROM ghcr.io/home-assistant/amd64-base-debian:bookworm # Uncomment to test add-on
+# FROM ghcr.io/home-assistant/armhf-base-debian:bookworm
 
 # switch working directory
 WORKDIR /app
@@ -12,17 +14,26 @@ COPY README.md README.md
 # Setup
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        # libffi-dev \
+        # python3 \
+        # python3-pip \
+        # python3-dev \
+        # git \
+        # build-essential \
         gcc \
+        coinor-cbc \
+        coinor-libcbc-dev \
         libhdf5-dev \
         libhdf5-serial-dev \
         netcdf-bin \
         libnetcdf-dev \
-        coinor-cbc \
-        coinor-libcbc-dev \
+        # pkg-config \
+        # gfortran \
+        # libatlas-base-dev \
     && ln -s /usr/include/hdf5/serial /usr/include/hdf5/include \
     && export HDF5_DIR=/usr/include/hdf5 \
-    && pip3 install netCDF4 \
-    && pip3 install --no-cache-dir -r requirements_webserver.txt \
+    # && pip3 install --extra-index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -U setuptools wheel \
+    && pip3 install --no-cache-dir --break-system-packages -r requirements_webserver.txt \
     && apt-get purge -y --auto-remove \
         gcc \
         libhdf5-dev \
@@ -30,9 +41,6 @@ RUN apt-get update \
         netcdf-bin \
         libnetcdf-dev \
     && rm -rf /var/lib/apt/lists/*
-
-# Setup slim-buster
-RUN pip3 install --no-cache-dir -r requirements_webserver.txt
 
 # copy contents
 COPY src/emhass/__init__.py /app/src/emhass/__init__.py
@@ -45,6 +53,8 @@ COPY src/emhass/utils.py /app/src/emhass/utils.py
 COPY src/emhass/web_server.py /app/src/emhass/web_server.py
 COPY src/emhass/templates/index.html /app/src/emhass/templates/index.html
 COPY src/emhass/static/style.css /app/src/emhass/static/style.css
+COPY src/emhass/static/img/emhass_logo_short.svg /app/src/emhass/static/img/emhass_logo_short.svg
+COPY src/emhass/static/img/emhass_icon.png /app/src/emhass/static/img/emhass_icon.png
 COPY data/opt_res_latest.csv /app/data/opt_res_latest.csv
 
 RUN python3 setup.py install

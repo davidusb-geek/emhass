@@ -14,8 +14,8 @@ import numpy as np
 from skforecast.ForecasterAutoreg import ForecasterAutoreg
 
 from emhass.command_line import set_input_data_dict
-from emhass.retrieve_hass import retrieve_hass
-from emhass.machine_learning_forecaster import mlforecaster
+from emhass.retrieve_hass import RetrieveHass
+from emhass.machine_learning_forecaster import MLForecaster
 from emhass import utils
 
 # the root folder
@@ -58,7 +58,7 @@ class TestMLForecaster(unittest.TestCase):
         }
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
-        params['optim_conf'][8]['load_forecast_method'] = 'skforecast'
+        params['optim_conf']['load_forecast_method'] = 'skforecast'
         params_json = json.dumps(params)
         self.input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
                                                    action, logger, get_data_from_file=True)
@@ -67,14 +67,14 @@ class TestMLForecaster(unittest.TestCase):
         var_model = self.input_data_dict['params']['passed_data']['var_model']
         sklearn_model = self.input_data_dict['params']['passed_data']['sklearn_model']
         num_lags = self.input_data_dict['params']['passed_data']['num_lags']
-        self.mlf = mlforecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
+        self.mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
         
         get_data_from_file = True
         params = None
         self.retrieve_hass_conf, self.optim_conf, _ = utils.get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=False)
-        self.rh = retrieve_hass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
-                                self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
-                                params, root, logger, get_data_from_file=get_data_from_file)
+        self.rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
+                               self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
+                               params, root, logger, get_data_from_file=get_data_from_file)
         with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'rb') as inp:
             self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
         
@@ -126,7 +126,7 @@ class TestMLForecaster(unittest.TestCase):
         var_model = self.input_data_dict['params']['passed_data']['var_model']
         sklearn_model = 'LinearRegression'
         num_lags = self.input_data_dict['params']['passed_data']['num_lags']
-        self.mlf = mlforecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
+        self.mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
         self.mlf.fit()
         df_pred_optim = self.mlf.tune(debug=True)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
@@ -137,7 +137,7 @@ class TestMLForecaster(unittest.TestCase):
         var_model = self.input_data_dict['params']['passed_data']['var_model']
         sklearn_model = 'ElasticNet'
         num_lags = self.input_data_dict['params']['passed_data']['num_lags']
-        self.mlf = mlforecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
+        self.mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
         self.mlf.fit()
         df_pred_optim = self.mlf.tune(debug=True)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)

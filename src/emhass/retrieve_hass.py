@@ -13,7 +13,7 @@ from requests import get, post
 from emhass.utils import set_df_index_freq
 
 
-class retrieve_hass:
+class RetrieveHass:
     r"""
     Retrieve data from Home Assistant using the restful API.
     
@@ -34,7 +34,7 @@ class retrieve_hass:
                  time_zone: datetime.timezone, params: str, base_path: str, logger: logging.Logger,
                  get_data_from_file: Optional[bool] = False) -> None:
         """
-        Define constructor for retrieve_hass class.
+        Define constructor for RetrieveHass class.
         
         :param hass_url: The URL of the Home Assistant instance
         :type hass_url: str
@@ -116,6 +116,9 @@ class retrieve_hass:
                     response = get(url, headers=headers)
                 except Exception:
                     return "Request Get Error"
+                else:
+                    if response.status_code > 299:
+                        return f"Request Get Error: {response.status_code}"
                 '''import bz2 # Uncomment to save a serialized data for tests
                 import _pickle as cPickle
                 with bz2.BZ2File("data/test_response_get_data_get_method.pbz2", "w") as f: 
@@ -131,8 +134,8 @@ class retrieve_hass:
                     self.logger.error("Retrieved empty Dataframe, check that correct day or variable names are passed")
                     self.logger.error("Either the names of the passed variables are not correct or days_to_retrieve is larger than the recorded history of your sensor (check your recorder settings)")
                 if i == 0: # Defining the DataFrame container
-                    from_date = pd.to_datetime(df_raw['last_changed']).min()
-                    to_date = pd.to_datetime(df_raw['last_changed']).max()
+                    from_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").min()
+                    to_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").max()
                     ts = pd.to_datetime(pd.date_range(start=from_date, end=to_date, freq=self.freq), 
                                         format='%Y-%d-%m %H:%M').round(self.freq)
                     df_day = pd.DataFrame(index = ts)
@@ -140,7 +143,7 @@ class retrieve_hass:
                 df_tp = df_raw.copy()[['state']].replace(
                     ['unknown', 'unavailable', ''], np.nan).astype(float).rename(columns={'state': var})
                 # Setting index, resampling and concatenation
-                df_tp.set_index(pd.to_datetime(df_raw['last_changed']), inplace=True)
+                df_tp.set_index(pd.to_datetime(df_raw['last_changed'], format="ISO8601"), inplace=True)
                 df_tp = df_tp.resample(self.freq).mean()
                 df_day = pd.concat([df_day, df_tp], axis=1)
             
@@ -174,17 +177,14 @@ class retrieve_hass:
         :rtype: pandas.DataFrame
         
         """
-        if load_negative: # Apply the correct sign to load power
-            try:
+        try:
+            if load_negative: # Apply the correct sign to load power
                 self.df_final[var_load+'_positive'] = -self.df_final[var_load]
-            except KeyError:
-                self.logger.error("Variable "+var_load+" was not found. This is typically because no data could be retrieved from Home Assistant")
-        else:
-            try:
+            else:
                 self.df_final[var_load+'_positive'] = self.df_final[var_load]
-            except KeyError:
-                self.logger.error("Variable "+var_load+" was not found. This is typically because no data could be retrieved from Home Assistant")
-        self.df_final.drop([var_load], inplace=True, axis=1)
+            self.df_final.drop([var_load], inplace=True, axis=1)
+        except KeyError:
+            self.logger.error("Variable "+var_load+" was not found. This is typically because no data could be retrieved from Home Assistant")
         if set_zero_min: # Apply minimum values
             self.df_final.clip(lower=0.0, inplace=True, axis=1)
             self.df_final.replace(to_replace=0.0, value=np.nan, inplace=True)
@@ -282,29 +282,39 @@ class retrieve_hass:
             state = np.round(data_df.sum()[0],2)
         elif type_var == 'unit_load_cost' or type_var == 'unit_prod_price':
             state = np.round(data_df.loc[data_df.index[idx]],4)
+        elif type_var == 'optim_status':
+            state = data_df.loc[data_df.index[idx]]
         else:
             state = np.round(data_df.loc[data_df.index[idx]],2)
         if type_var == 'power':
-            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "forecasts", state)
         elif type_var == 'deferrable':
-            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "deferrables_schedule", state)
         elif type_var == 'batt':
-            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "battery_scheduled_power", state)
         elif type_var == 'SOC':
-            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "battery_scheduled_soc", state)
         elif type_var == 'unit_load_cost':
-            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "unit_load_cost_forecasts", state)
         elif type_var == 'unit_prod_price':
-            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "unit_prod_price_forecasts", state)
         elif type_var == 'mlforecaster':
-            data = retrieve_hass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
                                                     friendly_name, "scheduled_forecast", state)
+        elif type_var == 'optim_status':
+            data = {
+                "state": state,
+                "attributes": {
+                    "unit_of_measurement": unit_of_measurement,
+                    "friendly_name": friendly_name
+                }
+            }
         else:
             data = {
                 "state": "{:.2f}".format(state),

@@ -3,14 +3,15 @@
 
 import logging
 import copy
-from typing import Optional
+from typing import Optional, Tuple
 import pandas as pd
 import numpy as np
 import pulp as plp
 from pulp import PULP_CBC_CMD, COIN_CMD, GLPK_CMD
+from math import ceil
 
 
-class optimization:
+class Optimization:
     r"""
     Optimize the deferrable load and battery energy dispatch problem using \ 
     the linear programming optimization technique. All equipement equations, \
@@ -33,7 +34,7 @@ class optimization:
                  costfun: str, base_path: str, logger: logging.Logger, 
                  opt_time_delta: Optional[int] = 24) -> None:
         r"""
-        Define constructor for optimization class.
+        Define constructor for Optimization class.
         
         :param retrieve_hass_conf: Configuration parameters used to retrieve data \
             from hass
@@ -77,7 +78,7 @@ class optimization:
         if 'lp_solver' in optim_conf.keys():
             self.lp_solver = optim_conf['lp_solver']
         else:
-            self.lp_solver = 'PULP_CBC_CMD'
+            self.lp_solver = 'default'
         if 'lp_solver_path' in optim_conf.keys():
             self.lp_solver_path = optim_conf['lp_solver_path']
         else:
@@ -88,7 +89,10 @@ class optimization:
     def perform_optimization(self, data_opt: pd.DataFrame, P_PV: np.array, P_load: np.array, 
                              unit_load_cost: np.array, unit_prod_price: np.array,
                              soc_init: Optional[float] = None, soc_final: Optional[float] = None,
-                             def_total_hours: Optional[list] = None) -> pd.DataFrame:
+                             def_total_hours: Optional[list] = None, 
+                             def_start_timestep: Optional[list] = None,
+                             def_end_timestep: Optional[list] = None,
+                             debug: Optional[bool] = False) -> pd.DataFrame:
         r"""
         Perform the actual optimization using linear programming (LP).
         
@@ -114,8 +118,13 @@ class optimization:
         :param soc_final: The final battery SOC for the optimization. This parameter \
             is optional, if not given soc_init = soc_final = soc_target from the configuration file.
         :type soc_final: 
-        :param def_total_hours: The functioning hours for this iteration for each deferrable load.
+        :param def_total_hours: The functioning hours for this iteration for each deferrable load. \
+            (For continuous deferrable loads: functioning hours at nominal power)
         :type def_total_hours: list
+        :param def_start_timestep: The timestep as from which each deferrable load is allowed to operate.
+        :type def_start_timestep: list
+        :param def_end_timestep: The timestep before which each deferrable load should operate.
+        :type def_end_timestep: list
         :return: The input DataFrame with all the different results from the \
             optimization appended
         :rtype: pd.DataFrame
@@ -135,6 +144,10 @@ class optimization:
                     soc_final = self.plant_conf['SOCtarget']
         if def_total_hours is None:
             def_total_hours = self.optim_conf['def_total_hours']
+        if def_start_timestep is None:
+            def_start_timestep = self.optim_conf['def_start_timestep']
+        if def_end_timestep is None:
+            def_end_timestep = self.optim_conf['def_end_timestep']
         type_self_conso = 'bigm' # maxmin
         
         #### The LP problem using Pulp ####
@@ -196,31 +209,31 @@ class optimization:
         if self.costfun == 'profit':
             if self.optim_conf['set_total_pv_sell']:
                 objective = plp.lpSum(-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum[i]) + \
-                                                            unit_prod_price[i]*P_grid_neg[i])
-                                      for i in set_I)
+                    unit_prod_price[i]*P_grid_neg[i]) for i in set_I)
             else:
                 objective = plp.lpSum(-0.001*self.timeStep*(unit_load_cost[i]*P_grid_pos[i] + \
-                                                            unit_prod_price[i]*P_grid_neg[i])
-                                      for i in set_I)
+                    unit_prod_price[i]*P_grid_neg[i]) for i in set_I)
         elif self.costfun == 'cost':
             if self.optim_conf['set_total_pv_sell']:
-                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*P_grid_pos[i]
-                                      for i in set_I)
+                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum[i]) for i in set_I)
             else:
-                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum[i])
-                                      for i in set_I)
+                objective = plp.lpSum(-0.001*self.timeStep*unit_load_cost[i]*P_grid_pos[i] for i in set_I)
         elif self.costfun == 'self-consumption':
             if type_self_conso == 'bigm':
                 bigm = 1e3
                 objective = plp.lpSum(-0.001*self.timeStep*(bigm*unit_load_cost[i]*P_grid_pos[i] + \
-                                                            unit_prod_price[i]*P_grid_neg[i])
-                                      for i in set_I)
+                    unit_prod_price[i]*P_grid_neg[i]) for i in set_I)
             elif type_self_conso == 'maxmin':
                 objective = plp.lpSum(0.001*self.timeStep*unit_load_cost[i]*SC[i] for i in set_I)
             else:
-                self.logger.error("Not a valida option for type_self_conso parameter")
+                self.logger.error("Not a valid option for type_self_conso parameter")
         else:
             self.logger.error("The cost function specified type is not valid")
+        # Add more terms to the objective function in the case of battery use
+        if self.optim_conf['set_use_battery']:
+            objective = objective + plp.lpSum(-0.001*self.timeStep*(
+                self.optim_conf['weight_battery_discharge']*P_sto_pos[i] + \
+                    self.optim_conf['weight_battery_charge']*P_sto_neg[i]) for i in set_I)
         opt_model.setObjective(objective)
         
         ## Setting constraints
@@ -271,6 +284,27 @@ class optimization:
                     sense = plp.LpConstraintEQ,
                     rhs = def_total_hours[k]*self.optim_conf['P_deferrable_nom'][k])
                 })
+            # Ensure deferrable loads consume energy between def_start_timestep & def_end_timestep
+            self.logger.debug("Deferrable load {}: Proposed optimization window: {} --> {}".format(k, def_start_timestep[k], def_end_timestep[k]))
+            def_start, def_end, warning = Optimization.validate_def_timewindow(def_start_timestep[k], def_end_timestep[k], ceil(def_total_hours[k]/self.timeStep), n)
+            if warning is not None: 
+                self.logger.warning("Deferrable load {} : {}".format(k, warning))
+            self.logger.debug("Deferrable load {}: Validated optimization window: {} --> {}".format(k, def_start, def_end))
+            if def_start > 0:                    
+                constraints.update({"constraint_defload{}_start_timestep".format(k) :
+                    plp.LpConstraint(
+                        e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in range(0, def_start)),
+                        sense = plp.LpConstraintEQ,
+                        rhs = 0)
+                    })
+            if def_end > 0:                    
+                constraints.update({"constraint_defload{}_end_timestep".format(k) :
+                    plp.LpConstraint(
+                        e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in range(def_end, n)),
+                        sense = plp.LpConstraintEQ,
+                        rhs = 0)
+                    })
+            
             # Treat deferrable load as a semi-continuous variable
             if self.optim_conf['treat_def_as_semi_cont'][k]:
                 constraints.update({"constraint_pdef{}_semicont1_{}".format(k, i) : 
@@ -287,30 +321,31 @@ class optimization:
                     for i in set_I})
             # Treat the number of starts for a deferrable load
             if self.optim_conf['set_def_constant'][k]:
-                constraints.update({"constraint_pdef{}_start1".format(k) : 
-                    plp.LpConstraint(
-                        e=P_def_start[k][0],
-                        sense=plp.LpConstraintEQ,
-                        rhs=0)
-                    })
-                constraints.update({"constraint_pdef{}_start2_{}".format(k, i) : 
-                    plp.LpConstraint(
-                        e=P_def_start[k][i] - P_def_bin2[k][i] + P_def_bin2[k][i-1],
-                        sense=plp.LpConstraintEQ,
-                        rhs=0)
-                    for i in set_I[1:]})
-                constraints.update({"constraint_pdef{}_start4_{}".format(k, i) : 
+                
+                constraints.update({"constraint_pdef{}_start1_{}".format(k, i) : 
                     plp.LpConstraint(
                         e=P_deferrable[k][i] - P_def_bin2[k][i]*M,
                         sense=plp.LpConstraintLE,
                         rhs=0)
                     for i in set_I})
-                constraints.update({"constraint_pdef{}_start5_{}".format(k, i) : 
+                constraints.update({"constraint_pdef{}_start2_{}".format(k, i) : 
                     plp.LpConstraint(
-                        e=-P_deferrable[k][i] + M*(P_def_bin2[k][i]-1) + 1,
-                        sense=plp.LpConstraintLE,
+                        e=P_def_start[k][i] - P_def_bin2[k][i] + P_def_bin2[k][i-1],
+                        sense=plp.LpConstraintGE,
                         rhs=0)
-                    for i in set_I})
+                    for i in set_I[1:]})
+                constraints.update({"constraint_pdef{}_start3".format(k) :
+                plp.LpConstraint(
+                    e = plp.lpSum(P_def_start[k][i] for i in set_I),
+                    sense = plp.LpConstraintEQ,
+                    rhs = 1)
+                })
+                constraints.update({"constraint_pdef{}_start4".format(k) :
+                plp.LpConstraint(
+                    e = plp.lpSum(P_def_bin2[k][i] for i in set_I),
+                    sense = plp.LpConstraintEQ,
+                    rhs = self.optim_conf['def_total_hours'][k]/self.timeStep)
+                })
         
         # The battery constraints
         if self.optim_conf['set_use_battery']:
@@ -387,25 +422,24 @@ class optimization:
     
         ## Finally, we call the solver to solve our optimization model:
         # solving with default solver CBC
-        try:
-            if self.lp_solver == 'PULP_CBC_CMD':
-                opt_model.solve(PULP_CBC_CMD(msg=0))
-            elif self.lp_solver == 'GLPK_CMD':
-                opt_model.solve(GLPK_CMD(msg=0))
-            elif self.lp_solver == 'COIN_CMD':
-                opt_model.solve(COIN_CMD(msg=0, path=self.lp_solver_path))
-            else:
-                self.logger.error("Invalid solver name passed")
-        except Exception:
-            self.logger.error("It was not possible to find a valid solver for Pulp package")
+        if self.lp_solver == 'PULP_CBC_CMD':
+            opt_model.solve(PULP_CBC_CMD(msg=0))
+        elif self.lp_solver == 'GLPK_CMD':
+            opt_model.solve(GLPK_CMD(msg=0))
+        elif self.lp_solver == 'COIN_CMD':
+            opt_model.solve(COIN_CMD(msg=0, path=self.lp_solver_path))
+        else:
+            self.logger.warning("Solver %s unknown, using default", self.lp_solver)
+            opt_model.solve()
         
         # The status of the solution is printed to the screen
         self.optim_status = plp.LpStatus[opt_model.status]
         self.logger.info("Status: " + self.optim_status)
         if plp.value(opt_model.objective) is None:
-            self.logger.warning("Cost function cannot be evaluated, probably None")
+            self.logger.warning("Cost function cannot be evaluated")
+            return
         else:
-            self.logger.info("Total value of the Cost function = " + str(round(plp.value(opt_model.objective),2)))
+            self.logger.info("Total value of the Cost function = %.02f", plp.value(opt_model.objective))
             
         # Build results Dataframe
         opt_tp = pd.DataFrame()
@@ -450,7 +484,10 @@ class optimization:
                 opt_tp["cost_fun_profit"] = [-0.001*self.timeStep*(unit_load_cost[i]*P_grid_pos[i].varValue + \
                     unit_prod_price[i]*P_grid_neg[i].varValue) for i in set_I]
         elif self.costfun == 'cost':
-            opt_tp["cost_fun_cost"] = [-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) for i in set_I]
+            if self.optim_conf['set_total_pv_sell']:
+                opt_tp["cost_fun_cost"] = [-0.001*self.timeStep*unit_load_cost[i]*(P_load[i] + P_def_sum_tp[i]) for i in set_I]
+            else:
+                opt_tp["cost_fun_cost"] = [-0.001*self.timeStep*unit_load_cost[i]*P_grid_pos[i].varValue for i in set_I]
         elif self.costfun == 'self-consumption':
             if type_self_conso == 'maxmin':
                 opt_tp["cost_fun_selfcons"] = [-0.001*self.timeStep*unit_load_cost[i]*SC[i].varValue for i in set_I]
@@ -459,6 +496,16 @@ class optimization:
                     unit_prod_price[i]*P_grid_neg[i].varValue) for i in set_I]
         else:
             self.logger.error("The cost function specified type is not valid")
+            
+        # Add the optimization status
+        opt_tp["optim_status"] = self.optim_status
+        
+        # Debug variables
+        if debug:
+            opt_tp["P_def_start_0"] = [P_def_start[0][i].varValue for i in set_I]
+            opt_tp["P_def_start_1"] = [P_def_start[1][i].varValue for i in set_I]
+            opt_tp["P_def_bin2_0"] = [P_def_bin2[0][i].varValue for i in set_I]
+            opt_tp["P_def_bin2_1"] = [P_def_bin2[1][i].varValue for i in set_I]
         
         return opt_tp
 
@@ -531,7 +578,9 @@ class optimization:
         
     def perform_naive_mpc_optim(self, df_input_data: pd.DataFrame, P_PV: pd.Series, P_load: pd.Series,
                                 prediction_horizon: int, soc_init: Optional[float] = None, soc_final: Optional[float] = None,
-                                def_total_hours: Optional[list] = None) -> pd.DataFrame:
+                                def_total_hours: Optional[list] = None,
+                                def_start_timestep: Optional[list] = None,
+                                def_end_timestep: Optional[list] = None) -> pd.DataFrame:
         r"""
         Perform a naive approach to a Model Predictive Control (MPC). \
         This implementaion is naive because we are not using the formal formulation \
@@ -546,7 +595,8 @@ class optimization:
         :param P_load: The forecasted Load power consumption. This power should \
             not include the power from the deferrable load that we want to find.
         :type P_load: pandas.DataFrame
-        :param prediction_horizon: The prediction horizon of the MPC controller in minutes.
+        :param prediction_horizon: The prediction horizon of the MPC controller in number \
+            of optimization time steps.
         :type prediction_horizon: int
         :param soc_init: The initial battery SOC for the optimization. This parameter \
             is optional, if not given soc_init = soc_final = soc_target from the configuration file.
@@ -554,8 +604,13 @@ class optimization:
         :param soc_final: The final battery SOC for the optimization. This parameter \
             is optional, if not given soc_init = soc_final = soc_target from the configuration file.
         :type soc_final: 
-        :param def_total_hours: The functioning hours for this iteration for each deferrable load.
+        :param def_total_hours: The functioning hours for this iteration for each deferrable load. \
+            (For continuous deferrable loads: functioning hours at nominal power)
         :type def_total_hours: list
+        :param def_start_timestep: The timestep as from which each deferrable load is allowed to operate.
+        :type def_start_timestep: list
+        :param def_end_timestep: The timestep before which each deferrable load should operate.
+        :type def_end_timestep: list
         :return: opt_res: A DataFrame containing the optimization results
         :rtype: pandas.DataFrame
 
@@ -574,6 +629,43 @@ class optimization:
         # Call optimization function
         self.opt_res = self.perform_optimization(df_input_data, P_PV.values.ravel(), P_load.values.ravel(), 
                                                  unit_load_cost, unit_prod_price, soc_init=soc_init, 
-                                                 soc_final=soc_final, def_total_hours=def_total_hours)
+                                                 soc_final=soc_final, def_total_hours=def_total_hours,
+                                                 def_start_timestep=def_start_timestep, def_end_timestep=def_end_timestep)
         return self.opt_res
-    
+
+    @staticmethod
+    def validate_def_timewindow(start: int, end: int, min_steps: int, window: int) -> Tuple[int,int,str]:
+        r"""
+        Helper function to validate (and if necessary: correct) the defined optimization window of a deferrable load.
+        
+        :param start: Start timestep of the optimization window of the deferrable load
+        :type start: int
+        :param end: End timestep of the optimization window of the deferrable load
+        :type end: int
+        :param min_steps: Minimal timesteps during which the load should operate (at nominal power)
+        :type min_steps: int
+        :param window: Total number of timesteps in the optimization window
+        :type window: int
+        :return: start_validated: Validated start timestep of the optimization window of the deferrable load
+        :rtype: int
+        :return: end_validated: Validated end timestep of the optimization window of the deferrable load
+        :rtype: int
+        :return: warning: Any warning information to be returned from the validation steps
+        :rtype: string
+
+        """
+        start_validated = 0
+        end_validated = 0
+        warning = None
+        # Verify that start <= end
+        if start <= end or start <= 0 or end <= 0:
+            # start and end should be within the optimization timewindow [0, window]
+            start_validated = max(0, min(window, start))
+            end_validated = max(0, min(window, end))
+            if end_validated > 0:
+                # If the available timeframe is shorter than the number of timesteps needed to meet the hours to operate (def_total_hours), issue a warning.
+                if (end_validated-start_validated) < min_steps:
+                    warning = "Available timeframe is shorter than the specified number of hours to operate. Optimization will fail."
+        else:
+            warning = "Invalid timeframe for deferrable load (start timestep is not <= end timestep). Continuing optimization without timewindow constraint."
+        return start_validated, end_validated, warning

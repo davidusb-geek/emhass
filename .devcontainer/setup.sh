@@ -19,6 +19,7 @@ main() {
     pip install netCDF4
 
     pip install -r requirements_webserver.txt
+    pip install requests-mock
 
     rm -rf "$0"
 }

@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.7.2] - 2024-01-30
+### Fix
+- Patched new version wer server issues of missing list types
+
+## [0.7.1] - 2024-01-29
+### Fix
+- Patched new version wer server issues accessing correct paths
+
+## [0.7.0] - 2024-01-28
+### Improvement
+- Added a new feature to provide operating time windows for deferrable loads. Thanks to @michaelpiron
+- Added lots of new options to be configured by the user. Thanks to @GeoDerp
+- Updated stylesheet with mobile & dark theme by @GeoDerp
+- Improved launch.json to fully test EMHASS on different configurations. Thanks to @GeoDerp
+- Added new script to debug and develop new time series clustering feature
+- Improved documentation. Thanks to @g1za
+### Fix
+- Updated github workflow actions/checkout to v4 and actions/setup-python to v5
+- Changed default values for weight_battery_discharge and weight_battery_charge to zero
+- Renamed classes to conform to PEP8
+- Bump markupsafe from 2.1.3 to 2.1.4 
+
+## [0.6.2] - 2024-01-04
+### Improvement
+- Added option to pass additional weight for battery usage
+- Improved coverage
+### Fix
+- Updated optimization constraints to solve conflict for `set_def_constant` and `treat_def_as_semi_cont` cases
+
+## [0.6.1] - 2023-12-18
+### Fix
+- Patching EMHASS for Python 3.11. New explicit dependecy h5py==3.10.0
+- Updated Dockerfile to easily test add-on build
+
+## [0.6.0] - 2023-12-16
+### Improvement
+- Now Python 3.11 is fully supported, thanks to @pail23
+- We now publish the optimization status on sensor.optim_status
+- Bumped setuptools, skforecast, numpy, scipy, pandas
+- A good bunch of documentation improvements thanks to @g1za
+- Improved code coverage (a little bit ;-)
+### Fix
+- Some fixes managing time zones, thanks to @pail23
+- Bug fix on grid cost function equation, thanks to @michaelpiron
+- Applying a first set of fixes proposed by @smurfix:
+  - Don't ignore HTTP errors
+  - Handle missing variable correctly
+  - Slight error message improvement
+  - Just use the default solver
+  - Get locations from environment in non-app mode
+  - Tolerate running directly from source
+
 ## [0.5.1] - 2023-10-19
 ### Improvement
 - Improved documentation, thanks to @g1za
@@ -471,6 +523,9 @@
 [0.4.13]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.13
 [0.4.14]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.14
 [0.4.15]: https://github.com/davidusb-geek/emhass/releases/tag/v0.4.15
+[0.5.0]: https://github.com/davidusb-geek/emhass/releases/tag/v0.5.0
+[0.5.1]: https://github.com/davidusb-geek/emhass/releases/tag/v0.5.1
+[0.6.0]: https://github.com/davidusb-geek/emhass/releases/tag/v0.6.0
 
 # Notes
 All notable changes to this project will be documented in this file.

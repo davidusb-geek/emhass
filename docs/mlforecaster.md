@@ -16,13 +16,13 @@ To train a model use the `forecast-model-fit` end point.
 
 Some paramters can be optionally defined at runtime:
 
-- `days_to_retrieve`: the total days to retrieve from Home Assistant for model training. Defined this in order to retrieve as much history data as possible.
+- `days_to_retrieve`: the total days to retrieve from Home Assistant for model training. Define this in order to retrieve as much history data as possible.
 
 ```{note}
 The minimum number of `days_to_retrieve` is hard coded to 9 by default. But it is adviced to provide more data for better accuracy by modifying your Home Assistant recorder settings. 
 ```
 
-- `model_type`: define the type of model forecast that this will be used for. For example: `load_forecast`. This should be an unique name is you are using multiple custom forecast models.
+- `model_type`: define the type of model forecast that this will be used for. For example: `load_forecast`. This should be an unique name if you are using multiple custom forecast models.
 
 - `var_model`: the name of the sensor to retrieve data from Home Assistant. Example: `sensor.power_load_no_var_loads`.
 
@@ -37,7 +37,7 @@ The minimum number of `days_to_retrieve` is hard coded to 9 by default. But it i
 The default values for these parameters are:
 ```
 runtimeparams = {
-    "days_to_retrieve": 30,
+    "days_to_retrieve": 9,
     "model_type": "load_forecast",
     "var_model": "sensor.power_load_no_var_loads",
     "sklearn_model": "KNeighborsRegressor",
