@@ -592,48 +592,30 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int, 
         # Updating variables in optim_conf
         params['optim_conf']['set_use_battery'] = options.get('set_use_battery',params['optim_conf']['set_use_battery'])
         params['optim_conf']['num_def_loads'] = options.get('number_of_deferrable_loads',params['optim_conf']['num_def_loads'])
-        try:
+        if options.get('list_nominal_power_of_deferrable_loads',None) != None: 
             params['optim_conf']['P_deferrable_nom'] = [i['nominal_power_of_deferrable_loads'] for i in options.get('list_nominal_power_of_deferrable_loads')]
-        except:
-            logger.debug("no list_nominal_power_of_deferrable_loads, defaulting to config file")
-        try:    
+        if options.get('list_operating_hours_of_each_deferrable_load',None) != None: 
             params['optim_conf']['def_total_hours'] = [i['operating_hours_of_each_deferrable_load'] for i in options.get('list_operating_hours_of_each_deferrable_load')]
-        except:
-            logger.debug("no list_operating_hours_of_each_deferrable_load, defaulting to config file")
-        try:
+        if options.get('list_treat_deferrable_load_as_semi_cont',None) != None: 
             params['optim_conf']['treat_def_as_semi_cont'] = [i['treat_deferrable_load_as_semi_cont'] for i in options.get('list_treat_deferrable_load_as_semi_cont')]
-        except:
-            logger.debug("no list_treat_deferrable_load_as_semi_cont, defaulting to config file")
         params['optim_conf']['weather_forecast_method'] = options.get('weather_forecast_method',params['optim_conf']['weather_forecast_method'])
+        # Update optional param secrets
         if params['optim_conf']['weather_forecast_method'] == "solcast":
-            try:
-                params['params_secrets']['solcast_api_key'] = options.get('optional_solcast_api_key',params['params_secrets']['solcast_api_key'])
-            except: #If no secrets file set default
-                params['params_secrets']['solcast_api_key'] = options.get('optional_solcast_api_key',"123456")
-            try:
-                params['params_secrets']['solcast_rooftop_id'] = options.get('optional_solcast_rooftop_id',params['params_secrets']['solcast_rooftop_id'])
-            except:
-                params['params_secrets']['solcast_rooftop_id'] = options.get('optional_solcast_rooftop_id',"123456")
+            params['params_secrets']['solcast_api_key'] = options.get('optional_solcast_api_key',params_secrets.get('solcast_api_key',"123456"))
+            params['params_secrets']['solcast_rooftop_id'] = options.get('optional_solcast_rooftop_id',params_secrets.get('solcast_rooftop_id',"123456"))
         elif params['optim_conf']['weather_forecast_method'] == "solar.forecast":    
-            try:
-                params['params_secrets']['solar_forecast_kwp'] = options.get('optional_solar_forecast_kwp',params['params_secrets']['solar_forecast_kwp'] )
-            except:
-                params['params_secrets']['solar_forecast_kwp'] = options.get('optional_solar_forecast_kwp',5)
+            params['params_secrets']['solar_forecast_kwp'] = options.get('optional_solar_forecast_kwp',params_secrets.get('solar_forecast_kwp',5))
         params['optim_conf']['load_forecast_method'] = options.get('load_forecast_method',params['optim_conf']['load_forecast_method'])
         params['optim_conf']['delta_forecast'] = options.get('delta_forecast_daily',params['optim_conf']['delta_forecast'])
         params['optim_conf']['load_cost_forecast_method'] = options.get('load_cost_forecast_method',params['optim_conf']['load_cost_forecast_method'])
-        try:
+        if options.get('list_set_deferrable_load_single_constant',None) != None: 
             params['optim_conf']['set_def_constant'] = [i['set_deferrable_load_single_constant'] for i in options.get('list_set_deferrable_load_single_constant')]
-        except:
-            logger.debug("no list_set_deferrable_load_single_constant, defaulting to config file")
-        try:
+        if options.get('list_peak_hours_periods_start_hours',None) != None:
             start_hours_list = [i['peak_hours_periods_start_hours'] for i in options['list_peak_hours_periods_start_hours']]
             end_hours_list = [i['peak_hours_periods_end_hours'] for i in options['list_peak_hours_periods_end_hours']]
             num_peak_hours = len(start_hours_list)
             list_hp_periods_list = [{'period_hp_'+str(i+1):[{'start':start_hours_list[i]},{'end':end_hours_list[i]}]} for i in range(num_peak_hours)]
             params['optim_conf']['list_hp_periods'] = list_hp_periods_list
-        except:
-            logger.debug("no list_peak_hours_periods_start_hours, defaulting to config file")
         params['optim_conf']['load_cost_hp'] = options.get('load_peak_hours_cost',params['optim_conf']['load_cost_hp'])
         params['optim_conf']['load_cost_hc'] = options.get('load_offpeak_hours_cost', params['optim_conf']['load_cost_hc'])
         params['optim_conf']['prod_price_forecast_method'] = options.get('production_price_forecast_method', params['optim_conf']['prod_price_forecast_method'])
@@ -648,40 +630,24 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int, 
         params['optim_conf']['battery_dynamic_min'] = options.get('battery_dynamic_min',params['optim_conf']['battery_dynamic_min'])
         params['optim_conf']['weight_battery_discharge'] = options.get('weight_battery_discharge',params['optim_conf']['weight_battery_discharge'])
         params['optim_conf']['weight_battery_charge'] = options.get('weight_battery_charge',params['optim_conf']['weight_battery_charge'])
-        try:
+        if options.get('list_start_timesteps_of_each_deferrable_load',None) != None: 
             params['optim_conf']['def_start_timestep'] = [i['start_timesteps_of_each_deferrable_load'] for i in options.get('list_start_timesteps_of_each_deferrable_load')]
-        except:
-            logger.debug("no list_start_timesteps_of_each_deferrable_load, defaulting to config file")
-        try:
+        if options.get('list_end_timesteps_of_each_deferrable_load',None) != None: 
             params['optim_conf']['def_end_timestep'] = [i['end_timesteps_of_each_deferrable_load'] for i in options.get('list_end_timesteps_of_each_deferrable_load')]
-        except:
-            logger.debug("no list_end_timesteps_of_each_deferrable_load, defaulting to config file")
         # Updating variables in plant_con
-        params['plant_conf']['P_grid_max'] = options.get('maximum_power_from_grid',params['plant_conf']['P_grid_max'])
-        try:
+            params['plant_conf']['P_grid_max'] = options.get('maximum_power_from_grid',params['plant_conf']['P_grid_max'])
+        if options.get('list_pv_module_model',None) != None:         
             params['plant_conf']['module_model'] = [i['pv_module_model'] for i in options.get('list_pv_module_model')]
-        except:
-            logger.debug("no list_pv_module_model, defaulting to config file")
-        try:
+        if options.get('list_pv_inverter_model',None) != None:        
             params['plant_conf']['inverter_model'] = [i['pv_inverter_model'] for i in options.get('list_pv_inverter_model')]
-        except:
-            logger.debug("no list_pv_inverter_model, defaulting to config file")
-        try:
+        if options.get('list_surface_tilt',None) != None:        
             params['plant_conf']['surface_tilt'] = [i['surface_tilt'] for i in options.get('list_surface_tilt')]
-        except:
-            logger.debug("no list_surface_tilt, defaulting to config file")
-        try:
+        if options.get('list_surface_azimuth',None) != None:         
             params['plant_conf']['surface_azimuth'] = [i['surface_azimuth'] for i in options.get('list_surface_azimuth')]
-        except:
-            logger.debug("no list_surface_azimuth, defaulting to config file")
-        try:
+        if options.get('list_modules_per_string',None) != None:         
             params['plant_conf']['modules_per_string'] = [i['modules_per_string'] for i in options.get('list_modules_per_string')]
-        except:
-            logger.debug("no list_modules_per_string, defaulting to config file")
-        try:
+        if options.get('list_strings_per_inverter',None) != None: 
             params['plant_conf']['strings_per_inverter'] = [i['strings_per_inverter'] for i in options.get('list_strings_per_inverter')]
-        except:
-            logger.debug("no list_strings_per_inverter, defaulting to config file")
         params['plant_conf']['Pd_max'] = options.get('battery_discharge_power_max',params['plant_conf']['Pd_max']) 
         params['plant_conf']['Pc_max'] = options.get('battery_charge_power_max',params['plant_conf']['Pc_max'])
         params['plant_conf']['eta_disch'] = options.get('battery_discharge_efficiency',params['plant_conf']['eta_disch'])
