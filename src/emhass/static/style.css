@@ -543,10 +543,6 @@ button {
   margin: 0px;
 }
 
-.svg-container {
-  margin-bottom: 10px;
-}
-
 .table_div {
   /* margin: 15px 5px 0px 0px; */
   margin: 15px 5px 0px 0px;
@@ -557,15 +553,21 @@ button {
   overflow-x: auto !important;
 }
 
+.modebar-group {
+  float: right !important;
+  min-width: 0px !important;
+}
 .svg-container,
-.main-svg,
 .table_div div {
-  min-width: 800px !important;
+  min-width: 850px;
 }
 
-.modebar-container {
-  width:auto !important;
+.modebar-container, .modebar{
+  width: 100% !important;
+  position: relative !important;
+  float: right !important;
 }
+
 
 /* Special style for DataFrmae tables */
 /* includes alternating gray and white with on-hover color */
@@ -594,6 +596,17 @@ th {
 .mystyle tr:hover {
   background: silver;
   cursor: pointer;
+}
+
+.svg-container, .main-svg, .gl-container, .modebar-container {
+  margin: 0 !important;
+}
+
+/* mobile only changes */
+@media only screen and (max-width: 799px) {
+.modebar-group:has(a[data-attr=dragmode]), .draglayer, .layer-below {
+  display: none !important;
+}
 }
 
 /* Dark Theme Support */
