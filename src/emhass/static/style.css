@@ -4,7 +4,7 @@
 .light {
   color: darkblue;
   color: #ccf3ff;
-  color: white;  
+  color: white;
   color: #e1e1e1;
   color: silver;
   color: #7d7d7d;
@@ -22,6 +22,7 @@
   color: #181818;
   color: #111111;
 }
+
 /* -------------- */
 
 
@@ -198,7 +199,7 @@ ol ol ol {
   list-style-type: lower-alpha;
 }
 
-li > p {
+li>p {
   margin-top: 1em;
 }
 
@@ -209,15 +210,15 @@ blockquote {
   border-left: 4px solid silver;
 }
 
-blockquote > :first-child {
+blockquote> :first-child {
   margin-top: 0;
 }
 
-blockquote > :last-child {
+blockquote> :last-child {
   margin-bottom: 0;
 }
 
-b,
+padding b,
 strong {
   font-weight: inherit;
   font-weight: 600;
@@ -278,7 +279,7 @@ pre code::after {
   content: normal;
 }
 
-pre > code {
+pre>code {
   border: 0;
   font-size: 1em;
   white-space: pre;
@@ -557,17 +558,25 @@ button {
   float: right !important;
   min-width: 0px !important;
 }
+
 .svg-container,
 .table_div div {
   min-width: 850px;
 }
 
-.modebar-container, .modebar{
+.modebar-container,
+.modebar {
   width: 100% !important;
   position: relative !important;
   float: right !important;
 }
 
+.svg-container,
+.main-svg,
+.gl-container,
+.modebar-container {
+  margin: 0 !important;
+}
 
 /* Special style for DataFrmae tables */
 /* includes alternating gray and white with on-hover color */
@@ -598,15 +607,14 @@ th {
   cursor: pointer;
 }
 
-.svg-container, .main-svg, .gl-container, .modebar-container {
-  margin: 0 !important;
-}
-
 /* mobile only changes */
 @media only screen and (max-width: 799px) {
-.modebar-group:has(a[data-attr=dragmode]), .draglayer, .layer-below {
-  display: none !important;
-}
+
+  .modebar-group:has(a[data-attr=dragmode]),
+  .draglayer,
+  .layer-below {
+    display: none !important;
+  }
 }
 
 /* Dark Theme Support */
@@ -615,19 +623,23 @@ th {
     background: #111111;
     color: #e1e1e1;
   }
+
   img,
   figure {
     -webkit-filter: invert(90%);
     filter: invert(90%);
   }
+
   button {
     color: #e1e1e1;
     background-color: rgb(40, 41, 40);
   }
+
   button:hover {
     color: #ccf3ff;
     background-color: #3d3d3d;
   }
+
   h2,
   kbd,
   a {
@@ -635,14 +647,17 @@ th {
     color: #ccf3ff;
     border: rgb(71, 71, 71);
   }
+
   .modebar-btn {
     background-color: #e1e1e1;
   }
+
   .main-svg svg,
   legend {
     background-color: rgb(73, 73, 73, 5%);
     background: rgb(73, 73, 73, 5%);
   }
+
   .g-gtitle,
   .g-xtitle,
   .g-ytitle,
@@ -650,22 +665,27 @@ th {
   th {
     color: #e1e1e1;
   }
+
   tr td:nth-child(even),
   .mystyle tr td:nth-child(even) {
     background-color: #3d3d3d;
   }
+
   tr:nth-child(odd),
   .mystyle tr:nth-child(odd) {
     background-color: #111111;
   }
+
   tr:nth-child(even),
   .mystyle tr:nth-child(even) {
     background-color: #181818;
   }
+
   tr:hover td,
   th {
     background-color: #3f3f3f;
   }
+
   .mystyle,
   .main-svg {
     box-shadow: 0 0 0 1px silver;
