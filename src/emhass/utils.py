@@ -654,8 +654,10 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int, 
 
 
         ## add the rest manually 
-        params['retrieve_hass_conf']['var_replace_zero'] = [options.get('sensor_power_photovoltaics',params['retrieve_hass_conf']['var_replace_zero'])]
-        params['retrieve_hass_conf']['var_interp'] = [options.get('sensor_power_photovoltaics',params['retrieve_hass_conf']['var_PV']), options.get('sensor_power_load_no_var_loads',params['retrieve_hass_conf']['var_load'])]
+        if options.get('sensor_power_photovoltaics',None) is not None:
+            params['retrieve_hass_conf']['var_replace_zero'] = [options.get('sensor_power_photovoltaics')]
+        if options.get('sensor_power_photovoltaics',None) is not None and options.get('sensor_power_load_no_var_loads',None) is not None:
+            params['retrieve_hass_conf']['var_interp'] = [options.get('sensor_power_photovoltaics'), options.get('sensor_power_load_no_var_loads')]
         if options.get('list_peak_hours_periods_start_hours',None) != None:
             start_hours_list = [i['peak_hours_periods_start_hours'] for i in options['list_peak_hours_periods_start_hours']]
             end_hours_list = [i['peak_hours_periods_end_hours'] for i in options['list_peak_hours_periods_end_hours']]
