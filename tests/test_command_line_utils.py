@@ -290,6 +290,7 @@ class TestCommandLineUtils(unittest.TestCase):
                                               action, logger, get_data_from_file=True)
         self.assertTrue(input_data_dict['params']['passed_data']['model_type'] == 'load_forecast')
         self.assertTrue(input_data_dict['params']['passed_data']['sklearn_model'] == 'KNeighborsRegressor')
+        self.assertTrue(input_data_dict['params']['passed_data']['perform_backtest'] == False)
         # Check that the default params are loaded
         input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
