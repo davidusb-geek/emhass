@@ -8,7 +8,7 @@
   "method_ts_round": "nearest",
   "optional_solcast_api_key": "empty",
   "optional_solcast_rooftop_id": "empty",
-  "optional_solar_forecast_kwp": 0,
+  "optional_solar_forecast_kwp": 5,
   "set_total_pv_sell": false,
   "lp_solver": "COIN_CMD",
   "lp_solver_path": "/usr/bin/cbc",
