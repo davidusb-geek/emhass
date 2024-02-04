@@ -573,99 +573,89 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int, 
     :rtype: dict
     """
     if addon == 1:
-        # create associations list
-        # _conf, key, options key, 'options key in list' 
+        # Updating variables in retrieve_hass_conf
+        params['retrieve_hass_conf']['freq'] = options.get('optimization_time_step',params['retrieve_hass_conf']['freq'])
+        params['retrieve_hass_conf']['days_to_retrieve'] = options.get('historic_days_to_retrieve',params['retrieve_hass_conf']['days_to_retrieve'])
+        params['retrieve_hass_conf']['var_PV'] = options.get('sensor_power_photovoltaics',params['retrieve_hass_conf']['var_PV'])
+        params['retrieve_hass_conf']['var_load'] = options.get('sensor_power_load_no_var_loads',params['retrieve_hass_conf']['var_load'])
+        params['retrieve_hass_conf']['load_negative'] = options.get('load_negative',params['retrieve_hass_conf']['load_negative'])
+        params['retrieve_hass_conf']['set_zero_min'] = options.get('set_zero_min',params['retrieve_hass_conf']['set_zero_min'])
+        params['retrieve_hass_conf']['var_replace_zero'] = [options.get('sensor_power_photovoltaics',params['retrieve_hass_conf']['var_replace_zero'])]
+        params['retrieve_hass_conf']['var_interp'] = [options.get('sensor_power_photovoltaics',params['retrieve_hass_conf']['var_PV']), options.get('sensor_power_load_no_var_loads',params['retrieve_hass_conf']['var_load'])]
+        params['retrieve_hass_conf']['method_ts_round'] = options.get('method_ts_round',params['retrieve_hass_conf']['method_ts_round'])
+        # Update params Secrets if specified
         params['params_secrets'] = params_secrets
-        associations = []    
-        associations_dict = {}
-        # variables in retrieve_hass_conf
-        associations.append(['retrieve_hass_conf', 'freq', 'optimization_time_step'])
-        associations.append(['retrieve_hass_conf', 'days_to_retrieve', 'historic_days_to_retrieve'])
-        associations.append(['retrieve_hass_conf', 'var_PV', 'sensor_power_photovoltaics'])
-        associations.append(['retrieve_hass_conf', 'var_load', 'sensor_power_load_no_var_loads'])
-        associations.append(['retrieve_hass_conf', 'load_negative', 'load_negative'])
-        associations.append(['retrieve_hass_conf', 'set_zero_min', 'set_zero_min'])
-        associations.append(['retrieve_hass_conf', 'method_ts_round', 'method_ts_round'])
-        # variables in params_secrets
-        associations.append(['params_secrets', 'solcast_api_key', 'optional_solcast_api_key'])
-        associations.append(['params_secrets', 'solcast_rooftop_id', 'optional_solcast_rooftop_id'])
-        associations.append(['params_secrets', 'solar_forecast_kwp', 'optional_solar_forecast_kwp'])
-        associations.append(['params_secrets', 'time_zone', 'time_zone'])
-        associations.append(['params_secrets', 'lat', 'Latitude'])
-        associations.append(['params_secrets', 'lon', 'Longitude'])
-        associations.append(['params_secrets', 'alt', 'Altitude'])
-        #  variables in optim_conf
-        associations.append(['optim_conf', 'set_use_battery', 'set_use_battery'])
-        associations.append(['optim_conf', 'num_def_loads', 'number_of_deferrable_loads'])
-        associations.append(['optim_conf', 'P_deferrable_nom', 'list_nominal_power_of_deferrable_loads', 'nominal_power_of_deferrable_loads'])
-        associations.append(['optim_conf', 'def_total_hours', 'list_operating_hours_of_each_deferrable_load', 'operating_hours_of_each_deferrable_load'])
-        associations.append(['optim_conf', 'treat_def_as_semi_cont', 'list_treat_deferrable_load_as_semi_cont', 'treat_deferrable_load_as_semi_cont'])
-        associations.append(['optim_conf', 'set_def_constant', 'list_set_deferrable_load_single_constant', 'set_deferrable_load_single_constant'])
-        associations.append(['optim_conf', 'weather_forecast_method', 'weather_forecast_method'])
-        associations.append(['optim_conf', 'load_forecast_method', 'load_forecast_method'])
-        associations.append(['optim_conf', 'delta_forecast', 'delta_forecast_daily'])
-        associations.append(['optim_conf', 'load_cost_forecast_method', 'load_cost_forecast_method'])
-        associations.append(['optim_conf', 'load_cost_hp', 'load_peak_hours_cost'])
-        associations.append(['optim_conf', 'load_cost_hc', 'load_offpeak_hours_cost'])
-        associations.append(['optim_conf', 'prod_price_forecast_method', 'production_price_forecast_method'])
-        associations.append(['optim_conf', 'prod_sell_price', 'photovoltaic_production_sell_price'])
-        associations.append(['optim_conf', 'set_total_pv_sell', 'set_total_pv_sell'])
-        associations.append(['optim_conf', 'lp_solver', 'lp_solver'])
-        associations.append(['optim_conf', 'lp_solver_path', 'lp_solver_path'])
-        associations.append(['optim_conf', 'set_nocharge_from_grid', 'set_nocharge_from_grid'])
-        associations.append(['optim_conf', 'set_nodischarge_to_grid', 'set_nodischarge_to_grid'])
-        associations.append(['optim_conf', 'set_battery_dynamic', 'set_battery_dynamic'])
-        associations.append(['optim_conf', 'battery_dynamic_max', 'battery_dynamic_max'])
-        associations.append(['optim_conf', 'battery_dynamic_min', 'battery_dynamic_min'])
-        associations.append(['optim_conf', 'weight_battery_discharge', 'weight_battery_discharge'])
-        associations.append(['optim_conf', 'weight_battery_charge', 'weight_battery_charge'])
-        associations.append(['optim_conf', 'def_start_timestep', 'start_timesteps_of_each_deferrable_load', 'list_start_timesteps_of_each_deferrable_load'])
-        associations.append(['optim_conf', 'def_end_timestep', 'end_timesteps_of_each_deferrable_load', 'list_end_timesteps_of_each_deferrable_load'])
-        # variables in plant_conf
-        associations.append(['plant_conf', 'P_grid_max', 'maximum_power_from_grid'])
-        associations.append(['plant_conf', 'module_model', 'list_pv_module_model', 'pv_module_model' ])
-        associations.append(['plant_conf', 'inverter_model', 'list_pv_inverter_model', 'pv_inverter_model' ])
-        associations.append(['plant_conf', 'surface_tilt', 'list_surface_tilt', 'surface_tilt' ])
-        associations.append(['plant_conf', 'surface_azimuth', 'list_surface_azimuth', 'surface_azimuth'])
-        associations.append(['plant_conf', 'modules_per_string','list_modules_per_string', 'modules_per_string'])
-        associations.append(['plant_conf', 'strings_per_inverter', 'list_strings_per_inverter', 'strings_per_inverter'])
-        associations.append(['plant_conf', 'Pd_max', 'battery_discharge_power_max'])
-        associations.append(['plant_conf', 'Pc_max', 'battery_charge_power_max'])
-        associations.append(['plant_conf', 'eta_disch', 'battery_discharge_efficiency'])
-        associations.append(['plant_conf', 'eta_ch', 'battery_charge_efficiency'])
-        associations.append(['plant_conf', 'Enom', 'battery_nominal_energy_capacity'])
-        associations.append(['plant_conf', 'SOCmin', 'battery_minimum_state_of_charge'])
-        associations.append(['plant_conf', 'SOCmax', 'battery_maximum_state_of_charge'])
-        associations.append(['plant_conf', 'SOCtarget', 'battery_target_state_of_charge'])
-
-        for i in associations:
-            #check if options are null 
-            if  options.get(i[2],None) is not None:
-                #check if list
-                # print(options[i[2]])
-                if len(i) == 4:
-                    params[i[0]][i[1]] = [x[i[3]] for x in options[i[2]]]
-                #check if dictionary
-                elif type(options[i[2]]) is not dict:
-                    params[i[0]][i[1]] = options[i[2]] 
-                else:    
-                    params[i[0]][i[1]] = [options[i[2]]]
-            associations_dict.update({i[1]:i[2]})
-
-
-        ## add the rest manually 
-        if options.get('sensor_power_photovoltaics',None) is not None:
-            params['retrieve_hass_conf']['var_replace_zero'] = [options.get('sensor_power_photovoltaics')]
-        if options.get('sensor_power_photovoltaics',None) is not None and options.get('sensor_power_load_no_var_loads',None) is not None:
-            params['retrieve_hass_conf']['var_interp'] = [options.get('sensor_power_photovoltaics'), options.get('sensor_power_load_no_var_loads')]
+        params['params_secrets']['time_zone'] = options.get('time_zone',params_secrets['time_zone'])
+        params['params_secrets']['lat'] = options.get('Latitude',params_secrets['lat'])
+        params['params_secrets']['lon'] = options.get('Longitude',params_secrets['lon'])
+        params['params_secrets']['alt'] = options.get('Altitude',params_secrets['alt'])
+        # Updating variables in optim_conf
+        params['optim_conf']['set_use_battery'] = options.get('set_use_battery',params['optim_conf']['set_use_battery'])
+        params['optim_conf']['num_def_loads'] = options.get('number_of_deferrable_loads',params['optim_conf']['num_def_loads'])
+        if options.get('list_nominal_power_of_deferrable_loads',None) != None: 
+            params['optim_conf']['P_deferrable_nom'] = [i['nominal_power_of_deferrable_loads'] for i in options.get('list_nominal_power_of_deferrable_loads')]
+        if options.get('list_operating_hours_of_each_deferrable_load',None) != None: 
+            params['optim_conf']['def_total_hours'] = [i['operating_hours_of_each_deferrable_load'] for i in options.get('list_operating_hours_of_each_deferrable_load')]
+        if options.get('list_treat_deferrable_load_as_semi_cont',None) != None: 
+            params['optim_conf']['treat_def_as_semi_cont'] = [i['treat_deferrable_load_as_semi_cont'] for i in options.get('list_treat_deferrable_load_as_semi_cont')]
+        params['optim_conf']['weather_forecast_method'] = options.get('weather_forecast_method',params['optim_conf']['weather_forecast_method'])
+        # Update optional param secrets
+        if params['optim_conf']['weather_forecast_method'] == "solcast":
+            params['params_secrets']['solcast_api_key'] = options.get('optional_solcast_api_key',params_secrets.get('solcast_api_key',"123456"))
+            params['params_secrets']['solcast_rooftop_id'] = options.get('optional_solcast_rooftop_id',params_secrets.get('solcast_rooftop_id',"123456"))
+        elif params['optim_conf']['weather_forecast_method'] == "solar.forecast":    
+            params['params_secrets']['solar_forecast_kwp'] = options.get('optional_solar_forecast_kwp',params_secrets.get('solar_forecast_kwp',5))
+        params['optim_conf']['load_forecast_method'] = options.get('load_forecast_method',params['optim_conf']['load_forecast_method'])
+        params['optim_conf']['delta_forecast'] = options.get('delta_forecast_daily',params['optim_conf']['delta_forecast'])
+        params['optim_conf']['load_cost_forecast_method'] = options.get('load_cost_forecast_method',params['optim_conf']['load_cost_forecast_method'])
+        if options.get('list_set_deferrable_load_single_constant',None) != None: 
+            params['optim_conf']['set_def_constant'] = [i['set_deferrable_load_single_constant'] for i in options.get('list_set_deferrable_load_single_constant')]
         if options.get('list_peak_hours_periods_start_hours',None) != None:
             start_hours_list = [i['peak_hours_periods_start_hours'] for i in options['list_peak_hours_periods_start_hours']]
             end_hours_list = [i['peak_hours_periods_end_hours'] for i in options['list_peak_hours_periods_end_hours']]
             num_peak_hours = len(start_hours_list)
             list_hp_periods_list = [{'period_hp_'+str(i+1):[{'start':start_hours_list[i]},{'end':end_hours_list[i]}]} for i in range(num_peak_hours)]
             params['optim_conf']['list_hp_periods'] = list_hp_periods_list
-
-        params['associations_dict'] = associations_dict 
+        params['optim_conf']['load_cost_hp'] = options.get('load_peak_hours_cost',params['optim_conf']['load_cost_hp'])
+        params['optim_conf']['load_cost_hc'] = options.get('load_offpeak_hours_cost', params['optim_conf']['load_cost_hc'])
+        params['optim_conf']['prod_price_forecast_method'] = options.get('production_price_forecast_method', params['optim_conf']['prod_price_forecast_method'])
+        params['optim_conf']['prod_sell_price'] = options.get('photovoltaic_production_sell_price',params['optim_conf']['prod_sell_price'])
+        params['optim_conf']['set_total_pv_sell'] = options.get('set_total_pv_sell',params['optim_conf']['set_total_pv_sell'])
+        params['optim_conf']['lp_solver'] = options.get('lp_solver',params['optim_conf']['lp_solver'])
+        params['optim_conf']['lp_solver_path'] = options.get('lp_solver_path',params['optim_conf']['lp_solver_path'])
+        params['optim_conf']['set_nocharge_from_grid'] = options.get('set_nocharge_from_grid',params['optim_conf']['set_nocharge_from_grid'])
+        params['optim_conf']['set_nodischarge_to_grid'] = options.get('set_nodischarge_to_grid',params['optim_conf']['set_nodischarge_to_grid'])
+        params['optim_conf']['set_battery_dynamic'] = options.get('set_battery_dynamic',params['optim_conf']['set_battery_dynamic'])
+        params['optim_conf']['battery_dynamic_max'] = options.get('battery_dynamic_max',params['optim_conf']['battery_dynamic_max'])
+        params['optim_conf']['battery_dynamic_min'] = options.get('battery_dynamic_min',params['optim_conf']['battery_dynamic_min'])
+        params['optim_conf']['weight_battery_discharge'] = options.get('weight_battery_discharge',params['optim_conf']['weight_battery_discharge'])
+        params['optim_conf']['weight_battery_charge'] = options.get('weight_battery_charge',params['optim_conf']['weight_battery_charge'])
+        if options.get('list_start_timesteps_of_each_deferrable_load',None) != None: 
+            params['optim_conf']['def_start_timestep'] = [i['start_timesteps_of_each_deferrable_load'] for i in options.get('list_start_timesteps_of_each_deferrable_load')]
+        if options.get('list_end_timesteps_of_each_deferrable_load',None) != None: 
+            params['optim_conf']['def_end_timestep'] = [i['end_timesteps_of_each_deferrable_load'] for i in options.get('list_end_timesteps_of_each_deferrable_load')]
+        # Updating variables in plant_con
+            params['plant_conf']['P_grid_max'] = options.get('maximum_power_from_grid',params['plant_conf']['P_grid_max'])
+        if options.get('list_pv_module_model',None) != None:         
+            params['plant_conf']['module_model'] = [i['pv_module_model'] for i in options.get('list_pv_module_model')]
+        if options.get('list_pv_inverter_model',None) != None:        
+            params['plant_conf']['inverter_model'] = [i['pv_inverter_model'] for i in options.get('list_pv_inverter_model')]
+        if options.get('list_surface_tilt',None) != None:        
+            params['plant_conf']['surface_tilt'] = [i['surface_tilt'] for i in options.get('list_surface_tilt')]
+        if options.get('list_surface_azimuth',None) != None:         
+            params['plant_conf']['surface_azimuth'] = [i['surface_azimuth'] for i in options.get('list_surface_azimuth')]
+        if options.get('list_modules_per_string',None) != None:         
+            params['plant_conf']['modules_per_string'] = [i['modules_per_string'] for i in options.get('list_modules_per_string')]
+        if options.get('list_strings_per_inverter',None) != None: 
+            params['plant_conf']['strings_per_inverter'] = [i['strings_per_inverter'] for i in options.get('list_strings_per_inverter')]
+        params['plant_conf']['Pd_max'] = options.get('battery_discharge_power_max',params['plant_conf']['Pd_max']) 
+        params['plant_conf']['Pc_max'] = options.get('battery_charge_power_max',params['plant_conf']['Pc_max'])
+        params['plant_conf']['eta_disch'] = options.get('battery_discharge_efficiency',params['plant_conf']['eta_disch'])
+        params['plant_conf']['eta_ch'] = options.get('battery_charge_efficiency',params['plant_conf']['eta_ch'])
+        params['plant_conf']['Enom'] = options.get('battery_nominal_energy_capacity',params['plant_conf']['Enom'])
+        params['plant_conf']['SOCmin'] = options.get('battery_minimum_state_of_charge',params['plant_conf']['SOCmin']) 
+        params['plant_conf']['SOCmax'] = options.get('battery_maximum_state_of_charge',params['plant_conf']['SOCmax']) 
+        params['plant_conf']['SOCtarget'] = options.get('battery_target_state_of_charge',params['plant_conf']['SOCtarget'])
     else:
         params['params_secrets'] = params_secrets
     # The params dict
