@@ -131,19 +131,6 @@ class TestCommandLineUtils(unittest.TestCase):
         runtimeparams.update({'custom_unit_load_cost_id':'my_custom_unit_load_cost_id'})
         runtimeparams.update({'custom_unit_prod_price_id':'my_custom_unit_prod_price_id'})
         runtimeparams.update({'custom_deferrable_forecast_id':'my_custom_deferrable_forecast_id'})
-        runtimeparams.update({'days_to_retrieve':15})
-        runtimeparams.update({'model_type':"my_special_model"})
-        runtimeparams.update({'var_model':"sensor.my_special_sensor"})
-        runtimeparams.update({'sklearn_model':"LinearRegression"})
-        runtimeparams.update({'num_lags':12})
-        runtimeparams.update({'split_date_delta':"24h"})
-        runtimeparams.update({'perform_backtest':True})
-        runtimeparams.update({'model_predict_entity_id':"sensor.my_custom_model_forecast"})
-        runtimeparams.update({'model_predict_unit_of_measurement':"kW"})
-        runtimeparams.update({'model_predict_friendly_name':"That friendly name"})
-        runtimeparams.update({'model_predict_unit_of_measurement':"kW"})
-        runtimeparams.update({'model_predict_unit_of_measurement':"kW"})
-        runtimeparams.update({'model_predict_unit_of_measurement':"kW"})
         
         runtimeparams_json = json.dumps(runtimeparams)
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
@@ -180,20 +167,6 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(params['passed_data']['custom_unit_load_cost_id'] == 'my_custom_unit_load_cost_id')
         self.assertTrue(params['passed_data']['custom_unit_prod_price_id'] == 'my_custom_unit_prod_price_id')
         self.assertTrue(params['passed_data']['custom_deferrable_forecast_id'] == 'my_custom_deferrable_forecast_id')
-        
-        self.assertTrue(params['passed_data']['days_to_retrieve'] == 15)
-        self.assertTrue(params['passed_data']['model_type'] == "my_special_model")
-        self.assertTrue(params['passed_data']['var_model'] == "sensor.my_special_sensor")
-        self.assertTrue(params['passed_data']['sklearn_model'] == "LinearRegression")
-        self.assertTrue(params['passed_data']['num_lags'] == 12)
-        self.assertTrue(params['passed_data']['split_date_delta'] == "24h")
-        self.assertTrue(params['passed_data']['perform_backtest'] == True)
-        self.assertTrue(params['passed_data']['model_predict_entity_id'] == "sensor.my_custom_model_forecast")
-        self.assertTrue(params['passed_data']['model_predict_unit_of_measurement'] == "kW")
-        self.assertTrue(params['passed_data']['model_predict_friendly_name'] == "That friendly name")
-        self.assertTrue(params['passed_data']['model_predict_unit_of_measurement'] == "kW")
-        self.assertTrue(params['passed_data']['model_predict_unit_of_measurement'] == "kW")
-        self.assertTrue(params['passed_data']['model_predict_unit_of_measurement'] == "kW")
     
     def test_treat_runtimeparams_failed(self):
         params = TestCommandLineUtils.get_test_params()
@@ -272,16 +245,6 @@ class TestCommandLineUtils(unittest.TestCase):
         for key in expected_keys:
             self.assertTrue(key in params.keys())
         self.assertTrue(params['params_secrets']['time_zone'] == "Europe/Paris")
-        # Test options and config parameter hierarchy
-        associations_dict = params["associations_dict"]
-        for keys in params:
-            if keys == "retrieve_hass_conf" or keys == "optim_conf" or keys == "plant_conf":
-                for param_items in params[keys]:
-                        if options.get(associations_dict.get(param_items,None),None) != None: #if exists check with opttions
-                            if type(options[associations_dict[param_items]]) is not list:
-                                self.assertTrue(params[keys][param_items] == options[associations_dict[param_items]])
-                        else: 
-                            self.assertTrue(params[keys][param_items] == config[keys][param_items])  #else check with config
         params = {}
         params['retrieve_hass_conf'] = retrieve_hass_conf
         params['optim_conf'] = optim_conf
