@@ -199,9 +199,9 @@ if __name__ == "__main__":
             "content-type": "application/json"
         }
         response = get(url, headers=headers)
-        try:
-            config_hass = response.json()
-
+        config_hass = {}
+        if response is None:
+            config_hash = response.json()
             params_secrets = {
             'hass_url': hass_url,
             'long_lived_token': long_lived_token,
@@ -210,7 +210,7 @@ if __name__ == "__main__":
             'lon': config_hass['longitude'],
             'alt': config_hass['elevation']
             }
-        except:
+        else:
             costfun = os.getenv('LOCAL_COSTFUN', default='profit')
             logging_level = os.getenv('LOGGING_LEVEL', default='INFO')
             with open(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), 'r') as file:
