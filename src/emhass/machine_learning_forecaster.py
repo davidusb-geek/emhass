@@ -163,7 +163,7 @@ class MLForecaster:
         df_pred['test'] = self.data_test[self.var_model]
         df_pred['pred'] = predictions
         df_pred_backtest = None
-        if perform_backtest:
+        if perform_backtest is True:
             # Using backtesting tool to evaluate the model
             self.logger.info("Performing simple backtesting of fitted model")
             start_time = time.time()
@@ -201,7 +201,7 @@ class MLForecaster:
             predictions = self.forecaster.predict(steps=self.num_lags, exog=self.data_test.drop(self.var_model, axis=1))
         else:
             data_last_window = data_last_window.interpolate(method='linear', axis=0, limit=None)
-            if self.is_tuned:
+            if self.is_tuned is True:
                 exog = MLForecaster.generate_exog(data_last_window, self.lags_opt, self.var_model)
                 predictions = self.forecaster.predict(steps=self.lags_opt, 
                                                       last_window=data_last_window[self.var_model],
@@ -223,7 +223,7 @@ class MLForecaster:
         """
         # Bayesian search hyperparameter and lags with skforecast/optuna
         # Lags used as predictors
-        if debug:
+        if debug is True:
             lags_grid = [3]
             refit = False
             num_lags = 3
@@ -233,7 +233,7 @@ class MLForecaster:
             num_lags = self.num_lags
         # Regressor hyperparameters search space
         if self.sklearn_model == 'LinearRegression':
-            if debug:
+            if debug is True:
                 def search_space(trial):
                     search_space  = {'fit_intercept': trial.suggest_categorical('fit_intercept', [True])} 
                     return search_space
@@ -242,7 +242,7 @@ class MLForecaster:
                     search_space  = {'fit_intercept': trial.suggest_categorical('fit_intercept', [True, False])} 
                     return search_space
         elif self.sklearn_model == 'ElasticNet':
-            if debug:
+            if debug is True:
                 def search_space(trial):
                     search_space  = {'selection': trial.suggest_categorical('selection', ['random'])} 
                     return search_space
@@ -254,7 +254,7 @@ class MLForecaster:
                                     } 
                     return search_space
         elif self.sklearn_model == 'KNeighborsRegressor':
-            if debug:
+            if debug is True:
                 def search_space(trial):
                     search_space  = {'weights': trial.suggest_categorical('weights', ['uniform'])} 
                     return search_space
