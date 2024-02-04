@@ -18,7 +18,7 @@ from skforecast.model_selection import bayesian_search_forecaster
 from skforecast.model_selection import backtesting_forecaster
 
 import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning) 
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 class MLForecaster:
     r"""
