@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.7.4] - 2024-02-04
+### Fix
+- Fixed broken build params method. Reverting back to alternate PR from @GeoDerp
+
 ## [0.7.3] - 2024-02-04
 ### Fix
 - Fixed bug when booleans, solving "perform_backtest": "false" has no effect
