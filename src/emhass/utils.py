@@ -298,12 +298,12 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         if 'perform_backtest' not in runtimeparams.keys():
             perform_backtest = False
         else:
-            perform_backtest = eval(str(runtimeparams['perform_backtest']).capitalize())
+            perform_backtest = bool(runtimeparams['perform_backtest'])
         params['passed_data']['perform_backtest'] = perform_backtest
         if 'model_predict_publish' not in runtimeparams.keys():
             model_predict_publish = False
         else:
-            model_predict_publish = eval(str(runtimeparams['model_predict_publish']).capitalize())
+            model_predict_publish = bool(runtimeparams['model_predict_publish'])
         params['passed_data']['model_predict_publish'] = model_predict_publish
         if 'model_predict_entity_id' not in runtimeparams.keys():
             model_predict_entity_id = "sensor.p_load_forecast_custom_model"
@@ -332,9 +332,9 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         if 'def_end_timestep' in runtimeparams.keys():
             optim_conf['def_end_timestep'] = runtimeparams['def_end_timestep']
         if 'treat_def_as_semi_cont' in runtimeparams.keys():
-            optim_conf['treat_def_as_semi_cont'] = runtimeparams['treat_def_as_semi_cont']
+            optim_conf['treat_def_as_semi_cont'] = [bool(k) for k in runtimeparams['treat_def_as_semi_cont']]
         if 'set_def_constant' in runtimeparams.keys():
-            optim_conf['set_def_constant'] = runtimeparams['set_def_constant']
+            optim_conf['set_def_constant'] = [bool(k) for k in runtimeparams['set_def_constant']]
         if 'solcast_api_key' in runtimeparams.keys():
             retrieve_hass_conf['solcast_api_key'] = runtimeparams['solcast_api_key']
             optim_conf['weather_forecast_method'] = 'solcast'

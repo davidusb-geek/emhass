@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.3] - 2024-02-04
+### Fix
+- Fixed bug when booleans, solving "perform_backtest": "false" has no effect
+- Refactored util.py method to handle optional parameters
+- Updated web server, solving runtime issues
+- Solved issue passing solcast and solar.forecast runtime params 
+- Updated documentation requirements
+
 ## [0.7.2] - 2024-01-30
 ### Fix
 - Patched new version wer server issues of missing list types
