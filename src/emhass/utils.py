@@ -298,12 +298,12 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         if 'perform_backtest' not in runtimeparams.keys():
             perform_backtest = False
         else:
-            perform_backtest = runtimeparams['perform_backtest']
+            perform_backtest = eval(str(runtimeparams['perform_backtest']).capitalize())
         params['passed_data']['perform_backtest'] = perform_backtest
         if 'model_predict_publish' not in runtimeparams.keys():
             model_predict_publish = False
         else:
-            model_predict_publish = runtimeparams['model_predict_publish']
+            model_predict_publish = eval(str(runtimeparams['model_predict_publish']).capitalize())
         params['passed_data']['model_predict_publish'] = model_predict_publish
         if 'model_predict_entity_id' not in runtimeparams.keys():
             model_predict_entity_id = "sensor.p_load_forecast_custom_model"
