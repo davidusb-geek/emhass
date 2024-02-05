@@ -367,7 +367,7 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     model_predict_unit_of_measurement = input_data_dict['params']['passed_data']['model_predict_unit_of_measurement']
     model_predict_friendly_name = input_data_dict['params']['passed_data']['model_predict_friendly_name']
     publish_prefix = input_data_dict['params']['passed_data']['publish_prefix']
-    if model_predict_publish:
+    if model_predict_publish is True:
         # Estimate the current index
         now_precise = datetime.now(input_data_dict['retrieve_hass_conf']['time_zone']).replace(second=0, microsecond=0)
         if input_data_dict['retrieve_hass_conf']['method_ts_round'] == 'nearest':

@@ -18,7 +18,7 @@ from skforecast.model_selection import bayesian_search_forecaster
 from skforecast.model_selection import backtesting_forecaster
 
 import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning) 
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 class MLForecaster:
     r"""
@@ -163,7 +163,7 @@ class MLForecaster:
         df_pred['test'] = self.data_test[self.var_model]
         df_pred['pred'] = predictions
         df_pred_backtest = None
-        if perform_backtest:
+        if perform_backtest is True:
             # Using backtesting tool to evaluate the model
             self.logger.info("Performing simple backtesting of fitted model")
             start_time = time.time()
