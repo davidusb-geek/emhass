@@ -201,7 +201,7 @@ if __name__ == "__main__":
         response = get(url, headers=headers)
         config_hass = {}
         if response is None:
-            config_hash = response.json()
+            config_hass = response.json()
             params_secrets = {
             'hass_url': hass_url,
             'long_lived_token': long_lived_token,
