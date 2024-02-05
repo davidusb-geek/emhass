@@ -328,9 +328,16 @@ class Optimization:
                         sense=plp.LpConstraintLE,
                         rhs=0)
                     for i in set_I})
-                constraints.update({"constraint_pdef{}_start2_{}".format(k, i) : 
+                # constraints.update({"constraint_pdef{}_start2_{}".format(k, i) : 
+                #     plp.LpConstraint(
+                #         e=P_def_start[k][i] - P_def_bin2[k][i] + P_def_bin2[k][i-1],
+                #         sense=plp.LpConstraintGE,
+                #         rhs=0)
+                #     for i in set_I[1:]})
+                constraints.update({"constraint_pdef{}_start2_{}".format(k, i): 
                     plp.LpConstraint(
-                        e=P_def_start[k][i] - P_def_bin2[k][i] + P_def_bin2[k][i-1],
+                        e=P_def_start[k][i] - P_def_bin2[k][i] + 
+                          (P_def_bin2[k][i-1] if i-1 >= 0 else 0),
                         sense=plp.LpConstraintGE,
                         rhs=0)
                     for i in set_I[1:]})
