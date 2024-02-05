@@ -245,6 +245,16 @@ class TestCommandLineUtils(unittest.TestCase):
         for key in expected_keys:
             self.assertTrue(key in params.keys())
         self.assertTrue(params['params_secrets']['time_zone'] == "Europe/Paris")
+        # Test options and config parameter hierarchy
+        associations_dict = params["associations_dict"]
+        for keys in params:
+            if keys == "retrieve_hass_conf" or keys == "optim_conf" or keys == "plant_conf":
+                for param_items in params[keys]:
+                        if options.get(associations_dict.get(param_items,None),None) != None: #if exists check with opttions
+                            if type(options[associations_dict[param_items]]) is not list:
+                                self.assertTrue(params[keys][param_items] == options[associations_dict[param_items]])
+                        else: 
+                            self.assertTrue(params[keys][param_items] == config[keys][param_items])  #else check with config
         params = {}
         params['retrieve_hass_conf'] = retrieve_hass_conf
         params['optim_conf'] = optim_conf
