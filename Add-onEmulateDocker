@@ -34,8 +34,6 @@ RUN apt-get update \
     && pip3 install --extra-index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -U setuptools wheel \
     && pip3 install --extra-index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -r requirements.txt \
     && apt-get purge -y --auto-remove \
-        python3-pip \
-        python3-dev \
         git \
         build-essential \
         libhdf5-dev \
@@ -47,19 +45,18 @@ RUN apt-get update \
 #install local emhass 
 #RUN git clone https://github.com/davidusb-geek/emhass.git
 #pip install emhass (original)
-COPY ./. /tmp/emhass
-WORKDIR /tmp/emhass
+COPY ./. /app/
+WORKDIR /app/
 RUN python3 setup.py install
+#create share dir
+RUN mkdir /share/
 
 
 WORKDIR /
 
-# copy contentsusr/src
+# copy contents
 COPY config_emhass.yaml /usr/src
 COPY options.json /data/
-
-#unused in production, used temporarily for testing
-COPY secrets_emhass.yaml /usr/src/ 
 
 # Labels
 LABEL \
@@ -69,4 +66,4 @@ LABEL \
   io.hass.type="addon" \
   io.hass.arch="aarch64|amd64|armhf|armv7"
 
-ENTRYPOINT [ "python3", "-m", "emhass.web_server", "--addon", "True" ]
+ENTRYPOINT [ "python3", "-m", "emhass.web_server", "--addon", "True" , "--no_response", "true"]
