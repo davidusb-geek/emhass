@@ -256,6 +256,9 @@ class Forecast(object):
             if 'solar_forecast_kwp' not in self.retrieve_hass_conf:
                 self.logger.warning("The solar_forecast_kwp parameter was not defined, using dummy values for testing")
                 self.retrieve_hass_conf['solar_forecast_kwp'] = 5
+            if  self.retrieve_hass_conf['solar_forecast_kwp'] == 0:
+                self.logger.warning("The solar_forecast_kwp parameter is set to zero, setting to default 5")
+                self.retrieve_hass_conf['solar_forecast_kwp'] = 5                   
             headers = {
                 "Accept": "application/json"
                 }
