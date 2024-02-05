@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import os
 import unittest
 import pandas as pd
 import numpy as np
@@ -211,6 +212,8 @@ class TestOptimization(unittest.TestCase):
         solver_list = pl.listSolvers(onlyAvailable=True)
         for solver in solver_list:
             self.optim_conf['lp_solver'] = solver
+            if os.getenv("LP_SOLVER_PATH", default=None) == None:
+                self.optim_conf['lp_solver_path'] = os.getenv("LP_SOLVER_PATH", default=None)            
             self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                     self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                     self.costfun, root, logger)
