@@ -119,6 +119,7 @@ if __name__ == "__main__":
     parser.add_argument('--url', type=str, help='The URL to your Home Assistant instance, ex the external_url in your hass configuration')
     parser.add_argument('--key', type=str, help='Your access key. If using EMHASS in standalone this should be a Long-Lived Access Token')
     parser.add_argument('--addon', type=strtobool, default='False', help='Define if we are usinng EMHASS with the add-on or in standalone mode')
+    parser.add_argument('--no_response', type=strtobool, default='False', help='This is set if error occurs getting json header response in addon mode')
     args = parser.parse_args()
     
     # Define the paths
@@ -136,7 +137,6 @@ if __name__ == "__main__":
             app.logger.error("options.json does not exists")
         DATA_PATH = os.getenv("DATA_PATH", default="/share/")
     else:
-        use_options = os.getenv('USE_OPTIONS', default=False)
         if use_options:
             OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
             options_json = Path(OPTIONS_PATH)
@@ -199,8 +199,7 @@ if __name__ == "__main__":
             "content-type": "application/json"
         }
         response = get(url, headers=headers)
-        config_hass = {}
-        if response is None:
+        if not args.no_response==1:
             config_hass = response.json()
             params_secrets = {
             'hass_url': hass_url,
@@ -227,7 +226,7 @@ if __name__ == "__main__":
     # Build params
     params = build_params(params, params_secrets, options, args.addon, app.logger)
     with open(str(data_path / 'params.pkl'), "wb") as fid:
-        pickle.dump((config_path, params), fid)
+        pickle.dump((config_path, params), fid)    
 
     # Define logger
     ch = logging.StreamHandler()

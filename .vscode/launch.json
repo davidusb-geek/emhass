@@ -31,7 +31,7 @@
       "program": "web_server.py",
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}/src/emhass/",
-      "args": ["--addon", "true", "--url", "http://IPHERE:PORT/", "--key", "PLACEKEYHERE" ],
+      "args": ["--addon", "true", "true", "--no_response", "--url", "http://IPHERE:PORT/", "--key", "PLACEKEYHERE" ],
       "purpose":["debug-in-terminal"],
       "justMyCode": true,
       "env": {
