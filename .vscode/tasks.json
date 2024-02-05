@@ -9,7 +9,7 @@
                 "isDefault": true
             },
             "args": [
-                "python3", "setup.py", "install"
+                "python3", "-m", "pip", "install", "."
             ],
             "presentation": {
                 "echo": true,
