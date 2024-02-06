@@ -328,19 +328,12 @@ class Optimization:
                         sense=plp.LpConstraintLE,
                         rhs=0)
                     for i in set_I})
-                # constraints.update({"constraint_pdef{}_start2_{}".format(k, i) : 
-                #     plp.LpConstraint(
-                #         e=P_def_start[k][i] - P_def_bin2[k][i] + P_def_bin2[k][i-1],
-                #         sense=plp.LpConstraintGE,
-                #         rhs=0)
-                #     for i in set_I[1:]})
                 constraints.update({"constraint_pdef{}_start2_{}".format(k, i): 
                     plp.LpConstraint(
-                        e=P_def_start[k][i] - P_def_bin2[k][i] + 
-                          (P_def_bin2[k][i-1] if i-1 >= 0 else 0),
+                        e=P_def_start[k][i] - P_def_bin2[k][i] + (P_def_bin2[k][i-1] if i-1 >= 0 else 0),
                         sense=plp.LpConstraintGE,
                         rhs=0)
-                    for i in set_I[1:]})
+                    for i in set_I})
                 constraints.update({"constraint_pdef{}_start3".format(k) :
                 plp.LpConstraint(
                     e = plp.lpSum(P_def_start[k][i] for i in set_I),
@@ -573,10 +566,8 @@ class Optimization:
 
         """
         self.logger.info("Perform optimization for the day-ahead")
-        
         unit_load_cost = df_input_data[self.var_load_cost].values # €/kWh
         unit_prod_price = df_input_data[self.var_prod_price].values # €/kWh
-        
         # Call optimization function
         self.opt_res = self.perform_optimization(df_input_data, P_PV.values.ravel(), 
                                                  P_load.values.ravel(), 
@@ -623,16 +614,13 @@ class Optimization:
 
         """
         self.logger.info("Perform an iteration of a naive MPC controller")
-        
         if prediction_horizon < 5:
             self.logger.error("Set the MPC prediction horizon to at least 5 times the optimization time step")
             return pd.DataFrame()
         else:
             df_input_data = copy.deepcopy(df_input_data)[df_input_data.index[0]:df_input_data.index[prediction_horizon-1]]
-        
         unit_load_cost = df_input_data[self.var_load_cost].values # €/kWh
         unit_prod_price = df_input_data[self.var_prod_price].values # €/kWh
-        
         # Call optimization function
         self.opt_res = self.perform_optimization(df_input_data, P_PV.values.ravel(), P_load.values.ravel(), 
                                                  unit_load_cost, unit_prod_price, soc_init=soc_init, 
