@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.6] - 2024-02-06
+### Fix
+- Fixed number of startups constraint for deferrable load at the begining of the optimization period
+- Fixed list of bools from options.json
+- Fixed some testing and debugging scripts
+
 ## [0.7.5] - 2024-02-04
 ### Fix
 - Fixing again "perform_backtest": "false" has no effect
