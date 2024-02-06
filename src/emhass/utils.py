@@ -332,9 +332,9 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         if 'def_end_timestep' in runtimeparams.keys():
             optim_conf['def_end_timestep'] = runtimeparams['def_end_timestep']
         if 'treat_def_as_semi_cont' in runtimeparams.keys():
-            optim_conf['treat_def_as_semi_cont'] = [bool(k) for k in runtimeparams['treat_def_as_semi_cont']]
+            optim_conf['treat_def_as_semi_cont'] = [eval(str(k).capitalize()) for k in runtimeparams['treat_def_as_semi_cont']]
         if 'set_def_constant' in runtimeparams.keys():
-            optim_conf['set_def_constant'] = [bool(k) for k in runtimeparams['set_def_constant']]
+            optim_conf['set_def_constant'] = [eval(str(k).capitalize()) for k in runtimeparams['set_def_constant']]
         if 'solcast_api_key' in runtimeparams.keys():
             retrieve_hass_conf['solcast_api_key'] = runtimeparams['solcast_api_key']
             optim_conf['weather_forecast_method'] = 'solcast'

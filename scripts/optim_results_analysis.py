@@ -36,6 +36,7 @@ def get_forecast_optim_objects(retrieve_hass_conf, optim_conf, plant_conf,
 if __name__ == '__main__':
     show_figures = False
     save_figures = False
+    save_html = False
     get_data_from_file = True
     params = None
     retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=False)
@@ -102,7 +103,7 @@ if __name__ == '__main__':
     # opt_res_dah = opt.perform_dayahead_forecast_optim(df_input_data_dayahead, P_PV_forecast, P_load_forecast)
     opt_res_dah['P_PV'] = df_input_data_dayahead[['P_PV_forecast']]
     fig_res_dah = opt_res_dah[['P_deferrable0', 'P_deferrable1', 'P_grid', 'P_PV',
-                               'P_def_start_0', 'P_def_start_1', 'P_def_bin2_0', 'P_def_bin2_1']].plot()
+                               ]].plot() # 'P_def_start_0', 'P_def_start_1', 'P_def_bin2_0', 'P_def_bin2_1'
     fig_res_dah.layout.template = template
     fig_res_dah.update_yaxes(title_text = "Powers (W)")
     fig_res_dah.update_xaxes(title_text = "Time")
@@ -116,4 +117,5 @@ if __name__ == '__main__':
         str(opt_res_dah['cost_profit'].sum()))
     
     print(opt_res_dah)
-    opt_res_dah.to_html('opt_res_dah.html')
+    if save_html:
+        opt_res_dah.to_html('opt_res_dah.html')
