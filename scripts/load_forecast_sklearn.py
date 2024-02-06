@@ -22,7 +22,7 @@ from skforecast.model_selection import bayesian_search_forecaster
 from skforecast.model_selection import backtesting_forecaster
 from skforecast.utils import save_forecaster
 from skforecast.utils import load_forecaster
-from skopt.space import Categorical, Real, Integer
+# from skopt.space import Categorical, Real, Integer
 
 
 # the root folder
