@@ -9,7 +9,7 @@
 	"features": {
 		"ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
 	}
-	//"appPort": ["5000:5000"] //used to access app from external device
+	//"appPort": ["5000:5000"] //used to access app from external device (User discretion advised)
 	
 	
 	
