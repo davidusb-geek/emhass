@@ -122,6 +122,7 @@ if __name__ == "__main__":
     parser.add_argument('--no_response', type=strtobool, default='False', help='This is set if error occurs getting json header response in addon mode')
     args = parser.parse_args()
     
+    use_options = os.getenv('USE_OPTIONS', default=False)
     # Define the paths
     if args.addon==1:
         OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/data/options.json")
@@ -224,9 +225,12 @@ if __name__ == "__main__":
         hass_url = params_secrets['hass_url']
         
     # Build params
-    params = build_params(params, params_secrets, options, args.addon, app.logger)
+    if use_options:
+        params = build_params(params, params_secrets, options, 1, app.logger)
+    else:
+        params = build_params(params, params_secrets, options, args.addon, app.logger)
     with open(str(data_path / 'params.pkl'), "wb") as fid:
-        pickle.dump((config_path, params), fid)    
+        pickle.dump((config_path, params), fid)
 
     # Define logger
     ch = logging.StreamHandler()
