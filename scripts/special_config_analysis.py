@@ -22,7 +22,7 @@ pd.options.plotting.backend = "plotly"
 from emhass.retrieve_hass import RetrieveHass
 from emhass.optimization import Optimization
 from emhass.forecast import Forecast
-from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
+from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger, build_params
 
 # the root folder
 root = str(get_root(__file__, num_parent=2))
@@ -43,59 +43,6 @@ def get_forecast_optim_objects(retrieve_hass_conf, optim_conf, plant_conf,
                        'cost', root, logger)
     return fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt
 
-def build_params(params, options):
-    # Updating variables in retrieve_hass_conf
-    params['retrieve_hass_conf'][0]['freq'] = options['optimization_time_step']
-    params['retrieve_hass_conf'][1]['days_to_retrieve'] = options['historic_days_to_retrieve']
-    params['retrieve_hass_conf'][2]['var_PV'] = options['sensor_power_photovoltaics']
-    params['retrieve_hass_conf'][3]['var_load'] = options['sensor_power_load_no_var_loads']
-    params['retrieve_hass_conf'][6]['var_replace_zero'] = [options['sensor_power_photovoltaics']]
-    params['retrieve_hass_conf'][7]['var_interp'] = [options['sensor_power_photovoltaics'], options['sensor_power_load_no_var_loads']]
-    params['retrieve_hass_conf'][8]['method_ts_round'] = options['method_ts_round']
-    # Updating variables in optim_conf
-    params['optim_conf'][0]['set_use_battery'] = options['set_use_battery']
-    params['optim_conf'][2]['num_def_loads'] = options['number_of_deferrable_loads']
-    params['optim_conf'][3]['P_deferrable_nom'] = [i['nominal_power_of_deferrable_loads'] for i in options['list_nominal_power_of_deferrable_loads']]
-    params['optim_conf'][4]['def_total_hours'] = [i['operating_hours_of_each_deferrable_load'] for i in options['list_operating_hours_of_each_deferrable_load']]
-    params['optim_conf'][5]['treat_def_as_semi_cont'] = [i['treat_deferrable_load_as_semi_cont'] for i in options['list_treat_deferrable_load_as_semi_cont']]
-    params['optim_conf'][6]['set_def_constant'] = [False for i in range(len(params['optim_conf'][3]['P_deferrable_nom']))]
-    params['optim_conf'][8]['load_forecast_method'] = options['load_forecast_method']
-    start_hours_list = [i['peak_hours_periods_start_hours'] for i in options['list_peak_hours_periods_start_hours']]
-    end_hours_list = [i['peak_hours_periods_end_hours'] for i in options['list_peak_hours_periods_end_hours']]
-    num_peak_hours = len(start_hours_list)
-    list_hp_periods_list = [{'period_hp_'+str(i+1):[{'start':start_hours_list[i]},{'end':end_hours_list[i]}]} for i in range(num_peak_hours)]
-    params['optim_conf'][10]['list_hp_periods'] = list_hp_periods_list
-    params['optim_conf'][11]['load_cost_hp'] = options['load_peak_hours_cost']
-    params['optim_conf'][12]['load_cost_hc'] = options['load_offpeak_hours_cost']
-    params['optim_conf'][14]['prod_sell_price'] = options['photovoltaic_production_sell_price']
-    params['optim_conf'][15]['set_total_pv_sell'] = options['set_total_pv_sell']
-    params['optim_conf'][16]['lp_solver'] = options['lp_solver']
-    params['optim_conf'][17]['lp_solver_path'] = options['lp_solver_path']
-    params['optim_conf'][18]['set_nocharge_from_grid'] = options['set_nocharge_from_grid']
-    params['optim_conf'][19]['set_nodischarge_to_grid'] = options['set_nodischarge_to_grid']
-    params['optim_conf'][20]['set_battery_dynamic'] = options['set_battery_dynamic']
-    params['optim_conf'][21]['battery_dynamic_max'] = options['battery_dynamic_max']
-    params['optim_conf'][22]['battery_dynamic_min'] = options['battery_dynamic_min']
-    params['optim_conf'][23]['weight_battery_discharge'] = options['weight_battery_discharge']
-    params['optim_conf'][24]['weight_battery_charge'] = options['weight_battery_charge']
-    # Updating variables in plant_conf
-    params['plant_conf'][0]['P_grid_max'] = options['maximum_power_from_grid']
-    params['plant_conf'][1]['module_model'] = [i['pv_module_model'] for i in options['list_pv_module_model']]
-    params['plant_conf'][2]['inverter_model'] = [i['pv_inverter_model'] for i in options['list_pv_inverter_model']]
-    params['plant_conf'][3]['surface_tilt'] = [i['surface_tilt'] for i in options['list_surface_tilt']]
-    params['plant_conf'][4]['surface_azimuth'] = [i['surface_azimuth'] for i in options['list_surface_azimuth']]
-    params['plant_conf'][5]['modules_per_string'] = [i['modules_per_string'] for i in options['list_modules_per_string']]
-    params['plant_conf'][6]['strings_per_inverter'] = [i['strings_per_inverter'] for i in options['list_strings_per_inverter']]
-    params['plant_conf'][7]['Pd_max'] = options['battery_discharge_power_max']
-    params['plant_conf'][8]['Pc_max'] = options['battery_charge_power_max']
-    params['plant_conf'][9]['eta_disch'] = options['battery_discharge_efficiency']
-    params['plant_conf'][10]['eta_ch'] = options['battery_charge_efficiency']
-    params['plant_conf'][11]['Enom'] = options['battery_nominal_energy_capacity']
-    params['plant_conf'][12]['SOCmin'] = options['battery_minimum_state_of_charge']
-    params['plant_conf'][13]['SOCmax'] = options['battery_maximum_state_of_charge']
-    params['plant_conf'][14]['SOCtarget'] = options['battery_target_state_of_charge']
-    return params
-
 if __name__ == '__main__':
     get_data_from_file = False
     config_path = pathlib.Path(root+'/config_emhass.yaml')
@@ -115,12 +62,13 @@ if __name__ == '__main__':
     with options_json.open('r') as data:
         options = json.load(data)
     
-    params = build_params(params, options)
+    # params = build_params(params, options)
     
     with open(pathlib.Path(root) / 'secrets_emhass.yaml', 'r') as file:
-        input_secrets = yaml.load(file, Loader=yaml.FullLoader)
-        
-    params['params_secrets'] = input_secrets
+        params_secrets = yaml.load(file, Loader=yaml.FullLoader)
+    
+    params = build_params(params, params_secrets, options, 1, logger)
+    # params['params_secrets'] = input_secrets
     
     pv_power_forecast = [0, 8, 27, 42, 47, 41, 25, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 19, 52, 73, 74, 68, 44, 12, 0, 0, 0, 0]
     load_power_forecast = [2850, 3021, 3107, 3582, 2551, 2554, 1856, 2505, 1768, 2540, 1722, 2463, 1670, 1379, 1165, 1000, 1641, 1181, 1861, 1414, 1467, 1344, 1209, 1531]
@@ -138,10 +86,10 @@ if __name__ == '__main__':
                              'prediction_horizon':prediction_horizon,'soc_init':soc_init,'soc_final':soc_final,
                              'def_total_hours':def_total_hours,'alpha':alpha,'beta':beta}
     
-    optim_conf[7]['weather_forecast_method'] = 'list'
-    optim_conf[8]['load_forecast_method'] = 'list'
-    optim_conf[9]['load_cost_forecast_method'] = 'list'
-    optim_conf[13]['prod_price_forecast_method'] = 'list'
+    optim_conf['weather_forecast_method'] = 'list'
+    optim_conf['load_forecast_method'] = 'list'
+    optim_conf['load_cost_forecast_method'] = 'list'
+    optim_conf['prod_price_forecast_method'] = 'list'
     
     data_path = pathlib.Path(root+'/scripts/data_temp.pkl')
     

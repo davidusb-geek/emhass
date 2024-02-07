@@ -131,7 +131,6 @@ class TestCommandLineUtils(unittest.TestCase):
         runtimeparams.update({'custom_unit_load_cost_id':'my_custom_unit_load_cost_id'})
         runtimeparams.update({'custom_unit_prod_price_id':'my_custom_unit_prod_price_id'})
         runtimeparams.update({'custom_deferrable_forecast_id':'my_custom_deferrable_forecast_id'})
-        
         runtimeparams_json = json.dumps(runtimeparams)
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
             pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True, params=self.params_json)
