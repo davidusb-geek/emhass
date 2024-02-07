@@ -127,10 +127,10 @@ if __name__ == "__main__":
         OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/data/options.json")
         options_json = Path(OPTIONS_PATH)
         CONFIG_PATH = os.getenv("CONFIG_PATH", default="/usr/src/config_emhass.yaml")
-        #Obtain url and key from env or Args
+        #Obtain url and key from ENV or ARG
         hass_url = os.getenv("EMHASS_URL", default=args.url)
         key =  os.getenv("EMHASS_KEY", default=args.key) 
-        #If url or key is None, Set as empty string
+        #If url or key is None, Set as empty string to reduce NoneType errors bellow
         if key is None: key = ""
         if hass_url is None: hass_url = ""
         # Read options info
@@ -213,14 +213,16 @@ if __name__ == "__main__":
             'lon': config_hass['longitude'],
             'alt': config_hass['elevation']
             }
-        else: #if no_response is set to false
+        else: #if no_response is set to true
             costfun = os.getenv('LOCAL_COSTFUN', default='profit')
             logging_level = os.getenv('LOGGING_LEVEL', default='INFO')
-            if Path(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml')).is_file(): #check if secrets file exists
+            # check if secrets file exists
+            if Path(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml')).is_file(): 
                 with open(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), 'r') as file:
                     params_secrets = yaml.load(file, Loader=yaml.FullLoader)
                     app.logger.debug("Obtained secrets from secrets file")
-            else: #If cant find secrets_emhass file 
+            #If cant find secrets_emhass file, use env
+            else: 
                 app.logger.debug("Failed to find secrets file: "+str(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml')))
                 app.logger.debug("Setting location defaults")
                 params_secrets = {} 
@@ -229,7 +231,7 @@ if __name__ == "__main__":
                 params_secrets['lat'] = float(os.getenv("LAT", default="45.83"))
                 params_secrets['lon'] = float(os.getenv("LON", default="6.86"))
                 params_secrets['alt'] = float(os.getenv("ALT", default="4807.8"))      
-            #If args specify url and key, then override secrets file
+            #If ARG/ENV specify url and key, then override secrets file
             if hass_url != "":
                 params_secrets['hass_url'] = hass_url
                 app.logger.debug("Using URL obtained from ARG/ENV")
