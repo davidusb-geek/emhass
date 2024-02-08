@@ -1,66 +1,170 @@
 <!DOCTYPE html>
 <html class="adaptive">
-    <head>
-        <title>EMHASS: Energy Management Optimization for Home Assistant</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <link rel="stylesheet" type="text/css" href="{{ basename }}/static/style.css">
-        <link rel="icon" href="{{ basename }}/static/img/emhass_logo_short.svg">
-    </head>
-    <body>
-        <center>
-            <img src="{{ basename }}/static/img/emhass_icon.png" alt="">
-            <h2 >EMHASS: Energy Management Optimization for Home Assistant</h2>
-        </center>
-        <div class="center">
-            <div align="center" class="form">
-                <form action="" method="get">
-                    <h4>Use the buttons below to manually  launch different optimization tasks</h4>
-                    <button type="button" id="perfect-optim" class="button button1" >Perfect Optimization</button>
-                    <button type="button" id="dayahead-optim" class="button button2" >Day-ahead Optimization</button>
-                    <h4 >Use the button below to publish the optimized variables at the current timestamp</h4>
-                    <button type="button" id="publish-data" class="button button1" >Publish Optimization Results</button>
-                    <h4 >Use the buttons below to fit, predict and tune a machine learning model for testing</h4>
-                    <button type="button" id="forecast-model-fit" class="button button1" >ML forecast model fit</button>
-                    <button type="button" id="forecast-model-predict" class="button button2" >ML forecast model predict</button>
-                    <button type="button" id="forecast-model-tune" class="button button3" >ML forecast model tune</button>
-                    <!-- h4 style="font-family: Helvetica;color: darkblue;">Pass any needed data dictionary here</h4>
-                    <div class="input-group">
-                      <textarea id="runtimeparams" name="runtimeparams" rows="6" cols="65"></textarea>
-                    </div> -->
-                    <br>
-                </form>
-                <br><br>
-            </div>
-        </div>
-        {% for plot in injection_dict %}
-            <div class="table_div" align="center">
-                {{injection_dict[plot]}}
-            </div> 
-        {% endfor %}
-        <footer class="footer">
-            <center>
-                <p style="margin-top: 10px;">&copy; MIT License | Copyright (c) 2021-2023 David HERNANDEZ</p>
-            </center>
-        </footer>
-    </body>
-    <script>
-        async function performAction(action) {
-            await fetch(`{{ basename }}/action/${action}`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: "{}",
-            });
-        }
 
-        [
-            "dayahead-optim",
-            "forecast-model-fit",
-            "forecast-model-predict",
-            "forecast-model-tune",
-            "perfect-optim",
-            "publish-data",
-        ].forEach((id) => document.getElementById(id).addEventListener('click', () => performAction(id)));
-    </script>
+<head>
+    <title>EMHASS: Energy Management Optimization for Home Assistant</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="{{ basename }}/static/style.css">
+    <link rel="icon" href="{{ basename }}/static/img/emhass_logo_short.svg">
+</head>
+
+<body style="margin: auto; align-items:center; text-align:center;">
+    <div>
+        <img src="{{ basename }}/static/img/emhass_icon.png" alt="">
+        <h2>EMHASS: Energy Management Optimization for Home Assistant</h2>
+    </div>
+    <div class="center">
+        <div class="form">
+            <form action="" method="get">
+                <!-- action button elements section -->
+                <h4>Use the buttons below to manually launch different optimization tasks</h4>
+                <button type="button" id="perfect-optim" class="button button1">Perfect Optimization</button>
+                <button type="button" id="dayahead-optim" class="button button2">Day-ahead Optimization</button>
+                <h4>Use the button below to publish the optimized variables at the current timestamp</h4>
+                <button type="button" id="publish-data" class="button button1">Publish Optimization Results</button>
+                <h4>Use the buttons below to fit, predict and tune a machine learning model for testing</h4>
+                <button type="button" id="forecast-model-fit" class="button button1">ML forecast model fit</button>
+                <button type="button" id="forecast-model-predict" class="button button2">ML forecast model
+                    predict</button>
+                <button type="button" id="forecast-model-tune" class="button button3">ML forecast model tune</button>
+                <!-- -->
+                <!--dynamic input elements section -->
+                <h4>Input Runtime Parameters</h4>
+                <div class="input-button-container">
+                    <div class="input-buttons">
+                        <button type="button" id="input-plus">+</button>
+                        <button type="button" id="input-minus">-</button>
+                        <select name="Select" id="input-select">
+                            <option value="List" selected>List</option>
+                            <option value="Box">Box</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="input-container"> <!-- Text (Box/List) input elements will be added here -->
+                    <div class=input-list>
+                        <input class="input-key" type="text" placeholder="pv_power_forecast">
+                        <p>:</p>
+                        <input class="input-value" type="text"
+                            placeholder="[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]">
+                    </div>
+                </div>
+                <!-- -->
+            </form>
+        </div>
+        <br><br><br>
+    <!-- dynamic table/diagram elements section -->
+    </div>
+    {% for plot in injection_dict %} <!-- diagrams/tables elements will be added here -->
+    <div class="table_div">
+        {{injection_dict[plot]}}
+    </div>
+    {% endfor %}
+    <!-- -->
+    <footer class="footer">
+        <p style="margin-top:10px; text-align:center;">&copy; MIT License | Copyright (c) 2021-2023 David HERNANDEZ</p>
+    </footer>
+</body>
+<script>
+
+    //function pushing data and triggering button action via post
+    async function formAction(action) {
+        var data = dictInputs("get")
+        await fetch(`{{ basename }}/action/${action}`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(dictInputs("get")), //POST can only send data via strings
+        });
+    }
+
+    //function assigned to control data input elements 
+    function dictInputs(action) {
+        const input_container = document.getElementById('input-container') // Container div containing all dynamic input elements
+        let selectElement = document.getElementById('input-select')        // Select button
+        let input_container_child = input_container.firstElementChild      // Figure out what is the first element inside of container (ie: "input-area" (box) or "input-list" (list)) 
+
+        //if list is selected, remove input-area element and replace
+        if (selectElement.value == "List") {
+            if (action == "input-plus" || input_container_child.className == "input-area") { //check if input-area elements exist as (if first element in container)
+                if (input_container_child.className == "input-area") {
+                    input_container_child.remove();
+                }
+                let div = document.createElement('div'); //add input-list element
+                div.className = 'input-list';
+                div.innerHTML = `
+                <input class="input-key" type="text" placeholder="pv_power_forecast" >
+                <p>:</p>
+                <input class="input-value" type="text" placeholder="[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]" >
+            `;
+                input_container.appendChild(div);
+            };
+            if (action == "input-minus") {  //remove input-list element
+                let inputListArr = document.getElementsByClassName('input-list');
+                let obj = inputListArr.item(inputListArr.length - 1)
+                obj.innerHTML = '';
+                obj.remove();
+            };
+        }
+        //if box is selected, remove input-list elements and replace
+        else {
+            if (input_container_child.className == "input-list") {
+                inputListArr = input_container.getElementsByClassName('input-list'); //check if input-list elements exist as (if first element in container)
+                while (inputListArr[0]) {
+                    inputListArr[0].parentNode.removeChild(inputListArr[0]);
+                };
+                let div = document.createElement('div'); //add input-area element
+                div.className = "input-area";
+                div.innerHTML = `
+                <textarea class="input-text-area" rows="30" placeholder="{}"></textarea>
+                `;
+                input_container.appendChild(div);
+            }
+        };
+        //get data from List or Box to send
+        if (action == "get") {
+            let jsonData = {};
+            // Get data from List 
+            if (selectElement.value == "List") {
+                let inputListArr = document.getElementsByClassName('input-list');
+                let jsonTempData = "{";
+                for (let i = 0; i < inputListArr.length; i++) {
+                    let key = inputListArr[i].getElementsByClassName('input-key')[0].value
+                    var value = inputListArr[i].getElementsByClassName('input-value')[0].value
+                    //curate a string to parse into json later
+                    if (key !== "") { //key must not be empty
+                        jsonTempData = jsonTempData.concat('"' + key + '":' + value)
+                    }
+                    if (i != inputListArr.length - 1) {
+                        jsonTempData = jsonTempData.concat(",")
+                    }
+                }
+                jsonTempData = jsonTempData.concat("}")
+                jsonData = JSON.parse(jsonTempData)
+            }
+            // get data from send TextBox
+            else {
+                jsonData = JSON.parse(input_container.getElementsByClassName('input-text-area')[0].value)
+            };
+            return (jsonData);
+        }
+    }
+    //Add listeners to buttons
+    [
+        "dayahead-optim",
+        "forecast-model-fit",
+        "forecast-model-predict",
+        "forecast-model-tune",
+        "perfect-optim",
+        "publish-data",
+    ].forEach((id) => document.getElementById(id).addEventListener('click', () => formAction(id)));
+    [
+        "input-plus",
+        "input-minus",
+    ].forEach((id) => document.getElementById(id).addEventListener('click', () => dictInputs(id)));
+    [
+        "input-select"
+    ].forEach((id) => document.getElementById(id).addEventListener('change', () => dictInputs(id)));
+</script>
+
 </html>
