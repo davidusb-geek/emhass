@@ -85,11 +85,11 @@
         getSavedData() 
     };
 
-    //function pushing data via post with button action
-    async function formAction(action) {
-        showChangeStatus(1) // show loading logo for status
+     //function pushing data via post with button action
+     async function formAction(action) {
         var data = inputToJson()
         if (data !== 0) { //don't run if there is an error in the data Json
+            showChangeStatus(1) // show loading logo for status
             response = await fetch(`{{ basename }}/action/${action}`, {
                 method: "POST",
                 headers: {
@@ -97,14 +97,21 @@
                 },
                 body: JSON.stringify(data), //post can only send data via strings
             }).then(saveStorage()) //save to storage if successful 
+            showChangeStatus(response.status) //replace loading, show tick or cross
         }
-        showChangeStatus(response.status) //replace loading, show tick or cross
+        else{
+            showChangeStatus("remove") //replace loading, show tick or cross
+        }
     }
 
     //function in control of status icons of post above
     function showChangeStatus(status) {
         var loading = document.getElementById("loader") //element showing status 
-        if (status === 1) { //show loading logo
+        if (status === "remove") { //show loading logo
+            loading.innerHTML = "";
+            loading.classList.remove("loading"); //append class with loading animation styling
+        }
+        else if (status === 1) { //show loading logo
             loading.innerHTML = "";
             loading.classList.add("loading"); //append class with loading animation styling
         }
@@ -135,13 +142,14 @@
 
             }
             if (selectElement.value == "List") { //if List is set, show saved json data into box 
-                input_container.innerHTML = "";
                 storedJson = JSON.parse(localStorage.getItem("input_container_content"));
-                i = 1;
-                for (const ikey in storedJson) {
-                    input_container.appendChild(createInputListDiv(ikey, JSON.stringify(storedJson[ikey]))); //call function to present each key as an list div element (with saved values)
+                if (Object.keys(storedJson).length > 0) {
+                    input_container.innerHTML = "";
+                    i = 1;
+                    for (const ikey in storedJson) {
+                        input_container.appendChild(createInputListDiv(ikey, JSON.stringify(storedJson[ikey]))); //call function to present each key as an list div element (with saved values)
+                    }
                 }
-
             }
         }
     }
@@ -162,7 +170,7 @@
         let jsonReturnData = {};
 
         //if List return box json
-        if (input_container_child.className == "input-list") {
+        if (input_container_child.className == "input-list" && inputListArr.length > 0) {
             let jsonTempData = "{";
             for (let i = 0; i < inputListArr.length; i++) {
                 let key = inputListArr[i].getElementsByClassName('input-key')[0].value;
