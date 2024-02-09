@@ -658,6 +658,7 @@ th {
   -webkit-animation: spin 2s linear infinite;
   animation: spin 2s linear infinite;
   vertical-align: text-top;
+  transition: 1s;
 }
 
 @-webkit-keyframes spin {
@@ -685,6 +686,10 @@ th {
   color: #158b00;
   vertical-align: text-top;
   font-size: 4.0em;
+  animation-name: fadeInOpacity;
+	animation-iteration-count: 1;
+	animation-timing-function: ease-in;
+	animation-duration: .5s;
 }
 
 .cross {
@@ -692,6 +697,28 @@ th {
   color: #a71515;
   vertical-align: text-top;
   font-size: 4.0em;
+  animation-name: fadeInOpacity;
+	animation-iteration-count: 1;
+	animation-timing-function: ease-in;
+	animation-duration: .5s;
+}
+
+@-webkit-keyframes fadeInOpacity {
+	0% {
+		opacity: 0;
+	}
+	100% {
+		opacity: 1;
+	}
+}
+
+@keyframes fadeInOpacity {
+	0% {
+		opacity: 0;
+	}
+	100% {
+		opacity: 1;
+	}
 }
 
 /* Alert box styling */
