@@ -58,7 +58,7 @@
         <!-- alert box element (for json parse issue) -->
         <div style="display: none;" id="alert" class="alert">
             <div>
-                <span onclick="this.parentElement.style.display='none';">&times;</span>
+                <span onclick="this.parentElement.parentElement.style.display='none';">&times;</span>
                 <p id="alert-text"></p>
             </div>
         </div>
@@ -178,7 +178,6 @@
                 }
             }
             jsonTempData = jsonTempData.concat("}");
-            console.log(jsonTempData)
             try {
                 jsonReturnData = JSON.parse(jsonTempData);
             }
