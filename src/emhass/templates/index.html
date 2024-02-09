@@ -15,44 +15,55 @@
     </div>
     <div class="center">
         <div class="form">
-            <form action="" method="get">
-                <!-- action button elements section -->
+            <!-- action button elements section -->
+            <div class="loading-div">
                 <h4>Use the buttons below to manually launch different optimization tasks</h4>
-                <button type="button" id="perfect-optim" class="button button1">Perfect Optimization</button>
-                <button type="button" id="dayahead-optim" class="button button2">Day-ahead Optimization</button>
-                <h4>Use the button below to publish the optimized variables at the current timestamp</h4>
-                <button type="button" id="publish-data" class="button button1">Publish Optimization Results</button>
+                <div style="transition: 1s;" id=loader></div> <!-- post status dynamic element -->
+            </div>
+            <button type="button" id="perfect-optim" class="button button1">Perfect Optimization</button>
+            <button type="button" id="dayahead-optim" class="button button2">Day-ahead Optimization</button>
+            <button type="button" id="advanced-ml" class="button button3">Advanced ML Tasks</button>
+            <h4>Use the button below to publish the optimized variables at the current timestamp</h4>
+            <button type="button" id="publish-data" class="button button1">Publish Optimization Results</button>
+            <div id="mlDiv" style="display: none;"> <!-- hidden toggled div for ml  -->
                 <h4>Use the buttons below to fit, predict and tune a machine learning model for testing</h4>
                 <button type="button" id="forecast-model-fit" class="button button1">ML forecast model fit</button>
                 <button type="button" id="forecast-model-predict" class="button button2">ML forecast model
                     predict</button>
                 <button type="button" id="forecast-model-tune" class="button button3">ML forecast model tune</button>
-                <!-- -->
-                <!--dynamic input elements section -->
-                <h4>Input Runtime Parameters</h4>
-                <div class="input-button-container">
-                    <div class="input-buttons">
-                        <button type="button" id="input-plus">+</button>
-                        <button type="button" id="input-minus">-</button>
-                        <select name="Select" id="input-select">
-                            <option value="List" selected>List</option>
-                            <option value="Box">Box</option>
-                        </select>
-                    </div>
+            </div>
+            <!-- -->
+            <!--dynamic input elements section -->
+            <h4>Input Runtime Parameters</h4>
+            <div class="input-button-container">
+                <div class="input-buttons">
+                    <button type="button" id="input-plus">+</button>
+                    <button type="button" id="input-minus">-</button>
+                    <select name="Select" id="input-select">
+                        <option value="List" selected>List</option>
+                        <option value="Box">Box</option>
+                    </select>
                 </div>
-                <div id="input-container"> <!-- Text (Box/List) input elements will be added here -->
-                    <div class=input-list>
-                        <input class="input-key" type="text" placeholder="pv_power_forecast">
-                        <p>:</p>
-                        <input class="input-value" type="text"
-                            placeholder="[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]">
-                    </div>
+            </div>
+            <div id="input-container"> <!-- Text (Box/List) input elements will be added here -->
+                <div class=input-list>
+                    <input class="input-key" type="text" placeholder="pv_power_forecast">
+                    <p>:</p>
+                    <input class="input-value" type="text"
+                        placeholder="[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]">
                 </div>
-                <!-- -->
-            </form>
+            </div>
+            <!-- -->
+        </div>
+        <!-- alert box element (for json parse issue) -->
+        <div style="display: none;" id="alert" class="alert">
+            <div>
+                <span onclick="this.parentElement.style.display='none';">&times;</span>
+                <p id="alert-text"></p>
+            </div>
         </div>
         <br><br><br>
-    <!-- dynamic table/diagram elements section -->
+        <!-- dynamic table/diagram elements section -->
     </div>
     {% for plot in injection_dict %} <!-- diagrams/tables elements will be added here -->
     <div class="table_div">
@@ -64,52 +75,182 @@
         <p style="margin-top:10px; text-align:center;">&copy; MIT License | Copyright (c) 2021-2023 David HERNANDEZ</p>
     </footer>
 </body>
+
+
+
 <script>
 
-    //function pushing data and triggering button action via post
+    //on page reload get saved data
+    window.onload = async function () {
+        getSavedData() 
+    };
+
+    //function pushing data via post with button action
     async function formAction(action) {
-        var data = dictInputs("get")
-        await fetch(`{{ basename }}/action/${action}`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(dictInputs("get")), //POST can only send data via strings
-        });
+        showChangeStatus(1) // show loading logo for status
+        var data = inputToJson()
+        if (data !== 0) { //don't run if there is an error in the data Json
+            response = await fetch(`{{ basename }}/action/${action}`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify(data), //post can only send data via strings
+            }).then(saveStorage()) //save to storage if successful 
+        }
+        showChangeStatus(response.status) //replace loading, show tick or cross
     }
 
-    //function assigned to control data input elements 
-    function dictInputs(action) {
-        const input_container = document.getElementById('input-container') // Container div containing all dynamic input elements
-        let selectElement = document.getElementById('input-select')        // Select button
-        let input_container_child = input_container.firstElementChild      // Figure out what is the first element inside of container (ie: "input-area" (box) or "input-list" (list)) 
+    //function in control of status icons of post above
+    function showChangeStatus(status) {
+        var loading = document.getElementById("loader") //element showing status 
+        if (status === 1) { //show loading logo
+            loading.innerHTML = "";
+            loading.classList.add("loading"); //append class with loading animation styling
+        }
+        else if (status === 201) { //then show a tick 
+            loading.classList.remove("loading")
+            loading.innerHTML = `<p class=tick>&#x2713;</p>`
 
-        //if list is selected, remove input-area element and replace
-        if (selectElement.value == "List") {
-            if (action == "input-plus" || input_container_child.className == "input-area") { //check if input-area elements exist as (if first element in container)
-                if (input_container_child.className == "input-area") {
-                    input_container_child.remove();
+        }
+        else { //then show a cross 
+            loading.classList.remove("loading")
+            loading.innerHTML = `<p class=cross>&#x292C;</p>`
+        }
+    }
+
+
+    //function gets saved data (if any)
+    function getSavedData() {
+        let selectElement = document.getElementById('input-select') // select button element
+        var input_container = document.getElementById('input-container'); // container div containing all dynamic input elements
+        let input_container_child;
+
+        dictInputs() //check selected current (List or Box) is correct
+
+        if (localStorage.getItem("input_container_content")) { //If items already stored in local storage, then override default
+            if (selectElement.value == "Box") { //if Box is set, show saved json data into box 
+                input_container_child = input_container.firstElementChild;
+                input_container_child.getElementsByTagName("textarea")[0].value = localStorage.getItem("input_container_content");
+
+            }
+            if (selectElement.value == "List") { //if List is set, show saved json data into box 
+                input_container.innerHTML = "";
+                storedJson = JSON.parse(localStorage.getItem("input_container_content"));
+                i = 1;
+                for (const ikey in storedJson) {
+                    input_container.appendChild(createInputListDiv(ikey, JSON.stringify(storedJson[ikey]))); //call function to present each key as an list div element (with saved values)
                 }
-                let div = document.createElement('div'); //add input-list element
-                div.className = 'input-list';
-                div.innerHTML = `
+
+            }
+        }
+    }
+
+    //using localStorage, store json data from input-select/input-box elements for saved state save on page refresh (will save state on successful post)
+    function saveStorage() {
+        var input_container = document.getElementById('input-container');
+        if (typeof (Storage) !== "undefined") {
+            localStorage.setItem("input_container_content", JSON.stringify(inputToJson()));
+        }
+    }
+
+    //function gets values from input-select/input-box elements and return json dict object 
+    function inputToJson() {
+        let inputListArr = document.getElementsByClassName('input-list');
+        var input_container = document.getElementById('input-container');
+        let input_container_child = input_container.firstElementChild;
+        let jsonReturnData = {};
+
+        //if List return box json
+        if (input_container_child.className == "input-list") {
+            let jsonTempData = "{";
+            for (let i = 0; i < inputListArr.length; i++) {
+                let key = inputListArr[i].getElementsByClassName('input-key')[0].value;
+                var value = inputListArr[i].getElementsByClassName('input-value')[0].value;
+                //curate a string with list elements to parse into json later
+                if (key !== "") { //key must not be empty
+                    jsonTempData = jsonTempData.concat('"' + key + '":' + value);
+                    if (i != (inputListArr.length - 1)) { //if items left 
+                        if (inputListArr[i + 1].getElementsByClassName('input-key')[0].value !== "") { //if item is not null 
+                            jsonTempData = jsonTempData.concat(",");
+                        }
+                    }
+                }
+            }
+            jsonTempData = jsonTempData.concat("}");
+            console.log(jsonTempData)
+            try {
+                jsonReturnData = JSON.parse(jsonTempData);
+            }
+            catch (error) { //if json error, show in alert box
+                document.getElementById("alert-text").textContent = "\r\n" + error + "\r\n" + "JSON Error: String values may not be wrapped in quotes"
+                document.getElementById("alert").style.display = "block";
+                return (0)
+            }
+        }
+        //if Box return box json
+        if (input_container_child.className == "input-area") {
+            try {
+                jsonReturnData = JSON.parse(input_container.getElementsByClassName('input-text-area')[0].value);
+            }
+            catch (error) {  //if json error, show in alert box
+                document.getElementById("alert-text").textContent = "\r\n" + error
+                document.getElementById("alert").style.display = "block";
+                return (0)
+            }
+        }
+        return (jsonReturnData)
+    }
+
+    //function to create input list div element (and pass it values if given)
+    function createInputListDiv(ikey, ivalue) {
+        let div = document.createElement('div'); //add input-list element
+        div.className = 'input-list';
+        div.innerHTML = `
                 <input class="input-key" type="text" placeholder="pv_power_forecast" >
                 <p>:</p>
                 <input class="input-value" type="text" placeholder="[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]" >
             `;
-                input_container.appendChild(div);
+
+        if (ikey && ivalue) { //if value and key is provided (from local storage) then add as element value
+            div.getElementsByClassName("input-key")[0].value = String(ikey);
+            div.getElementsByClassName("input-value")[0].value = String(ivalue);
+        }
+
+        return (div);
+    }
+
+    //function assigned to control (add and remove) input elements 
+    function dictInputs(action) {
+        var input_container = document.getElementById('input-container') // container div containing all dynamic input elements
+        let selectElement = document.getElementById('input-select')      // select button
+        let input_container_child = null
+        let input_container_child_name = null
+        if (input_container.children.length > 0) {
+            input_container_child = input_container.firstElementChild  // figure out what is the first element inside of container (ie: "input-area" (box) or "input-list" (list)) 
+            input_container_child_name = input_container.firstElementChild.className
+        };
+        //if list is selected, remove input-area element and replace (with input-list)
+        if (selectElement.value == "List") {
+            if (action == "input-plus" || input_container_child === null || input_container_child_name == "input-area") { //check if input-area elements exist as (based on first element in container)
+                if (input_container_child_name == "input-area") {
+                    input_container_child.remove();
+                }
+                input_container.appendChild(createInputListDiv(false, false)); //call to createInputListDiv function to craft input-area element (with no values)
             };
             if (action == "input-minus") {  //remove input-list element
-                let inputListArr = document.getElementsByClassName('input-list');
-                let obj = inputListArr.item(inputListArr.length - 1)
-                obj.innerHTML = '';
-                obj.remove();
+                if (input_container.children.length > 1) {
+                    let inputListArr = document.getElementsByClassName('input-list');
+                    let obj = inputListArr.item(inputListArr.length - 1);
+                    obj.innerHTML = '';
+                    obj.remove();
+                }
             };
         }
-        //if box is selected, remove input-list elements and replace
-        else {
-            if (input_container_child.className == "input-list") {
-                inputListArr = input_container.getElementsByClassName('input-list'); //check if input-list elements exist as (if first element in container)
+        //if box is selected, remove input-list elements and replace (with input-area)
+        if (selectElement.value == "Box") {
+            if (input_container_child_name == "input-list" || input_container_child === null) {
+                inputListArr = input_container.getElementsByClassName('input-list'); //check if input-list elements exist as (based on first element in container)
                 while (inputListArr[0]) {
                     inputListArr[0].parentNode.removeChild(inputListArr[0]);
                 };
@@ -118,38 +259,24 @@
                 div.innerHTML = `
                 <textarea class="input-text-area" rows="30" placeholder="{}"></textarea>
                 `;
-                input_container.appendChild(div);
+                input_container.appendChild(div); //append inside of input_container
             }
         };
-        //get data from List or Box to send
-        if (action == "get") {
-            let jsonData = {};
-            // Get data from List 
-            if (selectElement.value == "List") {
-                let inputListArr = document.getElementsByClassName('input-list');
-                let jsonTempData = "{";
-                for (let i = 0; i < inputListArr.length; i++) {
-                    let key = inputListArr[i].getElementsByClassName('input-key')[0].value
-                    var value = inputListArr[i].getElementsByClassName('input-value')[0].value
-                    //curate a string to parse into json later
-                    if (key !== "") { //key must not be empty
-                        jsonTempData = jsonTempData.concat('"' + key + '":' + value)
-                    }
-                    if (i != inputListArr.length - 1) {
-                        jsonTempData = jsonTempData.concat(",")
-                    }
-                }
-                jsonTempData = jsonTempData.concat("}")
-                jsonData = JSON.parse(jsonTempData)
-            }
-            // get data from send TextBox
-            else {
-                jsonData = JSON.parse(input_container.getElementsByClassName('input-text-area')[0].value)
-            };
-            return (jsonData);
+    }
+
+
+    //hide ml buttons behind Advanced ML tasks button
+    function advancedButtons(id) {
+        mldiv = document.getElementById("mlDiv")
+        if (mldiv.style.display == "none") {
+            mldiv.style.display = "block"
+        }
+        else {
+            mldiv.style.display = "none"
         }
     }
-    //Add listeners to buttons
+
+    //add listeners to buttons
     [
         "dayahead-optim",
         "forecast-model-fit",
@@ -159,12 +286,15 @@
         "publish-data",
     ].forEach((id) => document.getElementById(id).addEventListener('click', () => formAction(id)));
     [
+        "advanced-ml",
+    ].forEach((id) => document.getElementById(id).addEventListener('click', () => advancedButtons(id)));
+    [
         "input-plus",
         "input-minus",
     ].forEach((id) => document.getElementById(id).addEventListener('click', () => dictInputs(id)));
     [
         "input-select"
-    ].forEach((id) => document.getElementById(id).addEventListener('change', () => dictInputs(id)));
+    ].forEach((id) => document.getElementById(id).addEventListener('change', () => getSavedData(id)));
 </script>
 
 </html>
