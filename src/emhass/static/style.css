@@ -408,6 +408,7 @@ h2 {
 }
 
 button:hover,
+.alert:hover,
 select:hover {
   color: darkblue;
   background-color: #e1e1e1;
@@ -430,6 +431,7 @@ input {
 }
 
 button,
+.alert,
 select {
   text-transform: none;
   border-width: 1px;
@@ -532,6 +534,7 @@ template {
 [hidden] {
   display: none;
 }
+
 /* -------------- */
 
 /* EMHASS added style */
@@ -539,6 +542,7 @@ template {
 button,
 .main-svg,
 .mystyle,
+.alert,
 table {
   border-radius: 7px;
   /* overflow: visible; */
@@ -558,12 +562,12 @@ button {
   margin: 15px 5px 0px 0px;
 }
 
-/* center align diagram and set overflow scroll*/
+/* center align diagram/table and set overflow scroll*/
 .plotly-graph-div,
 .table_div {
   overflow-x: auto !important;
   margin: 0 auto;
-  margin-bottom: 10px auto;
+  margin-bottom: 10px;
 }
 
 /* Set min size for diagrams  */
@@ -589,6 +593,7 @@ button {
   position: relative !important;
   float: right !important;
 }
+
 /* */
 
 .svg-container,
@@ -606,7 +611,6 @@ button {
   font-family: Arial;
   border-collapse: collapse;
   border-style: hidden;
-  /* box-shadow: 0 0 0 1px rgb(192, 192, 192, 50%); */
 }
 
 .mystyle td {
@@ -626,8 +630,107 @@ th {
   cursor: pointer;
 }
 
+/* Post task status styling */
+.loading-div {
+  display: flex;
+  margin: 0 auto;
+  align-items: center;
+  align-self: center;
+  max-width: fit-content;
+}
 
-/* Input box styling */
+.loading-div h4 {
+  margin-right: 13px;
+}
+
+#loader {
+  min-width: 3.5em;
+  min-height: 3.5em;
+  width: 3.5em;
+  height: 3.5em;
+}
+
+.loading {
+  /* loading animation  */
+  border: 16px solid silver;
+  border-radius: 50%;
+  border-top: 16px solid #00008b;
+  -webkit-animation: spin 2s linear infinite;
+  animation: spin 2s linear infinite;
+  vertical-align: text-top;
+}
+
+@-webkit-keyframes spin {
+  0% {
+    -webkit-transform: rotate(0deg);
+  }
+
+  100% {
+    -webkit-transform: rotate(360deg);
+  }
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.tick {
+  /* tick symbol  */
+  color: #158b00;
+  vertical-align: text-top;
+  font-size: 4.0em;
+}
+
+.cross {
+  /* cross symbol  */
+  color: #a71515;
+  vertical-align: text-top;
+  font-size: 4.0em;
+}
+
+/* Alert box styling */
+.alert {
+  display: box;
+  max-width: fit-content;
+  overflow-x: auto;
+  align-items: center;
+  align-self: center;
+  box-sizing: inherit;
+  margin: 0 auto;
+  margin-top: 35px;
+  transition: 0.3s;
+}
+
+.alert div {
+  display: flex;
+  margin: 0 auto;
+  width: fit-content;
+  height: fit-content;
+  transition: 0.3s;
+}
+
+#alert-text {
+  white-space: pre-line;
+  padding-right: 35px;
+  transition: 0.3s;
+}
+
+.alert span {
+  color: #a71515;
+  font-weight: bold;
+  cursor: pointer;
+  transition: 0.3s;
+  font-size: calc(22px + 1.5vh);
+  margin: 35px;
+}
+
+/* Input box/List styling */
 #input-container {
   align-items: center;
   display: grid;
@@ -642,7 +745,7 @@ th {
 .input-list,
 .input-area {
   display: flex;
-  align-items: "center";
+  align-items: center;
   align-self: center;
   box-sizing: inherit;
   margin: 0 auto;
@@ -691,6 +794,7 @@ th {
   overflow-x: auto;
   line-height: 1.15;
   box-sizing: inherit;
+  padding: 8px;
 }
 
 .input-text-area {
@@ -737,6 +841,7 @@ th {
   }
 
   button,
+  .alert,
   select {
     color: #e1e1e1;
     background-color: #282928;
@@ -744,6 +849,7 @@ th {
   }
 
   button:hover,
+  .alert:hover,
   select:hover {
     color: #ccf3ff;
     background-color: #3d3d3d;
@@ -810,5 +916,12 @@ th {
   .input-list p {
     color: #e1e1e1;
   }
+
+  .loading {
+    /* loading animation  */
+    border: 16px solid #282928;
+    border-top: 16px solid #ccf3ff;
+  }
+
 
 }
