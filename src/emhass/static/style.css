@@ -687,9 +687,9 @@ th {
   vertical-align: text-top;
   font-size: 4.0em;
   animation-name: fadeInOpacity;
-	animation-iteration-count: 1;
-	animation-timing-function: ease-in;
-	animation-duration: .5s;
+  animation-iteration-count: 1;
+  animation-timing-function: ease-in;
+  animation-duration: .5s;
 }
 
 .cross {
@@ -698,27 +698,29 @@ th {
   vertical-align: text-top;
   font-size: 4.0em;
   animation-name: fadeInOpacity;
-	animation-iteration-count: 1;
-	animation-timing-function: ease-in;
-	animation-duration: .5s;
+  animation-iteration-count: 1;
+  animation-timing-function: ease-in;
+  animation-duration: .5s;
 }
 
 @-webkit-keyframes fadeInOpacity {
-	0% {
-		opacity: 0;
-	}
-	100% {
-		opacity: 1;
-	}
+  0% {
+    opacity: 0;
+  }
+
+  100% {
+    opacity: 1;
+  }
 }
 
 @keyframes fadeInOpacity {
-	0% {
-		opacity: 0;
-	}
-	100% {
-		opacity: 1;
-	}
+  0% {
+    opacity: 0;
+  }
+
+  100% {
+    opacity: 1;
+  }
 }
 
 /* Alert box styling */
@@ -770,7 +772,7 @@ th {
 }
 
 .input-list,
-.input-area {
+#text-area {
   display: flex;
   align-items: center;
   align-self: center;
@@ -811,7 +813,7 @@ th {
 
 
 .input-list input,
-.input-area textarea {
+.input-box textarea {
   border-collapse: collapse;
   border-radius: 7px;
   border-style: solid;
@@ -824,7 +826,7 @@ th {
   padding: 8px;
 }
 
-.input-text-area {
+.input-box {
   min-width: 100%;
 }
 
@@ -934,7 +936,7 @@ th {
   }
 
   .input-list input,
-  .input-area textarea {
+  .input-box textarea {
     background-color: #282928;
     border-color: #e1e1e1;
     color: #e1e1e1
