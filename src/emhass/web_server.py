@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import sys
 from flask import Flask, request, make_response, render_template
 from jinja2 import Environment, PackageLoader
 from requests import get
@@ -119,6 +118,7 @@ if __name__ == "__main__":
     parser.add_argument('--url', type=str, help='The URL to your Home Assistant instance, ex the external_url in your hass configuration')
     parser.add_argument('--key', type=str, help='Your access key. If using EMHASS in standalone this should be a Long-Lived Access Token')
     parser.add_argument('--addon', type=strtobool, default='False', help='Define if we are usinng EMHASS with the add-on or in standalone mode')
+    parser.add_argument('--no_response', type=strtobool, default='False', help='This is set if json response errors occur')
     args = parser.parse_args()
     
     use_options = os.getenv('USE_OPTIONS', default=False)
@@ -127,15 +127,19 @@ if __name__ == "__main__":
         OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/data/options.json")
         options_json = Path(OPTIONS_PATH)
         CONFIG_PATH = os.getenv("CONFIG_PATH", default="/usr/src/config_emhass.yaml")
-        hass_url = args.url
-        key = args.key
+        #Obtain url and key from ENV or ARG
+        hass_url = os.getenv("EMHASS_URL", default=args.url)
+        key =  os.getenv("EMHASS_KEY", default=args.key) 
+        #If url or key is None, Set as empty string to reduce NoneType errors bellow
+        if key is None: key = ""
+        if hass_url is None: hass_url = ""
         # Read options info
         if options_json.exists():
             with options_json.open('r') as data:
                 options = json.load(data)
         else:
             app.logger.error("options.json does not exists")
-        DATA_PATH = "/share/" #"/data/"
+        DATA_PATH = os.getenv("DATA_PATH", default="/share/")
     else:
         if use_options:
             OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
@@ -198,17 +202,45 @@ if __name__ == "__main__":
             "Authorization": "Bearer " + long_lived_token,
             "content-type": "application/json"
         }
-        response = get(url, headers=headers)
-        config_hass = response.json()
-        params_secrets = {
+        if not args.no_response==1:
+            response = get(url, headers=headers)
+            config_hass = response.json()
+            params_secrets = {
             'hass_url': hass_url,
             'long_lived_token': long_lived_token,
             'time_zone': config_hass['time_zone'],
             'lat': config_hass['latitude'],
             'lon': config_hass['longitude'],
             'alt': config_hass['elevation']
-        }
-    else:
+            }
+        else: #if no_response is set to true
+            costfun = os.getenv('LOCAL_COSTFUN', default='profit')
+            logging_level = os.getenv('LOGGING_LEVEL', default='INFO')
+            # check if secrets file exists
+            if Path(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml')).is_file(): 
+                with open(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), 'r') as file:
+                    params_secrets = yaml.load(file, Loader=yaml.FullLoader)
+                    app.logger.debug("Obtained secrets from secrets file")
+            #If cant find secrets_emhass file, use env
+            else: 
+                app.logger.debug("Failed to find secrets file: "+str(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml')))
+                app.logger.debug("Setting location defaults")
+                params_secrets = {} 
+                #If no secrets file try args, else set some defaults 
+                params_secrets['time_zone'] = os.getenv("TIME_ZONE", default="Europe/Paris")
+                params_secrets['lat'] = float(os.getenv("LAT", default="45.83"))
+                params_secrets['lon'] = float(os.getenv("LON", default="6.86"))
+                params_secrets['alt'] = float(os.getenv("ALT", default="4807.8"))      
+            #If ARG/ENV specify url and key, then override secrets file
+            if hass_url != "":
+                params_secrets['hass_url'] = hass_url
+                app.logger.debug("Using URL obtained from ARG/ENV")
+            else:
+                hass_url = params_secrets.get('hass_url',"http://localhost:8123/")      
+            if long_lived_token != "":
+                params_secrets['long_lived_token'] = long_lived_token
+                app.logger.debug("Using Key obtained from ARG/ENV")       
+    else: #If addon is false
         costfun = os.getenv('LOCAL_COSTFUN', default='profit')
         logging_level = os.getenv('LOGGING_LEVEL', default='INFO')
         with open(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), 'r') as file:

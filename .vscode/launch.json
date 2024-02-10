@@ -31,7 +31,7 @@
       "program": "web_server.py",
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}/src/emhass/",
-      "args": ["--addon", "true", "--url", "http://IPHERE:PORT/", "--key", "PLACEKEYHERE" ],
+      "args": ["--addon", "true",  "--no_response", "true"],
       "purpose":["debug-in-terminal"],
       "justMyCode": true,
       "env": {
@@ -39,6 +39,12 @@
         "OPTIONS_PATH": "/workspaces/emhass/options.json",
         "SECRETS_PATH": "/workspaces/emhass/secrets_emhass.yaml",
         "DATA_PATH": "/workspaces/emhass/data/",
+        "EMHASS_URL": "http://HAIPHERE:8123/", //change
+        "EMHASS_KEY": "PLACEKEYHERE", //change
+        "TIME_ZONE": "Europe/Paris", //optional change
+        "LAT": "45.83", //optional change
+        "LON": "6.86", //optional change
+        "ALT": "4807.8", //optional change
       },
       
   }

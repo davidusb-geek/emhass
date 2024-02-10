@@ -1,0 +1,13 @@
+{
+    "python.envFile": "${workspaceFolder}/.vscode/env.env",
+    "python.testing.unittestArgs": [
+        "-v",
+        "-rP",
+        "-s",
+        "./tests",
+        "-p",
+        "test_*.py"
+    ],
+    "python.testing.pytestEnabled": false,
+    "python.testing.unittestEnabled": true
+}
