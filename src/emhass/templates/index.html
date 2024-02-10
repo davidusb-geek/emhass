@@ -47,12 +47,6 @@
                 </div>
             </div>
             <div id="input-container"> <!-- (Box/List) dynamic input elements will be added here -->
-                <div class=input-list>
-                    <input class="input-key" type="text" placeholder="pv_power_forecast">
-                    <p>:</p>
-                    <input class="input-value" type="text"
-                        placeholder="[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]">
-                </div>
             </div>
             <!-- -->
         </div>
@@ -179,9 +173,13 @@
         var input_container = document.getElementById('input-container'); //container
         let inputListArr = document.getElementsByClassName('input-list'); //list
         let inputTextArea = document.getElementById('text-area'); //box 
-        let input_container_child = input_container.firstElementChild; //work out which element is first inside container div
+        let input_container_child = null
+        input_container_child = input_container.firstElementChild; //work out which element is first inside container div
         var jsonReturnData = {};
 
+        if (input_container_child == null){ //if no elements in container then return empty
+            return (jsonReturnData)
+        };
         //if List return box json
         if (input_container_child.className == "input-list" && inputListArr.length > 0) { //if list is first and if list is greater then 0, otherwise give empty dict
 
@@ -249,14 +247,14 @@
         };
         //if list is selected, remove text-area (from Box) element and replace (with input-list)
         if (selectElement.value == "List") {
-            if (action == "input-plus" || input_container_child === null || input_container_child_name == "input-box") {  //if plus button pressed, List elements or Box element 
+            if (action == "input-plus" || input_container_child_name == "input-box") {  //if plus button pressed, or Box element exists
                 if (input_container_child_name == "input-box") {
                     input_container_child.remove();
                 }
                 input_container.appendChild(createInputListDiv(false, false)); //call to createInputListDiv function to craft input-list element (with no values) and append inside container element
             };
             if (action == "input-minus") {  //minus button pressed, remove input-list element
-                if (input_container.children.length > 1) {
+                if (input_container.children.length > 0) {
                     let inputListArr = document.getElementsByClassName('input-list');
                     let obj = inputListArr.item(inputListArr.length - 1);
                     obj.innerHTML = '';
@@ -266,7 +264,7 @@
         }
         //if box is selected, remove input-list elements and replace (with text-area)
         if (selectElement.value == "Box") {
-            if (input_container_child_name == "input-list" || input_container_child === null) { // if input list or no Box element
+            if (input_container_child_name == "input-list" || input_container_child === null) { // if input list exists or no Box element
                 inputListArr = input_container.getElementsByClassName('input-list');
                 while (inputListArr[0]) { //while there is still input-list elements remove 
                     inputListArr[0].parentNode.removeChild(inputListArr[0]);
