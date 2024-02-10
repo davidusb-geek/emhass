@@ -23,9 +23,10 @@
             <button type="button" id="perfect-optim" class="button button1">Perfect Optimization</button>
             <button type="button" id="dayahead-optim" class="button button2">Day-ahead Optimization</button>
             <button type="button" id="advanced-ml" class="button button3">Advanced ML Tasks</button>
+            <!--ml toggled div button -->
             <h4>Use the button below to publish the optimized variables at the current timestamp</h4>
             <button type="button" id="publish-data" class="button button1">Publish Optimization Results</button>
-            <div id="mlDiv" style="display: none;"> <!-- hidden toggled div for ml  -->
+            <div id="mlDiv" style="display: none;"> <!-- dynamic hidden toggled div for ml  -->
                 <h4>Use the buttons below to fit, predict and tune a machine learning model for testing</h4>
                 <button type="button" id="forecast-model-fit" class="button button1">ML forecast model fit</button>
                 <button type="button" id="forecast-model-predict" class="button button2">ML forecast model
@@ -45,7 +46,7 @@
                     </select>
                 </div>
             </div>
-            <div id="input-container"> <!-- Text (Box/List) input elements will be added here -->
+            <div id="input-container"> <!-- (Box/List) dynamic input elements will be added here -->
                 <div class=input-list>
                     <input class="input-key" type="text" placeholder="pv_power_forecast">
                     <p>:</p>
@@ -85,11 +86,11 @@
         getSavedData()
     };
 
-    //function pushing data via post with button action
+    //function pushing data via post, triggered by button action
     async function formAction(action) {
         var data = inputToJson()
         if (data !== 0) { //don't run if there is an error in the data Json
-            showChangeStatus(1) // show loading logo for status
+            showChangeStatus("loading") // show loading div for status
             response = await fetch(`{{ basename }}/action/${action}`, {
                 method: "POST",
                 headers: {
@@ -100,7 +101,7 @@
             showChangeStatus(response.status) //replace loading, show tick or cross
         }
         else {
-            showChangeStatus("remove") //replace loading, show tick or cross
+            showChangeStatus("remove") //replace loading, show tick or cross with none 
         }
     }
 
@@ -111,7 +112,7 @@
             loading.innerHTML = "";
             loading.classList.remove("loading"); //append class with loading animation styling
         }
-        else if (status === 1) { //show loading logo
+        else if (status === "loading") { //show loading logo
             loading.innerHTML = "";
             loading.classList.add("loading"); //append class with loading animation styling
         }
@@ -126,11 +127,12 @@
         }
     }
 
-    function testStorage() {  //test localStorage support
+    //test localStorage support
+    function testStorage() {
         try {
-           localStorage.setItem("test", {"test":"123"}) 
-           localStorage.removeItem("test")
-           return true
+            localStorage.setItem("test", { "test": "123" })
+            localStorage.removeItem("test")
+            return true
         }
         catch (error) {
             return false
@@ -145,14 +147,14 @@
         dictInputs() //check selected current (List or Box) is correct
         if (testStorage()) { //if local storage exists and works
             let selectElement = document.getElementById('input-select') // select button element
-            var input_container = document.getElementById('input-container'); // container div containing all dynamic input elements
+            var input_container = document.getElementById('input-container'); // container div containing all dynamic input elements (Box/List)
             let input_container_child = null;
             if (localStorage.getItem("input_container_content")) { //If items already stored in local storage, then override default
-                if (selectElement.value == "Box") { //if Box is set, show saved json data into box 
+                if (selectElement.value == "Box") { //if Box is selected, show saved json data into box 
                     input_container_child = input_container.firstElementChild;
-                    input_container_child.getElementsByTagName("textarea")[0].value = localStorage.getItem("input_container_content");
+                    input_container_child.getElementById("textarea")[0].value = localStorage.getItem("input_container_content");
                 }
-                if (selectElement.value == "List") { //if List is set, show saved json data into box 
+                if (selectElement.value == "List") { //if List is selected, show saved json data into box 
                     storedJson = JSON.parse(localStorage.getItem("input_container_content"));
                     if (Object.keys(storedJson).length > 0) {
                         input_container.innerHTML = "";
@@ -166,38 +168,37 @@
         }
     }
 
-    //using localStorage, store json data from input-select/input-box elements for saved state save on page refresh (will save state on successful post)
+    //using localStorage, store json data from input-list(List)/text-area(from input-box) elements for saved state save on page refresh (will save state on successful post)
     function saveStorage() {
         var data = JSON.stringify(inputToJson())
-        if (testStorage() && data != "{}") { //don't bother saving if empty or storage dosn't exist
+        if (testStorage() && data != "{}") { //don't bother saving if empty and/or storage don't exist
             localStorage.setItem("input_container_content", data);
         }
     }
 
-    //function gets values from input-select/input-box elements and return json dict object 
+    //function gets values from input-list/text-area(from input-box) elements and return json dict object 
     function inputToJson() {
-        let inputListArr = document.getElementsByClassName('input-list');
-        var input_container = document.getElementById('input-container');
-        let input_container_child = input_container.firstElementChild;
-        let jsonReturnData = {};
+        var input_container = document.getElementById('input-container'); //container
+        let inputListArr = document.getElementsByClassName('input-list'); //list
+        let inputTextArea = document.getElementById('text-area'); //box 
+        let input_container_child = input_container.firstElementChild; //work out which element is first inside container div
+        var jsonReturnData = {};
 
         //if List return box json
-        if (input_container_child.className == "input-list" && inputListArr.length > 0) {
+        if (input_container_child.className == "input-list" && inputListArr.length > 0) { //if list is first and if list is greater then 0, otherwise give empty dict
+
             let jsonTempData = "{";
             for (let i = 0; i < inputListArr.length; i++) {
                 let key = inputListArr[i].getElementsByClassName('input-key')[0].value;
                 var value = inputListArr[i].getElementsByClassName('input-value')[0].value;
                 //curate a string with list elements to parse into json later
                 if (key !== "") { //key must not be empty
+                    if (i !== 0) { jsonTempData = jsonTempData.concat(","); } //add comma before every parameter, exuding the first 
                     jsonTempData = jsonTempData.concat('"' + key + '":' + value);
-                    if (i != (inputListArr.length - 1)) { //if items left 
-                        if (inputListArr[i + 1].getElementsByClassName('input-key')[0].value !== "") { //if item is not null 
-                            jsonTempData = jsonTempData.concat(",");
-                        }
-                    }
                 }
             }
             jsonTempData = jsonTempData.concat("}");
+            console.log(jsonTempData)
             try {
                 jsonReturnData = JSON.parse(jsonTempData);
             }
@@ -208,9 +209,9 @@
             }
         }
         //if Box return box json
-        if (input_container_child.className == "input-area") {
+        if (input_container_child.className == "input-box" && inputTextArea.value != "") {  //if Box is first and text is not empty, otherwise give empty dict
             try {
-                jsonReturnData = JSON.parse(input_container.getElementsByClassName('input-text-area')[0].value);
+                jsonReturnData = JSON.parse(inputTextArea.value);
             }
             catch (error) {  //if json error, show in alert box
                 document.getElementById("alert-text").textContent = "\r\n" + error
@@ -221,9 +222,9 @@
         return (jsonReturnData)
     }
 
-    //function to create input list div element (and pass it values if given)
+    //function creates input list div element (and pass it values if given)
     function createInputListDiv(ikey, ivalue) {
-        let div = document.createElement('div'); //add input-list element
+        let div = document.createElement('div');
         div.className = 'input-list';
         div.innerHTML = `
                 <input class="input-key" type="text" placeholder="pv_power_forecast" >
@@ -231,7 +232,7 @@
                 <input class="input-value" type="text" placeholder="[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]" >
             `;
 
-        if (ikey && ivalue) { //if value and key is provided (from local storage) then add as element value
+        if (ikey && ivalue) { //if value and key is provided (from local storage) then add as elements values
             div.getElementsByClassName("input-key")[0].value = String(ikey);
             div.getElementsByClassName("input-value")[0].value = String(ivalue);
         }
@@ -239,25 +240,25 @@
         return (div);
     }
 
-    //function assigned to control (add and remove) input elements 
+    //function assigned to control (add and remove) input (Box and List) elements 
     function dictInputs(action) {
         var input_container = document.getElementById('input-container') // container div containing all dynamic input elements
         let selectElement = document.getElementById('input-select')      // select button
         let input_container_child = null
         let input_container_child_name = null
         if (input_container.children.length > 0) {
-            input_container_child = input_container.firstElementChild  // figure out what is the first element inside of container (ie: "input-area" (box) or "input-list" (list)) 
+            input_container_child = input_container.firstElementChild  // figure out what is the first element inside of container (ie: "text-area" (input-box) or "input-list" (list)) 
             input_container_child_name = input_container.firstElementChild.className
         };
-        //if list is selected, remove input-area element and replace (with input-list)
+        //if list is selected, remove text-area (from Box) element and replace (with input-list)
         if (selectElement.value == "List") {
-            if (action == "input-plus" || input_container_child === null || input_container_child_name == "input-area") { //check if input-area elements exist as (based on first element in container)
-                if (input_container_child_name == "input-area") {
+            if (action == "input-plus" || input_container_child === null || input_container_child_name == "input-box") {  //if plus button pressed, List elements or Box element 
+                if (input_container_child_name == "input-box") {
                     input_container_child.remove();
                 }
-                input_container.appendChild(createInputListDiv(false, false)); //call to createInputListDiv function to craft input-area element (with no values)
+                input_container.appendChild(createInputListDiv(false, false)); //call to createInputListDiv function to craft input-list element (with no values) and append inside container element
             };
-            if (action == "input-minus") {  //remove input-list element
+            if (action == "input-minus") {  //minus button pressed, remove input-list element
                 if (input_container.children.length > 1) {
                     let inputListArr = document.getElementsByClassName('input-list');
                     let obj = inputListArr.item(inputListArr.length - 1);
@@ -266,19 +267,19 @@
                 }
             };
         }
-        //if box is selected, remove input-list elements and replace (with input-area)
+        //if box is selected, remove input-list elements and replace (with text-area)
         if (selectElement.value == "Box") {
-            if (input_container_child_name == "input-list" || input_container_child === null) {
-                inputListArr = input_container.getElementsByClassName('input-list'); //check if input-list elements exist as (based on first element in container)
-                while (inputListArr[0]) {
+            if (input_container_child_name == "input-list" || input_container_child === null) { // if input list or no Box element
+                inputListArr = input_container.getElementsByClassName('input-list');
+                while (inputListArr[0]) { //while there is still input-list elements remove 
                     inputListArr[0].parentNode.removeChild(inputListArr[0]);
                 };
-                let div = document.createElement('div'); //add input-area element
-                div.className = "input-area";
+                let div = document.createElement('div'); //add input-box element
+                div.className = "input-box";
                 div.innerHTML = `
-                <textarea class="input-text-area" rows="30" placeholder="{}"></textarea>
+                <textarea id="text-area" rows="30" placeholder="{}"></textarea>
                 `;
-                input_container.appendChild(div); //append inside of input_container
+                input_container.appendChild(div); //append inside of container element
             }
         };
     }
