@@ -148,11 +148,9 @@
         if (testStorage()) { //if local storage exists and works
             let selectElement = document.getElementById('input-select') // select button element
             var input_container = document.getElementById('input-container'); // container div containing all dynamic input elements (Box/List)
-            let input_container_child = null;
             if (localStorage.getItem("input_container_content")) { //If items already stored in local storage, then override default
                 if (selectElement.value == "Box") { //if Box is selected, show saved json data into box 
-                    input_container_child = input_container.firstElementChild;
-                    input_container_child.getElementById("textarea")[0].value = localStorage.getItem("input_container_content");
+                    document.getElementById("text-area").value = localStorage.getItem("input_container_content");
                 }
                 if (selectElement.value == "List") { //if List is selected, show saved json data into box 
                     storedJson = JSON.parse(localStorage.getItem("input_container_content"));
@@ -198,7 +196,6 @@
                 }
             }
             jsonTempData = jsonTempData.concat("}");
-            console.log(jsonTempData)
             try {
                 jsonReturnData = JSON.parse(jsonTempData);
             }
