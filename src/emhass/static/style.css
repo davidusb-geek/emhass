@@ -19,13 +19,14 @@
   color: silver;
   color: #7d7d7d;
   color: #3f3f3f;
+  color: #282928;
   color: #181818;
   color: #111111;
 }
 
 /* -------------- */
 
-
+/* Base (modified) ungoldman style */
 html {
   color: #3d3d3d;
   background-color: white;
@@ -41,18 +42,6 @@ html {
   -ms-text-size-adjust: 100%;
   -webkit-text-size-adjust: 100%;
   overflow-x: hidden;
-}
-
-h2 {
-  color: darkblue;
-}
-
-.text.adaptive {
-  color: #111111;
-}
-
-button:hover {
-  color: darkblue;
 }
 
 body {
@@ -410,6 +399,21 @@ input {
   margin: 0;
 }
 
+h2 {
+  color: darkblue;
+}
+
+.text.adaptive {
+  color: #111111;
+}
+
+button:hover,
+.alert:hover,
+select:hover {
+  color: darkblue;
+  background-color: #e1e1e1;
+}
+
 button,
 input,
 optgroup,
@@ -427,8 +431,13 @@ input {
 }
 
 button,
+.alert,
 select {
   text-transform: none;
+  border-width: 1px;
+  border-style: solid;
+  box-shadow: #3d3d3d 3px 3px;
+  ;
 }
 
 button,
@@ -526,12 +535,16 @@ template {
   display: none;
 }
 
+/* -------------- */
+
+/* EMHASS added style */
+/* set rounded element radius */
 button,
 .main-svg,
 .mystyle,
+.alert,
 table {
   border-radius: 7px;
-  margin: 15px 10px;
   /* overflow: visible; */
 }
 
@@ -549,19 +562,29 @@ button {
   margin: 15px 5px 0px 0px;
 }
 
+/* center align diagram/table and set overflow scroll*/
 .plotly-graph-div,
 .table_div {
   overflow-x: auto !important;
+  margin: 0 auto;
+  margin-bottom: 10px;
 }
 
-.modebar-group {
-  float: right !important;
-  min-width: 0px !important;
-}
-
+/* Set min size for diagrams  */
 .svg-container,
 .table_div div {
   min-width: 850px;
+}
+
+/* center align Table*/
+.table_div table {
+  margin: 0 auto !important;
+}
+
+/* Diagram modbar styling */
+.modebar-group {
+  float: right !important;
+  min-width: 0px !important;
 }
 
 .modebar-container,
@@ -570,6 +593,8 @@ button {
   position: relative !important;
   float: right !important;
 }
+
+/* */
 
 .svg-container,
 .main-svg,
@@ -585,9 +610,7 @@ button {
   font-size: 11pt;
   font-family: Arial;
   border-collapse: collapse;
-  border-radius: 7px;
   border-style: hidden;
-  /* box-shadow: 0 0 0 1px rgb(192, 192, 192, 50%); */
 }
 
 .mystyle td {
@@ -607,9 +630,225 @@ th {
   cursor: pointer;
 }
 
+/* Post task status styling */
+.loading-div {
+  display: flex;
+  margin: 0 auto;
+  align-items: center;
+  align-self: center;
+  max-width: fit-content;
+}
+
+.loading-div h4 {
+  margin-right: 13px;
+}
+
+#loader {
+  min-width: 3.5em;
+  min-height: 3.5em;
+  width: 3.5em;
+  height: 3.5em;
+}
+
+.loading {
+  /* loading animation  */
+  border: 16px solid silver;
+  border-radius: 50%;
+  border-top: 16px solid #00008b;
+  -webkit-animation: spin 2s linear infinite;
+  animation: spin 2s linear infinite;
+  vertical-align: text-top;
+  transition: 1s;
+}
+
+@-webkit-keyframes spin {
+  0% {
+    -webkit-transform: rotate(0deg);
+  }
+
+  100% {
+    -webkit-transform: rotate(360deg);
+  }
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.tick {
+  /* tick symbol  */
+  color: #158b00;
+  vertical-align: text-top;
+  font-size: 4.0em;
+  animation-name: fadeInOpacity;
+  animation-iteration-count: 1;
+  animation-timing-function: ease-in;
+  animation-duration: .5s;
+}
+
+.cross {
+  /* cross symbol  */
+  color: #a71515;
+  vertical-align: text-top;
+  font-size: 4.0em;
+  animation-name: fadeInOpacity;
+  animation-iteration-count: 1;
+  animation-timing-function: ease-in;
+  animation-duration: .5s;
+}
+
+@-webkit-keyframes fadeInOpacity {
+  0% {
+    opacity: 0;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeInOpacity {
+  0% {
+    opacity: 0;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+/* Alert box styling */
+.alert {
+  display: box;
+  max-width: fit-content;
+  overflow-x: auto;
+  align-items: center;
+  align-self: center;
+  box-sizing: inherit;
+  margin: 0 auto;
+  margin-top: 35px;
+  transition: 0.3s;
+}
+
+.alert div {
+  display: flex;
+  margin: 0 auto;
+  width: fit-content;
+  height: fit-content;
+  transition: 0.3s;
+}
+
+#alert-text {
+  white-space: pre-line;
+  padding-right: 35px;
+  transition: 0.3s;
+}
+
+.alert span {
+  color: #a71515;
+  font-weight: bold;
+  cursor: pointer;
+  transition: 0.3s;
+  font-size: calc(22px + 1.5vh);
+  margin: 35px;
+}
+
+/* Input box/List styling */
+#input-container {
+  align-items: center;
+  display: grid;
+}
+
+.input-button-container {
+  align-items: center;
+  display: flex;
+  margin-bottom: 0.5rem;
+}
+
+.input-list,
+#text-area {
+  display: flex;
+  align-items: center;
+  align-self: center;
+  box-sizing: inherit;
+  margin: 0 auto;
+  width: auto;
+  min-width: 50%;
+  max-width: 75%;
+}
+
+.input-buttons {
+  max-width: 50%;
+  display: flex;
+  align-items: "center";
+  align-self: center;
+  align-items: center;
+  box-sizing: inherit;
+  margin: 0 auto;
+  width: auto;
+}
+
+
+.input-buttons button,
+.input-buttons select {
+  border-collapse: collapse;
+  border-radius: 7px;
+  border-style: solid;
+  line-height: 1.15;
+  width: 43px;
+  height: 43px;
+  margin-right: 0.5rem;
+  text-align: center;
+}
+
+#input-select {
+  width: 77px;
+}
+
+
+.input-list input,
+.input-box textarea {
+  border-collapse: collapse;
+  border-radius: 7px;
+  border-style: solid;
+  background-color: #e1e1e1;
+  border-color: silver;
+  color: #282928;
+  overflow-x: auto;
+  line-height: 1.15;
+  box-sizing: inherit;
+  padding: 8px;
+}
+
+.input-box {
+  min-width: 100%;
+}
+
+.input-value {
+  min-width: 75%;
+}
+
+.input-list p {
+  font-size: 1.5em;
+  color: #282928;
+  height: max-content;
+  align-self: center;
+  margin: 0;
+}
+
+/* */
+
+
 /* mobile only changes */
 @media only screen and (max-width: 799px) {
 
+  /* modbar disable drag layer and buttons*/
   .modebar-group:has(a[data-attr=dragmode]),
   .draglayer,
   .layer-below {
@@ -630,12 +869,17 @@ th {
     filter: invert(90%);
   }
 
-  button {
+  button,
+  .alert,
+  select {
     color: #e1e1e1;
-    background-color: rgb(40, 41, 40);
+    background-color: #282928;
+    box-shadow: #282928 4px 7px;
   }
 
-  button:hover {
+  button:hover,
+  .alert:hover,
+  select:hover {
     color: #ccf3ff;
     background-color: #3d3d3d;
   }
@@ -690,4 +934,23 @@ th {
   .main-svg {
     box-shadow: 0 0 0 1px silver;
   }
+
+  .input-list input,
+  .input-box textarea {
+    background-color: #282928;
+    border-color: #e1e1e1;
+    color: #e1e1e1
+  }
+
+  .input-list p {
+    color: #e1e1e1;
+  }
+
+  .loading {
+    /* loading animation  */
+    border: 16px solid #282928;
+    border-top: 16px solid #ccf3ff;
+  }
+
+
 }
