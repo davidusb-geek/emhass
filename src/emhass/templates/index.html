@@ -82,11 +82,11 @@
 
     //on page reload get saved data
     window.onload = async function () {
-        getSavedData() 
+        getSavedData()
     };
 
-     //function pushing data via post with button action
-     async function formAction(action) {
+    //function pushing data via post with button action
+    async function formAction(action) {
         var data = inputToJson()
         if (data !== 0) { //don't run if there is an error in the data Json
             showChangeStatus(1) // show loading logo for status
@@ -99,7 +99,7 @@
             }).then(saveStorage()) //save to storage if successful 
             showChangeStatus(response.status) //replace loading, show tick or cross
         }
-        else{
+        else {
             showChangeStatus("remove") //replace loading, show tick or cross
         }
     }
@@ -126,28 +126,40 @@
         }
     }
 
+    function testStorage() {  //test localStorage support
+        try {
+           localStorage.setItem("test", {"test":"123"}) 
+           localStorage.removeItem("test")
+           return true
+        }
+        catch (error) {
+            return false
+        }
+        return false
+    }
+
 
     //function gets saved data (if any)
     function getSavedData() {
-        let selectElement = document.getElementById('input-select') // select button element
-        var input_container = document.getElementById('input-container'); // container div containing all dynamic input elements
-        let input_container_child;
 
         dictInputs() //check selected current (List or Box) is correct
-
-        if (localStorage.getItem("input_container_content")) { //If items already stored in local storage, then override default
-            if (selectElement.value == "Box") { //if Box is set, show saved json data into box 
-                input_container_child = input_container.firstElementChild;
-                input_container_child.getElementsByTagName("textarea")[0].value = localStorage.getItem("input_container_content");
-
-            }
-            if (selectElement.value == "List") { //if List is set, show saved json data into box 
-                storedJson = JSON.parse(localStorage.getItem("input_container_content"));
-                if (Object.keys(storedJson).length > 0) {
-                    input_container.innerHTML = "";
-                    i = 1;
-                    for (const ikey in storedJson) {
-                        input_container.appendChild(createInputListDiv(ikey, JSON.stringify(storedJson[ikey]))); //call function to present each key as an list div element (with saved values)
+        if (testStorage()) { //if local storage exists and works
+            let selectElement = document.getElementById('input-select') // select button element
+            var input_container = document.getElementById('input-container'); // container div containing all dynamic input elements
+            let input_container_child = null;
+            if (localStorage.getItem("input_container_content")) { //If items already stored in local storage, then override default
+                if (selectElement.value == "Box") { //if Box is set, show saved json data into box 
+                    input_container_child = input_container.firstElementChild;
+                    input_container_child.getElementsByTagName("textarea")[0].value = localStorage.getItem("input_container_content");
+                }
+                if (selectElement.value == "List") { //if List is set, show saved json data into box 
+                    storedJson = JSON.parse(localStorage.getItem("input_container_content"));
+                    if (Object.keys(storedJson).length > 0) {
+                        input_container.innerHTML = "";
+                        i = 1;
+                        for (const ikey in storedJson) {
+                            input_container.appendChild(createInputListDiv(ikey, JSON.stringify(storedJson[ikey]))); //call function to present each key as an list div element (with saved values)
+                        }
                     }
                 }
             }
@@ -156,9 +168,9 @@
 
     //using localStorage, store json data from input-select/input-box elements for saved state save on page refresh (will save state on successful post)
     function saveStorage() {
-        var input_container = document.getElementById('input-container');
-        if (typeof (Storage) !== "undefined") {
-            localStorage.setItem("input_container_content", JSON.stringify(inputToJson()));
+        var data = JSON.stringify(inputToJson())
+        if (testStorage() && data != "{}") { //don't bother saving if empty or storage dosn't exist
+            localStorage.setItem("input_container_content", data);
         }
     }
 
