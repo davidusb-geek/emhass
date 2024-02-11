@@ -9,6 +9,10 @@
 	"features": {
 		"ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
 	}
+	//"appPort": ["5000:5000"] //used to access app from external device (User discretion advised)
+	
+	
+	
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	// "features": {},
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.

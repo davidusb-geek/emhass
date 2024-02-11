@@ -4,6 +4,9 @@ test.py
 secrets_emhass.yaml
 *.tar
 .vscode/*
+.vscode/launch.json
+.vscode/settings.json
+.vscode/tasks.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
