@@ -1,17 +1,16 @@
 #Test Add-on via Docker Emulation
 #Docker run example: 
 ## docker build . -t emhass-addon -f AddonEmulateDocker && docker run  -e CONFIG_PATH="/usr/src/config_emhass.yaml" -e "SECRETS_PATH=/usr/src/secrets_emhass.yaml"  -e DATA_PATH="/data/" -e OPTIONS_PATH="/data/options.json" emhass-addon --url $URL --key $KEY
-FROM --platform=$BUILDPLATFORM ghcr.io/home-assistant/amd64-base-debian:bookworm AS build
+FROM --platform=$BUILDPLATFORM ghcr.io/home-assistant/armhf-base-debian:bookworm AS build
 WORKDIR /usr/src
 
 # copy the requirements file into the image
-COPY ./requirements.txt /usr/src/requirements.txt
+COPY ./requirements_addon.txt /usr/src/requirements.txt
 
 # Setup
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libffi-dev \
-        python3.11 \
         python3 \
         python3-pip \
         python3-dev \
@@ -45,11 +44,11 @@ RUN apt-get update \
 #install local emhass 
 #RUN git clone https://github.com/davidusb-geek/emhass.git
 #pip install emhass (original)
-COPY ./. /app/
-WORKDIR /app/
-RUN python3 setup.py install
+#COPY ./. /app/
+#WORKDIR /app/
+#RUN python3 setup.py install
 #create share dir
-RUN mkdir /share/
+#RUN mkdir /share/
 
 
 WORKDIR /
