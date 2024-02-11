@@ -2,7 +2,7 @@
 
 ## [0.7.7] - 2024-02-10
 ### Improvement
-- Bumped the webui. Index/style added runtime parameter dictionary inputs. Thanks to @GeoDerp
+- Bumped the webui. Some great new features and styling. Now it is possible to pass data directly as lsit of values when using the buttons in the webui. Thanks to @GeoDerp
 - Added two additional testing environment options. Thanks to @GeoDerp
 ### Fix
 - Bump markupsafe from 2.1.4 to 2.1.5
