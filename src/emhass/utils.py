@@ -656,6 +656,31 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int, 
         params['plant_conf']['SOCmin'] = options.get('battery_minimum_state_of_charge',params['plant_conf']['SOCmin']) 
         params['plant_conf']['SOCmax'] = options.get('battery_maximum_state_of_charge',params['plant_conf']['SOCmax']) 
         params['plant_conf']['SOCtarget'] = options.get('battery_target_state_of_charge',params['plant_conf']['SOCtarget'])
+
+        # Check parameter lists have the same amounts as deferrable loads
+        # If not, set defaults it fill in gaps
+        if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['def_start_timestep']):
+            for x in range(len(params['optim_conf']['def_start_timestep']), params['optim_conf']['num_def_loads']):
+                params['optim_conf']['def_start_timestep'].append(0)
+        if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['def_end_timestep']):
+            for x in range(len(params['optim_conf']['def_end_timestep']), params['optim_conf']['num_def_loads']):
+                params['optim_conf']['def_end_timestep'].append(0)
+        if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['set_def_constant']):
+            for x in range(len(params['optim_conf']['set_def_constant']), params['optim_conf']['num_def_loads']):
+                params['optim_conf']['set_def_constant'].append(False)
+        if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['treat_def_as_semi_cont']):
+            for x in range(len(params['optim_conf']['treat_def_as_semi_cont']), params['optim_conf']['num_def_loads']):
+                params['optim_conf']['treat_def_as_semi_cont'].append(True)        
+        if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['def_total_hours']):
+            for x in range(len(params['optim_conf']['def_total_hours']), params['optim_conf']['num_def_loads']):
+                params['optim_conf']['def_total_hours'].append(5)                   
+        if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['P_deferrable_nom']):
+            for x in range(len(params['optim_conf']['P_deferrable_nom']), params['optim_conf']['num_def_loads']):
+                params['optim_conf']['P_deferrable_nom'].append(3000)   
+        if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['list_hp_periods']):
+            for x in range(len(params['optim_conf']['list_hp_periods']), params['optim_conf']['num_def_loads']):
+                params['optim_conf']['list_hp_periods'].append({'period_hp_'+str(x+1):[{'start':'02:54'},{'end':'20:24'}]})
+
     else:
         params['params_secrets'] = params_secrets
     # The params dict
