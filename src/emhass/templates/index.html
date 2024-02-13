@@ -18,7 +18,7 @@
             <!-- action button elements section -->
             <div class="loading-div">
                 <h4>Use the buttons below to manually launch different optimization tasks</h4>
-                <div id=loader></div> <!-- post status dynamic element -->
+                <div id=loader></div> <!-- status dynamic element -->
             </div>
             <button type="button" id="perfect-optim" class="button button1">Perfect Optimization</button>
             <button type="button" id="dayahead-optim" class="button button2">Day-ahead Optimization</button>
@@ -57,10 +57,11 @@
                 <p id="alert-text"></p>
             </div>
         </div>
+        <!-- -->
         <br><br><br>
         <!-- dynamic table/diagram elements section -->
     </div>
-    <div id="template">
+    <div id="template"> <!-- table/diagram container element  -->
         {% for plot in injection_dict %} <!-- diagrams/tables elements will be added here -->
         <div class="table_div">
             {{injection_dict[plot]}}
@@ -86,26 +87,29 @@
     //function pushing data via post, triggered by button action
     async function formAction(action) {
         var data = inputToJson()
-        if (data !== 0) { //don't run if there is an error in the data Json
-            showChangeStatus("loading",{}) // show loading div for status
-            const response = await fetch(`{{ basename }}/action/${action}`, {
+        if (data !== 0) { //don't run if there is an error in the input (box/list) Json data 
+            showChangeStatus("loading", {}) // show loading div for status
+            const response = await fetch(`{{ basename }}/action/${action}`, { //fetch data from webserver.py
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                 },
-                body: JSON.stringify(data), //post can only send data via strings
-            }).then(saveStorage()) //save to storage if successful
-            if (response.status == 201) {showChangeStatus(response.status,{})} //if successful 
-            else {showChangeStatus(response.status,await response.json())} // else get Logs from response
-            }
+                body: JSON.stringify(data), //note that post can only send data via strings
+            })
+            if (response.status == 201) {
+                showChangeStatus(response.status, {})
+                saveStorage() //save to storage if successful
+            } //if successful 
+            else { showChangeStatus(response.status, await response.json()) } // else get Log data from response
+        }
         else {
             showChangeStatus("remove") //replace loading, show tick or cross with none 
         }
     }
 
     //function in control of status icons of post above
-    async function showChangeStatus(status,logJson) {
-        var loading = document.getElementById("loader") //element showing status 
+    async function showChangeStatus(status, logJson) {
+        var loading = document.getElementById("loader") //element showing statuses
         if (status === "remove") { //remove all
             loading.innerHTML = "";
             loading.classList.remove("loading");
@@ -114,7 +118,7 @@
             loading.innerHTML = "";
             loading.classList.add("loading"); //append class with loading animation styling
         }
-        else if (status === 201) { //then show a tick 
+        else if (status === 201) { //if status is 201, then show a tick 
             loading.classList.remove("loading")
             loading.innerHTML = `<p class=tick>&#x2713;</p>`
             getTemplate() //get updated templates
@@ -123,10 +127,31 @@
         else { //then show a cross 
             loading.classList.remove("loading")
             loading.innerHTML = `<p class=cross>&#x292C;</p>` //show cross icon to indicate an error
-            document.getElementById("alert-text").textContent = "\r\n" + logJson.join("\r\n")
-            document.getElementById("alert").style.display = "block";
+            if (logJson.length != 0) {
+                document.getElementById("alert-text").textContent = "\r\n" + logJson.join("\r\n") //show received log data in alert box
+                document.getElementById("alert").style.display = "block";
+            }
         }
     }
+
+    //get rendered html template with containing new table data  
+    async function getTemplate() { //fetch data from webserver.py
+        let htmlTemplateData = ""
+        response = await fetch(`{{ basename }}/template/table-template`, {
+            method: "GET"
+        })
+        blob = await response.blob() //get data blob
+        htmlTemplateData = await new Response(blob).text() //obtain html from blob
+        templateDiv = document.getElementById("template") //get template container element to override 
+        templateDiv.innerHTML = htmlTemplateData //override container inner html with new data
+        var scripts = Array.from(templateDiv.getElementsByTagName('script')); //replace script tags manually
+        for (const script of scripts) {
+            var TempScript = document.createElement("script");
+            TempScript.innerHTML = script.innerHTML
+            script.parentElement.appendChild(TempScript)
+        }
+    }
+
 
     //test localStorage support
     function testStorage() {
@@ -298,45 +323,25 @@
         }
     }
 
-    //get generated html template with new table data  
-    async function getTemplate() { //fetch from webserver
-        let htmlTemplateData = ""
-        response = await fetch(`{{ basename }}/template/table-template`, {
-            method: "GET"
-        })
-        blob = await response.blob() //get data blob
-        htmlTemplateData = await new Response(blob).text() //obtain html from blob
-        templateDiv = document.getElementById("template") //get template container element to override 
-        templateDiv.innerHTML = htmlTemplateData
-        var scripts = Array.from(templateDiv.getElementsByTagName('script')); //replace script tags manually
-        for (const script of scripts) {
-            var TempScript = document.createElement("script");
-            TempScript.innerHTML = script.innerHTML
-            script.parentElement.appendChild(TempScript)
-        }
-    }
-
-
-
-        //add listeners to buttons
-        [
-            "dayahead-optim",
-            "forecast-model-fit",
-            "forecast-model-predict",
-            "forecast-model-tune",
-            "perfect-optim",
-            "publish-data",
-        ].forEach((id) => document.getElementById(id).addEventListener('click', () => formAction(id)));
-        [
-            "advanced-ml",
-        ].forEach((id) => document.getElementById(id).addEventListener('click', () => advancedButtons(id)));
-        [
-            "input-plus",
-            "input-minus",
-        ].forEach((id) => document.getElementById(id).addEventListener('click', () => dictInputs(id)));
-        [
-            "input-select"
-        ].forEach((id) => document.getElementById(id).addEventListener('change', () => getSavedData(id)));
+    //add listeners to buttons
+    [
+        "dayahead-optim",
+        "forecast-model-fit",
+        "forecast-model-predict",
+        "forecast-model-tune",
+        "perfect-optim",
+        "publish-data",
+    ].forEach((id) => document.getElementById(id).addEventListener('click', () => formAction(id)));
+    [
+        "advanced-ml",
+    ].forEach((id) => document.getElementById(id).addEventListener('click', () => advancedButtons(id)));
+    [
+        "input-plus",
+        "input-minus",
+    ].forEach((id) => document.getElementById(id).addEventListener('click', () => dictInputs(id)));
+    [
+        "input-select"
+    ].forEach((id) => document.getElementById(id).addEventListener('change', () => getSavedData(id)));
 </script>
 
 </html>
