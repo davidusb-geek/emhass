@@ -21,16 +21,22 @@ from emhass.utils import get_injection_dict, get_injection_dict_forecast_model_f
 # Define the Flask instance
 app = Flask(__name__)
 
-def checkFileLog(): #check logfile for error
-    if ((data_path / 'actionLogs.txt')).exists():
+#check logfile for error, anything after string match if provided 
+def checkFileLog(refString=None):
+    isFound = False
+    if (refString is not None): 
+       logArray = grabLog(refString) #grab reduced log array
+    else: 
+        if ((data_path / 'actionLogs.txt')).exists():
             with open(str(data_path / 'actionLogs.txt'), "r") as fp:
                     logArray = fp.readlines()
-            for logString in logArray:
-                if (logString.split(' ', 1)[0] == "ERROR"):
-                   return True     
+    for logString in logArray:
+            if (logString.split(' ', 1)[0] == "ERROR"):
+                return True     
     return False
 
-def grabLog(refString): #find string in logs, append all lines after to return
+#find string in logs, append all lines after to return
+def grabLog(refString): 
     isFound = False
     output = []
     if ((data_path / 'actionLogs.txt')).exists():
@@ -42,8 +48,8 @@ def grabLog(refString): #find string in logs, append all lines after to return
                    output.append(logString)    
     return output
 
-
-def clearFileLog(): #clear the log file
+#clear the log file
+def clearFileLog(): 
     if ((data_path / 'actionLogs.txt')).exists():
         with open(str(data_path / 'actionLogs.txt'), "w") as fp:
             fp.truncate()    
@@ -91,55 +97,61 @@ def action_call(action_name):
     input_data_dict = set_input_data_dict(config_path, str(data_path), costfun, 
         params, runtimeparams, action_name, app.logger)
     if action_name == 'publish-data':
-        app.logger.info(" >> Publishing data...")
+        ActionStr = " >> Publishing data..."
+        app.logger.info(ActionStr)
         _ = publish_data(input_data_dict, app.logger)
         msg = f'EMHASS >> Action publish-data executed... \n'
-        if not checkFileLog():
+        if not checkFileLog(ActionStr):
             return make_response(msg, 201)
-        return make_response(grabLog(" >> Publishing data..."), 400)
+        return make_response(grabLog(ActionStr), 400)
     elif action_name == 'perfect-optim':
-        app.logger.info(" >> Performing perfect optimization...")
+        ActionStr = " >> Performing perfect optimization..."
+        app.logger.info(ActionStr)
         opt_res = perfect_forecast_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action perfect-optim executed... \n'
-        if not checkFileLog():
+        if not checkFileLog(ActionStr):
             return make_response(msg, 201)
-        return make_response(grabLog(" >> Performing perfect optimization..."), 400)
+        return make_response(grabLog(ActionStr), 400)
     elif action_name == 'dayahead-optim':
-        app.logger.info(" >> Performing dayahead optimization...")
+        ActionStr = " >> Performing dayahead optimization..."
+        app.logger.info(ActionStr)
         opt_res = dayahead_forecast_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action dayahead-optim executed... \n'
-        if not checkFileLog():
+        if not checkFileLog(ActionStr):
             return make_response(msg, 201)
-        return make_response(grabLog(" >> Performing dayahead optimization..."), 400)
+        return make_response(grabLog(ActionStr), 400)
     elif action_name == 'naive-mpc-optim':
-        app.logger.info(" >> Performing naive MPC optimization...")
+        ActionStr = " >> Performing naive MPC optimization..."
+        app.logger.info(ActionStr)
         opt_res = naive_mpc_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action naive-mpc-optim executed... \n'
-        if not checkFileLog():
+        if not checkFileLog(ActionStr):
             return make_response(msg, 201)
-        return make_response(grabLog(" >> Performing naive MPC optimization..."), 400)
+        return make_response(grabLog(ActionStr), 400)
     elif action_name == 'forecast-model-fit':
-        app.logger.info(" >> Performing a machine learning forecast model fit...")
+        ActionStr = " >> Performing a machine learning forecast model fit..."
+        app.logger.info(ActionStr)
         df_fit_pred, _, mlf = forecast_model_fit(input_data_dict, app.logger)
         injection_dict = get_injection_dict_forecast_model_fit(
             df_fit_pred, mlf)
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action forecast-model-fit executed... \n'
-        if not checkFileLog():
+        if not checkFileLog(ActionStr):
             return make_response(msg, 201)
-        return make_response(grabLog(" >> Performing a machine learning forecast model fit..."), 400)
+        return make_response(grabLog(ActionStr), 400)
     elif action_name == 'forecast-model-predict':
-        app.logger.info(" >> Performing a machine learning forecast model predict...")
+        ActionStr = " >> Performing a machine learning forecast model predict..."
+        app.logger.info(ActionStr)
         df_pred = forecast_model_predict(input_data_dict, app.logger)
         table1 = df_pred.reset_index().to_html(classes='mystyle', index=False)
         injection_dict = {}
@@ -149,20 +161,21 @@ def action_call(action_name):
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action forecast-model-predict executed... \n'
-        if not checkFileLog():
+        if not checkFileLog(ActionStr):
             return make_response(msg, 201)
-        return make_response(grabLog(" >> Performing a machine learning forecast model predict..."), 400)
+        return make_response(grabLog(ActionStr), 400)
     elif action_name == 'forecast-model-tune':
-        app.logger.info(" >> Performing a machine learning forecast model tune...")
+        ActionStr = " >> Performing a machine learning forecast model tune..."
+        app.logger.info(ActionStr)
         df_pred_optim, mlf = forecast_model_tune(input_data_dict, app.logger)
         injection_dict = get_injection_dict_forecast_model_tune(
             df_pred_optim, mlf)
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action forecast-model-tune executed... \n'
-        if not checkFileLog():
+        if not checkFileLog(ActionStr):
             return make_response(msg, 201)
-        return make_response(grabLog(" >> Performing a machine learning forecast model tune..."), 400)
+        return make_response(grabLog(ActionStr), 400)
     else:
         app.logger.error("ERROR: passed action is not valid")
         msg = f'EMHASS >> ERROR: Passed action is not valid... \n'
