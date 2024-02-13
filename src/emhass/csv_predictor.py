@@ -25,32 +25,30 @@ class CsvPredictor:
     
     This class uses the `sklearn` module and the machine learning models are from `scikit-learn`.
     
-    It exposes one main method:
+    It exposes two main methods:
     
-    - `predict`: to obtain a forecast from a csv file.
+    - `fit`: to train a model with the passed data.
+    
+    - `predict`: to obtain a forecast from a pre-trained model.
     
     """
     def __init__(self, data, model_type: str, independent_variables: list, dependent_variable: str, timestamp: str,
                 logger: logging.Logger) -> None:
         r"""Define constructor for the forecast class.
 
-        :param csv_file: The name of the csv file to retrieve data from. \
-            Example: `input_train_data.csv`.
-        :type csv_file: str
+        :param data: The data that will be used for train/test
+        :type data: pd.DataFrame
+        :param model_type: A unique name defining this model and useful to identify \
+            for what it will be used for.
+        :type model_type: str
         :param independent_variables: A list of independent variables. \
             Example: [`solar`, `degree_days`].
         :type independent_variables: list
         :param dependent_variable: The dependent variable(to be predicted). \
             Example: `hours`.
         :type dependent_variable: str
-        :param sklearn_model: The `scikit-learn` model that will be used. For now only \
-            this options are possible: `LinearRegression`, `ElasticNet` and `KNeighborsRegressor`.
-        :type sklearn_model: str
-        :param new_values: The new values for the independent variables(in the same order as the independent variables list). \
-            Example: [2.24, 5.68].
-        :type new_values: list
-        :param root: The parent folder of the path where the config.yaml file is located
-        :type root: str
+        :param timestamp: If defined, the column key that has to be used of timestamp.
+        :type timestamp: str
         :param logger: The passed logger object
         :type logger: logging.Logger
         """
@@ -60,23 +58,24 @@ class CsvPredictor:
         self.timestamp = timestamp
         self.model_type = model_type
         self.logger = logger
-        self.is_tuned = False
         self.data.sort_index(inplace=True)
         self.data = self.data[~self.data.index.duplicated(keep='first')]
     
     @staticmethod
-    def add_date_features(data: pd.DataFrame, date_features: list) -> pd.DataFrame:
+    def add_date_features(data: pd.DataFrame, date_features: list, timestamp: str) -> pd.DataFrame:
         """Add date features from the input DataFrame timestamp
 
         :param data: The input DataFrame
         :type data: pd.DataFrame
+        :param timestamp: The column containing the timestamp
+        :type timestamp: str
         :return: The DataFrame with the added features
         :rtype: pd.DataFrame
         """
         df = copy.deepcopy(data)
-        df['timestamp']= pd.to_datetime(df['timestamp'])
+        df[timestamp]= pd.to_datetime(df['timestamp'])
         if 'year' in date_features:
-            df['year'] = [i.month for i in df['timestamp']]
+            df['year'] = [i.year for i in df['timestamp']]
         if 'month' in date_features:
             df['month'] = [i.month for i in df['timestamp']]
         if 'day_of_week' in date_features:
@@ -94,10 +93,10 @@ class CsvPredictor:
         """
         Fit the model using the provided data.
         
-        :param data: Input Data
-        :type data: pd.DataFrame
+        :param date_features: A list of 'date_features' to take into account when fitting the model.
+        :type data: list
         """
-        self.logger.info("Performing a forecast model fit for "+self.model_type)
+        self.logger.info("Performing a csv model fit for "+self.model_type)
         self.data_exo = pd.DataFrame(self.data)
         self.data_exo[self.independent_variables] = self.data[self.independent_variables]
         self.data_exo[self.dependent_variable] = self.data[self.dependent_variable]
@@ -110,7 +109,7 @@ class CsvPredictor:
         self.data_exo.reset_index(drop=True, inplace=True)
         if len(date_features) > 0:
             if self.timestamp is not None:
-                self.data_exo = CsvPredictor.add_date_features(self.data_exo, date_features)
+                self.data_exo = CsvPredictor.add_date_features(self.data_exo, date_features, self.timestamp)
             else:
                 self.logger.error("If no timestamp provided, you can't use date_features, going further without date_features.")
 
@@ -155,6 +154,10 @@ class CsvPredictor:
     def predict(self, new_values:list) -> np.ndarray:
         r"""The predict method to generate a forecast from a csv file.
 
+
+        :param new_values: The new values for the independent variables(in the same order as the independent variables list). \
+            Example: [2.24, 5.68].
+        :type new_values: list
         :return: The np.ndarray containing the predicted value.
         :rtype: np.ndarray
         """
