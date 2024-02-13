@@ -2,7 +2,7 @@
   "configurations": [
     {
       "name": "Python: Current File",
-      "type": "debugpy",
+      "type": "python",
       "request": "launch",
       "program": "${file}",
       "console": "integratedTerminal",
@@ -10,9 +10,9 @@
     },
     {
       "name": "EMHASS run",
-      "type": "debugpy",
+      "type": "python",
       "request": "launch",
-      "module": "emhass.web_server",
+      "program": "web_server.py",
       "console": "integratedTerminal",
       "purpose": [
         "debug-in-terminal"
@@ -27,9 +27,9 @@
     },
     {
       "name": "EMHASS run ADDON",
-      "type": "debugpy",
+      "type": "python",
       "request": "launch",
-      "module": "emhass.web_server",
+      "program": "web_server.py",
       "console": "integratedTerminal",
       "args": [
         "--addon",
