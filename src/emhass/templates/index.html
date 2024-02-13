@@ -128,8 +128,9 @@
             loading.classList.remove("loading")
             loading.innerHTML = `<p class=cross>&#x292C;</p>` //show cross icon to indicate an error
             if (logJson.length != 0) {
-                document.getElementById("alert-text").textContent = "\r\n" + logJson.join("\r\n") //show received log data in alert box
+                document.getElementById("alert-text").textContent = "\r\n\u2022 " + logJson.join("\r\n\u2022 ") //show received log data in alert box
                 document.getElementById("alert").style.display = "block";
+                document.getElementById("alert").style.textAlign = "left";
             }
         }
     }
@@ -232,6 +233,7 @@
             catch (error) { //if json error, show in alert box
                 document.getElementById("alert-text").textContent = "\r\n" + error + "\r\n" + "JSON Error: String values may not be wrapped in quotes"
                 document.getElementById("alert").style.display = "block";
+                document.getElementById("alert").style.textAlign = "center";
                 return (0)
             }
         }

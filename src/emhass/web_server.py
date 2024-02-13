@@ -30,7 +30,7 @@ def checkFileLog(): #check logfile for error
                    return True     
     return False
 
-def grabLog(refString): #find string and append all lines after to output
+def grabLog(refString): #find string in logs, append all lines after to return
     isFound = False
     output = []
     if ((data_path / 'actionLogs.txt')).exists():
@@ -48,6 +48,7 @@ def clearFileLog(): #clear the log file
         with open(str(data_path / 'actionLogs.txt'), "w") as fp:
             fp.truncate()    
 
+#initial index page render
 @app.route('/')
 def index():
     app.logger.info("EMHASS server online, serving index.html...")
@@ -65,6 +66,7 @@ def index():
     basename = request.headers.get("X-Ingress-Path", "")
     return make_response(template.render(injection_dict=injection_dict, basename=basename))
 
+#get actions 
 @app.route('/template/<action_name>', methods=['GET'])
 def template_action(action_name):
     app.logger.info(" >> Sending rendered html template table data")
@@ -78,7 +80,7 @@ def template_action(action_name):
         basename = request.headers.get("X-Ingress-Path", "")    
         return make_response(template.render(injection_dict=injection_dict, basename=basename))
 
-
+#post actions 
 @app.route('/action/<action_name>', methods=['POST'])
 def action_call(action_name):
     with open(str(data_path / 'params.pkl'), "rb") as fid:
@@ -330,16 +332,13 @@ if __name__ == "__main__":
         ch.setLevel(logging.DEBUG)
     app.logger.propagate = False
     app.logger.addHandler(ch)
-
     #Save logs to file
     fileLogger = logging.FileHandler(str(data_path / 'actionLogs.txt')) #set Handler
     fileLogger.setLevel(logging.INFO) #set Handler level
     formatter = logging.Formatter('%(levelname)s - %(name)s - %(message)s')
     fileLogger.setFormatter(formatter) # add format to Handler
     app.logger.addHandler(fileLogger)   
-
     clearFileLog() #Clear log file ready for new instance
-
 
     # Launch server
     port = int(os.environ.get('PORT', 5000))
