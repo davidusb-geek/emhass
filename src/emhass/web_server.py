@@ -75,7 +75,7 @@ def index():
 #get actions 
 @app.route('/template/<action_name>', methods=['GET'])
 def template_action(action_name):
-    app.logger.info(" >> Sending rendered html template table data")
+    app.logger.info(" >> Sending rendered template table data")
     if action_name == 'table-template':
         file_loader = PackageLoader('emhass', 'templates')
         env = Environment(loader=file_loader)
