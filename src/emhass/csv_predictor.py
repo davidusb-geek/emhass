@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import copy
+from datetime import datetime
 import logging
 import copy
 import pathlib
@@ -9,6 +11,7 @@ from typing import Optional
 # from typing import Optional, Tuple
 import pandas as pd
 import numpy as np
+from sklearn.metrics import classification_report, r2_score
 
 from sklearn.linear_model import LinearRegression
 from sklearn.linear_model import ElasticNet
@@ -64,11 +67,16 @@ class CsvPredictor:
         self.csv_file = csv_file
         self.independent_variables = independent_variables
         self.dependent_variable = dependent_variable
-        self.sklearn_model = sklearn_model
-        self.new_values = new_values
-        self.root = root
+        self.timestamp = timestamp
+        self.model_type = model_type
         self.logger = logger
         self.is_tuned = False
+        self.data.sort_index(inplace=True)
+        self.data = self.data[~self.data.index.duplicated(keep='first')]
+    
+    @staticmethod
+    def add_date_features(data: pd.DataFrame, date_features: list) -> pd.DataFrame:
+        """Add date features from the input DataFrame timestamp
 
     
     def load_data(self):
