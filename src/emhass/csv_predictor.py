@@ -92,7 +92,7 @@ class CsvPredictor:
 
         return df
 
-    def fit(self, perform_backtest: Optional[bool] = False, date_features: Optional[list] = []) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def fit(self, date_features: Optional[list] = []) -> None:
         """
         Fit the model using the provided data.
         
