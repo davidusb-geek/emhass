@@ -2,7 +2,7 @@
   "configurations": [
     {
       "name": "Python: Current File",
-      "type": "debugpy",
+      "type": "python",
       "request": "launch",
       "program": "${file}",
       "console": "integratedTerminal",
@@ -10,10 +10,11 @@
     },
     {
       "name": "EMHASS run",
-      "type": "debugpy",
+      "type": "python",
       "request": "launch",
-      "module": "emhass.web_server",
+      "program": "web_server.py",
       "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}/src/emhass/",
       "purpose":["debug-in-terminal"],
       "justMyCode": true,
       "env": {
@@ -21,15 +22,15 @@
         "OPTIONS_PATH": "/workspaces/emhass/options.json",
         "SECRETS_PATH": "/workspaces/emhass/secrets_emhass.yaml",
         "DATA_PATH": "/workspaces/emhass/data/",
-        "LOGGING_LEVEL": "DEBUG"
       }
     },
     {
       "name": "EMHASS run ADDON",
-      "type": "debugpy",
+      "type": "python",
       "request": "launch",
-      "module": "emhass.web_server",
+      "program": "web_server.py",
       "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}/src/emhass/",
       "args": ["--addon", "true",  "--no_response", "true"],
       "purpose":["debug-in-terminal"],
       "justMyCode": true,
@@ -44,7 +45,6 @@
         "LAT": "45.83", //optional change
         "LON": "6.86", //optional change
         "ALT": "4807.8", //optional change
-        "LOGGING_LEVEL": "DEBUG" //optional change
       },
       
   }
