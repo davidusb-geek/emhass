@@ -155,14 +155,26 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         freq = int(retrieve_hass_conf['freq'].seconds/60.0)
         delta_forecast = int(optim_conf['delta_forecast'].days)
         forecast_dates = get_forecast_dates(freq, delta_forecast)
-        if set_type == "csv-predict":
+        if set_type == "csv-model-fit":
             csv_file = runtimeparams['csv_file']
             independent_variables = runtimeparams['independent_variables']
             dependent_variable = runtimeparams['dependent_variable']
-            new_values = runtimeparams['new_values']
             params['passed_data']['csv_file'] = csv_file
             params['passed_data']['independent_variables'] = independent_variables
             params['passed_data']['dependent_variable'] = dependent_variable
+            if 'timestamp' not in runtimeparams.keys():
+                params['passed_data']['timestamp'] = None
+            else:
+                timestamp = runtimeparams['timestamp']
+                params['passed_data']['timestamp'] = timestamp
+            if 'date_features' not in runtimeparams.keys():
+                params['passed_data']['date_features'] = []
+            else:
+                date_features = runtimeparams['date_features']
+                params['passed_data']['date_features'] = date_features
+            
+        if set_type == "csv-model-predict":
+            new_values = runtimeparams['new_values']
             params['passed_data']['new_values'] = new_values
 
         # Treating special data passed for MPC control case
