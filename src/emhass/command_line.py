@@ -472,7 +472,7 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
     return df_pred_optim, mlf
 
 def csv_model_fit(input_data_dict: dict, logger: logging.Logger,
-    debug: Optional[bool] = False) -> Tuple[pd.DataFrame, pd.DataFrame, CsvPredictor]:
+    debug: Optional[bool] = False) -> None:
     """Perform a forecast model fit from training data retrieved from Home Assistant.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
@@ -481,32 +481,26 @@ def csv_model_fit(input_data_dict: dict, logger: logging.Logger,
     :type logger: logging.Logger
     :param debug: True to debug, useful for unit testing, defaults to False
     :type debug: Optional[bool], optional
-    :return: The DataFrame containing the forecast data results without and with backtest and the `mlforecaster` object
-    :rtype: Tuple[pd.DataFrame, pd.DataFrame, mlforecaster]
     """
     data = copy.deepcopy(input_data_dict['df_input_data'])
-    # csv_file = input_data_dict['params']['passed_data']['csv_file']
     model_type = input_data_dict['params']['passed_data']['model_type']
-    # sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
     independent_variables = input_data_dict['params']['passed_data']['independent_variables']
     dependent_variable = input_data_dict['params']['passed_data']['dependent_variable']
     timestamp = input_data_dict['params']['passed_data']['timestamp']
-    # perform_backtest = input_data_dict['params']['passed_data']['perform_backtest']
     date_features = input_data_dict['params']['passed_data']['date_features']
     root = input_data_dict['root']
-    # The ML forecaster object
+    # The CSV forecaster object
     csv = CsvPredictor(data, model_type, independent_variables, dependent_variable, timestamp, logger)
     # Fit the ML model
-    df_pred = csv.fit(date_features=date_features)
+    csv.fit(date_features=date_features)
     # Save model
     if not debug:
         filename = model_type+'_csv.pkl'
         with open(pathlib.Path(root) / filename, 'wb') as outp:
             pickle.dump(csv, outp, pickle.HIGHEST_PROTOCOL)
-    # return df_pred, csv
 
 def csv_model_predict(input_data_dict: dict, logger: logging.Logger,
-    debug: Optional[bool] = False) -> np.ndarray:
+    debug: Optional[bool] = False) -> None:
     """Perform a prediction from csv file.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
@@ -515,8 +509,6 @@ def csv_model_predict(input_data_dict: dict, logger: logging.Logger,
     :type logger: logging.Logger
     :param debug: True to debug, useful for unit testing, defaults to False
     :type debug: Optional[bool], optional
-    :return: The np.ndarray containing the predicted value.
-    :rtype: np.ndarray
     """
     model_type = input_data_dict['params']['passed_data']['model_type']
     root = input_data_dict['root']
@@ -543,7 +535,6 @@ def csv_model_predict(input_data_dict: dict, logger: logging.Logger,
                                     csv_predict_unit_of_measurement, 
                                     csv_predict_friendly_name,
                                     type_var = 'csv_predictor')
-    return prediction
 
 def publish_data(input_data_dict: dict, logger: logging.Logger,
     save_data_to_file: Optional[bool] = False, 
