@@ -2,16 +2,14 @@
 # -*- coding: utf-8 -*-
 
 import copy
-from datetime import datetime
 import logging
-import pathlib
 import time
-from typing import Optional, Tuple
+from typing import Optional
 import warnings
 
 import pandas as pd
 import numpy as np
-from sklearn.metrics import classification_report, r2_score
+from sklearn.metrics import  r2_score
 
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import GridSearchCV, train_test_split
@@ -110,7 +108,6 @@ class CsvPredictor:
         keep_columns.append(self.dependent_variable)
         self.data_exo = self.data_exo[self.data_exo.columns.intersection(keep_columns)]
         self.data_exo.reset_index(drop=True, inplace=True)
-        # self.data_exo.to_csv(pathlib.Path(self.root) / "csv-data_exo.csv", index_label='timestamp')
         if len(date_features) > 0:
             if self.timestamp is not None:
                 self.data_exo = CsvPredictor.add_date_features(self.data_exo, date_features)
@@ -153,18 +150,6 @@ class CsvPredictor:
         predictions = pd.Series(predictions, index=X_test.index)
         pred_metric = r2_score(y_test,predictions)
         self.logger.info(f"Prediction R2 score of fitted model on test data: {pred_metric}")
-
-        # Prepare forecast DataFrame
-        df_pred = pd.DataFrame(index=self.data.index, columns=['train','test','pred'])
-        df_pred['train'] = y_train
-        df_pred['test'] = y_test
-        df_pred['pred'] = predictions
-        print(df_pred)
-        # df_pred.to_csv(pathlib.Path(self.root) / "csv-df_pred.csv", index_label='timestamp')
-
-
-
-        # return df_pred
         
 
     def predict(self, new_values:list) -> np.ndarray:
