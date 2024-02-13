@@ -301,12 +301,8 @@
     //get generated html template with new table data  
     async function getTemplate() { //fetch from webserver
         let htmlTemplateData = ""
-        response = await fetch(`{{ basename }}/action/get-template`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: "{}",
+        response = await fetch(`{{ basename }}/template/table-template`, {
+            method: "GET"
         })
         blob = await response.blob() //get data blob
         htmlTemplateData = await new Response(blob).text() //obtain html from blob
