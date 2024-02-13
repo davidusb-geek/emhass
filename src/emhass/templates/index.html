@@ -60,15 +60,18 @@
         <br><br><br>
         <!-- dynamic table/diagram elements section -->
     </div>
-    {% for plot in injection_dict %} <!-- diagrams/tables elements will be added here -->
-    <div class="table_div">
-        {{injection_dict[plot]}}
-    </div>
-    {% endfor %}
-    <!-- -->
-    <footer class="footer">
-        <p style="margin-top:10px; text-align:center;">&copy; MIT License | Copyright (c) 2021-2023 David HERNANDEZ</p>
-    </footer>
+    <div id="template">
+        {% for plot in injection_dict %} <!-- diagrams/tables elements will be added here -->
+        <div class="table_div">
+            {{injection_dict[plot]}}
+        </div>
+        {% endfor %}
+        <div>
+            <!-- -->
+            <footer class="footer">
+                <p style="margin-top:10px; text-align:center;">&copy; MIT License | Copyright (c) 2021-2023 David
+                    HERNANDEZ</p>
+            </footer>
 </body>
 
 
@@ -84,27 +87,28 @@
     async function formAction(action) {
         var data = inputToJson()
         if (data !== 0) { //don't run if there is an error in the data Json
-            showChangeStatus("loading") // show loading div for status
-            response = await fetch(`{{ basename }}/action/${action}`, {
+            showChangeStatus("loading",{}) // show loading div for status
+            const response = await fetch(`{{ basename }}/action/${action}`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                 },
                 body: JSON.stringify(data), //post can only send data via strings
-            }).then(saveStorage()) //save to storage if successful 
-            showChangeStatus(response.status) //replace loading, show tick or cross
-        }
+            }).then(saveStorage()) //save to storage if successful
+            if (response.status == 201) {showChangeStatus(response.status,{})} //if successful 
+            else {showChangeStatus(response.status,await response.json())} // else get Logs from response
+            }
         else {
             showChangeStatus("remove") //replace loading, show tick or cross with none 
         }
     }
 
     //function in control of status icons of post above
-    function showChangeStatus(status) {
+    async function showChangeStatus(status,logJson) {
         var loading = document.getElementById("loader") //element showing status 
-        if (status === "remove") { //show loading logo
+        if (status === "remove") { //remove all
             loading.innerHTML = "";
-            loading.classList.remove("loading"); //append class with loading animation styling
+            loading.classList.remove("loading");
         }
         else if (status === "loading") { //show loading logo
             loading.innerHTML = "";
@@ -113,11 +117,14 @@
         else if (status === 201) { //then show a tick 
             loading.classList.remove("loading")
             loading.innerHTML = `<p class=tick>&#x2713;</p>`
+            getTemplate() //get updated templates
 
         }
         else { //then show a cross 
             loading.classList.remove("loading")
-            loading.innerHTML = `<p class=cross>&#x292C;</p>`
+            loading.innerHTML = `<p class=cross>&#x292C;</p>` //show cross icon to indicate an error
+            document.getElementById("alert-text").textContent = "\r\n" + logJson.join("\r\n")
+            document.getElementById("alert").style.display = "block";
         }
     }
 
@@ -177,7 +184,7 @@
         input_container_child = input_container.firstElementChild; //work out which element is first inside container div
         var jsonReturnData = {};
 
-        if (input_container_child == null){ //if no elements in container then return empty
+        if (input_container_child == null) { //if no elements in container then return empty
             return (jsonReturnData)
         };
         //if List return box json
@@ -291,25 +298,49 @@
         }
     }
 
-    //add listeners to buttons
-    [
-        "dayahead-optim",
-        "forecast-model-fit",
-        "forecast-model-predict",
-        "forecast-model-tune",
-        "perfect-optim",
-        "publish-data",
-    ].forEach((id) => document.getElementById(id).addEventListener('click', () => formAction(id)));
-    [
-        "advanced-ml",
-    ].forEach((id) => document.getElementById(id).addEventListener('click', () => advancedButtons(id)));
-    [
-        "input-plus",
-        "input-minus",
-    ].forEach((id) => document.getElementById(id).addEventListener('click', () => dictInputs(id)));
-    [
-        "input-select"
-    ].forEach((id) => document.getElementById(id).addEventListener('change', () => getSavedData(id)));
+    //get generated html template with new table data  
+    async function getTemplate() { //fetch from webserver
+        let htmlTemplateData = ""
+        response = await fetch(`{{ basename }}/action/get-template`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: "{}",
+        })
+        blob = await response.blob() //get data blob
+        htmlTemplateData = await new Response(blob).text() //obtain html from blob
+        templateDiv = document.getElementById("template") //get template container element to override 
+        templateDiv.innerHTML = htmlTemplateData
+        var scripts = Array.from(templateDiv.getElementsByTagName('script')); //replace script tags manually
+        for (const script of scripts) {
+            var TempScript = document.createElement("script");
+            TempScript.innerHTML = script.innerHTML
+            script.parentElement.appendChild(TempScript)
+        }
+    }
+
+
+
+        //add listeners to buttons
+        [
+            "dayahead-optim",
+            "forecast-model-fit",
+            "forecast-model-predict",
+            "forecast-model-tune",
+            "perfect-optim",
+            "publish-data",
+        ].forEach((id) => document.getElementById(id).addEventListener('click', () => formAction(id)));
+        [
+            "advanced-ml",
+        ].forEach((id) => document.getElementById(id).addEventListener('click', () => advancedButtons(id)));
+        [
+            "input-plus",
+            "input-minus",
+        ].forEach((id) => document.getElementById(id).addEventListener('click', () => dictInputs(id)));
+        [
+            "input-select"
+        ].forEach((id) => document.getElementById(id).addEventListener('change', () => getSavedData(id)));
 </script>
 
 </html>

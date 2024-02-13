@@ -62,5 +62,5 @@ setup(
             'emhass=emhass.command_line:main',
         ],
     },
-    package_data={'emhass': ['templates/index.html','static/style.css','static/img/emhass_icon.png','static/img/emhass_logo_short.svg']},
+    package_data={'emhass': ['templates/index.html','templates/template.html','static/style.css','static/img/emhass_icon.png','static/img/emhass_logo_short.svg']},
 )
