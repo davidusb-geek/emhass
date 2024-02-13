@@ -155,7 +155,36 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
             if not rh.get_data(days_list, var_list):
                 return False
             df_input_data = rh.df_final.copy()
-    elif set_type == "csv-predict":
+ 
+    elif set_type == "csv-model-fit":
+        
+        df_input_data_dayahead = None
+        P_PV_forecast, P_load_forecast = None, None
+        params = json.loads(params)
+        days_list = None
+        csv_file = params['passed_data']['csv_file']
+        independent_variables = params['passed_data']['independent_variables']
+        dependent_variable = params['passed_data']['dependent_variable']
+        timestamp = params['passed_data']['timestamp']
+        filename_path = pathlib.Path(base_path) / csv_file
+        if filename_path.is_file():
+            df_input_data = pd.read_csv(filename_path, parse_dates=True)
+
+        else:
+            logger.error("The cvs file was not found.")
+            raise ValueError("The CSV file " + csv_file + " was not found.")
+        required_columns = []
+        required_columns.extend(independent_variables)
+        required_columns.append(dependent_variable)
+        if timestamp is not None:
+            required_columns.append(timestamp)
+
+        if not set(required_columns).issubset(df_input_data.columns):
+            logger.error("The cvs file does not contain the required columns.")
+            raise ValueError(
+                f"CSV file should contain the following columns: {', '.join(required_columns)}"
+            )
+    elif set_type == "csv-model-predict":
         df_input_data, df_input_data_dayahead = None, None
         P_PV_forecast, P_load_forecast = None, None
         days_list = None
@@ -454,7 +483,41 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
             pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)       
     return df_pred_optim, mlf
 
-def csv_predict(input_data_dict: dict, logger: logging.Logger,
+def csv_model_fit(input_data_dict: dict, logger: logging.Logger,
+    debug: Optional[bool] = False) -> Tuple[pd.DataFrame, pd.DataFrame, CsvPredictor]:
+    """Perform a forecast model fit from training data retrieved from Home Assistant.
+
+    :param input_data_dict: A dictionnary with multiple data used by the action functions
+    :type input_data_dict: dict
+    :param logger: The passed logger object
+    :type logger: logging.Logger
+    :param debug: True to debug, useful for unit testing, defaults to False
+    :type debug: Optional[bool], optional
+    :return: The DataFrame containing the forecast data results without and with backtest and the `mlforecaster` object
+    :rtype: Tuple[pd.DataFrame, pd.DataFrame, mlforecaster]
+    """
+    data = copy.deepcopy(input_data_dict['df_input_data'])
+    # csv_file = input_data_dict['params']['passed_data']['csv_file']
+    model_type = input_data_dict['params']['passed_data']['model_type']
+    # sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
+    independent_variables = input_data_dict['params']['passed_data']['independent_variables']
+    dependent_variable = input_data_dict['params']['passed_data']['dependent_variable']
+    timestamp = input_data_dict['params']['passed_data']['timestamp']
+    # perform_backtest = input_data_dict['params']['passed_data']['perform_backtest']
+    date_features = input_data_dict['params']['passed_data']['date_features']
+    root = input_data_dict['root']
+    # The ML forecaster object
+    csv = CsvPredictor(data, model_type, independent_variables, dependent_variable, timestamp, logger)
+    # Fit the ML model
+    df_pred = csv.fit(date_features=date_features)
+    # Save model
+    if not debug:
+        filename = model_type+'_csv.pkl'
+        with open(pathlib.Path(root) / filename, 'wb') as outp:
+            pickle.dump(csv, outp, pickle.HIGHEST_PROTOCOL)
+    # return df_pred, csv
+
+def csv_model_predict(input_data_dict: dict, logger: logging.Logger,
     debug: Optional[bool] = False) -> np.ndarray:
     """Perform a prediction from csv file.
 
@@ -467,16 +530,20 @@ def csv_predict(input_data_dict: dict, logger: logging.Logger,
     :return: The np.ndarray containing the predicted value.
     :rtype: np.ndarray
     """
-    csv_file = input_data_dict['params']['passed_data']['csv_file']
-    sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
-    independent_variables = input_data_dict['params']['passed_data']['independent_variables']
-    dependent_variable = input_data_dict['params']['passed_data']['dependent_variable']
-    new_values = input_data_dict['params']['passed_data']['new_values']
+    model_type = input_data_dict['params']['passed_data']['model_type']
     root = input_data_dict['root']
-    # The ML forecaster object
-    csv = CsvPredictor(csv_file, independent_variables, dependent_variable, sklearn_model, new_values, root, logger)
+    filename = model_type+'_csv.pkl'
+    filename_path = pathlib.Path(root) / filename
+    if not debug:
+        if filename_path.is_file():
+            with open(filename_path, 'rb') as inp:
+                csv = pickle.load(inp)
+        else:
+            logger.error("The ML forecaster file was not found, please run a model fit method before this predict method")
+            return
+    new_values = input_data_dict['params']['passed_data']['new_values']
     # Predict from csv file
-    prediction = csv.predict()
+    prediction = csv.predict(new_values)
 
     csv_predict_entity_id = input_data_dict['params']['passed_data']['csv_predict_entity_id']
     csv_predict_unit_of_measurement = input_data_dict['params']['passed_data']['csv_predict_unit_of_measurement']
