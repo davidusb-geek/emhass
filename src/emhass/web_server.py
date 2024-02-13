@@ -65,6 +65,19 @@ def index():
     basename = request.headers.get("X-Ingress-Path", "")
     return make_response(template.render(injection_dict=injection_dict, basename=basename))
 
+@app.route('/template/<action_name>', methods=['GET'])
+def template_action(action_name):
+    if action_name == 'table-template':
+        file_loader = PackageLoader('emhass', 'templates')
+        env = Environment(loader=file_loader)
+        template = env.get_template('template.html')
+        if (data_path / 'injection_dict.pkl').exists():
+            with open(str(data_path / 'injection_dict.pkl'), "rb") as fid:
+                injection_dict = pickle.load(fid)
+        basename = request.headers.get("X-Ingress-Path", "")    
+        return make_response(template.render(injection_dict=injection_dict, basename=basename))
+
+
 @app.route('/action/<action_name>', methods=['POST'])
 def action_call(action_name):
     with open(str(data_path / 'params.pkl'), "rb") as fid:
@@ -74,15 +87,6 @@ def action_call(action_name):
     runtimeparams = json.dumps(runtimeparams)
     input_data_dict = set_input_data_dict(config_path, str(data_path), costfun, 
         params, runtimeparams, action_name, app.logger)
-    if action_name == 'get-template':
-        file_loader = PackageLoader('emhass', 'templates')
-        env = Environment(loader=file_loader)
-        template = env.get_template('template.html')
-        if (data_path / 'injection_dict.pkl').exists():
-            with open(str(data_path / 'injection_dict.pkl'), "rb") as fid:
-                injection_dict = pickle.load(fid)
-        basename = request.headers.get("X-Ingress-Path", "")    
-        return make_response(template.render(injection_dict=injection_dict, basename=basename))
     if action_name == 'publish-data':
         app.logger.info(" >> Publishing data...")
         _ = publish_data(input_data_dict, app.logger)
