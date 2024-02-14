@@ -415,7 +415,7 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
                 mlf = pickle.load(inp)
         else:
             logger.error("The ML forecaster file was not found, please run a model fit method before this tune method")
-            return
+            return None, None
     # Tune the model
     df_pred_optim = mlf.tune(debug=debug)
     # Save model
@@ -540,6 +540,9 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                                     publish_prefix = publish_prefix)
     # Publish the optimization status
     custom_cost_fun_id = params['passed_data']['custom_optim_status_id']
+    if "optim_status" not in opt_res_latest:
+        opt_res_latest["optim_status"] = 'Optimal'
+        logger.warning("optim_status in opt_res_latest, run an optimization task first")
     input_data_dict['rh'].post_data(opt_res_latest['optim_status'], idx_closest, 
                                     custom_cost_fun_id["entity_id"], 
                                     custom_cost_fun_id["unit_of_measurement"],
