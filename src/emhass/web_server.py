@@ -23,7 +23,6 @@ app = Flask(__name__)
 
 #check logfile for error, anything after string match if provided 
 def checkFileLog(refString=None):
-    isFound = False
     if (refString is not None): 
        logArray = grabLog(refString) #grab reduced log array
     else: 
@@ -45,7 +44,7 @@ def grabLog(refString):
             for x in range(len(logArray)-1): #find all matches and log key in isFound
                 if (re.search(refString,logArray[x])):
                    isFound.append(x)
-            if isFound is not None:
+            if len(isFound) != 0:
                 for x in range(isFound[-1],len(logArray)): #use isFound to extract last related action logs  
                     output.append(logArray[x])
     return output
