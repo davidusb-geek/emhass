@@ -37,15 +37,17 @@ def checkFileLog(refString=None):
 
 #find string in logs, append all lines after to return
 def grabLog(refString): 
-    isFound = False
+    isFound = []
     output = []
     if ((data_path / 'actionLogs.txt')).exists():
             with open(str(data_path / 'actionLogs.txt'), "r") as fp:
                     logArray = fp.readlines()
-            for logString in logArray:
-                if (re.search(refString,logString) or isFound):
-                   isFound = True
-                   output.append(logString)    
+            for x in range(len(logArray)-1): #find all matches and log key in isFound
+                if (re.search(refString,logArray[x])):
+                   isFound.append(x)
+            if isFound is not None:
+                for x in range(isFound[-1],len(logArray)): #use isFound to extract last related action logs  
+                    output.append(logArray[x])
     return output
 
 #clear the log file
@@ -83,6 +85,9 @@ def template_action(action_name):
         if (data_path / 'injection_dict.pkl').exists():
             with open(str(data_path / 'injection_dict.pkl'), "rb") as fid:
                 injection_dict = pickle.load(fid)
+        else:
+            app.logger.warning("The data container dictionary is empty... Please launch an optimization task")
+            injection_dict={}        
         basename = request.headers.get("X-Ingress-Path", "")    
         return make_response(template.render(injection_dict=injection_dict, basename=basename))
 
@@ -153,6 +158,8 @@ def action_call(action_name):
         ActionStr = " >> Performing a machine learning forecast model predict..."
         app.logger.info(ActionStr)
         df_pred = forecast_model_predict(input_data_dict, app.logger)
+        if df_pred is None:
+            return make_response(grabLog(ActionStr), 400)
         table1 = df_pred.reset_index().to_html(classes='mystyle', index=False)
         injection_dict = {}
         injection_dict['title'] = '<h2>Custom machine learning forecast model predict</h2>'
@@ -167,7 +174,9 @@ def action_call(action_name):
     elif action_name == 'forecast-model-tune':
         ActionStr = " >> Performing a machine learning forecast model tune..."
         app.logger.info(ActionStr)
-        df_pred_optim, mlf = forecast_model_tune(input_data_dict, app.logger)
+        df_pred_optim, mlf = forecast_model_tune(input_data_dict, app.logger)    
+        if df_pred_optim is None or  mlf is None:
+            return make_response(grabLog(ActionStr), 400)
         injection_dict = get_injection_dict_forecast_model_tune(
             df_pred_optim, mlf)
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
@@ -325,33 +334,38 @@ if __name__ == "__main__":
         pickle.dump((config_path, params), fid)
 
     # Define logger
-    ch = logging.StreamHandler()
+    #stream logger
+    ch = logging.StreamHandler() 
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     ch.setFormatter(formatter)
+    #Action File logger
+    fileLogger = logging.FileHandler(str(data_path / 'actionLogs.txt')) 
+    formatter = logging.Formatter('%(levelname)s - %(name)s - %(message)s')
+    fileLogger.setFormatter(formatter) # add format to Handler
     if logging_level == "DEBUG":
         app.logger.setLevel(logging.DEBUG)
         ch.setLevel(logging.DEBUG)
+        fileLogger.setLevel(logging.DEBUG)
     elif logging_level == "INFO":
         app.logger.setLevel(logging.INFO)
         ch.setLevel(logging.INFO)
+        fileLogger.setLevel(logging.INFO)
     elif logging_level == "WARNING":
         app.logger.setLevel(logging.WARNING)
         ch.setLevel(logging.WARNING)
+        fileLogger.setLevel(logging.WARNING)
     elif logging_level == "ERROR":
         app.logger.setLevel(logging.ERROR)
         ch.setLevel(logging.ERROR)
+        fileLogger.setLevel(logging.ERROR)
     else:
         app.logger.setLevel(logging.DEBUG)
         ch.setLevel(logging.DEBUG)
+        fileLogger.setLevel(logging.DEBUG)
     app.logger.propagate = False
     app.logger.addHandler(ch)
-    #Save logs to file
-    fileLogger = logging.FileHandler(str(data_path / 'actionLogs.txt')) #set Handler
-    fileLogger.setLevel(logging.INFO) #set Handler level
-    formatter = logging.Formatter('%(levelname)s - %(name)s - %(message)s')
-    fileLogger.setFormatter(formatter) # add format to Handler
     app.logger.addHandler(fileLogger)   
-    clearFileLog() #Clear log file ready for new instance
+    clearFileLog() #Clear Action File logger file, ready for new instance
 
     # Launch server
     port = int(os.environ.get('PORT', 5000))
