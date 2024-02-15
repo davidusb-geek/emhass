@@ -586,7 +586,9 @@ class Forecast(object):
                     rh.df_final, days_list, _ = pickle.load(inp)
             else:
                 days_list = get_days_list(days_min_load_forecast)
-                rh.get_data(days_list, var_list)
+                getDataReturn = rh.get_data(days_list, var_list)
+                if getDataReturn == 'Request Get Error':
+                    return 'Request Get Error'
             rh.prepare_data(self.retrieve_hass_conf['var_load'], load_negative = self.retrieve_hass_conf['load_negative'],
                             set_zero_min = self.retrieve_hass_conf['set_zero_min'], 
                             var_replace_zero = var_replace_zero, 
