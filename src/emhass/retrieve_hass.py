@@ -92,6 +92,7 @@ class RetrieveHass:
         """
         self.logger.info("Retrieve hass get data method initiated...")
         self.df_final = pd.DataFrame()
+        x = 0 #iterate based on days
         # Looping on each day from days list
         for day in days_list:
         
@@ -115,6 +116,8 @@ class RetrieveHass:
                 try:
                     response = get(url, headers=headers)
                 except Exception:
+                    self.logger.error("Unable to access Home Assistance instance, check url and token/key")
+                    self.logger.error("If using addon try setting url and token to 'empty'")
                     return "Request Get Error"
                 else:
                     if response.status_code > 299:
@@ -126,13 +129,18 @@ class RetrieveHass:
                 try: # Sometimes when there are connection problems we need to catch empty retrieved json
                     data = response.json()[0]
                 except IndexError:
-                    self.logger.error("The retrieved JSON is empty, check that correct day or variable names are passed")
-                    self.logger.error("Either the names of the passed variables are not correct or days_to_retrieve is larger than the recorded history of your sensor (check your recorder settings)")
-                    break
+                    if x is 0:
+                        self.logger.error("The retrieved JSON is empty, The sensor names of the passed sensors are not correct (or HA sensor has 0 days of history)")
+                    else:
+                        self.logger.error("The retrieved JSON is empty, days_to_retrieve is larger than the recorded history of your sensor (check your recorder settings)")
+                    return  "Request Get Error"
                 df_raw = pd.DataFrame.from_dict(data)
                 if len(df_raw) == 0:
-                    self.logger.error("Retrieved empty Dataframe, check that correct day or variable names are passed")
-                    self.logger.error("Either the names of the passed variables are not correct or days_to_retrieve is larger than the recorded history of your sensor (check your recorder settings)")
+                    if x is 0:
+                        self.logger.error("Retrieved empty Dataframe, The sensor names of the passed sensors are not correct (or HA sensor has 0 days of history)")
+                    else:
+                        self.logger.error("Retrieved empty Dataframe, days_to_retrieve is larger than the recorded history of your sensor (check your recorder settings)")
+                    return  "Request Get Error"
                 if i == 0: # Defining the DataFrame container
                     from_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").min()
                     to_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").max()
@@ -147,11 +155,12 @@ class RetrieveHass:
                 df_tp = df_tp.resample(self.freq).mean()
                 df_day = pd.concat([df_day, df_tp], axis=1)
             
+            x += 1
             self.df_final = pd.concat([self.df_final, df_day], axis=0)
         self.df_final = set_df_index_freq(self.df_final)
         if self.df_final.index.freq != self.freq:
             self.logger.error("The inferred freq from data is not equal to the defined freq in passed parameters")
-
+        return True
     
     def prepare_data(self, var_load: str, load_negative: Optional[bool] = False, set_zero_min: Optional[bool] = True,
                      var_replace_zero: Optional[list] = None, var_interp: Optional[list] = None) -> None:
