@@ -164,6 +164,7 @@ class RetrieveHass:
         self.df_final = set_df_index_freq(self.df_final)
         if self.df_final.index.freq != self.freq:
             self.logger.error("The inferred freq from data is not equal to the defined freq in passed parameters")
+            return False
         return True
     
     def prepare_data(self, var_load: str, load_negative: Optional[bool] = False, set_zero_min: Optional[bool] = True,
@@ -199,6 +200,9 @@ class RetrieveHass:
         except KeyError:
             self.logger.error("Variable "+var_load+" was not found. This is typically because no data could be retrieved from Home Assistant")
             return False
+        except ValueError:
+            self.logger.error("sensor.power_photovoltaics and sensor.power_load_no_var_loads should not be the same")
+            return False   
         if set_zero_min: # Apply minimum values
             self.df_final.clip(lower=0.0, inplace=True, axis=1)
             self.df_final.replace(to_replace=0.0, value=np.nan, inplace=True)
@@ -229,6 +233,7 @@ class RetrieveHass:
             self.df_final.index = self.df_final.index.tz_convert(self.time_zone)
         # Drop datetimeindex duplicates on final DF
         self.df_final = self.df_final[~self.df_final.index.duplicated(keep='first')]
+        return True
     
     @staticmethod
     def get_attr_data_dict(data_df: pd.DataFrame, idx: int, entity_id: str, 
