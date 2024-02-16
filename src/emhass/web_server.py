@@ -102,7 +102,7 @@ def action_call(action_name):
     app.logger.info(ActionStr)
     input_data_dict = set_input_data_dict(config_path, str(data_path), costfun, 
         params, runtimeparams, action_name, app.logger)
-    if input_data_dict == "Request Get Error":
+    if not input_data_dict:
         return make_response(grabLog(ActionStr), 400)
     if action_name == 'publish-data':
         ActionStr = " >> Publishing data..."

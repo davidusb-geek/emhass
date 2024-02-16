@@ -75,14 +75,14 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         else:
             days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
             var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
-            if rh.get_data(days_list, var_list,
-                        minimal_response=False, significant_changes_only=False) == 'Request Get Error':
-                return 'Request Get Error'
-        if rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
+            if not rh.get_data(days_list, var_list,
+                        minimal_response=False, significant_changes_only=False):
+                return False
+        if not rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
                         set_zero_min = retrieve_hass_conf['set_zero_min'], 
                         var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
-                        var_interp = retrieve_hass_conf['var_interp'])  == 'Request Get Error':
-            return 'Request Get Error'
+                        var_interp = retrieve_hass_conf['var_interp']):
+            return False
         df_input_data = rh.df_final.copy()
         # What we don't need for this type of action
         P_PV_forecast, P_load_forecast, df_input_data_dayahead = None, None, None
@@ -91,9 +91,9 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
         P_PV_forecast = fcst.get_power_from_weather(df_weather)
         P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
-        if isinstance(P_load_forecast,str) and P_load_forecast == 'Request Get Error':
+        if isinstance(P_load_forecast,bool) and not P_load_forecast:
             logger.error("Unable to get sensor_power_photovoltaics or sensor_power_load_no_var_loads")
-            return 'Request Get Error'
+            return False
         df_input_data_dayahead = pd.DataFrame(np.transpose(np.vstack([P_PV_forecast.values,P_load_forecast.values])),
                                               index=P_PV_forecast.index,
                                               columns=['P_PV_forecast', 'P_load_forecast'])
@@ -112,14 +112,14 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         else:
             days_list = utils.get_days_list(1)
             var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
-            if rh.get_data(days_list, var_list,
-                        minimal_response=False, significant_changes_only=False) == 'Request Get Error':
-                return 'Request Get Error'
-        if rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
+            if not rh.get_data(days_list, var_list,
+                        minimal_response=False, significant_changes_only=False):
+                return False
+        if not rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
                         set_zero_min = retrieve_hass_conf['set_zero_min'], 
                         var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
-                        var_interp = retrieve_hass_conf['var_interp'])  == 'Request Get Error':
-            return 'Request Get Error'
+                        var_interp = retrieve_hass_conf['var_interp']):
+            return False
         df_input_data = rh.df_final.copy()
         # Get PV and load forecasts
         df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
@@ -150,8 +150,8 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         else:
             days_list = utils.get_days_list(days_to_retrieve)
             var_list = [var_model]
-            if rh.get_data(days_list, var_list) == 'Request Get Error':
-                return 'Request Get Error'
+            if not rh.get_data(days_list, var_list):
+                return False
             df_input_data = rh.df_final.copy()
     elif set_type == "publish-data":
         df_input_data, df_input_data_dayahead = None, None

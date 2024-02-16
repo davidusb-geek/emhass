@@ -118,12 +118,12 @@ class RetrieveHass:
                 except Exception:
                     self.logger.error("Unable to access Home Assistance instance, check url")
                     self.logger.error("If using addon, try setting url and token to 'empty'")
-                    return "Request Get Error"
+                    return False
                 else:
                     if response.status_code == 401:
                         self.logger.error("Unable to access Home Assistance instance, token/key")
                         self.logger.error("If using addon, try setting url and token to 'empty'")
-                        return "Request Get Error"
+                        return False
                     if response.status_code > 299:
                         return f"Request Get Error: {response.status_code}"
                 '''import bz2 # Uncomment to save a serialized data for tests
@@ -137,14 +137,14 @@ class RetrieveHass:
                         self.logger.error("The retrieved JSON is empty, A sensor may have 0 days of history or passed sensor may not be correct")
                     else:
                         self.logger.error("The retrieved JSON is empty, days_to_retrieve is larger than the recorded history of your sensor (check your recorder settings)")
-                    return  "Request Get Error"
+                    return False
                 df_raw = pd.DataFrame.from_dict(data)
                 if len(df_raw) == 0:
                     if x is 0:
                         self.logger.error("The retrieved JSON is empty, A sensor may have 0 days of history or passed sensor may not be correct")
                     else:
                         self.logger.error("Retrieved empty Dataframe, days_to_retrieve is larger than the recorded history of your sensor (check your recorder settings)")
-                    return  "Request Get Error"
+                    return False
                 if i == 0: # Defining the DataFrame container
                     from_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").min()
                     to_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").max()
@@ -198,7 +198,7 @@ class RetrieveHass:
             self.df_final.drop([var_load], inplace=True, axis=1)
         except KeyError:
             self.logger.error("Variable "+var_load+" was not found. This is typically because no data could be retrieved from Home Assistant")
-            return  "Request Get Error"
+            return False
         if set_zero_min: # Apply minimum values
             self.df_final.clip(lower=0.0, inplace=True, axis=1)
             self.df_final.replace(to_replace=0.0, value=np.nan, inplace=True)
