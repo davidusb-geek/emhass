@@ -134,14 +134,14 @@ class RetrieveHass:
                     data = response.json()[0]
                 except IndexError:
                     if x is 0:
-                        self.logger.error("The retrieved JSON is empty, A sensor may have 0 days of history or passed sensor may not be correct")
+                        self.logger.error("The retrieved JSON is empty, A sensor:" + var + " may have 0 days of history or passed sensor may not be correct")
                     else:
                         self.logger.error("The retrieved JSON is empty, days_to_retrieve is larger than the recorded history of your sensor (check your recorder settings)")
                     return False
                 df_raw = pd.DataFrame.from_dict(data)
                 if len(df_raw) == 0:
                     if x is 0:
-                        self.logger.error("The retrieved JSON is empty, A sensor may have 0 days of history or passed sensor may not be correct")
+                        self.logger.error("The retrieved Dataframe is empty, A sensor:" + var + " may have 0 days of history or passed sensor may not be correct")
                     else:
                         self.logger.error("Retrieved empty Dataframe, days_to_retrieve is larger than the recorded history of your sensor (check your recorder settings)")
                     return False
