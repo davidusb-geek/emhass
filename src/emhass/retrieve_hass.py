@@ -116,12 +116,12 @@ class RetrieveHass:
                 try:
                     response = get(url, headers=headers)
                 except Exception:
-                    self.logger.error("Unable to access Home Assistance instance, check url")
+                    self.logger.error("Unable to access Home Assistance instance, check URL")
                     self.logger.error("If using addon, try setting url and token to 'empty'")
                     return False
                 else:
                     if response.status_code == 401:
-                        self.logger.error("Unable to access Home Assistance instance, token/key")
+                        self.logger.error("Unable to access Home Assistance instance, TOKEN/KEY")
                         self.logger.error("If using addon, try setting url and token to 'empty'")
                         return False
                     if response.status_code > 299:
@@ -136,14 +136,14 @@ class RetrieveHass:
                     if x is 0:
                         self.logger.error("The retrieved JSON is empty, A sensor:" + var + " may have 0 days of history or passed sensor may not be correct")
                     else:
-                        self.logger.error("The retrieved JSON is empty, days_to_retrieve is larger than the recorded history of sensor:" + var + "  (check your recorder settings)")
+                        self.logger.error("The retrieved JSON is empty, days_to_retrieve may be larger than the recorded history of sensor:" + var + "  (check your recorder settings)")
                     return False
                 df_raw = pd.DataFrame.from_dict(data)
                 if len(df_raw) == 0:
                     if x is 0:
                         self.logger.error("The retrieved Dataframe is empty, A sensor:" + var + " may have 0 days of history or passed sensor may not be correct")
                     else:
-                        self.logger.error("Retrieved empty Dataframe, days_to_retrieve is larger than the recorded history of sensor:" + var + "  (check your recorder settings)")
+                        self.logger.error("Retrieved empty Dataframe, days_to_retrieve may be larger than the recorded history of sensor:" + var + "  (check your recorder settings)")
                     return False
                 if i == 0: # Defining the DataFrame container
                     from_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").min()
