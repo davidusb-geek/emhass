@@ -1,7 +1,9 @@
 #Test Add-on via Docker Emulation
-#Docker run example: 
-## docker build . -t emhass-addon -f AddonEmulateDocker && docker run  -e CONFIG_PATH="/usr/src/config_emhass.yaml" -e "SECRETS_PATH=/usr/src/secrets_emhass.yaml"  -e DATA_PATH="/data/" -e OPTIONS_PATH="/data/options.json" emhass-addon --url $URL --key $KEY
-FROM --platform=$BUILDPLATFORM ghcr.io/home-assistant/armhf-base-debian:bookworm AS build
+## Docker run example: 
+## docker build -t emhass/testing -f Add-onEmulateDocker .
+## docker run -it -p 5000:5000 --name emhass-test -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" docker.io/emhass/testing --url YOURHAURLHERE --key YOURHAKEYHERE
+FROM ghcr.io/home-assistant/$TARGETARCH-base-debian:bookworm 
+
 WORKDIR /usr/src
 
 # copy the requirements file into the image
