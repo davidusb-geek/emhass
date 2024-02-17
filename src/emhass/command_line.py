@@ -75,12 +75,14 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         else:
             days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
             var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
-            rh.get_data(days_list, var_list,
-                        minimal_response=False, significant_changes_only=False)
-        rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
+            if not rh.get_data(days_list, var_list,
+                        minimal_response=False, significant_changes_only=False):
+                return False 
+        if not rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
                         set_zero_min = retrieve_hass_conf['set_zero_min'], 
                         var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
-                        var_interp = retrieve_hass_conf['var_interp'])
+                        var_interp = retrieve_hass_conf['var_interp']):
+            return False
         df_input_data = rh.df_final.copy()
         # What we don't need for this type of action
         P_PV_forecast, P_load_forecast, df_input_data_dayahead = None, None, None
@@ -89,6 +91,9 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
         P_PV_forecast = fcst.get_power_from_weather(df_weather)
         P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
+        if isinstance(P_load_forecast,bool) and not P_load_forecast:
+            logger.error("Unable to get sensor_power_photovoltaics or sensor_power_load_no_var_loads")
+            return False
         df_input_data_dayahead = pd.DataFrame(np.transpose(np.vstack([P_PV_forecast.values,P_load_forecast.values])),
                                               index=P_PV_forecast.index,
                                               columns=['P_PV_forecast', 'P_load_forecast'])
@@ -107,12 +112,14 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         else:
             days_list = utils.get_days_list(1)
             var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
-            rh.get_data(days_list, var_list,
-                        minimal_response=False, significant_changes_only=False)
-        rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
+            if not rh.get_data(days_list, var_list,
+                        minimal_response=False, significant_changes_only=False):
+                return False
+        if not rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
                         set_zero_min = retrieve_hass_conf['set_zero_min'], 
                         var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
-                        var_interp = retrieve_hass_conf['var_interp'])
+                        var_interp = retrieve_hass_conf['var_interp']):
+            return False
         df_input_data = rh.df_final.copy()
         # Get PV and load forecasts
         df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
@@ -143,7 +150,8 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         else:
             days_list = utils.get_days_list(days_to_retrieve)
             var_list = [var_model]
-            rh.get_data(days_list, var_list)
+            if not rh.get_data(days_list, var_list):
+                return False
             df_input_data = rh.df_final.copy()
     elif set_type == "publish-data":
         df_input_data, df_input_data_dayahead = None, None
@@ -415,7 +423,7 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
                 mlf = pickle.load(inp)
         else:
             logger.error("The ML forecaster file was not found, please run a model fit method before this tune method")
-            return
+            return None, None
     # Tune the model
     df_pred_optim = mlf.tune(debug=debug)
     # Save model
@@ -540,6 +548,9 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                                     publish_prefix = publish_prefix)
     # Publish the optimization status
     custom_cost_fun_id = params['passed_data']['custom_optim_status_id']
+    if "optim_status" not in opt_res_latest:
+        opt_res_latest["optim_status"] = 'Optimal'
+        logger.warning("no optim_status in opt_res_latest, run an optimization task first")
     input_data_dict['rh'].post_data(opt_res_latest['optim_status'], idx_closest, 
                                     custom_cost_fun_id["entity_id"], 
                                     custom_cost_fun_id["unit_of_measurement"],
