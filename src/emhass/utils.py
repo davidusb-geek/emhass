@@ -610,7 +610,7 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int, 
         params['optim_conf']['load_cost_forecast_method'] = options.get('load_cost_forecast_method',params['optim_conf']['load_cost_forecast_method'])
         if options.get('list_set_deferrable_load_single_constant',None) != None: 
             params['optim_conf']['set_def_constant'] = [i['set_deferrable_load_single_constant'] for i in options.get('list_set_deferrable_load_single_constant')]
-        if options.get('list_peak_hours_periods_start_hours',None) != None:
+        if options.get('list_peak_hours_periods_start_hours',None) != None and options.get('list_peak_hours_periods_end_hours',None) != None:
             start_hours_list = [i['peak_hours_periods_start_hours'] for i in options['list_peak_hours_periods_start_hours']]
             end_hours_list = [i['peak_hours_periods_end_hours'] for i in options['list_peak_hours_periods_end_hours']]
             num_peak_hours = len(start_hours_list)
@@ -656,6 +656,41 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int, 
         params['plant_conf']['SOCmin'] = options.get('battery_minimum_state_of_charge',params['plant_conf']['SOCmin']) 
         params['plant_conf']['SOCmax'] = options.get('battery_maximum_state_of_charge',params['plant_conf']['SOCmax']) 
         params['plant_conf']['SOCtarget'] = options.get('battery_target_state_of_charge',params['plant_conf']['SOCtarget'])
+
+                # Check parameter lists have the same amounts as deferrable loads
+        # If not, set defaults it fill in gaps
+        if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['def_start_timestep']):
+            logger.warning("def_start_timestep / list_start_timesteps_of_each_deferrable_load does not match number in num_def_loads, adding default values to parameter")
+            for x in range(len(params['optim_conf']['def_start_timestep']), params['optim_conf']['num_def_loads']):
+                params['optim_conf']['def_start_timestep'].append(0)
+        if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['def_end_timestep']):
+            logger.warning("def_end_timestep / list_end_timesteps_of_each_deferrable_load does not match number in num_def_loads, adding default values to parameter")
+            for x in range(len(params['optim_conf']['def_end_timestep']), params['optim_conf']['num_def_loads']):
+                params['optim_conf']['def_end_timestep'].append(0)
+        if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['set_def_constant']):
+            logger.warning("set_def_constant / list_set_deferrable_load_single_constant does not match number in num_def_loads, adding default values to parameter")
+            for x in range(len(params['optim_conf']['set_def_constant']), params['optim_conf']['num_def_loads']):
+                params['optim_conf']['set_def_constant'].append(False)
+        if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['treat_def_as_semi_cont']):
+            logger.warning("treat_def_as_semi_cont / list_treat_deferrable_load_as_semi_cont does not match number in num_def_loads, adding default values to parameter")
+            for x in range(len(params['optim_conf']['treat_def_as_semi_cont']), params['optim_conf']['num_def_loads']):
+                params['optim_conf']['treat_def_as_semi_cont'].append(True)        
+        if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['def_total_hours']):
+            logger.warning("def_total_hours / list_operating_hours_of_each_deferrable_load does not match number in num_def_loads, adding default values to parameter")
+            for x in range(len(params['optim_conf']['def_total_hours']), params['optim_conf']['num_def_loads']):
+                params['optim_conf']['def_total_hours'].append(0)                   
+        if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['P_deferrable_nom']):
+            logger.warning("P_deferrable_nom / list_nominal_power_of_deferrable_loads does not match number in num_def_loads, adding default values to parameter")
+            for x in range(len(params['optim_conf']['P_deferrable_nom']), params['optim_conf']['num_def_loads']):
+                params['optim_conf']['P_deferrable_nom'].append(0)   
+        if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['list_hp_periods']):
+            logger.warning("list_hp_periods / list_peak_hours_periods_(start&end)_hours does not match number in num_def_loads, adding default values to parameter")
+            for x in range(len(params['optim_conf']['list_hp_periods']), params['optim_conf']['num_def_loads']):
+                params['optim_conf']['list_hp_periods'].append({'period_hp_'+str(x+1):[{'start':'02:54'},{'end':'20:24'}]})
+        # days_to_retrieve should be no less then 2
+        if params['retrieve_hass_conf']['days_to_retrieve'] < 2:
+            params['retrieve_hass_conf']['days_to_retrieve'] = 2
+            logger.warning("days_to_retrieve should not be lower then 2, setting days_to_retrieve to 2. Make sure your sensors also have at least 2 days of history")
     else:
         params['params_secrets'] = params_secrets
     # The params dict
