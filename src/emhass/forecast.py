@@ -585,12 +585,14 @@ class Forecast(object):
                 with open(pathlib.Path(self.root) / 'data' / 'test_df_final.pkl', 'rb') as inp:
                     rh.df_final, days_list, _ = pickle.load(inp)
             else:
-                days_list = get_days_list(days_min_load_forecast)
-                rh.get_data(days_list, var_list)
-            rh.prepare_data(self.retrieve_hass_conf['var_load'], load_negative = self.retrieve_hass_conf['load_negative'],
+                days_list = get_days_list(days_min_load_forecast) 
+                if not rh.get_data(days_list, var_list):
+                    return False
+            if  not rh.prepare_data(self.retrieve_hass_conf['var_load'], load_negative = self.retrieve_hass_conf['load_negative'],
                             set_zero_min = self.retrieve_hass_conf['set_zero_min'], 
                             var_replace_zero = var_replace_zero, 
-                            var_interp = var_interp)
+                            var_interp = var_interp):
+                return False
             df = rh.df_final.copy()[[self.var_load_new]]
         if method == 'naive': # using a naive approach
             mask_forecast_out = (df.index > days_list[-1] - self.optim_conf['delta_forecast'])

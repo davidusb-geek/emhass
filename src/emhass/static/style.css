@@ -568,6 +568,10 @@ button {
   overflow-x: auto !important;
   margin: 0 auto;
   margin-bottom: 10px;
+  animation-name: fadeInOpacity;
+  animation-iteration-count: 1;
+  animation-timing-function: ease-in-out;
+  animation-duration: .8s;
 }
 
 /* Set min size for diagrams  */
@@ -688,7 +692,7 @@ th {
   font-size: 4.0em;
   animation-name: fadeInOpacity;
   animation-iteration-count: 1;
-  animation-timing-function: ease-in;
+  animation-timing-function: ease-in-out;
   animation-duration: .5s;
 }
 
@@ -699,7 +703,7 @@ th {
   font-size: 4.0em;
   animation-name: fadeInOpacity;
   animation-iteration-count: 1;
-  animation-timing-function: ease-in;
+  animation-timing-function: ease-in-out;
   animation-duration: .5s;
 }
 
@@ -741,7 +745,10 @@ th {
   margin: 0 auto;
   width: fit-content;
   height: fit-content;
-  transition: 0.3s;
+  animation-name: fadeInOpacity;
+  animation-iteration-count: 1;
+  animation-timing-function: ease-in-out;
+  animation-duration: .8s;
 }
 
 #alert-text {
