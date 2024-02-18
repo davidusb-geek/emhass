@@ -210,7 +210,9 @@ if __name__ == "__main__":
         CONFIG_PATH = os.getenv("CONFIG_PATH", default="/data/config_emhass.yaml")
         #Obtain url and key from ENV or ARG
         hass_url = os.getenv("EMHASS_URL", default=args.url)
-        key =  os.getenv("EMHASS_KEY", default=args.key) 
+        key =  os.getenv("SUPERVISOR_TOKEN", default=args.key) 
+        if hass_url != "http://supervisor/core/api":
+            key =  os.getenv("EMHASS_KEY", key)  
         #If url or key is None, Set as empty string to reduce NoneType errors bellow
         if key is None: key = ""
         if hass_url is None: hass_url = ""
