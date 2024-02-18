@@ -1,46 +1,226 @@
-Create a developer environment:
+# EMHASS Development
+
+There are multiple different approaches to developing EMHASS.  
+The choice depend on EMHASS mode (standalone/add-on) and preference (Python venv/DevContainer/Docker).  
+Bellow are some development workflow examples:  
+_Note: It is preferred to run both addon mode, standalone mode and unitest once before submitting and pull request._
+
+## Step 1 - Fork
+
+_With your preferred git tool of choice:_  
+Fork the EMHASS github repository into your own account, then clone the forked repository into your local development platform. (ie. PC or Codespace)
+
+## Step 2 - Develop
+
+To develop the test code chose one of the following methods:
+
+### Method 1 - Python Virtual Environment
+
+We can use python virtual environments to build, develop and test/unitest the code.
+This method works well with standalone mode.
+
+_confirm terminal is in the root `emhass` directory before starting_
+
+**Create a developer environment:**
+
+```bash
+python -m venv .venv
 ```
-virtualenv -p /usr/bin/python3 emhass-dev
+
+**Activate the environment:**
+
+- linux:
+
+  ```bash
+  source .venv/bin/activate
+  ```
+
+- windows:
+
+  ```cmd
+  .venv\Scripts\activate.bat
+  ```
+
+An IDE like VSCode should automatically catch that a new virtual env was created, you can start developing from there.
+
+**Install the _emhass_ package in editable mode:**
+
+```bash
+python -m pip install -e .
 ```
-To develop using Anaconda use (pick the correct Python and Pip versions):
+
+**Set paths with environment variables:**
+
+- Linux
+  ```bash
+  export OPTIONS_PATH="${PWD}/options.json" && export USE_OPTIONS="True" ##optional to test options.json
+  export CONFIG_PATH="${PWD}/config_emhass.yaml"
+  export SECRETS_PATH="${PWD}/secrets_emhass.yaml"
+  export DATA_PATH="${PWD}/data/"
+  ```
+- windows
+  ```cmd
+  set "OPTIONS_PATH=%cd%/options.json"  & ::  optional to test options.json
+  set "USE_OPTIONS=True"                & ::  optional to test options.json
+  set "CONFIG_PATH=%cd%/config_emhass.yaml"
+  set "SECRETS_PATH=%cd%/secrets_emhass.yaml"
+  set "DATA_PATH=%cd%/data/"
+  ```
+
+_Make sure `secrets_emhass.yaml` has been made and set. Copy `secrets_emhass(example).yaml` for an example._
+
+**Run EMHASS**
+
 ```
-conda create --name emhass-dev python=3.8 pip=21.0.1
+python3 src/emhass/web_server.py
 ```
-Then activate environment and install the required packages using:
+
+**Run unitests**
+
 ```
-pip install -r requirements.txt
+python3 -m unitest -v -RP -s ./tests -p 'test_*.py'
 ```
-Add `emhass` to the Python path using the path to `src`, for example:
+
+_unitest will need to be installed prior_
+
+### Method 2: VS-Code Debug and Run via DevContainer
+
+In VS-Code, you can run a Docker DevContainer to setup and virtual environment that can edit and test inside of.
+
+The recommended steps to run are:
+
+- Open forked root (`emhass`) folder inside of VS-Code
+- VS-Code will ask if you want to run in a dev-container, say yes _([Docker environment](https://code.visualstudio.com/docs/devcontainers/containers) must be set up first)_.
+- Edit some code...
+- Compile emhass by pressing `control+shift+p` > `Tasks: Run Task` > `EMHASS Install`.
+  This has been set up in the [tasks.json](https://github.com/davidusb-geek/emhass/blob/master/.vscode/tasks.json) file. - Before _run & debug_, re-run `EMHASS Install` task every time a change has been made to emhass.
+- Launch and debug the application via selecting the [`Run and Debug`](https://code.visualstudio.com/docs/editor/debugging) tab /`Ctrl+Shift+D` > `EMHASS run Addon`. This has been setup in the [Launch.json](https://github.com/davidusb-geek/emhass/blob/master/.vscode/launch.json) .
+
+  - You will need to modify the `EMHASS_URL` _(http://HAIPHERE:8123/)_ and `EMHASS_KEY` _(PLACEKEYHERE)_ inside of Launch.json that matches your HA environment before running.
+  - If you want to change your parameters, you can edit options.json file before launch.
+  - you can also choose to run `EMHASS run` instead of `EMHASS run Addon`. This acts more like standalone mode and uses the secrets*emhass.yaml files and removes the use of options.json. *_(user sets parameters in config_emhass.yaml instep)_\_
+
+- You can run all the unitests by heading to the [`Testing`](https://code.visualstudio.com/docs/python/testing) tab on the left hand side.  
+  This is recommended before creating a pull request.
+
+### Method 3 - Docker Virtual Environment
+
+With Docker, you can test EMHASS in both standalone and add-on mode via modifying the build argument: `build_version` with values: `standalone`, `addon-pip`, `addon-git`, `addon-local`.  
+Since emhass-add-on is using the same docker base, this method is good to test the add-on functionally of your code. _(addon-local)_
+
+Depending on if you choose to run standalone or addon, `docker run` will require different passed variables/arguments to function. See following examples:
+
+_Make sure your terminal is in the root `emhass` directory before running the docker build._
+
+#### Docker run add-on via with local files:
+
+**addon-local** copies the local emhass files to compile and run in addon mode.
+
+```bash
+docker build -t emhass/docker --build-arg build_version=addon-local .
+docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
 ```
-/home/user/emhass/src
+
+**Note:**
+
+- `addon` mode can have secret parameters to passed in on run via varibles `-e`, arguments (`--key`,`--url`) or via `secrets_emhass.yaml` with volume mount
+- on file change. You will need to re-build and re-run the Docker image/container in order for the change to take effect. (excluding volume mounted configs)
+- if you are planning to modify the configs: options.json, secrets_emhass.yaml or config_emhass.yaml, you can volume mount them with `-v`
+
+  ```bash
+  docker build -t emhass/docker --build-arg build_version=addon-local .
+  docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/options.json:/data/options.json -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
+  ```
+
+  This allows editing config files without requiring to re-building Docker Image. If you have done a change, restart the container to take effect:
+
+  ```bash
+  docker stop emhass-container
+  docker start emhass-container
+  ```
+
+#### Docker run Standalone via with local files:
+
+**standalone** copies the local emhass files to compile and run in standalone mode.
+
+```bash
+docker build -t emhass/docker --build-arg build_version=standalone .
+docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass.yaml:/data/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/data/secrets_emhass.yaml emhass/docker
 ```
-If working on linux we can add these lines to the `~/.bashrc` file:
+
+_Standalone mode requires secrets_emhass.yaml to be set and passed in on run. Copy `secrets_emhass(example).yaml` for an example._
+
+#### Docker run add-on via with git or pip:
+
+If you will like to test with the current production/master versions of emhass, you can do so via pip or git.  
+**addon-pip** will be the closest environment to the production emhass-add-on.  
+However, Both come with the disadvantaged of not being able to edit the emhass package itself.
+
+**Docker run add-on git**
+
+```bash
+docker build -t emhass/docker --build-arg build_version=addon-git .
+docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -v $(pwd)/options.json:/data/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
 ```
-# Python modules
-export PYTHONPATH="${PYTHONPATH}:/home/user/emhass/src"
+
+**Docker run add-on pip:**
+
+```bash
+docker build -t emhass/docker --build-arg build_version=addon-pip .
+docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -v $(pwd)/options.json:/data/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
 ```
-Don't foget to source the `~/.bashrc` file:
+
+_You can add or remove file volume mounts with the `-v`` tag, this should override the file in the container (ex.options.json)_
+
+#### Delete built docker image
+
+We can delete the Docker image and container via:
+
+```bash
+docker rm  emhass-container #delete docker container
+docker rmi emhass/docker #delete docker image
 ```
-source ~/.bashrc
+
+#### Other Docker Options
+
+**Rapid Testing**  
+As editing and testing EMHASS via docker may be repetitive, you may like to simplify the removal, build and run process.
+
+**For rapid Docker testing, try a command chain:**  
+Linux:
+
+```bash
+docker rm -f emhass-container ; docker build -t emhass/docker --build-arg build_version=addon-local . && docker run -it -p 5001:5000 --name emhass-container emhass/docker -v $(pwd)/secrets_emhass.yaml:/data/secrets_emhass.yaml
 ```
-Update the build package:
+
+_The example command chain removes old emhass container, rebuild docker image, and run new container with newly built image._  
+_This uncase may not require any volume mounts (unless you use secrets_emhass.yaml) as the docker build process will pull the latest versions of the configs as it builds._
+
+
+**Environment Variables**  
+Running addon mode, you can also pass location, key and url secret parameters via environment variables
+
+```bash
+docker build -t emhass/docker --build-arg build_version=addon-local .
+docker run -it -p 5000:5000 --name emhass-container -e URL="YOURHAURLHERE" -e KEY="YOURHAKEYHERE" -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" emhass/docker
 ```
-python3 -m pip install --upgrade build
+
+This allows the user to set variables prior to build
+Linux:
+
+```bash
+export EMHASS_URL="YOURHAURLHERE"
+export EMHASS_KEY="YOURHAKEYHERE"
+export TIME_ZONE="Europe/Paris"
+export LAT="45.83"
+export LON="45.83"
+export ALT="4807.8"
+
+docker build -t emhass/docker --build-arg build_version=addon-local .
+docker run -it -p 5001:5000 --name emhass-container  -e EMHASS_KEY -e EMHASS_URL -e TIME_ZONE  -e LAT -e LON -e ALT  /emhass/docker
 ```
-And generate distribution archives with:
-```
-python3 -m build
-```
-Or with:
-```
-python3 setup.py build bdist_wheel
-```
-Create a new tag version:
-```
-git tag vX.X.X
-git push origin --tags
-```
-Upload to pypi:
-```
-twine upload dist/*
-```
+
+## Step 3 - Pull request
+
+Once developed, commit your code, and push to your fork.  
+Then submit a pull request with your fork to the [davidusb-geek/emhass@master](https://github.com/davidusb-geek/emhass) repository.
