@@ -425,7 +425,7 @@ Check the dedicated section in the documentation here: [https://emhass.readthedo
 
 ## Development
 
-Pull request are very much accepted on this project. For development you can find some instructions here [Development](./docs/develop.md)
+Pull request are very much accepted on this project. For development you can find some instructions here [Development](https://emhass.readthedocs.io/en/latest/develop.html)
 
 ## Troubleshooting
 
