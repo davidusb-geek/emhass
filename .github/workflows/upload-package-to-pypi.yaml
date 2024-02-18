@@ -19,7 +19,8 @@ jobs:
         python -m venv .venv
         source .venv/bin/activate
         python -m pip install --upgrade pip
-        pip install setuptools wheel twine build
+        pip install setuptools wheel twine
+        python -m pip install --upgrade build
     - name: Build and publish
       env:
         TWINE_USERNAME: __token__
