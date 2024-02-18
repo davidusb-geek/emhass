@@ -52,6 +52,7 @@ COPY src/emhass/retrieve_hass.py /app/src/emhass/retrieve_hass.py
 COPY src/emhass/utils.py /app/src/emhass/utils.py
 COPY src/emhass/web_server.py /app/src/emhass/web_server.py
 COPY src/emhass/templates/index.html /app/src/emhass/templates/index.html
+COPY src/emhass/templates/template.html /app/src/emhass/templates/template.html
 COPY src/emhass/static/style.css /app/src/emhass/static/style.css
 COPY src/emhass/static/img/emhass_logo_short.svg /app/src/emhass/static/img/emhass_logo_short.svg
 COPY src/emhass/static/img/emhass_icon.png /app/src/emhass/static/img/emhass_icon.png
