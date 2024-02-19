@@ -74,7 +74,7 @@ RUN  pip3 install --no-cache-dir --break-system-packages --upgrade --upgrade-str
 
 COPY options.json /app/
 
-ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True", "--no_response", "True",]
+ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True", "--no_response", "True"]
 
 #-----------
 #EMHASS-ADD-ON Testing from local files
@@ -84,6 +84,7 @@ COPY src/emhass/templates/ /app/src/emhass/templates/
 COPY src/emhass/static/ /app/src/emhass/static/
 COPY src/emhass/static/img/ /app/src/emhass/static/img/
 COPY data/opt_res_latest.csv /app/data/
+#add options.json, this would be generated via HA
 COPY options.json /app/
 COPY README.md /app/
 COPY setup.py /app/
@@ -93,18 +94,22 @@ ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True" , "--no_resp
 
 
 #-----------
-#EMHASS-ADD-ON  testing via git 
-FROM addon as addon-git 
+#EMHASS-ADD-ON testing with git
+FROM addon as addon-git
 WORKDIR /tmp/
+#Repo
 RUN git clone https://github.com/davidusb-geek/emhass.git
-RUN mkdir -p  /app/src/emhass/
-RUN mkdir -p  /app/data
-RUN cp -r /tmp/emhass/src/emhass/ /app/src/emhass/
-RUN cp /tmp/emhass/app/opt_res_latest.csv  /app/data/
-RUN cp /tmp/emhass/options.json /app/
+WORKDIR /tmp/emhass
+#Branch
+RUN git checkout master
+RUN mkdir -p /app/src/emhass/
+RUN mkdir -p /app/data/
+RUN cp -r /tmp/emhass/src/emhass/. /app/src/emhass/
+RUN cp /tmp/emhass/data/opt_res_latest.csv  /app/data/
 RUN cp /tmp/emhass/setup.py /app/
 RUN cp /tmp/emhass/README.md /app/
-#compile EMHASS locally
+#add options.json, this would be generated via HA
+RUN cp /tmp/emhass/options.json /app/
 WORKDIR /app
 RUN python3 -m pip install --no-cache-dir --break-system-packages -U  .
 ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True" , "--no_response", "True"]
