@@ -5,15 +5,15 @@
 ##
 ## Docker run Standalone example 
 ## docker build -t emhass/docker --build-arg build_version=standalone .
-## docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass.yaml:/data/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/data/secrets_emhass.yaml emhass/docker 
+## docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/docker 
 
 #build_version options are: addon, addon-pip, addon-git, addon-local standalone
 ARG build_version
 
 FROM ghcr.io/home-assistant/$TARGETARCH-base-debian:bookworm AS base
 
-WORKDIR /data
-COPY requirements.txt /data/
+WORKDIR /app
+COPY requirements.txt /app/
 
 # Setup
 RUN apt-get update \
@@ -51,12 +51,12 @@ RUN apt-get update \
 
 
 #copy config file (on all builds)
-COPY config_emhass.yaml /data/
+COPY config_emhass.yaml /app/
 
 #-------------------------
 #EMHASS-ADDON Default 
 FROM base as addon
-COPY ./requirements_addon.txt /data/requirements.txt
+COPY ./requirements_addon.txt /app/requirements.txt
 
 LABEL \
     io.hass.name="emhass" \
@@ -72,21 +72,21 @@ ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True", "--url", "h
 FROM addon as addon-pip
 RUN  pip3 install --no-cache-dir --break-system-packages --upgrade --upgrade-strategy=only-if-needed -U emhass
 
-COPY options.json /data/
+COPY options.json /app/
 
 ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True", "--no_response", "True",]
 
 #-----------
 #EMHASS-ADD-ON Testing from local files
 FROM addon as addon-local
-COPY src/emhass/ /data/src/emhass/ 
-COPY src/emhass/templates/ /data/src/emhass/templates/
-COPY src/emhass/static/ /data/src/emhass/static/
-COPY src/emhass/static/img/ /data/src/emhass/static/img/
-COPY data/opt_res_latest.csv /data/data/
-COPY options.json /data/
-COPY README.md /data/
-COPY setup.py /data/
+COPY src/emhass/ /app/src/emhass/ 
+COPY src/emhass/templates/ /app/src/emhass/templates/
+COPY src/emhass/static/ /app/src/emhass/static/
+COPY src/emhass/static/img/ /app/src/emhass/static/img/
+COPY data/opt_res_latest.csv /app/data/
+COPY options.json /app/
+COPY README.md /app/
+COPY setup.py /app/
 #compile EMHASS locally
 RUN python3 -m pip install --no-cache-dir --break-system-packages -U  .
 ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True" , "--no_response", "True"]
@@ -97,15 +97,15 @@ ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True" , "--no_resp
 FROM addon as addon-git 
 WORKDIR /tmp/
 RUN git clone https://github.com/davidusb-geek/emhass.git
-RUN mkdir -p  /data/src/emhass/
-RUN mkdir -p  /data/data
-RUN cp -r /tmp/emhass/src/emhass/ /data/src/emhass/
-RUN cp /tmp/emhass/data/opt_res_latest.csv  /data/data/
-RUN cp /tmp/emhass/options.json /data/
-RUN cp /tmp/emhass/setup.py /data/
-RUN cp /tmp/emhass/README.md /data/
+RUN mkdir -p  /app/src/emhass/
+RUN mkdir -p  /app/data
+RUN cp -r /tmp/emhass/src/emhass/ /app/src/emhass/
+RUN cp /tmp/emhass/app/opt_res_latest.csv  /app/data/
+RUN cp /tmp/emhass/options.json /app/
+RUN cp /tmp/emhass/setup.py /app/
+RUN cp /tmp/emhass/README.md /app/
 #compile EMHASS locally
-WORKDIR /data
+WORKDIR /app
 RUN python3 -m pip install --no-cache-dir --break-system-packages -U  .
 ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True" , "--no_response", "True"]
 
@@ -115,13 +115,13 @@ FROM base as standalone
 
 RUN pip3 install --extra-index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -U  flask waitress plotly
 
-COPY src/emhass/ /data/src/emhass/ 
-COPY src/emhass/templates/ /data/src/emhass/templates/
-COPY src/emhass/static/ /data/src/emhass/static/
-COPY src/emhass/static/img/ /data/src/emhass/static/img/
-COPY data/opt_res_latest.csv /data/data/
-COPY README.md /data/
-COPY setup.py /data/
+COPY src/emhass/ /app/src/emhass/ 
+COPY src/emhass/templates/ /app/src/emhass/templates/
+COPY src/emhass/static/ /app/src/emhass/static/
+COPY src/emhass/static/img/ /app/src/emhass/static/img/
+COPY data/opt_res_latest.csv /app/data/
+COPY README.md /app/
+COPY setup.py /app/
 #secrets file will need to be copied manually at docker run
 
 # # set env variables

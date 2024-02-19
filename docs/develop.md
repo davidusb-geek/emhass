@@ -56,7 +56,7 @@ python -m pip install -e .
   export OPTIONS_PATH="${PWD}/options.json" && export USE_OPTIONS="True" ##optional to test options.json
   export CONFIG_PATH="${PWD}/config_emhass.yaml"
   export SECRETS_PATH="${PWD}/secrets_emhass.yaml"
-  export DATA_PATH="${PWD}/data/"
+  export DATA_PATH="${PWD}/app/"
   ```
 - windows
   ```cmd
@@ -64,7 +64,7 @@ python -m pip install -e .
   set "USE_OPTIONS=True"                & ::  optional to test options.json
   set "CONFIG_PATH=%cd%/config_emhass.yaml"
   set "SECRETS_PATH=%cd%/secrets_emhass.yaml"
-  set "DATA_PATH=%cd%/data/"
+  set "DATA_PATH=%cd%/app/"
   ```
 
 _Make sure `secrets_emhass.yaml` has been made and set. Copy `secrets_emhass(example).yaml` for an example._
@@ -129,7 +129,7 @@ docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86"
 
   ```bash
   docker build -t emhass/docker --build-arg build_version=addon-local .
-  docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/options.json:/data/options.json -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
+  docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/options.json:/app/options.json -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
   ```
 
   This allows the editing of config files without re-building the Docker Image. If you have done a change, restart the container to take effect:
@@ -145,7 +145,7 @@ docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86"
 
 ```bash
 docker build -t emhass/docker --build-arg build_version=standalone .
-docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass.yaml:/data/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/data/secrets_emhass.yaml emhass/docker
+docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/docker
 ```
 
 _Standalone mode requires secrets_emhass.yaml to be set and passed in on run. Copy `secrets_emhass(example).yaml` for an example._
@@ -160,14 +160,14 @@ However, both come with the disadvantage of not being able to edit the emhass pa
 
 ```bash
 docker build -t emhass/docker --build-arg build_version=addon-git .
-docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -v $(pwd)/options.json:/data/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
+docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -v $(pwd)/options.json:/app/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
 ```
 
 **Docker run add-on pip:**
 
 ```bash
 docker build -t emhass/docker --build-arg build_version=addon-pip .
-docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -v $(pwd)/options.json:/data/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
+docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -v $(pwd)/options.json:/app/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
 ```
 
 _You can add or remove file volume mounts with the `-v`` tag, this should override the file in the container (ex.options.json)_
@@ -190,7 +190,7 @@ As editing and testing EMHASS via docker may be repetitive, you may like to simp
 Linux:
 
 ```bash
-docker rm -f emhass-container ; docker build -t emhass/docker --build-arg build_version=addon-local . && docker run -it -p 5000:5000 -v $(pwd)/secrets_emhass.yaml:/data/secrets_emhass.yaml --name emhass-container emhass/docker 
+docker rm -f emhass-container ; docker build -t emhass/docker --build-arg build_version=addon-local . && docker run -it -p 5000:5000 -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name emhass-container emhass/docker 
 ```
 
 _The example command chain removes old emhass container, rebuilds Docker image, and runs new container with newly built image._  

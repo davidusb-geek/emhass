@@ -205,9 +205,9 @@ if __name__ == "__main__":
     use_options = os.getenv('USE_OPTIONS', default=False)
     # Define the paths
     if args.addon==1:
-        OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/data/options.json")
+        OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
         options_json = Path(OPTIONS_PATH)
-        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/data/config_emhass.yaml")
+        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
         #Obtain url and key from ENV or ARG
         hass_url = os.getenv("EMHASS_URL", default=args.url)
         key =  os.getenv("SUPERVISOR_TOKEN", default=args.key) 
@@ -222,10 +222,10 @@ if __name__ == "__main__":
                 options = json.load(data)
         else:
             app.logger.error("options.json does not exists")
-        DATA_PATH = os.getenv("DATA_PATH", default="/data/data/")
+        DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
     else:
         if use_options:
-            OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/data/options.json")
+            OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
             options_json = Path(OPTIONS_PATH)
             # Read options info
             if options_json.exists():
@@ -235,8 +235,8 @@ if __name__ == "__main__":
                 app.logger.error("options.json does not exists")
         else:
             options = None
-        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/data/config_emhass.yaml")
-        DATA_PATH = os.getenv("DATA_PATH", default="/data/data/")
+        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
+        DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
 
     config_path = Path(CONFIG_PATH)
     data_path = Path(DATA_PATH)
@@ -300,13 +300,13 @@ if __name__ == "__main__":
             costfun = os.getenv('LOCAL_COSTFUN', default='profit')
             logging_level = os.getenv('LOGGING_LEVEL', default='INFO')
             # check if secrets file exists
-            if Path(os.getenv('SECRETS_PATH', default='/data/secrets_emhass.yaml')).is_file(): 
-                with open(os.getenv('SECRETS_PATH', default='/data/secrets_emhass.yaml'), 'r') as file:
+            if Path(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml')).is_file(): 
+                with open(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), 'r') as file:
                     params_secrets = yaml.load(file, Loader=yaml.FullLoader)
                     app.logger.debug("Obtained secrets from secrets file")
             #If cant find secrets_emhass file, use env
             else: 
-                app.logger.debug("Failed to find secrets file: "+str(os.getenv('SECRETS_PATH', default='/data/secrets_emhass.yaml')))
+                app.logger.debug("Failed to find secrets file: "+str(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml')))
                 app.logger.debug("Setting location defaults")
                 params_secrets = {} 
                 #If no secrets file try args, else set some defaults 
@@ -326,7 +326,7 @@ if __name__ == "__main__":
     else: #If addon is false
         costfun = os.getenv('LOCAL_COSTFUN', default='profit')
         logging_level = os.getenv('LOGGING_LEVEL', default='INFO')
-        with open(os.getenv('SECRETS_PATH', default='/data/secrets_emhass.yaml'), 'r') as file:
+        with open(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), 'r') as file:
             params_secrets = yaml.load(file, Loader=yaml.FullLoader)
         hass_url = params_secrets['hass_url']
         
