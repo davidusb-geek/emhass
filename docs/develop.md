@@ -56,7 +56,7 @@ python -m pip install -e .
   export OPTIONS_PATH="${PWD}/options.json" && export USE_OPTIONS="True" ##optional to test options.json
   export CONFIG_PATH="${PWD}/config_emhass.yaml"
   export SECRETS_PATH="${PWD}/secrets_emhass.yaml"
-  export DATA_PATH="${PWD}/app/"
+  export DATA_PATH="${PWD}/data/"
   ```
 - windows
   ```cmd
@@ -64,7 +64,7 @@ python -m pip install -e .
   set "USE_OPTIONS=True"                & ::  optional to test options.json
   set "CONFIG_PATH=%cd%/config_emhass.yaml"
   set "SECRETS_PATH=%cd%/secrets_emhass.yaml"
-  set "DATA_PATH=%cd%/app/"
+  set "DATA_PATH=%cd%/data/"
   ```
 
 _Make sure `secrets_emhass.yaml` has been made and set. Copy `secrets_emhass(example).yaml` for an example._
