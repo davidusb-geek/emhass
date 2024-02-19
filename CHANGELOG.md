@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.8] - 2024-02-18
+### Improvement
+Added some nice logging functionalities and responsiveness on the webui.
+Thanks to @GeoDerp for this great work!
+- new actionLogs.txt is generated in datapath storing sessions app.logger info
+- on successful html button press, fetch is called to get html containing latest table data
+- on html button press, If app.logger ERROR is present, send action log back and present on page.
+
 ## [0.7.7] - 2024-02-10
 ### Improvement
 - Bumped the webui. Some great new features and styling. Now it is possible to pass data directly as lsit of values when using the buttons in the webui. Thanks to @GeoDerp
@@ -565,6 +573,7 @@
 [0.7.5]: https://github.com/davidusb-geek/emhass/releases/tag/v0.7.5
 [0.7.6]: https://github.com/davidusb-geek/emhass/releases/tag/v0.7.6
 [0.7.7]: https://github.com/davidusb-geek/emhass/releases/tag/v0.7.7
+[0.7.8]: https://github.com/davidusb-geek/emhass/releases/tag/v0.7.8
 
 # Notes
 All notable changes to this project will be documented in this file.
