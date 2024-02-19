@@ -111,7 +111,7 @@ docker load -i <TarFileName>.tar
 ```
 Finally check your image tag with `docker images` and launch the docker itself:
 ```
-docker run -it --restart always -p 5000:5000 -e "LOCAL_COSTFUN=profit" -v $(pwd)/config_emhass.yaml:/data/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/data/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
+docker run -it --restart always -p 5000:5000 -e "LOCAL_COSTFUN=profit" -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
 ```
 
 ### Method 3) Legacy method using a Python virtual environment

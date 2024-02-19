@@ -118,6 +118,7 @@ _Make sure your terminal is in the root `emhass` directory before running the do
 
 ```bash
 docker build -t emhass/docker --build-arg build_version=addon-local .
+
 docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
 ```
 
@@ -129,6 +130,7 @@ docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86"
 
   ```bash
   docker build -t emhass/docker --build-arg build_version=addon-local .
+  
   docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/options.json:/app/options.json -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
   ```
 
@@ -136,6 +138,7 @@ docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86"
 
   ```bash
   docker stop emhass-container
+  
   docker start emhass-container
   ```
 
@@ -145,10 +148,11 @@ docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86"
 
 ```bash
 docker build -t emhass/docker --build-arg build_version=standalone .
+
 docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/docker
 ```
 
-_Standalone mode requires secrets_emhass.yaml to be set and passed in on run. Copy `secrets_emhass(example).yaml` for an example._
+_Standalone mode requires `secrets_emhass.yaml` to be set and passed in on operate. Copy `secrets_emhass(example).yaml` for an example._
 
 #### Docker run add-on with git or pip:
 
@@ -160,6 +164,7 @@ However, both come with the disadvantage of not being able to edit the emhass pa
 
 ```bash
 docker build -t emhass/docker --build-arg build_version=addon-git .
+
 docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -v $(pwd)/options.json:/app/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
 ```
 
@@ -167,17 +172,19 @@ docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86"
 
 ```bash
 docker build -t emhass/docker --build-arg build_version=addon-pip .
+
 docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -v $(pwd)/options.json:/app/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
 ```
 
-_You can add or remove file volume mounts with the `-v`` tag, this should override the file in the container (ex.options.json)_
+_You can add or remove file volume mounts with the `-v` tag, this should override the file in the container (ex.options.json)_
 
 #### Delete built Docker image
 
 We can delete the Docker image and container via:
 
 ```bash
-docker rm  emhass-container #delete Docker container
+docker rm -f emhass-container #force delete Docker container
+
 docker rmi emhass/docker #delete Docker image
 ```
 
@@ -202,6 +209,7 @@ Running addon mode, you can also pass location, key and url secret parameters vi
 
 ```bash
 docker build -t emhass/docker --build-arg build_version=addon-local .
+
 docker run -it -p 5000:5000 --name emhass-container -e URL="YOURHAURLHERE" -e KEY="YOURHAKEYHERE" -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" emhass/docker
 ```
 
@@ -217,7 +225,8 @@ export LON="45.83"
 export ALT="4807.8"
 
 docker build -t emhass/docker --build-arg build_version=addon-local .
-docker run -it -p 5000:5000 --name emhass-container  -e EMHASS_KEY -e EMHASS_URL -e TIME_ZONE  -e LAT -e LON -e ALT  /emhass/docker
+
+docker run -it -p 5000:5000 --name emhass-container -e EMHASS_KEY -e EMHASS_URL -e TIME_ZONE -e LAT -e LON -e ALT emhass/docker
 ```
 
 ## Step 3 - Pull request
