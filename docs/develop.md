@@ -1,8 +1,8 @@
 # EMHASS Development
 
 There are multiple different approaches to developing EMHASS.  
-The choice depend on EMHASS mode (standalone/add-on) and preference (Python venv/DevContainer/Docker).  
-Bellow are some development workflow examples:  
+The choice depends on EMHASS mode (standalone/add-on) and preference (Python venv/DevContainer/Docker).  
+Below are some development workflow examples:  
 _Note: It is preferred to run both addon mode, standalone mode and unitest once before submitting and pull request._
 
 ## Step 1 - Fork
@@ -12,7 +12,7 @@ Fork the EMHASS github repository into your own account, then clone the forked r
 
 ## Step 2 - Develop
 
-To develop the test code chose one of the following methods:
+To develop the test code choose one of the following methods:
 
 ### Method 1 - Python Virtual Environment
 
@@ -85,7 +85,7 @@ _unitest will need to be installed prior_
 
 ### Method 2: VS-Code Debug and Run via DevContainer
 
-In VS-Code, you can run a Docker DevContainer to setup and virtual environment that can edit and test inside of.
+In VS-Code, you can run a Docker DevContainer to set up a virtual environment you can edit and test inside of.
 
 The recommended steps to run are:
 
@@ -94,7 +94,7 @@ The recommended steps to run are:
 - Edit some code...
 - Compile emhass by pressing `control+shift+p` > `Tasks: Run Task` > `EMHASS Install`.
   This has been set up in the [tasks.json](https://github.com/davidusb-geek/emhass/blob/master/.vscode/tasks.json) file. - Before _run & debug_, re-run `EMHASS Install` task every time a change has been made to emhass.
-- Launch and debug the application via selecting the [`Run and Debug`](https://code.visualstudio.com/docs/editor/debugging) tab /`Ctrl+Shift+D` > `EMHASS run Addon`. This has been setup in the [Launch.json](https://github.com/davidusb-geek/emhass/blob/master/.vscode/launch.json) .
+- Launch and debug the application via selecting the [`Run and Debug`](https://code.visualstudio.com/docs/editor/debugging) tab /`Ctrl+Shift+D` > `EMHASS run Addon`. This has been set up in the [Launch.json](https://github.com/davidusb-geek/emhass/blob/master/.vscode/launch.json) .
 
   - You will need to modify the `EMHASS_URL` _(http://HAIPHERE:8123/)_ and `EMHASS_KEY` _(PLACEKEYHERE)_ inside of Launch.json that matches your HA environment before running.
   - If you want to change your parameters, you can edit options.json file before launch.
@@ -123,23 +123,23 @@ docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86"
 
 **Note:**
 
-- `addon` mode can have secret parameters to passed in on run via varibles `-e`, arguments (`--key`,`--url`) or via `secrets_emhass.yaml` with volume mount
-- on file change. You will need to re-build and re-run the Docker image/container in order for the change to take effect. (excluding volume mounted configs)
-- if you are planning to modify the configs: options.json, secrets_emhass.yaml or config_emhass.yaml, you can volume mount them with `-v`
+- `addon` mode can have secret parameters passed in at run via variables `-e`, arguments (`--key`,`--url`) or via `secrets_emhass.yaml` with a volume mount
+- on file change, you will need to re-build and re-run the Docker image/container in order for the change to take effect. (excluding volume mounted configs)
+- if you are planning to modify the configs: options.json, secrets_emhass.yaml or config_emhass.yaml, you can volume mount them with `-v`:
 
   ```bash
   docker build -t emhass/docker --build-arg build_version=addon-local .
   docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/options.json:/data/options.json -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
   ```
 
-  This allows editing config files without requiring to re-building Docker Image. If you have done a change, restart the container to take effect:
+  This allows the editing of config files without re-building the Docker Image. If you have done a change, restart the container to take effect:
 
   ```bash
   docker stop emhass-container
   docker start emhass-container
   ```
 
-#### Docker run Standalone via with local files:
+#### Docker run Standalone with local files:
 
 **standalone** copies the local emhass files to compile and run in standalone mode.
 
@@ -150,11 +150,11 @@ docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass.yaml
 
 _Standalone mode requires secrets_emhass.yaml to be set and passed in on run. Copy `secrets_emhass(example).yaml` for an example._
 
-#### Docker run add-on via with git or pip:
+#### Docker run add-on with git or pip:
 
-If you will like to test with the current production/master versions of emhass, you can do so via pip or git.  
+If you would like to test with the current production/master versions of emhass, you can do so via pip or git.  
 **addon-pip** will be the closest environment to the production emhass-add-on.  
-However, Both come with the disadvantaged of not being able to edit the emhass package itself.
+However, both come with the disadvantage of not being able to edit the emhass package itself.
 
 **Docker run add-on git**
 
@@ -172,13 +172,13 @@ docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86"
 
 _You can add or remove file volume mounts with the `-v`` tag, this should override the file in the container (ex.options.json)_
 
-#### Delete built docker image
+#### Delete built Docker image
 
 We can delete the Docker image and container via:
 
 ```bash
-docker rm  emhass-container #delete docker container
-docker rmi emhass/docker #delete docker image
+docker rm  emhass-container #delete Docker container
+docker rmi emhass/docker #delete Docker image
 ```
 
 #### Other Docker Options
@@ -190,15 +190,15 @@ As editing and testing EMHASS via docker may be repetitive, you may like to simp
 Linux:
 
 ```bash
-docker rm -f emhass-container ; docker build -t emhass/docker --build-arg build_version=addon-local . && docker run -it -p 5001:5000 --name emhass-container emhass/docker -v $(pwd)/secrets_emhass.yaml:/data/secrets_emhass.yaml
+docker rm -f emhass-container ; docker build -t emhass/docker --build-arg build_version=addon-local . && docker run -it -p 5000:5000 -v $(pwd)/secrets_emhass.yaml:/data/secrets_emhass.yaml --name emhass-container emhass/docker 
 ```
 
-_The example command chain removes old emhass container, rebuild docker image, and run new container with newly built image._  
-_This uncase may not require any volume mounts (unless you use secrets_emhass.yaml) as the docker build process will pull the latest versions of the configs as it builds._
+_The example command chain removes old emhass container, rebuilds Docker image, and runs new container with newly built image._  
+_This uncase may not require any volume mounts (unless you use secrets_emhass.yaml) as the Docker build process will pull the latest versions of the configs as it builds._
 
 
 **Environment Variables**  
-Running addon mode, you can also pass location, key and url secret parameters via environment variables
+Running addon mode, you can also pass location, key and url secret parameters via environment variables.
 
 ```bash
 docker build -t emhass/docker --build-arg build_version=addon-local .
@@ -217,7 +217,7 @@ export LON="45.83"
 export ALT="4807.8"
 
 docker build -t emhass/docker --build-arg build_version=addon-local .
-docker run -it -p 5001:5000 --name emhass-container  -e EMHASS_KEY -e EMHASS_URL -e TIME_ZONE  -e LAT -e LON -e ALT  /emhass/docker
+docker run -it -p 5000:5000 --name emhass-container  -e EMHASS_KEY -e EMHASS_URL -e TIME_ZONE  -e LAT -e LON -e ALT  /emhass/docker
 ```
 
 ## Step 3 - Pull request
