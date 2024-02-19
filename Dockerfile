@@ -88,7 +88,7 @@ COPY options.json /data/
 COPY README.md /data/
 COPY setup.py /data/
 #compile EMHASS locally
-RUN python3 setup.py install
+RUN python3 -m pip install --no-cache-dir --break-system-packages -U  .
 ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True" , "--no_response", "True"]
 
 
@@ -106,7 +106,7 @@ RUN cp /tmp/emhass/setup.py /data/
 RUN cp /tmp/emhass/README.md /data/
 #compile EMHASS locally
 WORKDIR /data
-RUN python3 setup.py install
+RUN python3 -m pip install --no-cache-dir --break-system-packages -U  .
 ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True" , "--no_response", "True"]
 
 #-------------------------
@@ -124,12 +124,13 @@ COPY README.md /data/
 COPY setup.py /data/
 #secrets file will need to be copied manually at docker run
 
-# set env variables
+# # set env variables
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
 #build EMHASS
-RUN python3 setup.py install
+# RUN python3 setup.py install
+RUN python3 -m pip install --no-cache-dir --break-system-packages -U  .
 ENTRYPOINT [ "python3", "-m", "emhass.web_server"]
 #-------------------------
 
