@@ -300,10 +300,7 @@
         //if box is selected, remove input-list elements and replace (with text-area)
         if (selectElement.value == "Box") {
             if (input_container_child_name == "input-list" || input_container_child === null) { // if input list exists or no Box element
-                inputListArr = input_container.getElementsByClassName('input-list');
-                while (inputListArr[0]) { //while there is still input-list elements remove 
-                    inputListArr[0].parentNode.removeChild(inputListArr[0]);
-                };
+                input_container.innerHTML = ""; //remove input-list list elements via erasing container innerHTML
                 let div = document.createElement('div'); //add input-box element
                 div.className = "input-box";
                 div.innerHTML = `
@@ -330,8 +327,8 @@
     async function ClearInputData(id) {
         if (testStorage() && localStorage.getItem("input_container_content") !== null) {
             localStorage.setItem("input_container_content", "{}")
-            ClearInputElements();
         }
+        ClearInputElements();
 
     }
 
