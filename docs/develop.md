@@ -90,7 +90,7 @@ In VS-Code, you can run a Docker DevContainer to set up a virtual environment yo
 The recommended steps to run are:
 
 - Open forked root (`emhass`) folder inside of VS-Code
-- VS-Code will ask if you want to run in a dev-container, say yes _([Docker environment](https://code.visualstudio.com/docs/devcontainers/containers) must be set up first)_.
+- VS-Code will ask if you want to run in a dev-container, say yes _([Dev Container](https://code.visualstudio.com/docs/devcontainers/containers) must be set up first)_. *(Shortcut: `F1` > `Dev Containers: Rebuild and Reopen in Container`)*
 - Edit some code...
 - Compile emhass by pressing `control+shift+p` > `Tasks: Run Task` > `EMHASS Install`.
   This has been set up in the [tasks.json](https://github.com/davidusb-geek/emhass/blob/master/.vscode/tasks.json) file. - Before _run & debug_, re-run `EMHASS Install` task every time a change has been made to emhass.
