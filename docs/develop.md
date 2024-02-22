@@ -119,7 +119,7 @@ _Make sure your terminal is in the root `emhass` directory before running the do
 ```bash
 docker build -t emhass/docker --build-arg build_version=addon-local .
 
-docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
+docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
 ```
 
 **Note:**
@@ -131,10 +131,10 @@ docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86"
   ```bash
   docker build -t emhass/docker --build-arg build_version=addon-local .
   
-  docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/options.json:/app/options.json -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
+  docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/options.json:/app/options.json -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
   ```
 
-  This allows the editing of config files without re-building the Docker Image. If you have done a change, restart the container to take effect:
+  This allows the editing of config files without re-building the Docker Image. On change, restart the container to take effect:
 
   ```bash
   docker stop emhass-container
@@ -165,7 +165,7 @@ However, both come with the disadvantage of not being able to edit the emhass pa
 ```bash
 docker build -t emhass/docker --build-arg build_version=addon-git .
 
-docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -v $(pwd)/options.json:/app/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
+docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" -v $(pwd)/options.json:/app/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
 ```
 
 **Docker run add-on pip:**
@@ -173,7 +173,7 @@ docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86"
 ```bash
 docker build -t emhass/docker --build-arg build_version=addon-pip .
 
-docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -v $(pwd)/options.json:/app/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
+docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" -v $(pwd)/options.json:/app/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
 ```
 
 _You can add or remove file volume mounts with the `-v` tag, this should override the file in the container (ex.options.json)_
@@ -210,7 +210,7 @@ Running addon mode, you can also pass location, key and url secret parameters vi
 ```bash
 docker build -t emhass/docker --build-arg build_version=addon-local .
 
-docker run -it -p 5000:5000 --name emhass-container -e URL="YOURHAURLHERE" -e KEY="YOURHAKEYHERE" -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" emhass/docker
+docker run -it -p 5000:5000 --name emhass-container -e URL="YOURHAURLHERE" -e KEY="YOURHAKEYHERE" -e LAT="45.83" -e LON="6.86" -e TIME_ZONE="Europe/Paris" -e ALT="4807.8" emhass/docker
 ```
 
 This allows the user to set variables prior to build
