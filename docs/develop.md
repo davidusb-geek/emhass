@@ -191,17 +191,17 @@ docker rmi emhass/docker #delete Docker image
 #### Other Docker Options
 
 **Rapid Testing**  
-As editing and testing EMHASS via docker may be repetitive, you may like to simplify the removal, build and run process.
+As editing and testing EMHASS via docker may be repetitive (rebuilding image and deleting containers), you may like to simplify the removal, build and run process.
 
 **For rapid Docker testing, try a command chain:**  
 Linux:
 
 ```bash
-docker rm -f emhass-container ; docker build -t emhass/docker --build-arg build_version=addon-local . && docker run -it -p 5000:5000 -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name emhass-container emhass/docker 
+docker build -t emhass/docker --build-arg build_version=addon-local . && docker run --rm -it -p 5000:5000 -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name emhass-container emhass/docker 
 ```
 
-_The example command chain removes old emhass container, rebuilds Docker image, and runs new container with newly built image._  
-_This uncase may not require any volume mounts (unless you use secrets_emhass.yaml) as the Docker build process will pull the latest versions of the configs as it builds._
+_The example command chain rebuilds Docker image, and runs new container with newly built image. `--rm` has been added to the `docker run` to delete the container once ended to avoid manual deletion every time._  
+_This use case may not require any volume mounts (unless you use secrets_emhass.yaml) as the Docker build process will pull the latest versions of the configs as it builds._
 
 
 **Environment Variables**  
