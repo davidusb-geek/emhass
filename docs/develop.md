@@ -156,10 +156,10 @@ _Standalone mode requires `secrets_emhass.yaml` to be set and passed in on opera
 
 #### Docker run add-on with git or pip:
 
-If you would like to test with the current production/master versions of emhass, you can do so via pip or git. With git you can also specify other repos/branches outside of `davidusb-geek/emhass:master`. 
+If you would like to test with the current production/master versions of emhass, you can do so via pip or git. With git, you can also specify other repos/branches outside of `davidusb-geek/emhass:master`. 
 
 **addon-pip** will be the closest environment to the production emhass-add-on.  
-However, both come with the disadvantage of not being able to edit the emhass package itself.
+However, both come with the disadvantage of not easily being able to edit the emhass package itself.
 
 **Docker run add-on git**
 

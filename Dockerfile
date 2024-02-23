@@ -3,7 +3,7 @@
 ## docker build -t emhass/docker --build-arg build_version=addon-local .
 ## docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
 ##
-## Docker run Standalone example 
+## Docker run Standalone example:
 ## docker build -t emhass/docker --build-arg build_version=standalone .
 ## docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/docker 
 
