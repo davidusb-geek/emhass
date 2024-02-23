@@ -156,7 +156,8 @@ _Standalone mode requires `secrets_emhass.yaml` to be set and passed in on opera
 
 #### Docker run add-on with git or pip:
 
-If you would like to test with the current production/master versions of emhass, you can do so via pip or git.  
+If you would like to test with the current production/master versions of emhass, you can do so via pip or git. With git you can also specify other repos/branches outside of `davidusb-geek/emhass:master`. 
+
 **addon-pip** will be the closest environment to the production emhass-add-on.  
 However, both come with the disadvantage of not being able to edit the emhass package itself.
 
@@ -164,6 +165,17 @@ However, both come with the disadvantage of not being able to edit the emhass pa
 
 ```bash
 docker build -t emhass/docker --build-arg build_version=addon-git .
+
+docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" -v $(pwd)/options.json:/app/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
+```
+
+To test a repo and branch outside of `davidusb-geek/emhass:master`:  
+_Linux:_
+```bash
+repo=https://github.com/davidusb-geek/emhass.git
+branch=master
+
+docker build -t emhass/docker --build-arg build_version=addon-git --build-arg build_repo=$repo --build-arg build_branch=$branch .
 
 docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" -v $(pwd)/options.json:/app/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
 ```
@@ -194,8 +206,7 @@ docker rmi emhass/docker #delete Docker image
 As editing and testing EMHASS via docker may be repetitive (rebuilding image and deleting containers), you may like to simplify the removal, build and run process.
 
 **For rapid Docker testing, try a command chain:**  
-Linux:
-
+_Linux:_
 ```bash
 docker build -t emhass/docker --build-arg build_version=addon-local . && docker run --rm -it -p 5000:5000 -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name emhass-container emhass/docker 
 ```
