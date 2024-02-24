@@ -53,10 +53,12 @@ RUN apt-get update \
 #copy config file (on all builds)
 COPY config_emhass.yaml /app/
 
+# Make sure data directory exists
+RUN mkdir -p /app/data/
+
 #-------------------------
-#EMHASS-ADDON Default 
+#EMHASS-ADDON Default (this has no emhass packadge)
 FROM base as addon
-COPY ./requirements_addon.txt /app/requirements.txt
 
 LABEL \
     io.hass.name="emhass" \
@@ -70,7 +72,9 @@ ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True", "--url", "h
 #-----------
 #EMHASS-ADD-ON Testing with pip emhass (closest testing reference) 
 FROM addon as addon-pip
-RUN  pip3 install --no-cache-dir --break-system-packages --upgrade --upgrade-strategy=only-if-needed -U emhass
+#set build arg for pip version
+ARG build_pip_version=""
+RUN pip3 install --no-cache-dir --break-system-packages --upgrade --upgrade-strategy=only-if-needed -U emhass${build_pip_version}
 
 COPY options.json /app/
 
@@ -105,7 +109,6 @@ WORKDIR /tmp/emhass
 #Branch
 RUN git checkout $build_branch
 RUN mkdir -p /app/src/emhass/
-RUN mkdir -p /app/data/
 RUN cp -r /tmp/emhass/src/emhass/. /app/src/emhass/
 RUN cp /tmp/emhass/data/opt_res_latest.csv  /app/data/
 RUN cp /tmp/emhass/setup.py /app/
