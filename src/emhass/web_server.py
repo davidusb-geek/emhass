@@ -205,12 +205,14 @@ if __name__ == "__main__":
     use_options = os.getenv('USE_OPTIONS', default=False)
     # Define the paths
     if args.addon==1:
-        OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/data/options.json")
+        OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
         options_json = Path(OPTIONS_PATH)
-        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/usr/src/config_emhass.yaml")
+        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
         #Obtain url and key from ENV or ARG
         hass_url = os.getenv("EMHASS_URL", default=args.url)
-        key =  os.getenv("EMHASS_KEY", default=args.key) 
+        key =  os.getenv("SUPERVISOR_TOKEN", default=args.key) 
+        if hass_url != "http://supervisor/core/api":
+            key =  os.getenv("EMHASS_KEY", key)  
         #If url or key is None, Set as empty string to reduce NoneType errors bellow
         if key is None: key = ""
         if hass_url is None: hass_url = ""
@@ -220,7 +222,7 @@ if __name__ == "__main__":
                 options = json.load(data)
         else:
             app.logger.error("options.json does not exists")
-        DATA_PATH = os.getenv("DATA_PATH", default="/share/")
+        DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
     else:
         if use_options:
             OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
