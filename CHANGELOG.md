@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.0] - 2024-02-25
+### Improvement
+- Thanks to the great work from @GeoDerp we now have a unified/centralized Dockerfile that allows for testing different installation configuration methods in one place. This greatly helps testing, notably emulating the add-on environment. This will improve overall testing for both teh core code and the add-on. Again many thanks!
+- There were also a lot of nice improveements from @GeoDerp to the webui, namely: styling, dynamic table, optimization feedback after button press, logging, a new clear button, etc.
+- From now on we will unify the semantic versioning for both the main core code and the add-on.
+
 ## [0.7.8] - 2024-02-18
 ### Improvement
 Added some nice logging functionalities and responsiveness on the webui.
