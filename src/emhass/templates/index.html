@@ -44,6 +44,7 @@
                         <option value="List" selected>List</option>
                         <option value="Box">Box</option>
                     </select>
+                    <button type="button" id="input-clear">Clear</button>
                 </div>
             </div>
             <div id="input-container"> <!-- (Box/List) dynamic input elements will be added here -->
@@ -175,7 +176,7 @@
         if (testStorage()) { //if local storage exists and works
             let selectElement = document.getElementById('input-select') // select button element
             var input_container = document.getElementById('input-container'); // container div containing all dynamic input elements (Box/List)
-            if (localStorage.getItem("input_container_content")) { //If items already stored in local storage, then override default
+            if (localStorage.getItem("input_container_content") && localStorage.getItem("input_container_content") !== "{}" ) { //If items already stored in local storage, then override default
                 if (selectElement.value == "Box") { //if Box is selected, show saved json data into box 
                     document.getElementById("text-area").value = localStorage.getItem("input_container_content");
                 }
@@ -299,10 +300,7 @@
         //if box is selected, remove input-list elements and replace (with text-area)
         if (selectElement.value == "Box") {
             if (input_container_child_name == "input-list" || input_container_child === null) { // if input list exists or no Box element
-                inputListArr = input_container.getElementsByClassName('input-list');
-                while (inputListArr[0]) { //while there is still input-list elements remove 
-                    inputListArr[0].parentNode.removeChild(inputListArr[0]);
-                };
+                input_container.innerHTML = ""; //remove input-list list elements via erasing container innerHTML
                 let div = document.createElement('div'); //add input-box element
                 div.className = "input-box";
                 div.innerHTML = `
@@ -325,6 +323,30 @@
         }
     }
 
+    //clear stored input data from localStorage (if any), clear input elements
+    async function ClearInputData(id) {
+        if (testStorage() && localStorage.getItem("input_container_content") !== null) {
+            localStorage.setItem("input_container_content", "{}")
+        }
+        ClearInputElements();
+
+    }
+
+    //clear input elements
+    async function ClearInputElements() {
+        let selectElement = document.getElementById('input-select')
+        var input_container = document.getElementById('input-container'); 
+        if (selectElement.value == "Box") { 
+            document.getElementById("text-area").value = "{}";
+        }
+        if (selectElement.value == "List") { 
+            input_container.innerHTML = "";
+        }
+
+    }
+
+
+
     //add listeners to buttons
     [
         "dayahead-optim",
@@ -344,6 +366,9 @@
     [
         "input-select"
     ].forEach((id) => document.getElementById(id).addEventListener('change', () => getSavedData(id)));
+    [
+        "input-clear"
+    ].forEach((id) => document.getElementById(id).addEventListener('click', () => ClearInputData(id)));
 </script>
 
 </html>
