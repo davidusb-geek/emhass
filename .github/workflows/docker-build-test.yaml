@@ -1,8 +1,11 @@
+#This action test builds EMHASS standalone Docker images, in each artitectire, then uploads the image as an artifact.
 name: "Publish Docker"
 
 on:
-  release:
-    types: [published]
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
   workflow_dispatch:
 
 jobs:
@@ -44,16 +47,6 @@ jobs:
             TARGETARCH=${{ matrix.platform.target_arch }}
           labels: ${{ steps.meta.outputs.labels }}
           tags: ${{ steps.meta.outputs.tags }}
-          outputs: type=image,name=davidusb/emhass-docker-standalone,push-by-digest=true,name-canonical=true,push=true
-      - name: Export digest
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
-      - name: Upload digest
-        uses: actions/upload-artifact@v4
-        with:
-          name: digests-${{ matrix.platform.target_arch }}
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
+          load: true
+      - name: Test #assume docker fail with missing retrieve_hass_conf 
+        run: docker run -it -p 5000:5000 --name emhass-container  emhass/docker | grep -q retrieve_hass_conf 
