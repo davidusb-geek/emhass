@@ -46,7 +46,7 @@ jobs:
             build_version=standalone
             TARGETARCH=${{ matrix.platform.target_arch }}
           labels: ${{ steps.meta.outputs.labels }}
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: emhass/test
           load: true
       - name: Test #assume docker fail with missing retrieve_hass_conf 
-        run: docker run -it -p 5000:5000 --name emhass-container  emhass/docker | grep -q retrieve_hass_conf 
+        run: docker run -it emhass/test 
