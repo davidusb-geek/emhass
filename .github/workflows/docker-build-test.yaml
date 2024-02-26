@@ -1,4 +1,4 @@
-#This action test builds EMHASS standalone Docker images, in each artitectire.
+#This action test builds EMHASS standalone Docker images, in each architecture.
 name: "Test Docker Stanadlone"
 
 on:
