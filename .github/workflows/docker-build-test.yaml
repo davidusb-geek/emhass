@@ -23,15 +23,6 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v4
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            davidusb/emhass-docker-standalone
-          tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=latest
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
@@ -45,8 +36,7 @@ jobs:
           build-args: |
             build_version=standalone
             TARGETARCH=${{ matrix.platform.target_arch }}
-          labels: ${{ steps.meta.outputs.labels }}
-          tags: emhass/test
+          tags: emhass/standalone-test
           load: true
-      - name: Test #assume docker fail with missing retrieve_hass_conf 
-        run: docker run --rm -it emhass/test | grep FileNotFoundError | grep -q secrets_emhass.yaml && echo 0 || echo 1
+      - name: Test #assume docker fail with FileNotFound secrets_emhass.yaml error
+        run: docker run --rm -it emhass/standalone-test | grep -q secrets_emhass.yaml && echo 0 || echo 1
