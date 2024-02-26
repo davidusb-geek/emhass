@@ -1,5 +1,5 @@
-#This action test builds EMHASS standalone Docker images, in each artitectire, then uploads the image as an artifact.
-name: "Publish Docker"
+#This action test builds EMHASS standalone Docker images, in each artitectire.
+name: "Test Docker Stanadlone"
 
 on:
   push:
