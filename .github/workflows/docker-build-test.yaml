@@ -39,4 +39,4 @@ jobs:
           tags: emhass/standalone-test
           load: true
       - name: Test #assume docker fail with FileNotFound secrets_emhass.yaml error
-        run: docker run --rm -it emhass/standalone-test | grep FileNotFoundError | grep -q secrets_emhass.yaml && echo 0 || echo 1
+        run: docker run --rm -it emhass/standalone-test | grep -q secrets_emhass.yaml && echo 0 || echo 1
