@@ -93,4 +93,4 @@ jobs:
             $(printf 'davidusb/emhass-docker-standalone@sha256:%s ' *)          
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect davidusb/emhass-docker-standalone:${{ steps.meta.outputs.version }}         
+          docker buildx imagetools inspect davidusb/emhass-docker-standalone:${{ steps.meta.outputs.version }}
