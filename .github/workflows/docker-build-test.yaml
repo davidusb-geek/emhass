@@ -49,4 +49,4 @@ jobs:
           tags: emhass/test
           load: true
       - name: Test #assume docker fail with missing retrieve_hass_conf 
-        run: docker run --rm -it emhass/test | grep FileNotFoundError | grep -q secrets_emhass.yaml
+        run: docker run --rm emhass/test | grep FileNotFoundError | grep -c secrets_emhass.yaml
