@@ -210,6 +210,11 @@ docker build -t emhass/docker --build-arg build_version=addon-pip .
 docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris"  -e CONFIG_PATH='/app/config_emhass.yaml' -e DATA_PATH='/app/data/' -e OPTIONS_PATH='/app/options.json' -v $(pwd)/options.json:/app/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
 ```
 
+#### Sync with local data folder 
+For those who wish to mount/sync the local `data` folder with the data folder from the docker container, volume mount the data folder with `-v` .
+```bash
+docker run ... -v $(pwd)/data/:/app/data ...
+```
 
 #### Delete built Docker image
 
