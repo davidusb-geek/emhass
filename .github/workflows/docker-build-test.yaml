@@ -1,0 +1,42 @@
+#This action test builds EMHASS standalone Docker images, in each architecture.
+name: "Test Docker Stanadlone"
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          {buildx: linux/amd64, target_arch: amd64},
+          {buildx: linux/arm/v7, target_arch: armv7},
+          {buildx: linux/arm/v7, target_arch: armhf},
+          {buildx: linux/arm64,  target_arch: aarch64}
+        ]
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: ${{ matrix.platform.buildx }}
+          build-args: |
+            build_version=standalone
+            TARGETARCH=${{ matrix.platform.target_arch }}
+          tags: emhass/standalone-test
+          load: true
+      - name: Test #assume docker fail with FileNotFound secrets_emhass.yaml error
+        run: docker run --rm -it emhass/standalone-test | grep -q secrets_emhass.yaml && echo 0 || echo 1
