@@ -60,6 +60,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
   merge:
+    if: ${{matrix.platform.target_arch(amd64).build == 'failure' }}
     runs-on: ubuntu-latest
     needs:
       - build
