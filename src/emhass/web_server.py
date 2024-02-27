@@ -211,8 +211,7 @@ if __name__ == "__main__":
         #Obtain url and key from ENV or ARG
         hass_url = os.getenv("EMHASS_URL", default=args.url)
         key =  os.getenv("SUPERVISOR_TOKEN", default=args.key) 
-        if hass_url != "http://supervisor/core/api":
-            key =  os.getenv("EMHASS_KEY", key)  
+        key =  os.getenv("EMHASS_KEY", key)  
         #If url or key is None, Set as empty string to reduce NoneType errors bellow
         if key is None: key = ""
         if hass_url is None: hass_url = ""
@@ -271,11 +270,11 @@ if __name__ == "__main__":
         # Some data from options
         logging_level = options.get('logging_level','INFO')
         url_from_options = options.get('hass_url', 'empty')
-        if url_from_options == 'empty' or url_from_options == '':
-            url = hass_url+"/config"
+        if url_from_options == 'empty' or url_from_options == '' or url_from_options == "http://supervisor/core/api":
+            url = "http://supervisor/core/api/config"
         else:
             hass_url = url_from_options
-            url = hass_url+"/api/config"
+            url = hass_url+"api/config"
         token_from_options = options.get('long_lived_token', 'empty')
         if token_from_options == 'empty' or token_from_options == '':
             long_lived_token = key
