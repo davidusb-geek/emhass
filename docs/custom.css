@@ -1,3 +1,288 @@
 .wy-nav-content {
     max-width: none !important;
 }
+
+div {
+    border-radius: 7px;
+    box-align: start !important;
+    align-items: start;
+    text-align: left;
+}
+
+.MathJax_Display,
+mjx-container {
+    text-align: left !important;
+}
+
+table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+}
+
+p {
+    text-align: left
+}
+
+.wy-nav-top a, .wy-nav-top a:visited{
+    font-size: large;
+    text-align: center;
+    margin: 0 auto;
+}
+
+/* lightmode styling  */
+.version {
+    color: #e1e1e1 !important;
+    font-weight: 700 !important;
+}
+
+p[role=heading] span {
+    color: #e1e1e1 !important;
+    font-weight: 700 !important;
+    font-size: 120%;
+}
+
+.wy-nav-side{
+    background: #282928 !important;
+}
+
+.wy-side-nav-search {
+    background: #169ad6;
+}
+
+.icon, .fa, a {
+    color: #169ad6;
+}
+
+.wy-nav-top a, .wy-nav-top a:visited{
+    color: #e1e1e1;
+}
+
+.wy-nav-top i{
+    color: #e1e1e1;
+}
+
+.icon:visited, .fa:visited, a:visited {
+    color: #17516c;
+}
+
+.wy-side-nav-search .icon-home, .wy-side-nav-search .icon-home:visited, .reference {
+    color: white;
+}
+
+.rst-versions .rst-current-version, .reference:visited {
+    color: silver;
+}
+
+
+@media screen and (min-width: 799px) {
+
+    p,
+    table {
+        text-align: left;
+        max-width: 80%;
+        word-break: normal;
+    }
+
+    .admonition {
+        max-width: 80%;
+    }
+
+    .admonition-title {
+        min-width: 100% !important;
+    }
+
+    [class^="highlight-"] {
+        max-width: 80%;
+        overflow-x: scroll;
+        border-radius: 7px;
+    }
+
+    img {
+        display: block;
+        border-radius: 7px;
+        margin: 0;
+    }
+
+    #intro-quick-start a img {
+        display: inline;
+    }
+
+    section {
+        margin-bottom: 30px;
+    }
+}
+
+
+/* Dark Theme Support */
+@media (prefers-color-scheme: dark) {
+
+    body, .wy-nav-content-wrap {
+        font-weight: 600;
+        background: #111111 !important;
+    }
+
+    .wy-nav-content {
+        background: #181818;
+        color: #e1e1e1;
+    }
+
+    /* imvert specified images  */
+    #what-is-energy-management-for-home-assistant-emhass p img,
+    #configuration-and-installation p img,
+    #the-emhass-optimizations p img,
+    #the-forecast-module p img,
+    #the-machine-learning-forecaster p img,
+    #example-configurations p img {
+        filter: invert(90%);
+    }
+
+    .wy-nav-side,
+    .wy-nav-top {
+        background: #282928;
+        color: #e1e1e1;
+    }
+    
+    .wy-nav-top i{
+        color: #e1e1e1;
+    }
+
+    .wy-side-nav-search {
+        background-color: lightblue;
+        color: #e1e1e1;
+    }
+
+
+    .admonition {
+        background: #282928 !important;
+        max-width: 80%;
+    }
+
+    .admonition p {
+        color: #e1e1e1;
+        background-color: #282928;
+    }
+
+    .admonition-title {
+        color: #ccf3ff !important;
+        background: #3d3d3d !important;
+    }
+
+
+    .version {
+        color: #181818 !important;
+        font-weight: 700 !important;
+    }
+
+    .wy-side-nav-search .icon-home, .wy-side-nav-search .icon-home:visited {
+        color: #181818 !important;
+    }
+
+    .toctree-l2 {
+        /* side selected list */
+        background-color: #3f3f3f;
+        color: #e1e1e1 !important;
+    }
+
+    .toctree-l2 a:hover,
+    a span:hover,
+    .btn-neutral:hover,
+    .btn-neutral:visited:hover {
+        /* side selected list */
+        background-color: #7d7d7d !important;
+        color: #e1e1e1 !important;
+    }
+
+    .toctree-l2 a,
+    .btn-neutral,
+    .btn-neutral:visited {
+        /* side selected list */
+        background-color: #3f3f3f !important;
+        color: #e1e1e1 !important;
+    }
+
+    a, a span, .icon, .fa { 
+        color: #ddf5fd;
+    }
+
+    a:visited, .wy-nav-top a, .wy-nav-top, .icon:visited, .fa:visited, a:visited {
+        color: #daf5fd;
+    }
+
+    p[role=heading] span {
+        color: #e9f6f9 !important;
+        font-weight: 700 !important;
+        font-size: 120%;
+    }
+
+    .highlight,
+    code {
+        background: #282928 !important;
+        border-color: #7d7d7d !important;
+    }
+
+    .row-even td {
+        background-color: #181818 !important;
+    }
+
+    .row-odd td {
+        background-color: #111111 !important;
+    }
+
+    th p {
+        color: #e1e1e1 !important;
+    }
+
+    tr:hover td,
+    th {
+        background-color: #3f3f3f !important;
+    }
+
+    .sig {
+        background: #3f3f3f !important;
+    }
+
+    dt {
+        background: #282928 !important;
+    }
+
+    .rst-current-version {
+        color: #e9f6f9 !important;
+    }
+
+
+    /* syntax heighlighting colours  */
+    .s2 {
+        color: lightblue !important;
+    }
+
+    .nv {
+        color: lightsalmon !important;
+    }
+
+    .nb {
+        color: lightpink !important;
+    }
+
+    .s1 {
+        color: lightseagreen !important;
+    }
+
+    .ow {
+        color: lightyellow !important;
+    }
+
+    .k {
+        color: lightseagreen !important;
+    }
+
+    .kc {
+        color: lightsteelblue !important;
+    }
+
+    .pre {
+        color: lightblue !important;
+    }
+
+
+}
