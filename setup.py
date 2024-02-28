@@ -63,5 +63,5 @@ setup(
         ],
     },
     package_data={'emhass': ['templates/index.html','templates/template.html',
-    'static/style.css','static/img/emhass_icon.png','static/img/emhass_logo_short.svg']},
+    'static/style.css','static/img/emhass_icon.png','static/img/emhass_logo_short.svg', 'static/img/feather-sprite.svg']},
 )

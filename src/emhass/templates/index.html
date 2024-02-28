@@ -10,6 +10,19 @@
 
 <body style="margin: auto; align-items:center; text-align:center;">
     <div>
+        <!-- Icons by feather https://github.com/feathericons/feather -->
+        <div id="top-links">
+            <a href="https://emhass.readthedocs.io/en/latest/">
+            <svg class="feather">
+                <use href="{{ basename }}/static/img/feather-sprite.svg#book" />
+              </svg>
+            </a> 
+            <a href="https://github.com/davidusb-geek/emhass">
+              <svg class="feather">
+                <use href="{{ basename }}/static/img/feather-sprite.svg#git-branch" />
+              </svg>
+            </a>
+        </div>
         <img src="{{ basename }}/static/img/emhass_icon.png" alt="">
         <h2>EMHASS: Energy Management Optimization for Home Assistant</h2>
     </div>
@@ -176,7 +189,7 @@
         if (testStorage()) { //if local storage exists and works
             let selectElement = document.getElementById('input-select') // select button element
             var input_container = document.getElementById('input-container'); // container div containing all dynamic input elements (Box/List)
-            if (localStorage.getItem("input_container_content") && localStorage.getItem("input_container_content") !== "{}" ) { //If items already stored in local storage, then override default
+            if (localStorage.getItem("input_container_content") && localStorage.getItem("input_container_content") !== "{}") { //If items already stored in local storage, then override default
                 if (selectElement.value == "Box") { //if Box is selected, show saved json data into box 
                     document.getElementById("text-area").value = localStorage.getItem("input_container_content");
                 }
@@ -335,11 +348,11 @@
     //clear input elements
     async function ClearInputElements() {
         let selectElement = document.getElementById('input-select')
-        var input_container = document.getElementById('input-container'); 
-        if (selectElement.value == "Box") { 
+        var input_container = document.getElementById('input-container');
+        if (selectElement.value == "Box") {
             document.getElementById("text-area").value = "{}";
         }
-        if (selectElement.value == "List") { 
+        if (selectElement.value == "List") {
             input_container.innerHTML = "";
         }
 
