@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1] - 2024-02-28
+### Improvement
+- Improved documentation
+### Fix
+- Persistent data storage fix
+- Docker Standalone Publish Workspace Fix
+
 ## [0.8.0] - 2024-02-25
 ### Improvement
 - Thanks to the great work from @GeoDerp we now have a unified/centralized Dockerfile that allows for testing different installation configuration methods in one place. This greatly helps testing, notably emulating the add-on environment. This will improve overall testing for both teh core code and the add-on. Again many thanks!
