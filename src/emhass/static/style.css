@@ -893,9 +893,12 @@ th {
   }
 
   img,
-  figure {
-    -webkit-filter: invert(90%);
-    filter: invert(90%);
+  figure, svg.main-svg{
+    -webkit-filter: invert(.82);
+    filter: invert(.82);
+    border-color: #181818;
+    border-style: solid;
+    border-width: 1px;
   }
 
   button,
@@ -921,14 +924,15 @@ th {
     border: rgb(71, 71, 71);
   }
 
-  .modebar-btn {
-    background-color: #e1e1e1;
+  .modebar-btn svg path {
+    fill: #111 !important;
   }
-
-  .main-svg svg,
-  legend {
-    background-color: rgb(73, 73, 73, 5%);
-    background: rgb(73, 73, 73, 5%);
+  .modebar-btn svg {
+    filter:invert(100%) sepia(64%) saturate(2%) hue-rotate(294deg) brightness(85%) contrast(93%) !important
+  }
+  .modebar-btn--logo svg{
+    filter: None !important;
+    /* filter: invert(100%) saturate(100%) brightness(87%) contrast(100%) !important */
   }
 
   .g-gtitle,
@@ -959,9 +963,18 @@ th {
     background-color: #3f3f3f;
   }
 
-  .mystyle,
-  .main-svg {
-    box-shadow: 0 0 0 1px silver;
+  tr:hover td,
+  th, td:first-child, td:last-child
+  {
+    border-radius: 7px
+  }
+
+  .modebar-group{
+    background-color: #0000 !important;
+  }
+
+  .modebar-btn{
+    background: #3f3f3f;
   }
 
   .input-list input,
