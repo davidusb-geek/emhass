@@ -11,6 +11,33 @@ window.onload = async function () {
     document.getElementById("basicOrAdvanced").addEventListener("click", () => SwitchBasicOrAdvanced());
 };
 
+//add listeners to buttons (based on page)
+function loadButtons(page) {
+    switch (page) {
+        case "advanced":
+            [
+                "dayahead-optim",
+                "forecast-model-fit",
+                "forecast-model-predict",
+                "forecast-model-tune",
+                "perfect-optim",
+                "publish-data",
+                "naive-mpc-optim"
+            ].forEach((id) =>
+                document.getElementById(id).addEventListener("click", () => formAction(id, "advanced"))
+            );
+            ["input-plus", "input-minus"].forEach((id) =>
+                document.getElementById(id).addEventListener("click", () => dictInputs(id))
+            );
+            document.getElementById("input-select").addEventListener("click", () => getSavedData());
+            document.getElementById("input-clear").addEventListener("click", () => ClearInputData());
+            break;
+        case "basic":
+            document.getElementById("dayahead-optim-publish").addEventListener("click", () => DayheadOptimPublish());
+            break;
+    }
+}
+
 //on check present basic or advanced html inside form element
 async function loadBasicOrAdvanced(RequestedPage) {
     let basicFile = "basic.html";
@@ -385,31 +412,6 @@ async function DayheadOptimPublish() {
     }
 }
 
-//add listeners to buttons (based on page)
-function loadButtons(page) {
-    switch (page) {
-        case "advanced":
-            [
-                "dayahead-optim",
-                "forecast-model-fit",
-                "forecast-model-predict",
-                "forecast-model-tune",
-                "perfect-optim",
-                "publish-data",
-                "naive-mpc-optim"
-            ].forEach((id) =>
-                document.getElementById(id).addEventListener("click", () => formAction(id, "advanced"))
-            );
-            ["input-plus", "input-minus"].forEach((id) =>
-                document.getElementById(id).addEventListener("click", () => dictInputs(id))
-            );
-            document.getElementById("input-select").addEventListener("click", () => getSavedData());
-            document.getElementById("input-clear").addEventListener("click", () => ClearInputData());
-            break;
-        case "basic":
-            document.getElementById("dayahead-optim-publish").addEventListener("click", () => DayheadOptimPublish());
-            break;
-    }
-}
+
 
 
