@@ -430,15 +430,6 @@ input {
   overflow: visible;
 }
 
-button,
-.alert,
-select {
-  text-transform: none;
-  border-width: 1px;
-  border-style: solid;
-  box-shadow: #3d3d3d 3px 3px;
-  ;
-}
 
 button,
 html [type="button"],
@@ -557,9 +548,27 @@ button,
 .main-svg,
 .mystyle,
 .alert,
+.info,
 table {
   border-radius: 7px;
   /* overflow: visible; */
+}
+
+button,
+.alert,
+.info,
+select {
+  text-transform: none;
+  border-width: 1px;
+  border-style: solid;
+  box-shadow: #3d3d3d 3px 3px;
+}
+
+.info {
+  max-width: 50%;
+  margin: 0 auto;
+  margin-top: 1em;
+  padding-top: 1em;
 }
 
 table {
@@ -748,6 +757,15 @@ th {
   }
 }
 
+/* Basic and Advanced fade transitions */
+.TabSelection, #advance, #basic, button, select, .info {
+  animation-name: fadeInOpacity;
+  animation-iteration-count: 1;
+  animation-timing-function: ease-in-out;
+  animation-duration: .3s;
+}
+
+
 /* Alert box styling */
 .alert {
   display: box;
@@ -883,6 +901,10 @@ th {
   .layer-below {
     display: none !important;
   }
+
+  .info {
+    max-width: 80%;
+  }
 }
 
 /* Dark Theme Support */
@@ -896,13 +918,17 @@ th {
   figure, svg.main-svg{
     -webkit-filter: invert(.82);
     filter: invert(.82);
-    border-color: #181818;
-    border-style: solid;
-    border-width: 1px;
+  }
+  
+  figure, svg.main-svg{
+  border-color: #181818;
+  border-style: solid;
+  border-width: 1px;
   }
 
   button,
   .alert,
+  .info,
   select {
     color: #e1e1e1;
     background-color: #282928;
