@@ -896,6 +896,9 @@ th {
   figure, svg.main-svg{
     -webkit-filter: invert(.82);
     filter: invert(.82);
+  }
+  
+  figure, svg.main-svg{
     border-color: #181818;
     border-style: solid;
     border-width: 1px;
