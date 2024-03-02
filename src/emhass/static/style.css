@@ -150,6 +150,15 @@ a {
   text-decoration: none;
 }
 
+a:hover {
+  color: #251fe3;
+}
+
+a:active {
+  color: #070f71;
+}
+
+
 a:active,
 a:hover {
   outline-width: 0;
@@ -407,11 +416,16 @@ h2 {
   color: #111111;
 }
 
+
 button:hover,
 .alert:hover,
 select:hover {
   color: darkblue;
   background-color: #e1e1e1;
+}
+
+button:active {
+  background-color: #d7d7db;
 }
 
 button,
@@ -537,8 +551,9 @@ https://github.com/feathericons/feather */
   stroke-linejoin: round;
   fill: none;
   margin-right: 12px;
-  filter: drop-shadow( #282928 1px 1px);
+  filter: drop-shadow( #282928 .4px .5px);
 }
+
 
 /* -------------- */
 
@@ -942,12 +957,25 @@ th {
     background-color: #3d3d3d;
   }
 
+  button:active {
+    background-color: #111111;
+  }
+
   h2,
   kbd,
   a {
     background-color: #111111;
     color: #ccf3ff;
-    border: rgb(71, 71, 71);
+    border: #3f3f3f;
+  }
+
+  a:hover {
+    color: #d2e8f0;
+  }
+
+
+  a:active {
+    color: #aaccd6;
   }
 
   .modebar-btn svg path {
