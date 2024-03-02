@@ -331,10 +331,26 @@ if __name__ == "__main__":
         if Path(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml')).is_file(): 
             with open(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), 'r') as file:
                 params_secrets = yaml.load(file, Loader=yaml.FullLoader)
+            #Check if URL and KEY are provided by file. If not attempt using values from ARG/ENV
+            if  params_secrets.get("hass_url", "empty") == "empty" or params_secrets['hass_url'] == "":
+                app.logger.info("No specified Home Assistant URL in secrets_emhass.yaml. Attempting to get from ARG/ENV") 
+                if hass_url != "":
+                     params_secrets['hass_url'] = hass_url    
+                else:
+                    app.logger.error("Can not find Home Assistant URL from secrets_emhass.yaml or ARG/ENV")
+                    raise Exception("Can not find Home Assistant URL from secrets_emhass.yaml or ARG/ENV")  
+            else:
                 hass_url = params_secrets['hass_url']
+            if  params_secrets.get("long_lived_token", "empty") == "empty" or params_secrets['long_lived_token'] == "":
+                app.logger.info("No specified Home Assistant KEY in secrets_emhass.yaml. Attempting to get from ARG/ENV") 
+                if key != "":
+                    params_secrets['long_lived_token'] = key
+                else:
+                    app.logger.error("Can not find Home Assistant KEY from secrets_emhass.yaml or ARG/ENV")
+                    raise Exception("Can not find Home Assistant KEY from secrets_emhass.yaml or ARG/ENV")  
         else: #If no secrets file try args, else set some defaults 
-            app.logger.info("Failed to find secrets_emhass.yaml in directory" + os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml') ) 
-            app.logger.info("Attempt to use secrets from arguments or environment variables")        
+            app.logger.info("Failed to find secrets_emhass.yaml in directory:" + os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml') ) 
+            app.logger.info("Attempting to use secrets from arguments or environment variables")        
             params_secrets = {} 
             params_secrets['time_zone'] = os.getenv("TIME_ZONE", default="Europe/Paris")
             params_secrets['lat'] = float(os.getenv("LAT", default="45.83"))
@@ -342,12 +358,12 @@ if __name__ == "__main__":
             params_secrets['alt'] = float(os.getenv("ALT", default="4807.8"))      
             if hass_url != "":
                 params_secrets['hass_url'] = hass_url
-            else: #if cant find secrets_emhass and passed url ENV/ARG, then send error
+            else: #If cant find secrets_emhass and passed url ENV/ARG, then send error
                 app.logger.error("No specified Home Assistant URL") 
                 raise Exception("Can not find Home Assistant URL from secrets_emhass.yaml or ARG/ENV") 
             if key != "":
                 params_secrets['long_lived_token'] = key
-            else: #if cant find secrets_emhass and passed key ENV/ARG, then send error
+            else: #If cant find secrets_emhass and passed key ENV/ARG, then send error
                 app.logger.error("No specified Home Assistant KEY")     
                 raise Exception("Can not find Home Assistant KEY from secrets_emhass.yaml or ARG/ENV") 
     # Build params
