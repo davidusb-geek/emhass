@@ -21,10 +21,15 @@ This method works well with standalone mode.
 
 _confirm terminal is in the root `emhass` directory before starting_
 
+**Install requirements**
+```bash
+python3 -m pip install --extra-index-url=https://www.piwheels.org/simple -r requirements_webserver.txt 
+```
+
 **Create a developer environment:**
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 ```
 
 **Activate the environment:**
@@ -46,7 +51,7 @@ An IDE like VSCode should automatically catch that a new virtual env was created
 **Install the _emhass_ package in editable mode:**
 
 ```bash
-python -m pip install -e .
+python3 -m pip install -e .
 ```
 
 **Set paths with environment variables:**
