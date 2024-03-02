@@ -579,11 +579,27 @@ select {
   box-shadow: #3d3d3d 3px 3px;
 }
 
-.info {
+
+.alert, .info {
   max-width: 50%;
+}
+
+.info {
   margin: 0 auto;
-  margin-top: 1em;
+  margin-top: 2em;
   padding-top: 1em;
+}
+
+h2 {
+  margin-bottom: .3em;
+}
+
+.table_div h4{
+  margin-top: .5em;
+}
+
+.info p {
+  line-height: 2em;
 }
 
 table {
@@ -784,7 +800,6 @@ th {
 /* Alert box styling */
 .alert {
   display: box;
-  max-width: fit-content;
   overflow-x: auto;
   align-items: center;
   align-self: center;
@@ -917,8 +932,8 @@ th {
     display: none !important;
   }
 
-  .info {
-    max-width: 80%;
+  .info, .alert {
+    max-width: 100%;
   }
 }
 
