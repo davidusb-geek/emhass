@@ -150,6 +150,15 @@ a {
   text-decoration: none;
 }
 
+a:hover {
+  color: #251fe3;
+}
+
+a:active {
+  color: #070f71;
+}
+
+
 a:active,
 a:hover {
   outline-width: 0;
@@ -407,11 +416,16 @@ h2 {
   color: #111111;
 }
 
+
 button:hover,
 .alert:hover,
 select:hover {
   color: darkblue;
   background-color: #e1e1e1;
+}
+
+button:active {
+  background-color: #d7d7db;
 }
 
 button,
@@ -430,15 +444,6 @@ input {
   overflow: visible;
 }
 
-button,
-.alert,
-select {
-  text-transform: none;
-  border-width: 1px;
-  border-style: solid;
-  box-shadow: #3d3d3d 3px 3px;
-  ;
-}
 
 button,
 html [type="button"],
@@ -535,6 +540,21 @@ template {
   display: none;
 }
 
+/* feather icons css 
+https://github.com/feathericons/feather */
+.feather {
+  width: 27px;
+  height: 27px;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  margin-right: 12px;
+  filter: drop-shadow( #282928 .4px .5px);
+}
+
+
 /* -------------- */
 
 /* EMHASS added style */
@@ -543,9 +563,43 @@ button,
 .main-svg,
 .mystyle,
 .alert,
+.info,
 table {
   border-radius: 7px;
   /* overflow: visible; */
+}
+
+button,
+.alert,
+.info,
+select {
+  text-transform: none;
+  border-width: 1px;
+  border-style: solid;
+  box-shadow: #3d3d3d 3px 3px;
+}
+
+
+.alert, .info {
+  max-width: 50%;
+}
+
+.info {
+  margin: 0 auto;
+  margin-top: 2em;
+  padding-top: 1em;
+}
+
+h2 {
+  margin-bottom: .3em;
+}
+
+.table_div h4{
+  margin-top: .5em;
+}
+
+.info p {
+  line-height: 2em;
 }
 
 table {
@@ -632,6 +686,13 @@ th {
 .mystyle tr:hover {
   background: silver;
   cursor: pointer;
+}
+
+#top-links {
+  display: flex;
+  position: absolute;
+  right: 13px;
+  top: 13px;
 }
 
 /* Post task status styling */
@@ -727,10 +788,18 @@ th {
   }
 }
 
+/* Basic and Advanced fade transitions */
+.TabSelection, #advance, #basic, button, select, .info, .input-list {
+  animation-name: fadeInOpacity;
+  animation-iteration-count: 1;
+  animation-timing-function: ease-in-out;
+  animation-duration: .3s;
+}
+
+
 /* Alert box styling */
 .alert {
   display: box;
-  max-width: fit-content;
   overflow-x: auto;
   align-items: center;
   align-self: center;
@@ -862,6 +931,10 @@ th {
   .layer-below {
     display: none !important;
   }
+
+  .info, .alert {
+    max-width: 100%;
+  }
 }
 
 /* Dark Theme Support */
@@ -872,13 +945,20 @@ th {
   }
 
   img,
-  figure {
-    -webkit-filter: invert(90%);
-    filter: invert(90%);
+  figure, svg.main-svg{
+    -webkit-filter: invert(.82);
+    filter: invert(.82);
+  }
+  
+  figure, svg.main-svg{
+  border-color: #181818;
+  border-style: solid;
+  border-width: 1px;
   }
 
   button,
   .alert,
+  .info,
   select {
     color: #e1e1e1;
     background-color: #282928;
@@ -892,22 +972,36 @@ th {
     background-color: #3d3d3d;
   }
 
+  button:active {
+    background-color: #111111;
+  }
+
   h2,
   kbd,
   a {
     background-color: #111111;
     color: #ccf3ff;
-    border: rgb(71, 71, 71);
+    border: #3f3f3f;
   }
 
-  .modebar-btn {
-    background-color: #e1e1e1;
+  a:hover {
+    color: #d2e8f0;
   }
 
-  .main-svg svg,
-  legend {
-    background-color: rgb(73, 73, 73, 5%);
-    background: rgb(73, 73, 73, 5%);
+
+  a:active {
+    color: #aaccd6;
+  }
+
+  .modebar-btn svg path {
+    fill: #111 !important;
+  }
+  .modebar-btn svg {
+    filter:invert(100%) sepia(64%) saturate(2%) hue-rotate(294deg) brightness(85%) contrast(93%) !important
+  }
+  .modebar-btn--logo svg{
+    filter: None !important;
+    /* filter: invert(100%) saturate(100%) brightness(87%) contrast(100%) !important */
   }
 
   .g-gtitle,
@@ -938,9 +1032,18 @@ th {
     background-color: #3f3f3f;
   }
 
-  .mystyle,
-  .main-svg {
-    box-shadow: 0 0 0 1px silver;
+  tr:hover td,
+  th, td:first-child, td:last-child
+  {
+    border-radius: 7px
+  }
+
+  .modebar-group{
+    background-color: #0000 !important;
+  }
+
+  .modebar-btn{
+    background: #3f3f3f;
   }
 
   .input-list input,

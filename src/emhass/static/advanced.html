@@ -1,0 +1,32 @@
+<!-- action button elements section -->
+<div class="loading-div" id="advance">
+    <h4>Use the buttons below to manually launch different optimization tasks</h4>
+    <div id=loader></div> <!-- status dynamic element -->
+</div>
+<button type="button" id="perfect-optim" class="button button1">Perfect Optimization</button>
+<button type="button" id="dayahead-optim" class="button button2">Day-ahead Optimization</button>
+<button type="button" id="naive-mpc-optim" class="button button3">MPC Optimization</button>
+<!--ml toggled div button -->
+<h4>Use the button below to publish the optimized variables at the current timestamp</h4>
+<button type="button" id="publish-data" class="button button1">Publish Optimization Results</button>
+<h4>Use the buttons below to fit, predict and tune a machine learning model for testing</h4>
+<button type="button" id="forecast-model-fit" class="button button1">ML forecast model fit</button>
+<button type="button" id="forecast-model-predict" class="button button2">ML forecast model
+    predict</button>
+<button type="button" id="forecast-model-tune" class="button button3">ML forecast model tune</button>
+<!-- -->
+<!--dynamic input elements section -->
+<h4>Input Runtime Parameters</h4>
+<div class="input-button-container">
+    <div class="input-buttons">
+        <button type="button" id="input-plus">+</button>
+        <button type="button" id="input-minus">-</button>
+        <select name="Select" id="input-select">
+            <option value="List" selected>List</option>
+            <option value="Box">Box</option>
+        </select>
+        <button type="button" id="input-clear">Clear</button>
+    </div>
+</div>
+<div id="input-container"> <!-- (Box/List) dynamic input elements will be added here -->
+</div>
