@@ -34,19 +34,24 @@ RUN apt-get update \
     netcdf-bin \
     libnetcdf-dev \
     pkg-config \
+    ninja-build \
+    patchelf \
     gfortran \
     libatlas-base-dev \
     && ln -s /usr/include/hdf5/serial /usr/include/hdf5/include \
     && export HDF5_DIR=/usr/include/hdf5 \
-    && pip3 install --extra-index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -U setuptools wheel \
-    && pip3 install --extra-index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -r requirements.txt \
+    && pip3 install --no-cache-dir --break-system-packages -r requirements.txt \
     && apt-get purge -y --auto-remove \
+    ninja-build \
+    patchelf \
     gcc \
     build-essential \
     libhdf5-dev \
     libhdf5-serial-dev \
     pkg-config \
     gfortran \
+    netcdf-bin \
+    libnetcdf-dev \
     && rm -rf /var/lib/apt/lists/*
 
 
