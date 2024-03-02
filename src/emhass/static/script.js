@@ -28,7 +28,7 @@ function loadButtons(page) {
             document.getElementById("input-clear").addEventListener("click", () => ClearInputData());
             break;
         case "basic":
-            document.getElementById("dayahead-optim-publish").addEventListener("click", () => DayheadOptimPublish());
+            document.getElementById("dayahead-optim-basic").addEventListener("click", () => formAction("dayahead-optim", "basic"));
             break;
     }
 }
@@ -402,13 +402,13 @@ async function ClearInputElements() {
     }
 }
 
-//Run day ahead, then publish actions
-async function DayheadOptimPublish() {
-    response = await formAction("dayahead-optim", "basic")
-    if (response) { //if successful publish data 
-        formAction("publish-data", "basic")
-    }
-}
+// //Run day ahead, then publish actions
+// async function DayheadOptimPublish() {
+//     response = await formAction("dayahead-optim", "basic")
+//     if (response) { //if successful publish data 
+//         formAction("publish-data", "basic")
+//     }
+//}
 
 
 
