@@ -1,6 +1,6 @@
 //on page reload get saved data
 window.onload = async function () {
-    pageSelected = loadBasicOrAdvanced();
+     pageSelected = await loadBasicOrAdvanced();
 
     //get saved input data if advanced page is presented
     if (pageSelected === "advanced") {
@@ -29,7 +29,7 @@ function loadButtons(page) {
             ["input-plus", "input-minus"].forEach((id) =>
                 document.getElementById(id).addEventListener("click", () => dictInputs(id))
             );
-            document.getElementById("input-select").addEventListener("click", () => getSavedData());
+            document.getElementById("input-select").addEventListener("change", () => getSavedData());
             document.getElementById("input-clear").addEventListener("click", () => ClearInputData());
             break;
         case "basic":
