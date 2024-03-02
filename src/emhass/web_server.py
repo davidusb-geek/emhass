@@ -97,6 +97,8 @@ def action_call(action_name):
         config_path, params = pickle.load(fid)
     runtimeparams = request.get_json(force=True)
     params = json.dumps(params)
+    if runtimeparams is not None and runtimeparams != '{}':
+        app.logger.info("Passed runtime parameters: " + runtimeparams)
     runtimeparams = json.dumps(runtimeparams)
     ActionStr = " >> Setting input data dict"
     app.logger.info(ActionStr)
