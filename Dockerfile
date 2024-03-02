@@ -123,7 +123,8 @@ ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True" , "--no_resp
 #EMHASS STANDALONE
 FROM base as standalone
 
-RUN pip3 install --extra-index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -U  flask waitress plotly
+COPY requirements_webserver.txt /app/
+RUN pip3 install --extra-index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -r requirements_webserver.txt
 
 COPY src/emhass/ /app/src/emhass/ 
 COPY src/emhass/templates/ /app/src/emhass/templates/
