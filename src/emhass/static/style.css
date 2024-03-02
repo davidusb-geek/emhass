@@ -773,7 +773,7 @@ th {
 }
 
 /* Basic and Advanced fade transitions */
-.TabSelection, #advance, #basic, button, select, .info {
+.TabSelection, #advance, #basic, button, select, .info, .input-list {
   animation-name: fadeInOpacity;
   animation-iteration-count: 1;
   animation-timing-function: ease-in-out;

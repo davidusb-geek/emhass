@@ -2,11 +2,6 @@
 window.onload = async function () {
      pageSelected = await loadBasicOrAdvanced();
 
-    //get saved input data if advanced page is presented
-    if (pageSelected === "advanced") {
-        getSavedData();
-    }
-
     //add listener for basic and advanced html switch
     document.getElementById("basicOrAdvanced").addEventListener("click", () => SwitchBasicOrAdvanced());
 };
@@ -57,11 +52,13 @@ async function loadBasicOrAdvanced(RequestedPage) {
                 formContainer.innerHTML = htmlData;
                 loadButtons("advanced");
                 if (testStorage()) { localStorage.setItem("TabSelection", "advanced") }
+                getSavedData();
                 return "advanced";
             default:
                 htmlData = await getHTMLData(advencedFile);
                 formContainer.innerHTML = htmlData;
                 loadButtons("advanced");
+                getSavedData();
                 return "advanced";
         }
     }
@@ -71,6 +68,7 @@ async function loadBasicOrAdvanced(RequestedPage) {
             htmlData = await getHTMLData(advencedFile);
             formContainer.innerHTML = htmlData;
             loadButtons("advanced");
+            getSavedData();
             return "advanced";
         }
         else { //else run basic (first time)
