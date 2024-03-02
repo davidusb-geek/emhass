@@ -67,7 +67,7 @@ python -m pip install -e .
   set "DATA_PATH=%cd%/data/"
   ```
 
-_Make sure `secrets_emhass.yaml` has been made and set. Copy `secrets_emhass(example).yaml` for an example._
+_Make sure `secrets_emhass.yaml` has been created and set. Copy `secrets_emhass(example).yaml` for an example._
 
 **Run EMHASS**
 
@@ -98,7 +98,7 @@ The recommended steps to run are:
 
   - You will need to modify the `EMHASS_URL` _(http://HAIPHERE:8123/)_ and `EMHASS_KEY` _(PLACEKEYHERE)_ inside of Launch.json that matches your HA environment before running.
   - If you want to change your parameters, you can edit options.json file before launch.
-  - you can also choose to run `EMHASS run` instead of `EMHASS run Addon`. This acts more like standalone mode and uses the secrets_emhass.yaml files and removes the use of options.json. _(user sets parameters in config_emhass.yaml instead)_
+  - you can also choose to run `EMHASS run` instead of `EMHASS run Addon`. This acts more like standalone mode an removes the use of options.json. _(user sets parameters in config_emhass.yaml instead)_
 
 - You can run all the unitests by heading to the [`Testing`](https://code.visualstudio.com/docs/python/testing) tab on the left hand side.  
   This is recommended before creating a pull request.
@@ -152,7 +152,7 @@ docker build -t emhass/docker --build-arg build_version=standalone .
 docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/docker
 ```
 
-_Standalone mode requires `secrets_emhass.yaml` to be set and passed in on operate. Copy `secrets_emhass(example).yaml` for an example._
+_Standalone mode can use `secrets_emhass.yaml` to pass secret parameters (overriding secrets provided by ARG/ENV's). Copy `secrets_emhass(example).yaml` for an example._
 
 #### Docker run add-on with Git or pip:
 
