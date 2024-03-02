@@ -110,9 +110,15 @@ Then load the image in the .tar file:
 docker load -i <TarFileName>.tar
 ```
 Finally check your image tag with `docker images` and launch the docker itself:
-```
+```bash
 docker run -it --restart always -p 5000:5000 -e "LOCAL_COSTFUN=profit" -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
 ```
+  - If you wish to keep a local, persistent copy of the EMHASS generated data, create a local folder on your device, then mount said folder inside the container.  
+    ```bash
+    mkdir -p $(pwd)/data #linux: create data folder on local device
+
+    docker run -it --restart always -p 5000:5000 -e "LOCAL_COSTFUN=profit" -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/data:/app/data  -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
+    ```
 
 ### Method 3) Legacy method using a Python virtual environment
 
@@ -425,7 +431,7 @@ Check the dedicated section in the documentation here: [https://emhass.readthedo
 
 ## Development
 
-Pull request are very much accepted on this project. For development you can find some instructions here [Development](./docs/develop.md)
+Pull request are very much accepted on this project. For development you can find some instructions here [Development](https://emhass.readthedocs.io/en/latest/develop.html)
 
 ## Troubleshooting
 

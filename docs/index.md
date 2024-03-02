@@ -23,6 +23,7 @@ mlforecaster.md
 study_case.md
 config.md
 emhass.md
+develop.md
 ```
 
 # Indices and tables

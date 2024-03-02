@@ -1,8 +1,29 @@
 # Changelog
 
+## [0.8.1] - 2024-02-28
+### Improvement
+- Improved documentation
+### Fix
+- Persistent data storage fix
+- Docker Standalone Publish Workspace Fix
+
+## [0.8.0] - 2024-02-25
+### Improvement
+- Thanks to the great work from @GeoDerp we now have a unified/centralized Dockerfile that allows for testing different installation configuration methods in one place. This greatly helps testing, notably emulating the add-on environment. This will improve overall testing for both teh core code and the add-on. Again many thanks!
+- There were also a lot of nice improveements from @GeoDerp to the webui, namely: styling, dynamic table, optimization feedback after button press, logging, a new clear button, etc.
+- From now on we will unify the semantic versioning for both the main core code and the add-on.
+
+## [0.7.8] - 2024-02-18
+### Improvement
+Added some nice logging functionalities and responsiveness on the webui.
+Thanks to @GeoDerp for this great work!
+- new actionLogs.txt is generated in datapath storing sessions app.logger info
+- on successful html button press, fetch is called to get html containing latest table data
+- on html button press, If app.logger ERROR is present, send action log back and present on page.
+
 ## [0.7.7] - 2024-02-10
 ### Improvement
-- Bumped the webui. Index/style added runtime parameter dictionary inputs. Thanks to @GeoDerp
+- Bumped the webui. Some great new features and styling. Now it is possible to pass data directly as lsit of values when using the buttons in the webui. Thanks to @GeoDerp
 - Added two additional testing environment options. Thanks to @GeoDerp
 ### Fix
 - Bump markupsafe from 2.1.4 to 2.1.5
@@ -565,6 +586,7 @@
 [0.7.5]: https://github.com/davidusb-geek/emhass/releases/tag/v0.7.5
 [0.7.6]: https://github.com/davidusb-geek/emhass/releases/tag/v0.7.6
 [0.7.7]: https://github.com/davidusb-geek/emhass/releases/tag/v0.7.7
+[0.7.8]: https://github.com/davidusb-geek/emhass/releases/tag/v0.7.8
 
 # Notes
 All notable changes to this project will be documented in this file.

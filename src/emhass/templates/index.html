@@ -18,7 +18,7 @@
             <!-- action button elements section -->
             <div class="loading-div">
                 <h4>Use the buttons below to manually launch different optimization tasks</h4>
-                <div id=loader></div> <!-- post status dynamic element -->
+                <div id=loader></div> <!-- status dynamic element -->
             </div>
             <button type="button" id="perfect-optim" class="button button1">Perfect Optimization</button>
             <button type="button" id="dayahead-optim" class="button button2">Day-ahead Optimization</button>
@@ -44,6 +44,7 @@
                         <option value="List" selected>List</option>
                         <option value="Box">Box</option>
                     </select>
+                    <button type="button" id="input-clear">Clear</button>
                 </div>
             </div>
             <div id="input-container"> <!-- (Box/List) dynamic input elements will be added here -->
@@ -57,18 +58,22 @@
                 <p id="alert-text"></p>
             </div>
         </div>
+        <!-- -->
         <br><br><br>
         <!-- dynamic table/diagram elements section -->
     </div>
-    {% for plot in injection_dict %} <!-- diagrams/tables elements will be added here -->
-    <div class="table_div">
-        {{injection_dict[plot]}}
-    </div>
-    {% endfor %}
-    <!-- -->
-    <footer class="footer">
-        <p style="margin-top:10px; text-align:center;">&copy; MIT License | Copyright (c) 2021-2023 David HERNANDEZ</p>
-    </footer>
+    <div id="template"> <!-- table/diagram container element  -->
+        {% for plot in injection_dict %} <!-- diagrams/tables elements will be added here -->
+        <div class="table_div">
+            {{injection_dict[plot]}}
+        </div>
+        {% endfor %}
+        <div>
+            <!-- -->
+            <footer class="footer">
+                <p style="margin-top:10px; text-align:center;">&copy; MIT License | Copyright (c) 2021-2023 David
+                    HERNANDEZ</p>
+            </footer>
 </body>
 
 
@@ -83,16 +88,20 @@
     //function pushing data via post, triggered by button action
     async function formAction(action) {
         var data = inputToJson()
-        if (data !== 0) { //don't run if there is an error in the data Json
-            showChangeStatus("loading") // show loading div for status
-            response = await fetch(`{{ basename }}/action/${action}`, {
+        if (data !== 0) { //don't run if there is an error in the input (box/list) Json data 
+            showChangeStatus("loading", {}) // show loading div for status
+            const response = await fetch(`{{ basename }}/action/${action}`, { //fetch data from webserver.py
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                 },
-                body: JSON.stringify(data), //post can only send data via strings
-            }).then(saveStorage()) //save to storage if successful 
-            showChangeStatus(response.status) //replace loading, show tick or cross
+                body: JSON.stringify(data), //note that post can only send data via strings
+            })
+            if (response.status == 201) {
+                showChangeStatus(response.status, {})
+                saveStorage() //save to storage if successful
+            } //if successful 
+            else { showChangeStatus(response.status, await response.json()) } // else get Log data from response
         }
         else {
             showChangeStatus("remove") //replace loading, show tick or cross with none 
@@ -100,26 +109,51 @@
     }
 
     //function in control of status icons of post above
-    function showChangeStatus(status) {
-        var loading = document.getElementById("loader") //element showing status 
-        if (status === "remove") { //show loading logo
+    async function showChangeStatus(status, logJson) {
+        var loading = document.getElementById("loader") //element showing statuses
+        if (status === "remove") { //remove all
             loading.innerHTML = "";
-            loading.classList.remove("loading"); //append class with loading animation styling
+            loading.classList.remove("loading");
         }
         else if (status === "loading") { //show loading logo
             loading.innerHTML = "";
             loading.classList.add("loading"); //append class with loading animation styling
         }
-        else if (status === 201) { //then show a tick 
+        else if (status === 201) { //if status is 201, then show a tick 
             loading.classList.remove("loading")
             loading.innerHTML = `<p class=tick>&#x2713;</p>`
+            getTemplate() //get updated templates
 
         }
         else { //then show a cross 
             loading.classList.remove("loading")
-            loading.innerHTML = `<p class=cross>&#x292C;</p>`
+            loading.innerHTML = `<p class=cross>&#x292C;</p>` //show cross icon to indicate an error
+            if (logJson.length != 0) {
+                document.getElementById("alert-text").textContent = "\r\n\u2022 " + logJson.join("\r\n\u2022 ") //show received log data in alert box
+                document.getElementById("alert").style.display = "block";
+                document.getElementById("alert").style.textAlign = "left";
+            }
         }
     }
+
+    //get rendered html template with containing new table data  
+    async function getTemplate() { //fetch data from webserver.py
+        let htmlTemplateData = ""
+        response = await fetch(`{{ basename }}/template/table-template`, {
+            method: "GET"
+        })
+        blob = await response.blob() //get data blob
+        htmlTemplateData = await new Response(blob).text() //obtain html from blob
+        templateDiv = document.getElementById("template") //get template container element to override 
+        templateDiv.innerHTML = htmlTemplateData //override container inner html with new data
+        var scripts = Array.from(templateDiv.getElementsByTagName('script')); //replace script tags manually
+        for (const script of scripts) {
+            var TempScript = document.createElement("script");
+            TempScript.innerHTML = script.innerHTML
+            script.parentElement.appendChild(TempScript)
+        }
+    }
+
 
     //test localStorage support
     function testStorage() {
@@ -142,7 +176,7 @@
         if (testStorage()) { //if local storage exists and works
             let selectElement = document.getElementById('input-select') // select button element
             var input_container = document.getElementById('input-container'); // container div containing all dynamic input elements (Box/List)
-            if (localStorage.getItem("input_container_content")) { //If items already stored in local storage, then override default
+            if (localStorage.getItem("input_container_content") && localStorage.getItem("input_container_content") !== "{}" ) { //If items already stored in local storage, then override default
                 if (selectElement.value == "Box") { //if Box is selected, show saved json data into box 
                     document.getElementById("text-area").value = localStorage.getItem("input_container_content");
                 }
@@ -177,7 +211,7 @@
         input_container_child = input_container.firstElementChild; //work out which element is first inside container div
         var jsonReturnData = {};
 
-        if (input_container_child == null){ //if no elements in container then return empty
+        if (input_container_child == null) { //if no elements in container then return empty
             return (jsonReturnData)
         };
         //if List return box json
@@ -200,6 +234,7 @@
             catch (error) { //if json error, show in alert box
                 document.getElementById("alert-text").textContent = "\r\n" + error + "\r\n" + "JSON Error: String values may not be wrapped in quotes"
                 document.getElementById("alert").style.display = "block";
+                document.getElementById("alert").style.textAlign = "center";
                 return (0)
             }
         }
@@ -265,10 +300,7 @@
         //if box is selected, remove input-list elements and replace (with text-area)
         if (selectElement.value == "Box") {
             if (input_container_child_name == "input-list" || input_container_child === null) { // if input list exists or no Box element
-                inputListArr = input_container.getElementsByClassName('input-list');
-                while (inputListArr[0]) { //while there is still input-list elements remove 
-                    inputListArr[0].parentNode.removeChild(inputListArr[0]);
-                };
+                input_container.innerHTML = ""; //remove input-list list elements via erasing container innerHTML
                 let div = document.createElement('div'); //add input-box element
                 div.className = "input-box";
                 div.innerHTML = `
@@ -291,6 +323,30 @@
         }
     }
 
+    //clear stored input data from localStorage (if any), clear input elements
+    async function ClearInputData(id) {
+        if (testStorage() && localStorage.getItem("input_container_content") !== null) {
+            localStorage.setItem("input_container_content", "{}")
+        }
+        ClearInputElements();
+
+    }
+
+    //clear input elements
+    async function ClearInputElements() {
+        let selectElement = document.getElementById('input-select')
+        var input_container = document.getElementById('input-container'); 
+        if (selectElement.value == "Box") { 
+            document.getElementById("text-area").value = "{}";
+        }
+        if (selectElement.value == "List") { 
+            input_container.innerHTML = "";
+        }
+
+    }
+
+
+
     //add listeners to buttons
     [
         "dayahead-optim",
@@ -310,6 +366,9 @@
     [
         "input-select"
     ].forEach((id) => document.getElementById(id).addEventListener('change', () => getSavedData(id)));
+    [
+        "input-clear"
+    ].forEach((id) => document.getElementById(id).addEventListener('click', () => ClearInputData(id)));
 </script>
 
 </html>

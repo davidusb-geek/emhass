@@ -7,7 +7,7 @@ from requests import get
 from waitress import serve
 from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
-import os, json, argparse, pickle, yaml, logging
+import os, json, argparse, pickle, yaml, logging,  re
 from distutils.util import strtobool
 import pandas as pd
 
@@ -21,7 +21,41 @@ from emhass.utils import get_injection_dict, get_injection_dict_forecast_model_f
 # Define the Flask instance
 app = Flask(__name__)
 
+#check logfile for error, anything after string match if provided 
+def checkFileLog(refString=None):
+    if (refString is not None): 
+       logArray = grabLog(refString) #grab reduced log array
+    else: 
+        if ((data_path / 'actionLogs.txt')).exists():
+            with open(str(data_path / 'actionLogs.txt'), "r") as fp:
+                    logArray = fp.readlines()
+    for logString in logArray:
+            if (logString.split(' ', 1)[0] == "ERROR"):
+                return True     
+    return False
 
+#find string in logs, append all lines after to return
+def grabLog(refString): 
+    isFound = []
+    output = []
+    if ((data_path / 'actionLogs.txt')).exists():
+            with open(str(data_path / 'actionLogs.txt'), "r") as fp:
+                    logArray = fp.readlines()
+            for x in range(len(logArray)-1): #find all matches and log key in isFound
+                if (re.search(refString,logArray[x])):
+                   isFound.append(x)
+            if len(isFound) != 0:
+                for x in range(isFound[-1],len(logArray)): #use isFound to extract last related action logs  
+                    output.append(logArray[x])
+    return output
+
+#clear the log file
+def clearFileLog(): 
+    if ((data_path / 'actionLogs.txt')).exists():
+        with open(str(data_path / 'actionLogs.txt'), "w") as fp:
+            fp.truncate()    
+
+#initial index page render
 @app.route('/')
 def index():
     app.logger.info("EMHASS server online, serving index.html...")
@@ -39,6 +73,24 @@ def index():
     basename = request.headers.get("X-Ingress-Path", "")
     return make_response(template.render(injection_dict=injection_dict, basename=basename))
 
+#get actions 
+@app.route('/template/<action_name>', methods=['GET'])
+def template_action(action_name):
+    app.logger.info(" >> Sending rendered template table data")
+    if action_name == 'table-template':
+        file_loader = PackageLoader('emhass', 'templates')
+        env = Environment(loader=file_loader)
+        template = env.get_template('template.html')
+        if (data_path / 'injection_dict.pkl').exists():
+            with open(str(data_path / 'injection_dict.pkl'), "rb") as fid:
+                injection_dict = pickle.load(fid)
+        else:
+            app.logger.warning("The data container dictionary is empty... Please launch an optimization task")
+            injection_dict={}        
+        basename = request.headers.get("X-Ingress-Path", "")    
+        return make_response(template.render(injection_dict=injection_dict, basename=basename))
+
+#post actions 
 @app.route('/action/<action_name>', methods=['POST'])
 def action_call(action_name):
     with open(str(data_path / 'params.pkl'), "rb") as fid:
@@ -46,49 +98,71 @@ def action_call(action_name):
     runtimeparams = request.get_json(force=True)
     params = json.dumps(params)
     runtimeparams = json.dumps(runtimeparams)
+    ActionStr = " >> Setting input data dict"
+    app.logger.info(ActionStr)
     input_data_dict = set_input_data_dict(config_path, str(data_path), costfun, 
         params, runtimeparams, action_name, app.logger)
+    if not input_data_dict:
+        return make_response(grabLog(ActionStr), 400)
     if action_name == 'publish-data':
-        app.logger.info(" >> Publishing data...")
+        ActionStr = " >> Publishing data..."
+        app.logger.info(ActionStr)
         _ = publish_data(input_data_dict, app.logger)
         msg = f'EMHASS >> Action publish-data executed... \n'
-        return make_response(msg, 201)
+        if not checkFileLog(ActionStr):
+            return make_response(msg, 201)
+        return make_response(grabLog(ActionStr), 400)
     elif action_name == 'perfect-optim':
-        app.logger.info(" >> Performing perfect optimization...")
+        ActionStr = " >> Performing perfect optimization..."
+        app.logger.info(ActionStr)
         opt_res = perfect_forecast_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action perfect-optim executed... \n'
-        return make_response(msg, 201)
+        if not checkFileLog(ActionStr):
+            return make_response(msg, 201)
+        return make_response(grabLog(ActionStr), 400)
     elif action_name == 'dayahead-optim':
-        app.logger.info(" >> Performing dayahead optimization...")
+        ActionStr = " >> Performing dayahead optimization..."
+        app.logger.info(ActionStr)
         opt_res = dayahead_forecast_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action dayahead-optim executed... \n'
-        return make_response(msg, 201)
+        if not checkFileLog(ActionStr):
+            return make_response(msg, 201)
+        return make_response(grabLog(ActionStr), 400)
     elif action_name == 'naive-mpc-optim':
-        app.logger.info(" >> Performing naive MPC optimization...")
+        ActionStr = " >> Performing naive MPC optimization..."
+        app.logger.info(ActionStr)
         opt_res = naive_mpc_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action naive-mpc-optim executed... \n'
-        return make_response(msg, 201)
+        if not checkFileLog(ActionStr):
+            return make_response(msg, 201)
+        return make_response(grabLog(ActionStr), 400)
     elif action_name == 'forecast-model-fit':
-        app.logger.info(" >> Performing a machine learning forecast model fit...")
+        ActionStr = " >> Performing a machine learning forecast model fit..."
+        app.logger.info(ActionStr)
         df_fit_pred, _, mlf = forecast_model_fit(input_data_dict, app.logger)
         injection_dict = get_injection_dict_forecast_model_fit(
             df_fit_pred, mlf)
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action forecast-model-fit executed... \n'
-        return make_response(msg, 201)
+        if not checkFileLog(ActionStr):
+            return make_response(msg, 201)
+        return make_response(grabLog(ActionStr), 400)
     elif action_name == 'forecast-model-predict':
-        app.logger.info(" >> Performing a machine learning forecast model predict...")
+        ActionStr = " >> Performing a machine learning forecast model predict..."
+        app.logger.info(ActionStr)
         df_pred = forecast_model_predict(input_data_dict, app.logger)
+        if df_pred is None:
+            return make_response(grabLog(ActionStr), 400)
         table1 = df_pred.reset_index().to_html(classes='mystyle', index=False)
         injection_dict = {}
         injection_dict['title'] = '<h2>Custom machine learning forecast model predict</h2>'
@@ -97,16 +171,23 @@ def action_call(action_name):
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action forecast-model-predict executed... \n'
-        return make_response(msg, 201)
+        if not checkFileLog(ActionStr):
+            return make_response(msg, 201)
+        return make_response(grabLog(ActionStr), 400)
     elif action_name == 'forecast-model-tune':
-        app.logger.info(" >> Performing a machine learning forecast model tune...")
-        df_pred_optim, mlf = forecast_model_tune(input_data_dict, app.logger)
+        ActionStr = " >> Performing a machine learning forecast model tune..."
+        app.logger.info(ActionStr)
+        df_pred_optim, mlf = forecast_model_tune(input_data_dict, app.logger)    
+        if df_pred_optim is None or  mlf is None:
+            return make_response(grabLog(ActionStr), 400)
         injection_dict = get_injection_dict_forecast_model_tune(
             df_pred_optim, mlf)
         with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action forecast-model-tune executed... \n'
-        return make_response(msg, 201)
+        if not checkFileLog(ActionStr):
+            return make_response(msg, 201)
+        return make_response(grabLog(ActionStr), 400)
     else:
         app.logger.error("ERROR: passed action is not valid")
         msg = f'EMHASS >> ERROR: Passed action is not valid... \n'
@@ -124,12 +205,13 @@ if __name__ == "__main__":
     use_options = os.getenv('USE_OPTIONS', default=False)
     # Define the paths
     if args.addon==1:
-        OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/data/options.json")
+        OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
         options_json = Path(OPTIONS_PATH)
-        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/usr/src/config_emhass.yaml")
+        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
         #Obtain url and key from ENV or ARG
         hass_url = os.getenv("EMHASS_URL", default=args.url)
-        key =  os.getenv("EMHASS_KEY", default=args.key) 
+        key =  os.getenv("SUPERVISOR_TOKEN", default=args.key) 
+        key =  os.getenv("EMHASS_KEY", key)  
         #If url or key is None, Set as empty string to reduce NoneType errors bellow
         if key is None: key = ""
         if hass_url is None: hass_url = ""
@@ -139,7 +221,7 @@ if __name__ == "__main__":
                 options = json.load(data)
         else:
             app.logger.error("options.json does not exists")
-        DATA_PATH = os.getenv("DATA_PATH", default="/share/")
+        DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
     else:
         if use_options:
             OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
@@ -188,11 +270,11 @@ if __name__ == "__main__":
         # Some data from options
         logging_level = options.get('logging_level','INFO')
         url_from_options = options.get('hass_url', 'empty')
-        if url_from_options == 'empty' or url_from_options == '':
-            url = hass_url+"/config"
+        if url_from_options == 'empty' or url_from_options == '' or url_from_options == "http://supervisor/core/api":
+            url = "http://supervisor/core/api/config"
         else:
             hass_url = url_from_options
-            url = hass_url+"/api/config"
+            url = hass_url+"api/config"
         token_from_options = options.get('long_lived_token', 'empty')
         if token_from_options == 'empty' or token_from_options == '':
             long_lived_token = key
@@ -256,27 +338,39 @@ if __name__ == "__main__":
         pickle.dump((config_path, params), fid)
 
     # Define logger
-    ch = logging.StreamHandler()
+    #stream logger
+    ch = logging.StreamHandler() 
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     ch.setFormatter(formatter)
+    #Action File logger
+    fileLogger = logging.FileHandler(str(data_path / 'actionLogs.txt')) 
+    formatter = logging.Formatter('%(levelname)s - %(name)s - %(message)s')
+    fileLogger.setFormatter(formatter) # add format to Handler
     if logging_level == "DEBUG":
         app.logger.setLevel(logging.DEBUG)
         ch.setLevel(logging.DEBUG)
+        fileLogger.setLevel(logging.DEBUG)
     elif logging_level == "INFO":
         app.logger.setLevel(logging.INFO)
         ch.setLevel(logging.INFO)
+        fileLogger.setLevel(logging.INFO)
     elif logging_level == "WARNING":
         app.logger.setLevel(logging.WARNING)
         ch.setLevel(logging.WARNING)
+        fileLogger.setLevel(logging.WARNING)
     elif logging_level == "ERROR":
         app.logger.setLevel(logging.ERROR)
         ch.setLevel(logging.ERROR)
+        fileLogger.setLevel(logging.ERROR)
     else:
         app.logger.setLevel(logging.DEBUG)
         ch.setLevel(logging.DEBUG)
+        fileLogger.setLevel(logging.DEBUG)
     app.logger.propagate = False
     app.logger.addHandler(ch)
-    
+    app.logger.addHandler(fileLogger)   
+    clearFileLog() #Clear Action File logger file, ready for new instance
+
     # Launch server
     port = int(os.environ.get('PORT', 5000))
     app.logger.info("Launching the emhass webserver at: http://"+web_ui_url+":"+str(port))

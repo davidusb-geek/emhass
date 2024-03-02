@@ -84,7 +84,7 @@ class TestRetrieveHass(unittest.TestCase):
         days_list = get_days_list(1)
         var_list = [self.retrieve_hass_conf['var_load']]
         response = self.rh.get_data(days_list, var_list)
-        self.assertEqual(response, "Request Get Error")
+        self.assertFalse(response)
 
     def test_get_data_mock(self):
         with requests_mock.mock() as m:
