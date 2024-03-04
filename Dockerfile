@@ -1,9 +1,7 @@
 ## EMHASS Docker
-## 
 ## Docker run ADD-ON testing example: 
     ## docker build -t emhass/docker --build-arg build_version=addon-local .
     ## docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
-##
 ## Docker run Standalone example:
     ## docker build -t emhass/docker --build-arg build_version=standalone .
     ## docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/docker 
@@ -20,7 +18,7 @@ ENV TARGETARCH=${TARGETARCH:?}
 WORKDIR /app
 COPY requirements.txt /app/
 
-#if armhf remove armel and replace with armhf
+#if arch is armhf replace armel package library with armhf
 RUN [[ "${TARGETARCH}" == "armhf" ]] && dpkg --add-architecture armhf ; dpkg --remove-architecture armel || echo "not armf"
 
 #setup
@@ -52,10 +50,10 @@ RUN apt-get update \
 RUN ln -s /usr/include/hdf5/serial /usr/include/hdf5/include 
 RUN export HDF5_DIR=/usr/include/hdf5 
 
-#install packadges from pip
+#install packages from pip, use piwheels if arm
 RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] &&  pip3 install --index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -r requirements.txt ||  pip3 install --no-cache-dir --break-system-packages -r requirements.txt 
 
-#remove build only packadges
+#remove build only packages
 RUN apt-get purge -y --auto-remove \
     ninja-build \
     cmake \

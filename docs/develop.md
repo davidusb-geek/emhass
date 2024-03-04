@@ -23,7 +23,7 @@ _confirm terminal is in the root `emhass` directory before starting_
 
 **Install requirements**
 ```bash
-python3 -m pip install --extra-index-url=https://www.piwheels.org/simple -r requirements.txt 
+python3 -m pip install -r requirements.txt #if arm try setting --extra-index-url=https://www.piwheels.org/simple
 ```
 
 **Create a developer environment:**
