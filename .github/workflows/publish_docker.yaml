@@ -15,7 +15,7 @@ jobs:
         platform: [
           {buildx: linux/amd64, target_arch: amd64},
           {buildx: linux/arm/v7, target_arch: armv7},
-          {buildx: linux/arm/v7, target_arch: armhf},
+          {buildx: linux/arm/v6, target_arch: armhf},
           {buildx: linux/arm64,  target_arch: aarch64}
         ]
     steps:

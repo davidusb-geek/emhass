@@ -52,9 +52,11 @@ RUN apt-get update \
 RUN ln -s /usr/include/hdf5/serial /usr/include/hdf5/include 
 RUN export HDF5_DIR=/usr/include/hdf5 
 
+#install packadges from pip
+RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] &&  pip3 install --index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -r requirements.txt ||  pip3 install --no-cache-dir --break-system-packages -r requirements.txt 
+
 #remove build only packadges
-RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt \
-    && apt-get purge -y --auto-remove \
+RUN apt-get purge -y --auto-remove \
     ninja-build \
     cmake \
     meson \
