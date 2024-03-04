@@ -20,6 +20,11 @@ ENV TARGETARCH=${TARGETARCH:?}
 WORKDIR /app
 COPY requirements.txt /app/
 
+#if armhf remove armel and replace with armhf
+RUN [[ "${TARGETARCH}" == "armhf" ]] \
+&& dpkg --add-architecture armhf \
+&& dpkg --remove-architecture armel || echo "not armf"
+
 #setup
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -38,6 +43,8 @@ RUN apt-get update \
     libhdf5-serial-dev \
     netcdf-bin \
     libnetcdf-dev \
+    libopenblas-dev \
+    cmake \
     pkg-config \
     meson \
     ninja-build \
@@ -46,21 +53,12 @@ RUN apt-get update \
     libatlas-base-dev 
 RUN ln -s /usr/include/hdf5/serial /usr/include/hdf5/include 
 RUN export HDF5_DIR=/usr/include/hdf5 
-#check if armhf (32bit) and build openblas for numpy and scipy
-RUN [[ "${TARGETARCH}" == "armhf" ]] \
-&& git clone https://github.com/OpenMathLib/OpenBLAS.git \
-&& cd OpenBLAS \
-&& git checkout $(git describe --tags) \
-&& export TARGET=ARMV6 \
-&& make FC=gfortran \
-&& cd .. || echo "not armf"
-#if not amdhf then install openblas via apt
-RUN [[ ! "${TARGETARCH}" == "armhf" ]] \
-&& apt install -y libopenblas-dev || echo "armf"
+
 #remove build only packadges
 RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt \
     && apt-get purge -y --auto-remove \
     ninja-build \
+    cmake \
     meson \
     patchelf \
     gcc \
