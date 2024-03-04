@@ -21,9 +21,7 @@ WORKDIR /app
 COPY requirements.txt /app/
 
 #if armhf remove armel and replace with armhf
-RUN [[ "${TARGETARCH}" == "armhf" ]] \
-&& dpkg --add-architecture armhf \
-&& dpkg --remove-architecture armel || echo "not armf"
+RUN [[ "${TARGETARCH}" == "armhf" ]] && dpkg --add-architecture armhf ; dpkg --remove-architecture armel || echo "not armf"
 
 #setup
 RUN apt-get update \
