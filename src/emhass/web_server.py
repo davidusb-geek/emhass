@@ -9,7 +9,6 @@ from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 import os, json, argparse, pickle, yaml, logging,  re
 from distutils.util import strtobool
-import pandas as pd
 
 from emhass.command_line import set_input_data_dict
 from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim

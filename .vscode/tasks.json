@@ -3,13 +3,13 @@
     "tasks": [
         {
             "label": "EMHASS install",
-            "command": "sudo",
+            "command": "pip3",
             "group": {
                 "kind": "build",
                 "isDefault": true
             },
             "args": [
-                "python3", "-m", "pip", "install", "."
+                "install", "--no-deps", "--force-reinstall", "."
             ],
             "presentation": {
                 "echo": true,
