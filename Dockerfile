@@ -69,6 +69,9 @@ RUN apt-get purge -y --auto-remove \
     && rm -rf /var/lib/apt/lists/*
 
 
+#try symlink cbc to python directory
+RUN ln -sf /usr/bin/cbc /usr/local/lib/python3.11/dist-packages/pulp/solverdir/cbc/linux/32/cbc || echo "cbc link didnt work"
+
 #copy config file (on all builds)
 COPY config_emhass.yaml /app/
 
