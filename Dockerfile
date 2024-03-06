@@ -47,8 +47,12 @@ RUN apt-get update \
     glpk-utils \
     libatlas-base-dev \
     libopenblas-dev 
-RUN ln -s /usr/include/hdf5/serial /usr/include/hdf5/include 
-RUN export HDF5_DIR=/usr/include/hdf5 
+#specify hdf5
+RUN ln -s /usr/include/hdf5/serial /usr/include/hdf5/include && export HDF5_DIR=/usr/include/hdf5
+#try symlink apt cbc to pulp python directory
+RUN ln -sf /usr/bin/cbc /usr/local/lib/python3.11/dist-packages/pulp/solverdir/cbc/linux/32/cbc || echo "cbc link didnt work"
+
+  
 
 #install packages from pip, use piwheels if arm
 RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] &&  pip3 install --index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -r requirements.txt ||  pip3 install --no-cache-dir --break-system-packages -r requirements.txt
@@ -67,10 +71,6 @@ RUN apt-get purge -y --auto-remove \
     netcdf-bin \
     libnetcdf-dev \
     && rm -rf /var/lib/apt/lists/*
-
-
-#try symlink cbc to python directory
-RUN ln -sf /usr/bin/cbc /usr/local/lib/python3.11/dist-packages/pulp/solverdir/cbc/linux/32/cbc || echo "cbc link didnt work"
 
 #copy config file (on all builds)
 COPY config_emhass.yaml /app/
