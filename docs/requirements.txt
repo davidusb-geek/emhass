@@ -14,8 +14,8 @@ skforecast==0.11.0
 markupsafe==2.1.5
 Jinja2<3.2
 plotly>=5.6.0
-sphinx==6.2.1
-sphinx-rtd-theme==1.2.0
+sphinx==7.2.6
+sphinx-rtd-theme==2.0.0
 docutils==0.18.1
 attrs==21.4.0
 myst-parser==2.0.0
