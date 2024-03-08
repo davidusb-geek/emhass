@@ -54,7 +54,7 @@ RUN ln -s /usr/include/hdf5/serial /usr/include/hdf5/include && export HDF5_DIR=
 RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] &&  pip3 install --index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -r requirements.txt ||  pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
 #try symlink apt cbc to pulp cbc in python directory (for 32bit)
-RUN [[ "${TARGETARCH}" == "armhf" ]] &&  ln -sf /usr/bin/cbc /usr/local/lib/python3.11/dist-packages/pulp/solverdir/cbc/linux/32/cbc || echo "cbc symlink didnt work/not required"
+RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7"  ]] &&  ln -sf /usr/bin/cbc /usr/local/lib/python3.11/dist-packages/pulp/solverdir/cbc/linux/32/cbc || echo "cbc symlink didnt work/not required"
 
 #remove build only packages
 RUN apt-get purge -y --auto-remove \
