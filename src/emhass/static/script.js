@@ -97,14 +97,19 @@ function SwitchBasicOrAdvanced() {
     }
 }
 
-//get html data from basic.html or advanced.html
-async function getHTMLData(htmlFile) {
+//set current url
+function getHTMLURL() {
     var currentUrl
     if (window.location) {
         currentUrl = window.location.href; //get current url to append
     }
-    else {currentUrl = ""}
-    const response = await fetch(currentUrl + "/static/" + htmlFile);
+    else { currentUrl = "" }
+    return currentUrl
+}
+
+//get html data from basic.html or advanced.html
+async function getHTMLData(htmlFile) {
+    const response = await fetch(getHTMLURL() + "/static/" + htmlFile);
     blob = await response.blob(); //get data blob
     htmlTemplateData = await new Response(blob).text(); //obtain html from blob
     return await htmlTemplateData;
@@ -120,7 +125,7 @@ async function formAction(action, page) {
 
     if (data !== 0) { //don't run if there is an error in the input (box/list) Json data
         showChangeStatus("loading", {}); // show loading div for status
-        const response = await fetch(`/action/${action}`, {
+        const response = await fetch(getHTMLURL() + `action/${action}`, {
             //fetch data from webserver.py
             method: "POST",
             headers: {
@@ -178,7 +183,7 @@ async function showChangeStatus(status, logJson) {
 async function getTemplate() {
     //fetch data from webserver.py
     let htmlTemplateData = "";
-    response = await fetch(`/template/table-template`, {
+    response = await fetch(getHTMLURL() + `template/table-template`, {
         method: "GET",
     });
     blob = await response.blob(); //get data blob
