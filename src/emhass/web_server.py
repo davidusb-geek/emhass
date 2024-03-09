@@ -375,7 +375,7 @@ if __name__ == "__main__":
         params = build_params(params, params_secrets, options, 1, app.logger)
     else:
         params = build_params(params, params_secrets, options, args.addon, app.logger)
-    if Path(str(data_path / 'params.pkl')).is_file(): 
+    if os.path.exists(str(data_path)): 
         with open(str(data_path / 'params.pkl'), "wb") as fid:
             pickle.dump((config_path, params), fid)
     else: 
