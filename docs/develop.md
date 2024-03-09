@@ -301,7 +301,7 @@ git checkout $branch
 ```bash
 #testing addon (build and run)
 docker build -t emhass/docker --build-arg build_version=addon-local .
-docker run --rm -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" emhass/docker --url $HAURL --key $HAKEY
+docker run --rm -it -p 5000:5000 --name emhass-container -v $(pwd)/options.json:/app/options.json -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" emhass/docker --url $HAURL --key $HAKEY
 ```
 ```bash
 #run actions on a separate terminal
@@ -339,6 +339,8 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000
 
 User may wish to re-test with tweaked parameters such as `lp_solver` and `weather_forecast_method`, in `config_emhass.yaml` *(standalone)* or `options.json` *(addon)*, to broaden the testing scope. 
 *see [EMHASS & EMHASS-Add-on differences](https://emhass.readthedocs.io/en/latest/differences.html) for more information on how these config_emhass & options files differ*
+
+*Note: may need to set `--build-arg TARGETARCH=YOUR-ARCH` in docker build*
 
 ## Step 3 - Pull request
 
