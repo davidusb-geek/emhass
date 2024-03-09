@@ -1,6 +1,6 @@
 //on page reload get saved data
 window.onload = async function () {
-     pageSelected = await loadBasicOrAdvanced();
+    pageSelected = await loadBasicOrAdvanced();
 
     //add listener for basic and advanced html switch
     document.getElementById("basicOrAdvanced").addEventListener("click", () => SwitchBasicOrAdvanced());
@@ -99,7 +99,12 @@ function SwitchBasicOrAdvanced() {
 
 //get html data from basic.html or advanced.html
 async function getHTMLData(htmlFile) {
-    const response = await fetch("/static/" + htmlFile);
+    var currentUrl
+    if (window.location) {
+        currentUrl = window.location.href; //get current url to append
+    }
+    else {currentUrl = ""}
+    const response = await fetch(currentUrl + "/static/" + htmlFile);
     blob = await response.blob(); //get data blob
     htmlTemplateData = await new Response(blob).text(); //obtain html from blob
     return await htmlTemplateData;
