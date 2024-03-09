@@ -281,6 +281,65 @@ docker build -t emhass/docker --build-arg build_version=addon-local .
 docker run -it -p 5000:5000 --name emhass-container -e EMHASS_KEY -e EMHASS_URL -e TIME_ZONE -e LAT -e LON -e ALT emhass/docker
 ```
 
+### Example Docker testing pipeline 
+If you are wishing to test your changes compatibility, check out this example as a template:
+
+*Linux:*  
+*Assuming docker and git installed*
+```bash
+#setup environment variables for test
+export repo=https://github.com/davidusb-geek/emhass.git
+export branch=master
+#Ex. HAURL=https://localhost:8123/
+export HAURL=HOMEASSISTANTURLHERE
+export HAKEY=HOMEASSISTANTKEYHERE
+
+git clone $repo
+cd emhass 
+git checkout $branch
+```
+```bash
+#testing addon (build and run)
+docker build -t emhass/docker --build-arg build_version=addon-local .
+docker run --rm -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" emhass/docker --url $HAURL --key $HAKEY
+```
+```bash
+#run actions on a separate terminal
+curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/publish-data
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/dayahead-optim
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/forecast-model-fit
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/forecast-model-predict
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/forecast-model-tune
+```
+
+```bash
+#testing standalone (build and run)
+docker build -t emhass/docker --build-arg build_version=standalone .
+#make secrets_emhass
+cat <<EOT >> secrets_emhass.yaml
+hass_url: $HAURL
+long_lived_token: $HAKEY
+time_zone: Europe/Paris
+lat: 45.83
+lon: 6.86
+alt: 4807.8
+EOT
+docker run --rm -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/docker 
+```
+```bash
+#run actions on a separate terminal
+curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/publish-data
+curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/dayahead-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/forecast-model-fit
+curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/forecast-model-predict
+curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/forecast-model-tune
+```
+
+User may wish to re-test with tweaked parameters such as `lp_solver` and `weather_forecast_method`, in `config_emhass.yaml` *(standalone)* or `options.json` *(addon)*, to broaden the testing scope. 
+*see [EMHASS & EMHASS-Add-on differences](https://emhass.readthedocs.io/en/latest/differences.html) for more information on how these config_emhass & options files differ*
+
 ## Step 3 - Pull request
 
 Once developed, commit your code, and push to your fork.
