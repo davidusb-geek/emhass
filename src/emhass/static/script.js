@@ -109,7 +109,7 @@ function getHTMLURL() {
 
 //get html data from basic.html or advanced.html
 async function getHTMLData(htmlFile) {
-    const response = await fetch(getHTMLURL() + "/static/" + htmlFile);
+    const response = await fetch(getHTMLURL() + `static/` + htmlFile);
     blob = await response.blob(); //get data blob
     htmlTemplateData = await new Response(blob).text(); //obtain html from blob
     return await htmlTemplateData;
