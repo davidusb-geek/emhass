@@ -1,21 +1,21 @@
 ## EMHASS Docker
-## Docker run ADD-ON testing example:
+## Docker run addon testing example:
     ## docker build -t emhass/docker --build-arg build_version=addon-local .
     ## docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
-## Docker run Standalone example:
+## Docker run standalone example:
     ## docker build -t emhass/docker --build-arg build_version=standalone .
     ## docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/docker
 
 #build_version options are: addon, addon-pip, addon-git, addon-local, standalone (default)
 ARG build_version=standalone
-#os_version
-#armhf = raspbian
-#amd64, armv7, aarch64 = debian
+
+
+#armhf=raspbian, amd64,armv7,aarch64=debian
 ARG os_version=debian
 
 FROM ghcr.io/home-assistant/$TARGETARCH-base-$os_version:bookworm AS base
 
-#check if TARGETARCH passed by build-arg
+#check if TARGETARCH was passed by build-arg
 ARG TARGETARCH
 ENV TARGETARCH=${TARGETARCH:?}
 
@@ -54,10 +54,10 @@ RUN ln -s /usr/include/hdf5/serial /usr/include/hdf5/include && export HDF5_DIR=
 #install packages from pip, use piwheels if arm 32bit
 RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] &&  pip3 install --index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -r requirements.txt ||  pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
-#try symlink apt cbc to pulp cbc in python directory (for 32bit)
+#try, symlink apt cbc, to pulp cbc, in python directory (for 32bit)
 RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7"  ]] &&  ln -sf /usr/bin/cbc /usr/local/lib/python3.11/dist-packages/pulp/solverdir/cbc/linux/32/cbc || echo "cbc symlink didnt work/not required"
 
-#if armv7 try install libatomic1 to fix scipy issue
+#if armv7, try install libatomic1 to fix scipy issue
 RUN [[ "${TARGETARCH}" == "armv7" ]] && apt-get update && apt-get install libatomic1 || echo "libatomic1 cant be installed"
 
 
@@ -76,7 +76,7 @@ RUN apt-get purge -y --auto-remove \
     libnetcdf-dev \
     && rm -rf /var/lib/apt/lists/*
 
-#copy config file (on all builds)
+#copy config file
 COPY config_emhass.yaml /app/
 
 #make sure data directory exists
@@ -94,7 +94,7 @@ LABEL \
     io.hass.arch="aarch64|amd64|armhf|armv7"
 
 #-----------
-#EMHASS-ADD-ON Testing with pip emhass (closest testing reference)
+#EMHASS-ADD-ON Testing with pip emhass (EMHASS-Add-on testing reference)
 FROM addon as addon-pip
 #set build arg for pip version
 ARG build_pip_version=""
@@ -154,9 +154,9 @@ COPY src/emhass/static/img/ /app/src/emhass/static/img/
 COPY data/opt_res_latest.csv /app/data/
 COPY README.md /app/
 COPY setup.py /app/
-#secrets file will need to be copied manually at docker run
+#secrets file can be copied manually at docker run
 
-#set env variables
+#set python env variables
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
