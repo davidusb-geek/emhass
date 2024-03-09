@@ -83,7 +83,7 @@ COPY config_emhass.yaml /app/
 RUN mkdir -p /app/data/
 
 #-------------------------
-#EMHASS-ADDON Default (this has no emhass package)
+##EMHASS-Add-on default (this has no emhass package)
 FROM base as addon
 
 LABEL \
@@ -94,7 +94,7 @@ LABEL \
     io.hass.arch="aarch64|amd64|armhf|armv7"
 
 #-----------
-#EMHASS-ADD-ON Testing with pip emhass (EMHASS-Add-on testing reference)
+#EMHASS-ADD-ON testing with pip emhass (EMHASS-Add-on testing reference)
 FROM addon as addon-pip
 #set build arg for pip version
 ARG build_pip_version=""
@@ -105,7 +105,7 @@ COPY options.json /app/
 ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True", "--no_response", "True"]
 
 #-----------
-#EMHASS-ADD-ON Testing from local files
+#EMHASS-Add-on testing from local files
 FROM addon as addon-local
 COPY src/emhass/ /app/src/emhass/
 COPY src/emhass/templates/ /app/src/emhass/templates/
@@ -122,7 +122,7 @@ ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True" , "--no_resp
 
 
 #-----------
-#EMHASS-ADD-ON testing with git
+#EMHASS-Add-on testing with git
 FROM addon as addon-git
 ARG build_repo=https://github.com/davidusb-geek/emhass.git
 ARG build_branch=master
@@ -144,7 +144,7 @@ RUN pip3 install --no-cache-dir --break-system-packages --no-deps --force-reinst
 ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True" , "--no_response", "True"]
 
 #-------------------------
-#EMHASS STANDALONE
+#EMHASS stanalone
 FROM base as standalone
 
 COPY src/emhass/ /app/src/emhass/
