@@ -306,11 +306,12 @@ docker run --rm -it -p 5000:5000 --name emhass-container -v $(pwd)/options.json:
 ```bash
 #run actions on a separate terminal
 curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6}' http://localhost:5000/action/naive-mpc-optim
-curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/publish-data
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/perfect-optim
 curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/dayahead-optim
 curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/forecast-model-fit
 curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/forecast-model-predict
 curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/forecast-model-tune
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/publish-data
 ```
 
 ```bash
@@ -330,11 +331,12 @@ docker run --rm -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass
 ```bash
 #run actions on a separate terminal
 curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6}' http://localhost:5000/action/naive-mpc-optim
-curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/publish-data
-curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/dayahead-optim
-curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/forecast-model-fit
-curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/forecast-model-predict
-curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/forecast-model-tune
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/perfect-optim
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/dayahead-optim
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/forecast-model-fit
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/forecast-model-predict
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/forecast-model-tune
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/publish-data
 ```
 
 User may wish to re-test with tweaked parameters such as `lp_solver` and `weather_forecast_method`, in `config_emhass.yaml` *(standalone)* or `options.json` *(addon)*, to broaden the testing scope. 
