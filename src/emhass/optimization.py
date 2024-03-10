@@ -85,6 +85,9 @@ class Optimization:
             self.lp_solver_path = 'empty'
         if self.lp_solver != 'COIN_CMD' and self.lp_solver_path != 'empty':
             self.logger.error("Use COIN_CMD solver name if you want to set a path for the LP solver")
+        if self.lp_solver == 'COIN_CMD' and self.lp_solver_path == 'empty': #if COIN_CMD but lp_solver_path is empty
+            self.logger.warning("lp_solver=COIN_CMD but lp_solver_path=empty, attempting to use lp_solver_path=/usr/bin/cbc")
+            self.lp_solver_path = '/usr/bin/cbc'  
         
     def perform_optimization(self, data_opt: pd.DataFrame, P_PV: np.array, P_load: np.array, 
                              unit_load_cost: np.array, unit_prod_price: np.array,

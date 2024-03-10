@@ -51,8 +51,8 @@ optim_conf:
   prod_price_forecast_method: 'constant' # options are 'constant' for constant fixed value or 'csv' to load custom price forecast from a CSV file
   prod_sell_price: 0.065 # power production selling price in €/kWh (only needed if prod_price_forecast_method='constant')
   set_total_pv_sell: False # consider that all PV power is injected to the grid (self-consumption with total sell)
-  lp_solver: 'default' # set the name of the linear programming solver that will be used
-  lp_solver_path: 'empty' # set the path to the LP solver
+  lp_solver: 'default' # set the name of the linear programming solver that will be used. Options are 'PULP_CBC_CMD', 'GLPK_CMD' and 'COIN_CMD'. 
+  lp_solver_path: 'empty' # set the path to the LP solver, COIN_CMD default is /usr/bin/cbc
   set_nocharge_from_grid: False # avoid battery charging from the grid
   set_nodischarge_to_grid: True # avoid battery discharging to the grid
   set_battery_dynamic: False # add a constraint to limit the dynamic of the battery power in power per time unit

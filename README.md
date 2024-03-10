@@ -97,16 +97,16 @@ These architectures are supported: `amd64`, `armv7`, `armhf` and `aarch64`.
 ### Method 2) Using Docker in standalone mode
 
 You can also install EMHASS using docker. This can be in the same machine as Home Assistant (if using the supervised install method) or in a different distant machine. To install first pull the latest image from docker hub:
-```
+```bash
 docker pull davidusb/emhass-docker-standalone
 ```
 
 You can also build your image locally. For this clone this repository, setup your `config_emhass.yaml` file and use the provided make file with this command:
-```
+```bash
 make -f deploy_docker.mk clean_deploy
 ```
 Then load the image in the .tar file:
-```
+```bash
 docker load -i <TarFileName>.tar
 ```
 Finally check your image tag with `docker images` and launch the docker itself:
@@ -124,17 +124,17 @@ docker run -it --restart always -p 5000:5000 -e "LOCAL_COSTFUN=profit" -v $(pwd)
 
 With this method it is recommended to install on a virtual environment.
 For this you will need `virtualenv`, install it using:
-```
+```bash
 sudo apt install python3-virtualenv
 ```
 Then create and activate the virtual environment:
-```
+```bash
 virtualenv -p /usr/bin/python3 emhassenv
 cd emhassenv
 source bin/activate
 ```
 Install using the distribution files:
-```
+```bash
 python3 -m pip install emhass
 ```
 Clone this repository to obtain the example configuration files.
@@ -145,7 +145,7 @@ We will suppose that this repository is cloned to:
 This will be the root path containing the yaml configuration files (`config_emhass.yaml` and `secrets_emhass.yaml`) and the different needed folders (a `data` folder to store the optimizations results and a `scripts` folder containing the bash scripts described further below).
 
 To upgrade the installation in the future just use:
-```
+```bash
 python3 -m pip install --upgrade emhass
 ```
 
@@ -181,7 +181,7 @@ The available arguments are:
 - `--version`: Show the current version of EMHASS.
 
 For example, the following line command can be used to perform a day-ahead optimization task:
-```
+```bash
 emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.yaml' --costfun 'profit'
 ```
 Before running any valuable command you need to modify the `config_emhass.yaml` and `secrets_emhass.yaml` files. These files should contain the information adapted to your own system. To do this take a look at the special section for this in the [documentation](https://emhass.readthedocs.io/en/latest/config.html).
@@ -195,7 +195,7 @@ Then additional optimization strategies were developed, that can be used in comb
 ### Dayahead Optimization - Method 1) Add-on and docker standalone
 
 In `configuration.yaml`:
-```
+```yaml
 shell_command:
   dayahead_optim: "curl -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/dayahead-optim"
   publish_data: "curl -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/publish-data"
@@ -203,25 +203,25 @@ shell_command:
 ### Dayahead Optimization - Method 2) Legacy method using a Python virtual environment
 
 In `configuration.yaml`:
-```
+```yaml
 shell_command:
   dayahead_optim: /home/user/emhass/scripts/dayahead_optim.sh
   publish_data: /home/user/emhass/scripts/publish_data.sh
 ```
 Create the file `dayahead_optim.sh` with the following content:
-```
+```bash
 #!/bin/bash
 . /home/user/emhassenv/bin/activate
 emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.yaml'
 ```
 And the file `publish_data.sh` with the following content:
-```
+```bash
 #!/bin/bash
 . /home/user/emhassenv/bin/activate
 emhass --action 'publish-data' --config '/home/user/emhass/config_emhass.yaml'
 ```
 Then specify user rights and make the files executables:
-```
+```bash
 sudo chmod -R 755 /home/user/emhass/scripts/dayahead_optim.sh
 sudo chmod -R 755 /home/user/emhass/scripts/publish_data.sh
 sudo chmod +x /home/user/emhass/scripts/dayahead_optim.sh
@@ -230,7 +230,7 @@ sudo chmod +x /home/user/emhass/scripts/publish_data.sh
 ### Common for any installation method
 
 In `automations.yaml`:
-```
+```yaml
 - alias: EMHASS day-ahead optimization
   trigger:
     platform: time
@@ -247,7 +247,7 @@ In `automations.yaml`:
 In these automations the day-ahead optimization is performed everyday at 5:30am and the data is published every 5 minutes.
 
 The final action will be to link a sensor value in Home Assistant to control the switch of a desired controllable load. For example imagine that I want to control my water heater and that the `publish-data` action is publishing the optimized value of a deferrable load that I want to be linked to my water heater desired behavior. In this case we could use an automation like this one below to control the desired real switch:
-```
+```yaml
 automation:
 - alias: Water Heater Optimized ON
   trigger:
@@ -262,7 +262,7 @@ automation:
       entity_id: switch.water_heater_switch
 ```
 A second automation should be used to turn off the switch:
-```
+```yaml
 automation:
 - alias: Water Heater Optimized OFF
   trigger:
@@ -284,7 +284,7 @@ The `publish-data` command will push to Home Assistant the optimization results 
 The `publish-data` command will also publish PV and load forecast data on sensors `p_pv_forecast` and `p_load_forecast`. If using a battery, then the battery optimized power and the SOC will be published on sensors `p_batt_forecast` and `soc_batt_forecast`. On these sensors the future values are passed as nested attributes.
 
 It is possible to provide custm sensor names for all the data exported by the `publish-data` command. For this, when using the `publish-data` endpoint just add some runtime parameters as dictionaries like this:
-```
+```yaml
 shell_command:
   publish_data: "curl -i -H \"Content-Type:application/json\" -X POST -d '{\"custom_load_forecast_id\": {\"entity_id\": \"sensor.p_load_forecast\", \"unit_of_measurement\": \"W\", \"friendly_name\": \"Load Power Forecast\"}}' http://localhost:5000/action/publish-data"
 ```
@@ -292,7 +292,7 @@ shell_command:
 These keys are available to modify: `custom_pv_forecast_id`, `custom_load_forecast_id`, `custom_batt_forecast_id`, `custom_batt_soc_forecast_id`,  `custom_grid_forecast_id`, `custom_cost_fun_id`, `custom_deferrable_forecast_id`, `custom_unit_load_cost_id` and `custom_unit_prod_price_id`.
 
 If you provide the `custom_deferrable_forecast_id` then the passed data should be a list of dictionaries, like this:
-```
+```yaml
 shell_command:
   publish_data: "curl -i -H \"Content-Type:application/json\" -X POST -d '{\"custom_deferrable_forecast_id\": [{\"entity_id\": \"sensor.p_deferrable0\",\"unit_of_measurement\": \"W\", \"friendly_name\": \"Deferrable Load 0\"},{\"entity_id\": \"sensor.p_deferrable1\",\"unit_of_measurement\": \"W\", \"friendly_name\": \"Deferrable Load 1\"}]}' http://localhost:5000/action/publish-data"
 ```
@@ -342,11 +342,11 @@ The valid values to pass for both forecast data and MPC related data are explain
 It is possible to provide EMHASS with your own forecast data. For this just add the data as list of values to a data dictionary during the call to `emhass` using the `runtimeparams` option. 
 
 For example if using the add-on or the standalone docker installation you can pass this data as list of values to the data dictionary during the `curl` POST:
-```
+```bash
 curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}' http://localhost:5000/action/dayahead-optim
 ```
 Or if using the legacy method using a Python virtual environment:
-```
+```bash
 emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.yaml' --runtimeparams '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}'
 ```
 
@@ -419,9 +419,15 @@ When applying this controller, the following `runtimeparams` should be defined:
 
 A correct call for a MPC optimization should look like:
 
+```bash
+curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6}' http://192.168.3.159:5000/action/naive-mpc-optim
 ```
-curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3],"def_start_timestep":[0,3],"def_end_timestep":[0,6],}' http://localhost:5000/action/naive-mpc-optim
+*Example with :`def_total_hours`, `def_start_timestep`, `def_end_timestep`.*
+```bash
+curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3],"def_start_timestep":[0,3],"def_end_timestep":[0,6]}' http://localhost:5000/action/naive-mpc-optim
 ```
+
+
 
 ## A machine learning forecaster
 
