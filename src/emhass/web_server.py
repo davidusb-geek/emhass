@@ -204,7 +204,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     use_options = os.getenv('USE_OPTIONS', default=False)
-    options = None
+    options = None #options None by default
 
     #Obtain url and key from ENV or ARG (if any)
     hass_url = os.getenv("EMHASS_URL", default=args.url)
@@ -232,7 +232,6 @@ if __name__ == "__main__":
             raise Exception("options.json does not exist in path: "+str(options_json)) 
     else:
         if use_options:
-            OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
             options_json = Path(OPTIONS_PATH)
             # Read options info
             if options_json.exists():
