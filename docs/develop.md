@@ -222,7 +222,7 @@ docker run ... -v $(pwd)/data/:/app/data ...
 ```
 
 #### Issue with TARGETARCH
-If your docker build fails with an error related to `TARGETARCH`. It may be best to add your devices artitecture this in manually:
+If your docker build fails with an error related to `TARGETARCH`. It may be best to add your devices architecture manually:
 
 Example with armhf architecture 
 ```bash

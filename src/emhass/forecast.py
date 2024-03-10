@@ -159,7 +159,7 @@ class Forecast(object):
         self.end_forecast = (self.start_forecast + self.optim_conf['delta_forecast']).replace(microsecond=0)
         self.forecast_dates = pd.date_range(start=self.start_forecast, 
                                             end=self.end_forecast-self.freq, 
-                                            freq=self.freq).round(self.freq)
+                                            freq=self.freq).round(self.freq, ambiguous='infer', nonexistent=self.freq)
         if params is not None:
             if 'prediction_horizon' in list(self.params['passed_data'].keys()):
                 if self.params['passed_data']['prediction_horizon'] is not None:
@@ -184,7 +184,7 @@ class Forecast(object):
             freq_scrap = pd.to_timedelta(60, "minutes") # The scrapping time step is 60min
             forecast_dates_scrap = pd.date_range(start=self.start_forecast,
                                                  end=self.end_forecast-freq_scrap, 
-                                                 freq=freq_scrap).round(freq_scrap)
+                                                 freq=freq_scrap).round(freq_scrap, ambiguous='infer', nonexistent=freq_scrap)
             # Using the clearoutside webpage
             response = get("https://clearoutside.com/forecast/"+str(round(self.lat, 2))+"/"+str(round(self.lon, 2))+"?desktop=true")
             '''import bz2 # Uncomment to save a serialized data for tests
@@ -476,7 +476,7 @@ class Forecast(object):
         end_forecast_csv = (start_forecast_csv + self.optim_conf['delta_forecast']).replace(microsecond=0)
         forecast_dates_csv = pd.date_range(start=start_forecast_csv, 
                                            end=end_forecast_csv+timedelta(days=timedelta_days)-self.freq, 
-                                           freq=self.freq).round(self.freq)
+                                           freq=self.freq).round(self.freq, ambiguous='infer', nonexistent=self.freq)
         if self.params is not None:
             if 'prediction_horizon' in list(self.params['passed_data'].keys()):
                 if self.params['passed_data']['prediction_horizon'] is not None:
