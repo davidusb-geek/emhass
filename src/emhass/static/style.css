@@ -789,13 +789,19 @@ th {
 }
 
 /* Basic and Advanced fade transitions */
-.TabSelection, #advance, #basic, button, select, .info, .input-list {
+.TabSelection, #advance, #basic, button, select, .info {
   animation-name: fadeInOpacity;
   animation-iteration-count: 1;
   animation-timing-function: ease-in-out;
   animation-duration: .3s;
 }
 
+.input-list, .input-box {
+  animation-name: fadeInOpacity;
+  animation-iteration-count: 1;
+  animation-timing-function: ease-in-out;
+  animation-duration: .1s;
+}
 
 /* Alert box styling */
 .alert {
