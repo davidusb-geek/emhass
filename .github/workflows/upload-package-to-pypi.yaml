@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  run:
+  build:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -14,18 +14,40 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: 3.11
-    - name: Install dependencies
-      run: |
-        python -m venv .venv
-        source .venv/bin/activate
-        python -m pip install --upgrade pip
-        pip install setuptools wheel twine
-        python -m pip install --upgrade build
-    - name: Build and publish
-      env:
-        TWINE_USERNAME: __token__
-        TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
-      run: |
-        source .venv/bin/activate
-        python -m build
-        twine upload dist/*
+    - name: Install pypa/build
+      run: >-
+        python3 -m pip install build --user
+    - name: Build a binary wheel and a source tarball
+      run: python3 -m build
+    - name: Store the distribution packages
+      uses: actions/upload-artifact@v3
+      with:
+        name: python-package-distributions
+        path: dist/
+    #- name: Build and publish
+    #  env:
+    #    TWINE_USERNAME: __token__
+    #    TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+    #  run: |
+    #    source .venv/bin/activate
+    #    python -m build
+    #    twine upload dist/*
+  publish-to-pypi:
+    name: >-
+      Publish Python 🐍 distribution 📦 to PyPI
+    needs:
+    - build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/emhass
+    permissions:
+      id-token: ${{ secrets.PYPI_PASSWORD }}
+    steps:
+    - name: Download all the dists
+      uses: actions/download-artifact@v3
+      with:
+        name: python-package-distributions
+        path: dist/
+    - name: Publish distribution 📦 to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
