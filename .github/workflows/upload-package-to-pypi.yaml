@@ -26,5 +26,6 @@ jobs:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
       run: |
+        source .venv/bin/activate
         python -m build
         twine upload dist/*
