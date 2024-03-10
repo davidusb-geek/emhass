@@ -98,7 +98,7 @@ def action_call(action_name):
     runtimeparams = request.get_json(force=True)
     params = json.dumps(params)
     if runtimeparams is not None and runtimeparams != '{}':
-        app.logger.info("Passed runtime parameters: " + runtimeparams)
+        app.logger.info("Passed runtime parameters: " + str(runtimeparams))
     runtimeparams = json.dumps(runtimeparams)
     ActionStr = " >> Setting input data dict"
     app.logger.info(ActionStr)
@@ -220,13 +220,13 @@ if __name__ == "__main__":
         OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
         options_json = Path(OPTIONS_PATH)
         CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
+        DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
         # Read options info
         if options_json.exists():
             with options_json.open('r') as data:
                 options = json.load(data)
         else:
             app.logger.error("options.json does not exists")
-        DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
     else:
         if use_options:
             OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
@@ -238,9 +238,12 @@ if __name__ == "__main__":
             else:
                 app.logger.error("options.json does not exists")
         else:
-            options = None
-        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
-        DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
+            options = None       
+
+    #if data path specified by options.json
+    if options_json.exists():
+        if options.get('data_path', None) != None and options.get('data_path', None) != "default":
+            DATA_PATH = options.get('data_path', None);   
 
     config_path = Path(CONFIG_PATH)
     data_path = Path(DATA_PATH)
@@ -254,7 +257,7 @@ if __name__ == "__main__":
         plant_conf = config['plant_conf']
     else:
         app.logger.error("Unable to open the default configuration yaml file")
-        app.logger.info("Failed config_path: "+str(config_path))
+        raise Exception("Failed to open config file, config_path: "+str(config_path)) 
 
     params = {}
     params['retrieve_hass_conf'] = retrieve_hass_conf
@@ -373,8 +376,11 @@ if __name__ == "__main__":
         params = build_params(params, params_secrets, options, 1, app.logger)
     else:
         params = build_params(params, params_secrets, options, args.addon, app.logger)
-    with open(str(data_path / 'params.pkl'), "wb") as fid:
-        pickle.dump((config_path, params), fid)
+    if os.path.exists(str(data_path)): 
+        with open(str(data_path / 'params.pkl'), "wb") as fid:
+            pickle.dump((config_path, params), fid)
+    else: 
+        raise Exception("missing: " + str(data_path))        
 
     # Define logger
     #stream logger
