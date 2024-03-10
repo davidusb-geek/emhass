@@ -42,7 +42,7 @@ jobs:
       name: pypi
       url: https://pypi.org/p/emhass
     permissions:
-      id-token: ${{ secrets.PYPI_PASSWORD }}
+      id-token: write
     steps:
     - name: Download all the dists
       uses: actions/download-artifact@v3
