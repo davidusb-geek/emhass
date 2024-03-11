@@ -203,9 +203,6 @@ if __name__ == "__main__":
     parser.add_argument('--no_response', type=strtobool, default='False', help='This is set if json response errors occur')
     args = parser.parse_args()
     
-    use_options = os.getenv('USE_OPTIONS', default=False)
-    options = None #options None by default
-
     #Obtain url and key from ENV or ARG (if any)
     hass_url = os.getenv("EMHASS_URL", default=args.url)
     key =  os.getenv("SUPERVISOR_TOKEN", default=args.key) 
@@ -216,9 +213,13 @@ if __name__ == "__main__":
     if hass_url is None: hass_url = ""
     
     #find env's, not not set defaults 
+    use_options = os.getenv('USE_OPTIONS', default=False)
     CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
     OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
     DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
+    
+    options = None #options None by default
+
 
     # Define the paths
     if args.addon==1:
