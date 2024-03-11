@@ -9,9 +9,10 @@ import warnings
 
 import pandas as pd
 import numpy as np
+from sklearn.ensemble import AdaBoostRegressor, GradientBoostingRegressor, RandomForestRegressor
 from sklearn.metrics import  r2_score
 
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import Lasso, LinearRegression, Ridge
 from sklearn.model_selection import GridSearchCV, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -122,33 +123,63 @@ class CsvPredictor:
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         self.steps = len(X_test)
 
-        # Define the model
-        self.model = Pipeline([
-            ('scaler', StandardScaler()),
-            ('regressor', LinearRegression())
-        ])
-        # Define the parameters to tune
-        param_grid = {
-            'regressor__fit_intercept': [True, False],
-            'regressor__positive': [True, False],
-        }
+        regression_methods = [
+            ('Linear Regression', LinearRegression(), {}),
+            ('Ridge Regression', Ridge(), {'ridge__alpha': [0.1, 1.0, 10.0]}),
+            ('Lasso Regression', Lasso(), {'lasso__alpha': [0.1, 1.0, 10.0]}),
+            ('Random Forest Regression', RandomForestRegressor(), {'randomforestregressor__n_estimators': [50, 100, 200]}),
+            ('Gradient Boosting Regression', GradientBoostingRegressor(), {
+                'gradientboostingregressor__n_estimators': [50, 100, 200],
+                'gradientboostingregressor__learning_rate': [0.01, 0.1, 0.2]
+            }),
+            ('AdaBoost Regression', AdaBoostRegressor(), {
+                'adaboostregressor__n_estimators': [50, 100, 200],
+                'adaboostregressor__learning_rate': [0.01, 0.1, 0.2]
+            })
+        ]
 
-        # Create a grid search object
-        self.grid_search = GridSearchCV(self.model, param_grid, cv=5, scoring=['r2', 'neg_mean_squared_error'], refit='r2', verbose=0, n_jobs=-1)
-        # Fit the grid search object to the data
-        self.logger.info("Fitting the model...")
-        start_time = time.time()
-        self.grid_search.fit(X_train.values, y_train.values)
-        self.logger.info(f"Elapsed time for model fit: {time.time() - start_time}")
+        # Define the models
+        for name, model, param_grid in regression_methods:
+            pipeline = Pipeline([
+                ('scaler', StandardScaler()),
+                (name, model)
+            ])
+            
+            # Use GridSearchCV to find the best hyperparameters for each model
+            grid_search = GridSearchCV(pipeline, param_grid, scoring='neg_mean_squared_error', cv=5)
+            grid_search.fit(X_train, y_train)
 
-        self.model = self.grid_search.best_estimator_
+            # Get the best model and print its mean squared error on the test set
+            best_model = grid_search.best_estimator_
+            print(best_model)
+            predictions = best_model.predict(X_test)
+            print(predictions)
+        # self.model = Pipeline([
+        #     ('scaler', StandardScaler()),
+        #     ('regressor', LinearRegression())
+        # ])
+        # # Define the parameters to tune
+        # param_grid = {
+        #     'regressor__fit_intercept': [True, False],
+        #     'regressor__positive': [True, False],
+        # }
+
+        # # Create a grid search object
+        # self.grid_search = GridSearchCV(self.model, param_grid, cv=5, scoring=['r2', 'neg_mean_squared_error'], refit='r2', verbose=0, n_jobs=-1)
+        # # Fit the grid search object to the data
+        # self.logger.info("Fitting the model...")
+        # start_time = time.time()
+        # self.grid_search.fit(X_train.values, y_train.values)
+        # self.logger.info(f"Elapsed time for model fit: {time.time() - start_time}")
+
+        # self.model = self.grid_search.best_estimator_
 
 
-        # Make predictions
-        predictions = self.model.predict(X_test.values)
-        predictions = pd.Series(predictions, index=X_test.index)
-        pred_metric = r2_score(y_test,predictions)
-        self.logger.info(f"Prediction R2 score of fitted model on test data: {pred_metric}")
+        # # Make predictions
+        # predictions = self.model.predict(X_test.values)
+        # predictions = pd.Series(predictions, index=X_test.index)
+        # pred_metric = r2_score(y_test,predictions)
+        # self.logger.info(f"Prediction R2 score of fitted model on test data: {pred_metric}")
         
 
     def predict(self, new_values:list) -> np.ndarray:
