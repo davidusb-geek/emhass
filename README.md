@@ -111,15 +111,19 @@ docker load -i <TarFileName>.tar
 ```
 Finally check your image tag with `docker images` and launch the docker itself:
 ```bash
-docker run -it --restart always -p 5000:5000 -e "LOCAL_COSTFUN=profit" -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
+docker run -it --restart always -p 5000:5000 -e LOCAL_COSTFUN="profit" -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
 ```
   - If you wish to keep a local, persistent copy of the EMHASS generated data, create a local folder on your device, then mount said folder inside the container.  
     ```bash
     mkdir -p $(pwd)/data #linux: create data folder on local device
 
-    docker run -it --restart always -p 5000:5000 -e "LOCAL_COSTFUN=profit" -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/data:/app/data  -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
+    docker run -it --restart always -p 5000:5000 -e LOCAL_COSTFUN="profit" -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/data:/app/data  -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
     ```
-
+    
+If you wish to set the web_server's diagrams to a timezone other than UTC, set `TZ` environment variable on:
+```bash
+docker run -it --restart always -p 5000:5000  -e TZ="Europe/Paris"  -e LOCAL_COSTFUN="profit" -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
+```  
 ### Method 3) Legacy method using a Python virtual environment
 
 With this method it is recommended to install on a virtual environment.
