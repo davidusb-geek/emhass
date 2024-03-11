@@ -203,8 +203,6 @@ if __name__ == "__main__":
     parser.add_argument('--no_response', type=strtobool, default='False', help='This is set if json response errors occur')
     args = parser.parse_args()
     
-    use_options = os.getenv('USE_OPTIONS', default=False)
-
     #Obtain url and key from ENV or ARG (if any)
     hass_url = os.getenv("EMHASS_URL", default=args.url)
     key =  os.getenv("SUPERVISOR_TOKEN", default=args.key) 
@@ -214,33 +212,40 @@ if __name__ == "__main__":
     if key is None: key = ""
     if hass_url is None: hass_url = ""
     
+    #find env's, not not set defaults 
+    use_options = os.getenv('USE_OPTIONS', default=False)
+    CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
+    OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
+    DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
+    
+    #options None by default
+    options = None 
+
     # Define the paths
     if args.addon==1:
-        OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
         options_json = Path(OPTIONS_PATH)
-        CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
-        DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
         # Read options info
         if options_json.exists():
             with options_json.open('r') as data:
                 options = json.load(data)
         else:
-            app.logger.error("options.json does not exists")
+            app.logger.error("options.json does not exist")
+            raise Exception("options.json does not exist in path: "+str(options_json)) 
     else:
         if use_options:
-            OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
             options_json = Path(OPTIONS_PATH)
             # Read options info
             if options_json.exists():
                 with options_json.open('r') as data:
                     options = json.load(data)
             else:
-                app.logger.error("options.json does not exists")
+                app.logger.error("options.json does not exist")
+                raise Exception("options.json does not exist in path: "+str(options_json)) 
         else:
             options = None       
 
     #if data path specified by options.json
-    if options_json.exists():
+    if options is not None:
         if options.get('data_path', None) != None and options.get('data_path', None) != "default":
             DATA_PATH = options.get('data_path', None);   
 
