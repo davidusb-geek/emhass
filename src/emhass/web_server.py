@@ -218,8 +218,8 @@ if __name__ == "__main__":
     OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
     DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
     
-    options = None #options None by default
-
+    #options None by default
+    options = None 
 
     # Define the paths
     if args.addon==1:
