@@ -1,10 +1,33 @@
+//before page load check for stylesheet
+document.onreadystatechange = async function() {
+    checkStyleSheets()
+}
+
 //on page reload get saved data
 window.onload = async function () {
+
     pageSelected = await loadBasicOrAdvanced();
 
     //add listener for basic and advanced html switch
     document.getElementById("basicOrAdvanced").addEventListener("click", () => SwitchBasicOrAdvanced());
 };
+
+//check style sheet is loaded 
+async function checkStyleSheets() {
+    var styleHREF = getHTMLURL() + `static/style.css`
+    var styles = document.styleSheets;
+    for (var i = 0; i < styles.length; i++) {
+        if (styles[i].href.match("style")["input"] == styleHREF) {
+            return true
+        }
+    }
+    //if could not find file
+    var style = document.createElement("link");
+    style.rel = "stylesheet";
+    style.href = styleHREF;
+    style.type = "text/css";
+    document.getElementsByTagName("head")[0].appendChild(style);
+}
 
 //add listeners to buttons (based on page)
 function loadButtons(page) {
