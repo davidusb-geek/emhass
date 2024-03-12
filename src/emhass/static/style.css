@@ -1045,7 +1045,7 @@ th {
   }
 
   tr:hover td,
-  th, td:first-child, td:last-child
+  th:last-child, th:first-child, td:first-child, td:last-child
   {
     border-radius: 7px
   }
