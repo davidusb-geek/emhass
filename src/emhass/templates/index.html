@@ -5,7 +5,7 @@
     <title>EMHASS: Energy Management Optimization for Home Assistant</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" type="text/css" href="{{ basename }}/static/style.css">
-    <link rel="icon" href="{{ basename }}/static/img/emhass_logo_short.svg">
+    <link rel="icon" type="image/x-icon" href="{{ basename }}/static/img/emhass_logo_short.svg">
     <script src="{{ basename }}/static/script.js"></script>
 </head>
 
@@ -15,19 +15,19 @@
         <!-- Icons by feather https://github.com/feathericons/feather -->
         <div id="top-links">
             <!-- advanced or basic page switch -->
-            <a id="basicOrAdvanced" style="margin-right: .7em; cursor: pointer; z-index: 1">
+            <a id="basicOrAdvanced" style="margin-right: 24px; cursor: pointer; z-index: 1">
                 <svg class="feather">
-                    <use href="{{ basename }}/static/img/feather-sprite.svg#tool" />
+                    <use class="feather" href="{{ basename }}/static/img/feather-sprite.svg#tool" />
                 </svg>
             </a>
             <a href="https://emhass.readthedocs.io/en/latest/">
-                <svg class="feather">
-                    <use href="{{ basename }}/static/img/feather-sprite.svg#book" />
+                <svg class="feather" style="margin-right: 12px;";>
+                    <use class="feather" href="{{ basename }}/static/img/feather-sprite.svg#book" />
                 </svg>
             </a>
-            <a href="https://github.com/davidusb-geek/emhass">
-                <svg style="margin-right: 0px;" class="feather">
-                    <use href="{{ basename }}/static/img/feather-sprite.svg#git-branch" />
+            <a href="https://github.com/davidusb-geek/emhass" target="_blank" rel="noopener noreferrer">
+                <svg class="feather" style="margin-right: 0px;" >
+                    <use class="feather" href="{{ basename }}/static/img/feather-sprite.svg#git-branch" />
                 </svg>
             </a>
         </div>
