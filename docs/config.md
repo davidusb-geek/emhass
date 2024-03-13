@@ -85,8 +85,8 @@ The following parameters and definitions are only needed if load_cost_forecast_m
 - `set_battery_dynamic`: Set a power dynamic limiting condition to the battery power. This is an additional constraint on the battery dynamic in power per unit of time, which allows you to set a percentage of the battery nominal full power as the maximum power allowed for (dis)charge.
 - `battery_dynamic_max`: The maximum positive (for discharge) battery power dynamic. This is the allowed power variation (in percentage) of battery maximum power per unit of time.
 - `battery_dynamic_min`: The maximum negative (for charge) battery power dynamic. This is the allowed power variation (in percentage) of battery maximum power per unit of time.
-- `weight_battery_discharge`: An additional weight applied in cost function to battery usage for discharge.
-- `weight_battery_charge`: An additional weight applied in cost function to battery usage for charge.
+- `weight_battery_discharge`: An additional weight (currency/ kWh) applied in cost function to battery usage for discharge. Defaults to 0.00
+- `weight_battery_charge`: An additional weight (currency/ kWh) applied in cost function to battery usage for charge. Defaults to 0.00
 
 ## System configuration parameters
 

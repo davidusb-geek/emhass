@@ -543,17 +543,23 @@ template {
 /* feather icons css 
 https://github.com/feathericons/feather */
 .feather {
-  width: 27px;
-  height: 27px;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  fill: none;
-  margin-right: 12px;
-  filter: drop-shadow( #282928 .4px .5px);
+  width: 27px !important;
+  height: 27px !important;
+  stroke: currentColor !important;
+  stroke-width: 2 !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+  fill: none !important;
+  filter: drop-shadow( #282928 .2px .2px) !important;
+  -webkit-text-size-adjust: none !important;
+  -ms-text-size-adjust: none !important;
+
 }
 
+/* feather icons no background color */ 
+#top-links a {
+  background: none !important;
+} 
 
 /* -------------- */
 
@@ -1039,7 +1045,7 @@ th {
   }
 
   tr:hover td,
-  th, td:first-child, td:last-child
+  th:last-child, th:first-child, td:first-child, td:last-child
   {
     border-radius: 7px
   }
