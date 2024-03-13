@@ -52,11 +52,11 @@ if __name__ == '__main__':
         days_list = get_days_list(retrieve_hass_conf['days_to_retrieve'])
         var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
         rh.get_data(days_list, var_list,
-                        minimal_response=False, significant_changes_only=False)
+                    minimal_response=False, significant_changes_only=False)
     rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
-                            set_zero_min = retrieve_hass_conf['set_zero_min'], 
-                            var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
-                            var_interp = retrieve_hass_conf['var_interp'])
+                    set_zero_min = retrieve_hass_conf['set_zero_min'], 
+                    var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
+                    var_interp = retrieve_hass_conf['var_interp'])
     df_input_data = rh.df_final.copy()
     
     fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt = \
