@@ -92,7 +92,7 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         P_PV_forecast = fcst.get_power_from_weather(df_weather)
         P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
         if isinstance(P_load_forecast,bool) and not P_load_forecast:
-            logger.error("Unable to get sensor_power_photovoltaics or sensor_power_load_no_var_loads")
+            logger.error("Unable to get sensor power photovoltaics, or sensor power load no var loads. Check HA sensors and their daily data")
             return False
         df_input_data_dayahead = pd.DataFrame(np.transpose(np.vstack([P_PV_forecast.values,P_load_forecast.values])),
                                               index=P_PV_forecast.index,
