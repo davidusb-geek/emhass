@@ -683,10 +683,6 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int, 
             logger.warning("P_deferrable_nom / list_nominal_power_of_deferrable_loads does not match number in num_def_loads, adding default values to parameter")
             for x in range(len(params['optim_conf']['P_deferrable_nom']), params['optim_conf']['num_def_loads']):
                 params['optim_conf']['P_deferrable_nom'].append(0)   
-        if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['list_hp_periods']):
-            logger.warning("list_hp_periods / list_peak_hours_periods_(start&end)_hours does not match number in num_def_loads, adding default values to parameter")
-            for x in range(len(params['optim_conf']['list_hp_periods']), params['optim_conf']['num_def_loads']):
-                params['optim_conf']['list_hp_periods'].append({'period_hp_'+str(x+1):[{'start':'02:54'},{'end':'20:24'}]})
         # days_to_retrieve should be no less then 2
         if params['retrieve_hass_conf']['days_to_retrieve'] < 2:
             params['retrieve_hass_conf']['days_to_retrieve'] = 2
