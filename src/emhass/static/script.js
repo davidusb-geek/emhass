@@ -1,8 +1,3 @@
-//before page load check for stylesheet
-document.onreadystatechange = async function() {
-    checkStyleSheets()
-}
-
 //on page reload get saved data
 window.onload = async function () {
 
