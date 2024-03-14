@@ -12,23 +12,6 @@ window.onload = async function () {
     document.getElementById("basicOrAdvanced").addEventListener("click", () => SwitchBasicOrAdvanced());
 };
 
-//check style sheet is loaded 
-async function checkStyleSheets() {
-    var styleHREF = getHTMLURL() + `static/style.css`
-    var styles = document.styleSheets;
-    for (var i = 0; i < styles.length; i++) {
-        if (styles[i].href.match("style")["input"] == styleHREF) {
-            return true
-        }
-    }
-    //if could not find file
-    var style = document.createElement("link");
-    style.rel = "stylesheet";
-    style.href = styleHREF;
-    style.type = "text/css";
-    document.getElementsByTagName("head")[0].appendChild(style);
-}
-
 //add listeners to buttons (based on page)
 function loadButtons(page) {
     switch (page) {
@@ -120,19 +103,10 @@ function SwitchBasicOrAdvanced() {
     }
 }
 
-//set current url
-function getHTMLURL() {
-    var currentUrl
-    if (window.location) {
-        currentUrl = window.location.href; //get current url to append
-    }
-    else { currentUrl = "" }
-    return currentUrl
-}
 
 //get html data from basic.html or advanced.html
 async function getHTMLData(htmlFile) {
-    const response = await fetch(getHTMLURL() + `static/` + htmlFile);
+    const response = await fetch(`static/` + htmlFile);
     blob = await response.blob(); //get data blob
     htmlTemplateData = await new Response(blob).text(); //obtain html from blob
     return await htmlTemplateData;
@@ -148,7 +122,7 @@ async function formAction(action, page) {
 
     if (data !== 0) { //don't run if there is an error in the input (box/list) Json data
         showChangeStatus("loading", {}); // show loading div for status
-        const response = await fetch(getHTMLURL() + `action/${action}`, {
+        const response = await fetch(`action/` + action, {
             //fetch data from webserver.py
             method: "POST",
             headers: {
@@ -206,7 +180,7 @@ async function showChangeStatus(status, logJson) {
 async function getTemplate() {
     //fetch data from webserver.py
     let htmlTemplateData = "";
-    response = await fetch(getHTMLURL() + `template/table-template`, {
+    response = await fetch(`template/table-template`, {
         method: "GET",
     });
     blob = await response.blob(); //get data blob
