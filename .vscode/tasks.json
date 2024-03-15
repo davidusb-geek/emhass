@@ -9,7 +9,11 @@
                 "isDefault": true
             },
             "args": [
-                "install", "--no-deps", "--force-reinstall", "."
+                "install",
+                "--no-deps",
+                "--force-reinstall",
+                "--editable",
+                "."
             ],
             "presentation": {
                 "echo": true,
