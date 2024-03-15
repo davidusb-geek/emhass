@@ -394,47 +394,36 @@ def treat_runtimeparams(
         if "mlr_predict_friendly_name" not in runtimeparams.keys():
             mlr_predict_friendly_name = "mlr predictor"
         else:
-            mlr_predict_friendly_name = runtimeparams["mlr_predict_friendly_name"]
-        params["passed_data"]["mlr_predict_friendly_name"] = mlr_predict_friendly_name
-        # Treat optimization configuration parameters passed at runtime
-        if "num_def_loads" in runtimeparams.keys():
-            optim_conf["num_def_loads"] = runtimeparams["num_def_loads"]
-        if "P_deferrable_nom" in runtimeparams.keys():
-            optim_conf["P_deferrable_nom"] = runtimeparams["P_deferrable_nom"]
-        if "def_total_hours" in runtimeparams.keys():
-            optim_conf["def_total_hours"] = runtimeparams["def_total_hours"]
-        if "def_start_timestep" in runtimeparams.keys():
-            optim_conf["def_start_timestep"] = runtimeparams["def_start_timestep"]
-        if "def_end_timestep" in runtimeparams.keys():
-            optim_conf["def_end_timestep"] = runtimeparams["def_end_timestep"]
-        if "treat_def_as_semi_cont" in runtimeparams.keys():
-            optim_conf["treat_def_as_semi_cont"] = [
-                eval(str(k).capitalize())
-                for k in runtimeparams["treat_def_as_semi_cont"]
-            ]
-        if "set_def_constant" in runtimeparams.keys():
-            optim_conf["set_def_constant"] = [
-                eval(str(k).capitalize()) for k in runtimeparams["set_def_constant"]
-            ]
-        if "solcast_api_key" in runtimeparams.keys():
-            retrieve_hass_conf["solcast_api_key"] = runtimeparams["solcast_api_key"]
-            optim_conf["weather_forecast_method"] = "solcast"
-        if "solcast_rooftop_id" in runtimeparams.keys():
-            retrieve_hass_conf["solcast_rooftop_id"] = runtimeparams[
-                "solcast_rooftop_id"
-            ]
-            optim_conf["weather_forecast_method"] = "solcast"
-        if "solar_forecast_kwp" in runtimeparams.keys():
-            retrieve_hass_conf["solar_forecast_kwp"] = runtimeparams[
-                "solar_forecast_kwp"
-            ]
-            optim_conf["weather_forecast_method"] = "solar.forecast"
-        if "weight_battery_discharge" in runtimeparams.keys():
-            optim_conf["weight_battery_discharge"] = runtimeparams[
-                "weight_battery_discharge"
-            ]
-        if "weight_battery_charge" in runtimeparams.keys():
-            optim_conf["weight_battery_charge"] = runtimeparams["weight_battery_charge"]
+            mlr_predict_friendly_name = runtimeparams['mlr_predict_friendly_name']
+        params['passed_data']['mlr_predict_friendly_name'] = mlr_predict_friendly_name
+        # Treat optimization configuration parameters passed at runtime 
+        if 'num_def_loads' in runtimeparams.keys():
+            optim_conf['num_def_loads'] = runtimeparams['num_def_loads']
+        if 'P_deferrable_nom' in runtimeparams.keys():
+            optim_conf['P_deferrable_nom'] = runtimeparams['P_deferrable_nom']
+        if 'def_total_hours' in runtimeparams.keys():
+            optim_conf['def_total_hours'] = runtimeparams['def_total_hours']
+        if 'def_start_timestep' in runtimeparams.keys():
+            optim_conf['def_start_timestep'] = runtimeparams['def_start_timestep']
+        if 'def_end_timestep' in runtimeparams.keys():
+            optim_conf['def_end_timestep'] = runtimeparams['def_end_timestep']
+        if 'treat_def_as_semi_cont' in runtimeparams.keys():
+            optim_conf['treat_def_as_semi_cont'] = [eval(str(k).capitalize()) for k in runtimeparams['treat_def_as_semi_cont']]
+        if 'set_def_constant' in runtimeparams.keys():
+            optim_conf['set_def_constant'] = [eval(str(k).capitalize()) for k in runtimeparams['set_def_constant']]
+        if 'solcast_api_key' in runtimeparams.keys():
+            retrieve_hass_conf['solcast_api_key'] = runtimeparams['solcast_api_key']
+            optim_conf['weather_forecast_method'] = 'solcast'
+        if 'solcast_rooftop_id' in runtimeparams.keys():
+            retrieve_hass_conf['solcast_rooftop_id'] = runtimeparams['solcast_rooftop_id']
+            optim_conf['weather_forecast_method'] = 'solcast'
+        if 'solar_forecast_kwp' in runtimeparams.keys():
+            retrieve_hass_conf['solar_forecast_kwp'] = runtimeparams['solar_forecast_kwp']
+            optim_conf['weather_forecast_method'] = 'solar.forecast'
+        if 'weight_battery_discharge' in runtimeparams.keys():
+            optim_conf['weight_battery_discharge'] = runtimeparams['weight_battery_discharge']
+        if 'weight_battery_charge' in runtimeparams.keys():
+            optim_conf['weight_battery_charge'] = runtimeparams['weight_battery_charge']
         # Treat plant configuration parameters passed at runtime
         if "SOCtarget" in runtimeparams.keys():
             plant_conf["SOCtarget"] = runtimeparams["SOCtarget"]
