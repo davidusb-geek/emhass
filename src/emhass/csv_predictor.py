@@ -14,7 +14,7 @@ from sklearn.metrics import  r2_score
 
 from sklearn.linear_model import Lasso, LinearRegression, Ridge
 from sklearn.model_selection import GridSearchCV, train_test_split
-from sklearn.pipeline import Pipeline
+from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 
@@ -33,7 +33,7 @@ class CsvPredictor:
     - `predict`: to obtain a forecast from a pre-trained model.
     
     """
-    def __init__(self, data, model_type: str, independent_variables: list, dependent_variable: str, timestamp: str,
+    def __init__(self, data, model_type: str, sklearn_model: str, independent_variables: list, dependent_variable: str, timestamp: str,
                 logger: logging.Logger) -> None:
         r"""Define constructor for the forecast class.
 
@@ -58,9 +58,14 @@ class CsvPredictor:
         self.dependent_variable = dependent_variable
         self.timestamp = timestamp
         self.model_type = model_type
+        self.sklearn_model = sklearn_model
         self.logger = logger
         self.data.sort_index(inplace=True)
         self.data = self.data[~self.data.index.duplicated(keep='first')]
+        self.data_exo = None
+        self.steps = None
+        self.model = None
+        self.grid_search =None
     
     @staticmethod
     def add_date_features(data: pd.DataFrame, date_features: list, timestamp: str) -> pd.DataFrame:
@@ -123,63 +128,117 @@ class CsvPredictor:
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         self.steps = len(X_test)
 
-        regression_methods = [
-            ('Linear Regression', LinearRegression(), {}),
-            ('Ridge Regression', Ridge(), {'ridge__alpha': [0.1, 1.0, 10.0]}),
-            ('Lasso Regression', Lasso(), {'lasso__alpha': [0.1, 1.0, 10.0]}),
-            ('Random Forest Regression', RandomForestRegressor(), {'randomforestregressor__n_estimators': [50, 100, 200]}),
-            ('Gradient Boosting Regression', GradientBoostingRegressor(), {
+        regression_methods = {
+            'LinearRegression': {"model": LinearRegression(), "param_grid": {
+                'linearregression__fit_intercept': [True, False],
+                'linearregression__positive': [True, False],
+            }},
+            'RidgeRegression': {"model": Ridge(), "param_grid": {'ridge__alpha': [0.1, 1.0, 10.0]}},
+            'LassoRegression': {"model": Lasso(), "param_grid": {'lasso__alpha': [0.1, 1.0, 10.0]}},
+            'RandomForestRegression': {"model": RandomForestRegressor(), "param_grid": {'randomforestregressor__n_estimators': [50, 100, 200]}},
+            'GradientBoostingRegression': {"model": GradientBoostingRegressor(), "param_grid": {
                 'gradientboostingregressor__n_estimators': [50, 100, 200],
                 'gradientboostingregressor__learning_rate': [0.01, 0.1, 0.2]
-            }),
-            ('AdaBoost Regression', AdaBoostRegressor(), {
+            }},
+            'AdaBoostRegression': {"model": AdaBoostRegressor(), "param_grid": {
                 'adaboostregressor__n_estimators': [50, 100, 200],
                 'adaboostregressor__learning_rate': [0.01, 0.1, 0.2]
-            })
-        ]
+            }}
+        }
+        # regression_methods = [
+        #     ('LinearRegression', LinearRegression(), {
+        #         'linearregression__fit_intercept': [True, False],
+        #         'linearregression__positive': [True, False],
+        #     }),
+        #     ('RidgeRegression', Ridge(), {'ridge__alpha': [0.1, 1.0, 10.0]}),
+        #     ('LassoRegression', Lasso(), {'lasso__alpha': [0.1, 1.0, 10.0]}),
+        #     ('RandomForestRegression', RandomForestRegressor(), {'randomforestregressor__n_estimators': [50, 100, 200]}),
+        #     ('GradientBoostingRegression', GradientBoostingRegressor(), {
+        #         'gradientboostingregressor__n_estimators': [50, 100, 200],
+        #         'gradientboostingregressor__learning_rate': [0.01, 0.1, 0.2]
+        #     }),
+        #     ('AdaBoostRegression', AdaBoostRegressor(), {
+        #         'adaboostregressor__n_estimators': [50, 100, 200],
+        #         'adaboostregressor__learning_rate': [0.01, 0.1, 0.2]
+        #     })
+        # ]
+
+        if self.sklearn_model == 'LinearRegression':
+            base_model = regression_methods['LinearRegression']['model']
+            param_grid = regression_methods['LinearRegression']['param_grid']
+        elif self.sklearn_model == 'RidgeRegression':
+            base_model = regression_methods['RidgeRegression']['model']
+            param_grid = regression_methods['RidgeRegression']['param_grid']
+        elif self.sklearn_model == 'LassoRegression':
+            base_model = regression_methods['LassoRegression']['model']
+            param_grid = regression_methods['LassoRegression']['param_grid']
+        elif self.sklearn_model == 'RandomForestRegression':
+            base_model = regression_methods['RandomForestRegression']['model']
+            param_grid = regression_methods['RandomForestRegression']['param_grid']
+        elif self.sklearn_model == 'GradientBoostingRegression':
+            base_model = regression_methods['GradientBoostingRegression']['model']
+            param_grid = regression_methods['GradientBoostingRegression']['param_grid']
+        elif self.sklearn_model == 'AdaBoostRegression':
+            base_model = regression_methods['AdaBoostRegression']['model']
+            param_grid = regression_methods['AdaBoostRegression']['param_grid']
+        else:
+            self.logger.error("Passed sklearn model "+self.sklearn_model+" is not valid")
+
 
         # Define the models
-        for name, model, param_grid in regression_methods:
-            pipeline = Pipeline([
-                ('scaler', StandardScaler()),
-                (name, model)
-            ])
+        # for name, model, param_grid in regression_methods:
+        #     self.model = make_pipeline(
+        #         StandardScaler(),
+        #         model
+        #     )
+        #     # self.model = Pipeline([
+        #     #     ('scaler', StandardScaler()),
+        #     #     (name, model)
+        #     # ])
             
-            # Use GridSearchCV to find the best hyperparameters for each model
-            grid_search = GridSearchCV(pipeline, param_grid, scoring='neg_mean_squared_error', cv=5)
-            grid_search.fit(X_train, y_train)
+        #     # Use GridSearchCV to find the best hyperparameters for each model
+        #     grid_search = GridSearchCV(self.model, param_grid, cv=5, scoring=['r2', 'neg_mean_squared_error'], refit='r2', verbose=0, n_jobs=-1)
+        #     grid_search.fit(X_train, y_train)
 
-            # Get the best model and print its mean squared error on the test set
-            best_model = grid_search.best_estimator_
-            print(best_model)
-            predictions = best_model.predict(X_test)
-            print(predictions)
+        #     # Get the best model and print its mean squared error on the test set
+        #     best_model = grid_search.best_estimator_
+        #     print(best_model)
+        #     predictions = best_model.predict(X_test)
+        #     print(predictions)
+
+        self.model = make_pipeline(
+            StandardScaler(),
+            base_model
+        )
         # self.model = Pipeline([
         #     ('scaler', StandardScaler()),
-        #     ('regressor', LinearRegression())
+        #     ('regressor', base_model)
         # ])
-        # # Define the parameters to tune
+        # Define the parameters to tune
         # param_grid = {
         #     'regressor__fit_intercept': [True, False],
         #     'regressor__positive': [True, False],
         # }
 
-        # # Create a grid search object
-        # self.grid_search = GridSearchCV(self.model, param_grid, cv=5, scoring=['r2', 'neg_mean_squared_error'], refit='r2', verbose=0, n_jobs=-1)
-        # # Fit the grid search object to the data
-        # self.logger.info("Fitting the model...")
-        # start_time = time.time()
-        # self.grid_search.fit(X_train.values, y_train.values)
-        # self.logger.info(f"Elapsed time for model fit: {time.time() - start_time}")
+        # Create a grid search object
+        self.grid_search = GridSearchCV(self.model, param_grid, cv=5, scoring='neg_mean_squared_error', refit=True, verbose=0, n_jobs=-1)
+        
+        # Fit the grid search object to the data
+        self.logger.info("Training a "+self.sklearn_model+" model")
+        start_time = time.time()
+        self.grid_search.fit(X_train.values, y_train.values)
+        print("Best value for lambda : ",self.grid_search.best_params_)
+        print("Best score for cost function: ", self.grid_search.best_score_)
+        self.logger.info(f"Elapsed time for model fit: {time.time() - start_time}")
 
-        # self.model = self.grid_search.best_estimator_
+        self.model = self.grid_search.best_estimator_
 
 
-        # # Make predictions
-        # predictions = self.model.predict(X_test.values)
-        # predictions = pd.Series(predictions, index=X_test.index)
-        # pred_metric = r2_score(y_test,predictions)
-        # self.logger.info(f"Prediction R2 score of fitted model on test data: {pred_metric}")
+        # Make predictions
+        predictions = self.model.predict(X_test.values)
+        predictions = pd.Series(predictions, index=X_test.index)
+        pred_metric = r2_score(y_test,predictions)
+        self.logger.info(f"Prediction R2 score of fitted model on test data: {pred_metric}")
         
 
     def predict(self, new_values:list) -> np.ndarray:
