@@ -657,7 +657,7 @@ def regressor_model_fit(
     """
     data = copy.deepcopy(input_data_dict["df_input_data"])
     model_type = input_data_dict["params"]["passed_data"]["model_type"]
-    sklearn_model = input_data_dict["params"]["passed_data"]["sklearn_model"]
+    regression_model = input_data_dict["params"]["passed_data"]["regression_model"]
     features = input_data_dict["params"]["passed_data"]["features"]
     target = input_data_dict["params"]["passed_data"]["target"]
     timestamp = input_data_dict["params"]["passed_data"]["timestamp"]
@@ -665,7 +665,7 @@ def regressor_model_fit(
     root = input_data_dict["root"]
     # The MLRegressor object
     mlr = MLRegressor(
-        data, model_type, sklearn_model, features, target, timestamp, logger
+        data, model_type, regression_model, features, target, timestamp, logger
     )
     # Fit the ML model
     mlr.fit(date_features=date_features)
