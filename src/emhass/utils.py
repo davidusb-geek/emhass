@@ -334,6 +334,11 @@ def treat_runtimeparams(
         else:
             sklearn_model = runtimeparams["sklearn_model"]
         params["passed_data"]["sklearn_model"] = sklearn_model
+        if "regression_model" not in runtimeparams.keys():
+            regression_model = "LinearRegression"
+        else:
+            regression_model = runtimeparams["regression_model"]
+        params["passed_data"]["regression_model"] = regression_model
         if "num_lags" not in runtimeparams.keys():
             num_lags = 48
         else:
