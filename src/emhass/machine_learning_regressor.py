@@ -24,6 +24,41 @@ from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
+REGRESSION_METHODS = {
+            "LinearRegression": {
+                "model": LinearRegression(),
+                "param_grid": {
+                    "linearregression__fit_intercept": [True, False],
+                    "linearregression__positive": [True, False],
+                },
+            },
+            "RidgeRegression": {
+                "model": Ridge(),
+                "param_grid": {"ridge__alpha": [0.1, 1.0, 10.0]},
+            },
+            "LassoRegression": {
+                "model": Lasso(),
+                "param_grid": {"lasso__alpha": [0.1, 1.0, 10.0]},
+            },
+            "RandomForestRegression": {
+                "model": RandomForestRegressor(),
+                "param_grid": {"randomforestregressor__n_estimators": [50, 100, 200]},
+            },
+            "GradientBoostingRegression": {
+                "model": GradientBoostingRegressor(),
+                "param_grid": {
+                    "gradientboostingregressor__n_estimators": [50, 100, 200],
+                    "gradientboostingregressor__learning_rate": [0.01, 0.1, 0.2],
+                },
+            },
+            "AdaBoostRegression": {
+                "model": AdaBoostRegressor(),
+                "param_grid": {
+                    "adaboostregressor__n_estimators": [50, 100, 200],
+                    "adaboostregressor__learning_rate": [0.01, 0.1, 0.2],
+                },
+            },
+        }
 
 class MLRegressor:
     r"""
@@ -43,7 +78,7 @@ class MLRegressor:
         self,
         data,
         model_type: str,
-        sklearn_model: str,
+        regression_model: str,
         features: list,
         target: str,
         timestamp: str,
@@ -56,11 +91,15 @@ class MLRegressor:
         :param model_type: A unique name defining this model and useful to identify \
             for what it will be used for.
         :type model_type: str
+        :param regression_model: The model that will be used. For now only \
+            this options are possible: `LinearRegression`, `RidgeRegression`, `KNeighborsRegressor`, \
+            `LassoRegression`, `RandomForestRegression`, `GradientBoostingRegression` and `AdaBoostRegression`.
+        :type regression_model: str
         :param features: A list of features. \
-            Example: [`solar`, `degree_days`].
+            Example: [`solar_production`, `degree_days`].
         :type features: list
         :param target: The target(to be predicted). \
-            Example: `hours`.
+            Example: `heating_hours`.
         :type target: str
         :param timestamp: If defined, the column key that has to be used of timestamp.
         :type timestamp: str
@@ -72,7 +111,7 @@ class MLRegressor:
         self.target = target
         self.timestamp = timestamp
         self.model_type = model_type
-        self.sklearn_model = sklearn_model
+        self.regression_model = regression_model
         self.logger = logger
         self.data.sort_index(inplace=True)
         self.data = self.data[~self.data.index.duplicated(keep="first")]
@@ -111,7 +150,7 @@ class MLRegressor:
 
         return df
 
-    def fit(self, date_features: Optional[list] = []) -> None:
+    def fit(self, date_features: Optional[list] = None) -> None:
         """
         Fit the model using the provided data.
 
@@ -129,7 +168,7 @@ class MLRegressor:
         keep_columns.append(self.target)
         self.data_exo = self.data_exo[self.data_exo.columns.intersection(keep_columns)]
         self.data_exo.reset_index(drop=True, inplace=True)
-        if len(date_features) > 0:
+        if date_features is not None:
             if self.timestamp is not None:
                 self.data_exo = MLRegressor.add_date_features(
                     self.data_exo, date_features, self.timestamp
@@ -150,63 +189,27 @@ class MLRegressor:
         )
         self.steps = len(X_test)
 
-        regression_methods = {
-            "LinearRegression": {
-                "model": LinearRegression(),
-                "param_grid": {
-                    "linearregression__fit_intercept": [True, False],
-                    "linearregression__positive": [True, False],
-                },
-            },
-            "RidgeRegression": {
-                "model": Ridge(),
-                "param_grid": {"ridge__alpha": [0.1, 1.0, 10.0]},
-            },
-            "LassoRegression": {
-                "model": Lasso(),
-                "param_grid": {"lasso__alpha": [0.1, 1.0, 10.0]},
-            },
-            "RandomForestRegression": {
-                "model": RandomForestRegressor(),
-                "param_grid": {"randomforestregressor__n_estimators": [50, 100, 200]},
-            },
-            "GradientBoostingRegression": {
-                "model": GradientBoostingRegressor(),
-                "param_grid": {
-                    "gradientboostingregressor__n_estimators": [50, 100, 200],
-                    "gradientboostingregressor__learning_rate": [0.01, 0.1, 0.2],
-                },
-            },
-            "AdaBoostRegression": {
-                "model": AdaBoostRegressor(),
-                "param_grid": {
-                    "adaboostregressor__n_estimators": [50, 100, 200],
-                    "adaboostregressor__learning_rate": [0.01, 0.1, 0.2],
-                },
-            },
-        }
-
-        if self.sklearn_model == "LinearRegression":
-            base_model = regression_methods["LinearRegression"]["model"]
-            param_grid = regression_methods["LinearRegression"]["param_grid"]
-        elif self.sklearn_model == "RidgeRegression":
-            base_model = regression_methods["RidgeRegression"]["model"]
-            param_grid = regression_methods["RidgeRegression"]["param_grid"]
-        elif self.sklearn_model == "LassoRegression":
-            base_model = regression_methods["LassoRegression"]["model"]
-            param_grid = regression_methods["LassoRegression"]["param_grid"]
-        elif self.sklearn_model == "RandomForestRegression":
-            base_model = regression_methods["RandomForestRegression"]["model"]
-            param_grid = regression_methods["RandomForestRegression"]["param_grid"]
-        elif self.sklearn_model == "GradientBoostingRegression":
-            base_model = regression_methods["GradientBoostingRegression"]["model"]
-            param_grid = regression_methods["GradientBoostingRegression"]["param_grid"]
-        elif self.sklearn_model == "AdaBoostRegression":
-            base_model = regression_methods["AdaBoostRegression"]["model"]
-            param_grid = regression_methods["AdaBoostRegression"]["param_grid"]
+        if self.regression_model == "LinearRegression":
+            base_model = REGRESSION_METHODS["LinearRegression"]["model"]
+            param_grid = REGRESSION_METHODS["LinearRegression"]["param_grid"]
+        elif self.regression_model == "RidgeRegression":
+            base_model = REGRESSION_METHODS["RidgeRegression"]["model"]
+            param_grid = REGRESSION_METHODS["RidgeRegression"]["param_grid"]
+        elif self.regression_model == "LassoRegression":
+            base_model = REGRESSION_METHODS["LassoRegression"]["model"]
+            param_grid = REGRESSION_METHODS["LassoRegression"]["param_grid"]
+        elif self.regression_model == "RandomForestRegression":
+            base_model = REGRESSION_METHODS["RandomForestRegression"]["model"]
+            param_grid = REGRESSION_METHODS["RandomForestRegression"]["param_grid"]
+        elif self.regression_model == "GradientBoostingRegression":
+            base_model = REGRESSION_METHODS["GradientBoostingRegression"]["model"]
+            param_grid = REGRESSION_METHODS["GradientBoostingRegression"]["param_grid"]
+        elif self.regression_model == "AdaBoostRegression":
+            base_model = REGRESSION_METHODS["AdaBoostRegression"]["model"]
+            param_grid = REGRESSION_METHODS["AdaBoostRegression"]["param_grid"]
         else:
             self.logger.error(
-                "Passed sklearn model " + self.sklearn_model + " is not valid"
+                "Passed sklearn model " + self.regression_model + " is not valid"
             )
 
         self.model = make_pipeline(StandardScaler(), base_model)
@@ -223,7 +226,7 @@ class MLRegressor:
         )
 
         # Fit the grid search object to the data
-        self.logger.info("Training a " + self.sklearn_model + " model")
+        self.logger.info("Training a " + self.regression_model + " model")
         start_time = time.time()
         self.grid_search.fit(X_train.values, y_train.values)
         print("Best value for lambda : ", self.grid_search.best_params_)
