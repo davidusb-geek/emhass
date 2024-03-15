@@ -20,7 +20,7 @@ from emhass.retrieve_hass import RetrieveHass
 from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.optimization import Optimization
-from emhass.csv_predictor import CsvPredictor
+from emhass.machine_learning_regressor import MLRegressor
 from emhass import utils
 
 
@@ -155,7 +155,7 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
                 return False
             df_input_data = rh.df_final.copy()
  
-    elif set_type == "csv-model-fit":
+    elif set_type == "regressor-model-fit":
         
         df_input_data_dayahead = None
         P_PV_forecast, P_load_forecast = None, None
@@ -183,7 +183,7 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
             raise ValueError(
                 f"CSV file should contain the following columns: {', '.join(required_columns)}"
             )
-    elif set_type == "csv-model-predict":
+    elif set_type == "regressor-model-predict":
         df_input_data, df_input_data_dayahead = None, None
         P_PV_forecast, P_load_forecast = None, None
         days_list = None
@@ -469,7 +469,7 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
             pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
     return df_pred_optim, mlf
 
-def csv_model_fit(input_data_dict: dict, logger: logging.Logger,
+def regressor_model_fit(input_data_dict: dict, logger: logging.Logger,
     debug: Optional[bool] = False) -> None:
     """Perform a forecast model fit from training data retrieved from Home Assistant.
 
@@ -488,17 +488,17 @@ def csv_model_fit(input_data_dict: dict, logger: logging.Logger,
     timestamp = input_data_dict['params']['passed_data']['timestamp']
     date_features = input_data_dict['params']['passed_data']['date_features']
     root = input_data_dict['root']
-    # The CSV forecaster object
-    csv = CsvPredictor(data, model_type, sklearn_model, independent_variables, dependent_variable, timestamp, logger)
+    # The MLRegressor object
+    mlr = MLRegressor(data, model_type, sklearn_model, independent_variables, dependent_variable, timestamp, logger)
     # Fit the ML model
-    csv.fit(date_features=date_features)
+    mlr.fit(date_features=date_features)
     # Save model
     if not debug:
-        filename = model_type+'_csv.pkl'
+        filename = model_type+'_mlr.pkl'
         with open(pathlib.Path(root) / filename, 'wb') as outp:
-            pickle.dump(csv, outp, pickle.HIGHEST_PROTOCOL)
+            pickle.dump(mlr, outp, pickle.HIGHEST_PROTOCOL)
 
-def csv_model_predict(input_data_dict: dict, logger: logging.Logger,
+def regressor_model_predict(input_data_dict: dict, logger: logging.Logger,
     debug: Optional[bool] = False) -> None:
     """Perform a prediction from csv file.
 
@@ -511,29 +511,29 @@ def csv_model_predict(input_data_dict: dict, logger: logging.Logger,
     """
     model_type = input_data_dict['params']['passed_data']['model_type']
     root = input_data_dict['root']
-    filename = model_type+'_csv.pkl'
+    filename = model_type+'_mlr.pkl'
     filename_path = pathlib.Path(root) / filename
     if not debug:
         if filename_path.is_file():
             with open(filename_path, 'rb') as inp:
-                csv = pickle.load(inp)
+                mlr = pickle.load(inp)
         else:
             logger.error("The ML forecaster file was not found, please run a model fit method before this predict method")
             return
     new_values = input_data_dict['params']['passed_data']['new_values']
     # Predict from csv file
-    prediction = csv.predict(new_values)
+    prediction = mlr.predict(new_values)
 
-    csv_predict_entity_id = input_data_dict['params']['passed_data']['csv_predict_entity_id']
-    csv_predict_unit_of_measurement = input_data_dict['params']['passed_data']['csv_predict_unit_of_measurement']
-    csv_predict_friendly_name = input_data_dict['params']['passed_data']['csv_predict_friendly_name']
+    mlr_predict_entity_id = input_data_dict['params']['passed_data']['mlr_predict_entity_id']
+    mlr_predict_unit_of_measurement = input_data_dict['params']['passed_data']['mlr_predict_unit_of_measurement']
+    mlr_predict_friendly_name = input_data_dict['params']['passed_data']['mlr_predict_friendly_name']
     # Publish prediction
     idx = 0
     input_data_dict['rh'].post_data(prediction, idx,
-                                    csv_predict_entity_id,
-                                    csv_predict_unit_of_measurement, 
-                                    csv_predict_friendly_name,
-                                    type_var = 'csv_predictor')
+                                    mlr_predict_entity_id,
+                                    mlr_predict_unit_of_measurement, 
+                                    mlr_predict_friendly_name,
+                                    type_var = 'mlregressor')
 
 def publish_data(input_data_dict: dict, logger: logging.Logger,
     save_data_to_file: Optional[bool] = False, 
