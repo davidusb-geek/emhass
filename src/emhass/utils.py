@@ -155,7 +155,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         freq = int(retrieve_hass_conf['freq'].seconds/60.0)
         delta_forecast = int(optim_conf['delta_forecast'].days)
         forecast_dates = get_forecast_dates(freq, delta_forecast)
-        if set_type == "csv-model-fit":
+        if set_type == "regressor-model-fit":
             csv_file = runtimeparams['csv_file']
             independent_variables = runtimeparams['independent_variables']
             dependent_variable = runtimeparams['dependent_variable']
@@ -173,7 +173,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
                 date_features = runtimeparams['date_features']
                 params['passed_data']['date_features'] = date_features
             
-        if set_type == "csv-model-predict":
+        if set_type == "regressor-model-predict":
             new_values = runtimeparams['new_values']
             params['passed_data']['new_values'] = new_values
 
@@ -342,21 +342,21 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         else:
             model_predict_friendly_name = runtimeparams['model_predict_friendly_name']
         params['passed_data']['model_predict_friendly_name'] = model_predict_friendly_name
-        if 'csv_predict_entity_id' not in runtimeparams.keys():
-            csv_predict_entity_id = "sensor.csv_predictor"
+        if 'mlr_predict_entity_id' not in runtimeparams.keys():
+            mlr_predict_entity_id = "sensor.mlr_predict"
         else:
-            csv_predict_entity_id = runtimeparams['csv_predict_entity_id']
-        params['passed_data']['csv_predict_entity_id'] = csv_predict_entity_id
-        if 'csv_predict_unit_of_measurement' not in runtimeparams.keys():
-            csv_predict_unit_of_measurement = None
+            mlr_predict_entity_id = runtimeparams['mlr_predict_entity_id']
+        params['passed_data']['mlr_predict_entity_id'] = mlr_predict_entity_id
+        if 'mlr_predict_unit_of_measurement' not in runtimeparams.keys():
+            mlr_predict_unit_of_measurement = None
         else:
-            csv_predict_unit_of_measurement = runtimeparams['csv_predict_unit_of_measurement']
-        params['passed_data']['csv_predict_unit_of_measurement'] = csv_predict_unit_of_measurement
-        if 'csv_predict_friendly_name' not in runtimeparams.keys():
-            csv_predict_friendly_name = "Csv predictor"
+            mlr_predict_unit_of_measurement = runtimeparams['mlr_predict_unit_of_measurement']
+        params['passed_data']['mlr_predict_unit_of_measurement'] = mlr_predict_unit_of_measurement
+        if 'mlr_predict_friendly_name' not in runtimeparams.keys():
+            mlr_predict_friendly_name = "mlr predictor"
         else:
-            csv_predict_friendly_name = runtimeparams['csv_predict_friendly_name']
-        params['passed_data']['csv_predict_friendly_name'] = csv_predict_friendly_name
+            mlr_predict_friendly_name = runtimeparams['mlr_predict_friendly_name']
+        params['passed_data']['mlr_predict_friendly_name'] = mlr_predict_friendly_name
         # Treat optimization configuration parameters passed at runtime 
         if 'num_def_loads' in runtimeparams.keys():
             optim_conf['num_def_loads'] = runtimeparams['num_def_loads']
