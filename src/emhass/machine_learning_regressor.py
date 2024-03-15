@@ -20,7 +20,7 @@ from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-class CsvPredictor:
+class MLRegressor:
     r"""
     A forecaster class using machine learning models.
     
@@ -115,7 +115,7 @@ class CsvPredictor:
         self.data_exo.reset_index(drop=True, inplace=True)
         if len(date_features) > 0:
             if self.timestamp is not None:
-                self.data_exo = CsvPredictor.add_date_features(self.data_exo, date_features, self.timestamp)
+                self.data_exo = MLRegressor.add_date_features(self.data_exo, date_features, self.timestamp)
             else:
                 self.logger.error("If no timestamp provided, you can't use date_features, going further without date_features.")
 
