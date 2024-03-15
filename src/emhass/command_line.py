@@ -482,13 +482,14 @@ def csv_model_fit(input_data_dict: dict, logger: logging.Logger,
     """
     data = copy.deepcopy(input_data_dict['df_input_data'])
     model_type = input_data_dict['params']['passed_data']['model_type']
+    sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
     independent_variables = input_data_dict['params']['passed_data']['independent_variables']
     dependent_variable = input_data_dict['params']['passed_data']['dependent_variable']
     timestamp = input_data_dict['params']['passed_data']['timestamp']
     date_features = input_data_dict['params']['passed_data']['date_features']
     root = input_data_dict['root']
     # The CSV forecaster object
-    csv = CsvPredictor(data, model_type, independent_variables, dependent_variable, timestamp, logger)
+    csv = CsvPredictor(data, model_type, sklearn_model, independent_variables, dependent_variable, timestamp, logger)
     # Fit the ML model
     csv.fit(date_features=date_features)
     # Save model
