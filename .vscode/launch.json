@@ -12,9 +12,8 @@
       "name": "EMHASS run",
       "type": "debugpy",
       "request": "launch",
-      "program": "web_server.py",
+      "module": "emhass.web_server",
       "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}/src/emhass/",
       "purpose": [
         "debug-in-terminal"
       ],
@@ -30,9 +29,8 @@
       "name": "EMHASS run ADDON",
       "type": "debugpy",
       "request": "launch",
-      "program": "web_server.py",
+      "module": "emhass.web_server",
       "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}/src/emhass/",
       "args": [
         "--addon",
         "true",
