@@ -1,70 +1,72 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""Machine learning regressor module."""
+
+from __future__ import annotations
 
 import copy
-import logging
 import time
-from typing import Optional
 import warnings
+from typing import TYPE_CHECKING
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 from sklearn.ensemble import (
     AdaBoostRegressor,
     GradientBoostingRegressor,
     RandomForestRegressor,
 )
-from sklearn.metrics import r2_score
-
 from sklearn.linear_model import Lasso, LinearRegression, Ridge
+from sklearn.metrics import r2_score
 from sklearn.model_selection import GridSearchCV, train_test_split
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+if TYPE_CHECKING:
+    import logging
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 REGRESSION_METHODS = {
-            "LinearRegression": {
-                "model": LinearRegression(),
-                "param_grid": {
-                    "linearregression__fit_intercept": [True, False],
-                    "linearregression__positive": [True, False],
-                },
-            },
-            "RidgeRegression": {
-                "model": Ridge(),
-                "param_grid": {"ridge__alpha": [0.1, 1.0, 10.0]},
-            },
-            "LassoRegression": {
-                "model": Lasso(),
-                "param_grid": {"lasso__alpha": [0.1, 1.0, 10.0]},
-            },
-            "RandomForestRegression": {
-                "model": RandomForestRegressor(),
-                "param_grid": {"randomforestregressor__n_estimators": [50, 100, 200]},
-            },
-            "GradientBoostingRegression": {
-                "model": GradientBoostingRegressor(),
-                "param_grid": {
-                    "gradientboostingregressor__n_estimators": [50, 100, 200],
-                    "gradientboostingregressor__learning_rate": [0.01, 0.1, 0.2],
-                },
-            },
-            "AdaBoostRegression": {
-                "model": AdaBoostRegressor(),
-                "param_grid": {
-                    "adaboostregressor__n_estimators": [50, 100, 200],
-                    "adaboostregressor__learning_rate": [0.01, 0.1, 0.2],
-                },
-            },
-        }
+    "LinearRegression": {
+        "model": LinearRegression(),
+        "param_grid": {
+            "linearregression__fit_intercept": [True, False],
+            "linearregression__positive": [True, False],
+        },
+    },
+    "RidgeRegression": {
+        "model": Ridge(),
+        "param_grid": {"ridge__alpha": [0.1, 1.0, 10.0]},
+    },
+    "LassoRegression": {
+        "model": Lasso(),
+        "param_grid": {"lasso__alpha": [0.1, 1.0, 10.0]},
+    },
+    "RandomForestRegression": {
+        "model": RandomForestRegressor(),
+        "param_grid": {"randomforestregressor__n_estimators": [50, 100, 200]},
+    },
+    "GradientBoostingRegression": {
+        "model": GradientBoostingRegressor(),
+        "param_grid": {
+            "gradientboostingregressor__n_estimators": [50, 100, 200],
+            "gradientboostingregressor__learning_rate": [0.01, 0.1, 0.2],
+        },
+    },
+    "AdaBoostRegression": {
+        "model": AdaBoostRegressor(),
+        "param_grid": {
+            "adaboostregressor__n_estimators": [50, 100, 200],
+            "adaboostregressor__learning_rate": [0.01, 0.1, 0.2],
+        },
+    },
+}
+
 
 class MLRegressor:
-    r"""
-    A forecaster class using machine learning models.
+    r"""A forecaster class using machine learning models.
 
-    This class uses the `sklearn` module and the machine learning models are from `scikit-learn`.
+    This class uses the `sklearn` module and the machine learning models are \
+        from `scikit-learn`.
 
     It exposes two main methods:
 
@@ -74,9 +76,9 @@ class MLRegressor:
 
     """
 
-    def __init__(
-        self,
-        data,
+    def __init__(  # noqa: PLR0913
+        self: MLRegressor,
+        data: pd.DataFrame,
         model_type: str,
         regression_model: str,
         features: list,
@@ -92,8 +94,9 @@ class MLRegressor:
             for what it will be used for.
         :type model_type: str
         :param regression_model: The model that will be used. For now only \
-            this options are possible: `LinearRegression`, `RidgeRegression`, `KNeighborsRegressor`, \
-            `LassoRegression`, `RandomForestRegression`, `GradientBoostingRegression` and `AdaBoostRegression`.
+            this options are possible: `LinearRegression`, `RidgeRegression`, \
+            `KNeighborsRegressor`, `LassoRegression`, `RandomForestRegression`, \
+            `GradientBoostingRegression` and `AdaBoostRegression`.
         :type regression_model: str
         :param features: A list of features. \
             Example: [`solar_production`, `degree_days`].
@@ -113,7 +116,7 @@ class MLRegressor:
         self.model_type = model_type
         self.regression_model = regression_model
         self.logger = logger
-        self.data.sort_index(inplace=True)
+        self.data = self.data.sort_index()
         self.data = self.data[~self.data.index.duplicated(keep="first")]
         self.data_exo = None
         self.steps = None
@@ -122,9 +125,11 @@ class MLRegressor:
 
     @staticmethod
     def add_date_features(
-        data: pd.DataFrame, date_features: list, timestamp: str
+        data: pd.DataFrame,
+        date_features: list,
+        timestamp: str,
     ) -> pd.DataFrame:
-        """Add date features from the input DataFrame timestamp
+        """Add date features from the input DataFrame timestamp.
 
         :param data: The input DataFrame
         :type data: pd.DataFrame
@@ -133,7 +138,7 @@ class MLRegressor:
         :return: The DataFrame with the added features
         :rtype: pd.DataFrame
         """
-        df = copy.deepcopy(data)
+        df = copy.deepcopy(data)  # noqa: PD901
         df[timestamp] = pd.to_datetime(df["timestamp"])
         if "year" in date_features:
             df["year"] = [i.year for i in df["timestamp"]]
@@ -150,45 +155,21 @@ class MLRegressor:
 
         return df
 
-    def fit(self, date_features: Optional[list] = None) -> None:
+    def get_regression_model(self: MLRegressor) -> tuple[str, str]:
+        """Get the base model and parameter grid for the specified regression model.
+
+        Returns a tuple containing the base model and parameter grid corresponding to \
+            the specified regression model.
+
+        Args:
+        ----
+            self: The instance of the MLRegressor class.
+
+        Returns:
+        -------
+            A tuple containing the base model and parameter grid.
+
         """
-        Fit the model using the provided data.
-
-        :param date_features: A list of 'date_features' to take into account when fitting the model.
-        :type data: list
-        """
-        self.logger.info("Performing a csv model fit for " + self.model_type)
-        self.data_exo = pd.DataFrame(self.data)
-        self.data_exo[self.features] = self.data[self.features]
-        self.data_exo[self.target] = self.data[self.target]
-        keep_columns = []
-        keep_columns.extend(self.features)
-        if self.timestamp is not None:
-            keep_columns.append(self.timestamp)
-        keep_columns.append(self.target)
-        self.data_exo = self.data_exo[self.data_exo.columns.intersection(keep_columns)]
-        self.data_exo.reset_index(drop=True, inplace=True)
-        if date_features is not None:
-            if self.timestamp is not None:
-                self.data_exo = MLRegressor.add_date_features(
-                    self.data_exo, date_features, self.timestamp
-                )
-            else:
-                self.logger.error(
-                    "If no timestamp provided, you can't use date_features, going further without date_features."
-                )
-
-        y = self.data_exo[self.target]
-        self.data_exo = self.data_exo.drop(self.target, axis=1)
-        if self.timestamp is not None:
-            self.data_exo = self.data_exo.drop(self.timestamp, axis=1)
-        X = self.data_exo
-
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
-        self.steps = len(X_test)
-
         if self.regression_model == "LinearRegression":
             base_model = REGRESSION_METHODS["LinearRegression"]["model"]
             param_grid = REGRESSION_METHODS["LinearRegression"]["param_grid"]
@@ -209,8 +190,58 @@ class MLRegressor:
             param_grid = REGRESSION_METHODS["AdaBoostRegression"]["param_grid"]
         else:
             self.logger.error(
-                "Passed sklearn model " + self.regression_model + " is not valid"
+                "Passed sklearn model %s is not valid",
+                self.regression_model,
             )
+        return base_model, param_grid
+
+    def fit(self: MLRegressor, date_features: list | None = None) -> None:
+        """Fit the model using the provided data.
+
+        :param date_features: A list of 'date_features' to take into account when \
+            fitting the model.
+        :type data: list
+        """
+        self.logger.info("Performing a MLRegressor fit for %s", self.model_type)
+        self.data_exo = pd.DataFrame(self.data)
+        self.data_exo[self.features] = self.data[self.features]
+        self.data_exo[self.target] = self.data[self.target]
+        keep_columns = []
+        keep_columns.extend(self.features)
+        if self.timestamp is not None:
+            keep_columns.append(self.timestamp)
+        keep_columns.append(self.target)
+        self.data_exo = self.data_exo[self.data_exo.columns.intersection(keep_columns)]
+        self.data_exo = self.data_exo.reset_index(drop=True)
+        if date_features is not None:
+            if self.timestamp is not None:
+                self.data_exo = MLRegressor.add_date_features(
+                    self.data_exo,
+                    date_features,
+                    self.timestamp,
+                )
+            else:
+                self.logger.error(
+                    "If no timestamp provided, you can't use date_features, going \
+                    further without date_features.",
+                )
+
+        y = self.data_exo[self.target]
+        self.data_exo = self.data_exo.drop(self.target, axis=1)
+        if self.timestamp is not None:
+            self.data_exo = self.data_exo.drop(self.timestamp, axis=1)
+        X = self.data_exo  # noqa: N806
+
+        X_train, X_test, y_train, y_test = train_test_split(  # noqa: N806
+            X,
+            y,
+            test_size=0.2,
+            random_state=42,
+        )
+
+        self.steps = len(X_test)
+
+        base_model, param_grid = self.get_regression_model()
 
         self.model = make_pipeline(StandardScaler(), base_model)
 
@@ -226,12 +257,10 @@ class MLRegressor:
         )
 
         # Fit the grid search object to the data
-        self.logger.info("Training a " + self.regression_model + " model")
+        self.logger.info("Training a %s model", self.regression_model)
         start_time = time.time()
         self.grid_search.fit(X_train.values, y_train.values)
-        print("Best value for lambda : ", self.grid_search.best_params_)
-        print("Best score for cost function: ", self.grid_search.best_score_)
-        self.logger.info(f"Elapsed time for model fit: {time.time() - start_time}")
+        self.logger.info("Elapsed time for model fit: %s", time.time() - start_time)
 
         self.model = self.grid_search.best_estimator_
 
@@ -240,20 +269,21 @@ class MLRegressor:
         predictions = pd.Series(predictions, index=X_test.index)
         pred_metric = r2_score(y_test, predictions)
         self.logger.info(
-            f"Prediction R2 score of fitted model on test data: {pred_metric}"
+            "Prediction R2 score of fitted model on test data: %s",
+            pred_metric,
         )
 
-    def predict(self, new_values: list) -> np.ndarray:
-        r"""The predict method to generate a forecast from a csv file.
+    def predict(self: MLRegressor, new_values: list) -> np.ndarray:
+        """Predict a new value.
 
-
-        :param new_values: The new values for the features(in the same order as the features list). \
+        :param new_values: The new values for the features \
+            (in the same order as the features list). \
             Example: [2.24, 5.68].
         :type new_values: list
         :return: The np.ndarray containing the predicted value.
         :rtype: np.ndarray
         """
-        self.logger.info("Performing a prediction for " + self.model_type)
+        self.logger.info("Performing a prediction for %s", self.model_type)
         new_values = np.array([new_values])
 
         return self.model.predict(new_values)
