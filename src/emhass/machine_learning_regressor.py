@@ -95,7 +95,7 @@ class MLRegressor:
         :type model_type: str
         :param regression_model: The model that will be used. For now only \
             this options are possible: `LinearRegression`, `RidgeRegression`, \
-            `KNeighborsRegressor`, `LassoRegression`, `RandomForestRegression`, \
+            `LassoRegression`, `RandomForestRegression`, \
             `GradientBoostingRegression` and `AdaBoostRegression`.
         :type regression_model: str
         :param features: A list of features. \
