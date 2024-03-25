@@ -550,16 +550,16 @@ https://github.com/feathericons/feather */
   stroke-linecap: round !important;
   stroke-linejoin: round !important;
   fill: none !important;
-  filter: drop-shadow( #282928 .2px .2px) !important;
+  filter: drop-shadow(#282928 .2px .2px) !important;
   -webkit-text-size-adjust: none !important;
   -ms-text-size-adjust: none !important;
 
 }
 
-/* feather icons no background color */ 
+/* feather icons no background color */
 #top-links a {
   background: none !important;
-} 
+}
 
 /* -------------- */
 
@@ -586,7 +586,8 @@ select {
 }
 
 
-.alert, .info {
+.alert,
+.info {
   max-width: 50%;
 }
 
@@ -600,7 +601,7 @@ h2 {
   margin-bottom: .3em;
 }
 
-.table_div h4{
+.table_div h4 {
   margin-top: .5em;
 }
 
@@ -683,15 +684,47 @@ button {
 
 th {
   padding: 5px 7.77px;
+  text-align: center;
 }
 
-.mystyle tr:nth-child(even) {
+.mystyle tr:nth-child(even) td,
+th {
   background: #e1e1e1;
 }
 
-.mystyle tr:hover {
-  background: silver;
+.mystyle tr:nth-child(odd) td {
+  background: white;
+}
+
+.mystyle tr:hover td {
+  background-color: silver;
   cursor: pointer;
+}
+
+th:last-child {
+  border-top-right-radius: 7px;
+}
+
+th:first-child {
+  border-top-left-radius: 7px;
+}
+
+tr:last-child td:first-child {
+  border-bottom-left-radius: 7px;
+}
+
+tr:last-child td:last-child {
+  border-bottom-right-radius: 7px;
+}
+
+tr:hover td:first-child {
+  border-top-left-radius: 7px;
+  border-bottom-left-radius: 7px;
+}
+
+tr:hover td:last-child {
+  border-top-right-radius: 7px;
+  border-bottom-right-radius: 7px;
 }
 
 #top-links {
@@ -795,14 +828,20 @@ th {
 }
 
 /* Basic and Advanced fade transitions */
-.TabSelection, #advance, #basic, button, select, .info {
+.TabSelection,
+#advance,
+#basic,
+button,
+select,
+.info {
   animation-name: fadeInOpacity;
   animation-iteration-count: 1;
   animation-timing-function: ease-in-out;
   animation-duration: .3s;
 }
 
-.input-list, .input-box {
+.input-list,
+.input-box {
   animation-name: fadeInOpacity;
   animation-iteration-count: 1;
   animation-timing-function: ease-in-out;
@@ -944,7 +983,8 @@ th {
     display: none !important;
   }
 
-  .info, .alert {
+  .info,
+  .alert {
     max-width: 100%;
   }
 }
@@ -957,15 +997,17 @@ th {
   }
 
   img,
-  figure, svg.main-svg{
+  figure,
+  svg.main-svg {
     -webkit-filter: invert(.82);
     filter: invert(.82);
   }
-  
-  figure, svg.main-svg{
-  border-color: #181818;
-  border-style: solid;
-  border-width: 1px;
+
+  figure,
+  svg.main-svg {
+    border-color: #181818;
+    border-style: solid;
+    border-width: 1px;
   }
 
   button,
@@ -1008,10 +1050,12 @@ th {
   .modebar-btn svg path {
     fill: #111 !important;
   }
+
   .modebar-btn svg {
-    filter:invert(100%) sepia(64%) saturate(2%) hue-rotate(294deg) brightness(85%) contrast(93%) !important
+    filter: invert(100%) sepia(64%) saturate(2%) hue-rotate(294deg) brightness(85%) contrast(93%) !important
   }
-  .modebar-btn--logo svg{
+
+  .modebar-btn--logo svg {
     filter: None !important;
     /* filter: invert(100%) saturate(100%) brightness(87%) contrast(100%) !important */
   }
@@ -1024,37 +1068,28 @@ th {
     color: #e1e1e1;
   }
 
-  tr td:nth-child(even),
-  .mystyle tr td:nth-child(even) {
-    background-color: #3d3d3d;
+  .mystyle tr {
+    background: none;
   }
 
-  tr:nth-child(odd),
-  .mystyle tr:nth-child(odd) {
-    background-color: #111111;
-  }
-
-  tr:nth-child(even),
-  .mystyle tr:nth-child(even) {
-    background-color: #181818;
-  }
-
-  tr:hover td,
+  .mystyle tr:nth-child(even) td,
   th {
+    background: #282928;
+  }
+
+  .mystyle tr:nth-child(odd) td {
+    background: #111111;
+  }
+
+  .mystyle tr:hover td {
     background-color: #3f3f3f;
   }
 
-  tr:hover td,
-  th:last-child, th:first-child, td:first-child, td:last-child
-  {
-    border-radius: 7px
-  }
-
-  .modebar-group{
+  .modebar-group {
     background-color: #0000 !important;
   }
 
-  .modebar-btn{
+  .modebar-btn {
     background: #3f3f3f;
   }
 
