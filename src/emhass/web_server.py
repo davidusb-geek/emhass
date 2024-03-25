@@ -13,6 +13,7 @@ from distutils.util import strtobool
 from emhass.command_line import set_input_data_dict
 from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim
 from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune
+from emhass.command_line import regressor_model_fit, regressor_model_predict
 from emhass.command_line import publish_data
 from emhass.utils import get_injection_dict, get_injection_dict_forecast_model_fit, \
     get_injection_dict_forecast_model_tune, build_params
@@ -193,6 +194,16 @@ def action_call(action_name):
         if not checkFileLog(ActionStr):
             return make_response(msg, 201)
         return make_response(grabLog(ActionStr), 400)
+    elif action_name == 'regressor-model-fit':
+        app.logger.info(" >> Performing a machine learning regressor fit...")
+        regressor_model_fit(input_data_dict, app.logger)
+        msg = f'EMHASS >> Action regressor-model-fit executed... \n'
+        return make_response(msg, 201)
+    elif action_name == 'regressor-model-predict':
+        app.logger.info(" >> Performing a machine learning regressor predict...")
+        regressor_model_predict(input_data_dict, app.logger)
+        msg = f'EMHASS >> Action regressor-model-predict executed... \n'
+        return make_response(msg, 201)
     else:
         app.logger.error("ERROR: passed action is not valid")
         msg = f'EMHASS >> ERROR: Passed action is not valid... \n'
