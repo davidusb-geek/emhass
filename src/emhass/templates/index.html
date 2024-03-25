@@ -4,9 +4,9 @@
 <head>
     <title>EMHASS: Energy Management Optimization for Home Assistant</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" type="text/css" href="{{ basename }}/static/style.css">
-    <link rel="icon" type="image/x-icon" href="{{ basename }}/static/img/emhass_logo_short.svg">
-    <script src="{{ basename }}/static/script.js"></script>
+    <link rel="stylesheet" type="text/css" href="static/style.css?version=1"> <!-- change version on stylesheet changes  -->
+    <link rel="icon" type="image/x-icon" href="static/img/emhass_logo_short.svg">
+    <script src="static/script.js"></script>
 </head>
 
 <body style="margin: auto; align-items:center; text-align:center;">
@@ -17,22 +17,22 @@
             <!-- advanced or basic page switch -->
             <a id="basicOrAdvanced" style="margin-right: 24px; cursor: pointer; z-index: 1">
                 <svg class="feather">
-                    <use class="feather" href="{{ basename }}/static/img/feather-sprite.svg#tool" />
+                    <use class="feather" href="static/img/feather-sprite.svg#tool" />
                 </svg>
             </a>
             <a href="https://emhass.readthedocs.io/en/latest/">
                 <svg class="feather" style="margin-right: 12px;";>
-                    <use class="feather" href="{{ basename }}/static/img/feather-sprite.svg#book" />
+                    <use class="feather" href="static/img/feather-sprite.svg#book" />
                 </svg>
             </a>
             <a href="https://github.com/davidusb-geek/emhass" target="_blank" rel="noopener noreferrer">
                 <svg class="feather" style="margin-right: 0px;" >
-                    <use class="feather" href="{{ basename }}/static/img/feather-sprite.svg#git-branch" />
+                    <use class="feather" href="static/img/feather-sprite.svg#git-branch" />
                 </svg>
             </a>
         </div>
         <!-- Title -->
-        <img src="{{ basename }}/static/img/emhass_icon.png" alt="">
+        <img src="static/img/emhass_icon.png" alt="">
         <h2>EMHASS: Energy Management Optimization for Home Assistant</h2>
     </div>
 

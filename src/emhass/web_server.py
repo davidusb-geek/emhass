@@ -69,8 +69,13 @@ def index():
     else:
         app.logger.warning("The data container dictionary is empty... Please launch an optimization task")
         injection_dict={}
-    basename = request.headers.get("X-Ingress-Path", "")
-    return make_response(template.render(injection_dict=injection_dict, basename=basename))
+
+    # replace {{basename}} in html template html with path root  
+    # basename = request.headers.get("X-Ingress-Path", "")
+    # return make_response(template.render(injection_dict=injection_dict, basename=basename))
+    
+    return make_response(template.render(injection_dict=injection_dict))
+
 
 #get actions 
 @app.route('/template/<action_name>', methods=['GET'])
@@ -86,8 +91,7 @@ def template_action(action_name):
         else:
             app.logger.warning("The data container dictionary is empty... Please launch an optimization task")
             injection_dict={}        
-        basename = request.headers.get("X-Ingress-Path", "")    
-        return make_response(template.render(injection_dict=injection_dict, basename=basename))
+        return make_response(template.render(injection_dict=injection_dict))
 
 #post actions 
 @app.route('/action/<action_name>', methods=['POST'])
