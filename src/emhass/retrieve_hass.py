@@ -133,14 +133,14 @@ class RetrieveHass:
                 try: # Sometimes when there are connection problems we need to catch empty retrieved json
                     data = response.json()[0]
                 except IndexError:
-                    if x is 0:
+                    if x == 0:
                         self.logger.error("The retrieved JSON is empty, A sensor:" + var + " may have 0 days of history or passed sensor may not be correct")
                     else:
                         self.logger.error("The retrieved JSON is empty for day:"+ str(day) +", days_to_retrieve may be larger than the recorded history of sensor:" + var + " (check your recorder settings)")
                     return False
                 df_raw = pd.DataFrame.from_dict(data)
                 if len(df_raw) == 0:
-                    if x is 0:
+                    if x == 0:
                         self.logger.error("The retrieved Dataframe is empty, A sensor:" + var + " may have 0 days of history or passed sensor may not be correct")
                     else:
                         self.logger.error("Retrieved empty Dataframe for day:"+ str(day) +", days_to_retrieve may be larger than the recorded history of sensor:" + var + " (check your recorder settings)")

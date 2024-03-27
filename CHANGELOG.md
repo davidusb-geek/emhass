@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+### Improvement
+- Simplified fetch urls to relatives
+- Improved code for passed forecast data error handling in utils.py
+- Added new tests for forecast longer than 24h by changing parameter `delta_forecast`
+### Fix
+- style.css auto format and adjusted table styling
+
 ## 0.8.4 - 2024-03-13
 ### Improvement
 - Improved documentation

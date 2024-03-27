@@ -133,7 +133,7 @@ class Forecast(object):
         self.time_zone = self.retrieve_hass_conf['time_zone']
         self.method_ts_round = self.retrieve_hass_conf['method_ts_round']
         self.timeStep = self.freq.seconds/3600 # in hours
-        self.time_delta = pd.to_timedelta(opt_time_delta, "hours") # The period of optimization
+        self.time_delta = pd.to_timedelta(opt_time_delta, "hours")
         self.var_PV = self.retrieve_hass_conf['var_PV']
         self.var_load = self.retrieve_hass_conf['var_load']
         self.var_load_new = self.var_load+'_positive'
