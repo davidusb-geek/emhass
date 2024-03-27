@@ -103,9 +103,6 @@ class TestForecast(unittest.TestCase):
         self.assertEqual(len(self.df_weather_csv), len(P_PV_forecast))
         df_weather_none = self.fcst.get_weather_forecast(method='none')
         self.assertTrue(df_weather_none == None)
-        
-    def test_get_weather_forecast_mlforecaster(self):
-        pass
     
     def test_get_weather_forecast_scrapper_method_mock(self):
         with requests_mock.mock() as m:
@@ -155,7 +152,7 @@ class TestForecast(unittest.TestCase):
             self.assertEqual(len(df_weather_scrap), 
                             int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
         
-    def test_get_weather_forecast_solarforecast_method(self):
+    def test_get_weather_forecast_solarforecast_method_mock(self):
         with requests_mock.mock() as m:
             data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_solarforecast_get_method.pbz2')), "rb")
             data = cPickle.load(data)
@@ -187,10 +184,10 @@ class TestForecast(unittest.TestCase):
             }
             })
         runtimeparams = {
-            'pv_power_forecast':[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48],
-            'load_power_forecast':[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48],
-            'load_cost_forecast':[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48],
-            'prod_price_forecast':[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48]
+            'pv_power_forecast':[i+1 for i in range(48)],
+            'load_power_forecast':[i+1 for i in range(48)],
+            'load_cost_forecast':[i+1 for i in range(48)],
+            'prod_price_forecast':[i+1 for i in range(48)]
         }
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
@@ -217,7 +214,6 @@ class TestForecast(unittest.TestCase):
                         var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
                         var_interp = retrieve_hass_conf['var_interp'])
         df_input_data = rh.df_final.copy()
-        
         fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf, 
                         params_json, root, logger, get_data_from_file=True)
         df_input_data = copy.deepcopy(df_input_data).iloc[-49:-1]
@@ -227,8 +223,8 @@ class TestForecast(unittest.TestCase):
         self.assertIsInstance(P_PV_forecast, type(pd.DataFrame()))
         self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-        self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
-        self.assertTrue(self.fcst.start_forecast < ts for ts in P_PV_forecast.index)
+        self.assertEqual(P_PV_forecast.index.tz, fcst.time_zone)
+        self.assertTrue(fcst.start_forecast < ts for ts in P_PV_forecast.index)
         self.assertTrue(P_PV_forecast.values[0][0] == 1)
         self.assertTrue(P_PV_forecast.values[-1][0] == 48)
         P_load_forecast = fcst.get_load_forecast(method='list')
@@ -249,6 +245,52 @@ class TestForecast(unittest.TestCase):
         self.assertTrue(df_input_data.isnull().sum().sum()==0)
         self.assertTrue(df_input_data['unit_prod_price'].values[0] == 1)
         self.assertTrue(df_input_data['unit_prod_price'].values[-1] == 48)
+        # Test with longer lists
+        with open(root+'/config_emhass.yaml', 'r') as file:
+            params = yaml.load(file, Loader=yaml.FullLoader)
+        params.update({
+            'params_secrets': {
+                'hass_url': 'http://supervisor/core/api',
+                'long_lived_token': '${SUPERVISOR_TOKEN}',
+                'time_zone': 'Europe/Paris',
+                'lat': 45.83,
+                'lon': 6.86,
+                'alt': 4807.8
+            }
+            })
+        runtimeparams = {
+            'pv_power_forecast':[i+1 for i in range(2*48)],
+            'load_power_forecast':[i+1 for i in range(2*48)],
+            'load_cost_forecast':[i+1 for i in range(2*48)],
+            'prod_price_forecast':[i+1 for i in range(2*48)]
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params['passed_data'] = runtimeparams
+        params_json = json.dumps(params)
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), 
+                                                                    use_secrets=False, params=params_json)
+        optim_conf['delta_forecast'] = pd.Timedelta(days=2)
+        params, retrieve_hass_conf, optim_conf, plant_conf = treat_runtimeparams(
+            runtimeparams_json, params_json, retrieve_hass_conf, 
+            optim_conf, plant_conf, set_type, logger)
+        fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf, 
+                        params_json, root, logger, opt_time_delta=48, get_data_from_file=True)
+        P_PV_forecast = fcst.get_weather_forecast(method='list')
+        self.assertIsInstance(P_PV_forecast, type(pd.DataFrame()))
+        self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        self.assertEqual(P_PV_forecast.index.tz, fcst.time_zone)
+        self.assertTrue(fcst.start_forecast < ts for ts in P_PV_forecast.index)
+        self.assertTrue(P_PV_forecast.values[0][0] == 1)
+        self.assertTrue(P_PV_forecast.values[-1][0] == 2*48)
+        P_load_forecast = fcst.get_load_forecast(method='list')
+        self.assertIsInstance(P_load_forecast, pd.core.series.Series)
+        self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        self.assertEqual(P_load_forecast.index.tz, fcst.time_zone)
+        self.assertEqual(len(P_PV_forecast), len(P_load_forecast))
+        self.assertTrue(P_load_forecast.values[0] == 1)
+        self.assertTrue(P_load_forecast.values[-1] == 2*48)
         
     def test_get_forecasts_with_lists_special_case(self):
         with open(root+'/config_emhass.yaml', 'r') as file:
@@ -292,7 +334,6 @@ class TestForecast(unittest.TestCase):
                         var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
                         var_interp = retrieve_hass_conf['var_interp'])
         df_input_data = rh.df_final.copy()
-        
         fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf, 
                         params_json, root, logger, get_data_from_file=True)
         df_input_data = copy.deepcopy(df_input_data).iloc[-49:-1]
@@ -300,13 +341,13 @@ class TestForecast(unittest.TestCase):
         df_input_data.index = P_PV_forecast.index
         df_input_data.index.freq = rh.df_final.index.freq
         df_input_data = fcst.get_load_cost_forecast(
-            df_input_data, method=fcst.optim_conf['load_cost_forecast_method'])
+            df_input_data, method='list')
         self.assertTrue(fcst.var_load_cost in df_input_data.columns)
         self.assertTrue(df_input_data.isnull().sum().sum()==0)
         self.assertTrue(df_input_data['unit_load_cost'].values[0] == 1)
         self.assertTrue(df_input_data['unit_load_cost'].values[-1] == 48)
         df_input_data = fcst.get_prod_price_forecast(
-            df_input_data, method=fcst.optim_conf['prod_price_forecast_method'])
+            df_input_data, method='list')
         self.assertTrue(fcst.var_prod_price in df_input_data.columns)
         self.assertTrue(df_input_data.isnull().sum().sum()==0)
         self.assertTrue(df_input_data['unit_prod_price'].values[0] == 1)

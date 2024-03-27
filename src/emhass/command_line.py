@@ -59,8 +59,8 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         optim_conf, plant_conf, set_type, logger)
     # Define main objects
     rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
-                       retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'], 
-                       params, base_path, logger, get_data_from_file=get_data_from_file)
+                      retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'], 
+                      params, base_path, logger, get_data_from_file=get_data_from_file)
     fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
                     params, base_path, logger, get_data_from_file=get_data_from_file)
     opt = Optimization(retrieve_hass_conf, optim_conf, plant_conf, 
