@@ -18,8 +18,7 @@ values:
   resources:
     ignoreLimits: true
   volumes:
-    - existingConfigMap: emhass_config
-      name: data
-      path: /app/config_emhass.yaml
+    - name: emhass
+      path: /app
       pvcAnnotations: {}
-      subPath: config_emhass.yaml
+      size: 1Gi
