@@ -7,6 +7,8 @@ import copy
 import logging
 import json
 from typing import Optional
+import bz2
+import pickle as cPickle
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -412,8 +414,20 @@ class Forecast(object):
                 # Setting the main parameters of the PV plant
                 location = Location(latitude=self.lat, longitude=self.lon)
                 temp_params = TEMPERATURE_MODEL_PARAMETERS['sapm']['close_mount_glass_glass']
-                cec_modules = pvlib.pvsystem.retrieve_sam('CECMod')
-                cec_inverters = pvlib.pvsystem.retrieve_sam('cecinverter')
+                # cec_modules_0 = pvlib.pvsystem.retrieve_sam('CECMod')
+                # cec_modules = pvlib.pvsystem.retrieve_sam(path=self.root + '/data/CEC Modules.csv')
+                # cols_to_keep = [elem for elem in list(cec_modules_0.columns) if elem not in list(cec_modules.columns)]
+                # cec_modules = pd.concat([cec_modules, cec_modules_0[cols_to_keep]], axis=1)
+                # with bz2.BZ2File(self.root + '/data/cec_modules.pbz2', "w") as f: 
+                #     cPickle.dump(cec_modules, f)
+                # cec_inverters_0 = pvlib.pvsystem.retrieve_sam('cecinverter')
+                # cec_inverters = pvlib.pvsystem.retrieve_sam(path=self.root + '/data/CEC Inverters.csv')
+                # with bz2.BZ2File(self.root + '/data/cec_inverters.pbz2', "w") as f: 
+                #     cPickle.dump(cec_inverters, f)
+                cec_modules = bz2.BZ2File(str(pathlib.Path(self.root+'/data/cec_modules.pbz2')), "rb")
+                cec_modules = cPickle.load(cec_modules)
+                cec_inverters = bz2.BZ2File(str(pathlib.Path(self.root+'/data/cec_inverters.pbz2')), "rb")
+                cec_inverters = cPickle.load(cec_inverters)
                 if type(self.plant_conf['module_model']) == list:
                     P_PV_forecast = pd.Series(0, index=df_weather.index)
                     for i in range(len(self.plant_conf['module_model'])):
