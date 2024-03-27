@@ -209,11 +209,12 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             params['passed_data']['beta'] = None
         # Treat passed forecast data lists
         list_forecast_key = ['pv_power_forecast', 'load_power_forecast', 'load_cost_forecast', 'prod_price_forecast']
-        for forecast_key in list_forecast_key:
+        forecast_methods = ['weather_forecast_method', 'load_forecast_method', 'load_cost_forecast_method', 'prod_price_forecast_method']
+        for method, forecast_key in enumerate(list_forecast_key):
             if forecast_key in runtimeparams.keys():
                 if type(runtimeparams[forecast_key]) == list and len(runtimeparams[forecast_key]) >= len(forecast_dates):
                     params['passed_data'][forecast_key] = runtimeparams[forecast_key]
-                    optim_conf['weather_forecast_method'] = 'list'
+                    optim_conf[forecast_methods[method]] = 'list'
                 else:
                     logger.error(f"ERROR: The passed data is either not a list or the length is not correct, length should be {str(len(forecast_dates))}")
                     logger.error(f"Passed type is {str(type(runtimeparams[forecast_key]))} and length is {str(len(runtimeparams[forecast_key]))}")
