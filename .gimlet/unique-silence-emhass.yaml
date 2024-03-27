@@ -18,7 +18,7 @@ values:
   resources:
     ignoreLimits: true
   volumes:
-    - name: emhass
+    - emptyDir: true
+      name: ephemeral-volume
       path: /app
       pvcAnnotations: {}
-      size: 1Gi
