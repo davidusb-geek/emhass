@@ -1,0 +1,19 @@
+app: emhass
+env: unique-silence
+namespace: default
+chart:
+  repository: https://chart.onechart.dev
+  name: onechart
+  version: 0.64.0
+values:
+  containerPort: 5000
+  gitRepository: tomgolebiewski/emhass
+  gitSha: '{{ .SHA }}'
+  image:
+    dockerfile: ""
+    repository: davidusb/emhass-docker-standalone
+    tag: 0.8.4
+  imagePullSecrets: []
+  replicas: 1
+  resources:
+    ignoreLimits: true
