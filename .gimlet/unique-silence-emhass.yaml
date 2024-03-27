@@ -17,8 +17,4 @@ values:
   replicas: 1
   resources:
     ignoreLimits: true
-  volumes:
-    - emptyDir: true
-      name: ephemeral-volume
-      path: /app
-      pvcAnnotations: {}
+  volumes: []
