@@ -1,0 +1,28 @@
+app: emhass-0ffc
+env: unique-silence
+namespace: default
+chart:
+  repository: https://chart.onechart.dev
+  name: onechart
+  version: 0.64.0
+values:
+  containerPort: 5000
+  gitRepository: tomgolebiewski/emhass
+  gitSha: '{{ .SHA }}'
+  image:
+    dockerfile: ""
+    repository: davidusb/emhass-docker-standalone
+    tag: 0.8.4
+  imagePullSecrets: []
+  replicas: 1
+  resources:
+    ignoreLimits: true
+  sealedSecrets:
+    secrets_emhass.yaml: AgAghX01fKhyn+eHldQfiamkIo2wGziwO/V6eyLGgmUi0onaCAyErM+q1ifSQoselcy5VEk07dAmyFlnPYI+Y9rkjkHhKKXPczYXYYXZPV0LpKmCU2Nz8/qvrbt5Cs1QNB5TZOpBUb11ZaexVqi17Y3/LSTZGLPw6G4jalA86/LJ3KhVUNw89E/6JptFNeqStyf4EH6WOYaSyncYRDDtd2jpGjWsqyvgKNE2CEX8t9psObv+y6EAiYqM0M79xIXvcX5lu3TJ7biyqpcng/yrrv50ZSowVhOgdt4Od9G3/LfEhSbE6GfnkdKjhdXOmZ7MskSOYeVnjz9OGaAul90B1IYT4HMcfu5QLByN7l2xz/o2/dw9eXM3lbD5b1+oJFjByW0XDJDfThF4KYUDUkUzy0KRhIeqN8Nl38lcBcQOwXuu9NqKlirJuD7I8/l8svvCVexhknonCjQJ5r0j07fvJroXsmoTEhtP74nWD4jj+UxCl9VBbKnkl9dPxlmCfVIC1dx9FfFsZtUDpedVXF8Nbho2dmBWhnI3gfuwrKqiIuSop3SAY7qgMQxT6yEbjiqKVgOdTb73BPZf6MOyhYzAQXsCX01PLOs3GeAXvzEAaj+CNgT8+YAI+fI1D2NnSs/8y3rSdRpmDoumVGuJ51tk7sOa8EwI3yIRExjr/Rooo2kmwRaUWp0dxPddiL0Qu4vV1Ha1dm9X6WqH098j4GH5kOXPq90EF6qPhKKWqIMBK6QDo9T5LKoclds/ni7xlakw6tyWlOpyQMg/QfXjjUUuBtBiXps3zXkQUW0xwzavH8rd9GMykzsSjwEcdKDrv8NM0VcqUyT/yNeClRwZ/TiCgNiwEffc4xYJV08wN+gWuJz34cQRS5myjAucE7sjKcRhiSJzn6/RwwTzeFwRsMW75hcfw/tND+NtT1WPk1BD4WyxLreo/YR6K/Vl6As3stF6FwWCSp+dImL4fEyRmgxWYS/InRoojIozI6oFyaz9uYIGCxd0NcOzjsghZflTHOIzmPvbvIKLQKG5FiBfwJzvLvPhteN9SOgQEc8iz+y5ge8t76OjYWNndtsgN/d98xr+dx8pDsdcObW4yG+nUaSQoBeUMVLmt2LiY7RWcQDU5OLA7mSTJyYy6DaoiW+xA7WR3zniEkj9zTN4N4g=
+  secretEnabled: false
+  volumes:
+    - existingConfigMap: emhass
+      name: data
+      path: /app/secrets_emhass.yaml
+      pvcAnnotations: {}
+      subPath: secrets_emhass.yaml
