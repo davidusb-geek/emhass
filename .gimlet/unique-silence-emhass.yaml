@@ -17,4 +17,10 @@ values:
   replicas: 1
   resources:
     ignoreLimits: true
-  volumes: []
+  secretEnabled: true
+  volumes:
+    - existingConfigMap: emhass
+      name: data
+      path: /app/config_emhass.yaml
+      pvcAnnotations: {}
+      subPath: config_emhass.yaml
