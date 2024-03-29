@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import pathlib
+import os
 import pickle
 import copy
 import logging
@@ -98,25 +99,25 @@ class Forecast(object):
     """
 
     def __init__(self, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict, 
-                 params: str, base_path: str, logger: logging.Logger, 
+                 params: str, emhass_conf: dict, logger: logging.Logger, 
                  opt_time_delta: Optional[int] = 24,
                  get_data_from_file: Optional[bool] = False) -> None:
         """
         Define constructor for the forecast class.
         
-        :param retrieve_hass_conf: Dictionnary containing the needed configuration
+        :param retrieve_hass_conf: Dictionary containing the needed configuration
             data from the configuration file, specific to retrieve data from HASS
         :type retrieve_hass_conf: dict
-        :param optim_conf: Dictionnary containing the needed configuration
+        :param optim_conf: Dictionary containing the needed configuration
             data from the configuration file, specific for the optimization task
         :type optim_conf: dict
-        :param plant_conf: Dictionnary containing the needed configuration
+        :param plant_conf: Dictionary containing the needed configuration
             data from the configuration file, specific for the modeling of the PV plant
         :type plant_conf: dict
         :param params: Configuration parameters passed from data/options.json
         :type params: str
-        :param base_path: The path to the yaml configuration file
-        :type base_path: str
+        :param emhass_conf: Dictionary containing the needed emhass paths
+        :type emhass_conf: dict
         :param logger: The passed logger object
         :type logger: logging object
         :param opt_time_delta: The time delta in hours used to generate forecasts, 
@@ -141,7 +142,7 @@ class Forecast(object):
         self.var_load_new = self.var_load+'_positive'
         self.lat = self.retrieve_hass_conf['lat'] 
         self.lon = self.retrieve_hass_conf['lon']
-        self.root = base_path
+        self.emhass_conf = emhass_conf
         self.logger = logger
         self.get_data_from_file = get_data_from_file
         self.var_load_cost = 'unit_load_cost'
@@ -169,7 +170,7 @@ class Forecast(object):
         
         
     def get_weather_forecast(self, method: Optional[str] = 'scrapper',
-                             csv_path: Optional[str] = "/data/data_weather_forecast.csv") -> pd.DataFrame:
+                             csv_path: Optional[str] = "data_weather_forecast.csv") -> pd.DataFrame:
         r"""
         Get and generate weather forecast data.
         
@@ -180,6 +181,8 @@ class Forecast(object):
         :rtype: pd.DataFrame
         
         """
+        csv_path  = self.emhass_conf['data_path'] / csv_path
+
         self.logger.info("Retrieving weather forecast data using method = "+method)
         self.weather_forecast_method = method # Saving this attribute for later use to identify csv method usage
         if method == 'scrapper':
@@ -292,7 +295,7 @@ class Forecast(object):
                 else:
                     data = data + data_tmp
         elif method == 'csv': # reading from a csv file
-            weather_csv_file_path = self.root + csv_path
+            weather_csv_file_path = csv_path
             # Loading the csv file, we will consider that this is the PV power in W
             data = pd.read_csv(weather_csv_file_path, header=None, names=['ts', 'yhat'])
             # Check if the passed data has the correct length       
@@ -424,9 +427,9 @@ class Forecast(object):
                 # cec_inverters = pvlib.pvsystem.retrieve_sam(path=self.root + '/data/CEC Inverters.csv')
                 # with bz2.BZ2File(self.root + '/data/cec_inverters.pbz2', "w") as f: 
                 #     cPickle.dump(cec_inverters, f)
-                cec_modules = bz2.BZ2File(str(pathlib.Path(self.root+'/data/cec_modules.pbz2')), "rb")
+                cec_modules = bz2.BZ2File(str(pathlib.Path(self.emhass_conf['data_path'] / 'cec_modules.pbz2')), "rb")
                 cec_modules = cPickle.load(cec_modules)
-                cec_inverters = bz2.BZ2File(str(pathlib.Path(self.root+'/data/cec_inverters.pbz2')), "rb")
+                cec_inverters = bz2.BZ2File(str(pathlib.Path(self.emhass_conf['data_path'] / 'cec_inverters.pbz2')), "rb")
                 cec_inverters = cPickle.load(cec_inverters)
                 if type(self.plant_conf['module_model']) == list:
                     P_PV_forecast = pd.Series(0, index=df_weather.index)
@@ -523,7 +526,9 @@ class Forecast(object):
             df_csv.index = forecast_dates_csv
             df_csv.drop(['ts'], axis=1, inplace=True)
         else:
-            load_csv_file_path = self.root + csv_path
+            load_csv_file_path = csv_path
+            if not os.path.exists(csv_path):
+                csv_path = self.emhass_conf['data_path'] / csv_path
             df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
             df_csv.index = forecast_dates_csv
             df_csv.drop(['ts'], axis=1, inplace=True)
@@ -548,7 +553,7 @@ class Forecast(object):
         return forecast_out
     
     def get_load_forecast(self, days_min_load_forecast: Optional[int] = 3, method: Optional[str] = 'naive',
-                          csv_path: Optional[str] = "/data/data_load_forecast.csv",
+                          csv_path: Optional[str] = "data_load_forecast.csv",
                           set_mix_forecast:Optional[bool] = False, df_now:Optional[pd.DataFrame] = pd.DataFrame(),
                           use_last_window: Optional[bool] = True, mlf: Optional[MLForecaster] = None,
                           debug: Optional[bool] = False) -> pd.Series:
@@ -586,6 +591,8 @@ class Forecast(object):
         :rtype: pd.DataFrame
 
         """
+        csv_path  = self.emhass_conf['data_path'] / csv_path
+        
         if method == 'naive' or method == 'mlforecaster': # retrieving needed data for these methods
             self.logger.info("Retrieving data from hass for load forecast using method = "+method)
             var_list = [self.var_load]
@@ -594,9 +601,9 @@ class Forecast(object):
             time_zone_load_foreacast = None
             # We will need to retrieve a new set of load data according to the days_min_load_forecast parameter
             rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
-                               self.freq, time_zone_load_foreacast, self.params, self.root, self.logger)
+                               self.freq, time_zone_load_foreacast, self.params, self.emhass_conf, self.logger)
             if self.get_data_from_file:
-                with open(pathlib.Path(self.root) / 'data' / 'test_df_final.pkl', 'rb') as inp:
+                with open(pathlib.Path(self.emhass_conf['data_path']) / 'test_df_final.pkl', 'rb') as inp:
                     rh.df_final, days_list, _ = pickle.load(inp)
             else:
                 days_list = get_days_list(days_min_load_forecast) 
@@ -619,13 +626,14 @@ class Forecast(object):
             # Load model
             model_type = self.params['passed_data']['model_type']
             filename = model_type+'_mlf.pkl'
-            filename_path = pathlib.Path(self.root) / filename
+            filename_path = pathlib.Path(self.emhass_conf['data_path']) / filename
             if not debug:
                 if filename_path.is_file():
                     with open(filename_path, 'rb') as inp:
                         mlf = pickle.load(inp)
                 else:
                     self.logger.error("The ML forecaster file was not found, please run a model fit method before this predict method")
+                    return False
             # Make predictions
             if use_last_window:
                 data_last_window = copy.deepcopy(df)
@@ -633,8 +641,12 @@ class Forecast(object):
             else:
                 data_last_window = None
             forecast_out = mlf.predict(data_last_window)
-            # Force forecast_out length to avoid mismatches
-            forecast_out = forecast_out.iloc[0:len(self.forecast_dates)]
+            # Force forecast length to avoid mismatches
+            if len(self.forecast_dates) < len(forecast_out.index):
+                forecast_out = forecast_out.iloc[0:len(self.forecast_dates)]
+            elif len(self.forecast_dates) > len(forecast_out.index):
+                self.logger.error("sensor: power load no var loads missing data within the " + str(len(self.forecast_dates)) + " days")
+                return False
             # Define DataFrame
             data_dict = {'ts':self.forecast_dates, 'yhat':forecast_out.values.tolist()}
             data = pd.DataFrame.from_dict(data_dict)
@@ -642,7 +654,7 @@ class Forecast(object):
             data.set_index('ts', inplace=True)
             forecast_out = data.copy().loc[self.forecast_dates]
         elif method == 'csv': # reading from a csv file
-            load_csv_file_path = self.root + csv_path
+            load_csv_file_path = csv_path
             df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
             if len(df_csv) < len(self.forecast_dates):
                 self.logger.error("Passed data from CSV is not long enough")
@@ -659,6 +671,7 @@ class Forecast(object):
             # Check if the passed data has the correct length
             if len(data_list) < len(self.forecast_dates) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from passed list is not long enough")
+                return False
             else:
                 # Ensure correct length
                 data_list = data_list[0:len(self.forecast_dates)]
@@ -670,6 +683,7 @@ class Forecast(object):
                 forecast_out = data.copy().loc[self.forecast_dates]
         else:
             self.logger.error("Passed method is not valid")
+            return False
         P_Load_forecast = copy.deepcopy(forecast_out['yhat'])
         if set_mix_forecast:
             P_Load_forecast = Forecast.get_mix_forecast(
@@ -698,6 +712,8 @@ class Forecast(object):
         :rtype: pd.DataFrame
 
         """
+        csv_path  = self.emhass_conf['data_path'] / csv_path
+
         if method == 'hp_hc_periods':
             df_final[self.var_load_cost] = self.optim_conf['load_cost_hc']
             list_df_hp = []
@@ -717,6 +733,7 @@ class Forecast(object):
             # Check if the passed data has the correct length
             if len(data_list) < len(self.forecast_dates) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from passed list is not long enough")
+                return False
             else:
                 # Ensure correct length
                 data_list = data_list[0:len(self.forecast_dates)]
@@ -728,11 +745,12 @@ class Forecast(object):
                 df_final[self.var_load_cost] = forecast_out
         else:
             self.logger.error("Passed method is not valid")
+            return False
             
         return df_final
     
     def get_prod_price_forecast(self, df_final: pd.DataFrame, method: Optional[str] = 'constant',
-                               csv_path: Optional[str] = "/data/data_prod_price_forecast.csv") -> pd.DataFrame:
+                               csv_path: Optional[str] = "'data_prod_price_forecast.csv") -> pd.DataFrame:
         r"""
         Get the unit power production price for the energy injected to the grid.\
         This is the price of the energy injected to the utility in a vector \
@@ -753,6 +771,9 @@ class Forecast(object):
         :rtype: pd.DataFrame
 
         """
+
+        csv_path  = self.emhass_conf['data_path'] / csv_path
+
         if method == 'constant':
             df_final[self.var_prod_price] = self.optim_conf['prod_sell_price']
         elif method == 'csv':
@@ -767,6 +788,7 @@ class Forecast(object):
             # Check if the passed data has the correct length
             if len(data_list) < len(self.forecast_dates) and self.params['passed_data']['prediction_horizon'] is None:
                 self.logger.error("Passed data from passed list is not long enough")
+                return False
             else:
                 # Ensure correct length
                 data_list = data_list[0:len(self.forecast_dates)]
@@ -778,6 +800,7 @@ class Forecast(object):
                 df_final[self.var_prod_price] = forecast_out
         else:
             self.logger.error("Passed method is not valid")
+            return False
             
         return df_final
     
