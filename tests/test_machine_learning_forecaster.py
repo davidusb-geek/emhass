@@ -20,6 +20,11 @@ from emhass import utils
 
 # the root folder
 root = str(utils.get_root(__file__, num_parent=2))
+emhass_conf = {}
+emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
+emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
+emhass_conf['root_path'] = pathlib.Path(root)
+
 # create logger
 logger, ch = utils.get_logger(__name__, root, save_to_file=False)
 
@@ -44,8 +49,6 @@ class TestMLForecaster(unittest.TestCase):
     def setUp(self):
         params = TestMLForecaster.get_test_params()
         params_json = json.dumps(params)
-        config_path = pathlib.Path(root+'/config_emhass.yaml')
-        base_path = str(config_path.parent)
         costfun = 'profit'
         action = 'forecast-model-fit' # fit, predict and tune methods
         params = copy.deepcopy(json.loads(params_json))
@@ -60,22 +63,22 @@ class TestMLForecaster(unittest.TestCase):
         params['passed_data'] = runtimeparams
         params['optim_conf']['load_forecast_method'] = 'skforecast'
         params_json = json.dumps(params)
-        self.input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+        self.input_data_dict = set_input_data_dict(emhass_conf, costfun, params_json, runtimeparams_json, 
                                                    action, logger, get_data_from_file=True)
         data = copy.deepcopy(self.input_data_dict['df_input_data'])
         model_type = self.input_data_dict['params']['passed_data']['model_type']
         var_model = self.input_data_dict['params']['passed_data']['var_model']
         sklearn_model = self.input_data_dict['params']['passed_data']['sklearn_model']
         num_lags = self.input_data_dict['params']['passed_data']['num_lags']
-        self.mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
+        self.mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, emhass_conf, logger)
         
         get_data_from_file = True
         params = None
-        self.retrieve_hass_conf, self.optim_conf, _ = utils.get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=False)
+        self.retrieve_hass_conf, self.optim_conf, _ = utils.get_yaml_parse(emhass_conf['config_path'], use_secrets=False)
         self.rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                                self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
                                params, root, logger, get_data_from_file=get_data_from_file)
-        with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'rb') as inp:
+        with open(pathlib.Path(emhass_conf['data_path'] / 'test_df_final.pkl'), 'rb') as inp:
             self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
         
     def test_fit(self):
@@ -126,7 +129,7 @@ class TestMLForecaster(unittest.TestCase):
         var_model = self.input_data_dict['params']['passed_data']['var_model']
         sklearn_model = 'LinearRegression'
         num_lags = self.input_data_dict['params']['passed_data']['num_lags']
-        self.mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
+        self.mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, emhass_conf, logger)
         self.mlf.fit()
         df_pred_optim = self.mlf.tune(debug=True)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
@@ -137,7 +140,7 @@ class TestMLForecaster(unittest.TestCase):
         var_model = self.input_data_dict['params']['passed_data']['var_model']
         sklearn_model = 'ElasticNet'
         num_lags = self.input_data_dict['params']['passed_data']['num_lags']
-        self.mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
+        self.mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, emhass_conf, logger)
         self.mlf.fit()
         df_pred_optim = self.mlf.tune(debug=True)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)

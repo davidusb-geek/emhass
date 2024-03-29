@@ -97,7 +97,7 @@ def template_action(action_name):
 @app.route('/action/<action_name>', methods=['POST'])
 def action_call(action_name):
     with open(str(data_path / 'params.pkl'), "rb") as fid:
-        config_path, params = pickle.load(fid)
+        emhass_conf['config_path'], params = pickle.load(fid)
     runtimeparams = request.get_json(force=True)
     params = json.dumps(params)
     if runtimeparams is not None and runtimeparams != '{}':
@@ -105,7 +105,7 @@ def action_call(action_name):
     runtimeparams = json.dumps(runtimeparams)
     ActionStr = " >> Setting input data dict"
     app.logger.info(ActionStr)
-    input_data_dict = set_input_data_dict(config_path, str(data_path), costfun, 
+    input_data_dict = set_input_data_dict(emhass_conf, costfun, 
         params, runtimeparams, action_name, app.logger)
     if not input_data_dict:
         return make_response(grabLog(ActionStr), 400)
@@ -255,6 +255,12 @@ if __name__ == "__main__":
 
     config_path = Path(CONFIG_PATH)
     data_path = Path(DATA_PATH)
+
+    #save paths to dictionary
+    emhass_conf = {}
+    emhass_conf['config_path'] = config_path
+    emhass_conf['data_path'] = data_path
+    emhass_conf['root_path'] = Path(config_path).parent
     
     # Read the example default config file
     if config_path.exists():
@@ -388,7 +394,7 @@ if __name__ == "__main__":
         with open(str(data_path / 'params.pkl'), "wb") as fid:
             pickle.dump((config_path, params), fid)
     else: 
-        raise Exception("missing: " + str(data_path))        
+        raise Exception("missing: " + str(data_path))   
 
     # Define logger
     #stream logger
