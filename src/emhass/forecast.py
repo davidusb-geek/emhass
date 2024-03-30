@@ -526,9 +526,9 @@ class Forecast(object):
             df_csv.index = forecast_dates_csv
             df_csv.drop(['ts'], axis=1, inplace=True)
         else:
-            load_csv_file_path = csv_path
             if not os.path.exists(csv_path):
                 csv_path = self.emhass_conf['data_path'] / csv_path
+            load_csv_file_path = csv_path    
             df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
             df_csv.index = forecast_dates_csv
             df_csv.drop(['ts'], axis=1, inplace=True)
@@ -750,7 +750,7 @@ class Forecast(object):
         return df_final
     
     def get_prod_price_forecast(self, df_final: pd.DataFrame, method: Optional[str] = 'constant',
-                               csv_path: Optional[str] = "'data_prod_price_forecast.csv") -> pd.DataFrame:
+                               csv_path: Optional[str] = "data_prod_price_forecast.csv") -> pd.DataFrame:
         r"""
         Get the unit power production price for the energy injected to the grid.\
         This is the price of the energy injected to the utility in a vector \
