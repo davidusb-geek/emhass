@@ -16,6 +16,22 @@
                 "panel": "shared",
                 "focus": true
             }
+        },
+        {
+            "label": "EMHASS install with dependencies",
+            "command": "pip3",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "args": [
+                "install", "--force-reinstall", "."
+            ],
+            "presentation": {
+                "echo": true,
+                "panel": "shared",
+                "focus": true
+            }
         }
     ]
 }
