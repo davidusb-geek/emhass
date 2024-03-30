@@ -23,7 +23,7 @@ emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
 emhass_conf['root_path'] = pathlib.Path(root)
 
 # create logger
-logger, ch = get_logger(__name__, emhass_conf['root_path'], save_to_file=False)
+logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
 class TestForecast(unittest.TestCase):
     
@@ -46,7 +46,7 @@ class TestForecast(unittest.TestCase):
     def setUp(self):
         self.get_data_from_file = True
         params = None
-        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf['config_path'], use_secrets=False)
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf, use_secrets=False)
         self.retrieve_hass_conf, self.optim_conf, self.plant_conf = \
             retrieve_hass_conf, optim_conf, plant_conf
         self.rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
@@ -197,7 +197,7 @@ class TestForecast(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
         params_json = json.dumps(params)
-        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse((emhass_conf['config_path']), 
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf, 
                                                                     use_secrets=False, params=params_json)
         set_type = "dayahead-optim"
         params, retrieve_hass_conf, optim_conf, plant_conf = treat_runtimeparams(
@@ -272,7 +272,7 @@ class TestForecast(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
         params_json = json.dumps(params)
-        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse((emhass_conf['config_path']), 
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf, 
                                                                     use_secrets=False, params=params_json)
         optim_conf['delta_forecast'] = pd.Timedelta(days=2)
         params, retrieve_hass_conf, optim_conf, plant_conf = treat_runtimeparams(
@@ -317,7 +317,7 @@ class TestForecast(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
         params_json = json.dumps(params)
-        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse((emhass_conf['config_path']), 
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf, 
                                                                     use_secrets=False, params=params_json)
         set_type = "dayahead-optim"
         params, retrieve_hass_conf, optim_conf, plant_conf = treat_runtimeparams(

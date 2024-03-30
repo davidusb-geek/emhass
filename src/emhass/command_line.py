@@ -50,7 +50,7 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
     logger.info("Setting up needed data")
     # Parsing yaml
     retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-        emhass_conf['config_path'], use_secrets=not(get_data_from_file), params=params)
+        emhass_conf, use_secrets=not(get_data_from_file), params=params)
     # Treat runtimeparams
     params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
         runtimeparams, params, retrieve_hass_conf, 
@@ -626,7 +626,7 @@ def main():
     emhass_conf['data_path'] = data_path
     emhass_conf['root_path'] = root_path
     # create logger
-    logger, ch = utils.get_logger(__name__, emhass_conf['data_path'], save_to_file=bool(args.log2file))
+    logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=bool(args.log2file))
     # Additionnal argument
     try:
         parser.add_argument('--version', action='version', version='%(prog)s '+version('emhass'))

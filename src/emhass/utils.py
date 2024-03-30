@@ -32,15 +32,15 @@ def get_root(file: str, num_parent: Optional[int] = 3) -> str:
         raise ValueError("num_parent value not valid, must be between 1 and 3")
     return root
 
-def get_logger(fun_name: str, config_path: str, save_to_file: Optional[bool] = True,
+def get_logger(fun_name: str, emhass_conf: dict, save_to_file: Optional[bool] = True,
                logging_level: Optional[str] = "DEBUG") -> Tuple[logging.Logger, logging.StreamHandler]:
     """
     Create a simple logger object.
     
     :param fun_name: The Python function object name where the logger will be used
     :type fun_name: str
-    :param config_path: The path to the yaml configuration file
-    :type config_path: str
+    :param emhass_conf: Dictionary containing the needed emhass paths
+    :type emhass_conf: dict
     :param save_to_file: Write log to a file, defaults to True
     :type save_to_file: bool, optional
     :return: The logger object and the handler
@@ -52,7 +52,7 @@ def get_logger(fun_name: str, config_path: str, save_to_file: Optional[bool] = T
     logger.propagate = True
     logger.fileSetting = save_to_file
     if save_to_file:
-        ch = logging.FileHandler(config_path + '/data/logger_emhass.log')
+        ch = logging.FileHandler(emhass_conf['data_path'] / 'logger_emhass.log')
     else:
         ch = logging.StreamHandler()
     if logging_level == "DEBUG":
@@ -343,13 +343,13 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
     params = json.dumps(params)
     return params, retrieve_hass_conf, optim_conf, plant_conf
 
-def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
+def get_yaml_parse(emhass_conf: dict, use_secrets: Optional[bool] = True,
                    params: Optional[str] = None) -> Tuple[dict, dict, dict]:
     """
     Perform parsing of the config.yaml file.
     
-    :param config_path: The path to the yaml configuration file
-    :type config_path: str
+    :param emhass_conf: Dictionary containing the needed emhass paths
+    :type emhass_conf: dict
     :param use_secrets: Indicate if we should use a secrets file or not.
         Set to False for unit tests.
     :type use_secrets: bool, optional
@@ -359,15 +359,14 @@ def get_yaml_parse(config_path: str, use_secrets: Optional[bool] = True,
     :rtype: tuple(dict)
 
     """
-    base = config_path.parent
     if params is None:
-        with open(config_path, 'r') as file:
+        with open(emhass_conf["config_path"], 'r') as file:
             input_conf = yaml.load(file, Loader=yaml.FullLoader)
     else:
         input_conf = json.loads(params)
     if use_secrets:
         if params is None:
-            with open(base / 'secrets_emhass.yaml', 'r') as file:
+            with open(emhass_conf["root_path"] / 'secrets_emhass.yaml', 'r') as file: #assume secrets file is in root path 
                 input_secrets = yaml.load(file, Loader=yaml.FullLoader)
         else:
             input_secrets = input_conf.pop('params_secrets', None)

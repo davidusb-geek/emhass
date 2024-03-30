@@ -26,7 +26,7 @@ emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
 emhass_conf['root_path'] = pathlib.Path(root)
 
 # create logger
-logger, ch = utils.get_logger(__name__, root, save_to_file=False)
+logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
 class TestMLForecaster(unittest.TestCase):
     
@@ -74,7 +74,7 @@ class TestMLForecaster(unittest.TestCase):
         
         get_data_from_file = True
         params = None
-        self.retrieve_hass_conf, self.optim_conf, _ = utils.get_yaml_parse(emhass_conf['config_path'], use_secrets=False)
+        self.retrieve_hass_conf, self.optim_conf, _ = utils.get_yaml_parse(emhass_conf, use_secrets=False)
         self.rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                                self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
                                params, root, logger, get_data_from_file=get_data_from_file)
