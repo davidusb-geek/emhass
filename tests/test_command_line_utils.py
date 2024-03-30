@@ -21,7 +21,7 @@ emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
 emhass_conf['root_path'] = pathlib.Path(root)
 
 # create logger
-logger, ch = utils.get_logger(__name__, emhass_conf['root_path'], save_to_file=False)
+logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
 class TestCommandLineUtils(unittest.TestCase):
     

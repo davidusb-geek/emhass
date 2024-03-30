@@ -20,18 +20,23 @@ from emhass.utils import get_root, get_logger
 if __name__ == '__main__':
 
     # the root folder
-    root = str(get_root(__file__))
+    root = str(get_root(__file__, num_parent=2))
+    emhass_conf = {}
+    emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
+    emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
+    emhass_conf['root_path'] = pathlib.Path(root)
+
     # create logger
-    logger, ch = get_logger(__name__, root, save_to_file=False)
+    logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
     # Reading CSV files
-    path_file = root + "/data/opt_res_perfect_optim_cost.csv"
+    path_file = emhass_conf['data_path'] / "opt_res_perfect_optim_cost.csv"
     data_cost = pd.read_csv(path_file, index_col='timestamp')
     data_cost.index = pd.to_datetime(data_cost.index)
-    path_file = root + "/data/opt_res_perfect_optim_profit.csv"
+    path_file = emhass_conf['data_path'] / "opt_res_perfect_optim_profit.csv"
     data_profit = pd.read_csv(path_file, index_col='timestamp')
     data_profit.index = pd.to_datetime(data_profit.index)
-    path_file = root + "/data/opt_res_perfect_optim_self-consumption.csv"
+    path_file = emhass_conf['data_path'] / "opt_res_perfect_optim_self-consumption.csv"
     data_selfcons = pd.read_csv(path_file, index_col='timestamp')
     data_selfcons.index = pd.to_datetime(data_selfcons.index)
 
@@ -131,7 +136,7 @@ if __name__ == '__main__':
     this_figure.show()
 
     if save_figs:
-        fig_filename = root + "/docs/images/optim_results"
+        fig_filename = emhass_conf['root_path'] / "docs/images/optim_results"
         this_figure.write_image(fig_filename + ".png", width=1.5*768, height=1.5*1.5*768)
 
     fig_bar = px.bar(np.arange(len(cf)), x=[c+" (+"+"{:.2f}".format(np.sum(data['gain_'+c])*100/np.sum(
@@ -145,5 +150,5 @@ if __name__ == '__main__':
     fig_bar.show()
 
     if save_figs:
-        fig_filename = root + "/docs/images/optim_results_bar_plot"
+        fig_filename = emhass_conf['root_path'] / "images/optim_results_bar_plot"
         fig_bar.write_image(fig_filename + ".png", width=1080, height=0.8*1080)

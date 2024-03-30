@@ -15,7 +15,7 @@ emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
 emhass_conf['root_path'] = pathlib.Path(root)
 
 # create logger
-logger, ch = utils.get_logger(__name__, emhass_conf['root_path'], save_to_file=False)
+logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
 class TestCommandLineUtils(unittest.TestCase):
     
@@ -52,16 +52,16 @@ class TestCommandLineUtils(unittest.TestCase):
         self.params_json = json.dumps(params)
         
     def test_get_yaml_parse(self):
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(pathlib.Path(emhass_conf['config_path']), use_secrets=False)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(emhass_conf, use_secrets=False)
         self.assertIsInstance(retrieve_hass_conf, dict)
         self.assertIsInstance(optim_conf, dict)
         self.assertIsInstance(plant_conf, dict)
         self.assertTrue(retrieve_hass_conf['alt'] == 4807.8)
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(pathlib.Path(emhass_conf['config_path']), use_secrets=True, params=self.params_json)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(emhass_conf, use_secrets=True, params=self.params_json)
         self.assertTrue(retrieve_hass_conf['alt'] == 8000.0)
         
     def test_get_forecast_dates(self):
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(pathlib.Path(emhass_conf['config_path']), use_secrets=True, params=self.params_json)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(emhass_conf, use_secrets=True, params=self.params_json)
         freq = int(retrieve_hass_conf['freq'].seconds/60.0)
         delta_forecast = int(optim_conf['delta_forecast'].days)
         forecast_dates = utils.get_forecast_dates(freq, delta_forecast)
@@ -69,8 +69,7 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(len(forecast_dates)==int(delta_forecast*60*24/freq))
         
     def test_treat_runtimeparams(self):
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            pathlib.Path(emhass_conf['config_path']), use_secrets=True, params=self.params_json)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(emhass_conf, use_secrets=True, params=self.params_json)
         set_type = 'dayahead-optim'
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             self.runtimeparams_json, self.params_json,
@@ -96,8 +95,7 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(params['passed_data']['soc_final'] == plant_conf['SOCtarget'])
         self.assertTrue(params['passed_data']['def_total_hours'] == optim_conf['def_total_hours'])
         # This will be the case when using emhass in standalone mode
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            pathlib.Path(emhass_conf['config_path']), use_secrets=True, params=self.params_json)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(emhass_conf, use_secrets=True, params=self.params_json)
         params = json.dumps(None)
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             self.runtimeparams_json, params,
@@ -137,8 +135,7 @@ class TestCommandLineUtils(unittest.TestCase):
         runtimeparams.update({'custom_unit_prod_price_id':'my_custom_unit_prod_price_id'})
         runtimeparams.update({'custom_deferrable_forecast_id':'my_custom_deferrable_forecast_id'})
         runtimeparams_json = json.dumps(runtimeparams)
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            pathlib.Path(emhass_conf['config_path']), use_secrets=True, params=self.params_json)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(emhass_conf, use_secrets=True, params=self.params_json)
         set_type = 'dayahead-optim'
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             runtimeparams_json, self.params_json,
@@ -187,8 +184,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params['optim_conf']['load_cost_forecast_method'] = 'list'
         params['optim_conf']['prod_price_forecast_method'] = 'list'
         params_json = json.dumps(params)
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            pathlib.Path(emhass_conf['config_path']), use_secrets=True, params=params_json)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(emhass_conf, use_secrets=True, params=params_json)
         set_type = 'dayahead-optim'
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             runtimeparams_json, params_json,
@@ -213,8 +209,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params['optim_conf']['load_cost_forecast_method'] = 'list'
         params['optim_conf']['prod_price_forecast_method'] = 'list'
         params_json = json.dumps(params)
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            pathlib.Path(emhass_conf['config_path']), use_secrets=True, params=params_json)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(emhass_conf, use_secrets=True, params=params_json)
         set_type = 'dayahead-optim'
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             runtimeparams_json, params_json,

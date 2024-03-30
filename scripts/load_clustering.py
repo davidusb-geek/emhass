@@ -34,8 +34,13 @@ from tslearn.preprocessing import TimeSeriesScalerMeanVariance, \
 
 # the root folder
 root = str(get_root(__file__, num_parent=2))
+emhass_conf = {}
+emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
+emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
+emhass_conf['root_path'] = pathlib.Path(root)
+
 # create logger
-logger, ch = get_logger(__name__, root, save_to_file=True)
+logger, ch = get_logger(__name__, emhass_conf, save_to_file=True)
 
 
 if __name__ == '__main__':
@@ -44,7 +49,7 @@ if __name__ == '__main__':
     model_type = "load_clustering"
     var_model = "sensor.power_load_positive"
     
-    data_path = pathlib.Path(root+'/data/data_train_'+model_type+'.pkl')
+    data_path = pathlib.Path(emhass_conf['data_path'] / 'data_train_'+model_type+'.pkl')
     params = None
     template = 'presentation'
 
@@ -54,10 +59,10 @@ if __name__ == '__main__':
             data, var_model = pickle.load(fid)
     else:
         logger.info("Using EMHASS methods to retrieve the new forecast model train data")
-        retrieve_hass_conf, _, _ = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=True)
+        retrieve_hass_conf, _, _ = get_yaml_parse(emhass_conf, use_secrets=True)
         rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
         retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
-        params, root, logger, get_data_from_file=False)
+        params, emhass_conf, logger, get_data_from_file=False)
 
         days_list = get_days_list(days_to_retrieve)
         var_list = [var_model]

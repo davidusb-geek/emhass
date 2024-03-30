@@ -26,13 +26,18 @@ from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger, bu
 
 # the root folder
 root = str(get_root(__file__, num_parent=2))
+emhass_conf = {}
+emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
+emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
+emhass_conf['root_path'] = pathlib.Path(root)
+
 # create logger
-logger, ch = get_logger(__name__, root, save_to_file=False)
+logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
 def get_forecast_optim_objects(retrieve_hass_conf, optim_conf, plant_conf,
                                params, get_data_from_file):
     fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
-                    params, root, logger, get_data_from_file=get_data_from_file)
+                    params, emhass_conf, logger, get_data_from_file=get_data_from_file)
     df_weather = fcst.get_weather_forecast(method='solar.forecast')
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
     P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
@@ -40,14 +45,13 @@ def get_forecast_optim_objects(retrieve_hass_conf, optim_conf, plant_conf,
     df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
     opt = Optimization(retrieve_hass_conf, optim_conf, plant_conf, 
                        fcst.var_load_cost, fcst.var_prod_price,  
-                       'cost', root, logger)
+                       'cost', emhass_conf, logger)
     return fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt
 
 if __name__ == '__main__':
     get_data_from_file = False
-    config_path = pathlib.Path(root+'/config_emhass.yaml')
     
-    with open(config_path, 'r') as file:
+    with open(emhass_conf['config_path'], 'r') as file:
         config = yaml.load(file, Loader=yaml.FullLoader)
     retrieve_hass_conf = config['retrieve_hass_conf']
     optim_conf = config['optim_conf']
@@ -58,13 +62,13 @@ if __name__ == '__main__':
     params['optim_conf'] = optim_conf
     params['plant_conf'] = plant_conf
     
-    options_json = pathlib.Path(root+'/scripts/special_options.json')
+    options_json = pathlib.Path(emhass_conf['root_path'] / 'scripts/special_options.json')
     with options_json.open('r') as data:
         options = json.load(data)
     
     # params = build_params(params, options)
     
-    with open(pathlib.Path(root) / 'secrets_emhass.yaml', 'r') as file:
+    with open(emhass_conf['root_path'] / 'secrets_emhass.yaml', 'r') as file:
         params_secrets = yaml.load(file, Loader=yaml.FullLoader)
     
     params = build_params(params, params_secrets, options, 1, logger)
@@ -91,7 +95,7 @@ if __name__ == '__main__':
     optim_conf['load_cost_forecast_method'] = 'list'
     optim_conf['prod_price_forecast_method'] = 'list'
     
-    data_path = pathlib.Path(root+'/scripts/data_temp.pkl')
+    data_path = pathlib.Path(emhass_conf['root_path'] / 'scripts/data_temp.pkl')
     
     if data_path.is_file():
         logger.info("Loading a previous data file")
@@ -99,10 +103,10 @@ if __name__ == '__main__':
             fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt, df_input_data = pickle.load(fid)
     else:
     
-        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(config_path, use_secrets=True, params = json.dumps(params))
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf, use_secrets=True, params = json.dumps(params))
         rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
                           retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
-                          params, root, logger)
+                          params, emhass_conf, logger)
         days_list = get_days_list(retrieve_hass_conf['days_to_retrieve'])
         var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
         rh.get_data(days_list, var_list,

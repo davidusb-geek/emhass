@@ -20,7 +20,7 @@ emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
 emhass_conf['root_path'] = pathlib.Path(root)
 
 # create logger
-logger, ch = get_logger(__name__, emhass_conf['root_path'], save_to_file=False)
+logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
 class TestRetrieveHass(unittest.TestCase):
 
@@ -28,7 +28,7 @@ class TestRetrieveHass(unittest.TestCase):
         get_data_from_file = True
         save_data_to_file = False
         params = None
-        retrieve_hass_conf, _, _ = get_yaml_parse(pathlib.Path(emhass_conf['config_path']), use_secrets=False)
+        retrieve_hass_conf, _, _ = get_yaml_parse(emhass_conf, use_secrets=False)
         self.retrieve_hass_conf = retrieve_hass_conf
         self.rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                                self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
@@ -61,7 +61,7 @@ class TestRetrieveHass(unittest.TestCase):
             }
             })
         params = json.dumps(params)
-        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(emhass_conf['config_path']), 
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf, 
                                                                     use_secrets=True, params=params)
         self.assertIsInstance(retrieve_hass_conf, dict)
         self.assertTrue('hass_url' in retrieve_hass_conf.keys())
