@@ -10,6 +10,7 @@ secrets_emhass.yaml
 *.csv
 *.html
 *.pkl
+data/actionLogs.txt
 
 
 # Byte-compiled / optimized / DLL files
