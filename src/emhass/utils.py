@@ -596,7 +596,8 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int, 
         if options.get('list_end_timesteps_of_each_deferrable_load',None) != None: 
             params['optim_conf']['def_end_timestep'] = [i['end_timesteps_of_each_deferrable_load'] for i in options.get('list_end_timesteps_of_each_deferrable_load')]
         # Updating variables in plant_conf
-        params['plant_conf']['P_grid_max'] = options.get('maximum_power_from_grid',params['plant_conf']['P_grid_max'])
+        params['plant_conf']['P_from_grid_max'] = options.get('maximum_power_from_grid',params['plant_conf']['P_from_grid_max'])
+        params['plant_conf']['P_to_grid_max'] = options.get('maximum_power_to_grid',params['plant_conf']['P_to_grid_max'])
         if options.get('list_pv_module_model',None) != None:         
             params['plant_conf']['module_model'] = [i['pv_module_model'] for i in options.get('list_pv_module_model')]
         if options.get('list_pv_inverter_model',None) != None:        
