@@ -92,7 +92,8 @@ The following parameters and definitions are only needed if load_cost_forecast_m
 
 These are the technical parameters of the energy system of the household.
 
-- `P_grid_max`: The maximum power that can be supplied by the utility grid in Watts. Defaults to 9000.
+- `P_from_grid_max`: The maximum power that can be supplied by the utility grid in Watts (consumption). Defaults to 9000.
+- `P_to_grid_max`: The maximum power that can be supplied to the utility grid in Watts (injection). Defaults to 9000.
 
 We will define the technical parameters of the PV installation. For the modeling task we rely on the PVLib Python package. For more information see: [https://pvlib-python.readthedocs.io/en/stable/](https://pvlib-python.readthedocs.io/en/stable/)
 A dedicated webapp will help you search for your correct PV module and inverter names: [https://emhass-pvlib-database.streamlit.app/](https://emhass-pvlib-database.streamlit.app/)

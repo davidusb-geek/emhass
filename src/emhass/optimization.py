@@ -162,10 +162,10 @@ class Optimization:
         
         ## Add decision variables
         P_grid_neg  = {(i):plp.LpVariable(cat='Continuous',
-                                          lowBound=-self.plant_conf['P_grid_max'], upBound=0,
+                                          lowBound=-self.plant_conf['P_to_grid_max'], upBound=0,
                                           name="P_grid_neg{}".format(i)) for i in set_I}
         P_grid_pos  = {(i):plp.LpVariable(cat='Continuous',
-                                          lowBound=0, upBound=self.plant_conf['P_grid_max'],
+                                          lowBound=0, upBound=self.plant_conf['P_from_grid_max'],
                                           name="P_grid_pos{}".format(i)) for i in set_I}
         P_deferrable = []
         P_def_bin1 = []
@@ -267,13 +267,13 @@ class Optimization:
         # Avoid injecting and consuming from grid at the same time
         constraints.update({"constraint_pgridpos_{}".format(i) : 
             plp.LpConstraint(
-                e = P_grid_pos[i] - self.plant_conf['P_grid_max']*D[i],
+                e = P_grid_pos[i] - self.plant_conf['P_from_grid_max']*D[i],
                 sense = plp.LpConstraintLE,
                 rhs = 0)
             for i in set_I})
         constraints.update({"constraint_pgridneg_{}".format(i) : 
             plp.LpConstraint(
-                e = -P_grid_neg[i] - self.plant_conf['P_grid_max']*(1-D[i]),
+                e = -P_grid_neg[i] - self.plant_conf['P_to_grid_max']*(1-D[i]),
                 sense = plp.LpConstraintLE,
                 rhs = 0)
             for i in set_I})
