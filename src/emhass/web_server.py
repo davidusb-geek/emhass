@@ -260,7 +260,7 @@ if __name__ == "__main__":
     emhass_conf = {}
     emhass_conf['config_path'] = config_path
     emhass_conf['data_path'] = data_path
-    emhass_conf['root_path'] = get_root(__file__, num_parent=2)
+    emhass_conf['root_path'] = Path(config_path).parent
     
     # Read the example default config file
     if config_path.exists():
