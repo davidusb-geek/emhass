@@ -431,8 +431,6 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 
 curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3],"def_start_timestep":[0,3],"def_end_timestep":[0,6]}' http://localhost:5000/action/naive-mpc-optim
 ```
 
-
-
 ## A machine learning forecaster
 
 Starting in v0.4.0 a new machine learning forecaster class was introduced.
