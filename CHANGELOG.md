@@ -11,6 +11,7 @@
 ### Fix
 - style.css auto format and adjusted table styling
 - Changed pandas datetime rounding to nonexistent='shift_forward' to help survive DST change
+- Dropped support for Python 3.9
 
 ## 0.8.4 - 2024-03-13
 ### Improvement
