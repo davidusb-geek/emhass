@@ -15,7 +15,7 @@ from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim,
 from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune
 from emhass.command_line import publish_data
 from emhass.utils import get_injection_dict, get_injection_dict_forecast_model_fit, \
-    get_injection_dict_forecast_model_tune, build_params
+    get_injection_dict_forecast_model_tune, build_params, get_root
 
 # Define the Flask instance
 app = Flask(__name__)
@@ -260,7 +260,7 @@ if __name__ == "__main__":
     emhass_conf = {}
     emhass_conf['config_path'] = config_path
     emhass_conf['data_path'] = data_path
-    emhass_conf['root_path'] = Path(config_path).parent
+    emhass_conf['root_path'] = get_root(__file__, num_parent=2)
     
     # Read the example default config file
     if config_path.exists():
