@@ -96,7 +96,7 @@ def get_forecast_dates(freq: int, delta_forecast: int,
     end_forecast = (start_forecast + pd.Timedelta(days=delta_forecast)).replace(microsecond=0)
     forecast_dates = pd.date_range(start=start_forecast, 
         end=end_forecast+timedelta(days=timedelta_days)-freq, 
-        freq=freq).round(freq, ambiguous='infer', nonexistent=freq)
+        freq=freq).round(freq, ambiguous='infer', nonexistent='shift_forward')
     return forecast_dates
 
 def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dict, optim_conf: dict, plant_conf: dict,
