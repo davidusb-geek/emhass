@@ -153,7 +153,7 @@ class RetrieveHass:
                     from_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").min()
                     to_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").max()
                     ts = pd.to_datetime(pd.date_range(start=from_date, end=to_date, freq=self.freq), 
-                                        format='%Y-%d-%m %H:%M').round(self.freq, ambiguous='infer', nonexistent=self.freq)
+                                        format='%Y-%d-%m %H:%M').round(self.freq, ambiguous='infer', nonexistent='shift_forward')
                     df_day = pd.DataFrame(index = ts)
                 # Caution with undefined string data: unknown, unavailable, etc.
                 df_tp = df_raw.copy()[['state']].replace(

@@ -111,6 +111,8 @@ COPY src/emhass/ /app/src/emhass/
 COPY src/emhass/templates/ /app/src/emhass/templates/
 COPY src/emhass/static/ /app/src/emhass/static/
 COPY src/emhass/static/img/ /app/src/emhass/static/img/
+COPY src/emhass/data/cec_modules.pbz2 /app/src/emhass/data/
+COPY src/emhass/data/cec_inverters.pbz2 /app/src/emhass/data/
 COPY data/opt_res_latest.csv /app/data/
 #add options.json, this otherwise would be generated via HA
 COPY options.json /app/
@@ -144,13 +146,15 @@ RUN pip3 install --no-cache-dir --break-system-packages --no-deps --force-reinst
 ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True" , "--no_response", "True"]
 
 #-------------------------
-#EMHASS stanalone
+#EMHASS standalone
 FROM base as standalone
 
 COPY src/emhass/ /app/src/emhass/
 COPY src/emhass/templates/ /app/src/emhass/templates/
 COPY src/emhass/static/ /app/src/emhass/static/
 COPY src/emhass/static/img/ /app/src/emhass/static/img/
+COPY src/emhass/data/cec_modules.pbz2 /app/src/emhass/data/
+COPY src/emhass/data/cec_inverters.pbz2 /app/src/emhass/data/
 COPY data/opt_res_latest.csv /app/data/
 COPY README.md /app/
 COPY setup.py /app/
