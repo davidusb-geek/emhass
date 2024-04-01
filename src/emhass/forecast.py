@@ -414,9 +414,9 @@ class Forecast(object):
                 # Setting the main parameters of the PV plant
                 location = Location(latitude=self.lat, longitude=self.lon)
                 temp_params = TEMPERATURE_MODEL_PARAMETERS['sapm']['close_mount_glass_glass']
-                cec_modules = bz2.BZ2File(str(get_root(__file__, num_parent=1))+str(pathlib.Path('/data/cec_modules.pbz2')), "rb")
+                cec_modules = bz2.BZ2File(get_root(__file__, num_parent=2) / 'emhass/data/cec_modules.pbz2', "rb")
                 cec_modules = cPickle.load(cec_modules)
-                cec_inverters = bz2.BZ2File(str(get_root(__file__, num_parent=1))+str(pathlib.Path('/data/cec_inverters.pbz2')), "rb")
+                cec_inverters = bz2.BZ2File(get_root(__file__, num_parent=2) / 'emhass/data/cec_inverters.pbz2', "rb")
                 cec_inverters = cPickle.load(cec_inverters)
                 if type(self.plant_conf['module_model']) == list:
                     P_PV_forecast = pd.Series(0, index=df_weather.index)
