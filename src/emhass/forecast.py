@@ -23,7 +23,7 @@ from pvlib.irradiance import disc
 
 from emhass.retrieve_hass import RetrieveHass
 from emhass.machine_learning_forecaster import MLForecaster
-from emhass.utils import get_days_list, get_root
+from emhass.utils import get_days_list, get_root, set_df_index_freq
 
 
 class Forecast(object):
@@ -487,8 +487,8 @@ class Forecast(object):
                     forecast_dates_csv = forecast_dates_csv[0:self.params['passed_data']['prediction_horizon']]
         return forecast_dates_csv
     
-    def get_forecast_out_from_csv(self, df_final: pd.DataFrame, forecast_dates_csv: pd.date_range,
-                                  csv_path: str, data_list: Optional[list] = None) -> pd.DataFrame:
+    def get_forecast_out_from_csv_or_list(self, df_final: pd.DataFrame, forecast_dates_csv: pd.date_range,
+                                          csv_path: str, data_list: Optional[list] = None) -> pd.DataFrame:
         r"""
         Get the forecast data as a DataFrame from a CSV file. 
         
@@ -506,34 +506,51 @@ class Forecast(object):
         :rtype: pd.DataFrame
 
         """
-        days_list = df_final.index.day.unique().tolist()
         if csv_path is None:
             data_dict = {'ts':forecast_dates_csv, 'yhat':data_list}
             df_csv = pd.DataFrame.from_dict(data_dict)
             df_csv.index = forecast_dates_csv
             df_csv.drop(['ts'], axis=1, inplace=True)
+            df_csv = set_df_index_freq(df_csv)
+            days_list = df_csv.index.day.unique().tolist()
         else:
             load_csv_file_path = self.root + csv_path
             df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
             df_csv.index = forecast_dates_csv
             df_csv.drop(['ts'], axis=1, inplace=True)
+            df_csv = set_df_index_freq(df_csv)
+            days_list = df_final.index.day.unique().tolist()
         forecast_out = pd.DataFrame()
         for day in days_list:
-            first_elm_index = [i for i, x in enumerate(df_final.index.day == day) if x][0]
-            last_elm_index = [i for i, x in enumerate(df_final.index.day == day) if x][-1]
-            fcst_index = pd.date_range(start=df_final.index[first_elm_index],
-                                       end=df_final.index[last_elm_index], 
-                                       freq=df_final.index.freq)
-            first_hour = str(df_final.index[first_elm_index].hour)+":"+str(df_final.index[first_elm_index].minute)
-            last_hour = str(df_final.index[last_elm_index].hour)+":"+str(df_final.index[last_elm_index].minute)
-            if len(forecast_out) == 0:
-                forecast_out = pd.DataFrame(
-                    df_csv.between_time(first_hour, last_hour).values,
-                    index=fcst_index)
+            if csv_path is None:
+                df_tmp = copy.deepcopy(df_csv)
             else:
-                forecast_tp = pd.DataFrame(
-                    df_csv.between_time(first_hour, last_hour).values,
-                    index=fcst_index)
+                df_tmp = copy.deepcopy(df_final)
+            first_elm_index = [i for i, x in enumerate(df_tmp.index.day == day) if x][0]
+            last_elm_index = [i for i, x in enumerate(df_tmp.index.day == day) if x][-1]
+            fcst_index = pd.date_range(start=df_tmp.index[first_elm_index],
+                                    end=df_tmp.index[last_elm_index], 
+                                    freq=df_tmp.index.freq)
+            first_hour = str(df_tmp.index[first_elm_index].hour)+":"+str(df_tmp.index[first_elm_index].minute)
+            last_hour = str(df_tmp.index[last_elm_index].hour)+":"+str(df_tmp.index[last_elm_index].minute)
+            if len(forecast_out) == 0:
+                if csv_path is None:
+                    forecast_out = pd.DataFrame(
+                        df_csv.loc[fcst_index,:].between_time(first_hour, last_hour).values,
+                        index=fcst_index)
+                else:
+                    forecast_out = pd.DataFrame(
+                        df_csv.between_time(first_hour, last_hour).values,
+                        index=fcst_index)
+            else:
+                if csv_path is None:
+                    forecast_tp = pd.DataFrame(
+                        df_csv.loc[fcst_index,:].between_time(first_hour, last_hour).values,
+                        index=fcst_index)
+                else:
+                    forecast_tp = pd.DataFrame(
+                        df_csv.between_time(first_hour, last_hour).values,
+                        index=fcst_index)
                 forecast_out = pd.concat([forecast_out, forecast_tp], axis=0)
         return forecast_out
     
@@ -698,7 +715,7 @@ class Forecast(object):
                 df_final.loc[df_hp.index, self.var_load_cost] = self.optim_conf['load_cost_hp']
         elif method == 'csv':
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
-            forecast_out = self.get_forecast_out_from_csv(
+            forecast_out = self.get_forecast_out_from_csv_or_list(
                 df_final, forecast_dates_csv, csv_path)
             df_final[self.var_load_cost] = forecast_out
         elif method == 'list': # reading a list of values
@@ -712,7 +729,7 @@ class Forecast(object):
                 data_list = data_list[0:len(self.forecast_dates)]
                 # Define the correct dates
                 forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
-                forecast_out = self.get_forecast_out_from_csv(
+                forecast_out = self.get_forecast_out_from_csv_or_list(
                     df_final, forecast_dates_csv, None, data_list=data_list)
                 # Fill the final DF
                 df_final[self.var_load_cost] = forecast_out
@@ -747,7 +764,7 @@ class Forecast(object):
             df_final[self.var_prod_price] = self.optim_conf['prod_sell_price']
         elif method == 'csv':
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
-            forecast_out = self.get_forecast_out_from_csv(df_final,
+            forecast_out = self.get_forecast_out_from_csv_or_list(df_final,
                                                           forecast_dates_csv,
                                                           csv_path)
             df_final[self.var_prod_price] = forecast_out
@@ -762,7 +779,7 @@ class Forecast(object):
                 data_list = data_list[0:len(self.forecast_dates)]
                 # Define the correct dates
                 forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
-                forecast_out = self.get_forecast_out_from_csv(
+                forecast_out = self.get_forecast_out_from_csv_or_list(
                     df_final, forecast_dates_csv, None, data_list=data_list)
                 # Fill the final DF
                 df_final[self.var_prod_price] = forecast_out
