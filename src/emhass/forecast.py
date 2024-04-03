@@ -488,7 +488,8 @@ class Forecast(object):
         return forecast_dates_csv
     
     def get_forecast_out_from_csv_or_list(self, df_final: pd.DataFrame, forecast_dates_csv: pd.date_range,
-                                          csv_path: str, data_list: Optional[list] = None) -> pd.DataFrame:
+                                          csv_path: str, data_list: Optional[list] = None, 
+                                          list_and_perfect: Optional[bool] = False) -> pd.DataFrame:
         r"""
         Get the forecast data as a DataFrame from a CSV file. 
         
@@ -512,7 +513,10 @@ class Forecast(object):
             df_csv.index = forecast_dates_csv
             df_csv.drop(['ts'], axis=1, inplace=True)
             df_csv = set_df_index_freq(df_csv)
-            days_list = df_csv.index.day.unique().tolist()
+            if list_and_perfect:
+                days_list = df_final.index.day.unique().tolist()
+            else:
+                days_list = df_csv.index.day.unique().tolist()
         else:
             load_csv_file_path = self.root + csv_path
             df_csv = pd.read_csv(load_csv_file_path, header=None, names=['ts', 'yhat'])
@@ -523,7 +527,10 @@ class Forecast(object):
         forecast_out = pd.DataFrame()
         for day in days_list:
             if csv_path is None:
-                df_tmp = copy.deepcopy(df_csv)
+                if list_and_perfect:
+                    df_tmp = copy.deepcopy(df_final)
+                else:
+                    df_tmp = copy.deepcopy(df_csv)
             else:
                 df_tmp = copy.deepcopy(df_final)
             first_elm_index = [i for i, x in enumerate(df_tmp.index.day == day) if x][0]
@@ -535,18 +542,28 @@ class Forecast(object):
             last_hour = str(df_tmp.index[last_elm_index].hour)+":"+str(df_tmp.index[last_elm_index].minute)
             if len(forecast_out) == 0:
                 if csv_path is None:
-                    forecast_out = pd.DataFrame(
-                        df_csv.loc[fcst_index,:].between_time(first_hour, last_hour).values,
-                        index=fcst_index)
+                    if list_and_perfect:
+                        forecast_out = pd.DataFrame(
+                            df_csv.between_time(first_hour, last_hour).values,
+                            index=fcst_index)
+                    else:
+                        forecast_out = pd.DataFrame(
+                            df_csv.loc[fcst_index,:].between_time(first_hour, last_hour).values,
+                            index=fcst_index)
                 else:
                     forecast_out = pd.DataFrame(
                         df_csv.between_time(first_hour, last_hour).values,
                         index=fcst_index)
             else:
                 if csv_path is None:
-                    forecast_tp = pd.DataFrame(
-                        df_csv.loc[fcst_index,:].between_time(first_hour, last_hour).values,
-                        index=fcst_index)
+                    if list_and_perfect:
+                        forecast_tp = pd.DataFrame(
+                            df_csv.between_time(first_hour, last_hour).values,
+                            index=fcst_index)
+                    else:
+                        forecast_tp = pd.DataFrame(
+                            df_csv.loc[fcst_index,:].between_time(first_hour, last_hour).values,
+                            index=fcst_index)
                 else:
                     forecast_tp = pd.DataFrame(
                         df_csv.between_time(first_hour, last_hour).values,
@@ -685,7 +702,8 @@ class Forecast(object):
         return P_Load_forecast
     
     def get_load_cost_forecast(self, df_final: pd.DataFrame, method: Optional[str] = 'hp_hc_periods',
-                               csv_path: Optional[str] = "data_load_cost_forecast.csv") -> pd.DataFrame:
+                               csv_path: Optional[str] = "data_load_cost_forecast.csv",
+                               list_and_perfect: Optional[bool] = False) -> pd.DataFrame:
         r"""
         Get the unit cost for the load consumption based on multiple tariff \
         periods. This is the cost of the energy from the utility in a vector \
@@ -730,7 +748,7 @@ class Forecast(object):
                 # Define the correct dates
                 forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
                 forecast_out = self.get_forecast_out_from_csv_or_list(
-                    df_final, forecast_dates_csv, None, data_list=data_list)
+                    df_final, forecast_dates_csv, None, data_list=data_list, list_and_perfect=list_and_perfect)
                 # Fill the final DF
                 df_final[self.var_load_cost] = forecast_out
         else:
@@ -739,7 +757,8 @@ class Forecast(object):
         return df_final
     
     def get_prod_price_forecast(self, df_final: pd.DataFrame, method: Optional[str] = 'constant',
-                               csv_path: Optional[str] = "/data/data_prod_price_forecast.csv") -> pd.DataFrame:
+                                csv_path: Optional[str] = "/data/data_prod_price_forecast.csv",
+                                list_and_perfect: Optional[bool] = False) -> pd.DataFrame:
         r"""
         Get the unit power production price for the energy injected to the grid.\
         This is the price of the energy injected to the utility in a vector \
@@ -780,7 +799,7 @@ class Forecast(object):
                 # Define the correct dates
                 forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
                 forecast_out = self.get_forecast_out_from_csv_or_list(
-                    df_final, forecast_dates_csv, None, data_list=data_list)
+                    df_final, forecast_dates_csv, None, data_list=data_list, list_and_perfect=list_and_perfect)
                 # Fill the final DF
                 df_final[self.var_prod_price] = forecast_out
         else:
