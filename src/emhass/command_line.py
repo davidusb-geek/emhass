@@ -76,12 +76,12 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
             days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
             var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
             if not rh.get_data(days_list, var_list,
-                        minimal_response=False, significant_changes_only=False):
+                               minimal_response=False, significant_changes_only=False):
                 return False 
         if not rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
-                        set_zero_min = retrieve_hass_conf['set_zero_min'], 
-                        var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
-                        var_interp = retrieve_hass_conf['var_interp']):
+                               set_zero_min = retrieve_hass_conf['set_zero_min'], 
+                               var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
+                               var_interp = retrieve_hass_conf['var_interp']):
             return False
         df_input_data = rh.df_final.copy()
         # What we don't need for this type of action
@@ -113,12 +113,12 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
             days_list = utils.get_days_list(1)
             var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
             if not rh.get_data(days_list, var_list,
-                        minimal_response=False, significant_changes_only=False):
+                               minimal_response=False, significant_changes_only=False):
                 return False
         if not rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
-                        set_zero_min = retrieve_hass_conf['set_zero_min'], 
-                        var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
-                        var_interp = retrieve_hass_conf['var_interp']):
+                               set_zero_min = retrieve_hass_conf['set_zero_min'], 
+                               var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
+                               var_interp = retrieve_hass_conf['var_interp']):
             return False
         df_input_data = rh.df_final.copy()
         # Get PV and load forecasts
@@ -201,9 +201,11 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     # Load cost and prod price forecast
     df_input_data = input_data_dict['fcst'].get_load_cost_forecast(
         input_data_dict['df_input_data'], 
-        method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'])
+        method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'],
+        list_and_perfect=True)
     df_input_data = input_data_dict['fcst'].get_prod_price_forecast(
-        df_input_data, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
+        df_input_data, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'],
+        list_and_perfect=True)
     opt_res = input_data_dict['opt'].perform_perfect_forecast_optim(df_input_data, input_data_dict['days_list'])
     # Save CSV file for analysis
     if save_data_to_file:
