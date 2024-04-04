@@ -154,10 +154,9 @@ The tuning routine can be computing intense. If you have problems with computati
 This machine learning forecast class is based on the `skforecast` module. 
 We use the recursive autoregresive forecaster with added features. 
 
-I will borrow this image from the `skforecast` [documentation](
-https://joaquinamatrodrigo.github.io/skforecast/0.6.0/user_guides/autoregresive-forecaster.html) that help us understand the working principles of this type of model. 
+I will borrow this image from the `skforecast` [documentation](https://skforecast.org/0.11.0/user_guides/autoregresive-forecaster) that help us understand the working principles of this type of model. 
 
-![](https://joaquinamatrodrigo.github.io/skforecast/0.6.0/img/diagram-recursive-mutistep-forecasting.png) 
+![](https://skforecast.org/0.11.0/img/diagram-recursive-mutistep-forecasting.png) 
 
 With this type of model what we do in EMHASS is to create new features based on the timestamps of the data retrieved from Home Assistant. We create new features based on the day, the hour of the day, the day of the week, the month of the year, among others. 
 
