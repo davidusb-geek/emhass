@@ -13,7 +13,7 @@ from emhass.command_line import set_input_data_dict
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.forecast import Forecast
 from emhass.optimization import Optimization
-from emhass.utils import get_root, get_logger, get_yaml_parse, treat_runtimeparams, get_days_list
+from emhass import utils
 
 # the root folder
 root = str(get_root(__file__, num_parent=2))
@@ -46,7 +46,7 @@ class TestForecast(unittest.TestCase):
     def setUp(self):
         self.get_data_from_file = True
         params = None
-        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf, use_secrets=False)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(emhass_conf, use_secrets=False)
         self.retrieve_hass_conf, self.optim_conf, self.plant_conf = \
             retrieve_hass_conf, optim_conf, plant_conf
         self.rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
@@ -56,7 +56,7 @@ class TestForecast(unittest.TestCase):
             with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
                 self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
         else:
-            self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
+            self.days_list = utils.get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
             self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
             self.rh.get_data(self.days_list, self.var_list,
                             minimal_response=False, significant_changes_only=False)
@@ -197,10 +197,10 @@ class TestForecast(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
         params_json = json.dumps(params)
-        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf, 
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(emhass_conf, 
                                                                     use_secrets=False, params=params_json)
         set_type = "dayahead-optim"
-        params, retrieve_hass_conf, optim_conf, plant_conf = treat_runtimeparams(
+        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             runtimeparams_json, params_json, retrieve_hass_conf, 
             optim_conf, plant_conf, set_type, logger)
         rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
@@ -210,7 +210,7 @@ class TestForecast(unittest.TestCase):
             with open((emhass_conf['data_path'] / 'test_df_final.pkl'), 'rb') as inp:
                 rh.df_final, days_list, var_list = pickle.load(inp)
         else:
-            days_list = get_days_list(retrieve_hass_conf['days_to_retrieve'])
+            days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
             var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
             rh.get_data(days_list, var_list,
                         minimal_response=False, significant_changes_only=False)
@@ -264,22 +264,22 @@ class TestForecast(unittest.TestCase):
             }
             })
         runtimeparams = {
-            'pv_power_forecast':[i+1 for i in range(2*48)],
-            'load_power_forecast':[i+1 for i in range(2*48)],
-            'load_cost_forecast':[i+1 for i in range(2*48)],
-            'prod_price_forecast':[i+1 for i in range(2*48)]
+            'pv_power_forecast':[i+1 for i in range(3*48)],
+            'load_power_forecast':[i+1 for i in range(3*48)],
+            'load_cost_forecast':[i+1 for i in range(3*48)],
+            'prod_price_forecast':[i+1 for i in range(3*48)]
         }
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
         params_json = json.dumps(params)
-        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf, 
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(emhass_conf, 
                                                                     use_secrets=False, params=params_json)
-        optim_conf['delta_forecast'] = pd.Timedelta(days=2)
-        params, retrieve_hass_conf, optim_conf, plant_conf = treat_runtimeparams(
+        optim_conf['delta_forecast'] = pd.Timedelta(days=3)
+        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             runtimeparams_json, params_json, retrieve_hass_conf, 
             optim_conf, plant_conf, set_type, logger)
         fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf, 
-                        params_json, emhass_conf, logger, opt_time_delta=48, get_data_from_file=True)
+                        params_json, emhass_conf, logger, get_data_from_file=True)
         P_PV_forecast = fcst.get_weather_forecast(method='list')
         self.assertIsInstance(P_PV_forecast, type(pd.DataFrame()))
         self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
@@ -287,7 +287,7 @@ class TestForecast(unittest.TestCase):
         self.assertEqual(P_PV_forecast.index.tz, fcst.time_zone)
         self.assertTrue(fcst.start_forecast < ts for ts in P_PV_forecast.index)
         self.assertTrue(P_PV_forecast.values[0][0] == 1)
-        self.assertTrue(P_PV_forecast.values[-1][0] == 2*48)
+        self.assertTrue(P_PV_forecast.values[-1][0] == 3*48)
         P_load_forecast = fcst.get_load_forecast(method='list')
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
         self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
@@ -295,7 +295,20 @@ class TestForecast(unittest.TestCase):
         self.assertEqual(P_load_forecast.index.tz, fcst.time_zone)
         self.assertEqual(len(P_PV_forecast), len(P_load_forecast))
         self.assertTrue(P_load_forecast.values[0] == 1)
-        self.assertTrue(P_load_forecast.values[-1] == 2*48)
+        self.assertTrue(P_load_forecast.values[-1] == 3*48)
+        df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
+        df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
+        df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
+        df_input_data_dayahead = fcst.get_load_cost_forecast(df_input_data_dayahead, method='list')
+        self.assertTrue(fcst.var_load_cost in df_input_data_dayahead.columns)
+        self.assertTrue(df_input_data_dayahead.isnull().sum().sum()==0)
+        self.assertTrue(df_input_data_dayahead[fcst.var_load_cost].iloc[0] == 1)
+        self.assertTrue(df_input_data_dayahead[fcst.var_load_cost].iloc[-1] == 3*48)
+        df_input_data_dayahead = fcst.get_prod_price_forecast(df_input_data_dayahead, method='list')
+        self.assertTrue(fcst.var_prod_price in df_input_data_dayahead.columns)
+        self.assertTrue(df_input_data_dayahead.isnull().sum().sum()==0)
+        self.assertTrue(df_input_data_dayahead[fcst.var_prod_price].iloc[0] == 1)
+        self.assertTrue(df_input_data_dayahead[fcst.var_prod_price].iloc[-1] == 3*48)
         
     def test_get_forecasts_with_lists_special_case(self):
         with open(emhass_conf['config_path'], 'r') as file:
@@ -317,10 +330,10 @@ class TestForecast(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
         params_json = json.dumps(params)
-        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf, 
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(emhass_conf, 
                                                                     use_secrets=False, params=params_json)
         set_type = "dayahead-optim"
-        params, retrieve_hass_conf, optim_conf, plant_conf = treat_runtimeparams(
+        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             runtimeparams_json, params_json, retrieve_hass_conf, 
             optim_conf, plant_conf, set_type, logger)
         rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
@@ -330,7 +343,7 @@ class TestForecast(unittest.TestCase):
             with open(pathlib.Path(emhass_conf['data_path'] / 'test_df_final.pkl'), 'rb') as inp:
                 rh.df_final, days_list, var_list = pickle.load(inp)
         else:
-            days_list = get_days_list(retrieve_hass_conf['days_to_retrieve'])
+            days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
             var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
             rh.get_data(days_list, var_list,
                         minimal_response=False, significant_changes_only=False)
