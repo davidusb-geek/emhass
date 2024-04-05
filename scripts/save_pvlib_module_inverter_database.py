@@ -35,8 +35,12 @@ if __name__ == '__main__':
     cec_inverters = pvlib.pvsystem.retrieve_sam(path=root + '/data/CEC Inverters.csv')
     cec_inverters = cec_inverters.loc[:, ~cec_inverters.columns.duplicated()] # Drop column duplicates
     logger.info('Updating and saving databases')
-    cols_to_keep = [elem for elem in list(cec_modules_0.columns) if elem not in list(cec_modules.columns)]
-    cec_modules = pd.concat([cec_modules, cec_modules_0[cols_to_keep]], axis=1)
+    cols_to_keep_modules = [elem for elem in list(cec_modules_0.columns) if elem not in list(cec_modules.columns)]
+    cec_modules = pd.concat([cec_modules, cec_modules_0[cols_to_keep_modules]], axis=1)
+    cols_to_keep_inverters = [elem for elem in list(cec_inverters_0.columns) if elem not in list(cec_inverters.columns)]
+    cec_inverters = pd.concat([cec_inverters, cec_inverters_0[cols_to_keep_inverters]], axis=1)
+    logger.info(f'Number of elements from old database copied in new database for modules = {len(cols_to_keep_modules)}')
+    logger.info(f'Number of elements from old database copied in new database for inverters = {len(cols_to_keep_inverters)}')
     logger.info('Modules databases')
     print(tabulate(cec_modules.head(20).iloc[:,:5], headers='keys', tablefmt='psql'))
     logger.info('Inverters databases')

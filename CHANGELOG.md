@@ -1,14 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.8.5 - 2024-04-01
 ### Improvement
 - Simplified fetch urls to relatives
 - Improved code for passed forecast data error handling in utils.py
 - Added new tests for forecast longer than 24h by changing parameter `delta_forecast`
-- Added new files for updated PV modules and inverters using PVLib
+- Added new files for updated PV modules and inverters database for use with PVLib
+- Added a new webapp to help configuring modules and inverters: [https://emhass-pvlib-database.streamlit.app/](https://emhass-pvlib-database.streamlit.app/)
+- Added a new `P_to_grid_max` variable, different from the current `P_from_grid_max` option
 ### Fix
 - style.css auto format and adjusted table styling
 - Changed pandas datetime rounding to nonexistent='shift_forward' to help survive DST change
+- Dropped support for Python 3.9
 
 ## 0.8.4 - 2024-03-13
 ### Improvement
