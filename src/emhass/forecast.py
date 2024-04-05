@@ -636,7 +636,7 @@ class Forecast(object):
             if len(self.forecast_dates) < len(forecast_out.index):
                 forecast_out = forecast_out.iloc[0:len(self.forecast_dates)]
             elif len(self.forecast_dates) > len(forecast_out.index):
-                self.logger.error("sensor: power load no var loads missing data within the " + str(len(self.forecast_dates)) + " days")
+                self.logger.error("Unable to obtain: " + str(len(self.forecast_dates))  + " lags_opt values from sensor: power load no var loads, check optimization_time_step/freq and historic_days_to_retrieve/days_to_retrieve parameters")
                 return False
             # Define DataFrame
             data_dict = {'ts':self.forecast_dates, 'yhat':forecast_out.values.tolist()}
