@@ -16,14 +16,14 @@ from emhass.optimization import Optimization
 from emhass import utils
 
 # the root folder
-root = str(get_root(__file__, num_parent=2))
+root = str(utils.get_root(__file__, num_parent=2))
 emhass_conf = {}
 emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
 emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
 emhass_conf['root_path'] = pathlib.Path(root)
 
 # create logger
-logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
+logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
 class TestForecast(unittest.TestCase):
     
