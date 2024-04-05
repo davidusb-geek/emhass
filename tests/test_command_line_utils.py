@@ -417,7 +417,7 @@ class TestCommandLineUtils(unittest.TestCase):
                         '--debug', 'True'])
     def test_main_publish_data(self):
         opt_res = main()
-        self.assertTrue(opt_res==None)
+        self.assertFalse(opt_res.empty)
         
 if __name__ == '__main__':
     unittest.main()
