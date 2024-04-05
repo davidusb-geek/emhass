@@ -776,7 +776,7 @@ class Forecast(object):
         return df_final
     
     def get_prod_price_forecast(self, df_final: pd.DataFrame, method: Optional[str] = 'constant',
-                               csv_path: Optional[str] = "data_prod_price_forecast.csv") pd.DataFrame, 
+                               csv_path: Optional[str] = "data_prod_price_forecast.csv", 
                                list_and_perfect: Optional[bool] = False) -> pd.DataFrame:
 
         r"""
