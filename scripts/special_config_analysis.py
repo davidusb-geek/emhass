@@ -128,8 +128,8 @@ if __name__ == '__main__':
     template = 'presentation'
     
     # Let's plot the input data
-    fig_inputs1 = df_input_data[['sensor.power_photovoltaics',
-                                 'sensor.power_load_no_var_loads_positive']].plot()
+    fig_inputs1 = df_input_data[[str(retrieve_hass_conf['var_PV']),
+                                 str(retrieve_hass_conf['var_load'] + '_positive')]].plot()
     fig_inputs1.layout.template = template
     fig_inputs1.update_yaxes(title_text = "Powers (W)")
     fig_inputs1.update_xaxes(title_text = "Time")

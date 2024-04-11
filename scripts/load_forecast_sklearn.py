@@ -57,7 +57,7 @@ if __name__ == '__main__':
     sklearn_model = "KNeighborsRegressor"
     num_lags = 48
     
-    data_path = pathlib.Path(emhass_conf['data_path'] / 'data_train_'+model_type+'.pkl')
+    data_path = pathlib.Path(emhass_conf['data_path'] / str('data_train_'+model_type+'.pkl'))
     params = None
     template = 'presentation'
 
