@@ -222,8 +222,7 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(runtimeparams['prod_price_forecast'], str)
     
     def test_build_params(self):
-        config_path = emhass_conf['config_path']
-        with open(config_path, 'r') as file:
+        with open(emhass_conf['config_path'], 'r') as file:
             config = yaml.load(file, Loader=yaml.FullLoader)
         retrieve_hass_conf = config['retrieve_hass_conf']
         optim_conf = config['optim_conf']
@@ -232,11 +231,11 @@ class TestCommandLineUtils(unittest.TestCase):
         params['retrieve_hass_conf'] = retrieve_hass_conf
         params['optim_conf'] = optim_conf
         params['plant_conf'] = plant_conf
-        options_json = emhass_conf['root_path'] / pathlib.Path("options.json")
+        options_json = emhass_conf['root_path'] / "options.json"
         # Read options info
         with options_json.open('r') as data:
             options = json.load(data)
-        with open(root / pathlib.Path("secrets_emhass(example).yaml"), 'r') as file:
+        with open(emhass_conf['root_path'] / "secrets_emhass(example).yaml", 'r') as file:
             params_secrets = yaml.load(file, Loader=yaml.FullLoader)
         addon = 1
         params = utils.build_params(params, params_secrets, options, addon, logger)

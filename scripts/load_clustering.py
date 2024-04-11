@@ -48,7 +48,7 @@ if __name__ == '__main__':
     model_type = "load_clustering"
     var_model = "sensor.power_load_positive"
     
-    data_path = pathlib.Path(emhass_conf['data_path'] / str('data_train_'+model_type+'.pkl'))
+    data_path = emhass_conf['data_path'] / str('data_train_'+model_type+'.pkl')
     params = None
     template = 'presentation'
 

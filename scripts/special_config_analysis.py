@@ -62,7 +62,7 @@ if __name__ == '__main__':
     params['optim_conf'] = optim_conf
     params['plant_conf'] = plant_conf
     
-    options_json = pathlib.Path(emhass_conf['root_path'] / 'scripts/special_options.json')
+    options_json = emhass_conf['root_path'] / 'scripts/special_options.json'
     with options_json.open('r') as data:
         options = json.load(data)
     
@@ -95,7 +95,7 @@ if __name__ == '__main__':
     optim_conf['load_cost_forecast_method'] = 'list'
     optim_conf['prod_price_forecast_method'] = 'list'
     
-    data_path = pathlib.Path(emhass_conf['root_path'] / 'scripts/data_temp.pkl')
+    data_path = emhass_conf['root_path'] / 'scripts/data_temp.pkl'
     
     if data_path.is_file():
         logger.info("Loading a previous data file")

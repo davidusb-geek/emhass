@@ -340,7 +340,7 @@ class TestForecast(unittest.TestCase):
                           retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
                           params, emhass_conf, logger)
         if self.get_data_from_file:
-            with open(pathlib.Path(emhass_conf['data_path'] / 'test_df_final.pkl'), 'rb') as inp:
+            with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
                 rh.df_final, days_list, var_list = pickle.load(inp)
         else:
             days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])

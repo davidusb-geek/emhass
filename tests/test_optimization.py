@@ -35,7 +35,7 @@ class TestOptimization(unittest.TestCase):
                                self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
                                params, emhass_conf, logger)
         if get_data_from_file:
-            with open(pathlib.Path(emhass_conf['data_path'] / 'test_df_final.pkl'), 'rb') as inp:
+            with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
                 self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
         else:
             self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])

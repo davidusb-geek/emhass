@@ -34,7 +34,7 @@ class TestRetrieveHass(unittest.TestCase):
                                self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
                                params, emhass_conf, logger, get_data_from_file=get_data_from_file)
         if get_data_from_file:
-            with open(pathlib.Path(emhass_conf['data_path'] / 'test_df_final.pkl'), 'rb') as inp:
+            with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
                 self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
         else:
             self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
@@ -42,7 +42,7 @@ class TestRetrieveHass(unittest.TestCase):
             self.rh.get_data(self.days_list, self.var_list,
                              minimal_response=False, significant_changes_only=False)
             if save_data_to_file:
-                with open(pathlib.Path(emhass_conf['data_path'] / 'test_df_final.pkl'), 'wb') as outp:
+                with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'wb') as outp:
                     pickle.dump((self.rh.df_final, self.days_list, self.var_list), 
                                 outp, pickle.HIGHEST_PROTOCOL)
         self.df_raw = self.rh.df_final.copy()
@@ -95,7 +95,7 @@ class TestRetrieveHass(unittest.TestCase):
         with requests_mock.mock() as m:
             days_list = get_days_list(1)
             var_list = [self.retrieve_hass_conf['var_load']]
-            data = bz2.BZ2File(str(pathlib.Path(emhass_conf['data_path'] / 'test_response_get_data_get_method.pbz2')), "rb")
+            data = bz2.BZ2File(str(emhass_conf['data_path'] / 'test_response_get_data_get_method.pbz2'), "rb")
             data = cPickle.load(data)
             m.get(self.retrieve_hass_conf['hass_url'], json=data.json())
             self.rh.get_data(days_list, var_list,
