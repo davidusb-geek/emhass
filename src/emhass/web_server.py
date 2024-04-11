@@ -15,7 +15,7 @@ from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim,
 from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune
 from emhass.command_line import publish_data
 from emhass.utils import get_injection_dict, get_injection_dict_forecast_model_fit, \
-    get_injection_dict_forecast_model_tune, build_params, get_root
+    get_injection_dict_forecast_model_tune, build_params
 
 # Define the Flask instance
 app = Flask(__name__)
@@ -253,10 +253,9 @@ if __name__ == "__main__":
         if options.get('data_path', None) != None and options.get('data_path', None) != "default":
             DATA_PATH = options.get('data_path', None);   
 
+    #save paths to dictionary
     config_path = Path(CONFIG_PATH)
     data_path = Path(DATA_PATH)
-
-    #save paths to dictionary
     emhass_conf = {}
     emhass_conf['config_path'] = config_path
     emhass_conf['data_path'] = data_path
@@ -280,8 +279,8 @@ if __name__ == "__main__":
     web_ui_url = '0.0.0.0'
 
     # Initialize this global dict
-    if (data_path / 'injection_dict.pkl').exists():
-        with open(str(data_path / 'injection_dict.pkl'), "rb") as fid:
+    if (emhass_conf['data_path'] / 'injection_dict.pkl').exists():
+        with open(str(emhass_conf['data_path'] / 'injection_dict.pkl'), "rb") as fid:
             injection_dict = pickle.load(fid)
     else:
         injection_dict = None
@@ -390,11 +389,11 @@ if __name__ == "__main__":
         params = build_params(params, params_secrets, options, 1, app.logger)
     else:
         params = build_params(params, params_secrets, options, args.addon, app.logger)
-    if os.path.exists(str(data_path)): 
-        with open(str(data_path / 'params.pkl'), "wb") as fid:
+    if os.path.exists(str(emhass_conf['data_path'])): 
+        with open(str(emhass_conf['data_path'] / 'params.pkl'), "wb") as fid:
             pickle.dump((config_path, params), fid)
     else: 
-        raise Exception("missing: " + str(data_path))   
+        raise Exception("missing: " + str(emhass_conf['data_path']))   
 
     # Define logger
     #stream logger
@@ -402,7 +401,7 @@ if __name__ == "__main__":
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     ch.setFormatter(formatter)
     #Action File logger
-    fileLogger = logging.FileHandler(str(data_path / 'actionLogs.txt')) 
+    fileLogger = logging.FileHandler(str(emhass_conf['data_path'] / 'actionLogs.txt')) 
     formatter = logging.Formatter('%(levelname)s - %(name)s - %(message)s')
     fileLogger.setFormatter(formatter) # add format to Handler
     if logging_level == "DEBUG":
@@ -434,7 +433,7 @@ if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     app.logger.info("Launching the emhass webserver at: http://"+web_ui_url+":"+str(port))
     app.logger.info("Home Assistant data fetch will be performed using url: "+hass_url)
-    app.logger.info("The data path is: "+str(data_path))
+    app.logger.info("The data path is: "+str(emhass_conf['data_path']))
     try:
         app.logger.info("Using core emhass version: "+version('emhass'))
     except PackageNotFoundError:

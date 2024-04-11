@@ -144,8 +144,8 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
         if get_data_from_file:
             days_list = None
             filename = 'data_train_'+model_type+'.pkl'
-            data_path = emhass_conf['data_path'] / filename
-            with open(data_path, 'rb') as inp:
+            filename_path = emhass_conf['data_path'] / filename
+            with open(filename_path, 'rb') as inp:
                 df_input_data, _ = pickle.load(inp)
             df_input_data = df_input_data[df_input_data.index[-1] - pd.offsets.Day(days_to_retrieve):]
         else:
@@ -204,9 +204,13 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         input_data_dict['df_input_data'], 
         method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'],
         list_and_perfect=True)
+    if isinstance(df_input_data,bool) and not df_input_data:
+        return False
     df_input_data = input_data_dict['fcst'].get_prod_price_forecast(
         df_input_data, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'],
         list_and_perfect=True)
+    if isinstance(df_input_data,bool) and not df_input_data:
+        return False 
     opt_res = input_data_dict['opt'].perform_perfect_forecast_optim(df_input_data, input_data_dict['days_list'])
     # Save CSV file for analysis
     if save_data_to_file:
@@ -214,7 +218,7 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     else: # Just save the latest optimization results
         filename = 'opt_res_latest.csv'
     if not debug:
-        opt_res.to_csv(pathlib.Path(input_data_dict['emhass_conf']['data_path']) / filename, index_label='timestamp')
+        opt_res.to_csv(input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
     return opt_res
     
 def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
@@ -239,9 +243,13 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     df_input_data_dayahead = input_data_dict['fcst'].get_load_cost_forecast(
         input_data_dict['df_input_data_dayahead'],
         method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'])
+    if isinstance(df_input_data_dayahead,bool) and not df_input_data_dayahead:
+        return False 
     df_input_data_dayahead = input_data_dict['fcst'].get_prod_price_forecast(
         df_input_data_dayahead, 
         method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
+    if isinstance(df_input_data_dayahead,bool) and not df_input_data_dayahead:
+        return False 
     opt_res_dayahead = input_data_dict['opt'].perform_dayahead_forecast_optim(
         df_input_data_dayahead, input_data_dict['P_PV_forecast'], input_data_dict['P_load_forecast'])
     # Save CSV file for publish_data
@@ -251,7 +259,7 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     else: # Just save the latest optimization results
         filename = 'opt_res_latest.csv'
     if not debug:
-        opt_res_dayahead.to_csv(pathlib.Path(input_data_dict['emhass_conf']['data_path']) / filename, index_label='timestamp')
+        opt_res_dayahead.to_csv(input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
     return opt_res_dayahead
 
 def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
@@ -276,8 +284,12 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     df_input_data_dayahead = input_data_dict['fcst'].get_load_cost_forecast(
         input_data_dict['df_input_data_dayahead'],
         method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'])
+    if isinstance(df_input_data_dayahead,bool) and not df_input_data_dayahead:
+        return False 
     df_input_data_dayahead = input_data_dict['fcst'].get_prod_price_forecast(
         df_input_data_dayahead, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
+    if isinstance(df_input_data_dayahead,bool) and not df_input_data_dayahead:
+        return False 
     # The specifics params for the MPC at runtime
     prediction_horizon = input_data_dict['params']['passed_data']['prediction_horizon']
     soc_init = input_data_dict['params']['passed_data']['soc_init']
@@ -295,7 +307,7 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     else: # Just save the latest optimization results
         filename = 'opt_res_latest.csv'
     if not debug:
-        opt_res_naive_mpc.to_csv(pathlib.Path(input_data_dict['emhass_conf']['data_path']) / filename, index_label='timestamp')
+        opt_res_naive_mpc.to_csv(input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
     return opt_res_naive_mpc
 
 def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
@@ -318,7 +330,6 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
     num_lags = input_data_dict['params']['passed_data']['num_lags']
     split_date_delta = input_data_dict['params']['passed_data']['split_date_delta']
     perform_backtest = input_data_dict['params']['passed_data']['perform_backtest']
-    data_path = input_data_dict['emhass_conf']['data_path']
     # The ML forecaster object
     mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, input_data_dict['emhass_conf'], logger)
     # Fit the ML model
@@ -327,7 +338,8 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
     # Save model
     if not debug:
         filename = model_type+'_mlf.pkl'
-        with open(pathlib.Path(data_path) / filename, 'wb') as outp:
+        filename_path = input_data_dict['emhass_conf']['data_path'] / filename
+        with open(filename_path, 'wb') as outp:
             pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
     return df_pred, df_pred_backtest, mlf
 
@@ -356,9 +368,8 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     """
     # Load model
     model_type = input_data_dict['params']['passed_data']['model_type']
-    data_path = input_data_dict['emhass_conf']['data_path']
     filename = model_type+'_mlf.pkl'
-    filename_path = pathlib.Path(data_path) / filename
+    filename_path = input_data_dict['emhass_conf']['data_path'] / filename
     if not debug:
         if filename_path.is_file():
             with open(filename_path, 'rb') as inp:
@@ -417,9 +428,8 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
     """
     # Load model
     model_type = input_data_dict['params']['passed_data']['model_type']
-    data_path = input_data_dict['emhass_conf']['data_path']
     filename = model_type+'_mlf.pkl'
-    filename_path = pathlib.Path(data_path) / filename
+    filename_path = input_data_dict['emhass_conf']['data_path'] / filename
     if not debug:
         if filename_path.is_file():
             with open(filename_path, 'rb') as inp:
@@ -432,8 +442,9 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
     # Save model
     if not debug:
         filename = model_type+'_mlf.pkl'
-        with open(pathlib.Path(data_path) / filename, 'wb') as outp:
-            pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
+        filename_path = input_data_dict['emhass_conf']['data_path'] / filename
+        with open(filename_path, 'wb') as outp:
+            pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)       
     return df_pred_optim, mlf
 
 def publish_data(input_data_dict: dict, logger: logging.Logger,
@@ -460,11 +471,11 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     else:
         filename = 'opt_res_latest.csv'
     if opt_res_latest is None:
-        if not os.path.isfile(pathlib.Path(input_data_dict['emhass_conf']['data_path']) / filename):
+        if not os.path.isfile(input_data_dict['emhass_conf']['data_path'] / filename):
             logger.error("File not found error, run an optimization task first.")
             return
         else:
-            opt_res_latest = pd.read_csv(pathlib.Path(input_data_dict['emhass_conf']['data_path']) / filename, index_col='timestamp')
+            opt_res_latest = pd.read_csv(input_data_dict['emhass_conf']['data_path'] / filename, index_col='timestamp')
             opt_res_latest.index = pd.to_datetime(opt_res_latest.index)
             opt_res_latest.index.freq = input_data_dict['retrieve_hass_conf']['freq']
     # Estimate the current index

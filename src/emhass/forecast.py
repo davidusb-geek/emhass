@@ -24,7 +24,7 @@ from pvlib.irradiance import disc
 
 from emhass.retrieve_hass import RetrieveHass
 from emhass.machine_learning_forecaster import MLForecaster
-from emhass.utils import get_days_list, get_root, set_df_index_freq
+from emhass.utils import get_days_list, set_df_index_freq
 
 
 class Forecast(object):
@@ -417,7 +417,6 @@ class Forecast(object):
                 # Setting the main parameters of the PV plant
                 location = Location(latitude=self.lat, longitude=self.lon)
                 temp_params = TEMPERATURE_MODEL_PARAMETERS['sapm']['close_mount_glass_glass']
-                self.logger.info(self.emhass_conf['root_path'] / 'src/emhass/data/cec_modules.pbz2')
                 cec_modules = bz2.BZ2File(self.emhass_conf['root_path'] / 'src/emhass/data/cec_modules.pbz2', "rb")
                 cec_modules = cPickle.load(cec_modules)
                 cec_inverters = bz2.BZ2File(self.emhass_conf['root_path'] / 'src/emhass/data/cec_inverters.pbz2', "rb")
@@ -628,7 +627,8 @@ class Forecast(object):
             rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                                self.freq, time_zone_load_foreacast, self.params, self.emhass_conf, self.logger)
             if self.get_data_from_file:
-                with open(pathlib.Path(self.emhass_conf['data_path']) / 'test_df_final.pkl', 'rb') as inp:
+                filename_path = self.emhass_conf['data_path'] / 'test_df_final.pkl'
+                with open(filename_path, 'rb') as inp:
                     rh.df_final, days_list, _ = pickle.load(inp)
             else:
                 days_list = get_days_list(days_min_load_forecast) 
@@ -651,7 +651,7 @@ class Forecast(object):
             # Load model
             model_type = self.params['passed_data']['model_type']
             filename = model_type+'_mlf.pkl'
-            filename_path = pathlib.Path(self.emhass_conf['data_path']) / filename
+            filename_path = self.emhass_conf['data_path'] / filename
             if not debug:
                 if filename_path.is_file():
                     with open(filename_path, 'rb') as inp:
@@ -667,8 +667,11 @@ class Forecast(object):
                 data_last_window = None
             forecast_out = mlf.predict(data_last_window)
             # Force forecast length to avoid mismatches
+            self.logger.debug("Number of ML predict forcast data generated (lags_opt): " + str(len(forecast_out.index)))
+            self.logger.debug("Number of forcast dates obtained: " + str(len(self.forecast_dates)))
             if len(self.forecast_dates) < len(forecast_out.index):
                 forecast_out = forecast_out.iloc[0:len(self.forecast_dates)]
+            # To be removed once bug is fixed
             elif len(self.forecast_dates) > len(forecast_out.index):
                 self.logger.error("Unable to obtain: " + str(len(self.forecast_dates))  + " lags_opt values from sensor: power load no var loads, check optimization_time_step/freq and historic_days_to_retrieve/days_to_retrieve parameters")
                 return False

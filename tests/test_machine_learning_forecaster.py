@@ -32,7 +32,7 @@ class TestMLForecaster(unittest.TestCase):
     
     @staticmethod
     def get_test_params():
-        with open(root+'/config_emhass.yaml', 'r') as file:
+        with open(emhass_conf['config_path'], 'r') as file:
             params = yaml.load(file, Loader=yaml.FullLoader)
         params.update({
             'params_secrets': {
@@ -77,8 +77,8 @@ class TestMLForecaster(unittest.TestCase):
         self.retrieve_hass_conf, self.optim_conf, _ = utils.get_yaml_parse(emhass_conf, use_secrets=False)
         self.rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                                self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
-                               params, root, logger, get_data_from_file=get_data_from_file)
-        with open(pathlib.Path(emhass_conf['data_path'] / 'test_df_final.pkl'), 'rb') as inp:
+                               params, emhass_conf, logger, get_data_from_file=get_data_from_file)
+        with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
             self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
         
     def test_fit(self):
