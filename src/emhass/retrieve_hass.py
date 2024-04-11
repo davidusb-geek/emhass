@@ -133,23 +133,23 @@ class RetrieveHass:
                 try: # Sometimes when there are connection problems we need to catch empty retrieved json
                     data = response.json()[0]
                 except IndexError:
-                    if x is 0:
+                    if x == 0:
                         self.logger.error("The retrieved JSON is empty, A sensor:" + var + " may have 0 days of history or passed sensor may not be correct")
                     else:
-                        self.logger.error("The retrieved JSON is empty, days_to_retrieve may be larger than the recorded history of sensor:" + var + "  (check your recorder settings)")
+                        self.logger.error("The retrieved JSON is empty for day:"+ str(day) +", days_to_retrieve may be larger than the recorded history of sensor:" + var + " (check your recorder settings)")
                     return False
                 df_raw = pd.DataFrame.from_dict(data)
                 if len(df_raw) == 0:
-                    if x is 0:
+                    if x == 0:
                         self.logger.error("The retrieved Dataframe is empty, A sensor:" + var + " may have 0 days of history or passed sensor may not be correct")
                     else:
-                        self.logger.error("Retrieved empty Dataframe, days_to_retrieve may be larger than the recorded history of sensor:" + var + "  (check your recorder settings)")
+                        self.logger.error("Retrieved empty Dataframe for day:"+ str(day) +", days_to_retrieve may be larger than the recorded history of sensor:" + var + " (check your recorder settings)")
                     return False
                 if i == 0: # Defining the DataFrame container
                     from_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").min()
                     to_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").max()
                     ts = pd.to_datetime(pd.date_range(start=from_date, end=to_date, freq=self.freq), 
-                                        format='%Y-%d-%m %H:%M').round(self.freq)
+                                        format='%Y-%d-%m %H:%M').round(self.freq, ambiguous='infer', nonexistent='shift_forward')
                     df_day = pd.DataFrame(index = ts)
                 # Caution with undefined string data: unknown, unavailable, etc.
                 df_tp = df_raw.copy()[['state']].replace(

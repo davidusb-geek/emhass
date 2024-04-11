@@ -17,6 +17,7 @@ To get started go ahead and look at the installation procedure and usage instruc
 :maxdepth: 2
 
 intro.md
+differences.md
 lpems.md
 forecasts.md
 mlforecaster.md

@@ -1,0 +1,375 @@
+/* color theme */
+.light {
+  color: white;
+  color: #e1e1e1;
+  color: silver;
+  color: #bfd2db;
+
+  color: #169ad6;
+  color: #17516c;
+  color: #282928;
+}
+
+.dark {
+  color: #e1e1e1;
+  color: #e9f6f9;
+  color: #ccf3ff;
+  color: #d2e8f0;
+
+  color: #7d7d7d;
+  color: #282928;
+  color: #3f3f3f;
+  color: #181818;
+  color: #111111;
+  color: #e1e1e1;
+}
+
+
+/* All displays, styling */
+.wy-nav-content {
+  max-width: none !important;
+}
+
+div {
+  border-radius: 7px;
+  box-align: start !important;
+  align-items: start;
+  text-align: left;
+}
+
+section {
+  margin-bottom: 53px;
+}
+
+.MathJax_Display,
+mjx-container {
+  text-align: left !important;
+}
+
+table {
+  display: block !important;
+  overflow-x: auto !important;
+  white-space: nowrap !important;
+  max-width: min-content !important;
+}
+
+p {
+  text-align: left;
+}
+
+
+/* Mobile only styling (will get overriden) */
+.wy-nav-top a,
+.wy-nav-top a:visited {
+  font-size: large;
+  text-align: center;
+  margin: 0 auto;
+}
+
+.math {
+  overflow-x: auto;
+}
+
+
+.admonition {
+  min-width: 100%;
+}
+
+
+/* Large screen styling */
+@media screen and (min-width: 799px) {
+
+  p,
+  table,
+  span,
+  dt {
+    text-align: left;
+    max-width: 80%;
+    word-break: normal;
+  }
+
+  .admonition {
+    min-width: 50%;
+    max-width: 75%;
+  }
+
+  .admonition-title {
+    max-width: 100%;
+  }
+
+  [class^="highlight-"] {
+    max-width: 80%;
+    overflow-x: scroll;
+    border-radius: 7px;
+  }
+
+  img {
+    display: block;
+    border-radius: 7px;
+    margin: 0;
+    max-width: 80% !important;
+  }
+
+  #intro-quick-start a img {
+    display: inline;
+  }
+}
+
+
+
+
+/* Lightmode styling  */
+.version {
+  color: #e1e1e1 !important;
+  font-weight: 700 !important;
+}
+
+p[role="heading"] span {
+  color: #169ad6 !important;
+  font-weight: 700 !important;
+  font-size: 120%;
+}
+
+.wy-menu .caption-text {
+  color: #bfd2db !important;
+}
+
+.wy-nav-side {
+  background: #282928 !important;
+}
+
+.wy-side-nav-search {
+  background: #169ad6;
+}
+
+.icon,
+.fa,
+a,
+a span {
+  color: #169ad6;
+}
+
+.icon:visited,
+.internal:visited,
+.fa:visited,
+a:visited,
+a span:visited {
+  color: #17516c;
+}
+
+.icon:hover,
+.internal:hover,
+.fa:hover,
+a:hover,
+a span:hover {
+  color: #14445a;
+}
+
+.wy-nav-top a,
+.wy-nav-top a:visited {
+  color: #e1e1e1;
+}
+
+.wy-nav-top i {
+  color: #e1e1e1;
+}
+
+.wy-side-nav-search .icon-home,
+.wy-side-nav-search .icon-home:visited,
+.wy-menu .internal {
+  color: white;
+}
+
+.rst-versions .rst-current-version {
+  color: silver;
+}
+
+dl {
+  word-wrap: anywhere;
+  overflow-x: auto;
+}
+
+
+/* Darkmode Styling */
+@media (prefers-color-scheme: dark) {
+
+  body,
+  .wy-nav-content,
+  .wy-nav-content-wrap {
+    color: #e1e1e1;
+    font-weight: 500;
+    background: #181818 !important;
+  }
+
+  /* invert image color specified sections  */
+  #what-is-energy-management-for-home-assistant-emhass p img,
+  #configuration-and-installation p img,
+  #the-emhass-optimizations p img,
+  #the-forecast-module p img,
+  #the-machine-learning-forecaster p img,
+  #example-configurations p img {
+    filter: invert(90%);
+  }
+
+  .wy-nav-side,
+  .wy-nav-top {
+    background: #282928 !important;
+    color: #e1e1e1;
+  }
+
+  .wy-nav-top i {
+    color: #e1e1e1;
+  }
+
+  .wy-side-nav-search {
+    background-color: #d2e8f0;
+    color: #e1e1e1;
+  }
+
+  li.toctree-l1.current>a {
+    border: none !important;
+  }
+
+  .wy-side-nav-search .icon-home,
+  .wy-side-nav-search .icon-home:visited {
+    color: #181818 !important;
+  }
+
+  .admonition {
+    background: #282928 !important;
+    max-width: 80%;
+  }
+
+  .admonition p {
+    color: #e1e1e1;
+    background-color: #282928;
+  }
+
+  .admonition-title {
+    color: #ccf3ff !important;
+    background: #3d3d3d !important;
+  }
+
+  .version {
+    color: #181818 !important;
+    font-weight: 700 !important;
+  }
+
+  li.toctree-l2 a {
+    /* background-color: #3f3f3f; */
+    color: #e1e1e1 !important;
+  }
+
+  a span:hover,
+  .btn-neutral:hover,
+  .btn-neutral:visited:hover {
+    background-color: #7d7d7d !important;
+    color: #e1e1e1 !important;
+  }
+
+  .btn-neutral,
+  .btn-neutral:visited {
+    background-color: #3f3f3f !important;
+    color: #e1e1e1 !important;
+  }
+
+  .wy-menu ul .toctree-l1 {
+    background-color: #282928 !important;
+  }
+
+  .wy-menu ul .toctree-l1 a {
+    background-color: #282928 !important;
+    border: none;
+  }
+
+  .wy-menu ul .toctree-l1 a:hover {
+    background-color: #7d7d7d !important;
+  }
+
+  a,
+  a span,
+  a .pre,
+  .icon,
+  .fa {
+    color: #ccf3ff !important;
+  }
+
+  a:visited,
+  .wy-nav-top a,
+  .wy-nav-top,
+  .icon:visited,
+  .fa:visited,
+  a:visited {
+    color: #d2e8f0;
+  }
+
+  p[role="heading"] span {
+    color: #e9f6f9 !important;
+    font-weight: 700 !important;
+    font-size: 120%;
+  }
+
+  .row-even td {
+    background-color: #181818 !important;
+  }
+
+  .row-odd td {
+    background-color: #111111 !important;
+  }
+
+  th p {
+    color: #e1e1e1 !important;
+  }
+
+  tr:hover td,
+  th {
+    background-color: #3f3f3f !important;
+  }
+
+  .sig {
+    background: #3f3f3f !important;
+  }
+
+  .rst-current-version {
+    color: #e9f6f9 !important;
+  }
+
+  .highlight,
+  code {
+    background: #282928 !important;
+    border-color: #7d7d7d !important;
+  }
+
+  /* Darkmode syntax heighlighting colours  */
+  .s2 {
+    color: lightblue !important;
+  }
+
+  .nv {
+    color: lightsalmon !important;
+  }
+
+  .nb {
+    color: lightpink !important;
+  }
+
+  .s1 {
+    color: lightseagreen !important;
+  }
+
+  .ow {
+    color: lightyellow !important;
+  }
+
+  .k {
+    color: lightseagreen !important;
+  }
+
+  .kc {
+    color: lightsteelblue !important;
+  }
+
+  .pre {
+    color: lightblue !important;
+  }
+}

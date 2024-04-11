@@ -1,5 +1,5 @@
 #This action test builds EMHASS standalone Docker images, in each architecture.
-name: "Test Docker Stanadlone"
+name: "Test Docker Standalone"
 
 on:
   push:
@@ -15,10 +15,10 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          {buildx: linux/amd64, target_arch: amd64},
-          {buildx: linux/arm/v7, target_arch: armv7},
-          {buildx: linux/arm/v7, target_arch: armhf},
-          {buildx: linux/arm64,  target_arch: aarch64}
+          {buildx: linux/amd64, target_arch: amd64, os_version: debian},
+          {buildx: linux/arm/v7, target_arch: armv7, os_version: debian},
+          {buildx: linux/arm/v7, target_arch: armhf, os_version: raspbian},
+          {buildx: linux/arm64,  target_arch: aarch64, os_version: debian}
         ]
     steps:
       - name: Checkout the repository
@@ -36,6 +36,7 @@ jobs:
           build-args: |
             build_version=standalone
             TARGETARCH=${{ matrix.platform.target_arch }}
+            os_version=${{ matrix.platform.os_version }}
           tags: emhass/standalone-test
           load: true
       - name: Test #assume docker fail with FileNotFound secrets_emhass.yaml error

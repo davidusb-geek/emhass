@@ -21,10 +21,15 @@ This method works well with standalone mode.
 
 _confirm terminal is in the root `emhass` directory before starting_
 
+**Install requirements**
+```bash
+python3 -m pip install -r requirements.txt #if arm try setting --extra-index-url=https://www.piwheels.org/simple
+```
+
 **Create a developer environment:**
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 ```
 
 **Activate the environment:**
@@ -46,7 +51,7 @@ An IDE like VSCode should automatically catch that a new virtual env was created
 **Install the _emhass_ package in editable mode:**
 
 ```bash
-python -m pip install -e .
+python3 -m pip install -e .
 ```
 
 **Set paths with environment variables:**
@@ -67,7 +72,7 @@ python -m pip install -e .
   set "DATA_PATH=%cd%/data/"
   ```
 
-_Make sure `secrets_emhass.yaml` has been made and set. Copy `secrets_emhass(example).yaml` for an example._
+_Make sure `secrets_emhass.yaml` has been created and set. Copy `secrets_emhass(example).yaml` for an example._
 
 **Run EMHASS**
 
@@ -98,7 +103,7 @@ The recommended steps to run are:
 
   - You will need to modify the `EMHASS_URL` _(http://HAIPHERE:8123/)_ and `EMHASS_KEY` _(PLACEKEYHERE)_ inside of Launch.json that matches your HA environment before running.
   - If you want to change your parameters, you can edit options.json file before launch.
-  - you can also choose to run `EMHASS run` instead of `EMHASS run Addon`. This acts more like standalone mode and uses the secrets_emhass.yaml files and removes the use of options.json. _(user sets parameters in config_emhass.yaml instead)_
+  - you can also choose to run `EMHASS run` instead of `EMHASS run Addon`. This acts more like standalone mode an removes the use of options.json. _(user sets parameters in config_emhass.yaml instead)_
 
 - You can run all the unitests by heading to the [`Testing`](https://code.visualstudio.com/docs/python/testing) tab on the left hand side.  
   This is recommended before creating a pull request.
@@ -152,7 +157,7 @@ docker build -t emhass/docker --build-arg build_version=standalone .
 docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/docker
 ```
 
-_Standalone mode requires `secrets_emhass.yaml` to be set and passed in on operate. Copy `secrets_emhass(example).yaml` for an example._
+_Standalone mode can use `secrets_emhass.yaml` to pass secret parameters (overriding secrets provided by ARG/ENV's). Copy `secrets_emhass(example).yaml` for an example._
 
 #### Docker run add-on with Git or pip:
 
@@ -216,6 +221,16 @@ For those who wish to mount/sync the local `data` folder with the data folder fr
 docker run ... -v $(pwd)/data/:/app/data ...
 ```
 
+#### Issue with TARGETARCH
+If your docker build fails with an error related to `TARGETARCH`. It may be best to add your devices architecture manually:
+
+Example with armhf architecture 
+```bash
+docker build ... --build-arg TARGETARCH=armhf --build-arg os_version=raspbian ...
+```
+*For `armhf` only, create a build-arg for `os_version=raspbian`* 
+
+
 #### Delete built Docker image
 
 We can delete the Docker image and container via:
@@ -265,6 +280,69 @@ docker build -t emhass/docker --build-arg build_version=addon-local .
 
 docker run -it -p 5000:5000 --name emhass-container -e EMHASS_KEY -e EMHASS_URL -e TIME_ZONE -e LAT -e LON -e ALT emhass/docker
 ```
+
+### Example Docker testing pipeline 
+If you are wishing to test your changes compatibility, check out this example as a template:
+
+*Linux:*  
+*Assuming docker and git installed*
+```bash
+#setup environment variables for test
+export repo=https://github.com/davidusb-geek/emhass.git
+export branch=master
+#Ex. HAURL=https://localhost:8123/
+export HAURL=HOMEASSISTANTURLHERE
+export HAKEY=HOMEASSISTANTKEYHERE
+
+git clone $repo
+cd emhass 
+git checkout $branch
+```
+```bash
+#testing addon (build and run)
+docker build -t emhass/docker --build-arg build_version=addon-local .
+docker run --rm -it -p 5000:5000 --name emhass-container -v $(pwd)/options.json:/app/options.json -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" emhass/docker --url $HAURL --key $HAKEY
+```
+```bash
+#run actions on a separate terminal
+curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/perfect-optim
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/dayahead-optim
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/forecast-model-fit
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/forecast-model-predict
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/forecast-model-tune
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/publish-data
+```
+
+```bash
+#testing standalone (build and run)
+docker build -t emhass/docker --build-arg build_version=standalone .
+#make secrets_emhass
+cat <<EOT >> secrets_emhass.yaml
+hass_url: $HAURL
+long_lived_token: $HAKEY
+time_zone: Europe/Paris
+lat: 45.83
+lon: 6.86
+alt: 4807.8
+EOT
+docker run --rm -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/docker 
+```
+```bash
+#run actions on a separate terminal
+curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/perfect-optim
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/dayahead-optim
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/forecast-model-fit
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/forecast-model-predict
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/forecast-model-tune
+curl -i -H 'Content-Type:application/json' -X POST http://localhost:5000/action/publish-data
+```
+
+User may wish to re-test with tweaked parameters such as `lp_solver` and `weather_forecast_method`, in `config_emhass.yaml` *(standalone)* or `options.json` *(addon)*, to broaden the testing scope. 
+*see [EMHASS & EMHASS-Add-on differences](https://emhass.readthedocs.io/en/latest/differences.html) for more information on how these config_emhass & options files differ*
+
+*Note: may need to set `--build-arg TARGETARCH=YOUR-ARCH` in docker build*
 
 ## Step 3 - Pull request
 

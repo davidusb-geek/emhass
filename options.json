@@ -9,6 +9,7 @@
   "optional_solcast_api_key": "empty",
   "optional_solcast_rooftop_id": "empty",
   "optional_solar_forecast_kwp": 5,
+  "data_path": "default",
   "set_total_pv_sell": false,
   "lp_solver": "COIN_CMD",
   "lp_solver_path": "/usr/bin/cbc",
@@ -101,6 +102,7 @@
   "production_price_forecast_method": "constant",
   "photovoltaic_production_sell_price": 0.1419,
   "maximum_power_from_grid": 9000,
+  "maximum_power_to_grid": 9000,
   "list_pv_module_model": [
     {
       "pv_module_model": "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M"

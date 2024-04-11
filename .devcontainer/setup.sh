@@ -18,7 +18,7 @@ main() {
     export HDF5_DIR=/usr/include/hdf5
     pip install netCDF4
 
-    pip install -r requirements_webserver.txt
+    pip install -r requirements.txt
     pip install requests-mock
 
     rm -rf "$0"

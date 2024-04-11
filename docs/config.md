@@ -85,23 +85,23 @@ The following parameters and definitions are only needed if load_cost_forecast_m
 - `set_battery_dynamic`: Set a power dynamic limiting condition to the battery power. This is an additional constraint on the battery dynamic in power per unit of time, which allows you to set a percentage of the battery nominal full power as the maximum power allowed for (dis)charge.
 - `battery_dynamic_max`: The maximum positive (for discharge) battery power dynamic. This is the allowed power variation (in percentage) of battery maximum power per unit of time.
 - `battery_dynamic_min`: The maximum negative (for charge) battery power dynamic. This is the allowed power variation (in percentage) of battery maximum power per unit of time.
-- `weight_battery_discharge`: An additional weight applied in cost function to battery usage for discharge.
-- `weight_battery_charge`: An additional weight applied in cost function to battery usage for charge.
+- `weight_battery_discharge`: An additional weight (currency/ kWh) applied in cost function to battery usage for discharge. Defaults to 0.00
+- `weight_battery_charge`: An additional weight (currency/ kWh) applied in cost function to battery usage for charge. Defaults to 0.00
 
 ## System configuration parameters
 
 These are the technical parameters of the energy system of the household.
 
-- `P_grid_max`: The maximum power that can be supplied by the utility grid in Watts. Defaults to 9000.
+- `P_from_grid_max`: The maximum power that can be supplied by the utility grid in Watts (consumption). Defaults to 9000.
+- `P_to_grid_max`: The maximum power that can be supplied to the utility grid in Watts (injection). Defaults to 9000.
 
 We will define the technical parameters of the PV installation. For the modeling task we rely on the PVLib Python package. For more information see: [https://pvlib-python.readthedocs.io/en/stable/](https://pvlib-python.readthedocs.io/en/stable/)
-The complete list of supported modules can be found here: [https://github.com/davidusb-geek/emhass-add-on/files/9234460/sam-library-cec-modules-2019-03-05.csv](https://github.com/davidusb-geek/emhass-add-on/files/9234460/sam-library-cec-modules-2019-03-05.csv) 
-And the list of inverter models can be found here: [https://github.com/davidusb-geek/emhass-add-on/files/9532724/sam-library-cec-inverters-2019-03-05.csv](https://github.com/davidusb-geek/emhass-add-on/files/9532724/sam-library-cec-inverters-2019-03-05.csv)
+A dedicated webapp will help you search for your correct PV module and inverter names: [https://emhass-pvlib-database.streamlit.app/](https://emhass-pvlib-database.streamlit.app/)
 If your specific model is not found in these lists then solution (1) is to pick another model as close as possible as yours in terms of the nominal power.
 Solution (2) would be to use SolCast and pass that data directly to emhass as a list of values from a template. Take a look at this example here: [https://emhass.readthedocs.io/en/latest/forecasts.html#example-using-solcast-forecast-amber-prices](https://emhass.readthedocs.io/en/latest/forecasts.html#example-using-solcast-forecast-amber-prices)
 
-- `module_model`: The PV module model. For example: 'CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M'. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270). When finding the correct model for your installation remember to replace all the special characters in the model name by '_'.
-- `inverter_model`: The PV inverter model. For example: 'Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_'. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270). When finding the correct model for your installation remember to replace all the special characters in the model name by '_'.
+- `module_model`: The PV module model. For example: 'CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M'. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270). When finding the correct model for your installation remember to replace all the special characters in the model name by '_'. The name of the table column for your device on the webapp will already have the correct naming convention.
+- `inverter_model`: The PV inverter model. For example: 'Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_'. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270). When finding the correct model for your installation remember to replace all the special characters in the model name by '_'. The name of the table column for your device on the webapp will already have the correct naming convention.
 - `surface_tilt`: The tilt angle of your solar panels. Defaults to 30. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 
 - `surface_azimuth`: The azimuth of your PV installation. Defaults to 205. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 
 - `modules_per_string`: The number of modules per string. Defaults to 16. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 

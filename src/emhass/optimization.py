@@ -85,6 +85,9 @@ class Optimization:
             self.lp_solver_path = 'empty'
         if self.lp_solver != 'COIN_CMD' and self.lp_solver_path != 'empty':
             self.logger.error("Use COIN_CMD solver name if you want to set a path for the LP solver")
+        if self.lp_solver == 'COIN_CMD' and self.lp_solver_path == 'empty': #if COIN_CMD but lp_solver_path is empty
+            self.logger.warning("lp_solver=COIN_CMD but lp_solver_path=empty, attempting to use lp_solver_path=/usr/bin/cbc")
+            self.lp_solver_path = '/usr/bin/cbc'  
         
     def perform_optimization(self, data_opt: pd.DataFrame, P_PV: np.array, P_load: np.array, 
                              unit_load_cost: np.array, unit_prod_price: np.array,
@@ -159,10 +162,10 @@ class Optimization:
         
         ## Add decision variables
         P_grid_neg  = {(i):plp.LpVariable(cat='Continuous',
-                                          lowBound=-self.plant_conf['P_grid_max'], upBound=0,
+                                          lowBound=-self.plant_conf['P_to_grid_max'], upBound=0,
                                           name="P_grid_neg{}".format(i)) for i in set_I}
         P_grid_pos  = {(i):plp.LpVariable(cat='Continuous',
-                                          lowBound=0, upBound=self.plant_conf['P_grid_max'],
+                                          lowBound=0, upBound=self.plant_conf['P_from_grid_max'],
                                           name="P_grid_pos{}".format(i)) for i in set_I}
         P_deferrable = []
         P_def_bin1 = []
@@ -264,13 +267,13 @@ class Optimization:
         # Avoid injecting and consuming from grid at the same time
         constraints.update({"constraint_pgridpos_{}".format(i) : 
             plp.LpConstraint(
-                e = P_grid_pos[i] - self.plant_conf['P_grid_max']*D[i],
+                e = P_grid_pos[i] - self.plant_conf['P_from_grid_max']*D[i],
                 sense = plp.LpConstraintLE,
                 rhs = 0)
             for i in set_I})
         constraints.update({"constraint_pgridneg_{}".format(i) : 
             plp.LpConstraint(
-                e = -P_grid_neg[i] - self.plant_conf['P_grid_max']*(1-D[i]),
+                e = -P_grid_neg[i] - self.plant_conf['P_to_grid_max']*(1-D[i]),
                 sense = plp.LpConstraintLE,
                 rhs = 0)
             for i in set_I})

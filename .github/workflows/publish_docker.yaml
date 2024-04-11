@@ -13,10 +13,10 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          {buildx: linux/amd64, target_arch: amd64},
-          {buildx: linux/arm/v7, target_arch: armv7},
-          {buildx: linux/arm/v7, target_arch: armhf},
-          {buildx: linux/arm64,  target_arch: aarch64}
+          {buildx: linux/amd64, target_arch: amd64, os_version: debian},
+          {buildx: linux/arm/v7, target_arch: armv7, os_version: debian},
+          {buildx: linux/arm/v7, target_arch: armhf, os_version: raspbian},
+          {buildx: linux/arm64,  target_arch: aarch64, os_version: debian}
         ]
     steps:
       - name: Checkout the repository
@@ -45,6 +45,7 @@ jobs:
           build-args: |
             build_version=standalone
             TARGETARCH=${{ matrix.platform.target_arch }}
+            os_version=${{ matrix.platform.os_version }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ secrets.DOCKERHUB_USERNAME }}/emhass-docker-standalone,push-by-digest=true,name-canonical=true,push=true
       - name: Export digest
