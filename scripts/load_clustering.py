@@ -42,14 +42,13 @@ emhass_conf['root_path'] = pathlib.Path(root)
 # create logger
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=True)
 
-
 if __name__ == '__main__':
 
     days_to_retrieve = 240
     model_type = "load_clustering"
     var_model = "sensor.power_load_positive"
     
-    data_path = pathlib.Path(emhass_conf['data_path'] / 'data_train_'+model_type+'.pkl')
+    data_path = pathlib.Path(emhass_conf['data_path'] / str('data_train_'+model_type+'.pkl'))
     params = None
     template = 'presentation'
 

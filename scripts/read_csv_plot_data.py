@@ -12,6 +12,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.subplots as sp
 import plotly.io as pio
+import pathlib
 pio.renderers.default = 'browser'
 pd.options.plotting.backend = "plotly"
 
@@ -137,7 +138,7 @@ if __name__ == '__main__':
 
     if save_figs:
         fig_filename = emhass_conf['root_path'] / "docs/images/optim_results"
-        this_figure.write_image(fig_filename + ".png", width=1.5*768, height=1.5*1.5*768)
+        this_figure.write_image(str(fig_filename) + ".png", width=1.5*768, height=1.5*1.5*768)
 
     fig_bar = px.bar(np.arange(len(cf)), x=[c+" (+"+"{:.2f}".format(np.sum(data['gain_'+c])*100/np.sum(
                         data['gain_profit'])-100)+"%)" for c in cf], 
@@ -150,5 +151,5 @@ if __name__ == '__main__':
     fig_bar.show()
 
     if save_figs:
-        fig_filename = emhass_conf['root_path'] / "images/optim_results_bar_plot"
-        fig_bar.write_image(fig_filename + ".png", width=1080, height=0.8*1080)
+        fig_filename = emhass_conf['root_path'] / "docs/images/optim_results_bar_plot"
+        fig_bar.write_image(str(fig_filename) + ".png", width=1080, height=0.8*1080)
