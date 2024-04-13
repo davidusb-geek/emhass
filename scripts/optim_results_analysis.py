@@ -44,7 +44,10 @@ if __name__ == '__main__':
     save_html = False
     get_data_from_file = True
     params = None
-    retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf, use_secrets=False)
+    if get_data_from_file:
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf, use_secrets=False)
+    else:
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf)
     retrieve_hass_conf, optim_conf, plant_conf = \
         retrieve_hass_conf, optim_conf, plant_conf
     rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
@@ -53,6 +56,10 @@ if __name__ == '__main__':
     if get_data_from_file:
         with open(pathlib.Path(emhass_conf['data_path'] / 'test_df_final.pkl'), 'rb') as inp:
             rh.df_final, days_list, var_list = pickle.load(inp)
+        retrieve_hass_conf['var_load'] = str(var_list[0])
+        retrieve_hass_conf['var_PV'] = str(var_list[1])
+        retrieve_hass_conf['var_interp'] = [retrieve_hass_conf['var_PV'], retrieve_hass_conf['var_load']]
+        retrieve_hass_conf['var_replace_zero'] = [retrieve_hass_conf['var_PV']]
     else:
         days_list = get_days_list(retrieve_hass_conf['days_to_retrieve'])
         var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
@@ -73,8 +80,8 @@ if __name__ == '__main__':
     template = 'presentation'
     
     # Let's plot the input data
-    fig_inputs1 = df_input_data[['sensor.power_photovoltaics',
-                                'sensor.power_load_no_var_loads_positive']].plot()
+    fig_inputs1 = df_input_data[[retrieve_hass_conf['var_PV'],
+                                 str(retrieve_hass_conf['var_load'] + '_positive')]].plot()
     fig_inputs1.layout.template = template
     fig_inputs1.update_yaxes(title_text = "Powers (W)")
     fig_inputs1.update_xaxes(title_text = "Time")
