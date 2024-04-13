@@ -37,8 +37,12 @@ class TestCommandLineUtils(unittest.TestCase):
                 'lat': 45.83,
                 'lon': 6.86,
                 'alt': 8000.0
-            }
-            })
+            }})
+        #Force config params for testing
+        params["retrieve_hass_conf"]['var_PV'] = 'sensor.power_photovoltaics'
+        params["retrieve_hass_conf"]['var_load'] = 'sensor.power_load_no_var_loads'
+        params["retrieve_hass_conf"]['var_replace_zero'] = ['sensor.power_photovoltaics']
+        params["retrieve_hass_conf"]['var_interp'] = ['sensor.power_photovoltaics','sensor.power_load_no_var_loads'] 
         return params
 
     def setUp(self):
@@ -322,7 +326,7 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertEqual(opt_res, None)
         
     @patch('sys.argv', ['main', '--action', 'perfect-optim', '--config', str(emhass_conf['config_path']), 
-                        '--debug', 'True'])
+                        '--debug', 'True', '--params', json.dumps(get_test_params())])
     def test_main_perfect_forecast_optim(self):
         opt_res = main()
         self.assertIsInstance(opt_res, pd.DataFrame)
