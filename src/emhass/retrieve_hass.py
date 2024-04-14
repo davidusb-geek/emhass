@@ -148,7 +148,7 @@ class RetrieveHass:
                     return False
                 # self.logger.info(self.freq.seconds)
                 if len(df_raw) < ((60 / (self.freq.seconds / 60)) * 24) and x != len(days_list) -1: #check if there is enough Dataframes for passed frequency per day (not inc current day)
-                    self.logger.warning("sensor:"  + var + " retrieved Dataframe count: " + str(len(df_raw))  + ", on day: " + str(day) + ", is less than freq value passed: " + str(self.freq))
+                    self.logger.debug("sensor:"  + var + " retrieved Dataframe count: " + str(len(df_raw))  + ", on day: " + str(day) + ". This is less than freq value passed: " + str(self.freq))
                 if i == 0: # Defining the DataFrame container
                     from_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").min()
                     to_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").max()
