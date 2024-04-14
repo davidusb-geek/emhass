@@ -629,6 +629,8 @@ def main():
     parser.add_argument('--action', type=str, help='Set the desired action, options are: perfect-optim, dayahead-optim,\
         naive-mpc-optim, publish-data, forecast-model-fit, forecast-model-predict, forecast-model-tune')
     parser.add_argument('--config', type=str, help='Define path to the config.yaml file')
+    parser.add_argument('--data', type=str, help='Define path to the Data files (.csv & .pkl)')
+    parser.add_argument('--root', type=str, help='Define path emhass root')
     parser.add_argument('--costfun', type=str, default='profit', help='Define the type of cost function, options are: profit, cost, self-consumption')
     parser.add_argument('--log2file', type=strtobool, default='False', help='Define if we should log to a file or not')
     parser.add_argument('--params', type=str, default=None, help='Configuration parameters passed from data/options.json')
@@ -636,18 +638,49 @@ def main():
     parser.add_argument('--debug', type=strtobool, default='False', help='Use True for testing purposes')
     args = parser.parse_args()
     # The path to the configuration files
+    
     if args.config is not None:
         config_path = pathlib.Path(args.config)
     else:
         config_path = pathlib.Path(str(utils.get_root(__file__, num_parent=2) / 'config_emhass.yaml' ))
-    root_path = config_path.parent
-    data_path = (config_path.parent / 'data/')
+
+    if args.data is not None:
+        data_path = pathlib.Path(args.data)
+    else:
+        data_path = (config_path.parent / 'data/')
+
+    if args.root is not None:
+        root_path = pathlib.Path(args.root)
+    else:
+        root_path = config_path.parent
+    
     emhass_conf = {}
     emhass_conf['config_path'] = config_path
     emhass_conf['data_path'] = data_path
     emhass_conf['root_path'] = root_path
     # create logger
     logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=bool(args.log2file))
+    
+    logger.debug("config path: " + str(config_path))
+    logger.debug("data path: " + str(data_path))
+    logger.debug("root path: " + str(root_path))
+
+
+    if not config_path.exists():
+        logger.error("Could not find config_emhass.yaml file in: " + str(config_path))
+        logger.error("Try setting config file path with --config" )
+        return False
+
+    if not os.path.isdir(data_path):
+        logger.error("Could not find data foulder in: " + str(data_path))
+        logger.error("Try setting data path with --data" )
+        return False
+
+    if not os.path.isdir(root_path / 'src'):
+        logger.error("Could not find emhass/src foulder in: " + str(root_path))
+        logger.error("Try setting emhass root path with --root" )
+        return False
+
     # Additionnal argument
     try:
         parser.add_argument('--version', action='version', version='%(prog)s '+version('emhass'))
@@ -686,6 +719,7 @@ def main():
         opt_res = publish_data(input_data_dict, logger)
     else:
         logger.error("The passed action argument is not valid")
+        logger.error("Try setting --action: perfect-optim, dayahead-optim, naive-mpc-optim, forecast-model-fit, forecast-model-predict, forecast-model-tune or publish-data")
         opt_res = None
     logger.info(opt_res)
     # Flush the logger
