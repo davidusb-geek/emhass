@@ -7,14 +7,11 @@ import unittest
 
 import numpy as np
 import pandas as pd
-from sklearn.pipeline import Pipeline
 import yaml
 from emhass import utils
 from emhass.command_line import set_input_data_dict
 from emhass.machine_learning_regressor import MLRegressor
-from sklearn.ensemble import (
-    AdaBoostRegressor,
-)
+from sklearn.pipeline import Pipeline
 
 # the root folder
 root = str(utils.get_root(__file__, num_parent=2))
@@ -50,11 +47,11 @@ class TestMLRegressor(unittest.TestCase):
         action = "regressor-model-fit"  # fit and predict methods
         params = copy.deepcopy(json.loads(params_json))
         runtimeparams = {
-            "csv_file": "prediction.csv",
-            "features": ["dd", "solar"],
+            "csv_file": "heating_prediction.csv",
+            "features": ["degreeday", "solar"],
             "target": "hour",
             "regression_model": "AdaBoostRegression",
-            "model_type": "heating_dd",
+            "model_type": "heating_hours_degreeday",
             "timestamp": "timestamp",
             "date_features": ["month", "day_of_week"],
             "new_values": [12.79, 4.766, 1, 2],

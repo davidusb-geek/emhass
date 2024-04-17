@@ -344,11 +344,11 @@ class TestCommandLineUtils(unittest.TestCase):
         action = "regressor-model-fit"  # fit and predict methods
         params = TestCommandLineUtils.get_test_params()
         runtimeparams = {
-            "csv_file": "prediction.csv",
-            "features": ["dd", "solar"],
+            "csv_file": "heating_prediction.csv",
+            "features": ["degreeday", "solar"],
             "target": "hour",
             "regression_model": "AdaBoostRegression",
-            "model_type": "heating_dd",
+            "model_type": "heating_hours_degreeday",
             "timestamp": "timestamp",
             "date_features": ["month", "day_of_week"],
             "mlr_predict_entity_id": "sensor.predicted_hours_test",
@@ -369,14 +369,16 @@ class TestCommandLineUtils(unittest.TestCase):
             get_data_from_file=True,
         )
         self.assertTrue(
-            input_data_dict["params"]["passed_data"]["model_type"] == "heating_dd",
+            input_data_dict["params"]["passed_data"]["model_type"]
+            == "heating_hours_degreeday",
         )
         self.assertTrue(
             input_data_dict["params"]["passed_data"]["regression_model"]
             == "AdaBoostRegression",
         )
         self.assertTrue(
-            input_data_dict["params"]["passed_data"]["csv_file"] == "prediction.csv",
+            input_data_dict["params"]["passed_data"]["csv_file"]
+            == "heating_prediction.csv",
         )
         mlr = regressor_model_fit(input_data_dict, logger, debug=True)
 
@@ -387,11 +389,11 @@ class TestCommandLineUtils(unittest.TestCase):
         action = "regressor-model-predict"  # predict methods
         params = TestCommandLineUtils.get_test_params()
         runtimeparams = {
-            "csv_file": "prediction.csv",
-            "features": ["dd", "solar"],
+            "csv_file": "heating_prediction.csv",
+            "features": ["degreeday", "solar"],
             "target": "hour",
             "regression_model": "AdaBoostRegression",
-            "model_type": "heating_dd",
+            "model_type": "heating_hours_degreeday",
             "timestamp": "timestamp",
             "date_features": ["month", "day_of_week"],
             "mlr_predict_entity_id": "sensor.predicted_hours_test",
@@ -414,7 +416,8 @@ class TestCommandLineUtils(unittest.TestCase):
             get_data_from_file=True,
         )
         self.assertTrue(
-            input_data_dict["params"]["passed_data"]["model_type"] == "heating_dd",
+            input_data_dict["params"]["passed_data"]["model_type"]
+            == "heating_hours_degreeday",
         )
         self.assertTrue(
             input_data_dict["params"]["passed_data"]["mlr_predict_friendly_name"]
@@ -599,11 +602,11 @@ class TestCommandLineUtils(unittest.TestCase):
     def test_main_regressor_model_fit(self):
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
-            "csv_file": "prediction.csv",
-            "features": ["dd", "solar"],
+            "csv_file": "heating_prediction.csv",
+            "features": ["degreeday", "solar"],
             "target": "hour",
             "regression_model": "AdaBoostRegression",
-            "model_type": "heating_dd",
+            "model_type": "heating_hours_degreeday",
             "timestamp": "timestamp",
             "date_features": ["month", "day_of_week"],
         }
@@ -631,11 +634,11 @@ class TestCommandLineUtils(unittest.TestCase):
     def test_main_regressor_model_predict(self):
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
-            "csv_file": "prediction.csv",
-            "features": ["dd", "solar"],
+            "csv_file": "heating_prediction.csv",
+            "features": ["degreeday", "solar"],
             "target": "hour",
             "regression_model": "AdaBoostRegression",
-            "model_type": "heating_dd",
+            "model_type": "heating_hours_degreeday",
             "timestamp": "timestamp",
             "date_features": ["month", "day_of_week"],
             "new_values": [12.79, 4.766, 1, 2],
