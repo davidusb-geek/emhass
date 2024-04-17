@@ -1063,10 +1063,7 @@ def main():
         else:
             mlf = None
         df_pred_optim, mlf = forecast_model_tune(
-            input_data_dict,
-            logger,
-            debug=args.debug,
-            mlf=mlf,
+            input_data_dict, logger, debug=args.debug, mlf=mlf
         )
         opt_res = None
     elif args.action == "regressor-model-fit":
