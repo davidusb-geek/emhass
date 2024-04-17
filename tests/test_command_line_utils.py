@@ -5,10 +5,21 @@ import unittest
 from unittest.mock import patch
 import pandas as pd
 import pathlib, json, yaml, copy
+import numpy as np
 
 from emhass.command_line import set_input_data_dict
-from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim
-from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune
+from emhass.command_line import (
+    perfect_forecast_optim,
+    dayahead_forecast_optim,
+    naive_mpc_optim,
+)
+from emhass.command_line import (
+    forecast_model_fit,
+    forecast_model_predict,
+    forecast_model_tune,
+    regressor_model_fit,
+    regressor_model_predict,
+)
 from emhass.command_line import publish_data
 from emhass.command_line import main
 from emhass import utils
@@ -307,13 +318,102 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(df_pred, pd.Series)
         self.assertTrue(df_pred.isnull().sum().sum() == 0)
         # Test the tune method
-        df_pred_optim, mlf = forecast_model_tune(input_data_dict, logger, debug=True, mlf=mlf)
+        df_pred_optim, mlf = forecast_model_tune(
+            input_data_dict, logger, debug=True, mlf=mlf
+        )
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
         self.assertTrue(mlf.is_tuned == True)
-        # Test ijection_dict for tune method on webui
+        # Test injection_dict for tune method on webui
         injection_dict = utils.get_injection_dict_forecast_model_tune(df_fit_pred, mlf)
         self.assertIsInstance(injection_dict, dict)
-        self.assertIsInstance(injection_dict['figure_0'], str)
+        self.assertIsInstance(injection_dict["figure_0"], str)
+
+    def test_regressor_model_fit_predict(self):
+        config_path = pathlib.Path(root + "/config_emhass.yaml")
+        base_path = str(config_path.parent)
+        costfun = "profit"
+        action = "regressor-model-fit"  # fit and predict methods
+        params = TestCommandLineUtils.get_test_params()
+        runtimeparams = {
+            "csv_file": "prediction.csv",
+            "features": ["dd", "solar"],
+            "target": "hour",
+            "regression_model": "AdaBoostRegression",
+            "model_type": "heating_dd",
+            "timestamp": "timestamp",
+            "date_features": ["month", "day_of_week"],
+            "mlr_predict_entity_id": "sensor.predicted_hours_test",
+            "mlr_predict_unit_of_measurement": "h",
+            "mlr_predict_friendly_name": "Predicted hours",
+            "new_values": [12.79, 4.766, 1, 2],
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params_json = json.dumps(params)
+        input_data_dict = set_input_data_dict(
+            config_path,
+            base_path,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        self.assertTrue(
+            input_data_dict["params"]["passed_data"]["model_type"] == "heating_dd",
+        )
+        self.assertTrue(
+            input_data_dict["params"]["passed_data"]["regression_model"]
+            == "AdaBoostRegression",
+        )
+        self.assertTrue(
+            input_data_dict["params"]["passed_data"]["csv_file"] == "prediction.csv",
+        )
+        mlr = regressor_model_fit(input_data_dict, logger, debug=True)
+
+        # def test_regressor_model_predict(self):
+        config_path = pathlib.Path(root + "/config_emhass.yaml")
+        base_path = str(config_path.parent)  # + "/data"
+        costfun = "profit"
+        action = "regressor-model-predict"  # predict methods
+        params = TestCommandLineUtils.get_test_params()
+        runtimeparams = {
+            "csv_file": "prediction.csv",
+            "features": ["dd", "solar"],
+            "target": "hour",
+            "regression_model": "AdaBoostRegression",
+            "model_type": "heating_dd",
+            "timestamp": "timestamp",
+            "date_features": ["month", "day_of_week"],
+            "mlr_predict_entity_id": "sensor.predicted_hours_test",
+            "mlr_predict_unit_of_measurement": "h",
+            "mlr_predict_friendly_name": "Predicted hours",
+            "new_values": [12.79, 4.766, 1, 2],
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params["passed_data"] = runtimeparams
+        params_json = json.dumps(params)
+
+        input_data_dict = set_input_data_dict(
+            config_path,
+            base_path,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        self.assertTrue(
+            input_data_dict["params"]["passed_data"]["model_type"] == "heating_dd",
+        )
+        self.assertTrue(
+            input_data_dict["params"]["passed_data"]["mlr_predict_friendly_name"]
+            == "Predicted hours",
+        )
+
+        regressor_model_predict(input_data_dict, logger, debug=True, mlr=mlr)
+
     
     @patch('sys.argv', ['main', '--action', 'test', '--config', str(emhass_conf['config_path']), 
                         '--debug', 'True'])
@@ -326,27 +426,30 @@ class TestCommandLineUtils(unittest.TestCase):
     def test_main_perfect_forecast_optim(self):
         opt_res = main()
         self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(opt_res.isnull().sum().sum()==0)
+        self.assertTrue(opt_res.isnull().sum().sum() == 0)
         self.assertIsInstance(opt_res.index, pd.core.indexes.datetimes.DatetimeIndex)
-        self.assertIsInstance(opt_res.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-        
+        self.assertIsInstance(
+            opt_res.index.dtype,
+            pd.core.dtypes.dtypes.DatetimeTZDtype,
+        )
+
     def test_main_dayahead_forecast_optim(self):
         with patch('sys.argv', ['main', '--action', 'dayahead-optim', '--config', str(emhass_conf['config_path']), 
                                 '--params', self.params_json, '--runtimeparams', self.runtimeparams_json,
                                 '--debug', 'True']):
             opt_res = main()
         self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(opt_res.isnull().sum().sum()==0)
-        
+        self.assertTrue(opt_res.isnull().sum().sum() == 0)
+
     def test_main_naive_mpc_optim(self):
         with patch('sys.argv', ['main', '--action', 'naive-mpc-optim', '--config', str(emhass_conf['config_path']), 
                                 '--params', self.params_json, '--runtimeparams', self.runtimeparams_json,
                                 '--debug', 'True']):
             opt_res = main()
         self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(opt_res.isnull().sum().sum()==0)
-        self.assertTrue(len(opt_res)==10)
-        
+        self.assertTrue(opt_res.isnull().sum().sum() == 0)
+        self.assertTrue(len(opt_res) == 10)
+
     def test_main_forecast_model_fit(self):
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
@@ -377,12 +480,12 @@ class TestCommandLineUtils(unittest.TestCase):
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
-            "split_date_delta": '48h',
-            "perform_backtest": False
+            "split_date_delta": "48h",
+            "perform_backtest": False,
         }
         runtimeparams_json = json.dumps(runtimeparams)
-        params['passed_data'] = runtimeparams
-        params['optim_conf']['load_forecast_method'] = 'skforecast'
+        params["passed_data"] = runtimeparams
+        params["optim_conf"]["load_forecast_method"] = "skforecast"
         params_json = json.dumps(params)
         with patch('sys.argv', ['main', '--action', 'forecast-model-predict', '--config', str(emhass_conf['config_path']), 
                                 '--params', params_json, '--runtimeparams', runtimeparams_json,
@@ -390,7 +493,7 @@ class TestCommandLineUtils(unittest.TestCase):
             df_pred = main()
         self.assertIsInstance(df_pred, pd.Series)
         self.assertTrue(df_pred.isnull().sum().sum() == 0)
-        
+
     def test_main_forecast_model_tune(self):
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
@@ -399,12 +502,12 @@ class TestCommandLineUtils(unittest.TestCase):
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
-            "split_date_delta": '48h',
-            "perform_backtest": False
+            "split_date_delta": "48h",
+            "perform_backtest": False,
         }
         runtimeparams_json = json.dumps(runtimeparams)
-        params['passed_data'] = runtimeparams
-        params['optim_conf']['load_forecast_method'] = 'skforecast'
+        params["passed_data"] = runtimeparams
+        params["optim_conf"]["load_forecast_method"] = "skforecast"
         params_json = json.dumps(params)
         with patch('sys.argv', ['main', '--action', 'forecast-model-tune', '--config', str(emhass_conf['config_path']), 
                                 '--params', params_json, '--runtimeparams', runtimeparams_json,
@@ -412,6 +515,74 @@ class TestCommandLineUtils(unittest.TestCase):
             df_pred_optim, mlf = main()
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
         self.assertTrue(mlf.is_tuned == True)
+
+    def test_main_regressor_model_fit(self):
+        params = copy.deepcopy(json.loads(self.params_json))
+        runtimeparams = {
+            "csv_file": "prediction.csv",
+            "features": ["dd", "solar"],
+            "target": "hour",
+            "regression_model": "AdaBoostRegression",
+            "model_type": "heating_dd",
+            "timestamp": "timestamp",
+            "date_features": ["month", "day_of_week"],
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params["passed_data"] = runtimeparams
+        params_json = json.dumps(params)
+        with patch(
+            "sys.argv",
+            [
+                "main",
+                "--action",
+                "regressor-model-fit",
+                "--config",
+                str(pathlib.Path(root + "/config_emhass.yaml")),
+                "--params",
+                params_json,
+                "--runtimeparams",
+                runtimeparams_json,
+                "--debug",
+                "True",
+            ],
+        ):
+            mlr = main()
+
+    def test_main_regressor_model_predict(self):
+        params = copy.deepcopy(json.loads(self.params_json))
+        runtimeparams = {
+            "csv_file": "prediction.csv",
+            "features": ["dd", "solar"],
+            "target": "hour",
+            "regression_model": "AdaBoostRegression",
+            "model_type": "heating_dd",
+            "timestamp": "timestamp",
+            "date_features": ["month", "day_of_week"],
+            "new_values": [12.79, 4.766, 1, 2],
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params["passed_data"] = runtimeparams
+        params["optim_conf"]["load_forecast_method"] = "skforecast"
+        params_json = json.dumps(params)
+        with patch(
+            "sys.argv",
+            [
+                "main",
+                "--action",
+                "regressor-model-predict",
+                "--config",
+                str(pathlib.Path(root + "/config_emhass.yaml")),
+                "--params",
+                params_json,
+                "--runtimeparams",
+                runtimeparams_json,
+                "--debug",
+                "True",
+            ],
+        ):
+            prediction = main()
+        self.assertIsInstance(prediction, np.ndarray)
+
         
     @patch('sys.argv', ['main', '--action', 'publish-data', '--config', str(emhass_conf['config_path']), 
                         '--debug', 'True'])
