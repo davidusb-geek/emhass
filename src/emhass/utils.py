@@ -223,12 +223,12 @@ def treat_runtimeparams(
             params["passed_data"]["csv_file"] = csv_file
             params["passed_data"]["features"] = features
             params["passed_data"]["target"] = target
-            if "timestamp" not in runtimeparams.keys():
+            if "timestamp" not in runtimeparams:
                 params["passed_data"]["timestamp"] = None
             else:
                 timestamp = runtimeparams["timestamp"]
                 params["passed_data"]["timestamp"] = timestamp
-            if "date_features" not in runtimeparams.keys():
+            if "date_features" not in runtimeparams:
                 params["passed_data"]["date_features"] = []
             else:
                 date_features = runtimeparams["date_features"]
@@ -237,6 +237,15 @@ def treat_runtimeparams(
         if set_type == "regressor-model-predict":
             new_values = runtimeparams["new_values"]
             params["passed_data"]["new_values"] = new_values
+            if "csv_file" in runtimeparams:
+                csv_file = runtimeparams["csv_file"]
+                params["passed_data"]["csv_file"] = csv_file
+            if "features" in runtimeparams:
+                features = runtimeparams["features"]
+                params["passed_data"]["features"] = features
+            if "target" in runtimeparams:
+                target = runtimeparams["target"]
+                params["passed_data"]["target"] = target
 
         # Treating special data passed for MPC control case
         if set_type == "naive-mpc-optim":
@@ -330,7 +339,7 @@ def treat_runtimeparams(
             sklearn_model = runtimeparams["sklearn_model"]
         params["passed_data"]["sklearn_model"] = sklearn_model
         if "regression_model" not in runtimeparams.keys():
-            regression_model = "LinearRegression"
+            regression_model = "AdaBoostRegression"
         else:
             regression_model = runtimeparams["regression_model"]
         params["passed_data"]["regression_model"] = regression_model

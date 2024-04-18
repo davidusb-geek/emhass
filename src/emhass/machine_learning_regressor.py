@@ -190,9 +190,10 @@ class MLRegressor:
             param_grid = REGRESSION_METHODS["AdaBoostRegression"]["param_grid"]
         else:
             self.logger.error(
-                "Passed sklearn model %s is not valid",
+                "Passed model %s is not valid",
                 self.regression_model,
             )
+            return None
         return base_model, param_grid
 
     def fit(self: MLRegressor, date_features: list | None = None) -> None:
