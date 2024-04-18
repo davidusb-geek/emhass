@@ -31,7 +31,7 @@ class RetrieveHass:
     """
 
     def __init__(self, hass_url: str, long_lived_token: str, freq: pd.Timedelta, 
-                 time_zone: datetime.timezone, params: str, base_path: str, logger: logging.Logger,
+                 time_zone: datetime.timezone, params: str, emhass_conf: dict, logger: logging.Logger,
                  get_data_from_file: Optional[bool] = False) -> None:
         """
         Define constructor for RetrieveHass class.
@@ -46,8 +46,8 @@ class RetrieveHass:
         :type time_zone: datetime.timezone
         :param params: Configuration parameters passed from data/options.json
         :type params: str
-        :param base_path: The path to the yaml configuration file
-        :type base_path: str
+        :param emhass_conf: Dictionary containing the needed emhass paths
+        :type emhass_conf: dict
         :param logger: The passed logger object
         :type logger: logging object
         :param get_data_from_file: Select if data should be retrieved from a 
@@ -61,7 +61,7 @@ class RetrieveHass:
         self.freq = freq
         self.time_zone = time_zone
         self.params = params
-        self.base_path = base_path
+        # self.emhass_conf = emhass_conf
         self.logger = logger
         self.get_data_from_file = get_data_from_file
 
@@ -134,17 +134,21 @@ class RetrieveHass:
                     data = response.json()[0]
                 except IndexError:
                     if x == 0:
-                        self.logger.error("The retrieved JSON is empty, A sensor:" + var + " may have 0 days of history or passed sensor may not be correct")
+                        self.logger.error("The retrieved JSON is empty, A sensor:" + var + " may have 0 days of history, passed sensor may not be correct, or days to retrieve is set too heigh")
                     else:
                         self.logger.error("The retrieved JSON is empty for day:"+ str(day) +", days_to_retrieve may be larger than the recorded history of sensor:" + var + " (check your recorder settings)")
                     return False
                 df_raw = pd.DataFrame.from_dict(data)
+                # self.logger.info(str(df_raw))
                 if len(df_raw) == 0:
                     if x == 0:
                         self.logger.error("The retrieved Dataframe is empty, A sensor:" + var + " may have 0 days of history or passed sensor may not be correct")
                     else:
                         self.logger.error("Retrieved empty Dataframe for day:"+ str(day) +", days_to_retrieve may be larger than the recorded history of sensor:" + var + " (check your recorder settings)")
                     return False
+                # self.logger.info(self.freq.seconds)
+                if len(df_raw) < ((60 / (self.freq.seconds / 60)) * 24) and x != len(days_list) -1: #check if there is enough Dataframes for passed frequency per day (not inc current day)
+                    self.logger.debug("sensor:"  + var + " retrieved Dataframe count: " + str(len(df_raw))  + ", on day: " + str(day) + ". This is less than freq value passed: " + str(self.freq))
                 if i == 0: # Defining the DataFrame container
                     from_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").min()
                     to_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").max()
@@ -158,14 +162,14 @@ class RetrieveHass:
                 df_tp.set_index(pd.to_datetime(df_raw['last_changed'], format="ISO8601"), inplace=True)
                 df_tp = df_tp.resample(self.freq).mean()
                 df_day = pd.concat([df_day, df_tp], axis=1)
-            
-            x += 1
             self.df_final = pd.concat([self.df_final, df_day], axis=0)
+            x += 1 
         self.df_final = set_df_index_freq(self.df_final)
         if self.df_final.index.freq != self.freq:
-            self.logger.error("The inferred freq from data is not equal to the defined freq in passed parameters")
+            self.logger.error("The inferred freq:" + str(self.df_final.index.freq) + " from data is not equal to the defined freq in passed:" + str(self.freq))
             return False
         return True
+           
     
     def prepare_data(self, var_load: str, load_negative: Optional[bool] = False, set_zero_min: Optional[bool] = True,
                      var_replace_zero: Optional[list] = None, var_interp: Optional[list] = None) -> None:

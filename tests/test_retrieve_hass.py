@@ -14,8 +14,13 @@ from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
 # the root folder
 root = str(get_root(__file__, num_parent=2))
+emhass_conf = {}
+emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
+emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
+emhass_conf['root_path'] = pathlib.Path(root)
+
 # create logger
-logger, ch = get_logger(__name__, root, save_to_file=False)
+logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
 class TestRetrieveHass(unittest.TestCase):
 
@@ -23,13 +28,13 @@ class TestRetrieveHass(unittest.TestCase):
         get_data_from_file = True
         save_data_to_file = False
         params = None
-        retrieve_hass_conf, _, _ = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), use_secrets=False)
+        retrieve_hass_conf, _, _ = get_yaml_parse(emhass_conf, use_secrets=False)
         self.retrieve_hass_conf = retrieve_hass_conf
         self.rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                                self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
-                               params, root, logger, get_data_from_file=get_data_from_file)
+                               params, emhass_conf, logger, get_data_from_file=get_data_from_file)
         if get_data_from_file:
-            with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'rb') as inp:
+            with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
                 self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
         else:
             self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
@@ -37,13 +42,13 @@ class TestRetrieveHass(unittest.TestCase):
             self.rh.get_data(self.days_list, self.var_list,
                              minimal_response=False, significant_changes_only=False)
             if save_data_to_file:
-                with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'wb') as outp:
+                with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'wb') as outp:
                     pickle.dump((self.rh.df_final, self.days_list, self.var_list), 
                                 outp, pickle.HIGHEST_PROTOCOL)
         self.df_raw = self.rh.df_final.copy()
         
     def test_get_yaml_parse(self):
-        with open(root+'/config_emhass.yaml', 'r') as file:
+        with open(emhass_conf['config_path'], 'r') as file:
             params = yaml.load(file, Loader=yaml.FullLoader)
         params.update({
             'params_secrets': {
@@ -56,7 +61,7 @@ class TestRetrieveHass(unittest.TestCase):
             }
             })
         params = json.dumps(params)
-        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), 
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf, 
                                                                     use_secrets=True, params=params)
         self.assertIsInstance(retrieve_hass_conf, dict)
         self.assertTrue('hass_url' in retrieve_hass_conf.keys())
@@ -65,7 +70,7 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertIsInstance(plant_conf, dict)
     
     def test_yaml_parse_wab_server(self):
-        with open(pathlib.Path(root) / "config_emhass.yaml", 'r') as file:
+        with open(emhass_conf['config_path'], 'r') as file:
             config = yaml.load(file, Loader=yaml.FullLoader)
         retrieve_hass_conf = config['retrieve_hass_conf']
         optim_conf = config['optim_conf']
@@ -90,7 +95,7 @@ class TestRetrieveHass(unittest.TestCase):
         with requests_mock.mock() as m:
             days_list = get_days_list(1)
             var_list = [self.retrieve_hass_conf['var_load']]
-            data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_get_data_get_method.pbz2')), "rb")
+            data = bz2.BZ2File(str(emhass_conf['data_path'] / 'test_response_get_data_get_method.pbz2'), "rb")
             data = cPickle.load(data)
             m.get(self.retrieve_hass_conf['hass_url'], json=data.json())
             self.rh.get_data(days_list, var_list,

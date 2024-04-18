@@ -38,7 +38,7 @@ class MLForecaster:
     """
 
     def __init__(self, data: pd.DataFrame, model_type: str, var_model: str, sklearn_model: str,
-                 num_lags: int, root: str, logger: logging.Logger) -> None:
+                 num_lags: int, emhass_conf: dict, logger: logging.Logger) -> None:
         r"""Define constructor for the forecast class.
 
         :param data: The data that will be used for train/test
@@ -56,8 +56,8 @@ class MLForecaster:
             is to fix this as one day. For example if your time step is 30 minutes, then fix this \
             to 48, if the time step is 1 hour the fix this to 24 and so on.
         :type num_lags: int
-        :param root: The parent folder of the path where the config.yaml file is located
-        :type root: str
+        :param emhass_conf: Dictionary containing the needed emhass paths
+        :type emhass_conf: dict
         :param logger: The passed logger object
         :type logger: logging.Logger
         """
@@ -66,7 +66,7 @@ class MLForecaster:
         self.var_model = var_model
         self.sklearn_model = sklearn_model
         self.num_lags = num_lags
-        self.root = root
+        self.emhass_conf = emhass_conf
         self.logger = logger
         self.is_tuned = False
         # A quick data preparation

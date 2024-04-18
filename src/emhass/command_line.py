@@ -23,21 +23,19 @@ from emhass.optimization import Optimization
 from emhass import utils
 
 
-def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str, 
+def set_input_data_dict(emhass_conf: dict, costfun: str, 
     params: str, runtimeparams: str, set_type: str, logger: logging.Logger,
     get_data_from_file: Optional[bool] = False) -> dict:
     """
     Set up some of the data needed for the different actions.
     
-    :param config_path: The complete absolute path where the config.yaml file is located
-    :type config_path: pathlib.Path
-    :param base_path: The parent folder of the config_path
-    :type base_path: str
+    :param emhass_conf: Dictionary containing the needed emhass paths
+    :type emhass_conf: dict
     :param costfun: The type of cost function to use for optimization problem
     :type costfun: str
     :param params: Configuration parameters passed from data/options.json
     :type params: str
-    :param runtimeparams: Runtime optimization parameters passed as a dictionnary
+    :param runtimeparams: Runtime optimization parameters passed as a dictionary
     :type runtimeparams: str
     :param set_type: Set the type of setup based on following type of optimization
     :type set_type: str
@@ -52,7 +50,7 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
     logger.info("Setting up needed data")
     # Parsing yaml
     retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-        config_path, use_secrets=not(get_data_from_file), params=params)
+        emhass_conf, use_secrets=not(get_data_from_file), params=params)
     # Treat runtimeparams
     params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
         runtimeparams, params, retrieve_hass_conf, 
@@ -60,17 +58,17 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
     # Define main objects
     rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
                       retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'], 
-                      params, base_path, logger, get_data_from_file=get_data_from_file)
+                      params, emhass_conf, logger, get_data_from_file=get_data_from_file)
     fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
-                    params, base_path, logger, get_data_from_file=get_data_from_file)
+                    params, emhass_conf, logger, get_data_from_file=get_data_from_file)
     opt = Optimization(retrieve_hass_conf, optim_conf, plant_conf, 
                        fcst.var_load_cost, fcst.var_prod_price, 
-                       costfun, base_path, logger)
+                       costfun, emhass_conf, logger)
     # Perform setup based on type of action
     if set_type == "perfect-optim":
         # Retrieve data from hass
         if get_data_from_file:
-            with open(pathlib.Path(base_path) / 'data' / 'test_df_final.pkl', 'rb') as inp:
+            with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
                 rh.df_final, days_list, var_list = pickle.load(inp)
         else:
             days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
@@ -107,7 +105,7 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
     elif set_type == "naive-mpc-optim":
         # Retrieve data from hass
         if get_data_from_file:
-            with open(pathlib.Path(base_path) / 'data' / 'test_df_final.pkl', 'rb') as inp:
+            with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
                 rh.df_final, days_list, var_list = pickle.load(inp)
         else:
             days_list = utils.get_days_list(1)
@@ -125,6 +123,9 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
         P_PV_forecast = fcst.get_power_from_weather(df_weather, set_mix_forecast=True, df_now=df_input_data)
         P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'], set_mix_forecast=True, df_now=df_input_data)
+        if isinstance(P_load_forecast,bool) and not P_load_forecast:
+            logger.error("Unable to get sensor power photovoltaics, or sensor power load no var loads. Check HA sensors and their daily data")
+            return False
         df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
         df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
         df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
@@ -143,8 +144,8 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         if get_data_from_file:
             days_list = None
             filename = 'data_train_'+model_type+'.pkl'
-            data_path = pathlib.Path(base_path) / 'data' / filename
-            with open(data_path, 'rb') as inp:
+            filename_path = emhass_conf['data_path'] / filename
+            with open(filename_path, 'rb') as inp:
                 df_input_data, _ = pickle.load(inp)
             df_input_data = df_input_data[df_input_data.index[-1] - pd.offsets.Day(days_to_retrieve):]
         else:
@@ -163,9 +164,9 @@ def set_input_data_dict(config_path: pathlib.Path, base_path: str, costfun: str,
         P_PV_forecast, P_load_forecast = None, None
         days_list = None
 
-    # The input data dictionnary to return
+    # The input data dictionary to return
     input_data_dict = {
-        'root': base_path,
+        'emhass_conf': emhass_conf,
         'retrieve_hass_conf': retrieve_hass_conf,
         'rh': rh,
         'opt': opt,
@@ -203,9 +204,13 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         input_data_dict['df_input_data'], 
         method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'],
         list_and_perfect=True)
+    if isinstance(df_input_data,bool) and not df_input_data:
+        return False
     df_input_data = input_data_dict['fcst'].get_prod_price_forecast(
         df_input_data, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'],
         list_and_perfect=True)
+    if isinstance(df_input_data,bool) and not df_input_data:
+        return False 
     opt_res = input_data_dict['opt'].perform_perfect_forecast_optim(df_input_data, input_data_dict['days_list'])
     # Save CSV file for analysis
     if save_data_to_file:
@@ -213,7 +218,7 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     else: # Just save the latest optimization results
         filename = 'opt_res_latest.csv'
     if not debug:
-        opt_res.to_csv(pathlib.Path(input_data_dict['root']) / filename, index_label='timestamp')
+        opt_res.to_csv(input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
     return opt_res
     
 def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
@@ -238,9 +243,13 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     df_input_data_dayahead = input_data_dict['fcst'].get_load_cost_forecast(
         input_data_dict['df_input_data_dayahead'],
         method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'])
+    if isinstance(df_input_data_dayahead,bool) and not df_input_data_dayahead:
+        return False 
     df_input_data_dayahead = input_data_dict['fcst'].get_prod_price_forecast(
         df_input_data_dayahead, 
         method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
+    if isinstance(df_input_data_dayahead,bool) and not df_input_data_dayahead:
+        return False 
     opt_res_dayahead = input_data_dict['opt'].perform_dayahead_forecast_optim(
         df_input_data_dayahead, input_data_dict['P_PV_forecast'], input_data_dict['P_load_forecast'])
     # Save CSV file for publish_data
@@ -250,7 +259,7 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     else: # Just save the latest optimization results
         filename = 'opt_res_latest.csv'
     if not debug:
-        opt_res_dayahead.to_csv(pathlib.Path(input_data_dict['root']) / filename, index_label='timestamp')
+        opt_res_dayahead.to_csv(input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
     return opt_res_dayahead
 
 def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
@@ -275,8 +284,12 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     df_input_data_dayahead = input_data_dict['fcst'].get_load_cost_forecast(
         input_data_dict['df_input_data_dayahead'],
         method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'])
+    if isinstance(df_input_data_dayahead,bool) and not df_input_data_dayahead:
+        return False 
     df_input_data_dayahead = input_data_dict['fcst'].get_prod_price_forecast(
         df_input_data_dayahead, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
+    if isinstance(df_input_data_dayahead,bool) and not df_input_data_dayahead:
+        return False 
     # The specifics params for the MPC at runtime
     prediction_horizon = input_data_dict['params']['passed_data']['prediction_horizon']
     soc_init = input_data_dict['params']['passed_data']['soc_init']
@@ -294,7 +307,7 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     else: # Just save the latest optimization results
         filename = 'opt_res_latest.csv'
     if not debug:
-        opt_res_naive_mpc.to_csv(pathlib.Path(input_data_dict['root']) / filename, index_label='timestamp')
+        opt_res_naive_mpc.to_csv(input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
     return opt_res_naive_mpc
 
 def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
@@ -317,16 +330,16 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
     num_lags = input_data_dict['params']['passed_data']['num_lags']
     split_date_delta = input_data_dict['params']['passed_data']['split_date_delta']
     perform_backtest = input_data_dict['params']['passed_data']['perform_backtest']
-    root = input_data_dict['root']
     # The ML forecaster object
-    mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
+    mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, input_data_dict['emhass_conf'], logger)
     # Fit the ML model
     df_pred, df_pred_backtest = mlf.fit(split_date_delta=split_date_delta, 
                                         perform_backtest=perform_backtest)
     # Save model
     if not debug:
         filename = model_type+'_mlf.pkl'
-        with open(pathlib.Path(root) / filename, 'wb') as outp:
+        filename_path = input_data_dict['emhass_conf']['data_path'] / filename
+        with open(filename_path, 'wb') as outp:
             pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
     return df_pred, df_pred_backtest, mlf
 
@@ -355,9 +368,8 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
     """
     # Load model
     model_type = input_data_dict['params']['passed_data']['model_type']
-    root = input_data_dict['root']
     filename = model_type+'_mlf.pkl'
-    filename_path = pathlib.Path(root) / filename
+    filename_path = input_data_dict['emhass_conf']['data_path'] / filename
     if not debug:
         if filename_path.is_file():
             with open(filename_path, 'rb') as inp:
@@ -416,9 +428,8 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
     """
     # Load model
     model_type = input_data_dict['params']['passed_data']['model_type']
-    root = input_data_dict['root']
     filename = model_type+'_mlf.pkl'
-    filename_path = pathlib.Path(root) / filename
+    filename_path = input_data_dict['emhass_conf']['data_path'] / filename
     if not debug:
         if filename_path.is_file():
             with open(filename_path, 'rb') as inp:
@@ -431,8 +442,9 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
     # Save model
     if not debug:
         filename = model_type+'_mlf.pkl'
-        with open(pathlib.Path(root) / filename, 'wb') as outp:
-            pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
+        filename_path = input_data_dict['emhass_conf']['data_path'] / filename
+        with open(filename_path, 'wb') as outp:
+            pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)       
     return df_pred_optim, mlf
 
 def publish_data(input_data_dict: dict, logger: logging.Logger,
@@ -459,11 +471,11 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     else:
         filename = 'opt_res_latest.csv'
     if opt_res_latest is None:
-        if not os.path.isfile(pathlib.Path(input_data_dict['root']) / filename):
+        if not os.path.isfile(input_data_dict['emhass_conf']['data_path'] / filename):
             logger.error("File not found error, run an optimization task first.")
             return
         else:
-            opt_res_latest = pd.read_csv(pathlib.Path(input_data_dict['root']) / filename, index_col='timestamp')
+            opt_res_latest = pd.read_csv(input_data_dict['emhass_conf']['data_path'] / filename, index_col='timestamp')
             opt_res_latest.index = pd.to_datetime(opt_res_latest.index)
             opt_res_latest.index.freq = input_data_dict['retrieve_hass_conf']['freq']
     # Estimate the current index
@@ -609,6 +621,8 @@ def main():
     parser.add_argument('--action', type=str, help='Set the desired action, options are: perfect-optim, dayahead-optim,\
         naive-mpc-optim, publish-data, forecast-model-fit, forecast-model-predict, forecast-model-tune')
     parser.add_argument('--config', type=str, help='Define path to the config.yaml file')
+    parser.add_argument('--data', type=str, help='Define path to the Data files (.csv & .pkl)')
+    parser.add_argument('--root', type=str, help='Define path emhass root')
     parser.add_argument('--costfun', type=str, default='profit', help='Define the type of cost function, options are: profit, cost, self-consumption')
     parser.add_argument('--log2file', type=strtobool, default='False', help='Define if we should log to a file or not')
     parser.add_argument('--params', type=str, default=None, help='Configuration parameters passed from data/options.json')
@@ -616,10 +630,49 @@ def main():
     parser.add_argument('--debug', type=strtobool, default='False', help='Use True for testing purposes')
     args = parser.parse_args()
     # The path to the configuration files
-    config_path = pathlib.Path(args.config)
-    base_path = str(config_path.parent)
+    
+    if args.config is not None:
+        config_path = pathlib.Path(args.config)
+    else:
+        config_path = pathlib.Path(str(utils.get_root(__file__, num_parent=2) / 'config_emhass.yaml' ))
+
+    if args.data is not None:
+        data_path = pathlib.Path(args.data)
+    else:
+        data_path = (config_path.parent / 'data/')
+
+    if args.root is not None:
+        root_path = pathlib.Path(args.root)
+    else:
+        root_path = config_path.parent
+    
+    emhass_conf = {}
+    emhass_conf['config_path'] = config_path
+    emhass_conf['data_path'] = data_path
+    emhass_conf['root_path'] = root_path
     # create logger
-    logger, ch = utils.get_logger(__name__, base_path, save_to_file=bool(args.log2file))
+    logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=bool(args.log2file))
+    
+    logger.debug("config path: " + str(config_path))
+    logger.debug("data path: " + str(data_path))
+    logger.debug("root path: " + str(root_path))
+
+
+    if not config_path.exists():
+        logger.error("Could not find config_emhass.yaml file in: " + str(config_path))
+        logger.error("Try setting config file path with --config" )
+        return False
+
+    if not os.path.isdir(data_path):
+        logger.error("Could not find data foulder in: " + str(data_path))
+        logger.error("Try setting data path with --data" )
+        return False
+
+    if not os.path.isdir(root_path / 'src'):
+        logger.error("Could not find emhass/src foulder in: " + str(root_path))
+        logger.error("Try setting emhass root path with --root" )
+        return False
+
     # Additionnal argument
     try:
         parser.add_argument('--version', action='version', version='%(prog)s '+version('emhass'))
@@ -627,7 +680,7 @@ def main():
     except Exception:
         logger.info("Version not found for emhass package. Or importlib exited with PackageNotFoundError.")
     # Setup parameters
-    input_data_dict = set_input_data_dict(config_path, base_path, 
+    input_data_dict = set_input_data_dict(emhass_conf, 
                                           args.costfun, args.params, args.runtimeparams, args.action, 
                                           logger, args.debug)
     # Perform selected action
@@ -658,6 +711,7 @@ def main():
         opt_res = publish_data(input_data_dict, logger)
     else:
         logger.error("The passed action argument is not valid")
+        logger.error("Try setting --action: perfect-optim, dayahead-optim, naive-mpc-optim, forecast-model-fit, forecast-model-predict, forecast-model-tune or publish-data")
         opt_res = None
     logger.info(opt_res)
     # Flush the logger
@@ -672,6 +726,8 @@ def main():
         return df_pred
     elif args.action == 'forecast-model-tune':
         return df_pred_optim, mlf
+    else: 
+        return opt_res
 
 if __name__ == '__main__':
     main()
