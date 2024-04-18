@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.6 - 2024-04-07
+### Fix
+- Fixed bug from forecast out method related to issue 240
+- Fix patch for some issues with package file paths
+
 ## 0.8.5 - 2024-04-01
 ### Improvement
 - Simplified fetch urls to relatives
