@@ -246,34 +246,39 @@ def set_input_data_dict(
         P_PV_forecast, P_load_forecast = None, None
         params = json.loads(params)
         days_list = None
-        csv_file = params["passed_data"]["csv_file"]
-        features = params["passed_data"]["features"]
-        target = params["passed_data"]["target"]
-        timestamp = params["passed_data"]["timestamp"]
-        if get_data_from_file:
-            base_path = base_path + "/data"
-            filename_path = pathlib.Path(base_path) / csv_file
+        csv_file = params["passed_data"].get("csv_file", None)
+        if "features" in params["passed_data"]:
+            features = params["passed_data"]["features"]
+        if "target" in params["passed_data"]:
+            target = params["passed_data"]["target"]
+        if "timestamp" in params["passed_data"]:
+            timestamp = params["passed_data"]["timestamp"]
+        if csv_file:
+            if get_data_from_file:
+                base_path = base_path + "/data"
+                filename_path = pathlib.Path(base_path) / csv_file
 
-        else:
-            filename_path = pathlib.Path(base_path) / csv_file
+            else:
+                filename_path = pathlib.Path(base_path) / csv_file
 
-        if filename_path.is_file():
-            df_input_data = pd.read_csv(filename_path, parse_dates=True)
+            if filename_path.is_file():
+                df_input_data = pd.read_csv(filename_path, parse_dates=True)
 
-        else:
-            logger.error("The cvs file was not found.")
-            raise ValueError("The CSV file " + csv_file + " was not found.")
-        required_columns = []
-        required_columns.extend(features)
-        required_columns.append(target)
-        if timestamp is not None:
-            required_columns.append(timestamp)
+            else:
+                logger.error("The cvs file was not found.")
+                raise ValueError("The CSV file " + csv_file + " was not found.")
+            required_columns = []
+            required_columns.extend(features)
+            required_columns.append(target)
+            if timestamp is not None:
+                required_columns.append(timestamp)
 
-        if not set(required_columns).issubset(df_input_data.columns):
-            logger.error("The cvs file does not contain the required columns.")
-            raise ValueError(
-                f"CSV file should contain the following columns: {', '.join(required_columns)}",
-            )
+            if not set(required_columns).issubset(df_input_data.columns):
+                logger.error("The cvs file does not contain the required columns.")
+                msg = f"CSV file should contain the following columns: {', '.join(required_columns)}"
+                raise ValueError(
+                    msg,
+                )
 
     elif set_type == "publish-data":
         df_input_data, df_input_data_dayahead = None, None
