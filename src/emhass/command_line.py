@@ -215,11 +215,11 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
             timestamp = params["passed_data"]["timestamp"]
         if csv_file:
             if get_data_from_file:
-                base_path = base_path + "/data"
+                base_path = emhass_conf["data_path"]  # + "/data"
                 filename_path = pathlib.Path(base_path) / csv_file
 
             else:
-                filename_path = pathlib.Path(base_path) / csv_file
+                filename_path = emhass_conf["data_path"] / csv_file
 
             if filename_path.is_file():
                 df_input_data = pd.read_csv(filename_path, parse_dates=True)
@@ -621,7 +621,6 @@ def regressor_model_fit(
     target = input_data_dict["params"]["passed_data"]["target"]
     timestamp = input_data_dict["params"]["passed_data"]["timestamp"]
     date_features = input_data_dict["params"]["passed_data"]["date_features"]
-    root = input_data_dict["root"]
 
     # The MLRegressor object
     mlr = MLRegressor(
@@ -638,7 +637,8 @@ def regressor_model_fit(
     # Save model
     if not debug:
         filename = model_type + "_mlr.pkl"
-        with open(pathlib.Path(root) / filename, "wb") as outp:
+        filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
+        with open(filename_path, "wb") as outp:
             pickle.dump(mlr, outp, pickle.HIGHEST_PROTOCOL)
     return mlr
 
@@ -659,9 +659,8 @@ def regressor_model_predict(
     :type debug: Optional[bool], optional
     """
     model_type = input_data_dict["params"]["passed_data"]["model_type"]
-    root = input_data_dict["root"]
     filename = model_type + "_mlr.pkl"
-    filename_path = pathlib.Path(root) / filename
+    filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
     if not debug:
         if filename_path.is_file():
             with open(filename_path, "rb") as inp:

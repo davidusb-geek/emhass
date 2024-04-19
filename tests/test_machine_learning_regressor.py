@@ -15,15 +15,19 @@ from sklearn.pipeline import Pipeline
 
 # the root folder
 root = str(utils.get_root(__file__, num_parent=2))
+emhass_conf = {}
+emhass_conf["config_path"] = pathlib.Path(root) / "config_emhass.yaml"
+emhass_conf["data_path"] = pathlib.Path(root) / "data/"
+emhass_conf["root_path"] = pathlib.Path(root)
 # create logger
-logger, ch = utils.get_logger(__name__, root, save_to_file=False)
+logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
 
 class TestMLRegressor(unittest.TestCase):
     @staticmethod
     def get_test_params():
-        with open(root + "/config_emhass.yaml", "r") as file:
-            params = yaml.load(file, Loader=yaml.FullLoader)
+        with open(emhass_conf["config_path"]) as file:
+            params = yaml.safe_load(file)
         params.update(
             {
                 "params_secrets": {
@@ -41,8 +45,6 @@ class TestMLRegressor(unittest.TestCase):
     def setUp(self):
         params = TestMLRegressor.get_test_params()
         params_json = json.dumps(params)
-        config_path = pathlib.Path(root + "/config_emhass.yaml")
-        base_path = str(config_path.parent)  # + "/data"
         costfun = "profit"
         action = "regressor-model-fit"  # fit and predict methods
         params = copy.deepcopy(json.loads(params_json))
@@ -61,8 +63,7 @@ class TestMLRegressor(unittest.TestCase):
         params["optim_conf"]["load_forecast_method"] = "skforecast"
         params_json = json.dumps(params)
         self.input_data_dict = set_input_data_dict(
-            config_path,
-            base_path,
+            emhass_conf,
             costfun,
             params_json,
             runtimeparams_json,
