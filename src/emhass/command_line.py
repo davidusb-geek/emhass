@@ -225,8 +225,9 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
                 df_input_data = pd.read_csv(filename_path, parse_dates=True)
 
             else:
-                logger.error("The cvs file was not found.")
-                raise ValueError("The CSV file " + csv_file + " was not found.")
+                logger.error("The CSV file " + csv_file + " was not found in path: " + str(emhass_conf["data_path"]))
+                return False
+                #raise ValueError("The CSV file " + csv_file + " was not found.")
             required_columns = []
             required_columns.extend(features)
             required_columns.append(target)
@@ -236,9 +237,11 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
             if not set(required_columns).issubset(df_input_data.columns):
                 logger.error("The cvs file does not contain the required columns.")
                 msg = f"CSV file should contain the following columns: {', '.join(required_columns)}"
-                raise ValueError(
-                    msg,
-                )
+                logger.error(msg)
+                return False
+                #raise ValueError(
+                #    msg,
+                #)
 
     elif set_type == "publish-data":
         df_input_data, df_input_data_dayahead = None, None
@@ -615,12 +618,36 @@ def regressor_model_fit(
     :type debug: Optional[bool], optional
     """
     data = copy.deepcopy(input_data_dict["df_input_data"])
-    model_type = input_data_dict["params"]["passed_data"]["model_type"]
-    regression_model = input_data_dict["params"]["passed_data"]["regression_model"]
-    features = input_data_dict["params"]["passed_data"]["features"]
-    target = input_data_dict["params"]["passed_data"]["target"]
-    timestamp = input_data_dict["params"]["passed_data"]["timestamp"]
-    date_features = input_data_dict["params"]["passed_data"]["date_features"]
+    if "model_type" in input_data_dict["params"]["passed_data"]:
+        model_type = input_data_dict["params"]["passed_data"]["model_type"]
+    else:
+        logger.error("parameter: 'model_type' not passed")
+        return False
+    if "regression_model" in input_data_dict["params"]["passed_data"]:
+        regression_model = input_data_dict["params"]["passed_data"]["regression_model"]
+    else:
+        logger.error("parameter: 'regression_model' not passed")
+        return False
+    if "features" in input_data_dict["params"]["passed_data"]:
+        features = input_data_dict["params"]["passed_data"]["features"]
+    else:
+        logger.error("parameter: 'features' not passed")
+        return False    
+    if "target" in input_data_dict["params"]["passed_data"]:
+        target = input_data_dict["params"]["passed_data"]["target"]
+    else:
+        logger.error("parameter: 'target' not passed")
+        return False        
+    if "timestamp" in input_data_dict["params"]["passed_data"]:
+        timestamp = input_data_dict["params"]["passed_data"]["timestamp"]
+    else:
+        logger.error("parameter: 'timestamp' not passed")
+        return False       
+    if "date_features" in input_data_dict["params"]["passed_data"]:
+        date_features = input_data_dict["params"]["passed_data"]["date_features"]
+    else:
+        logger.error("parameter: 'date_features' not passed")
+        return False           
 
     # The MLRegressor object
     mlr = MLRegressor(
@@ -658,7 +685,11 @@ def regressor_model_predict(
     :param debug: True to debug, useful for unit testing, defaults to False
     :type debug: Optional[bool], optional
     """
-    model_type = input_data_dict["params"]["passed_data"]["model_type"]
+    if "model_type" in input_data_dict["params"]["passed_data"]:
+        model_type = input_data_dict["params"]["passed_data"]["model_type"]
+    else:
+        logger.error("parameter: 'model_type' not passed")
+        return False   
     filename = model_type + "_mlr.pkl"
     filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
     if not debug:
@@ -669,20 +700,18 @@ def regressor_model_predict(
             logger.error(
                 "The ML forecaster file was not found, please run a model fit method before this predict method",
             )
-            return
-    new_values = input_data_dict["params"]["passed_data"]["new_values"]
+            return False
+    if "new_values" in input_data_dict["params"]["passed_data"]:    
+        new_values = input_data_dict["params"]["passed_data"]["new_values"]
+    else:
+        logger.error("parameter: 'new_values' not passed")
+        return False         
     # Predict from csv file
     prediction = mlr.predict(new_values)
-
-    mlr_predict_entity_id = input_data_dict["params"]["passed_data"][
-        "mlr_predict_entity_id"
-    ]
-    mlr_predict_unit_of_measurement = input_data_dict["params"]["passed_data"][
-        "mlr_predict_unit_of_measurement"
-    ]
-    mlr_predict_friendly_name = input_data_dict["params"]["passed_data"][
-        "mlr_predict_friendly_name"
-    ]
+    
+    mlr_predict_entity_id = input_data_dict["params"]["passed_data"].get("mlr_predict_entity_id","sensor.mlr_predict")
+    mlr_predict_unit_of_measurement = input_data_dict["params"]["passed_data"].get("mlr_predict_unit_of_measurement","h")
+    mlr_predict_friendly_name = input_data_dict["params"]["passed_data"].get("mlr_predict_friendly_name","mlr predictor")
     # Publish prediction
     idx = 0
     if not debug:
