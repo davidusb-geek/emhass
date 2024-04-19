@@ -329,8 +329,6 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(injection_dict["figure_0"], str)
 
     def test_regressor_model_fit_predict(self):
-        config_path = pathlib.Path(root + "/config_emhass.yaml")
-        base_path = str(config_path.parent)
         costfun = "profit"
         action = "regressor-model-fit"  # fit and predict methods
         params = TestCommandLineUtils.get_test_params()
@@ -350,8 +348,7 @@ class TestCommandLineUtils(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(
-            config_path,
-            base_path,
+            emhass_conf,
             costfun,
             params_json,
             runtimeparams_json,
@@ -374,8 +371,6 @@ class TestCommandLineUtils(unittest.TestCase):
         mlr = regressor_model_fit(input_data_dict, logger, debug=True)
 
         # def test_regressor_model_predict(self):
-        config_path = pathlib.Path(root + "/config_emhass.yaml")
-        base_path = str(config_path.parent)  # + "/data"
         costfun = "profit"
         action = "regressor-model-predict"  # predict methods
         params = TestCommandLineUtils.get_test_params()
@@ -397,8 +392,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params_json = json.dumps(params)
 
         input_data_dict = set_input_data_dict(
-            config_path,
-            base_path,
+            emhass_conf,
             costfun,
             params_json,
             runtimeparams_json,
@@ -540,7 +534,7 @@ class TestCommandLineUtils(unittest.TestCase):
                 "--action",
                 "regressor-model-fit",
                 "--config",
-                str(pathlib.Path(root + "/config_emhass.yaml")),
+                str(emhass_conf["config_path"]),
                 "--params",
                 params_json,
                 "--runtimeparams",
@@ -574,7 +568,7 @@ class TestCommandLineUtils(unittest.TestCase):
                 "--action",
                 "regressor-model-predict",
                 "--config",
-                str(pathlib.Path(root + "/config_emhass.yaml")),
+                str(emhass_conf["config_path"]),
                 "--params",
                 params_json,
                 "--runtimeparams",
