@@ -170,7 +170,7 @@ class RetrieveHass:
                 df_raw = pd.DataFrame.from_dict(data)
                 # self.logger.info(str(df_raw))
                 if len(df_raw) == 0:
-                    if x is 0:
+                    if x == 0:
                         self.logger.error(
                             "The retrieved Dataframe is empty, A sensor:"
                             + var
