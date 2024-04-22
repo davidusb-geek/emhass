@@ -216,13 +216,16 @@ def treat_runtimeparams(
         freq = int(retrieve_hass_conf["freq"].seconds / 60.0)
         delta_forecast = int(optim_conf["delta_forecast"].days)
         forecast_dates = get_forecast_dates(freq, delta_forecast)
-        if set_type == "regressor-model-fit":
-            csv_file = runtimeparams["csv_file"]
-            features = runtimeparams["features"]
-            target = runtimeparams["target"]
-            params["passed_data"]["csv_file"] = csv_file
-            params["passed_data"]["features"] = features
-            params["passed_data"]["target"] = target
+        if set_type == "regressor-model-fit":            
+            if "csv_file" in runtimeparams:
+                csv_file = runtimeparams["csv_file"]
+                params["passed_data"]["csv_file"] = csv_file
+            if "features" in runtimeparams:
+                features = runtimeparams["features"]
+                params["passed_data"]["features"] = features
+            if "target" in runtimeparams:
+                target = runtimeparams["target"]
+                params["passed_data"]["target"] = target
             if "timestamp" not in runtimeparams:
                 params["passed_data"]["timestamp"] = None
             else:
@@ -233,10 +236,10 @@ def treat_runtimeparams(
             else:
                 date_features = runtimeparams["date_features"]
                 params["passed_data"]["date_features"] = date_features
-
         if set_type == "regressor-model-predict":
-            new_values = runtimeparams["new_values"]
-            params["passed_data"]["new_values"] = new_values
+            if "new_values" in runtimeparams:
+                new_values = runtimeparams["new_values"]
+                params["passed_data"]["new_values"] = new_values
             if "csv_file" in runtimeparams:
                 csv_file = runtimeparams["csv_file"]
                 params["passed_data"]["csv_file"] = csv_file

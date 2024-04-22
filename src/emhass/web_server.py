@@ -195,15 +195,21 @@ def action_call(action_name):
             return make_response(msg, 201)
         return make_response(grabLog(ActionStr), 400)
     elif action_name == 'regressor-model-fit':
-        app.logger.info(" >> Performing a machine learning regressor fit...")
+        ActionStr = " >> Performing a machine learning regressor fit..."
+        app.logger.info(ActionStr)
         regressor_model_fit(input_data_dict, app.logger)
         msg = f'EMHASS >> Action regressor-model-fit executed... \n'
-        return make_response(msg, 201)
+        if not checkFileLog(ActionStr):
+            return make_response(msg, 201)
+        return make_response(grabLog(ActionStr), 400)
     elif action_name == 'regressor-model-predict':
-        app.logger.info(" >> Performing a machine learning regressor predict...")
+        ActionStr = " >> Performing a machine learning regressor predict..."
+        app.logger.info(ActionStr)
         regressor_model_predict(input_data_dict, app.logger)
         msg = f'EMHASS >> Action regressor-model-predict executed... \n'
-        return make_response(msg, 201)
+        if not checkFileLog(ActionStr):
+            return make_response(msg, 201)
+        return make_response(grabLog(ActionStr), 400)
     else:
         app.logger.error("ERROR: passed action is not valid")
         msg = f'EMHASS >> ERROR: Passed action is not valid... \n'
