@@ -56,7 +56,7 @@ class TestMLRegressor(unittest.TestCase):
             "model_type": "heating_hours_degreeday",
             "timestamp": "timestamp",
             "date_features": ["month", "day_of_week"],
-            "new_values": [12.79, 4.766, 1, 2],
+            "new_values": [12.79, 4.766, 1, 2]
         }
         runtimeparams_json = json.dumps(runtimeparams)
         params["passed_data"] = runtimeparams
