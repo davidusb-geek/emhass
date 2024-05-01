@@ -305,6 +305,8 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         if 'solar_forecast_kwp' in runtimeparams.keys():
             retrieve_hass_conf['solar_forecast_kwp'] = runtimeparams['solar_forecast_kwp']
             optim_conf['weather_forecast_method'] = 'solar.forecast'
+        if 'freq' in runtimeparams.keys():
+            retrieve_hass_conf['freq'] = pd.to_timedelta(runtimeparams['freq'], "minutes")
         if 'weight_battery_discharge' in runtimeparams.keys():
             optim_conf['weight_battery_discharge'] = runtimeparams['weight_battery_discharge']
         if 'weight_battery_charge' in runtimeparams.keys():
