@@ -29,6 +29,13 @@ class TestRetrieveHass(unittest.TestCase):
         save_data_to_file = False
         params = None
         retrieve_hass_conf, _, _ = get_yaml_parse(emhass_conf, use_secrets=False)
+        
+        #Force config params for testing
+        retrieve_hass_conf['var_PV'] = 'sensor.power_photovoltaics'
+        retrieve_hass_conf['var_load'] = 'sensor.power_load_no_var_loads'
+        retrieve_hass_conf['var_replace_zero'] = ['sensor.power_photovoltaics']
+        retrieve_hass_conf['var_interp'] = ['sensor.power_photovoltaics','sensor.power_load_no_var_loads'] 
+        
         self.retrieve_hass_conf = retrieve_hass_conf
         self.rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                                self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
