@@ -37,6 +37,10 @@ class TestOptimization(unittest.TestCase):
         if get_data_from_file:
             with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
                 self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
+            self.retrieve_hass_conf['var_load'] = str(self.var_list[0])
+            self.retrieve_hass_conf['var_PV'] = str(self.var_list[1])
+            self.retrieve_hass_conf['var_interp'] = [retrieve_hass_conf['var_PV'], retrieve_hass_conf['var_load']]
+            self.retrieve_hass_conf['var_replace_zero'] = [retrieve_hass_conf['var_PV']]
         else:
             self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
             self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]

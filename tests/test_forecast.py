@@ -55,6 +55,10 @@ class TestForecast(unittest.TestCase):
         if self.get_data_from_file:
             with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
                 self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
+            self.retrieve_hass_conf['var_load'] = str(self.var_list[0])
+            self.retrieve_hass_conf['var_PV'] = str(self.var_list[1])
+            self.retrieve_hass_conf['var_interp'] = [retrieve_hass_conf['var_PV'], retrieve_hass_conf['var_load']]
+            self.retrieve_hass_conf['var_replace_zero'] = [retrieve_hass_conf['var_PV']]
         else:
             self.days_list = utils.get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
             self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
@@ -74,7 +78,7 @@ class TestForecast(unittest.TestCase):
         self.P_load_forecast = self.fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
         self.df_input_data_dayahead = pd.concat([self.P_PV_forecast, self.P_load_forecast], axis=1)
         self.df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
-        self.opt = Optimization(retrieve_hass_conf, optim_conf, plant_conf, 
+        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price, 
                                 'profit', emhass_conf, logger)
         self.input_data_dict = {
@@ -209,6 +213,10 @@ class TestForecast(unittest.TestCase):
         if self.get_data_from_file:
             with open((emhass_conf['data_path'] / 'test_df_final.pkl'), 'rb') as inp:
                 rh.df_final, days_list, var_list = pickle.load(inp)
+            retrieve_hass_conf['var_load'] = str(self.var_list[0])
+            retrieve_hass_conf['var_PV'] = str(self.var_list[1])
+            retrieve_hass_conf['var_interp'] = [retrieve_hass_conf['var_PV'], retrieve_hass_conf['var_load']]
+            retrieve_hass_conf['var_replace_zero'] = [retrieve_hass_conf['var_PV']]
         else:
             days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
             var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
@@ -342,6 +350,10 @@ class TestForecast(unittest.TestCase):
         if self.get_data_from_file:
             with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
                 rh.df_final, days_list, var_list = pickle.load(inp)
+            retrieve_hass_conf['var_load'] = str(self.var_list[0])
+            retrieve_hass_conf['var_PV'] = str(self.var_list[1])
+            retrieve_hass_conf['var_interp'] = [retrieve_hass_conf['var_PV'], retrieve_hass_conf['var_load']]
+            retrieve_hass_conf['var_replace_zero'] = [retrieve_hass_conf['var_PV']]
         else:
             days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
             var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
