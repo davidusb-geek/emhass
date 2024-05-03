@@ -77,6 +77,10 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
         if get_data_from_file:
             with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
                 rh.df_final, days_list, var_list = pickle.load(inp)
+            retrieve_hass_conf['var_load'] = str(var_list[0])
+            retrieve_hass_conf['var_PV'] = str(var_list[1])
+            retrieve_hass_conf['var_interp'] = [retrieve_hass_conf['var_PV'], retrieve_hass_conf['var_load']]
+            retrieve_hass_conf['var_replace_zero'] = [retrieve_hass_conf['var_PV']]
         else:
             days_list = utils.get_days_list(retrieve_hass_conf["days_to_retrieve"])
             var_list = [retrieve_hass_conf["var_load"], retrieve_hass_conf["var_PV"]]
@@ -132,6 +136,10 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
         if get_data_from_file:
             with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
                 rh.df_final, days_list, var_list = pickle.load(inp)
+            retrieve_hass_conf['var_load'] = str(var_list[0])
+            retrieve_hass_conf['var_PV'] = str(var_list[1])
+            retrieve_hass_conf['var_interp'] = [retrieve_hass_conf['var_PV'], retrieve_hass_conf['var_load']]
+            retrieve_hass_conf['var_replace_zero'] = [retrieve_hass_conf['var_PV']]
         else:
             days_list = utils.get_days_list(1)
             var_list = [retrieve_hass_conf["var_load"], retrieve_hass_conf["var_PV"]]

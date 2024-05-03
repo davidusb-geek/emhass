@@ -447,6 +447,8 @@ def treat_runtimeparams(
             ]
         if "weight_battery_charge" in runtimeparams.keys():
             optim_conf["weight_battery_charge"] = runtimeparams["weight_battery_charge"]
+        if 'freq' in runtimeparams.keys():
+            retrieve_hass_conf['freq'] = pd.to_timedelta(runtimeparams['freq'], "minutes")
         # Treat plant configuration parameters passed at runtime
         if "SOCtarget" in runtimeparams.keys():
             plant_conf["SOCtarget"] = runtimeparams["SOCtarget"]

@@ -629,7 +629,12 @@ class Forecast(object):
             if self.get_data_from_file:
                 filename_path = self.emhass_conf['data_path'] / 'test_df_final.pkl'
                 with open(filename_path, 'rb') as inp:
-                    rh.df_final, days_list, _ = pickle.load(inp)
+                    rh.df_final, days_list, var_list = pickle.load(inp)
+                    self.var_load = var_list[0]
+                    self.retrieve_hass_conf['var_load'] = self.var_load
+                    var_interp = [var_list[0]]
+                    self.var_list = [var_list[0]]
+                    self.var_load_new = self.var_load+'_positive'
             else:
                 days_list = get_days_list(days_min_load_forecast) 
                 if not rh.get_data(days_list, var_list):
