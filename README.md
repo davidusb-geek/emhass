@@ -29,51 +29,19 @@
   </a>
 </p>
 <div align="center">
-  <style>.invert-image{
-    padding: 5px 12px;
-    margin-right: 3px;
-    border-radius: 7px;
-    color: #3d3d3d;
-    background-color: #e1e1e1;
-    box-shadow: #3d3d3d 3px 3px;
-    }
-    .invert-image:hover {
-      color: darkblue;
-      background-color: #e1e1e1;
-    }
-    .invert-image:active {
-      background-color: #d7d7db;
-    }
-    @media (prefers-color-scheme: dark) {
-    .invert-image{
-    border-width: 1px;
-    color: #e1e1e1;
-    background-color: #282928;
-    box-shadow: #282928 4px 7px;
-    } 
-    .invert-image:hover {
-    color: #ccf3ff;
-    background-color: #3d3d3d;
-    }
-    .invert-image:active {
-      background-color: #111111;
-    }
-    }
-  </style>
  <a href="https://emhass.readthedocs.io/en/latest/">
-      <button class="invert-image">Documentation</button>
+      <img src="https://raw.githubusercontent.com/davidusb-geek/emhass/master/docs/images/Documentation_button.svg" alt="Issues">
   </a>
    <a href="https://community.home-assistant.io/t/emhass-an-energy-management-for-home-assistant/338126">
-      <button class="invert-image">Community</button>
+      <img src="https://raw.githubusercontent.com/davidusb-geek/emhass/master/docs/images/Community_button.svg" alt="Issues">
   </a>
   <a href="https://github.com/davidusb-geek/emhass/issues">
-      <button class="invert-image">Issues</button>
+      <img src="https://raw.githubusercontent.com/davidusb-geek/emhass/master/docs/images/Issues_button.svg" alt="Issues">
   </a>
   <a href="https://github.com/davidusb-geek/emhass-add-on">
-      <button class="invert-image">EMHASS Add-on</button>
+     <img src="https://raw.githubusercontent.com/davidusb-geek/emhass/master/docs/images/EMHASS_Add_on_button.svg" alt="Issues">
   </a>
 </div>
-<br>
 <br>
 <p align="center">
 If you like this work please consider buying a coffee ;-) 
