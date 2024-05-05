@@ -16,6 +16,8 @@ function loadButtons(page) {
                 "forecast-model-fit",
                 "forecast-model-predict",
                 "forecast-model-tune",
+                "regressor-model-fit",
+                "regressor-model-predict",
                 "perfect-optim",
                 "publish-data",
                 "naive-mpc-optim"

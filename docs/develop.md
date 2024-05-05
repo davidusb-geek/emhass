@@ -221,6 +221,11 @@ For those who wish to mount/sync the local `data` folder with the data folder fr
 docker run ... -v $(pwd)/data/:/app/data ...
 ```
 
+You can also mount data (ex .csv)  files separately
+```bash
+docker run... -v $(pwd)/data/heating_prediction.csv:/app/data/ ...
+```
+
 #### Issue with TARGETARCH
 If your docker build fails with an error related to `TARGETARCH`. It may be best to add your devices architecture manually:
 
@@ -301,7 +306,7 @@ git checkout $branch
 ```bash
 #testing addon (build and run)
 docker build -t emhass/docker --build-arg build_version=addon-local .
-docker run --rm -it -p 5000:5000 --name emhass-container -v $(pwd)/options.json:/app/options.json -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" emhass/docker --url $HAURL --key $HAKEY
+docker run --rm -it -p 5000:5000 --name emhass-container -v $(pwd)/data/heating_prediction.csv:/app/data/heating_prediction.csv -v $(pwd)/options.json:/app/options.json -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" emhass/docker --url $HAURL --key $HAKEY
 ```
 ```bash
 #run actions on a separate terminal
@@ -311,6 +316,8 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-model-fit
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-model-predict
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-model-tune
+curl -i -H "Content-Type:application/json" -X POST -d  '{"csv_file": "heating_prediction.csv", "features": ["degreeday", "solar"], "target": "hour", "regression_model": "RandomForestRegression", "model_type": "heating_hours_degreeday", "timestamp": "timestamp", "date_features": ["month", "day_of_week"], "new_values": [12.79, 4.766, 1, 2] }' http://localhost:5000/action/regressor-model-fit
+curl -i -H "Content-Type:application/json" -X POST -d  '{"mlr_predict_entity_id": "sensor.mlr_predict", "mlr_predict_unit_of_measurement": "h", "mlr_predict_friendly_name": "mlr predictor", "new_values": [8.2, 7.23, 2, 6], "model_type": "heating_hours_degreeday" }' http://localhost:5000/action/regressor-model-predict
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
 ```
 
@@ -326,7 +333,7 @@ lat: 45.83
 lon: 6.86
 alt: 4807.8
 EOT
-docker run --rm -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/docker 
+docker run --rm -it -p 5000:5000 --name emhass-container -v $(pwd)/data/heating_prediction.csv:/app/data/heating_prediction.csv -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/docker 
 ```
 ```bash
 #run actions on a separate terminal
@@ -336,10 +343,12 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-model-fit
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-model-predict
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-model-tune
+curl -i -H "Content-Type:application/json" -X POST -d  '{"csv_file": "heating_prediction.csv", "features": ["degreeday", "solar"], "target": "hour", "regression_model": "RandomForestRegression", "model_type": "heating_hours_degreeday", "timestamp": "timestamp", "date_features": ["month", "day_of_week"], "new_values": [12.79, 4.766, 1, 2] }' http://localhost:5000/action/regressor-model-fit
+curl -i -H "Content-Type:application/json" -X POST -d  '{"mlr_predict_entity_id": "sensor.mlr_predict", "mlr_predict_unit_of_measurement": "h", "mlr_predict_friendly_name": "mlr predictor", "new_values": [8.2, 7.23, 2, 6], "model_type": "heating_hours_degreeday" }' http://localhost:5000/action/regressor-model-predict
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
 ```
 
-User may wish to re-test with tweaked parameters such as `lp_solver` and `weather_forecast_method`, in `config_emhass.yaml` *(standalone)* or `options.json` *(addon)*, to broaden the testing scope. 
+User may wish to re-test with tweaked parameters such as `lp_solver`, `weather_forecast_method` and `load_forecast_method`, in `config_emhass.yaml` *(standalone)* or `options.json` *(addon)*, to broaden the testing scope. 
 *see [EMHASS & EMHASS-Add-on differences](https://emhass.readthedocs.io/en/latest/differences.html) for more information on how these config_emhass & options files differ*
 
 *Note: may need to set `--build-arg TARGETARCH=YOUR-ARCH` in docker build*
