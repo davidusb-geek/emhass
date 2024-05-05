@@ -28,6 +28,20 @@
     <img alt="Read the Docs" src="https://img.shields.io/readthedocs/emhass">
   </a>
 </p>
+<div align="center">
+ <a href="https://emhass.readthedocs.io/en/latest/">
+      <img src="https://raw.githubusercontent.com/davidusb-geek/emhass/master/docs/images/Documentation_button.svg" alt="Documentation">
+  </a>
+   <a href="https://community.home-assistant.io/t/emhass-an-energy-management-for-home-assistant/338126">
+      <img src="https://raw.githubusercontent.com/davidusb-geek/emhass/master/docs/images/Community_button.svg" alt="Community">
+  </a>
+  <a href="https://github.com/davidusb-geek/emhass/issues">
+      <img src="https://raw.githubusercontent.com/davidusb-geek/emhass/master/docs/images/Issues_button.svg" alt="Issues">
+  </a>
+  <a href="https://github.com/davidusb-geek/emhass-add-on">
+     <img src="https://raw.githubusercontent.com/davidusb-geek/emhass/master/docs/images/EMHASS_Add_on_button.svg" alt="EMHASS Add-on">
+  </a>
+</div>
 <br>
 <p align="center">
 If you like this work please consider buying a coffee ;-) 
