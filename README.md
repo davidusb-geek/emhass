@@ -86,7 +86,7 @@ You must follow these steps to make EMHASS work properly:
 
 1) Define all the parameters in the configuration file according to your installation. See the description for each parameter in the **configuration** section.
 
-2) You most notably will need to define the main data entering EMHASS. This will be the `sensor_power_photovoltaics` for the name of the your hass variable containing the PV produced power and the variable `sensor_power_load_no_var_loads` for the load power of your household excluding the power of the deferrable loads that you want to optimize.
+2) You most notably will need to define the main data entering EMHASS. This will be the `sensor.power_photovoltaics` for the name of the your hass variable containing the PV produced power and the variable `sensor.power_load_no_var_loads` for the load power of your household excluding the power of the deferrable loads that you want to optimize.
 
 3) Launch the actual optimization and check the results. This can be done manually using the buttons in the web ui or with a `curl` command like this: `curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/dayahead-optim`.
 
@@ -349,7 +349,7 @@ In EMHASS we have basically 4 forecasts to deal with:
 
 - PV production selling price forecast: at what price are you selling your excess PV production on the next 24h. This is given in EUR/kWh.
 
-The sensor containing the load data should be specified in parameter `var_load` in the configuration file. As we want to optimize the household energies, when need to forecast the load power conumption. The default method for this is a naive approach using 1-day persistence. The load data variable should not contain the data from the deferrable loads themselves. For example, lets say that you set your deferrable load to be the washing machine. The variable that you should enter in EMHASS will be: `var_load: 'sensor.power_load_no_var_loads'` and `sensor_power_load_no_var_loads = sensor_power_load - sensor_power_washing_machine`. This is supposing that the overall load of your house is contained in variable: `sensor_power_load`. The sensor `sensor_power_load_no_var_loads` can be easily created with a new template sensor in Home Assistant.
+The sensor containing the load data should be specified in parameter `var_load` in the configuration file. As we want to optimize the household energies, when need to forecast the load power conumption. The default method for this is a naive approach using 1-day persistence. The load data variable should not contain the data from the deferrable loads themselves. For example, lets say that you set your deferrable load to be the washing machine. The variable that you should enter in EMHASS will be: `var_load: 'sensor.power_load_no_var_loads'` and `sensor.power_load_no_var_loads = sensor.power_load - sensor.power_washing_machine`. This is supposing that the overall load of your house is contained in variable: `sensor.power_load`. The sensor `sensor.power_load_no_var_loads` can be easily created with a new template sensor in Home Assistant.
 
 If you are implementing a MPC controller, then you should also need to provide some data at the optimization runtime using the key `runtimeparams`.
 
