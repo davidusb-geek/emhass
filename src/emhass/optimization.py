@@ -301,7 +301,7 @@ class Optimization:
             for i in set_I})
 
         # Treat deferrable loads constraints
-        predicted_temps = []
+        predicted_temps = {}
         for k in range(self.optim_conf['num_def_loads']):
             # Total time of deferrable load
             if def_total_hours[k] > 0:
@@ -311,7 +311,7 @@ class Optimization:
                         sense = plp.LpConstraintEQ,
                         rhs = def_total_hours[k]*self.optim_conf['P_deferrable_nom'][k])
                     })
-            if "def_load_config" in self.optim_conf and len(self.optim_conf["thermal_config"]) > k:
+            if "def_load_config" in self.optim_conf and len(self.optim_conf["def_load_config"]) > k:
                 def_load_config = self.optim_conf['def_load_config'][k]
                 if def_load_config and 'thermal_config' in def_load_config:
                     hc = def_load_config["thermal_config"]
@@ -349,7 +349,7 @@ class Optimization:
                         )
                     for I in set_I})
 
-                    predicted_temps.append(predicted_temp)
+                    predicted_temps[k] = predicted_temp
 
             # Ensure deferrable loads consume energy between def_start_timestep & def_end_timestep
             self.logger.debug("Deferrable load {}: Proposed optimization window: {} --> {}".format(k, def_start_timestep[k], def_end_timestep[k]))
@@ -616,9 +616,9 @@ class Optimization:
                 opt_tp[f"P_def_start_{k}"] = [P_def_start[k][i].varValue for i in set_I]
                 opt_tp[f"P_def_bin2_{k}"] = [P_def_bin2[k][i].varValue for i in set_I]
 
-        for i in range(len(predicted_temps)):
-            opt_tp[f"predicted_temp_heater{i}"] = pd.Series([round(pt.value(), 2) if isinstance(pt, plp.LpAffineExpression) else pt for pt in predicted_temps[i]], index=opt_tp.index)
-            opt_tp[f"target_temp_heater{i}"] = pd.Series(self.optim_conf["heater_config"][i]["desired_temperature"], index=opt_tp.index)
+        for i, predicted_temp in predicted_temps.items():
+            opt_tp[f"predicted_temp_heater{i}"] = pd.Series([round(pt.value(), 2) if isinstance(pt, plp.LpAffineExpression) else pt for pt in predicted_temp], index=opt_tp.index)
+            opt_tp[f"target_temp_heater{i}"] = pd.Series(self.optim_conf["def_load_config"][i]['thermal_config']["desired_temperature"], index=opt_tp.index)
 
         return opt_tp
 

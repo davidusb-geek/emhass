@@ -288,12 +288,12 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             params["passed_data"]["beta"] = beta
 
             if 'def_load_config' in optim_conf:
-                for k in len(optim_conf['def_load_config']):
+                for k in range(len(optim_conf['def_load_config'])):
                     if 'thermal_config' in optim_conf['def_load_config'][k]:
                         if 'heater_desired_temperatures' in runtimeparams and len(runtimeparams['heater_desired_temperatures']) > k:
                             optim_conf["def_load_config"][k]['thermal_config']["desired_temperature"] = runtimeparams["heater_desired_temperatures"][k]
                         if 'heater_start_temperatures' in runtimeparams and len(runtimeparams['heater_start_temperatures']) > k:
-                            optim_conf["heater_config"][k]["start_temperature"] = runtimeparams["heater_start_temperatures"][k]
+                            optim_conf["def_load_config"][k]['thermal_config']["start_temperature"] = runtimeparams["heater_start_temperatures"][k]
 
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
         else:
