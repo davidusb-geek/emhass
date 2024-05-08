@@ -286,6 +286,15 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             else:
                 beta = runtimeparams["beta"]
             params["passed_data"]["beta"] = beta
+
+            if 'def_load_config' in optim_conf:
+                for k in len(optim_conf['def_load_config']):
+                    if 'thermal_config' in optim_conf['def_load_config'][k]:
+                        if 'heater_desired_temperatures' in runtimeparams and len(runtimeparams['heater_desired_temperatures']) > k:
+                            optim_conf["def_load_config"][k]['thermal_config']["desired_temperature"] = runtimeparams["heater_desired_temperatures"][k]
+                        if 'heater_start_temperatures' in runtimeparams and len(runtimeparams['heater_start_temperatures']) > k:
+                            optim_conf["heater_config"][k]["start_temperature"] = runtimeparams["heater_start_temperatures"][k]
+
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
         else:
             params["passed_data"]["prediction_horizon"] = None
@@ -297,8 +306,8 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             params["passed_data"]["alpha"] = None
             params["passed_data"]["beta"] = None
         # Treat passed forecast data lists
-        list_forecast_key = ['pv_power_forecast', 'load_power_forecast', 'load_cost_forecast', 'prod_price_forecast']
-        forecast_methods = ['weather_forecast_method', 'load_forecast_method', 'load_cost_forecast_method', 'prod_price_forecast_method']
+        list_forecast_key = ['pv_power_forecast', 'load_power_forecast', 'load_cost_forecast', 'prod_price_forecast', 'outdoor_temperature_forecast']
+        forecast_methods = ['weather_forecast_method', 'load_forecast_method', 'load_cost_forecast_method', 'prod_price_forecast_method', 'outdoor_temperature_forecast_method']
         for method, forecast_key in enumerate(list_forecast_key):
             if forecast_key in runtimeparams.keys():
                 if type(runtimeparams[forecast_key]) == list and len(runtimeparams[forecast_key]) >= len(forecast_dates):

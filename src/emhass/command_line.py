@@ -363,6 +363,10 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
         df_input_data_dayahead, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
+    if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
+        df_input_data_dayahead["outdoor_temperature_forecast"] = input_data_dict[
+            "params"
+        ]["passed_data"]["outdoor_temperature_forecast"]
     # The specifics params for the MPC at runtime
     prediction_horizon = input_data_dict["params"]["passed_data"]["prediction_horizon"]
     soc_init = input_data_dict["params"]["passed_data"]["soc_init"]
