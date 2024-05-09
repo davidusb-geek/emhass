@@ -249,7 +249,7 @@ class Optimization:
                         * self.optim_conf["def_start_penalty"][k]
                         * P_def_start[k][i]
                         * unit_load_cost[i]
-                        * (P_load[i] + P_def_sum[i])
+                        * self.optim_conf['P_deferrable_nom'][k]
                         for i in set_I
                     )
 
@@ -338,27 +338,42 @@ class Optimization:
                         sense=plp.LpConstraintLE,
                         rhs=0)
                     for i in set_I})
+
             # Treat the number of starts for a deferrable load
+            # P_deferrable < P_def_bin2 * 1 million
+            # P_deferrable must be zero if P_def_bin2 is zero
+            constraints.update({"constraint_pdef{}_start1_{}".format(k, i) :
+                plp.LpConstraint(
+                    e=P_deferrable[k][i] - P_def_bin2[k][i]*M,
+                    sense=plp.LpConstraintLE,
+                    rhs=0)
+                for i in set_I})
+            # P_def_start + P_def_bin2[i-1] >= P_def_bin2[i]
+            # If load is on this cycle (P_def_bin2[i] is 1) then P_def_start must be 1 OR P_def_bin2[i-1] must be 1
+            constraints.update({"constraint_pdef{}_start2_{}".format(k, i):
+                plp.LpConstraint(
+                    e=P_def_start[k][i] - P_def_bin2[k][i] + (P_def_bin2[k][i-1] if i-1 >= 0 else 0),
+                    sense=plp.LpConstraintGE,
+                    rhs=0)
+                for i in set_I})
+            # P_def_bin2[i-1] + P_def_start <= 1
+            # If load started this cycle (P_def_start[i] is 1) then P_def_bin2[i-1] must be 0
+            constraints.update({"constraint_pdef{}_start3_{}".format(k, i):
+                plp.LpConstraint(
+                    e=(P_def_bin2[k][i-1] if i-1 >= 0 else 0) + P_def_start[k][i],
+                    sense=plp.LpConstraintLE,
+                    rhs=1)
+                for i in set_I})
             if self.optim_conf['set_def_constant'][k]:
-                constraints.update({"constraint_pdef{}_start1_{}".format(k, i) : 
-                    plp.LpConstraint(
-                        e=P_deferrable[k][i] - P_def_bin2[k][i]*M,
-                        sense=plp.LpConstraintLE,
-                        rhs=0)
-                    for i in set_I})
-                constraints.update({"constraint_pdef{}_start2_{}".format(k, i): 
-                    plp.LpConstraint(
-                        e=P_def_start[k][i] - P_def_bin2[k][i] + (P_def_bin2[k][i-1] if i-1 >= 0 else 0),
-                        sense=plp.LpConstraintGE,
-                        rhs=0)
-                    for i in set_I})
-                constraints.update({"constraint_pdef{}_start3".format(k) :
+                # P_def_start[i] must be 1 for exactly 1 value of i
+                constraints.update({"constraint_pdef{}_start4".format(k) :
                 plp.LpConstraint(
                     e = plp.lpSum(P_def_start[k][i] for i in set_I),
                     sense = plp.LpConstraintEQ,
                     rhs = 1)
                 })
-                constraints.update({"constraint_pdef{}_start4".format(k) :
+                # P_def_bin2 must be 1 for exactly the correct number of timesteps.
+                constraints.update({"constraint_pdef{}_start5".format(k) :
                 plp.LpConstraint(
                     e = plp.lpSum(P_def_bin2[k][i] for i in set_I),
                     sense = plp.LpConstraintEQ,
