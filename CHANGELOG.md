@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.0 - 2024-05-10
+### Improvement
+- On this new version we now have a new method to train a regression model using Scikit-Learn methods. This is the contribution of @gieljnssns. Check the dedicated section the documentation to this new feature: [https://emhass.readthedocs.io/en/latest/mlregressor.html](https://emhass.readthedocs.io/en/latest/mlregressor.html)
+- Again another bunch of nice improvements by @GeoDerp:
+  - Added Dictionary var containing EMHASS paths
+  - MLForcaster error suppression
+  - Add `freq` as runtime parameter
+  - Improved documentation added README buttons
+- Bumping dependencies:
+  - Bump h5py from 3.10.0 to 3.11.0
+  - Bump myst-parser from 2.0.0 to 3.0.1
+  - Bump skforecast from 0.11.0 to 0.12.0
+
 ## 0.8.6 - 2024-04-07
 ### Fix
 - Fixed bug from forecast out method related to issue 240
