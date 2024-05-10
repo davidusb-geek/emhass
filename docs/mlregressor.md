@@ -44,10 +44,6 @@ runtimeparams = {
 A correct `curl` call to launch a model fit can look like this:
 
 ```bash
-curl -i -H "Content-Type:application/json" -X POST -d '{"csv_file": "heating_prediction.csv", "features": ["degreeday", "solar"], "target": "heating_hours"}' http://localhost:5000/action/regressor-model-fit
-```
-or 
-```bash
 curl -i -H "Content-Type:application/json" -X POST -d  '{"csv_file": "heating_prediction.csv", "features": ["degreeday", "solar"], "target": "hour", "regression_model": "RandomForestRegression", "model_type": "heating_hours_degreeday", "timestamp": "timestamp", "date_features": ["month", "day_of_week"], "new_values": [12.79, 4.766, 1, 2] }' http://localhost:5000/action/regressor-model-fit
 ```
 
@@ -108,9 +104,8 @@ runtimeparams = {
 ```
 
 Pass the correct `model_type` like this:
-
 ```bash
-curl -i -H "Content-Type:application/json" -X POST -d '{"model_type": "heating_hours_degreeday"}' http://localhost:5000/action/regressor-model-predict
+curl -i -H "Content-Type:application/json" -X POST -d '{"new_values": [8.2, 7.23, 2, 6], "model_type": "heating_hours_degreeday" }' http://localhost:5000/action/regressor-model-predict
 ```
 or
 ```bash
