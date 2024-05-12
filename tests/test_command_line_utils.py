@@ -5,24 +5,40 @@ import unittest
 from unittest.mock import patch
 import pandas as pd
 import pathlib, json, yaml, copy
+import numpy as np
 
 from emhass.command_line import set_input_data_dict
-from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim
-from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune
+from emhass.command_line import (
+    perfect_forecast_optim,
+    dayahead_forecast_optim,
+    naive_mpc_optim,
+)
+from emhass.command_line import (
+    forecast_model_fit,
+    forecast_model_predict,
+    forecast_model_tune,
+    regressor_model_fit,
+    regressor_model_predict,
+)
 from emhass.command_line import publish_data
 from emhass.command_line import main
 from emhass import utils
 
-# the root folder
+# create paths
 root = str(utils.get_root(__file__, num_parent=2))
+emhass_conf = {}
+emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
+emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
+emhass_conf['root_path'] = pathlib.Path(root)
+
 # create logger
-logger, ch = utils.get_logger(__name__, root, save_to_file=False)
+logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
 class TestCommandLineUtils(unittest.TestCase):
     
     @staticmethod
     def get_test_params():
-        with open(root+'/config_emhass.yaml', 'r') as file:
+        with open(emhass_conf['config_path'], 'r') as file:
             params = yaml.load(file, Loader=yaml.FullLoader)
         params.update({
             'params_secrets': {
@@ -32,8 +48,12 @@ class TestCommandLineUtils(unittest.TestCase):
                 'lat': 45.83,
                 'lon': 6.86,
                 'alt': 8000.0
-            }
-            })
+            }})
+        #Force config params for testing
+        params["retrieve_hass_conf"]['var_PV'] = 'sensor.power_photovoltaics'
+        params["retrieve_hass_conf"]['var_load'] = 'sensor.power_load_no_var_loads'
+        params["retrieve_hass_conf"]['var_replace_zero'] = ['sensor.power_photovoltaics']
+        params["retrieve_hass_conf"]['var_interp'] = ['sensor.power_photovoltaics','sensor.power_load_no_var_loads'] 
         return params
 
     def setUp(self):
@@ -49,11 +69,9 @@ class TestCommandLineUtils(unittest.TestCase):
         self.params_json = json.dumps(params)
         
     def test_set_input_data_dict(self):
-        config_path = pathlib.Path(root+'/config_emhass.yaml')
-        base_path = str(config_path.parent)
         costfun = 'profit'
         action = 'dayahead-optim'
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, self.params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         self.assertIsInstance(input_data_dict, dict)
         self.assertTrue(input_data_dict['df_input_data'] == None)
@@ -65,14 +83,14 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(input_data_dict['fcst'].optim_conf['load_cost_forecast_method']=='list')
         self.assertTrue(input_data_dict['fcst'].optim_conf['prod_price_forecast_method']=='list')
         action = 'publish-data'
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, self.params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         self.assertTrue(input_data_dict['df_input_data'] == None)
         self.assertTrue(input_data_dict['df_input_data_dayahead'] == None)
         self.assertTrue(input_data_dict['P_PV_forecast'] == None)
         self.assertTrue(input_data_dict['P_load_forecast'] == None)
         action = 'naive-mpc-optim'
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, self.params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         self.assertIsInstance(input_data_dict, dict)
         self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
@@ -89,7 +107,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = copy.deepcopy(json.loads(self.params_json))
         params['passed_data'] = runtimeparams
         params_json = json.dumps(params)
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         self.assertIsInstance(input_data_dict, dict)
         self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
@@ -102,7 +120,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = copy.deepcopy(json.loads(self.params_json))
         params['passed_data'] = runtimeparams
         params_json = json.dumps(params)
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         self.assertIsInstance(input_data_dict, dict)
         self.assertIsInstance(input_data_dict['df_input_data_dayahead'], pd.DataFrame)
@@ -119,18 +137,16 @@ class TestCommandLineUtils(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
         params_json = json.dumps(params)
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         self.assertTrue(input_data_dict['fcst'].optim_conf['load_cost_forecast_method']=='list')
         self.assertTrue(input_data_dict['fcst'].optim_conf['prod_price_forecast_method']=='list')
     
     def test_webserver_get_injection_dict(self):
         # First perform a day-ahead optimization
-        config_path = pathlib.Path(root+'/config_emhass.yaml')
-        base_path = str(config_path.parent)
         costfun = 'profit'
         action = 'dayahead-optim'
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, self.params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
         injection_dict = utils.get_injection_dict(opt_res)
@@ -139,12 +155,10 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(injection_dict['table2'], str)
     
     def test_dayahead_forecast_optim(self):
-        config_path = pathlib.Path(root+'/config_emhass.yaml')
-        base_path = str(config_path.parent)
         costfun = 'profit'
         action = 'dayahead-optim'
         params = copy.deepcopy(json.loads(self.params_json))
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, self.params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
@@ -160,7 +174,7 @@ class TestCommandLineUtils(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
         params_json = json.dumps(params)
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
@@ -171,11 +185,9 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertEqual(opt_res['unit_prod_price'].values.tolist(), runtimeparams['prod_price_forecast'])
         
     def test_perfect_forecast_optim(self):
-        config_path = pathlib.Path(root+'/config_emhass.yaml')
-        base_path = str(config_path.parent)
         costfun = 'profit'
         action = 'perfect-optim'
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, self.params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         opt_res = perfect_forecast_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
@@ -185,12 +197,10 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue('cost_fun_'+input_data_dict["costfun"] in opt_res.columns)
         
     def test_naive_mpc_optim(self):
-        config_path = pathlib.Path(root+'/config_emhass.yaml')
-        base_path = str(config_path.parent)
         costfun = 'profit'
         action = 'naive-mpc-optim'
         params = copy.deepcopy(json.loads(self.params_json))
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, self.params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         opt_res = naive_mpc_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
@@ -207,25 +217,23 @@ class TestCommandLineUtils(unittest.TestCase):
         params['optim_conf']['load_cost_forecast_method'] = 'hp_hc_periods'
         params['optim_conf']['prod_price_forecast_method'] = 'constant'
         params_json = json.dumps(params)
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         opt_res = naive_mpc_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertTrue(opt_res.isnull().sum().sum()==0)
         self.assertTrue(len(opt_res)==10)
         # Test publish after passing the forecast as list
-        config_path = pathlib.Path(root+'/config_emhass.yaml')
-        base_path = str(config_path.parent)
         costfun = 'profit'
         action = 'naive-mpc-optim'
         params = copy.deepcopy(json.loads(self.params_json))
         params['retrieve_hass_conf']['method_ts_round'] = 'first'
         params_json = json.dumps(params)
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, self.runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         opt_res = naive_mpc_optim(input_data_dict, logger, debug=True)
         action = 'publish-data'
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, None, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, params_json, None, 
                                               action, logger, get_data_from_file=True)
         opt_res_first = publish_data(input_data_dict, logger, opt_res_latest=opt_res)
         self.assertTrue(len(opt_res_first)==1)
@@ -234,17 +242,17 @@ class TestCommandLineUtils(unittest.TestCase):
         params['retrieve_hass_conf']['method_ts_round'] = 'last'
         params['optim_conf']['set_use_battery'] = True
         params_json = json.dumps(params)
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, self.runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         opt_res = naive_mpc_optim(input_data_dict, logger, debug=True)
         action = 'publish-data'
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, None, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, params_json, None, 
                                               action, logger, get_data_from_file=True)
         opt_res_last = publish_data(input_data_dict, logger, opt_res_latest=opt_res)
         self.assertTrue(len(opt_res_last)==1)
         # Reproduce when trying to publish data but params=None and runtimeparams=None
         action = 'publish-data'
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, None, None, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, None, None, 
                                               action, logger, get_data_from_file=True)
         opt_res_last = publish_data(input_data_dict, logger, opt_res_latest=opt_res)
         self.assertTrue(len(opt_res_last)==1)
@@ -264,8 +272,6 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(data['attributes']['friendly_name'] == 'EMHASS optimization status')
     
     def test_forecast_model_fit_predict_tune(self):
-        config_path = pathlib.Path(root+'/config_emhass.yaml')
-        base_path = str(config_path.parent)
         costfun = 'profit'
         action = 'forecast-model-fit' # fit, predict and tune methods
         params = TestCommandLineUtils.get_test_params()
@@ -286,13 +292,13 @@ class TestCommandLineUtils(unittest.TestCase):
         # params['passed_data'] = runtimeparams
         params['optim_conf']['load_forecast_method'] = 'skforecast'
         params_json = json.dumps(params)
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         self.assertTrue(input_data_dict['params']['passed_data']['model_type'] == 'load_forecast')
         self.assertTrue(input_data_dict['params']['passed_data']['sklearn_model'] == 'KNeighborsRegressor')
         self.assertTrue(input_data_dict['params']['passed_data']['perform_backtest'] == False)
         # Check that the default params are loaded
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, self.params_json, self.runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, self.params_json, self.runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         self.assertTrue(input_data_dict['params']['passed_data']['model_type'] == 'load_forecast')
         self.assertTrue(input_data_dict['params']['passed_data']['sklearn_model'] == 'KNeighborsRegressor')
@@ -306,7 +312,7 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(injection_dict, dict)
         self.assertIsInstance(injection_dict['figure_0'], str)
         # Test the predict method on observations following the train period
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         df_pred = forecast_model_predict(input_data_dict, logger, use_last_window=False, debug=True, mlf=mlf)
         self.assertIsInstance(df_pred, pd.Series)
@@ -316,46 +322,135 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(df_pred, pd.Series)
         self.assertTrue(df_pred.isnull().sum().sum() == 0)
         # Test the tune method
-        df_pred_optim, mlf = forecast_model_tune(input_data_dict, logger, debug=True, mlf=mlf)
+        df_pred_optim, mlf = forecast_model_tune(
+            input_data_dict, logger, debug=True, mlf=mlf
+        )
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
         self.assertTrue(mlf.is_tuned == True)
-        # Test ijection_dict for tune method on webui
+        # Test injection_dict for tune method on webui
         injection_dict = utils.get_injection_dict_forecast_model_tune(df_fit_pred, mlf)
         self.assertIsInstance(injection_dict, dict)
-        self.assertIsInstance(injection_dict['figure_0'], str)
+        self.assertIsInstance(injection_dict["figure_0"], str)
+
+    def test_regressor_model_fit_predict(self):
+        costfun = "profit"
+        action = "regressor-model-fit"  # fit and predict methods
+        params = TestCommandLineUtils.get_test_params()
+        runtimeparams = {
+            "csv_file": "heating_prediction.csv",
+            "features": ["degreeday", "solar"],
+            "target": "hour",
+            "regression_model": "AdaBoostRegression",
+            "model_type": "heating_hours_degreeday",
+            "timestamp": "timestamp",
+            "date_features": ["month", "day_of_week"],
+            "mlr_predict_entity_id": "sensor.predicted_hours_test",
+            "mlr_predict_unit_of_measurement": "h",
+            "mlr_predict_friendly_name": "Predicted hours",
+            "new_values": [12.79, 4.766, 1, 2],
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params_json = json.dumps(params)
+        input_data_dict = set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        self.assertTrue(
+            input_data_dict["params"]["passed_data"]["model_type"]
+            == "heating_hours_degreeday",
+        )
+        self.assertTrue(
+            input_data_dict["params"]["passed_data"]["regression_model"]
+            == "AdaBoostRegression",
+        )
+        self.assertTrue(
+            input_data_dict["params"]["passed_data"]["csv_file"]
+            == "heating_prediction.csv",
+        )
+        mlr = regressor_model_fit(input_data_dict, logger, debug=True)
+
+        # def test_regressor_model_predict(self):
+        costfun = "profit"
+        action = "regressor-model-predict"  # predict methods
+        params = TestCommandLineUtils.get_test_params()
+        runtimeparams = {
+            "csv_file": "heating_prediction.csv",
+            "features": ["degreeday", "solar"],
+            "target": "hour",
+            "regression_model": "AdaBoostRegression",
+            "model_type": "heating_hours_degreeday",
+            "timestamp": "timestamp",
+            "date_features": ["month", "day_of_week"],
+            "mlr_predict_entity_id": "sensor.predicted_hours_test",
+            "mlr_predict_unit_of_measurement": "h",
+            "mlr_predict_friendly_name": "Predicted hours",
+            "new_values": [12.79, 4.766, 1, 2],
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params["passed_data"] = runtimeparams
+        params_json = json.dumps(params)
+
+        input_data_dict = set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        self.assertTrue(
+            input_data_dict["params"]["passed_data"]["model_type"]
+            == "heating_hours_degreeday",
+        )
+        self.assertTrue(
+            input_data_dict["params"]["passed_data"]["mlr_predict_friendly_name"]
+            == "Predicted hours",
+        )
+
+        regressor_model_predict(input_data_dict, logger, debug=True, mlr=mlr)
+
     
-    @patch('sys.argv', ['main', '--action', 'test', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
+    @patch('sys.argv', ['main', '--action', 'test', '--config', str(emhass_conf['config_path']), 
                         '--debug', 'True'])
     def test_main_wrong_action(self):
         opt_res = main()
         self.assertEqual(opt_res, None)
         
-    @patch('sys.argv', ['main', '--action', 'perfect-optim', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
-                        '--debug', 'True'])
+    @patch('sys.argv', ['main', '--action', 'perfect-optim', '--config', str(emhass_conf['config_path']), 
+                        '--debug', 'True', '--params', json.dumps(get_test_params())])
     def test_main_perfect_forecast_optim(self):
         opt_res = main()
         self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(opt_res.isnull().sum().sum()==0)
+        self.assertTrue(opt_res.isnull().sum().sum() == 0)
         self.assertIsInstance(opt_res.index, pd.core.indexes.datetimes.DatetimeIndex)
-        self.assertIsInstance(opt_res.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-        
+        self.assertIsInstance(
+            opt_res.index.dtype,
+            pd.core.dtypes.dtypes.DatetimeTZDtype,
+        )
+
     def test_main_dayahead_forecast_optim(self):
-        with patch('sys.argv', ['main', '--action', 'dayahead-optim', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
+        with patch('sys.argv', ['main', '--action', 'dayahead-optim', '--config', str(emhass_conf['config_path']), 
                                 '--params', self.params_json, '--runtimeparams', self.runtimeparams_json,
                                 '--debug', 'True']):
             opt_res = main()
         self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(opt_res.isnull().sum().sum()==0)
-        
+        self.assertTrue(opt_res.isnull().sum().sum() == 0)
+
     def test_main_naive_mpc_optim(self):
-        with patch('sys.argv', ['main', '--action', 'naive-mpc-optim', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
+        with patch('sys.argv', ['main', '--action', 'naive-mpc-optim', '--config', str(emhass_conf['config_path']), 
                                 '--params', self.params_json, '--runtimeparams', self.runtimeparams_json,
                                 '--debug', 'True']):
             opt_res = main()
         self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(opt_res.isnull().sum().sum()==0)
-        self.assertTrue(len(opt_res)==10)
-        
+        self.assertTrue(opt_res.isnull().sum().sum() == 0)
+        self.assertTrue(len(opt_res) == 10)
+
     def test_main_forecast_model_fit(self):
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
@@ -371,7 +466,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params['passed_data'] = runtimeparams
         params['optim_conf']['load_forecast_method'] = 'skforecast'
         params_json = json.dumps(params)
-        with patch('sys.argv', ['main', '--action', 'forecast-model-fit', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
+        with patch('sys.argv', ['main', '--action', 'forecast-model-fit', '--config', str(emhass_conf['config_path']), 
                                 '--params', params_json, '--runtimeparams', runtimeparams_json,
                                 '--debug', 'True']):
             df_fit_pred, df_fit_pred_backtest, mlf = main()
@@ -386,20 +481,20 @@ class TestCommandLineUtils(unittest.TestCase):
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
-            "split_date_delta": '48h',
-            "perform_backtest": False
+            "split_date_delta": "48h",
+            "perform_backtest": False,
         }
         runtimeparams_json = json.dumps(runtimeparams)
-        params['passed_data'] = runtimeparams
-        params['optim_conf']['load_forecast_method'] = 'skforecast'
+        params["passed_data"] = runtimeparams
+        params["optim_conf"]["load_forecast_method"] = "skforecast"
         params_json = json.dumps(params)
-        with patch('sys.argv', ['main', '--action', 'forecast-model-predict', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
+        with patch('sys.argv', ['main', '--action', 'forecast-model-predict', '--config', str(emhass_conf['config_path']), 
                                 '--params', params_json, '--runtimeparams', runtimeparams_json,
                                 '--debug', 'True']):
             df_pred = main()
         self.assertIsInstance(df_pred, pd.Series)
         self.assertTrue(df_pred.isnull().sum().sum() == 0)
-        
+
     def test_main_forecast_model_tune(self):
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
@@ -408,25 +503,93 @@ class TestCommandLineUtils(unittest.TestCase):
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
-            "split_date_delta": '48h',
-            "perform_backtest": False
+            "split_date_delta": "48h",
+            "perform_backtest": False,
         }
         runtimeparams_json = json.dumps(runtimeparams)
-        params['passed_data'] = runtimeparams
-        params['optim_conf']['load_forecast_method'] = 'skforecast'
+        params["passed_data"] = runtimeparams
+        params["optim_conf"]["load_forecast_method"] = "skforecast"
         params_json = json.dumps(params)
-        with patch('sys.argv', ['main', '--action', 'forecast-model-tune', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
+        with patch('sys.argv', ['main', '--action', 'forecast-model-tune', '--config', str(emhass_conf['config_path']), 
                                 '--params', params_json, '--runtimeparams', runtimeparams_json,
                                 '--debug', 'True']):
             df_pred_optim, mlf = main()
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
         self.assertTrue(mlf.is_tuned == True)
+
+    def test_main_regressor_model_fit(self):
+        params = copy.deepcopy(json.loads(self.params_json))
+        runtimeparams = {
+            "csv_file": "heating_prediction.csv",
+            "features": ["degreeday", "solar"],
+            "target": "hour",
+            "regression_model": "AdaBoostRegression",
+            "model_type": "heating_hours_degreeday",
+            "timestamp": "timestamp",
+            "date_features": ["month", "day_of_week"],
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params["passed_data"] = runtimeparams
+        params_json = json.dumps(params)
+        with patch(
+            "sys.argv",
+            [
+                "main",
+                "--action",
+                "regressor-model-fit",
+                "--config",
+                str(emhass_conf["config_path"]),
+                "--params",
+                params_json,
+                "--runtimeparams",
+                runtimeparams_json,
+                "--debug",
+                "True",
+            ],
+        ):
+            mlr = main()
+
+    def test_main_regressor_model_predict(self):
+        params = copy.deepcopy(json.loads(self.params_json))
+        runtimeparams = {
+            "csv_file": "heating_prediction.csv",
+            "features": ["degreeday", "solar"],
+            "target": "hour",
+            "regression_model": "AdaBoostRegression",
+            "model_type": "heating_hours_degreeday",
+            "timestamp": "timestamp",
+            "date_features": ["month", "day_of_week"],
+            "new_values": [12.79, 4.766, 1, 2],
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params["passed_data"] = runtimeparams
+        params["optim_conf"]["load_forecast_method"] = "skforecast"
+        params_json = json.dumps(params)
+        with patch(
+            "sys.argv",
+            [
+                "main",
+                "--action",
+                "regressor-model-predict",
+                "--config",
+                str(emhass_conf["config_path"]),
+                "--params",
+                params_json,
+                "--runtimeparams",
+                runtimeparams_json,
+                "--debug",
+                "True",
+            ],
+        ):
+            prediction = main()
+        self.assertIsInstance(prediction, np.ndarray)
+
         
-    @patch('sys.argv', ['main', '--action', 'publish-data', '--config', str(pathlib.Path(root+'/config_emhass.yaml')), 
+    @patch('sys.argv', ['main', '--action', 'publish-data', '--config', str(emhass_conf['config_path']), 
                         '--debug', 'True'])
     def test_main_publish_data(self):
         opt_res = main()
-        self.assertTrue(opt_res==None)
+        self.assertFalse(opt_res.empty)
         
 if __name__ == '__main__':
     unittest.main()

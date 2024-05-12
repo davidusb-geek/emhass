@@ -14,14 +14,15 @@
       "request": "launch",
       "module": "emhass.web_server",
       "console": "integratedTerminal",
-      "purpose":["debug-in-terminal"],
+      "purpose": [
+        "debug-in-terminal"
+      ],
       "justMyCode": true,
       "env": {
         "CONFIG_PATH": "/workspaces/emhass/config_emhass.yaml",
         "OPTIONS_PATH": "/workspaces/emhass/options.json",
         "SECRETS_PATH": "/workspaces/emhass/secrets_emhass.yaml",
         "DATA_PATH": "/workspaces/emhass/data/",
-        "LOGGING_LEVEL": "DEBUG"
       }
     },
     {
@@ -30,8 +31,15 @@
       "request": "launch",
       "module": "emhass.web_server",
       "console": "integratedTerminal",
-      "args": ["--addon", "true",  "--no_response", "true"],
-      "purpose":["debug-in-terminal"],
+      "args": [
+        "--addon",
+        "true",
+        "--no_response",
+        "true"
+      ],
+      "purpose": [
+        "debug-in-terminal"
+      ],
       "justMyCode": true,
       "env": {
         "CONFIG_PATH": "/workspaces/emhass/config_emhass.yaml",
@@ -44,9 +52,7 @@
         "LAT": "45.83", //optional change
         "LON": "6.86", //optional change
         "ALT": "4807.8", //optional change
-        "LOGGING_LEVEL": "DEBUG" //optional change
       },
-      
-  }
+    }
   ]
 }

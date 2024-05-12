@@ -7,10 +7,10 @@ secrets_emhass.yaml
 .vscode/launch.json
 .vscode/settings.json
 .vscode/tasks.json
-*.csv
 *.html
 *.pkl
 data/actionLogs.txt
+**/app
 
 
 # Byte-compiled / optimized / DLL files

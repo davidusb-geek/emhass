@@ -9,7 +9,27 @@
                 "isDefault": true
             },
             "args": [
-                "install", "--no-deps", "--force-reinstall", "."
+                "install",
+                "--no-deps",
+                "--force-reinstall",
+                "--editable",
+                "."
+            ],
+            "presentation": {
+                "echo": true,
+                "panel": "shared",
+                "focus": true
+            }
+        },
+        {
+            "label": "EMHASS install with dependencies",
+            "command": "pip3",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "args": [
+                "install", "--force-reinstall", "."
             ],
             "presentation": {
                 "echo": true,

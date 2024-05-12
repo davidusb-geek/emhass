@@ -13,6 +13,7 @@ from distutils.util import strtobool
 from emhass.command_line import set_input_data_dict
 from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim
 from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune
+from emhass.command_line import regressor_model_fit, regressor_model_predict
 from emhass.command_line import publish_data
 from emhass.utils import get_injection_dict, get_injection_dict_forecast_model_fit, \
     get_injection_dict_forecast_model_tune, build_params
@@ -25,8 +26,8 @@ def checkFileLog(refString=None):
     if (refString is not None): 
        logArray = grabLog(refString) #grab reduced log array
     else: 
-        if ((data_path / 'actionLogs.txt')).exists():
-            with open(str(data_path / 'actionLogs.txt'), "r") as fp:
+        if ((emhass_conf['data_path'] / 'actionLogs.txt')).exists():
+            with open(str(emhass_conf['data_path'] / 'actionLogs.txt'), "r") as fp:
                     logArray = fp.readlines()
     for logString in logArray:
             if (logString.split(' ', 1)[0] == "ERROR"):
@@ -37,8 +38,8 @@ def checkFileLog(refString=None):
 def grabLog(refString): 
     isFound = []
     output = []
-    if ((data_path / 'actionLogs.txt')).exists():
-            with open(str(data_path / 'actionLogs.txt'), "r") as fp:
+    if ((emhass_conf['data_path'] / 'actionLogs.txt')).exists():
+            with open(str(emhass_conf['data_path'] / 'actionLogs.txt'), "r") as fp:
                     logArray = fp.readlines()
             for x in range(len(logArray)-1): #find all matches and log key in isFound
                 if (re.search(refString,logArray[x])):
@@ -50,8 +51,8 @@ def grabLog(refString):
 
 #clear the log file
 def clearFileLog(): 
-    if ((data_path / 'actionLogs.txt')).exists():
-        with open(str(data_path / 'actionLogs.txt'), "w") as fp:
+    if ((emhass_conf['data_path'] / 'actionLogs.txt')).exists():
+        with open(str(emhass_conf['data_path'] / 'actionLogs.txt'), "w") as fp:
             fp.truncate()    
 
 #initial index page render
@@ -63,8 +64,8 @@ def index():
     env = Environment(loader=file_loader)
     template = env.get_template('index.html')
     # Load cache dict
-    if (data_path / 'injection_dict.pkl').exists():
-        with open(str(data_path / 'injection_dict.pkl'), "rb") as fid:
+    if (emhass_conf['data_path'] / 'injection_dict.pkl').exists():
+        with open(str(emhass_conf['data_path'] / 'injection_dict.pkl'), "rb") as fid:
             injection_dict = pickle.load(fid)
     else:
         app.logger.warning("The data container dictionary is empty... Please launch an optimization task")
@@ -85,8 +86,8 @@ def template_action(action_name):
         file_loader = PackageLoader('emhass', 'templates')
         env = Environment(loader=file_loader)
         template = env.get_template('template.html')
-        if (data_path / 'injection_dict.pkl').exists():
-            with open(str(data_path / 'injection_dict.pkl'), "rb") as fid:
+        if (emhass_conf['data_path'] / 'injection_dict.pkl').exists():
+            with open(str(emhass_conf['data_path'] / 'injection_dict.pkl'), "rb") as fid:
                 injection_dict = pickle.load(fid)
         else:
             app.logger.warning("The data container dictionary is empty... Please launch an optimization task")
@@ -96,8 +97,8 @@ def template_action(action_name):
 #post actions 
 @app.route('/action/<action_name>', methods=['POST'])
 def action_call(action_name):
-    with open(str(data_path / 'params.pkl'), "rb") as fid:
-        config_path, params = pickle.load(fid)
+    with open(str(emhass_conf['data_path'] / 'params.pkl'), "rb") as fid:
+        emhass_conf['config_path'], params = pickle.load(fid)
     runtimeparams = request.get_json(force=True)
     params = json.dumps(params)
     if runtimeparams is not None and runtimeparams != '{}':
@@ -105,7 +106,7 @@ def action_call(action_name):
     runtimeparams = json.dumps(runtimeparams)
     ActionStr = " >> Setting input data dict"
     app.logger.info(ActionStr)
-    input_data_dict = set_input_data_dict(config_path, str(data_path), costfun, 
+    input_data_dict = set_input_data_dict(emhass_conf, costfun, 
         params, runtimeparams, action_name, app.logger)
     if not input_data_dict:
         return make_response(grabLog(ActionStr), 400)
@@ -122,7 +123,7 @@ def action_call(action_name):
         app.logger.info(ActionStr)
         opt_res = perfect_forecast_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
-        with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
+        with open(str(emhass_conf['data_path'] / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action perfect-optim executed... \n'
         if not checkFileLog(ActionStr):
@@ -133,7 +134,7 @@ def action_call(action_name):
         app.logger.info(ActionStr)
         opt_res = dayahead_forecast_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
-        with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
+        with open(str(emhass_conf['data_path'] / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action dayahead-optim executed... \n'
         if not checkFileLog(ActionStr):
@@ -144,7 +145,7 @@ def action_call(action_name):
         app.logger.info(ActionStr)
         opt_res = naive_mpc_optim(input_data_dict, app.logger)
         injection_dict = get_injection_dict(opt_res)
-        with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
+        with open(str(emhass_conf['data_path'] / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action naive-mpc-optim executed... \n'
         if not checkFileLog(ActionStr):
@@ -156,7 +157,7 @@ def action_call(action_name):
         df_fit_pred, _, mlf = forecast_model_fit(input_data_dict, app.logger)
         injection_dict = get_injection_dict_forecast_model_fit(
             df_fit_pred, mlf)
-        with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
+        with open(str(emhass_conf['data_path'] / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action forecast-model-fit executed... \n'
         if not checkFileLog(ActionStr):
@@ -173,7 +174,7 @@ def action_call(action_name):
         injection_dict['title'] = '<h2>Custom machine learning forecast model predict</h2>'
         injection_dict['subsubtitle0'] = '<h4>Performed a prediction using a pre-trained model</h4>'
         injection_dict['table1'] = table1
-        with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
+        with open(str(emhass_conf['data_path'] / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action forecast-model-predict executed... \n'
         if not checkFileLog(ActionStr):
@@ -187,9 +188,25 @@ def action_call(action_name):
             return make_response(grabLog(ActionStr), 400)
         injection_dict = get_injection_dict_forecast_model_tune(
             df_pred_optim, mlf)
-        with open(str(data_path / 'injection_dict.pkl'), "wb") as fid:
+        with open(str(emhass_conf['data_path'] / 'injection_dict.pkl'), "wb") as fid:
             pickle.dump(injection_dict, fid)
         msg = f'EMHASS >> Action forecast-model-tune executed... \n'
+        if not checkFileLog(ActionStr):
+            return make_response(msg, 201)
+        return make_response(grabLog(ActionStr), 400)
+    elif action_name == 'regressor-model-fit':
+        ActionStr = " >> Performing a machine learning regressor fit..."
+        app.logger.info(ActionStr)
+        regressor_model_fit(input_data_dict, app.logger)
+        msg = f'EMHASS >> Action regressor-model-fit executed... \n'
+        if not checkFileLog(ActionStr):
+            return make_response(msg, 201)
+        return make_response(grabLog(ActionStr), 400)
+    elif action_name == 'regressor-model-predict':
+        ActionStr = " >> Performing a machine learning regressor predict..."
+        app.logger.info(ActionStr)
+        regressor_model_predict(input_data_dict, app.logger)
+        msg = f'EMHASS >> Action regressor-model-predict executed... \n'
         if not checkFileLog(ActionStr):
             return make_response(msg, 201)
         return make_response(grabLog(ActionStr), 400)
@@ -253,8 +270,13 @@ if __name__ == "__main__":
         if options.get('data_path', None) != None and options.get('data_path', None) != "default":
             DATA_PATH = options.get('data_path', None);   
 
+    #save paths to dictionary
     config_path = Path(CONFIG_PATH)
     data_path = Path(DATA_PATH)
+    emhass_conf = {}
+    emhass_conf['config_path'] = config_path
+    emhass_conf['data_path'] = data_path
+    emhass_conf['root_path'] = Path(config_path).parent #assume root is parent of config_path
     
     # Read the example default config file
     if config_path.exists():
@@ -274,8 +296,8 @@ if __name__ == "__main__":
     web_ui_url = '0.0.0.0'
 
     # Initialize this global dict
-    if (data_path / 'injection_dict.pkl').exists():
-        with open(str(data_path / 'injection_dict.pkl'), "rb") as fid:
+    if (emhass_conf['data_path'] / 'injection_dict.pkl').exists():
+        with open(str(emhass_conf['data_path'] / 'injection_dict.pkl'), "rb") as fid:
             injection_dict = pickle.load(fid)
     else:
         injection_dict = None
@@ -384,11 +406,11 @@ if __name__ == "__main__":
         params = build_params(params, params_secrets, options, 1, app.logger)
     else:
         params = build_params(params, params_secrets, options, args.addon, app.logger)
-    if os.path.exists(str(data_path)): 
-        with open(str(data_path / 'params.pkl'), "wb") as fid:
+    if os.path.exists(str(emhass_conf['data_path'])): 
+        with open(str(emhass_conf['data_path'] / 'params.pkl'), "wb") as fid:
             pickle.dump((config_path, params), fid)
     else: 
-        raise Exception("missing: " + str(data_path))        
+        raise Exception("missing: " + str(emhass_conf['data_path']))   
 
     # Define logger
     #stream logger
@@ -396,7 +418,7 @@ if __name__ == "__main__":
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     ch.setFormatter(formatter)
     #Action File logger
-    fileLogger = logging.FileHandler(str(data_path / 'actionLogs.txt')) 
+    fileLogger = logging.FileHandler(str(emhass_conf['data_path'] / 'actionLogs.txt')) 
     formatter = logging.Formatter('%(levelname)s - %(name)s - %(message)s')
     fileLogger.setFormatter(formatter) # add format to Handler
     if logging_level == "DEBUG":
@@ -428,7 +450,7 @@ if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     app.logger.info("Launching the emhass webserver at: http://"+web_ui_url+":"+str(port))
     app.logger.info("Home Assistant data fetch will be performed using url: "+hass_url)
-    app.logger.info("The data path is: "+str(data_path))
+    app.logger.info("The data path is: "+str(emhass_conf['data_path']))
     try:
         app.logger.info("Using core emhass version: "+version('emhass'))
     except PackageNotFoundError:

@@ -17,14 +17,19 @@ from emhass import utils
 
 # the root folder
 root = str(utils.get_root(__file__, num_parent=2))
+emhass_conf = {}
+emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
+emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
+emhass_conf['root_path'] = pathlib.Path(root)
+
 # create logger
-logger, ch = utils.get_logger(__name__, root, save_to_file=False)
+logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
 class TestForecast(unittest.TestCase):
     
     @staticmethod
     def get_test_params():
-        with open(root+'/config_emhass.yaml', 'r') as file:
+        with open(emhass_conf['config_path'], 'r') as file:
             params = yaml.load(file, Loader=yaml.FullLoader)
         params.update({
             'params_secrets': {
@@ -41,15 +46,19 @@ class TestForecast(unittest.TestCase):
     def setUp(self):
         self.get_data_from_file = True
         params = None
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(pathlib.Path(root) / 'config_emhass.yaml', use_secrets=False)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(emhass_conf, use_secrets=False)
         self.retrieve_hass_conf, self.optim_conf, self.plant_conf = \
             retrieve_hass_conf, optim_conf, plant_conf
         self.rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                                self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
-                               params, root, logger)
+                               params, emhass_conf, logger)
         if self.get_data_from_file:
-            with open(pathlib.Path(root) / 'data' / 'test_df_final.pkl', 'rb') as inp:
+            with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
                 self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
+            self.retrieve_hass_conf['var_load'] = str(self.var_list[0])
+            self.retrieve_hass_conf['var_PV'] = str(self.var_list[1])
+            self.retrieve_hass_conf['var_interp'] = [retrieve_hass_conf['var_PV'], retrieve_hass_conf['var_load']]
+            self.retrieve_hass_conf['var_replace_zero'] = [retrieve_hass_conf['var_PV']]
         else:
             self.days_list = utils.get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
             self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
@@ -62,18 +71,18 @@ class TestForecast(unittest.TestCase):
         self.df_input_data = self.rh.df_final.copy()
         
         self.fcst = Forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
-                             params, root, logger, get_data_from_file=self.get_data_from_file)
+                             params, emhass_conf, logger, get_data_from_file=self.get_data_from_file)
         # The default for test is csv read
         self.df_weather_scrap = self.fcst.get_weather_forecast(method='csv')
         self.P_PV_forecast = self.fcst.get_power_from_weather(self.df_weather_scrap)
         self.P_load_forecast = self.fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
         self.df_input_data_dayahead = pd.concat([self.P_PV_forecast, self.P_load_forecast], axis=1)
         self.df_input_data_dayahead.columns = ['P_PV_forecast', 'P_load_forecast']
-        self.opt = Optimization(retrieve_hass_conf, optim_conf, plant_conf, 
+        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price, 
-                                'profit', root, logger)
+                                'profit', emhass_conf, logger)
         self.input_data_dict = {
-            'root': root,
+            'emhass_conf': emhass_conf,
             'retrieve_hass_conf': self.retrieve_hass_conf,
             'df_input_data': self.df_input_data,
             'df_input_data_dayahead': self.df_input_data_dayahead,
@@ -106,7 +115,7 @@ class TestForecast(unittest.TestCase):
     
     def test_get_weather_forecast_scrapper_method_mock(self):
         with requests_mock.mock() as m:
-            data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_scrapper_get_method.pbz2')), "rb")
+            data = bz2.BZ2File(str(emhass_conf['data_path'] / 'test_response_scrapper_get_method.pbz2'), "rb")
             data = cPickle.load(data)
             get_url = "https://clearoutside.com/forecast/"+str(round(self.fcst.lat, 2))+"/"+str(round(self.fcst.lon, 2))+"?desktop=true"
             m.get(get_url, content=data)
@@ -139,7 +148,7 @@ class TestForecast(unittest.TestCase):
 
     def test_get_weather_forecast_solcast_method_mock(self):
         with requests_mock.mock() as m:
-            data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_solcast_get_method.pbz2')), "rb")
+            data = bz2.BZ2File(str(emhass_conf['data_path'] / 'test_response_solcast_get_method.pbz2'), "rb")
             data = cPickle.load(data)
             get_url = "https://api.solcast.com.au/rooftop_sites/123456/forecasts?hours=24"
             m.get(get_url, json=data.json())
@@ -154,7 +163,7 @@ class TestForecast(unittest.TestCase):
         
     def test_get_weather_forecast_solarforecast_method_mock(self):
         with requests_mock.mock() as m:
-            data = bz2.BZ2File(str(pathlib.Path(root+'/data/test_response_solarforecast_get_method.pbz2')), "rb")
+            data = bz2.BZ2File(str(emhass_conf['data_path'] / 'test_response_solarforecast_get_method.pbz2'), "rb")
             data = cPickle.load(data)
             for i in range(len(self.plant_conf['module_model'])):
                 get_url = "https://api.forecast.solar/estimate/"+str(round(self.fcst.lat, 2))+"/"+str(round(self.fcst.lon, 2))+\
@@ -171,7 +180,7 @@ class TestForecast(unittest.TestCase):
                                 int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
 
     def test_get_forecasts_with_lists(self):
-        with open(root+'/config_emhass.yaml', 'r') as file:
+        with open(emhass_conf['config_path'], 'r') as file:
             params = yaml.load(file, Loader=yaml.FullLoader)
         params.update({
             'params_secrets': {
@@ -192,7 +201,7 @@ class TestForecast(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
         params_json = json.dumps(params)
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), 
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(emhass_conf, 
                                                                     use_secrets=False, params=params_json)
         set_type = "dayahead-optim"
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
@@ -200,10 +209,14 @@ class TestForecast(unittest.TestCase):
             optim_conf, plant_conf, set_type, logger)
         rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
                           retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
-                          params, root, logger)
+                          params, emhass_conf, logger)
         if self.get_data_from_file:
-            with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'rb') as inp:
+            with open((emhass_conf['data_path'] / 'test_df_final.pkl'), 'rb') as inp:
                 rh.df_final, days_list, var_list = pickle.load(inp)
+            retrieve_hass_conf['var_load'] = str(self.var_list[0])
+            retrieve_hass_conf['var_PV'] = str(self.var_list[1])
+            retrieve_hass_conf['var_interp'] = [retrieve_hass_conf['var_PV'], retrieve_hass_conf['var_load']]
+            retrieve_hass_conf['var_replace_zero'] = [retrieve_hass_conf['var_PV']]
         else:
             days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
             var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
@@ -215,7 +228,7 @@ class TestForecast(unittest.TestCase):
                         var_interp = retrieve_hass_conf['var_interp'])
         df_input_data = rh.df_final.copy()
         fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf, 
-                        params_json, root, logger, get_data_from_file=True)
+                        params_json, emhass_conf, logger, get_data_from_file=True)
         df_input_data = copy.deepcopy(df_input_data).iloc[-49:-1]
         P_PV_forecast = fcst.get_weather_forecast(method='list')
         df_input_data.index = P_PV_forecast.index
@@ -246,7 +259,7 @@ class TestForecast(unittest.TestCase):
         self.assertTrue(df_input_data['unit_prod_price'].values[0] == 1)
         self.assertTrue(df_input_data['unit_prod_price'].values[-1] == 48)
         # Test with longer lists
-        with open(root+'/config_emhass.yaml', 'r') as file:
+        with open(emhass_conf['config_path'], 'r') as file:
             params = yaml.load(file, Loader=yaml.FullLoader)
         params.update({
             'params_secrets': {
@@ -267,14 +280,14 @@ class TestForecast(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
         params_json = json.dumps(params)
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), 
-                                                                          use_secrets=False, params=params_json)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(emhass_conf, 
+                                                                    use_secrets=False, params=params_json)
         optim_conf['delta_forecast'] = pd.Timedelta(days=3)
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             runtimeparams_json, params_json, retrieve_hass_conf, 
             optim_conf, plant_conf, set_type, logger)
         fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf, 
-                        params_json, root, logger, get_data_from_file=True)
+                        params_json, emhass_conf, logger, get_data_from_file=True)
         P_PV_forecast = fcst.get_weather_forecast(method='list')
         self.assertIsInstance(P_PV_forecast, type(pd.DataFrame()))
         self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
@@ -306,7 +319,7 @@ class TestForecast(unittest.TestCase):
         self.assertTrue(df_input_data_dayahead[fcst.var_prod_price].iloc[-1] == 3*48)
         
     def test_get_forecasts_with_lists_special_case(self):
-        with open(root+'/config_emhass.yaml', 'r') as file:
+        with open(emhass_conf['config_path'], 'r') as file:
             params = yaml.load(file, Loader=yaml.FullLoader)
         params.update({
             'params_secrets': {
@@ -325,7 +338,7 @@ class TestForecast(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
         params_json = json.dumps(params)
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(pathlib.Path(root+'/config_emhass.yaml'), 
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(emhass_conf, 
                                                                     use_secrets=False, params=params_json)
         set_type = "dayahead-optim"
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
@@ -333,10 +346,14 @@ class TestForecast(unittest.TestCase):
             optim_conf, plant_conf, set_type, logger)
         rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
                           retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
-                          params, root, logger)
+                          params, emhass_conf, logger)
         if self.get_data_from_file:
-            with open(pathlib.Path(root+'/data/test_df_final.pkl'), 'rb') as inp:
+            with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
                 rh.df_final, days_list, var_list = pickle.load(inp)
+            retrieve_hass_conf['var_load'] = str(self.var_list[0])
+            retrieve_hass_conf['var_PV'] = str(self.var_list[1])
+            retrieve_hass_conf['var_interp'] = [retrieve_hass_conf['var_PV'], retrieve_hass_conf['var_load']]
+            retrieve_hass_conf['var_replace_zero'] = [retrieve_hass_conf['var_PV']]
         else:
             days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
             var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
@@ -348,7 +365,7 @@ class TestForecast(unittest.TestCase):
                         var_interp = retrieve_hass_conf['var_interp'])
         df_input_data = rh.df_final.copy()
         fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf, 
-                        params_json, root, logger, get_data_from_file=True)
+                        params_json, emhass_conf, logger, get_data_from_file=True)
         df_input_data = copy.deepcopy(df_input_data).iloc[-49:-1]
         P_PV_forecast = fcst.get_weather_forecast()
         df_input_data.index = P_PV_forecast.index
@@ -380,7 +397,7 @@ class TestForecast(unittest.TestCase):
         self.plant_conf['modules_per_string'] = [8, 8]
         self.plant_conf['strings_per_inverter'] = [1, 1]
         self.fcst = Forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
-                             None, root, logger, get_data_from_file=self.get_data_from_file)
+                             None, emhass_conf, logger, get_data_from_file=self.get_data_from_file)
         df_weather_scrap = self.fcst.get_weather_forecast(method='csv')
         P_PV_forecast = self.fcst.get_power_from_weather(df_weather_scrap)
         self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
@@ -392,7 +409,7 @@ class TestForecast(unittest.TestCase):
         params = json.dumps({'passed_data':{'alpha':0.5,'beta':0.5}})
         df_input_data = self.input_data_dict['rh'].df_final.copy()
         self.fcst = Forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
-                             params, root, logger, get_data_from_file=self.get_data_from_file)
+                             params, emhass_conf, logger, get_data_from_file=self.get_data_from_file)
         df_weather_scrap = self.fcst.get_weather_forecast(method='csv')
         P_PV_forecast = self.fcst.get_power_from_weather(df_weather_scrap, set_mix_forecast=True, df_now=df_input_data)
         self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
@@ -413,7 +430,7 @@ class TestForecast(unittest.TestCase):
         params = json.dumps({'passed_data':{'alpha':0.5,'beta':0.5}})
         df_input_data = self.input_data_dict['rh'].df_final.copy()
         self.fcst = Forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
-                             params, root, logger, get_data_from_file=self.get_data_from_file)
+                             params, emhass_conf, logger, get_data_from_file=self.get_data_from_file)
         P_load_forecast = self.fcst.get_load_forecast(set_mix_forecast=True, df_now=df_input_data)
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
         self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
@@ -431,8 +448,6 @@ class TestForecast(unittest.TestCase):
     def test_get_load_forecast_mlforecaster(self):
         params = TestForecast.get_test_params()
         params_json = json.dumps(params)
-        config_path = pathlib.Path(root+'/config_emhass.yaml')
-        base_path = str(config_path.parent)
         costfun = 'profit'
         action = 'forecast-model-fit' # fit, predict and tune methods
         params = copy.deepcopy(json.loads(params_json))
@@ -447,14 +462,14 @@ class TestForecast(unittest.TestCase):
         params['passed_data'] = runtimeparams
         params['optim_conf']['load_forecast_method'] = 'mlforecaster'
         params_json = json.dumps(params)
-        input_data_dict = set_input_data_dict(config_path, base_path, costfun, params_json, runtimeparams_json, 
+        input_data_dict = set_input_data_dict(emhass_conf, costfun, params_json, runtimeparams_json, 
                                               action, logger, get_data_from_file=True)
         data = copy.deepcopy(input_data_dict['df_input_data'])
         model_type = input_data_dict['params']['passed_data']['model_type']
         var_model = input_data_dict['params']['passed_data']['var_model']
         sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
         num_lags = input_data_dict['params']['passed_data']['num_lags']
-        mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, root, logger)
+        mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, emhass_conf, logger)
         mlf.fit()
         P_load_forecast = input_data_dict['fcst'].get_load_forecast(method="mlforecaster", use_last_window=False, 
                                                                     debug=True, mlf=mlf)
@@ -470,7 +485,7 @@ class TestForecast(unittest.TestCase):
         self.assertTrue(self.fcst.var_load_cost in df_input_data.columns)
         self.assertTrue(df_input_data.isnull().sum().sum()==0)
         df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data, method='csv',
-                                                         csv_path='/data/data_load_cost_forecast.csv')
+                                                         csv_path='data_load_cost_forecast.csv')
         self.assertTrue(self.fcst.var_load_cost in df_input_data.columns)
         self.assertTrue(df_input_data.isnull().sum().sum()==0)
         
@@ -479,7 +494,7 @@ class TestForecast(unittest.TestCase):
         self.assertTrue(self.fcst.var_prod_price in df_input_data.columns)
         self.assertTrue(df_input_data.isnull().sum().sum()==0)
         df_input_data = self.fcst.get_prod_price_forecast(self.df_input_data, method='csv',
-                                                          csv_path='/data/data_load_cost_forecast.csv')
+                                                          csv_path='data_load_cost_forecast.csv')
         self.assertTrue(self.fcst.var_prod_price in df_input_data.columns)
         self.assertTrue(df_input_data.isnull().sum().sum()==0)
         

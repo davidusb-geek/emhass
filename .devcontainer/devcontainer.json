@@ -8,9 +8,16 @@
 	},
 	"features": {
 		"ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
-	}
+	},
 	//"appPort": ["5000:5000"] //used to access app from external device (User discretion advised)
-	
+
+	"customizations": {
+		// Configure properties specific to VS Code.
+		"vscode": {
+		  // Add the IDs of extensions you want installed when the container is created.
+		  "extensions": ["ms-python.debugpy", "ms-python.python"]
+		}
+	  }
 	
 	
 	// Features to add to the dev container. More info: https://containers.dev/features.
