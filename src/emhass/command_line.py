@@ -24,12 +24,12 @@ from emhass.machine_learning_regressor import MLRegressor
 from emhass import utils
 
 
-def set_input_data_dict(emhass_conf: dict, costfun: str, 
-    params: str, runtimeparams: str, set_type: str, logger: logging.Logger,
-    get_data_from_file: Optional[bool] = False) -> dict:
+def set_input_data_dict(emhass_conf: dict, costfun: str,
+                        params: str, runtimeparams: str, set_type: str, logger: logging.Logger,
+                        get_data_from_file: Optional[bool] = False) -> dict:
     """
     Set up some of the data needed for the different actions.
-    
+
     :param emhass_conf: Dictionary containing the needed emhass paths
     :type emhass_conf: dict
     :param costfun: The type of cost function to use for optimization problem
@@ -51,25 +51,18 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
     logger.info("Setting up needed data")
     # Parsing yaml
     retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-        emhass_conf, use_secrets=not(get_data_from_file), params=params)
+        emhass_conf, use_secrets=not (get_data_from_file), params=params)
     # Treat runtimeparams
     params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
-        runtimeparams,
-        params,
-        retrieve_hass_conf,
-        optim_conf,
-        plant_conf,
-        set_type,
-        logger,
-    )
+        runtimeparams, params, retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
     # Define main objects
-    rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
-                      retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'], 
+    rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'],
+                      retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
                       params, emhass_conf, logger, get_data_from_file=get_data_from_file)
     fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
                     params, emhass_conf, logger, get_data_from_file=get_data_from_file)
-    opt = Optimization(retrieve_hass_conf, optim_conf, plant_conf, 
-                       fcst.var_load_cost, fcst.var_prod_price, 
+    opt = Optimization(retrieve_hass_conf, optim_conf, plant_conf,
+                       fcst.var_load_cost, fcst.var_prod_price,
                        costfun, emhass_conf, logger)
     # Perform setup based on type of action
     if set_type == "perfect-optim":
@@ -79,25 +72,22 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
                 rh.df_final, days_list, var_list = pickle.load(inp)
             retrieve_hass_conf['var_load'] = str(var_list[0])
             retrieve_hass_conf['var_PV'] = str(var_list[1])
-            retrieve_hass_conf['var_interp'] = [retrieve_hass_conf['var_PV'], retrieve_hass_conf['var_load']]
-            retrieve_hass_conf['var_replace_zero'] = [retrieve_hass_conf['var_PV']]
+            retrieve_hass_conf['var_interp'] = [
+                retrieve_hass_conf['var_PV'], retrieve_hass_conf['var_load']]
+            retrieve_hass_conf['var_replace_zero'] = [
+                retrieve_hass_conf['var_PV']]
         else:
-            days_list = utils.get_days_list(retrieve_hass_conf["days_to_retrieve"])
-            var_list = [retrieve_hass_conf["var_load"], retrieve_hass_conf["var_PV"]]
-            if not rh.get_data(
-                days_list,
-                var_list,
-                minimal_response=False,
-                significant_changes_only=False,
-            ):
+            days_list = utils.get_days_list(
+                retrieve_hass_conf["days_to_retrieve"])
+            var_list = [retrieve_hass_conf["var_load"],
+                        retrieve_hass_conf["var_PV"]]
+            if not rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False):
                 return False
-        if not rh.prepare_data(
-            retrieve_hass_conf["var_load"],
-            load_negative=retrieve_hass_conf["load_negative"],
-            set_zero_min=retrieve_hass_conf["set_zero_min"],
-            var_replace_zero=retrieve_hass_conf["var_replace_zero"],
-            var_interp=retrieve_hass_conf["var_interp"],
-        ):
+        if not rh.prepare_data(retrieve_hass_conf["var_load"],
+                               load_negative=retrieve_hass_conf["load_negative"],
+                               set_zero_min=retrieve_hass_conf["set_zero_min"],
+                               var_replace_zero=retrieve_hass_conf["var_replace_zero"],
+                               var_interp=retrieve_hass_conf["var_interp"]):
             return False
         df_input_data = rh.df_final.copy()
         # What we don't need for this type of action
@@ -105,30 +95,23 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
     elif set_type == "dayahead-optim":
         # Get PV and load forecasts
         df_weather = fcst.get_weather_forecast(
-            method=optim_conf["weather_forecast_method"]
-        )
+            method=optim_conf["weather_forecast_method"])
         P_PV_forecast = fcst.get_power_from_weather(df_weather)
-        P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
-        if isinstance(P_load_forecast,bool) and not P_load_forecast:
-            logger.error("Unable to get sensor power photovoltaics, or sensor power load no var loads. Check HA sensors and their daily data")
+        P_load_forecast = fcst.get_load_forecast(
+            method=optim_conf['load_forecast_method'])
+        if isinstance(P_load_forecast, bool) and not P_load_forecast:
+            logger.error(
+                "Unable to get sensor power photovoltaics, or sensor power load no var loads. Check HA sensors and their daily data")
             return False
-        df_input_data_dayahead = pd.DataFrame(
-            np.transpose(np.vstack([P_PV_forecast.values, P_load_forecast.values])),
-            index=P_PV_forecast.index,
-            columns=["P_PV_forecast", "P_load_forecast"],
-        )
+        df_input_data_dayahead = pd.DataFrame(np.transpose(np.vstack(
+            [P_PV_forecast.values, P_load_forecast.values])), index=P_PV_forecast.index,
+            columns=["P_PV_forecast", "P_load_forecast"])
         df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
         params = json.loads(params)
-        if (
-            "prediction_horizon" in params["passed_data"]
-            and params["passed_data"]["prediction_horizon"] is not None
-        ):
+        if ("prediction_horizon" in params["passed_data"] and params["passed_data"]["prediction_horizon"] is not None):
             prediction_horizon = params["passed_data"]["prediction_horizon"]
             df_input_data_dayahead = copy.deepcopy(df_input_data_dayahead)[
-                df_input_data_dayahead.index[0] : df_input_data_dayahead.index[
-                    prediction_horizon - 1
-                ]
-            ]
+                df_input_data_dayahead.index[0]: df_input_data_dayahead.index[prediction_horizon - 1]]
         # What we don't need for this type of action
         df_input_data, days_list = None, None
     elif set_type == "naive-mpc-optim":
@@ -138,53 +121,43 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
                 rh.df_final, days_list, var_list = pickle.load(inp)
             retrieve_hass_conf['var_load'] = str(var_list[0])
             retrieve_hass_conf['var_PV'] = str(var_list[1])
-            retrieve_hass_conf['var_interp'] = [retrieve_hass_conf['var_PV'], retrieve_hass_conf['var_load']]
-            retrieve_hass_conf['var_replace_zero'] = [retrieve_hass_conf['var_PV']]
+            retrieve_hass_conf['var_interp'] = [
+                retrieve_hass_conf['var_PV'], retrieve_hass_conf['var_load']]
+            retrieve_hass_conf['var_replace_zero'] = [
+                retrieve_hass_conf['var_PV']]
         else:
             days_list = utils.get_days_list(1)
-            var_list = [retrieve_hass_conf["var_load"], retrieve_hass_conf["var_PV"]]
-            if not rh.get_data(
-                days_list,
-                var_list,
-                minimal_response=False,
-                significant_changes_only=False,
-            ):
+            var_list = [retrieve_hass_conf["var_load"],
+                        retrieve_hass_conf["var_PV"]]
+            if not rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False):
                 return False
-        if not rh.prepare_data(
-            retrieve_hass_conf["var_load"],
-            load_negative=retrieve_hass_conf["load_negative"],
-            set_zero_min=retrieve_hass_conf["set_zero_min"],
-            var_replace_zero=retrieve_hass_conf["var_replace_zero"],
-            var_interp=retrieve_hass_conf["var_interp"],
-        ):
+        if not rh.prepare_data(retrieve_hass_conf["var_load"],
+                               load_negative=retrieve_hass_conf["load_negative"],
+                               set_zero_min=retrieve_hass_conf["set_zero_min"],
+                               var_replace_zero=retrieve_hass_conf["var_replace_zero"],
+                               var_interp=retrieve_hass_conf["var_interp"]):
             return False
         df_input_data = rh.df_final.copy()
         # Get PV and load forecasts
-        df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
-        P_PV_forecast = fcst.get_power_from_weather(df_weather, set_mix_forecast=True, df_now=df_input_data)
-        P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'], set_mix_forecast=True, df_now=df_input_data)
-        if isinstance(P_load_forecast,bool) and not P_load_forecast:
-            logger.error("Unable to get sensor power photovoltaics, or sensor power load no var loads. Check HA sensors and their daily data")
+        df_weather = fcst.get_weather_forecast(
+            method=optim_conf['weather_forecast_method'])
+        P_PV_forecast = fcst.get_power_from_weather(
+            df_weather, set_mix_forecast=True, df_now=df_input_data)
+        P_load_forecast = fcst.get_load_forecast(
+            method=optim_conf['load_forecast_method'], set_mix_forecast=True, df_now=df_input_data)
+        if isinstance(P_load_forecast, bool) and not P_load_forecast:
+            logger.error(
+                "Unable to get sensor power photovoltaics, or sensor power load no var loads. Check HA sensors and their daily data")
             return False
         df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
         df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
         df_input_data_dayahead.columns = ["P_PV_forecast", "P_load_forecast"]
         params = json.loads(params)
-        if (
-            "prediction_horizon" in params["passed_data"]
-            and params["passed_data"]["prediction_horizon"] is not None
-        ):
+        if ("prediction_horizon" in params["passed_data"] and params["passed_data"]["prediction_horizon"] is not None):
             prediction_horizon = params["passed_data"]["prediction_horizon"]
             df_input_data_dayahead = copy.deepcopy(df_input_data_dayahead)[
-                df_input_data_dayahead.index[0] : df_input_data_dayahead.index[
-                    prediction_horizon - 1
-                ]
-            ]
-    elif (
-        set_type == "forecast-model-fit"
-        or set_type == "forecast-model-predict"
-        or set_type == "forecast-model-tune"
-    ):
+                df_input_data_dayahead.index[0]: df_input_data_dayahead.index[prediction_horizon - 1]]
+    elif (set_type == "forecast-model-fit" or set_type == "forecast-model-predict" or set_type == "forecast-model-tune"):
         df_input_data_dayahead = None
         P_PV_forecast, P_load_forecast = None, None
         params = json.loads(params)
@@ -198,18 +171,14 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
             filename_path = emhass_conf['data_path'] / filename
             with open(filename_path, 'rb') as inp:
                 df_input_data, _ = pickle.load(inp)
-            df_input_data = df_input_data[
-                df_input_data.index[-1] - pd.offsets.Day(days_to_retrieve) :
-            ]
+            df_input_data = df_input_data[df_input_data.index[-1] - pd.offsets.Day(days_to_retrieve):]
         else:
             days_list = utils.get_days_list(days_to_retrieve)
             var_list = [var_model]
             if not rh.get_data(days_list, var_list):
                 return False
             df_input_data = rh.df_final.copy()
-
     elif set_type == "regressor-model-fit" or set_type == "regressor-model-predict":
-
         df_input_data, df_input_data_dayahead = None, None
         P_PV_forecast, P_load_forecast = None, None
         params = json.loads(params)
@@ -225,32 +194,26 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
             if get_data_from_file:
                 base_path = emhass_conf["data_path"]  # + "/data"
                 filename_path = pathlib.Path(base_path) / csv_file
-
             else:
                 filename_path = emhass_conf["data_path"] / csv_file
-
             if filename_path.is_file():
                 df_input_data = pd.read_csv(filename_path, parse_dates=True)
-
             else:
-                logger.error("The CSV file " + csv_file + " was not found in path: " + str(emhass_conf["data_path"]))
+                logger.error("The CSV file " + csv_file +
+                             " was not found in path: " + str(emhass_conf["data_path"]))
                 return False
-                #raise ValueError("The CSV file " + csv_file + " was not found.")
+                # raise ValueError("The CSV file " + csv_file + " was not found.")
             required_columns = []
             required_columns.extend(features)
             required_columns.append(target)
             if timestamp is not None:
                 required_columns.append(timestamp)
-
             if not set(required_columns).issubset(df_input_data.columns):
-                logger.error("The cvs file does not contain the required columns.")
+                logger.error(
+                    "The cvs file does not contain the required columns.")
                 msg = f"CSV file should contain the following columns: {', '.join(required_columns)}"
                 logger.error(msg)
                 return False
-                #raise ValueError(
-                #    msg,
-                #)
-
     elif set_type == "publish-data":
         df_input_data, df_input_data_dayahead = None, None
         P_PV_forecast, P_load_forecast = None, None
@@ -262,7 +225,6 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
         df_input_data, df_input_data_dayahead = None, None
         P_PV_forecast, P_load_forecast = None, None
         days_list = None
-
     # The input data dictionary to return
     input_data_dict = {
         'emhass_conf': emhass_conf,
@@ -281,12 +243,9 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
     return input_data_dict
 
 
-def perfect_forecast_optim(
-    input_data_dict: dict,
-    logger: logging.Logger,
-    save_data_to_file: Optional[bool] = True,
-    debug: Optional[bool] = False,
-) -> pd.DataFrame:
+def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
+                           save_data_to_file: Optional[bool] = True, 
+                           debug: Optional[bool] = False) -> pd.DataFrame:
     """
     Perform a call to the perfect forecast optimization routine.
 
@@ -305,33 +264,33 @@ def perfect_forecast_optim(
     logger.info("Performing perfect forecast optimization")
     # Load cost and prod price forecast
     df_input_data = input_data_dict['fcst'].get_load_cost_forecast(
-        input_data_dict['df_input_data'], 
+        input_data_dict['df_input_data'],
         method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'],
         list_and_perfect=True)
-    if isinstance(df_input_data,bool) and not df_input_data:
+    if isinstance(df_input_data, bool) and not df_input_data:
         return False
     df_input_data = input_data_dict['fcst'].get_prod_price_forecast(
         df_input_data, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'],
         list_and_perfect=True)
-    if isinstance(df_input_data,bool) and not df_input_data:
-        return False 
-    opt_res = input_data_dict['opt'].perform_perfect_forecast_optim(df_input_data, input_data_dict['days_list'])
+    if isinstance(df_input_data, bool) and not df_input_data:
+        return False
+    opt_res = input_data_dict['opt'].perform_perfect_forecast_optim(
+        df_input_data, input_data_dict['days_list'])
     # Save CSV file for analysis
     if save_data_to_file:
-        filename = "opt_res_perfect_optim_" + input_data_dict["costfun"] + ".csv"
+        filename = "opt_res_perfect_optim_" + \
+            input_data_dict["costfun"] + ".csv"
     else:  # Just save the latest optimization results
         filename = "opt_res_latest.csv"
     if not debug:
-        opt_res.to_csv(input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
+        opt_res.to_csv(
+            input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
     return opt_res
 
 
-def dayahead_forecast_optim(
-    input_data_dict: dict,
-    logger: logging.Logger,
-    save_data_to_file: Optional[bool] = False,
-    debug: Optional[bool] = False,
-) -> pd.DataFrame:
+def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger, 
+                            save_data_to_file: Optional[bool] = False, 
+                            debug: Optional[bool] = False) -> pd.DataFrame:
     """
     Perform a call to the day-ahead optimization routine.
 
@@ -352,13 +311,13 @@ def dayahead_forecast_optim(
     df_input_data_dayahead = input_data_dict['fcst'].get_load_cost_forecast(
         input_data_dict['df_input_data_dayahead'],
         method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'])
-    if isinstance(df_input_data_dayahead,bool) and not df_input_data_dayahead:
-        return False 
+    if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
+        return False
     df_input_data_dayahead = input_data_dict['fcst'].get_prod_price_forecast(
-        df_input_data_dayahead, 
+        df_input_data_dayahead,
         method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
-    if isinstance(df_input_data_dayahead,bool) and not df_input_data_dayahead:
-        return False 
+    if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
+        return False
     opt_res_dayahead = input_data_dict['opt'].perform_dayahead_forecast_optim(
         df_input_data_dayahead, input_data_dict['P_PV_forecast'], input_data_dict['P_load_forecast'])
     # Save CSV file for publish_data
@@ -370,16 +329,14 @@ def dayahead_forecast_optim(
     else:  # Just save the latest optimization results
         filename = "opt_res_latest.csv"
     if not debug:
-        opt_res_dayahead.to_csv(input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
+        opt_res_dayahead.to_csv(
+            input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
     return opt_res_dayahead
 
 
-def naive_mpc_optim(
-    input_data_dict: dict,
-    logger: logging.Logger,
-    save_data_to_file: Optional[bool] = False,
-    debug: Optional[bool] = False,
-) -> pd.DataFrame:
+def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger, 
+                    save_data_to_file: Optional[bool] = False, 
+                    debug: Optional[bool] = False) -> pd.DataFrame:
     """
     Perform a call to the naive Model Predictive Controller optimization routine.
 
@@ -400,12 +357,12 @@ def naive_mpc_optim(
     df_input_data_dayahead = input_data_dict['fcst'].get_load_cost_forecast(
         input_data_dict['df_input_data_dayahead'],
         method=input_data_dict['fcst'].optim_conf['load_cost_forecast_method'])
-    if isinstance(df_input_data_dayahead,bool) and not df_input_data_dayahead:
-        return False 
+    if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
+        return False
     df_input_data_dayahead = input_data_dict['fcst'].get_prod_price_forecast(
         df_input_data_dayahead, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
-    if isinstance(df_input_data_dayahead,bool) and not df_input_data_dayahead:
-        return False 
+    if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
+        return False
     # The specifics params for the MPC at runtime
     prediction_horizon = input_data_dict["params"]["passed_data"]["prediction_horizon"]
     soc_init = input_data_dict["params"]["passed_data"]["soc_init"]
@@ -414,16 +371,9 @@ def naive_mpc_optim(
     def_start_timestep = input_data_dict["params"]["passed_data"]["def_start_timestep"]
     def_end_timestep = input_data_dict["params"]["passed_data"]["def_end_timestep"]
     opt_res_naive_mpc = input_data_dict["opt"].perform_naive_mpc_optim(
-        df_input_data_dayahead,
-        input_data_dict["P_PV_forecast"],
-        input_data_dict["P_load_forecast"],
-        prediction_horizon,
-        soc_init,
-        soc_final,
-        def_total_hours,
-        def_start_timestep,
-        def_end_timestep,
-    )
+        df_input_data_dayahead, input_data_dict["P_PV_forecast"], input_data_dict["P_load_forecast"],
+        prediction_horizon, soc_init, soc_final, def_total_hours,
+        def_start_timestep, def_end_timestep)
     # Save CSV file for publish_data
     if save_data_to_file:
         today = datetime.now(timezone.utc).replace(
@@ -433,13 +383,13 @@ def naive_mpc_optim(
     else:  # Just save the latest optimization results
         filename = "opt_res_latest.csv"
     if not debug:
-        opt_res_naive_mpc.to_csv(input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
+        opt_res_naive_mpc.to_csv(
+            input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
     return opt_res_naive_mpc
 
 
-def forecast_model_fit(
-    input_data_dict: dict, logger: logging.Logger, debug: Optional[bool] = False
-) -> Tuple[pd.DataFrame, pd.DataFrame, MLForecaster]:
+def forecast_model_fit(input_data_dict: dict, logger: logging.Logger, 
+                       debug: Optional[bool] = False) -> Tuple[pd.DataFrame, pd.DataFrame, MLForecaster]:
     """Perform a forecast model fit from training data retrieved from Home Assistant.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
@@ -459,7 +409,8 @@ def forecast_model_fit(
     split_date_delta = input_data_dict['params']['passed_data']['split_date_delta']
     perform_backtest = input_data_dict['params']['passed_data']['perform_backtest']
     # The ML forecaster object
-    mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, input_data_dict['emhass_conf'], logger)
+    mlf = MLForecaster(data, model_type, var_model, sklearn_model,
+                       num_lags, input_data_dict['emhass_conf'], logger)
     # Fit the ML model
     df_pred, df_pred_backtest = mlf.fit(
         split_date_delta=split_date_delta, perform_backtest=perform_backtest
@@ -473,13 +424,10 @@ def forecast_model_fit(
     return df_pred, df_pred_backtest, mlf
 
 
-def forecast_model_predict(
-    input_data_dict: dict,
-    logger: logging.Logger,
-    use_last_window: Optional[bool] = True,
-    debug: Optional[bool] = False,
-    mlf: Optional[MLForecaster] = None,
-) -> pd.DataFrame:
+def forecast_model_predict(input_data_dict: dict, logger: logging.Logger, 
+                           use_last_window: Optional[bool] = True, 
+                           debug: Optional[bool] = False, mlf: Optional[MLForecaster] = None
+                           ) -> pd.DataFrame:
     r"""Perform a forecast model predict using a previously trained skforecast model.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
@@ -539,40 +487,24 @@ def forecast_model_predict(
             input_data_dict["retrieve_hass_conf"]["time_zone"]
         ).replace(second=0, microsecond=0)
         if input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "nearest":
-            idx_closest = predictions.index.get_indexer(
-                [now_precise], method="nearest"
-            )[0]
+            idx_closest = predictions.index.get_indexer([now_precise], method="nearest")[0]
         elif input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "first":
-            idx_closest = predictions.index.get_indexer([now_precise], method="ffill")[
-                0
-            ]
+            idx_closest = predictions.index.get_indexer([now_precise], method="ffill")[0]
         elif input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "last":
-            idx_closest = predictions.index.get_indexer([now_precise], method="bfill")[
-                0
-            ]
+            idx_closest = predictions.index.get_indexer([now_precise], method="bfill")[0]
         if idx_closest == -1:
-            idx_closest = predictions.index.get_indexer(
-                [now_precise], method="nearest"
-            )[0]
+            idx_closest = predictions.index.get_indexer([now_precise], method="nearest")[0]
         # Publish Load forecast
         input_data_dict["rh"].post_data(
-            predictions,
-            idx_closest,
-            model_predict_entity_id,
-            model_predict_unit_of_measurement,
-            model_predict_friendly_name,
-            type_var="mlforecaster",
-            publish_prefix=publish_prefix,
-        )
+            predictions, idx_closest, model_predict_entity_id,
+            model_predict_unit_of_measurement, model_predict_friendly_name,
+            type_var="mlforecaster", publish_prefix=publish_prefix)
     return predictions
 
 
-def forecast_model_tune(
-    input_data_dict: dict,
-    logger: logging.Logger,
-    debug: Optional[bool] = False,
-    mlf: Optional[MLForecaster] = None,
-) -> Tuple[pd.DataFrame, MLForecaster]:
+def forecast_model_tune(input_data_dict: dict, logger: logging.Logger, 
+                        debug: Optional[bool] = False, mlf: Optional[MLForecaster] = None
+                        ) -> Tuple[pd.DataFrame, MLForecaster]:
     """Tune a forecast model hyperparameters using bayesian optimization.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
@@ -607,15 +539,12 @@ def forecast_model_tune(
         filename = model_type+'_mlf.pkl'
         filename_path = input_data_dict['emhass_conf']['data_path'] / filename
         with open(filename_path, 'wb') as outp:
-            pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)       
+            pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
     return df_pred_optim, mlf
 
 
-def regressor_model_fit(
-    input_data_dict: dict,
-    logger: logging.Logger,
-    debug: Optional[bool] = False,
-) -> None:
+def regressor_model_fit(input_data_dict: dict, logger: logging.Logger, 
+                        debug: Optional[bool] = False) -> MLRegressor:
     """Perform a forecast model fit from training data retrieved from Home Assistant.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
@@ -640,33 +569,24 @@ def regressor_model_fit(
         features = input_data_dict["params"]["passed_data"]["features"]
     else:
         logger.error("parameter: 'features' not passed")
-        return False    
+        return False
     if "target" in input_data_dict["params"]["passed_data"]:
         target = input_data_dict["params"]["passed_data"]["target"]
     else:
         logger.error("parameter: 'target' not passed")
-        return False        
+        return False
     if "timestamp" in input_data_dict["params"]["passed_data"]:
         timestamp = input_data_dict["params"]["passed_data"]["timestamp"]
     else:
         logger.error("parameter: 'timestamp' not passed")
-        return False       
+        return False
     if "date_features" in input_data_dict["params"]["passed_data"]:
         date_features = input_data_dict["params"]["passed_data"]["date_features"]
     else:
         logger.error("parameter: 'date_features' not passed")
-        return False           
-
+        return False
     # The MLRegressor object
-    mlr = MLRegressor(
-        data,
-        model_type,
-        regression_model,
-        features,
-        target,
-        timestamp,
-        logger,
-    )
+    mlr = MLRegressor(data, model_type, regression_model, features, target, timestamp, logger)
     # Fit the ML model
     mlr.fit(date_features=date_features)
     # Save model
@@ -678,12 +598,9 @@ def regressor_model_fit(
     return mlr
 
 
-def regressor_model_predict(
-    input_data_dict: dict,
-    logger: logging.Logger,
-    debug: Optional[bool] = False,
-    mlr: Optional[MLRegressor] = None,
-) -> None:
+def regressor_model_predict(input_data_dict: dict, logger: logging.Logger, 
+                            debug: Optional[bool] = False, mlr: Optional[MLRegressor] = None
+                            ) -> np.ndarray:
     """Perform a prediction from csv file.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
@@ -697,7 +614,7 @@ def regressor_model_predict(
         model_type = input_data_dict["params"]["passed_data"]["model_type"]
     else:
         logger.error("parameter: 'model_type' not passed")
-        return False   
+        return False
     filename = model_type + "_mlr.pkl"
     filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
     if not debug:
@@ -709,37 +626,31 @@ def regressor_model_predict(
                 "The ML forecaster file was not found, please run a model fit method before this predict method",
             )
             return False
-    if "new_values" in input_data_dict["params"]["passed_data"]:    
+    if "new_values" in input_data_dict["params"]["passed_data"]:
         new_values = input_data_dict["params"]["passed_data"]["new_values"]
     else:
         logger.error("parameter: 'new_values' not passed")
-        return False         
+        return False
     # Predict from csv file
     prediction = mlr.predict(new_values)
-    
-    mlr_predict_entity_id = input_data_dict["params"]["passed_data"].get("mlr_predict_entity_id","sensor.mlr_predict")
-    mlr_predict_unit_of_measurement = input_data_dict["params"]["passed_data"].get("mlr_predict_unit_of_measurement","h")
-    mlr_predict_friendly_name = input_data_dict["params"]["passed_data"].get("mlr_predict_friendly_name","mlr predictor")
+    mlr_predict_entity_id = input_data_dict["params"]["passed_data"].get(
+        "mlr_predict_entity_id", "sensor.mlr_predict")
+    mlr_predict_unit_of_measurement = input_data_dict["params"]["passed_data"].get(
+        "mlr_predict_unit_of_measurement", "h")
+    mlr_predict_friendly_name = input_data_dict["params"]["passed_data"].get(
+        "mlr_predict_friendly_name", "mlr predictor")
     # Publish prediction
     idx = 0
     if not debug:
-        input_data_dict["rh"].post_data(
-            prediction,
-            idx,
-            mlr_predict_entity_id,
-            mlr_predict_unit_of_measurement,
-            mlr_predict_friendly_name,
-            type_var="mlregressor",
-        )
+        input_data_dict["rh"].post_data(prediction, idx, mlr_predict_entity_id,
+            mlr_predict_unit_of_measurement, mlr_predict_friendly_name,
+            type_var="mlregressor")
     return prediction
 
 
-def publish_data(
-    input_data_dict: dict,
-    logger: logging.Logger,
-    save_data_to_file: Optional[bool] = False,
-    opt_res_latest: Optional[pd.DataFrame] = None,
-) -> pd.DataFrame:
+def publish_data(input_data_dict: dict, logger: logging.Logger, 
+                 save_data_to_file: Optional[bool] = False, 
+                 opt_res_latest: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """
     Publish the data obtained from the optimization results.
 
@@ -764,10 +675,12 @@ def publish_data(
         filename = "opt_res_latest.csv"
     if opt_res_latest is None:
         if not os.path.isfile(input_data_dict['emhass_conf']['data_path'] / filename):
-            logger.error("File not found error, run an optimization task first.")
+            logger.error(
+                "File not found error, run an optimization task first.")
             return
         else:
-            opt_res_latest = pd.read_csv(input_data_dict['emhass_conf']['data_path'] / filename, index_col='timestamp')
+            opt_res_latest = pd.read_csv(
+                input_data_dict['emhass_conf']['data_path'] / filename, index_col='timestamp')
             opt_res_latest.index = pd.to_datetime(opt_res_latest.index)
             opt_res_latest.index.freq = input_data_dict["retrieve_hass_conf"]["freq"]
     # Estimate the current index
@@ -775,17 +688,15 @@ def publish_data(
         input_data_dict["retrieve_hass_conf"]["time_zone"]
     ).replace(second=0, microsecond=0)
     if input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "nearest":
-        idx_closest = opt_res_latest.index.get_indexer([now_precise], method="nearest")[
-            0
-        ]
+        idx_closest = opt_res_latest.index.get_indexer([now_precise], method="nearest")[0]
     elif input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "first":
-        idx_closest = opt_res_latest.index.get_indexer([now_precise], method="ffill")[0]
+        idx_closest = opt_res_latest.index.get_indexer(
+            [now_precise], method="ffill")[0]
     elif input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "last":
-        idx_closest = opt_res_latest.index.get_indexer([now_precise], method="bfill")[0]
+        idx_closest = opt_res_latest.index.get_indexer(
+            [now_precise], method="bfill")[0]
     if idx_closest == -1:
-        idx_closest = opt_res_latest.index.get_indexer([now_precise], method="nearest")[
-            0
-        ]
+        idx_closest = opt_res_latest.index.get_indexer([now_precise], method="nearest")[0]
     # Publish the data
     params = json.loads(input_data_dict["params"])
     publish_prefix = params["passed_data"]["publish_prefix"]
@@ -930,7 +841,8 @@ def publish_data(
     )
     cols_published = cols_published + ["unit_prod_price"]
     # Create a DF resuming what has been published
-    opt_res = opt_res_latest[cols_published].loc[[opt_res_latest.index[idx_closest]]]
+    opt_res = opt_res_latest[cols_published].loc[[
+        opt_res_latest.index[idx_closest]]]
     return opt_res
 
 
@@ -959,59 +871,59 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--action', type=str, help='Set the desired action, options are: perfect-optim, dayahead-optim,\
         naive-mpc-optim, publish-data, forecast-model-fit, forecast-model-predict, forecast-model-tune')
-    parser.add_argument('--config', type=str, help='Define path to the config.yaml file')
-    parser.add_argument('--data', type=str, help='Define path to the Data files (.csv & .pkl)')
+    parser.add_argument('--config', type=str,
+                        help='Define path to the config.yaml file')
+    parser.add_argument('--data', type=str,
+                        help='Define path to the Data files (.csv & .pkl)')
     parser.add_argument('--root', type=str, help='Define path emhass root')
-    parser.add_argument('--costfun', type=str, default='profit', help='Define the type of cost function, options are: profit, cost, self-consumption')
-    parser.add_argument('--log2file', type=strtobool, default='False', help='Define if we should log to a file or not')
-    parser.add_argument('--params', type=str, default=None, help='Configuration parameters passed from data/options.json')
-    parser.add_argument('--runtimeparams', type=str, default=None, help='Pass runtime optimization parameters as dictionnary')
-    parser.add_argument('--debug', type=strtobool, default='False', help='Use True for testing purposes')
+    parser.add_argument('--costfun', type=str, default='profit',
+                        help='Define the type of cost function, options are: profit, cost, self-consumption')
+    parser.add_argument('--log2file', type=strtobool, default='False',
+                        help='Define if we should log to a file or not')
+    parser.add_argument('--params', type=str, default=None,
+                        help='Configuration parameters passed from data/options.json')
+    parser.add_argument('--runtimeparams', type=str, default=None,
+                        help='Pass runtime optimization parameters as dictionnary')
+    parser.add_argument('--debug', type=strtobool,
+                        default='False', help='Use True for testing purposes')
     args = parser.parse_args()
     # The path to the configuration files
-    
     if args.config is not None:
         config_path = pathlib.Path(args.config)
     else:
-        config_path = pathlib.Path(str(utils.get_root(__file__, num_parent=2) / 'config_emhass.yaml' ))
-
+        config_path = pathlib.Path(
+            str(utils.get_root(__file__, num_parent=2) / 'config_emhass.yaml'))
     if args.data is not None:
         data_path = pathlib.Path(args.data)
     else:
         data_path = (config_path.parent / 'data/')
-
     if args.root is not None:
         root_path = pathlib.Path(args.root)
     else:
         root_path = config_path.parent
-    
     emhass_conf = {}
     emhass_conf['config_path'] = config_path
     emhass_conf['data_path'] = data_path
     emhass_conf['root_path'] = root_path
     # create logger
-    logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=bool(args.log2file))
-    
+    logger, ch = utils.get_logger(
+        __name__, emhass_conf, save_to_file=bool(args.log2file))
     logger.debug("config path: " + str(config_path))
     logger.debug("data path: " + str(data_path))
     logger.debug("root path: " + str(root_path))
-
-
     if not config_path.exists():
-        logger.error("Could not find config_emhass.yaml file in: " + str(config_path))
-        logger.error("Try setting config file path with --config" )
+        logger.error(
+            "Could not find config_emhass.yaml file in: " + str(config_path))
+        logger.error("Try setting config file path with --config")
         return False
-
     if not os.path.isdir(data_path):
         logger.error("Could not find data foulder in: " + str(data_path))
-        logger.error("Try setting data path with --data" )
+        logger.error("Try setting data path with --data")
         return False
-
     if not os.path.isdir(root_path / 'src'):
         logger.error("Could not find emhass/src foulder in: " + str(root_path))
-        logger.error("Try setting emhass root path with --root" )
+        logger.error("Try setting emhass root path with --root")
         return False
-
     # Additionnal argument
     try:
         parser.add_argument(
@@ -1025,14 +937,16 @@ def main():
             "Version not found for emhass package. Or importlib exited with PackageNotFoundError.",
         )
     # Setup parameters
-    input_data_dict = set_input_data_dict(emhass_conf, 
-                                          args.costfun, args.params, args.runtimeparams, args.action, 
+    input_data_dict = set_input_data_dict(emhass_conf,
+                                          args.costfun, args.params, args.runtimeparams, args.action,
                                           logger, args.debug)
     # Perform selected action
     if args.action == "perfect-optim":
-        opt_res = perfect_forecast_optim(input_data_dict, logger, debug=args.debug)
+        opt_res = perfect_forecast_optim(
+            input_data_dict, logger, debug=args.debug)
     elif args.action == "dayahead-optim":
-        opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=args.debug)
+        opt_res = dayahead_forecast_optim(
+            input_data_dict, logger, debug=args.debug)
     elif args.action == "naive-mpc-optim":
         opt_res = naive_mpc_optim(input_data_dict, logger, debug=args.debug)
     elif args.action == "forecast-model-fit":
@@ -1045,18 +959,14 @@ def main():
             _, _, mlf = forecast_model_fit(input_data_dict, logger, debug=args.debug)
         else:
             mlf = None
-        df_pred = forecast_model_predict(
-            input_data_dict, logger, debug=args.debug, mlf=mlf
-        )
+        df_pred = forecast_model_predict(input_data_dict, logger, debug=args.debug, mlf=mlf)
         opt_res = None
     elif args.action == "forecast-model-tune":
         if args.debug:
             _, _, mlf = forecast_model_fit(input_data_dict, logger, debug=args.debug)
         else:
             mlf = None
-        df_pred_optim, mlf = forecast_model_tune(
-            input_data_dict, logger, debug=args.debug, mlf=mlf
-        )
+        df_pred_optim, mlf = forecast_model_tune(input_data_dict, logger, debug=args.debug, mlf=mlf)
         opt_res = None
     elif args.action == "regressor-model-fit":
         mlr = regressor_model_fit(input_data_dict, logger, debug=args.debug)
@@ -1066,12 +976,7 @@ def main():
             mlr = regressor_model_fit(input_data_dict, logger, debug=args.debug)
         else:
             mlr = None
-        prediction = regressor_model_predict(
-            input_data_dict,
-            logger,
-            debug=args.debug,
-            mlr=mlr,
-        )
+        prediction = regressor_model_predict(input_data_dict, logger, debug=args.debug,mlr=mlr)
         opt_res = None
     elif args.action == "publish-data":
         opt_res = publish_data(input_data_dict, logger)
@@ -1100,7 +1005,7 @@ def main():
         return prediction
     elif args.action == "forecast-model-tune":
         return df_pred_optim, mlf
-    else: 
+    else:
         return opt_res
 
 

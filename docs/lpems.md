@@ -56,10 +56,10 @@ $$
 $$
 
 > For the special case of an energy contract where the totality of the PV produced energy is injected into the grid this will be:
-> 
-> $$
-> \sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t*(unit_{LoadCost}[i]*(P_{load}[i]+P_{defSum}[i]) + prod_{SellPrice}*P_{gridNeg}[i])
-> $$
+
+$$
+\sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t*(unit_{LoadCost}[i]*(P_{load}[i]+P_{defSum}[i]) + prod_{SellPrice}*P_{gridNeg}[i])
+$$
 
 where $\Delta_{opt}$ is the total period of optimization in hours, $\Delta_t$ is the optimization time step in hours, $unit_{LoadCost_i}$ is the cost of the energy from the utility in EUR/kWh, $P_{load}$ is the electricity load consumption (positive defined), $P_{defSum}$ is the sum of the deferrable loads defined, $prod_{SellPrice}$ is the price of the energy sold to the utility, $P_{gridNeg}$ is the negative component of the grid power, this is the power exported to the grid. All these power are expressed in Watts.
 
@@ -73,10 +73,10 @@ $$
 $$
 
 > Again, for the special case of an energy contract where the totality of the PV produced energy is injected into the grid this will be:
-> 
-> $$
-> \sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t* unit_{LoadCost}[i]*(P_{load}[i]+P_{defSum}[i])
-> $$
+
+$$
+\sum_{i=1}^{\Delta_{opt}/\Delta_t} -0.001*\Delta_t* unit_{LoadCost}[i]*(P_{load}[i]+P_{defSum}[i])
+$$
 
 #### **3/ The _self-consumption_ cost function:**
 
@@ -104,28 +104,28 @@ Please note that the bigM factor is not used in the calculated cost that comes o
 >
 > The self-consumption is defined as:
 > 
-> $$
-> SC = \min(P_{PV}, (P_{load}+P_{defSum}))
-> $$
+$$
+SC = \min(P_{PV}, (P_{load}+P_{defSum}))
+$$
 > 
 > To convert this to a linear cost function, an additional continuous variable $SC$ is added. This is the so-called maximin problem.
 > The cost function is defined as:
 > 
-> $$
-> \sum_{i=1}^{\Delta_{opt}/\Delta_t} SC[i]
-> $$
+$$
+\sum_{i=1}^{\Delta_{opt}/\Delta_t} SC[i]
+$$
 > 
 > With the following set of constraints:
 > 
-> $$
-> SC[i] \leq P_{PV}[i]
-> $$
+$$
+SC[i] \leq P_{PV}[i]
+$$
 > 
 > and
 > 
-> $$
-> SC[i] \leq P_{load}[i]+P_{defSum}[i]
-> $$
+$$
+SC[i] \leq P_{load}[i]+P_{defSum}[i]
+$$
 
 All these cost functions can be chosen by the user with the `--costfun` tag with the `emhass` command. The options are: `profit`, `cost`, `self-consumption`.
 They are all set in the LP formulation as cost function to maximize.

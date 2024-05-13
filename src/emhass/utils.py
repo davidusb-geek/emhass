@@ -41,6 +41,7 @@ def get_root(file: str, num_parent: Optional[int] = 3) -> str:
         raise ValueError("num_parent value not valid, must be between 1 and 3")
     return root
 
+
 def get_logger(fun_name: str, emhass_conf: dict, save_to_file: Optional[bool] = True,
                logging_level: Optional[str] = "DEBUG") -> Tuple[logging.Logger, logging.StreamHandler]:
     """
@@ -88,9 +89,8 @@ def get_logger(fun_name: str, emhass_conf: dict, save_to_file: Optional[bool] = 
     return logger, ch
 
 
-def get_forecast_dates(
-    freq: int, delta_forecast: int, timedelta_days: Optional[int] = 0
-) -> pd.core.indexes.datetimes.DatetimeIndex:
+def get_forecast_dates(freq: int, delta_forecast: int, timedelta_days: Optional[int] = 0
+                       ) -> pd.core.indexes.datetimes.DatetimeIndex:
     """
     Get the date_range list of the needed future dates using the delta_forecast parameter.
 
@@ -113,15 +113,9 @@ def get_forecast_dates(
     return forecast_dates
 
 
-def treat_runtimeparams(
-    runtimeparams: str,
-    params: str,
-    retrieve_hass_conf: dict,
-    optim_conf: dict,
-    plant_conf: dict,
-    set_type: str,
-    logger: logging.Logger,
-) -> Tuple[str, dict]:
+def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dict, optim_conf: dict,
+                        plant_conf: dict, set_type: str, logger: logging.Logger
+                        ) -> Tuple[str, dict]:
     """
     Treat the passed optimization runtime parameters.
 
@@ -503,6 +497,7 @@ def treat_runtimeparams(
     params = json.dumps(params)
     return params, retrieve_hass_conf, optim_conf, plant_conf
 
+
 def get_yaml_parse(emhass_conf: dict, use_secrets: Optional[bool] = True,
                    params: Optional[str] = None) -> Tuple[dict, dict, dict]:
     """
@@ -655,9 +650,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: Optional[int] = 1366) -> dic
     return injection_dict
 
 
-def get_injection_dict_forecast_model_fit(
-    df_fit_pred: pd.DataFrame, mlf: MLForecaster
-) -> dict:
+def get_injection_dict_forecast_model_fit(df_fit_pred: pd.DataFrame, mlf: MLForecaster) -> dict:
     """
     Build a dictionary with graphs and tables for the webui for special MLF fit case.
 
@@ -686,9 +679,7 @@ def get_injection_dict_forecast_model_fit(
     return injection_dict
 
 
-def get_injection_dict_forecast_model_tune(
-    df_pred_optim: pd.DataFrame, mlf: MLForecaster
-) -> dict:
+def get_injection_dict_forecast_model_tune(df_pred_optim: pd.DataFrame, mlf: MLForecaster) -> dict:
     """
     Build a dictionary with graphs and tables for the webui for special MLF tune case.
 
@@ -719,13 +710,8 @@ def get_injection_dict_forecast_model_tune(
     return injection_dict
 
 
-def build_params(
-    params: dict,
-    params_secrets: dict,
-    options: dict,
-    addon: int,
-    logger: logging.Logger,
-) -> dict:
+def build_params(params: dict, params_secrets: dict, options: dict, addon: int,
+                 logger: logging.Logger) -> dict:
     """
     Build the main params dictionary from the loaded options.json when using the add-on.
 
@@ -967,7 +953,6 @@ def get_days_list(days_to_retrieve: int) -> pd.date_range:
     today = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     d = (today - timedelta(days=days_to_retrieve)).isoformat()
     days_list = pd.date_range(start=d, end=today.isoformat(), freq="D")
-
     return days_list
 
 
