@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.1 - 2024-05-13
+### Fix
+- Fix patch for issue with paths to modules and inverters database
+- Fixed code formatting, or at least trying to keep a unique format
+
 ## 0.9.0 - 2024-05-10
 ### Improvement
 - On this new version we now have a new method to train a regression model using Scikit-Learn methods. This is the contribution of @gieljnssns. Check the dedicated section the documentation to this new feature: [https://emhass.readthedocs.io/en/latest/mlregressor.html](https://emhass.readthedocs.io/en/latest/mlregressor.html)
