@@ -639,10 +639,10 @@ class Forecast(object):
                 days_list = get_days_list(days_min_load_forecast) 
                 if not rh.get_data(days_list, var_list):
                     return False
-            if  not rh.prepare_data(self.retrieve_hass_conf['var_load'], load_negative = self.retrieve_hass_conf['load_negative'],
-                            set_zero_min = self.retrieve_hass_conf['set_zero_min'], 
-                            var_replace_zero = var_replace_zero, 
-                            var_interp = var_interp):
+            if  not rh.prepare_data(
+                self.retrieve_hass_conf['var_load'], load_negative = self.retrieve_hass_conf['load_negative'],
+                set_zero_min = self.retrieve_hass_conf['set_zero_min'], 
+                var_replace_zero = var_replace_zero, var_interp = var_interp):
                 return False
             df = rh.df_final.copy()[[self.var_load_new]]
         if method == 'naive': # using a naive approach
@@ -747,7 +747,6 @@ class Forecast(object):
 
         """
         csv_path  = self.emhass_conf['data_path'] / csv_path
-
         if method == 'hp_hc_periods':
             df_final[self.var_load_cost] = self.optim_conf['load_cost_hc']
             list_df_hp = []
@@ -780,12 +779,11 @@ class Forecast(object):
         else:
             self.logger.error("Passed method is not valid")
             return False
-            
         return df_final
     
     def get_prod_price_forecast(self, df_final: pd.DataFrame, method: Optional[str] = 'constant',
-                               csv_path: Optional[str] = "data_prod_price_forecast.csv", 
-                               list_and_perfect: Optional[bool] = False) -> pd.DataFrame:
+                                csv_path: Optional[str] = "data_prod_price_forecast.csv", 
+                                list_and_perfect: Optional[bool] = False) -> pd.DataFrame:
 
         r"""
         Get the unit power production price for the energy injected to the grid.\
@@ -807,16 +805,13 @@ class Forecast(object):
         :rtype: pd.DataFrame
 
         """
-
         csv_path  = self.emhass_conf['data_path'] / csv_path
-
         if method == 'constant':
             df_final[self.var_prod_price] = self.optim_conf['prod_sell_price']
         elif method == 'csv':
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
-            forecast_out = self.get_forecast_out_from_csv_or_list(df_final,
-                                                          forecast_dates_csv,
-                                                          csv_path)
+            forecast_out = self.get_forecast_out_from_csv_or_list(
+                df_final, forecast_dates_csv, csv_path)
             df_final[self.var_prod_price] = forecast_out
         elif method == 'list': # reading a list of values
             # Loading data from passed list
@@ -837,6 +832,5 @@ class Forecast(object):
         else:
             self.logger.error("Passed method is not valid")
             return False
-            
         return df_final
     

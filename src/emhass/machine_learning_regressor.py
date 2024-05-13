@@ -76,16 +76,8 @@ class MLRegressor:
 
     """
 
-    def __init__(  # noqa: PLR0913
-        self: MLRegressor,
-        data: pd.DataFrame,
-        model_type: str,
-        regression_model: str,
-        features: list,
-        target: str,
-        timestamp: str,
-        logger: logging.Logger,
-    ) -> None:
+    def __init__(self: MLRegressor, data: pd.DataFrame, model_type: str, regression_model: str,
+                 features: list, target: str, timestamp: str, logger: logging.Logger) -> None:
         r"""Define constructor for the forecast class.
 
         :param data: The data that will be used for train/test
@@ -124,11 +116,7 @@ class MLRegressor:
         self.grid_search = None
 
     @staticmethod
-    def add_date_features(
-        data: pd.DataFrame,
-        date_features: list,
-        timestamp: str,
-    ) -> pd.DataFrame:
+    def add_date_features(data: pd.DataFrame, date_features: list, timestamp: str) -> pd.DataFrame:
         """Add date features from the input DataFrame timestamp.
 
         :param data: The input DataFrame
@@ -152,23 +140,18 @@ class MLRegressor:
             df["day"] = [i.day for i in df["timestamp"]]
         if "hour" in date_features:
             df["hour"] = [i.day for i in df["timestamp"]]
-
         return df
 
     def get_regression_model(self: MLRegressor) -> tuple[str, str]:
-        """Get the base model and parameter grid for the specified regression model.
-
+        r"""
+        Get the base model and parameter grid for the specified regression model.
         Returns a tuple containing the base model and parameter grid corresponding to \
             the specified regression model.
 
-        Args:
-        ----
-            self: The instance of the MLRegressor class.
-
-        Returns:
-        -------
-            A tuple containing the base model and parameter grid.
-
+        :param self: The instance of the MLRegressor class.
+        :type self: MLRegressor
+        :return: A tuple containing the base model and parameter grid.
+        :rtype: tuple[str, str]
         """
         if self.regression_model == "LinearRegression":
             base_model = REGRESSION_METHODS["LinearRegression"]["model"]
@@ -197,7 +180,7 @@ class MLRegressor:
         return base_model, param_grid
 
     def fit(self: MLRegressor, date_features: list | None = None) -> None:
-        """Fit the model using the provided data.
+        r"""Fit the model using the provided data.
 
         :param date_features: A list of 'date_features' to take into account when \
             fitting the model.
@@ -226,45 +209,24 @@ class MLRegressor:
                     "If no timestamp provided, you can't use date_features, going \
                     further without date_features.",
                 )
-
         y = self.data_exo[self.target]
         self.data_exo = self.data_exo.drop(self.target, axis=1)
         if self.timestamp is not None:
             self.data_exo = self.data_exo.drop(self.timestamp, axis=1)
-        X = self.data_exo  # noqa: N806
-
-        X_train, X_test, y_train, y_test = train_test_split(  # noqa: N806
-            X,
-            y,
-            test_size=0.2,
-            random_state=42,
-        )
-
+        X = self.data_exo 
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         self.steps = len(X_test)
-
         base_model, param_grid = self.get_regression_model()
-
         self.model = make_pipeline(StandardScaler(), base_model)
-
         # Create a grid search object
-        self.grid_search = GridSearchCV(
-            self.model,
-            param_grid,
-            cv=5,
-            scoring="neg_mean_squared_error",
-            refit=True,
-            verbose=0,
-            n_jobs=-1,
-        )
-
+        self.grid_search = GridSearchCV(self.model, param_grid, cv=5, scoring="neg_mean_squared_error",
+                                        refit=True, verbose=0, n_jobs=-1)
         # Fit the grid search object to the data
         self.logger.info("Training a %s model", self.regression_model)
         start_time = time.time()
         self.grid_search.fit(X_train.values, y_train.values)
         self.logger.info("Elapsed time for model fit: %s", time.time() - start_time)
-
         self.model = self.grid_search.best_estimator_
-
         # Make predictions
         predictions = self.model.predict(X_test.values)
         predictions = pd.Series(predictions, index=X_test.index)
@@ -286,5 +248,4 @@ class MLRegressor:
         """
         self.logger.info("Performing a prediction for %s", self.model_type)
         new_values = np.array([new_values])
-
         return self.model.predict(new_values)
