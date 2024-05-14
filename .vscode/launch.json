@@ -23,6 +23,7 @@
         "OPTIONS_PATH": "/workspaces/emhass/options.json",
         "SECRETS_PATH": "/workspaces/emhass/secrets_emhass.yaml",
         "DATA_PATH": "/workspaces/emhass/data/",
+        "LOGGING_LEVEL": "DEBUG"
       }
     },
     {
@@ -52,6 +53,7 @@
         "LAT": "45.83", //optional change
         "LON": "6.86", //optional change
         "ALT": "4807.8", //optional change
+        "LOGGING_LEVEL": "DEBUG" //optional change
       },
     }
   ]

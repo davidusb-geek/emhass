@@ -24,6 +24,7 @@ These are the parameters that we will need to define to retrieve data from Home 
 	- 'sensor.power_photovoltaics'
 	- 'sensor.power_load_no_var_loads'
 - `method_ts_round`: Set the method for timestamp rounding, options are: first, last and nearest.
+- `continual_publish`: set True to Save entity data, and republish entities with current state every freq minutes. entity data saved to data_path/entities.
 
 A second part of this section is given by some privacy-sensitive parameters that should be included in a `secrets_emhass.yaml` file alongside the `config_emhass.yaml` file.
 
