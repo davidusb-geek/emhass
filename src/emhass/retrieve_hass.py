@@ -3,6 +3,8 @@
 
 import json
 import copy
+import os
+import pathlib
 import datetime
 import logging
 from typing import Optional
@@ -61,7 +63,7 @@ class RetrieveHass:
         self.freq = freq
         self.time_zone = time_zone
         self.params = params
-        # self.emhass_conf = emhass_conf
+        self.emhass_conf = emhass_conf
         self.logger = logger
         self.get_data_from_file = get_data_from_file
 
@@ -328,6 +330,9 @@ class RetrieveHass:
         type_var: str,
         from_mlforecaster: Optional[bool] = False,
         publish_prefix: Optional[str] = "",
+        save_entities: Optional[bool] = False,
+        logger_levels: Optional[str] = "info",
+        dont_post: Optional[bool] = False,
     ) -> None:
         r"""
         Post passed data to hass.
@@ -348,6 +353,12 @@ class RetrieveHass:
         :type type_var: str
         :param publish_prefix: A common prefix for all published data entity_id.
         :type publish_prefix: str, optional
+        :param save_entities: if entity data should be saved in data_path/entities
+        :type save_entities: bool, optional
+        :param logger_levels: set logger level, info or debug, to output  
+        :type logger_levels: str, optional
+        :param dont_post: dont post to HA
+        :type dont_post: bool, optional
 
         """
         # Add a possible prefix to the entity ID
@@ -362,10 +373,12 @@ class RetrieveHass:
         headers = {
             "Authorization": "Bearer " + self.long_lived_token,
             "content-type": "application/json",
-        }
+        }  
         # Preparing the data dict to be published
         if type_var == "cost_fun":
-            state = np.round(data_df.sum()[0], 2)
+            if isinstance(data_df.iloc[0],pd.Series): #if Series extract
+                data_df = data_df.iloc[:, 0]
+            state = np.round(data_df.sum(), 2)
         elif type_var == "unit_load_cost" or type_var == "unit_prod_price":
             state = np.round(data_df.loc[data_df.index[idx]], 4)
         elif type_var == "optim_status":
@@ -469,18 +482,48 @@ class RetrieveHass:
                 },
             }
         # Actually post the data
-        if self.get_data_from_file:
-
+        if self.get_data_from_file or dont_post:
             class response:
                 pass
-
             response.status_code = 200
             response.ok = True
         else:
             response = post(url, headers=headers, data=json.dumps(data))
+            if logger_levels == "DEBUG":
+                self.logger.debug("Successfully posted to " + entity_id + " = " + str(state))
+            else:
+                self.logger.info("Successfully posted to " + entity_id + " = " + str(state))
+        
         # Treating the response status and posting them on the logger
         if response.ok:
-            self.logger.info("Successfully posted to " + entity_id + " = " + str(state))
+            # If save entities is set, save entity data to /data_path/entities
+            if (save_entities):
+                entities_path = self.emhass_conf['data_path'] / "entities"
+                
+                pathlib.Path(entities_path).mkdir(parents=True, exist_ok=True)
+                
+                # Save entity data to json file
+                result = data_df.to_json(orient='index')
+                parsed = json.loads(result)
+                with open(entities_path / (entity_id + ".json"), "w") as file:                       
+                    json.dump(parsed, file, indent=4)
+                 
+                # Save the required metadata to json file
+                if os.path.isfile(entities_path / "metadata.json"):
+                    with open(entities_path / "metadata.json", "r") as file:
+                        metadata = json.load(file) 
+                else:
+                    metadata = {}
+                with open(entities_path / "metadata.json", "w") as file:                       
+                    # Save entity metadata key = entity_id 
+                    metadata[entity_id] = {'unit_of_measurement': unit_of_measurement,'friendly_name': friendly_name,'type_var': type_var, 'freq': int(self.freq.seconds / 60)}
+                    
+                    # Find lowest frequency to set for continual loop freq
+                    if metadata.get("lowest_freq",None) == None or metadata["lowest_freq"] > int(self.freq.seconds / 60):
+                        metadata["lowest_freq"] = int(self.freq.seconds / 60)
+                    json.dump(metadata,file, indent=4)
+
+                self.logger.info("Saved " + entity_id + " to json file")   
         else:
             self.logger.info(
                 "The status code for received curl command response is: "

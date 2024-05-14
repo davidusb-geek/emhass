@@ -12,7 +12,6 @@ import pandas as pd
 import yaml
 import pytz
 
-
 import plotly.express as px
 
 pd.options.plotting.backend = "plotly"
@@ -449,6 +448,8 @@ def treat_runtimeparams(
             optim_conf["weight_battery_charge"] = runtimeparams["weight_battery_charge"]
         if 'freq' in runtimeparams.keys():
             retrieve_hass_conf['freq'] = pd.to_timedelta(runtimeparams['freq'], "minutes")
+        if 'continual_publish' in runtimeparams.keys():
+            retrieve_hass_conf['continual_publish'] = bool(runtimeparams['continual_publish'])  
         # Treat plant configuration parameters passed at runtime
         if "SOCtarget" in runtimeparams.keys():
             plant_conf["SOCtarget"] = runtimeparams["SOCtarget"]
@@ -780,6 +781,9 @@ def build_params(
         ]
         params["retrieve_hass_conf"]["method_ts_round"] = options.get(
             "method_ts_round", params["retrieve_hass_conf"]["method_ts_round"]
+        )
+        params["retrieve_hass_conf"]["continual_publish"] = options.get(
+            "continual_publish", params["retrieve_hass_conf"]["continual_publish"]
         )
         # Update params Secrets if specified
         params["params_secrets"] = params_secrets
