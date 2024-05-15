@@ -6,7 +6,7 @@
   "optimization_time_step": 30,
   "historic_days_to_retrieve": 2,
   "method_ts_round": "nearest",
-  "continual_publish": true,
+  "continual_publish": false,
   "optional_solcast_api_key": "empty",
   "optional_solcast_rooftop_id": "empty",
   "optional_solar_forecast_kwp": 5,
