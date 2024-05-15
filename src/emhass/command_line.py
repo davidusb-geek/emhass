@@ -286,6 +286,12 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     if not debug:
         opt_res.to_csv(
             input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
+        
+    # if continual_publish, save perfect results to data_path/entities json
+    if input_data_dict["retrieve_hass_conf"]["continual_publish"]:
+        #Trigger the publish function, save entity data and not post to HA
+        publish_data(input_data_dict, logger, continual_publish_save=True, dont_post=True)  
+
     return opt_res
 
 
