@@ -1,5 +1,5 @@
-<svg fill="none"  width="72" height="35" xmlns="http://www.w3.org/2000/svg">
-    <foreignObject width="100%" height="100%" >
+<svg fill="none"  width="91" height="35" xmlns="http://www.w3.org/2000/svg">
+    <foreignObject width="100%" height="100%">
        <div xmlns="http://www.w3.org/1999/xhtml">
           <style>
              .invert-image{
@@ -34,7 +34,7 @@
              }
              }
           </style>
-          <button class="invert-image">Issues</button>
+          <button class="invert-image">EMHASS</button>
        </div>   
     </foreignObject>
  </svg>
