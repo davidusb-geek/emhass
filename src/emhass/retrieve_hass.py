@@ -67,14 +67,9 @@ class RetrieveHass:
         self.logger = logger
         self.get_data_from_file = get_data_from_file
 
-    def get_data(
-        self,
-        days_list: pd.date_range,
-        var_list: list,
-        minimal_response: Optional[bool] = False,
-        significant_changes_only: Optional[bool] = False,
-        test_url: Optional[str] = "empty",
-    ) -> None:
+    def get_data(self, days_list: pd.date_range, var_list: list, 
+                 minimal_response: Optional[bool] = False, significant_changes_only: Optional[bool] = False,
+                 test_url: Optional[str] = "empty") -> None:
         r"""
         Retrieve the actual data from hass.
         
@@ -102,9 +97,7 @@ class RetrieveHass:
         x = 0  # iterate based on days
         # Looping on each day from days list
         for day in days_list:
-
             for i, var in enumerate(var_list):
-
                 if test_url == "empty":
                     if (
                         self.hass_url == "http://supervisor/core/api"
@@ -291,15 +284,8 @@ class RetrieveHass:
         return True
 
     @staticmethod
-    def get_attr_data_dict(
-        data_df: pd.DataFrame,
-        idx: int,
-        entity_id: str,
-        unit_of_measurement: str,
-        friendly_name: str,
-        list_name: str,
-        state: float,
-    ) -> dict:
+    def get_attr_data_dict(data_df: pd.DataFrame, idx: int, entity_id: str, unit_of_measurement: str,
+                           friendly_name: str, list_name: str, state: float) -> dict:
         list_df = copy.deepcopy(data_df).loc[data_df.index[idx] :].reset_index()
         list_df.columns = ["timestamps", entity_id]
         ts_list = [str(i) for i in list_df["timestamps"].tolist()]
@@ -320,20 +306,11 @@ class RetrieveHass:
         }
         return data
 
-    def post_data(
-        self,
-        data_df: pd.DataFrame,
-        idx: int,
-        entity_id: str,
-        unit_of_measurement: str,
-        friendly_name: str,
-        type_var: str,
-        from_mlforecaster: Optional[bool] = False,
-        publish_prefix: Optional[str] = "",
-        save_entities: Optional[bool] = False,
-        logger_levels: Optional[str] = "info",
-        dont_post: Optional[bool] = False,
-    ) -> None:
+
+    def post_data(self, data_df: pd.DataFrame, idx: int, entity_id: str, unit_of_measurement: str,
+                  friendly_name: str, type_var: str, from_mlforecaster: Optional[bool] = False,
+                  publish_prefix: Optional[str] = "", save_entities: Optional[bool] = False, 
+                  logger_levels: Optional[str] = "info", dont_post: Optional[bool] = False) -> None:
         r"""
         Post passed data to hass.
         
@@ -388,75 +365,26 @@ class RetrieveHass:
         else:
             state = np.round(data_df.loc[data_df.index[idx]], 2)
         if type_var == "power":
-            data = RetrieveHass.get_attr_data_dict(
-                data_df,
-                idx,
-                entity_id,
-                unit_of_measurement,
-                friendly_name,
-                "forecasts",
-                state,
-            )
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement,
+                                                   friendly_name, "forecasts", state)
         elif type_var == "deferrable":
-            data = RetrieveHass.get_attr_data_dict(
-                data_df,
-                idx,
-                entity_id,
-                unit_of_measurement,
-                friendly_name,
-                "deferrables_schedule",
-                state,
-            )
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement,
+                                                   friendly_name, "deferrables_schedule", state)
         elif type_var == "batt":
-            data = RetrieveHass.get_attr_data_dict(
-                data_df,
-                idx,
-                entity_id,
-                unit_of_measurement,
-                friendly_name,
-                "battery_scheduled_power",
-                state,
-            )
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement,
+                                                   friendly_name, "battery_scheduled_power", state)
         elif type_var == "SOC":
-            data = RetrieveHass.get_attr_data_dict(
-                data_df,
-                idx,
-                entity_id,
-                unit_of_measurement,
-                friendly_name,
-                "battery_scheduled_soc",
-                state,
-            )
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement,
+                                                   friendly_name, "battery_scheduled_soc", state)
         elif type_var == "unit_load_cost":
-            data = RetrieveHass.get_attr_data_dict(
-                data_df,
-                idx,
-                entity_id,
-                unit_of_measurement,
-                friendly_name,
-                "unit_load_cost_forecasts",
-                state,
-            )
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement, 
+                                                   friendly_name, "unit_load_cost_forecasts", state)
         elif type_var == "unit_prod_price":
-            data = RetrieveHass.get_attr_data_dict(
-                data_df,
-                idx,
-                entity_id,
-                unit_of_measurement,
-                friendly_name,
-                "unit_prod_price_forecasts",
-                state,
-            )
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement,
+                                                   friendly_name, "unit_prod_price_forecasts", state)
         elif type_var == "mlforecaster":
-            data = RetrieveHass.get_attr_data_dict(
-                data_df,
-                idx,
-                entity_id,
-                unit_of_measurement,
-                friendly_name,
-                "scheduled_forecast",
-                state,
-            )
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement,
+                                                   friendly_name, "scheduled_forecast", state)
         elif type_var == "optim_status":
             data = {
                 "state": state,
