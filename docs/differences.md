@@ -22,6 +22,7 @@ See bellow for a list of associations between the parameters from `config_emhass
 | retrieve_hass_conf |  load_negative |  load_negative | |
 | retrieve_hass_conf |  set_zero_min |  set_zero_min | |
 | retrieve_hass_conf |  method_ts_round |  method_ts_round | |
+| retrieve_hass_conf |  continual_publish |  continual_publish | |
 | params_secrets |  solcast_api_key |  optional_solcast_api_key | |
 | params_secrets |  solcast_rooftop_id |  optional_solcast_rooftop_id | |
 | params_secrets |  solar_forecast_kwp |  optional_solar_forecast_kwp | |
