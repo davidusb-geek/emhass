@@ -325,7 +325,6 @@ class Optimization:
                     for i in set_I})
             # Treat the number of starts for a deferrable load
             if self.optim_conf['set_def_constant'][k]:
-                
                 constraints.update({"constraint_pdef{}_start1_{}".format(k, i) : 
                     plp.LpConstraint(
                         e=P_deferrable[k][i] - P_def_bin2[k][i]*M,
