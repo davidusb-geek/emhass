@@ -289,7 +289,8 @@ class Forecast(object):
                 mask_down_data_df = data_tmp.copy(deep=True).fillna(method = "bfill").isnull()
                 data_tmp.loc[data_tmp.index[mask_up_data_df['yhat']==True],:] = 0.0
                 data_tmp.loc[data_tmp.index[mask_down_data_df['yhat']==True],:] = 0.0
-                data_tmp.interpolate(inplace=True)
+                data_tmp.interpolate(inplace=True, limit=1)
+                data_tmp = data_tmp.fillna(0.0)
                 if len(data) == 0:
                     data = copy.deepcopy(data_tmp)
                 else:
