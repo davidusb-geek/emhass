@@ -428,6 +428,7 @@ class RetrieveHass:
             if (save_entities):
                 entities_path = self.emhass_conf['data_path'] / "entities"
                 
+                # Clarify folder exists
                 pathlib.Path(entities_path).mkdir(parents=True, exist_ok=True)
                 
                 # Save entity data to json file
@@ -443,7 +444,7 @@ class RetrieveHass:
                 else:
                     metadata = {}
                 with open(entities_path / "metadata.json", "w") as file:                       
-                    # Save entity metadata key = entity_id 
+                    # Save entity metadata, key = entity_id 
                     metadata[entity_id] = {'unit_of_measurement': unit_of_measurement,'friendly_name': friendly_name,'type_var': type_var, 'freq': int(self.freq.seconds / 60)}
                     
                     # Find lowest frequency to set for continual loop freq
@@ -451,9 +452,10 @@ class RetrieveHass:
                         metadata["lowest_freq"] = int(self.freq.seconds / 60)
                     json.dump(metadata,file, indent=4)
 
-                self.logger.info("Saved " + entity_id + " to json file")   
+                    self.logger.debug("Saved " + entity_id + " to json file")   
+ 
         else:
-            self.logger.info(
+            self.logger.warning(
                 "The status code for received curl command response is: "
                 + str(response.status_code)
             )

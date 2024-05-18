@@ -113,18 +113,10 @@ def action_call(action_name):
     if not input_data_dict:
         return make_response(grabLog(ActionStr), 400)
     
-
     # If continual_publish is True, start thread with loop function
     if len(continual_publish_thread) == 0 and input_data_dict['retrieve_hass_conf'].get("continual_publish",False):
-        entityPath = emhass_conf['data_path'] / "entities"
-        # If entityPath exists, remove files 
-        if os.path.exists(entityPath): 
-            entityPathContents = os.listdir(entityPath)
-            if len(entityPathContents) > 0:
-                for entity in entityPathContents:
-                    os.remove(entityPath / entity)
         # Start Thread
-        continualLoop = threading.Thread(name="continual_publish",target=continual_publish,args=[input_data_dict,entityPath,app.logger])
+        continualLoop = threading.Thread(name="continual_publish",target=continual_publish,args=[input_data_dict,entity_path,app.logger])
         continualLoop.start()
         continual_publish_thread.append(continualLoop)      
         
@@ -132,9 +124,7 @@ def action_call(action_name):
     if action_name == 'publish-data':
         ActionStr = " >> Publishing data..."
         app.logger.info(ActionStr)
-        _ = publish_data(input_data_dict, 
-                         app.logger,
-                         continual_publish_save=input_data_dict['retrieve_hass_conf'].get("continual_publish",False))
+        _ = publish_data(input_data_dict, app.logger)
         msg = f'EMHASS >> Action publish-data executed... \n'
         if not checkFileLog(ActionStr):
             return make_response(msg, 201)
@@ -467,9 +457,18 @@ if __name__ == "__main__":
     app.logger.addHandler(fileLogger)   
     clearFileLog() #Clear Action File logger file, ready for new instance
 
+
+    #If entity_path exists, remove any entity/metadata files 
+    entity_path = emhass_conf['data_path'] / "entities"
+    if os.path.exists(entity_path): 
+        entity_pathContents = os.listdir(entity_path)
+        if len(entity_pathContents) > 0:
+            for entity in entity_pathContents:
+                os.remove(entity_path / entity)
+
     # Initialise continual publish thread list
     continual_publish_thread = []
-
+    
     # Launch server
     port = int(os.environ.get('PORT', 5000))
     app.logger.info("Launching the emhass webserver at: http://"+web_ui_url+":"+str(port))

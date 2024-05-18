@@ -287,10 +287,16 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         opt_res.to_csv(
             input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
         
+
+    if not isinstance(input_data_dict["params"],dict):
+        params = json.loads(input_data_dict["params"])
+    else:
+        params = input_data_dict["params"]
+
     # if continual_publish, save perfect results to data_path/entities json
-    if input_data_dict["retrieve_hass_conf"]["continual_publish"]:
+    if input_data_dict["retrieve_hass_conf"].get("continual_publish",False) or params["passed_data"].get("entity_save",False):
         #Trigger the publish function, save entity data and not post to HA
-        publish_data(input_data_dict, logger, continual_publish_save=True, dont_post=True)  
+        publish_data(input_data_dict, logger, entity_save=True, dont_post=True)   
 
     return opt_res
 
@@ -339,12 +345,17 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         opt_res_dayahead.to_csv(
           input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
     
+    if not isinstance(input_data_dict["params"],dict):
+        params = json.loads(input_data_dict["params"])
+    else:
+        params = input_data_dict["params"]
+
     
     # if continual_publish, save day_ahead results to data_path/entities json
-    if input_data_dict["retrieve_hass_conf"]["continual_publish"]:
+    if input_data_dict["retrieve_hass_conf"].get("continual_publish",False) or params["passed_data"].get("entity_save",False):
         #Trigger the publish function, save entity data and not post to HA
-        publish_data(input_data_dict, logger, continual_publish_save=True, dont_post=True)  
-    
+        publish_data(input_data_dict, logger, entity_save=True, dont_post=True)   
+        
     return opt_res_dayahead
 
 
@@ -399,11 +410,16 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     if not debug:
         opt_res_naive_mpc.to_csv(
           input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
-    
+        
+    if not isinstance(input_data_dict["params"],dict):
+        params = json.loads(input_data_dict["params"])
+    else:
+        params = input_data_dict["params"]
+
     # if continual_publish, save mpc results to data_path/entities json
-    if input_data_dict["retrieve_hass_conf"]["continual_publish"]:
+    if input_data_dict["retrieve_hass_conf"].get("continual_publish",False) or params["passed_data"].get("entity_save",False):
         #Trigger the publish function, save entity data and not post to HA
-        publish_data(input_data_dict, logger, continual_publish_save=True, dont_post=True)  
+        publish_data(input_data_dict, logger, entity_save=True, dont_post=True)   
 
     return opt_res_naive_mpc
 
@@ -672,7 +688,7 @@ def regressor_model_predict(input_data_dict: dict, logger: logging.Logger,
 def publish_data(input_data_dict: dict, logger: logging.Logger, 
                  save_data_to_file: Optional[bool] = False, 
                  opt_res_latest: Optional[pd.DataFrame] = None, 
-                 continual_publish_save: Optional[bool] = False,
+                 entity_save: Optional[bool] = False,
                  dont_post: Optional[bool] = False) -> pd.DataFrame:
     """
     Publish the data obtained from the optimization results.
@@ -685,19 +701,55 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     :type save_data_to_file: bool, optional
     :return: The output data of the optimization readed from a CSV file in the data folder
     :rtype: pd.DataFrame
-    :param continual_publish_save: Save result to data_path/entities for continual_publish
-    :type continual_publish_save: bool, optional
-    :param dont_post: Do not post to HA. Works with continual_publish_save
+    :param entity_save: Save built entities to data_path/entities
+    :type entity_save: bool, optional
+    :param dont_post: Do not post to Home Assistant. Works with entity_save
     :type dont_post: bool, optional
 
     """
     logger.info("Publishing data to HASS instance")
+
+    if not isinstance(input_data_dict["params"],dict):
+        params = json.loads(input_data_dict["params"])
+    else:
+        params = input_data_dict["params"]
+    
     # Check if a day ahead optimization has been performed (read CSV file)
     if save_data_to_file:
         today = datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
         filename = "opt_res_dayahead_" + today.strftime("%Y_%m_%d") + ".csv"
+    # If publish_prefix is passed, check if there is saved entities in data_path/entities with prefix, publish to results
+    elif params["passed_data"].get("publish_prefix","") != "" and not dont_post:
+        opt_res_list = []
+        opt_res_list_names = []
+        publish_prefix = params["passed_data"]["publish_prefix"]
+        entity_path = input_data_dict['emhass_conf']['data_path'] / "entities"
+        
+        # Check if items in entity_path
+        if os.path.exists(entity_path) and len(os.listdir(entity_path)) > 0:
+            # Obtain all files in entity_path
+            entity_path_contents =  os.listdir(entity_path)    
+            for entity in entity_path_contents:
+                if entity != "metadata.json": 
+                    # If publish_prefix is "all" publish all saved entities to Home Assistant 
+                    # If publish_prefix matches the prefix from saved entities, publish to Home Assistant
+                    if publish_prefix in entity or publish_prefix == "all":
+                        entity_data = publish_json(entity,input_data_dict,entity_path,logger)    
+                        if not isinstance(entity_data, bool):
+                            opt_res_list.append(entity_data)
+                            opt_res_list_names.append(entity.replace(".json", ""))
+                        else:
+                            return False      
+            # Build a DataFrame with published entities
+            opt_res = pd.concat(opt_res_list, axis=1)
+            opt_res.columns = opt_res_list_names
+            return opt_res
+        else:
+            logger.warning("no saved entity json files in path:" + str(entity_path))     
+            logger.warning("falling back to opt_res_latest")
+            filename = "opt_res_latest.csv"            
     else:
         filename = "opt_res_latest.csv"
     if opt_res_latest is None:
@@ -725,10 +777,6 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     if idx_closest == -1:
         idx_closest = opt_res_latest.index.get_indexer([now_precise], method="nearest")[0]
     # Publish the data
-    if not isinstance(input_data_dict["params"],dict):
-        params = json.loads(input_data_dict["params"])
-    else:
-        params = input_data_dict["params"]
     publish_prefix = params["passed_data"]["publish_prefix"]
     # Publish PV forecast
     custom_pv_forecast_id = params["passed_data"]["custom_pv_forecast_id"]
@@ -740,8 +788,8 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         custom_pv_forecast_id["friendly_name"],
         type_var="power",
         publish_prefix=publish_prefix,
-        save_entities=continual_publish_save,
-        dont_post=continual_publish_save
+        save_entities=entity_save,
+        dont_post=dont_post
     )
     # Publish Load forecast
     custom_load_forecast_id = params["passed_data"]["custom_load_forecast_id"]
@@ -753,8 +801,8 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         custom_load_forecast_id["friendly_name"],
         type_var="power",
         publish_prefix=publish_prefix,
-        save_entities=continual_publish_save,
-        dont_post=continual_publish_save
+        save_entities=entity_save,
+        dont_post=dont_post
     )
     cols_published = ["P_PV", "P_Load"]
     # Publish deferrable loads
@@ -776,8 +824,8 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                 custom_deferrable_forecast_id[k]["friendly_name"],
                 type_var="deferrable",
                 publish_prefix=publish_prefix,
-                save_entities=continual_publish_save,
-                dont_post=continual_publish_save
+                save_entities=entity_save,
+                dont_post=dont_post
             )
             cols_published = cols_published + ["P_deferrable{}".format(k)]
     # Publish battery power
@@ -796,8 +844,8 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                 custom_batt_forecast_id["friendly_name"],
                 type_var="batt",
                 publish_prefix=publish_prefix,
-                save_entities=continual_publish_save,
-                dont_post=continual_publish_save
+                save_entities=entity_save,
+                dont_post=dont_post
             )
             cols_published = cols_published + ["P_batt"]
             custom_batt_soc_forecast_id = params["passed_data"][
@@ -811,8 +859,8 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                 custom_batt_soc_forecast_id["friendly_name"],
                 type_var="SOC",
                 publish_prefix=publish_prefix,
-                save_entities=continual_publish_save,
-                dont_post=continual_publish_save
+                save_entities=entity_save,
+                dont_post=dont_post
             )
             cols_published = cols_published + ["SOC_opt"]
     # Publish grid power
@@ -825,8 +873,8 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         custom_grid_forecast_id["friendly_name"],
         type_var="power",
         publish_prefix=publish_prefix,
-        save_entities=continual_publish_save,
-        dont_post=continual_publish_save
+        save_entities=entity_save,
+        dont_post=dont_post
     )
     cols_published = cols_published + ["P_grid"]
     # Publish total value of cost function
@@ -840,8 +888,8 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         custom_cost_fun_id["friendly_name"],
         type_var="cost_fun",
         publish_prefix=publish_prefix,
-        save_entities=continual_publish_save,
-        dont_post=continual_publish_save
+        save_entities=entity_save,
+        dont_post=dont_post
     )
     # cols_published = cols_published + col_cost_fun
     # Publish the optimization status
@@ -859,8 +907,8 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         custom_cost_fun_id["friendly_name"],
         type_var="optim_status",
         publish_prefix=publish_prefix,
-        save_entities=continual_publish_save,
-        dont_post=continual_publish_save
+        save_entities=entity_save,
+        dont_post=dont_post
     )
     cols_published = cols_published + ["optim_status"]
     # Publish unit_load_cost
@@ -873,8 +921,8 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         custom_unit_load_cost_id["friendly_name"],
         type_var="unit_load_cost",
         publish_prefix=publish_prefix,
-        save_entities=continual_publish_save,
-        dont_post=continual_publish_save
+        save_entities=entity_save,
+        dont_post=dont_post
     )
     cols_published = cols_published + ["unit_load_cost"]
     # Publish unit_prod_price
@@ -887,8 +935,8 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         custom_unit_prod_price_id["friendly_name"],
         type_var="unit_prod_price",
         publish_prefix=publish_prefix,
-        save_entities=continual_publish_save,
-        dont_post=continual_publish_save
+        save_entities=entity_save,
+        dont_post=dont_post
     )
     cols_published = cols_published + ["unit_prod_price"]
     # Create a DF resuming what has been published
@@ -896,80 +944,107 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         opt_res_latest.index[idx_closest]]]
     return opt_res
 
-def continual_publish(input_data_dict,entityPath,logger):
+def continual_publish(input_data_dict,entity_path,logger):
     """
-    If entity file saved in /data_path/entities, continually publish sensor on freq rate, updating entity current state based on timestamp
+    If continual_publish is true and a entity file saved in /data_path/entities, continually publish sensor on freq rate, updating entity current state value based on timestamp
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
     :type input_data_dict: dict
-    :param entityPath: Path for entities folder in data_path
-    :type entityPath: Path
+    :param entity_path: Path for entities folder in data_path
+    :type entity_path: Path
     :param logger: The passed logger object
     :type logger: logging.Logger
 
     """
     logger.info("Continual publish thread service started")
     freq = input_data_dict['retrieve_hass_conf'].get("freq", pd.to_timedelta(1, "minutes"))
-    entityPathContents = []
+    entity_path_contents = []
 
     while True:
-        # Sleep for x seconds (using current timecode as reference for time left)
+        # Sleep for x seconds (using current time as a reference for time left)
         time.sleep(max(0,freq.total_seconds() - (datetime.now(input_data_dict["retrieve_hass_conf"]["time_zone"]).timestamp() % 60)))
 
         # Loop through all saved entity files
-        if os.path.exists(entityPath) and len(os.listdir(entityPath)) > 0:
-            entityPathContents =  os.listdir(entityPath)
-            
-            # Round current timecode
-            now_precise = datetime.now(input_data_dict["retrieve_hass_conf"]["time_zone"]).replace(second=0, microsecond=0)
-            
-            # Retrieve entity metadata from file
-            if os.path.isfile(entityPath / "metadata.json"):
-                with open(entityPath / "metadata.json", "r") as file:
-                    metadata = json.load(file) 
-                    if not metadata.get("lowest_freq",None) == None:
-                        freq = pd.to_timedelta(metadata["lowest_freq"], "minutes")
-            
-            for entity in entityPathContents:
-                if entity != "metadata.json":                        
-                    
-                    # Retrieve entity data from file
-                    entity_data = pd.read_json(entityPath / entity , orient='index')
-                    
-                    # Remove .json from string for ID
-                    entity_id = entity.replace(".json", "")
-                    
-                    # Adjust Dataframe from entity json file
-                    entity_data.columns = ['value']
-                    entity_data.index = pd.to_datetime(entity_data.index).tz_localize(input_data_dict["retrieve_hass_conf"]["time_zone"])
-                    entity_data.index.freq = pd.to_timedelta(int(metadata[entity_id]["freq"]), "minutes")
-                    
-                    # Calculate the current state value
-                    if input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "nearest":
-                        idx_closest = entity_data.index.get_indexer([now_precise], method="nearest")[0]
-                    elif input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "first":
-                        idx_closest = entity_data.index.get_indexer([now_precise], method="ffill")[0]
-                    elif input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "last":
-                        idx_closest = entity_data.index.get_indexer([now_precise], method="bfill")[0]
-                    if idx_closest == -1:
-                        idx_closest = entity_data.index.get_indexer([now_precise], method="nearest")[0]
-                    
-                    # Call post data 
-                    logger.debug("Auto Published sensor:")
-                    input_data_dict["rh"].post_data(
-                        data_df=entity_data['value'],
-                        idx=idx_closest,
-                        entity_id=entity_id,
-                        unit_of_measurement=metadata[entity_id]["unit_of_measurement"],
-                        friendly_name=metadata[entity_id]["friendly_name"],
-                        type_var=metadata[entity_id].get("type_var",""),
-                        save_entities=False,
-                        logger_levels="DEBUG"
-                    )
-        #loop and wait freq            
+        if os.path.exists(entity_path) and len(os.listdir(entity_path)) > 0:
+            entity_path_contents =  os.listdir(entity_path)    
+            for entity in entity_path_contents:
+                if entity != "metadata.json":
+                    # Call publish_json with entity file, build entity, and publish                     
+                    publish_json(entity,input_data_dict,entity_path,logger,"continual_publish")
         pass 
-    #This function should never return           
+    # This function should never return           
     return False 
+
+def publish_json(entity,input_data_dict,entity_path,logger,reference: Optional[str] = ""):
+    """
+    Extract saved entity data from .json (in data_path/entities), build entity, post results to post_data
+
+    :param entity: json file containing entity data
+    :type entity: dict
+    :param input_data_dict: A dictionnary with multiple data used by the action functions
+    :type input_data_dict: dict
+    :param entity_path: Path for entities folder in data_path
+    :type entity_path: Path
+    :param logger: The passed logger object
+    :type logger: logging.Logger
+    :param reference: String for identifying who ran the function  
+    :type reference: str, optional
+
+    """
+
+    # Retrieve entity metadata from file
+    if os.path.isfile(entity_path / "metadata.json"):
+        with open(entity_path / "metadata.json", "r") as file:
+            metadata = json.load(file) 
+            if not metadata.get("lowest_freq",None) == None:
+                freq = pd.to_timedelta(metadata["lowest_freq"], "minutes")
+    else:
+        logger.error("unable to located metadata.json in:" + entity_path)
+        return False            
+
+    # Round current timecode (now)
+    now_precise = datetime.now(input_data_dict["retrieve_hass_conf"]["time_zone"]).replace(second=0, microsecond=0)
+
+    # Retrieve entity data from file
+    entity_data = pd.read_json(entity_path / entity , orient='index')
+    
+    # Remove ".json" from string for entity_id
+    entity_id = entity.replace(".json", "")
+    
+    # Adjust Dataframe from received entity json file
+    entity_data.columns = ['value']
+    entity_data.index = pd.to_datetime(entity_data.index).tz_localize(input_data_dict["retrieve_hass_conf"]["time_zone"])
+    entity_data.index.freq = pd.to_timedelta(int(metadata[entity_id]["freq"]), "minutes")
+    
+    # Calculate the current state value
+    if input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "nearest":
+        idx_closest = entity_data.index.get_indexer([now_precise], method="nearest")[0]
+    elif input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "first":
+        idx_closest = entity_data.index.get_indexer([now_precise], method="ffill")[0]
+    elif input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "last":
+        idx_closest = entity_data.index.get_indexer([now_precise], method="bfill")[0]
+    if idx_closest == -1:
+        idx_closest = entity_data.index.get_indexer([now_precise], method="nearest")[0]
+    
+    # Call post data 
+    if reference == "continual_publish":
+        logger.debug("Auto Published sensor:")
+        logger_levels = "DEBUG"
+    else: 
+        logger_levels = "INFO"
+    
+    #post/save entity
+    input_data_dict["rh"].post_data(
+        data_df=entity_data['value'],
+        idx=idx_closest,
+        entity_id=entity_id,
+        unit_of_measurement=metadata[entity_id]["unit_of_measurement"],
+        friendly_name=metadata[entity_id]["friendly_name"],
+        type_var=metadata[entity_id].get("type_var",""),
+        save_entities=False,
+        logger_levels=logger_levels
+    )
+    return entity_data['value']
 
 
 def main():
@@ -1105,9 +1180,7 @@ def main():
         prediction = regressor_model_predict(input_data_dict, logger, debug=args.debug,mlr=mlr)
         opt_res = None
     elif args.action == "publish-data":
-        opt_res = publish_data(input_data_dict,
-                                logger,
-                                continual_publish_save=input_data_dict['retrieve_hass_conf'].get("continual_publish",False))
+        opt_res = publish_data(input_data_dict,logger)
     else:
         logger.error("The passed action argument is not valid")
         logger.error("Try setting --action: perfect-optim, dayahead-optim, naive-mpc-optim, forecast-model-fit, forecast-model-predict, forecast-model-tune or publish-data")
