@@ -28,10 +28,11 @@ if __name__ == '__main__':
     params = None
     template = 'presentation'
     
-    methods_list = ['solar.forecast', 'solcast', 'scrapper']
+    methods_list = ['solar.forecast', 'solcast', 'scrapper'] # 
     
     for k, method in enumerate(methods_list):
         retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf)
+        optim_conf['delta_forecast'] = pd.Timedelta(days=2)
         fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
                         params, emhass_conf, logger, get_data_from_file=get_data_from_file)
         df_weather = fcst.get_weather_forecast(method=method)
