@@ -205,7 +205,11 @@ class Optimization:
         if self.costfun == 'self-consumption':
             SC  = {(i):plp.LpVariable(cat='Continuous',
                                       name="SC_{}".format(i)) for i in set_I}
-            
+        
+        # Special variables to define a sequence:
+        # Seq_start  = {(i):plp.LpVariable(cat='Binary',
+        #                                  name="Seq_start_{}".format(i)) for i in set_I}
+        
         ## Define objective
         P_def_sum= []
         for i in set_I:
@@ -248,6 +252,39 @@ class Optimization:
                 sense = plp.LpConstraintEQ,
                 rhs = 0)
             for i in set_I}
+        
+        # Constraint for hybrid inverter case
+        if self.optim_conf['inverter_is_hybrid']:
+            import pathlib
+            import bz2
+            import pickle as cPickle
+            cec_inverters = bz2.BZ2File(pathlib.Path(__file__).parent / 'data/cec_inverters.pbz2', "rb")
+            cec_inverters = cPickle.load(cec_inverters)
+            if type(self.plant_conf['module_model']) == list:
+                P_nom_inverter = 0.0
+                for i in range(len(self.plant_conf['inverter_model'])):
+                    inverter = cec_inverters[self.plant_conf['inverter_model'][i]]
+                    P_nom_inverter += inverter.Paco
+            else:
+                inverter = cec_inverters[self.plant_conf['inverter_model']]
+                P_nom_inverter = inverter.Paco
+            constraints.update({"constraint_hybrid_inverter_{}".format(i) :
+                plp.LpConstraint(
+                    e = P_PV[i] + P_sto_pos[i] + P_sto_neg[i] - P_nom_inverter,
+                    sense = plp.LpConstraintLE,
+                    rhs = 0)
+                for i in set_I})
+            
+        # Constraint for sequence of deferrable
+        # value_list = self.optim_conf['P_deferrable_nom'][0]
+        # L = len(value_list)
+        # for t in set_I:
+        #     constraints[f"P_constraint_{t}"] = P_deferrable[t] == plp.lpSum(value_list[i] * Seq_start[(t - i) % n] for i in range(L) if (t - i) % n in Seq_start)
+        # constraints["One_sequence_start"] = plp.lpSum(Seq_start[t] for t in set_I) == 1
+        # for t in set_I:
+        #     for i in range(L):
+        #         if t + i < n:
+        #             constraints[f"Contiguity_constraint_{t}_{i}"] = P_deferrable[t + i] == value_list[i] * Seq_start[t]
             
         # Two special constraints just for a self-consumption cost function
         if self.costfun == 'self-consumption':
