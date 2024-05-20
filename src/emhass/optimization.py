@@ -3,6 +3,9 @@
 
 import logging
 import copy
+import pathlib
+import bz2
+import pickle as cPickle
 from typing import Optional, Tuple
 import pandas as pd
 import numpy as np
@@ -266,21 +269,18 @@ class Optimization:
                     rhs = 0)
                 for i in set_I}
         
-        # Constraint for hybrid inverter case
+        # Constraint for hybrid inverter and curtailment cases
+        cec_inverters = bz2.BZ2File(pathlib.Path(__file__).parent / 'data/cec_inverters.pbz2', "rb")
+        cec_inverters = cPickle.load(cec_inverters)
+        if type(self.plant_conf['module_model']) == list:
+            P_nom_inverter = 0.0
+            for i in range(len(self.plant_conf['inverter_model'])):
+                inverter = cec_inverters[self.plant_conf['inverter_model'][i]]
+                P_nom_inverter += inverter.Paco
+        else:
+            inverter = cec_inverters[self.plant_conf['inverter_model']]
+            P_nom_inverter = inverter.Paco
         if self.optim_conf['inverter_is_hybrid']:
-            import pathlib
-            import bz2
-            import pickle as cPickle
-            cec_inverters = bz2.BZ2File(pathlib.Path(__file__).parent / 'data/cec_inverters.pbz2', "rb")
-            cec_inverters = cPickle.load(cec_inverters)
-            if type(self.plant_conf['module_model']) == list:
-                P_nom_inverter = 0.0
-                for i in range(len(self.plant_conf['inverter_model'])):
-                    inverter = cec_inverters[self.plant_conf['inverter_model'][i]]
-                    P_nom_inverter += inverter.Paco
-            else:
-                inverter = cec_inverters[self.plant_conf['inverter_model']]
-                P_nom_inverter = inverter.Paco
             constraints.update({"constraint_hybrid_inverter1_{}".format(i) :
                 plp.LpConstraint(
                     e = P_PV[i] - P_PV_curtailment[i] + P_sto_pos[i] + P_sto_neg[i] - P_nom_inverter,
@@ -291,6 +291,13 @@ class Optimization:
                 plp.LpConstraint(
                     e = P_PV[i] - P_PV_curtailment[i] + P_sto_pos[i] + P_sto_neg[i] - P_hybrid_inverter[i],
                     sense = plp.LpConstraintEQ,
+                    rhs = 0)
+                for i in set_I})
+        else:
+            constraints.update({"constraint_curtailment_{}".format(i) :
+                plp.LpConstraint(
+                    e = P_PV[i] - P_PV_curtailment[i] - P_nom_inverter,
+                    sense = plp.LpConstraintLE,
                     rhs = 0)
                 for i in set_I})
             
