@@ -69,8 +69,8 @@ if __name__ == '__main__':
     }
     
     # Set special debug cases
-    # optim_conf.update({'treat_def_as_semi_cont': [True, True]})
-    # optim_conf.update({'set_def_constant': [False, False]})
+    optim_conf.update({'treat_def_as_semi_cont': [True, True]})
+    optim_conf.update({'set_def_constant': [False, False]})
     # optim_conf.update({'P_deferrable_nom': [[500.0, 1000.0, 1000.0, 500.0], 750.0]})
     
     optim_conf.update({'set_use_battery': True})
@@ -78,7 +78,7 @@ if __name__ == '__main__':
     optim_conf.update({'set_battery_dynamic': True})
     optim_conf.update({'set_nodischarge_to_grid': True})
     
-    optim_conf.update({'inverter_is_hybrid': False})
+    optim_conf.update({'inverter_is_hybrid': True})
     
     df_input_data.loc[df_input_data.index[25:30],'unit_prod_price'] = -0.07
     df_input_data['P_PV_forecast'] = df_input_data['P_PV_forecast']*2
@@ -99,9 +99,11 @@ if __name__ == '__main__':
     if show_figures:
         fig_inputs_dah.show()
     
-    vars_to_plot = ['P_deferrable0', 'P_deferrable1', 'P_batt','P_grid', 'P_PV', 'P_PV_curtailment']
+    vars_to_plot = ['P_deferrable0', 'P_deferrable1','P_grid', 'P_PV', 'P_PV_curtailment']
     if optim_conf['inverter_is_hybrid']:
         vars_to_plot = vars_to_plot + ['P_hybrid_inverter']
+    if optim_conf['set_use_battery']:
+        vars_to_plot = vars_to_plot + ['P_batt']
     fig_res_dah = opt_res_dayahead[vars_to_plot].plot() # 'P_def_start_0', 'P_def_start_1', 'P_def_bin2_0', 'P_def_bin2_1'
     fig_res_dah.layout.template = template
     fig_res_dah.update_yaxes(title_text = "Powers (W)")

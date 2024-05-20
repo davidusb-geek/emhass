@@ -178,8 +178,12 @@ class Optimization:
                 P_deferrable.append({(i):plp.LpVariable(cat='Continuous',
                                                         name="P_deferrable{}_{}".format(k, i)) for i in set_I})
             else:
+                if type(self.optim_conf['P_deferrable_nom'][k]) == list:
+                    upBound = np.max(self.optim_conf['P_deferrable_nom'][k])
+                else:
+                    upBound = self.optim_conf['P_deferrable_nom'][k]
                 P_deferrable.append({(i):plp.LpVariable(cat='Continuous',
-                                                        lowBound=0, upBound=self.optim_conf['P_deferrable_nom'][k],
+                                                        lowBound=0, upBound=upBound,
                                                         name="P_deferrable{}_{}".format(k, i)) for i in set_I})
             P_def_bin1.append({(i):plp.LpVariable(cat='Binary',
                                                   name="P_def{}_bin1_{}".format(k, i)) for i in set_I})
@@ -323,15 +327,36 @@ class Optimization:
                 for i in set_I})
             
         # Constraint for sequence of deferrable
-        # value_list = self.optim_conf['P_deferrable_nom'][0]
-        # L = len(value_list)
-        # for t in set_I:
-        #     constraints[f"P_constraint_{t}"] = P_deferrable[t] == plp.lpSum(value_list[i] * Seq_start[(t - i) % n] for i in range(L) if (t - i) % n in Seq_start)
-        # constraints["One_sequence_start"] = plp.lpSum(Seq_start[t] for t in set_I) == 1
-        # for t in set_I:
-        #     for i in range(L):
-        #         if t + i < n:
-        #             constraints[f"Contiguity_constraint_{t}_{i}"] = P_deferrable[t + i] == value_list[i] * Seq_start[t]
+        for k in range(self.optim_conf['num_def_loads']):
+            if type(self.optim_conf['P_deferrable_nom'][k]) == list:
+                power_sequence = self.optim_conf['P_deferrable_nom'][k]
+                sequence_length = len(power_sequence)
+                start_time = {i: plp.LpVariable(cat='Binary', name="start_time_{}_{}".format(k, i)) for i in range(n - sequence_length + 1)}
+                # Ensure the sequence starts exactly once
+                constraints.update({"One_Start_Time_{}".format(k):
+                    plp.LpConstraint(
+                        e=plp.lpSum(start_time[i] for i in start_time),
+                        sense=plp.LpConstraintEQ,
+                        rhs=1)
+                    })
+                # Add constraints to enforce the sequence based on the start time
+                for i in range(n - sequence_length + 1):
+                    for j in range(sequence_length):
+                        constraints.update({"Seq_Constraint_{}_{}_{}".format(k, i, j) :
+                            plp.LpConstraint(
+                                e=P_deferrable[k][i + j] - power_sequence[j] * start_time[i],
+                                sense=plp.LpConstraintEQ,
+                                rhs=0
+                            )})
+                # Add constraints to ensure P_deferrable is zero outside the sequence range
+                for i in set_I:
+                    if i >= n - sequence_length + 1:
+                        constraints.update({"Zero_Outside_Sequence_{}_{}".format(k, i) :
+                            plp.LpConstraint(
+                                e=P_deferrable[k][i],
+                                sense=plp.LpConstraintEQ,
+                                rhs=0
+                            )})
             
         # Two special constraints just for a self-consumption cost function
         if self.costfun == 'self-consumption':
@@ -365,32 +390,69 @@ class Optimization:
 
         # Treat deferrable loads constraints
         for k in range(self.optim_conf['num_def_loads']):
-            # Total time of deferrable load
-            constraints.update({"constraint_defload{}_energy".format(k) :
-                plp.LpConstraint(
-                    e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in set_I),
-                    sense = plp.LpConstraintEQ,
-                    rhs = def_total_hours[k]*self.optim_conf['P_deferrable_nom'][k])
-                })
-            # Ensure deferrable loads consume energy between def_start_timestep & def_end_timestep
-            self.logger.debug("Deferrable load {}: Proposed optimization window: {} --> {}".format(k, def_start_timestep[k], def_end_timestep[k]))
-            def_start, def_end, warning = Optimization.validate_def_timewindow(def_start_timestep[k], def_end_timestep[k], ceil(def_total_hours[k]/self.timeStep), n)
-            if warning is not None: 
-                self.logger.warning("Deferrable load {} : {}".format(k, warning))
-            self.logger.debug("Deferrable load {}: Validated optimization window: {} --> {}".format(k, def_start, def_end))
-            if def_start > 0:                    
-                constraints.update({"constraint_defload{}_start_timestep".format(k) :
+            if type(self.optim_conf['P_deferrable_nom'][k]) == list:
+                continue
+            else:
+                # Total time of deferrable load
+                constraints.update({"constraint_defload{}_energy".format(k) :
                     plp.LpConstraint(
-                        e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in range(0, def_start)),
+                        e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in set_I),
                         sense = plp.LpConstraintEQ,
-                        rhs = 0)
+                        rhs = def_total_hours[k]*self.optim_conf['P_deferrable_nom'][k])
                     })
-            if def_end > 0:                    
-                constraints.update({"constraint_defload{}_end_timestep".format(k) :
+                # Ensure deferrable loads consume energy between def_start_timestep & def_end_timestep
+                self.logger.debug("Deferrable load {}: Proposed optimization window: {} --> {}".format(k, def_start_timestep[k], def_end_timestep[k]))
+                def_start, def_end, warning = Optimization.validate_def_timewindow(def_start_timestep[k], def_end_timestep[k], ceil(def_total_hours[k]/self.timeStep), n)
+                if warning is not None: 
+                    self.logger.warning("Deferrable load {} : {}".format(k, warning))
+                self.logger.debug("Deferrable load {}: Validated optimization window: {} --> {}".format(k, def_start, def_end))
+                if def_start > 0:                    
+                    constraints.update({"constraint_defload{}_start_timestep".format(k) :
+                        plp.LpConstraint(
+                            e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in range(0, def_start)),
+                            sense = plp.LpConstraintEQ,
+                            rhs = 0)
+                        })
+                if def_end > 0:                    
+                    constraints.update({"constraint_defload{}_end_timestep".format(k) :
+                        plp.LpConstraint(
+                            e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in range(def_end, n)),
+                            sense = plp.LpConstraintEQ,
+                            rhs = 0)
+                        })
+                # Treat deferrable load as a semi-continuous variable
+                if self.optim_conf['treat_def_as_semi_cont'][k]:
+                    constraints.update({"constraint_pdef{}_semicont1_{}".format(k, i) : 
+                        plp.LpConstraint(
+                            e=P_deferrable[k][i] - self.optim_conf['P_deferrable_nom'][k]*P_def_bin1[k][i],
+                            sense=plp.LpConstraintGE,
+                            rhs=0)
+                        for i in set_I})
+                    constraints.update({"constraint_pdef{}_semicont2_{}".format(k, i) :
+                        plp.LpConstraint(
+                            e=P_deferrable[k][i] - self.optim_conf['P_deferrable_nom'][k]*P_def_bin1[k][i],
+                            sense=plp.LpConstraintLE,
+                            rhs=0)
+                        for i in set_I})
+                # Treat the number of starts for a deferrable load
+                if self.optim_conf['set_def_constant'][k]:
+                    constraints.update({"constraint_pdef{}_start1_{}".format(k, i) : 
+                        plp.LpConstraint(
+                            e=P_deferrable[k][i] - P_def_bin2[k][i]*M,
+                            sense=plp.LpConstraintLE,
+                            rhs=0)
+                        for i in set_I})
+                    constraints.update({"constraint_pdef{}_start2_{}".format(k, i): 
+                        plp.LpConstraint(
+                            e=P_def_start[k][i] - P_def_bin2[k][i] + (P_def_bin2[k][i-1] if i-1 >= 0 else 0),
+                            sense=plp.LpConstraintGE,
+                            rhs=0)
+                        for i in set_I})
+                    constraints.update({"constraint_pdef{}_start3".format(k) :
                     plp.LpConstraint(
-                        e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in range(def_end, n)),
+                        e = plp.lpSum(P_def_start[k][i] for i in set_I),
                         sense = plp.LpConstraintEQ,
-                        rhs = 0)
+                        rhs = 1)
                     })
 
             # Treat deferrable load as a semi-continuous variable
