@@ -205,6 +205,11 @@ class Optimization:
         if self.costfun == 'self-consumption':
             SC  = {(i):plp.LpVariable(cat='Continuous',
                                       name="SC_{}".format(i)) for i in set_I}
+        if self.optim_conf['inverter_is_hybrid']:
+            P_hybrid_inverter = {(i):plp.LpVariable(cat='Continuous',
+                                                    name="P_hybrid_inverter{}".format(i)) for i in set_I}
+        P_PV_curtailment = {(i):plp.LpVariable(cat='Continuous', lowBound=0,
+                                               name="P_PV_curtailment{}".format(i)) for i in set_I}
         
         # Special variables to define a sequence:
         # Seq_start  = {(i):plp.LpVariable(cat='Binary',
@@ -267,12 +272,20 @@ class Optimization:
 
         ## Setting constraints
         # The main constraint: power balance
-        constraints = {"constraint_main1_{}".format(i) :
-            plp.LpConstraint(
-                e = P_PV[i] - P_def_sum[i] - P_load[i] + P_grid_neg[i] + P_grid_pos[i] + P_sto_pos[i] + P_sto_neg[i],
-                sense = plp.LpConstraintEQ,
-                rhs = 0)
-            for i in set_I}
+        if self.optim_conf['inverter_is_hybrid']:
+            constraints = {"constraint_main1_{}".format(i) :
+                plp.LpConstraint(
+                    e = P_hybrid_inverter[i] - P_def_sum[i] - P_load[i] + P_grid_neg[i] + P_grid_pos[i] ,
+                    sense = plp.LpConstraintEQ,
+                    rhs = 0)
+                for i in set_I}
+        else:
+            constraints = {"constraint_main1_{}".format(i) :
+                plp.LpConstraint(
+                    e = P_PV[i] - P_PV_curtailment[i] - P_def_sum[i] - P_load[i] + P_grid_neg[i] + P_grid_pos[i] + P_sto_pos[i] + P_sto_neg[i],
+                    sense = plp.LpConstraintEQ,
+                    rhs = 0)
+                for i in set_I}
         
         # Constraint for hybrid inverter case
         if self.optim_conf['inverter_is_hybrid']:
@@ -289,10 +302,16 @@ class Optimization:
             else:
                 inverter = cec_inverters[self.plant_conf['inverter_model']]
                 P_nom_inverter = inverter.Paco
-            constraints.update({"constraint_hybrid_inverter_{}".format(i) :
+            constraints.update({"constraint_hybrid_inverter1_{}".format(i) :
                 plp.LpConstraint(
-                    e = P_PV[i] + P_sto_pos[i] + P_sto_neg[i] - P_nom_inverter,
+                    e = P_PV[i] - P_PV_curtailment[i] + P_sto_pos[i] + P_sto_neg[i] - P_nom_inverter,
                     sense = plp.LpConstraintLE,
+                    rhs = 0)
+                for i in set_I})
+            constraints.update({"constraint_hybrid_inverter2_{}".format(i) :
+                plp.LpConstraint(
+                    e = P_PV[i] - P_PV_curtailment[i] + P_sto_pos[i] + P_sto_neg[i] - P_hybrid_inverter[i],
+                    sense = plp.LpConstraintEQ,
                     rhs = 0)
                 for i in set_I})
             
@@ -566,6 +585,9 @@ class Optimization:
                 SOC_opt.append(SOCinit - SOC_opt_delta[i])
                 SOCinit = SOC_opt[i]
             opt_tp["SOC_opt"] = SOC_opt
+        if self.optim_conf['inverter_is_hybrid']:
+            opt_tp["P_hybrid_inverter"] = [P_hybrid_inverter[i].varValue for i in set_I]
+        opt_tp["P_PV_curtailment"] = [P_PV_curtailment[i].varValue for i in set_I]
         opt_tp.index = data_opt.index
 
         # Lets compute the optimal cost function
