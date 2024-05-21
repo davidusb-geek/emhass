@@ -331,34 +331,38 @@ class Optimization:
             if type(self.optim_conf['P_deferrable_nom'][k]) == list:
                 power_sequence = self.optim_conf['P_deferrable_nom'][k]
                 sequence_length = len(power_sequence)
-                y = plp.LpVariable.dicts("y", ((i, j) for i in set_I for j in range(sequence_length)), cat='Binary')
+                def create_matrix(input_list, n):
+                    matrix = []
+                    for i in range(n + 1):
+                        row = [0] * i + input_list + [0] * (n - i)
+                        matrix.append(row[:n*2])
+                    return matrix
+                matrix = create_matrix(power_sequence, n-sequence_length)
+                y = plp.LpVariable.dicts("y", (i for i in set_I), cat='Binary')
                 constraints.update({f"SingleValueConstraint_{i}" :
                     plp.LpConstraint(
-                        e = plp.lpSum(y[(i, j)] for j in range(sequence_length)),
-                        sense = plp.LpConstraintLE,
+                        e = plp.lpSum(y[i] for i in set_I),
+                        sense = plp.LpConstraintEQ,
                         rhs = 1)
+                    })
+                constraints.update({f"DefSumConstraint_{i}" :
+                    plp.LpConstraint(
+                        e = plp.lpSum(P_deferrable[k][i] for i in set_I),
+                        sense = plp.LpConstraintEQ,
+                        rhs = np.sum(power_sequence))
+                    })
+                constraints.update({f"DefPositiveConstraint_{i}" :
+                    plp.LpConstraint(
+                        e = P_deferrable[k][i],
+                        sense = plp.LpConstraintGE,
+                        rhs = 0)
                     for i in set_I})
-                
-                
-                for num, _ in enumerate(power_sequence):
-                    constraints.update({f"One_{num}" :
+                for num, mat in enumerate(matrix):
+                    constraints.update({f"ValueConstraint_{num}" :
                         plp.LpConstraint(
-                            e = plp.lpSum(y[(i, num)]),
+                            e = P_deferrable[k][i],
                             sense = plp.LpConstraintEQ,
-                            rhs = 1)
-                        for i in set_I})
-                    if num > 0:
-                        constraints.update({f"OrderConstraint_{num}" :
-                            plp.LpConstraint(
-                                e = plp.lpSum(y[(val, num-1)] for val in range(i + 1)),
-                                sense = plp.LpConstraintGE,
-                                rhs = y[(i, num)])
-                            for i in set_I})
-                constraints.update({f"ValueConstraint_{i}" :
-                        plp.LpConstraint(
-                            e = P_deferrable[k][i] - plp.lpSum(val * y[(i, j)] for j, val in enumerate(power_sequence)),
-                            sense = plp.LpConstraintEQ,
-                            rhs = 0)
+                            rhs = mat[i]*y[i])
                         for i in set_I})
 
         # Two special constraints just for a self-consumption cost function
