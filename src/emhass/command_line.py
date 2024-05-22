@@ -1012,10 +1012,10 @@ def publish_json(entity,input_data_dict,entity_path,logger,reference: Optional[s
     entity_id = entity.replace(".json", "")
     
     # Adjust Dataframe from received entity json file
-    entity_data.columns = ['value']
-    entity_data.index = pd.to_datetime(entity_data.index).tz_localize(input_data_dict["retrieve_hass_conf"]["time_zone"])
-    entity_data.index.freq = pd.to_timedelta(int(metadata[entity_id]["freq"]), "minutes")
-    
+    entity_data.columns = [metadata[entity_id]["name"]]
+    entity_data.index.name = "timestamp"
+    entity_data.index = pd.to_datetime(entity_data.index).tz_convert(input_data_dict["retrieve_hass_conf"]["time_zone"])
+    entity_data.index.freq = pd.to_timedelta(int(metadata[entity_id]["freq"]), "minutes")    
     # Calculate the current state value
     if input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "nearest":
         idx_closest = entity_data.index.get_indexer([now_precise], method="nearest")[0]
@@ -1035,7 +1035,7 @@ def publish_json(entity,input_data_dict,entity_path,logger,reference: Optional[s
     
     #post/save entity
     input_data_dict["rh"].post_data(
-        data_df=entity_data['value'],
+        data_df=entity_data[metadata[entity_id]["name"]],
         idx=idx_closest,
         entity_id=entity_id,
         unit_of_measurement=metadata[entity_id]["unit_of_measurement"],
@@ -1044,7 +1044,7 @@ def publish_json(entity,input_data_dict,entity_path,logger,reference: Optional[s
         save_entities=False,
         logger_levels=logger_levels
     )
-    return entity_data['value']
+    return entity_data[metadata[entity_id]["name"]]
 
 
 def main():

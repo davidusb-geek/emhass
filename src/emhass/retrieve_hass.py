@@ -417,13 +417,15 @@ class RetrieveHass:
             response.ok = True
         else:
             response = post(url, headers=headers, data=json.dumps(data))
+
+        # Treating the response status and posting them on the logger
+        if response.ok:
+
             if logger_levels == "DEBUG":
                 self.logger.debug("Successfully posted to " + entity_id + " = " + str(state))
             else:
                 self.logger.info("Successfully posted to " + entity_id + " = " + str(state))
-        
-        # Treating the response status and posting them on the logger
-        if response.ok:
+
             # If save entities is set, save entity data to /data_path/entities
             if (save_entities):
                 entities_path = self.emhass_conf['data_path'] / "entities"
@@ -432,7 +434,7 @@ class RetrieveHass:
                 pathlib.Path(entities_path).mkdir(parents=True, exist_ok=True)
                 
                 # Save entity data to json file
-                result = data_df.to_json(orient='index')
+                result = data_df.to_json(index="timestamp", orient='index', date_unit='s', date_format='iso')
                 parsed = json.loads(result)
                 with open(entities_path / (entity_id + ".json"), "w") as file:                       
                     json.dump(parsed, file, indent=4)
@@ -445,7 +447,7 @@ class RetrieveHass:
                     metadata = {}
                 with open(entities_path / "metadata.json", "w") as file:                       
                     # Save entity metadata, key = entity_id 
-                    metadata[entity_id] = {'unit_of_measurement': unit_of_measurement,'friendly_name': friendly_name,'type_var': type_var, 'freq': int(self.freq.seconds / 60)}
+                    metadata[entity_id] = {'name': data_df.name, 'unit_of_measurement': unit_of_measurement,'friendly_name': friendly_name,'type_var': type_var, 'freq': int(self.freq.seconds / 60)}
                     
                     # Find lowest frequency to set for continual loop freq
                     if metadata.get("lowest_freq",None) == None or metadata["lowest_freq"] > int(self.freq.seconds / 60):
