@@ -340,6 +340,9 @@ class Optimization:
                     for i in set_I})
 
             # Treat the number of starts for a deferrable load
+            current_state = 1
+            if 'def_current_state' in self.optim_conf and len(self.optim_conf['def_current_state']) > k:
+                current_state = 1 if self.optim_conf['def_current_state'][k] else 0
             # P_deferrable < P_def_bin2 * 1 million
             # P_deferrable must be zero if P_def_bin2 is zero
             constraints.update({"constraint_pdef{}_start1_{}".format(k, i) :
@@ -350,9 +353,10 @@ class Optimization:
                 for i in set_I})
             # P_def_start + P_def_bin2[i-1] >= P_def_bin2[i]
             # If load is on this cycle (P_def_bin2[i] is 1) then P_def_start must be 1 OR P_def_bin2[i-1] must be 1
+            # For first timestep, use current state if provided by caller.
             constraints.update({"constraint_pdef{}_start2_{}".format(k, i):
                 plp.LpConstraint(
-                    e=P_def_start[k][i] - P_def_bin2[k][i] + (P_def_bin2[k][i-1] if i-1 >= 0 else 0),
+                    e=P_def_start[k][i] - P_def_bin2[k][i] + (P_def_bin2[k][i-1] if i-1 >= 0 else current_state),
                     sense=plp.LpConstraintGE,
                     rhs=0)
                 for i in set_I})
