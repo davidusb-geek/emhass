@@ -202,8 +202,7 @@ class RetrieveHass:
             self.logger.error("The inferred freq:" + str(self.df_final.index.freq) + " from data is not equal to the defined freq in passed:" + str(self.freq))
             return False
         return True
-           
-    
+
     def prepare_data(self, var_load: str, load_negative: Optional[bool] = False, set_zero_min: Optional[bool] = True,
                      var_replace_zero: Optional[list] = None, var_interp: Optional[list] = None) -> None:
         r"""
@@ -282,17 +281,25 @@ class RetrieveHass:
         return True
 
     @staticmethod
-    def get_attr_data_dict(data_df: pd.DataFrame, idx: int, entity_id: str, unit_of_measurement: str,
-                           friendly_name: str, list_name: str, state: float) -> dict:
-        list_df = copy.deepcopy(data_df).loc[data_df.index[idx] :].reset_index()
-        list_df.columns = ["timestamps", entity_id]
-        ts_list = [str(i) for i in list_df["timestamps"].tolist()]
-        vals_list = [str(np.round(i, 2)) for i in list_df[entity_id].tolist()]
+    def get_attr_data_dict(
+        data_df: pd.DataFrame | pd.Series,
+        idx: int,
+        entity_id: str,
+        unit_of_measurement: str,
+        friendly_name: str,
+        list_name: str,
+        state: float,
+    ) -> dict:
+        key = entity_id.split("sensor.")[1]
+        if isinstance(data_df, pd.Series):
+            list_df = pd.DataFrame(data={key: data_df.copy()}, index=data_df.index)
+        else:
+            list_df = data_df.copy().loc[data_df.index[idx] :]
         forecast_list = []
-        for i, ts in enumerate(ts_list):
+        for ts, row in list_df.iterrows():
             datum = {}
-            datum["date"] = ts
-            datum[entity_id.split("sensor.")[1]] = vals_list[i]
+            datum["date"] = ts.isoformat()
+            datum[key] = np.round(row[key], 2)
             forecast_list.append(datum)
         data = {
             "state": "{:.2f}".format(state),
