@@ -414,7 +414,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         if "def_end_timestep" in runtimeparams.keys():
             optim_conf["def_end_timestep"] = runtimeparams["def_end_timestep"]
         if "def_current_state" in runtimeparams.keys():
-            optim_conf["def_current_state"] = [bool(s) for s in runtimeparams["def_current_state"]
+            optim_conf["def_current_state"] = [bool(s) for s in runtimeparams["def_current_state"]]
         if "treat_def_as_semi_cont" in runtimeparams.keys():
             optim_conf["treat_def_as_semi_cont"] = [
                 eval(str(k).capitalize())
