@@ -299,7 +299,7 @@ class RetrieveHass:
         for ts, row in list_df.iterrows():
             datum = {}
             datum["date"] = ts.isoformat()
-            datum[key] = np.round(row[key], 2)
+            datum[key] = str(np.round(row[key], 2))
             forecast_list.append(datum)
         data = {
             "state": "{:.2f}".format(state),
