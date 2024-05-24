@@ -16,6 +16,7 @@ These are the parameters that we will need to define to retrieve data from Home 
 - `days_to_retrieve`: We will retrieve data from now and up to days_to_retrieve days. Defaults to 2.
 - `var_PV`: This is the name of the photovoltaic produced power sensor in Watts from Home Assistant. For example: 'sensor.power_photovoltaics'.
 - `var_load`: The name of the household power consumption sensor in Watts from Home Assistant. The deferrable loads that we will want to include in the optimization problem should be substracted from this sensor in HASS. For example: 'sensor.power_load_no_var_loads'
+- `load_sensor_kw`: Set this parameter to True if the load and PV sensors are in kW rather than W. Defaults to False.
 - `load_negative`: Set this parameter to True if the retrived load variable is negative by convention. Defaults to False.
 - `set_zero_min`: Set this parameter to True to give a special treatment for a minimum value saturation to zero for power consumption data. Values below zero are replaced by nans. Defaults to True.
 - `var_replace_zero`: The list of retrieved variables that we would want to replace nans (if they exist) with zeros. For example:

@@ -74,7 +74,7 @@ if __name__ == '__main__':
 
         days_list = get_days_list(days_to_retrieve)
         var_list = [var_model]
-        rh.get_data(days_list, var_list)
+        rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, load_sensor_kw = retrieve_hass_conf['load_sensor_kw'])
         
         with open(data_path, 'wb') as fid:
             pickle.dump((rh.df_final, var_model), fid, pickle.HIGHEST_PROTOCOL)
@@ -257,7 +257,7 @@ if __name__ == '__main__':
     days_list = get_days_list(days_needed)
     var_model = retrieve_hass_conf['var_load']
     var_list = [var_model]
-    rh.get_data(days_list, var_list)
+    rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, load_sensor_kw = retrieve_hass_conf['load_sensor_kw'])
     data_last_window = copy.deepcopy(rh.df_final)
     
     data_last_window = add_date_features(data_last_window)

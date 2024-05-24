@@ -22,6 +22,7 @@
   "weight_battery_charge": 1.0,
   "sensor_power_photovoltaics": "sensor.power_photovoltaics",
   "sensor_power_load_no_var_loads": "sensor.power_load_no_var_loads",
+  "load_sensor_kw": false,
   "load_negative": false,
   "set_zero_min": true,
   "number_of_deferrable_loads": 2,

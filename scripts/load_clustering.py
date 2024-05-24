@@ -65,7 +65,7 @@ if __name__ == '__main__':
 
         days_list = get_days_list(days_to_retrieve)
         var_list = [var_model]
-        rh.get_data(days_list, var_list)
+        rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, load_sensor_kw = retrieve_hass_conf['load_sensor_kw'])
         
         with open(data_path, 'wb') as fid:
             pickle.dump((rh.df_final, var_model), fid, pickle.HIGHEST_PROTOCOL)

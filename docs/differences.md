@@ -20,6 +20,7 @@ See bellow for a list of associations between the parameters from `config_emhass
 | retrieve_hass_conf |  var_PV |  sensor_power_photovoltaics | |
 | retrieve_hass_conf |  var_load |  sensor_power_load_no_var_loads | |
 | retrieve_hass_conf |  load_negative |  load_negative | |
+| retrieve_hass_conf |  load_sensor_kw |  load_sensor_kw | |
 | retrieve_hass_conf |  set_zero_min |  set_zero_min | |
 | retrieve_hass_conf |  method_ts_round |  method_ts_round | |
 | params_secrets |  solcast_api_key |  optional_solcast_api_key | |

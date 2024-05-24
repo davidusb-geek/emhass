@@ -45,7 +45,7 @@ class TestOptimization(unittest.TestCase):
             self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
             self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
             self.rh.get_data(self.days_list, self.var_list,
-                            minimal_response=False, significant_changes_only=False)
+                            minimal_response=False, significant_changes_only=False,load_sensor_kw=self.retrieve_hass_conf['load_sensor_kw'])
         self.rh.prepare_data(self.retrieve_hass_conf['var_load'], load_negative = self.retrieve_hass_conf['load_negative'],
                              set_zero_min = self.retrieve_hass_conf['set_zero_min'], 
                              var_replace_zero = self.retrieve_hass_conf['var_replace_zero'], 

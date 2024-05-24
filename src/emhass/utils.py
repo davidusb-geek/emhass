@@ -743,6 +743,9 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int,
         params["retrieve_hass_conf"]["var_load"] = options.get(
             "sensor_power_load_no_var_loads", params["retrieve_hass_conf"]["var_load"]
         )
+        params["retrieve_hass_conf"]["load_sensor_kw"] = options.get(
+            "load_sensor_kw", params["retrieve_hass_conf"]["load_sensor_kw"]
+        )
         params["retrieve_hass_conf"]["load_negative"] = options.get(
             "load_negative", params["retrieve_hass_conf"]["load_negative"]
         )

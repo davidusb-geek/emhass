@@ -47,7 +47,7 @@ class TestRetrieveHass(unittest.TestCase):
             self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
             self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
             self.rh.get_data(self.days_list, self.var_list,
-                             minimal_response=False, significant_changes_only=False)
+                             minimal_response=False, significant_changes_only=False, load_sensor_kw=self.retrieve_hass_conf['load_sensor_kw'])
             if save_data_to_file:
                 with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'wb') as outp:
                     pickle.dump((self.rh.df_final, self.days_list, self.var_list), 
@@ -95,7 +95,7 @@ class TestRetrieveHass(unittest.TestCase):
     def test_get_data_failed(self):
         days_list = get_days_list(1)
         var_list = [self.retrieve_hass_conf['var_load']]
-        response = self.rh.get_data(days_list, var_list)
+        response = self.rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, load_sensor_kw=self.retrieve_hass_conf['load_sensor_kw'])
         self.assertFalse(response)
 
     def test_get_data_mock(self):
@@ -107,7 +107,8 @@ class TestRetrieveHass(unittest.TestCase):
             m.get(self.retrieve_hass_conf['hass_url'], json=data.json())
             self.rh.get_data(days_list, var_list,
                              minimal_response=False, significant_changes_only=False,
-                             test_url=self.retrieve_hass_conf['hass_url'])
+                             test_url=self.retrieve_hass_conf['hass_url']
+                             load_sensor_kw=self.retrieve_hass_conf['load_sensor_kw'])
             self.assertIsInstance(self.rh.df_final, type(pd.DataFrame()))
             self.assertIsInstance(self.rh.df_final.index, pd.core.indexes.datetimes.DatetimeIndex)
             self.assertIsInstance(self.rh.df_final.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
