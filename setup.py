@@ -52,7 +52,7 @@ setup(
         'pulp>=2.4',
         'pyyaml>=5.4.1',
         'tables<=3.9.1',
-        'skforecast==0.12.0',
+        'skforecast==0.12.1',
         'flask>=2.0.3',
         'waitress>=2.1.1',
         'plotly>=5.6.0'
