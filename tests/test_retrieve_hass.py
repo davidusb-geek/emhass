@@ -48,7 +48,7 @@ class TestRetrieveHass(unittest.TestCase):
             self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
             self.sensors_in_kw = [self.retrieve_hass_conf['var_load_in_kw'], self.retrieve_hass_conf['var_PV_in_kw']]
             self.rh.get_data(self.days_list, self.var_list,
-                             minimal_response=False, significant_changes_only=False, self.sensor_in_kw_list=sensors_in_kw)
+                             minimal_response=False, significant_changes_only=False, sensor_in_kw_list=sensors_in_kw)
             if save_data_to_file:
                 with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'wb') as outp:
                     pickle.dump((self.rh.df_final, self.days_list, self.var_list), 
