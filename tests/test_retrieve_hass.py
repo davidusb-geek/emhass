@@ -46,8 +46,9 @@ class TestRetrieveHass(unittest.TestCase):
         else:
             self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
             self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
+            self.sensors_in_kw = [self.retrieve_hass_conf['var_load_in_kw'], self.retrieve_hass_conf['var_PV_in_kw']]
             self.rh.get_data(self.days_list, self.var_list,
-                             minimal_response=False, significant_changes_only=False, load_sensor_kw=self.retrieve_hass_conf['load_sensor_kw'])
+                             minimal_response=False, significant_changes_only=False, self.sensor_in_kw_list=sensors_in_kw)
             if save_data_to_file:
                 with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'wb') as outp:
                     pickle.dump((self.rh.df_final, self.days_list, self.var_list), 
@@ -95,8 +96,24 @@ class TestRetrieveHass(unittest.TestCase):
     def test_get_data_failed(self):
         days_list = get_days_list(1)
         var_list = [self.retrieve_hass_conf['var_load']]
-        response = self.rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, load_sensor_kw=self.retrieve_hass_conf['load_sensor_kw'])
+        sensors_in_kw = [self.retriev_hass_conf['var_load_in_kw']]
+        response = self.rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, sensor_in_kw_list=sensors_in_kw)
         self.assertFalse(response)
+
+    def test_get_data_in_kw(self):
+        days_list = get_days_list(1)
+        var_list = [self.retrieve_hass_conf['var_load']]
+        r1 = self.rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, sensor_in_kw_list=[True])
+        r2 = self.rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, sensor_in_kw_list=[False])
+        # test that r1 df entry is 1000x same r2 df entry
+        for i,row in r1.iterrows():
+            value_r1=row[1]
+            value_r2=r2.loc[i,1]
+            if value_r1>0:
+                if value_r2 == value_r1 * 1000:
+                    self.assertTrue(r1)
+                    break
+        self.assertFalse(r1)
 
     def test_get_data_mock(self):
         with requests_mock.mock() as m:
@@ -107,8 +124,7 @@ class TestRetrieveHass(unittest.TestCase):
             m.get(self.retrieve_hass_conf['hass_url'], json=data.json())
             self.rh.get_data(days_list, var_list,
                              minimal_response=False, significant_changes_only=False,
-                             test_url=self.retrieve_hass_conf['hass_url']
-                             load_sensor_kw=self.retrieve_hass_conf['load_sensor_kw'])
+                             test_url=self.retrieve_hass_conf['hass_url'])
             self.assertIsInstance(self.rh.df_final, type(pd.DataFrame()))
             self.assertIsInstance(self.rh.df_final.index, pd.core.indexes.datetimes.DatetimeIndex)
             self.assertIsInstance(self.rh.df_final.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)

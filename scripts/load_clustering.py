@@ -47,6 +47,7 @@ if __name__ == '__main__':
     days_to_retrieve = 240
     model_type = "load_clustering"
     var_model = "sensor.power_load_positive"
+    var_model_in_kw = False
     
     data_path = emhass_conf['data_path'] / str('data_train_'+model_type+'.pkl')
     params = None
@@ -65,7 +66,8 @@ if __name__ == '__main__':
 
         days_list = get_days_list(days_to_retrieve)
         var_list = [var_model]
-        rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, load_sensor_kw = retrieve_hass_conf['load_sensor_kw'])
+        sensors_in_kw = [var_model_in_kw]
+        rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, sensor_in_kw_list=sensors_in_kw)
         
         with open(data_path, 'wb') as fid:
             pickle.dump((rh.df_final, var_model), fid, pickle.HIGHEST_PROTOCOL)

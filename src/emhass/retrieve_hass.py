@@ -67,7 +67,7 @@ class RetrieveHass:
 
     def get_data(self, days_list: pd.date_range, var_list: list, 
                  minimal_response: Optional[bool] = False, significant_changes_only: Optional[bool] = False,
-                 test_url: Optional[str] = "empty", load_sensor_kw: Optional[bool] = False) -> None:
+                 test_url: Optional[str] = "empty", sensor_in_kw_list: Optional[list] = []) -> None:
         r"""
         Retrieve the actual data from hass.
         
@@ -84,9 +84,9 @@ class RetrieveHass:
         :param significant_changes_only: Retrieve significant changes only \
             using the hass restful API, defaults to False
         :type significant_changes_only: bool, optional
-        :param load_sensor_kw: Set to True to interpret the load variable in \
-                kW rather than the default W, defaults to False
-        :type load_sensor_kw: bool, optional
+        :param sensor_in_kw_list: Array of flags that determine whether the \
+                var_list elements are in kW or W. False if undefined
+        :type sensor_in_kw_list: list, optional
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
         
@@ -181,19 +181,28 @@ class RetrieveHass:
                 if i == 0: # Defining the DataFrame container
                     from_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").min()
                     to_date = pd.to_datetime(df_raw['last_changed'], format="ISO8601").max()
-                    ts = pd.to_datetime(pd.date_range(start=from_date, end=to_date, freq=self.freq), 
+                    ts = pd.to_datetime(pd.date_range(start=from_date, end=to_date, freq=self.freq),
                                         format='%Y-%d-%m %H:%M').round(self.freq, ambiguous='infer', nonexistent='shift_forward')
                     df_day = pd.DataFrame(index = ts)
                 # if load sensors are in kW, multiply the state entry by 1000
-                if load_sensor_kw:
-                    # Caution with undefined string data: unknown, unavailable, etc.
-                    df_tp = (
-                        df_raw.copy()[["state"]]
-                        .replace(["unknown", "unavailable", ""], np.nan)
-                        .astype(float)
-                        .rename(columns={"state": var})
-                        .mul(1000)
-                    )
+                if sensor_in_kw_list:
+                    if sensor_in_kw_list[i]:
+                        # Caution with undefined string data: unknown, unavailable, etc.
+                        df_tp = (
+                            df_raw.copy()[["state"]]
+                            .replace(["unknown", "unavailable", ""], np.nan)
+                            .astype(float)
+                            .rename(columns={"state": var})
+                            .mul(1000)
+                        )
+                    else:
+                        # Caution with undefined string data: unknown, unavailable, etc.
+                        df_tp = (
+                            df_raw.copy()[["state"]]
+                            .replace(["unknown", "unavailable", ""], np.nan)
+                            .astype(float)
+                            .rename(columns={"state": var})
+                        )
                 else:
                     # Caution with undefined string data: unknown, unavailable, etc.
                     df_tp = (
@@ -202,6 +211,7 @@ class RetrieveHass:
                         .astype(float)
                         .rename(columns={"state": var})
                     )
+
                 # Setting index, resampling and concatenation
                 df_tp.set_index(
                     pd.to_datetime(df_raw["last_changed"], format="ISO8601"),

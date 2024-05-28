@@ -54,6 +54,7 @@ if __name__ == '__main__':
     days_to_retrieve = 240
     model_type = "load_forecast"
     var_model = "sensor.power_load_no_var_loads"
+    var_model_in_kw = False
     sklearn_model = "KNeighborsRegressor"
     num_lags = 48
     
@@ -74,7 +75,8 @@ if __name__ == '__main__':
 
         days_list = get_days_list(days_to_retrieve)
         var_list = [var_model]
-        rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, load_sensor_kw = retrieve_hass_conf['load_sensor_kw'])
+        sensors_in_kw = [var_model_in_kw]
+        rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, sensor_in_kw_list=sensors_in_kw)
         
         with open(data_path, 'wb') as fid:
             pickle.dump((rh.df_final, var_model), fid, pickle.HIGHEST_PROTOCOL)
@@ -257,7 +259,8 @@ if __name__ == '__main__':
     days_list = get_days_list(days_needed)
     var_model = retrieve_hass_conf['var_load']
     var_list = [var_model]
-    rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, load_sensor_kw = retrieve_hass_conf['load_sensor_kw'])
+    sensor_in_kw_list = [retrieve_hass_conf['var_load_in_kw']]
+    rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, sensor_in_kw_list)
     data_last_window = copy.deepcopy(rh.df_final)
     
     data_last_window = add_date_features(data_last_window)

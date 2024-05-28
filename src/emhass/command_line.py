@@ -81,7 +81,9 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
                 retrieve_hass_conf["days_to_retrieve"])
             var_list = [retrieve_hass_conf["var_load"],
                         retrieve_hass_conf["var_PV"]]
-            if not rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, load_sensor_kw = retrieve_hass_conf['load_sensor_kw']):
+            sensors_in_kw = [retrieve_hass_conf["var_load_in_kw"],
+                                 retrieve_hass_conf["var_PV_in_kw"]]
+            if not rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, sensor_in_kw_list=sensors_in_kw):
                 return False
         if not rh.prepare_data(retrieve_hass_conf["var_load"],
                                load_negative=retrieve_hass_conf["load_negative"],
@@ -129,7 +131,9 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
             days_list = utils.get_days_list(1)
             var_list = [retrieve_hass_conf["var_load"],
                         retrieve_hass_conf["var_PV"]]
-            if not rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, load_sensor_kw = retrieve_hass_conf['load_sensor_kw']):
+            sensors_in_kw = [retrieve_hass_conf["var_load_in_kw"],
+                                 retrieve_hass_conf["var_PV_in_kw"]]
+            if not rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, sensor_in_kw_list=sensors_in_kw):
                 return False
         if not rh.prepare_data(retrieve_hass_conf["var_load"],
                                load_negative=retrieve_hass_conf["load_negative"],
@@ -165,6 +169,7 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
         days_to_retrieve = params["passed_data"]["days_to_retrieve"]
         model_type = params["passed_data"]["model_type"]
         var_model = params["passed_data"]["var_model"]
+        var_model_in_kw = params["passed_data"]["var_model_in_kw"]
         if get_data_from_file:
             days_list = None
             filename = 'data_train_'+model_type+'.pkl'
@@ -175,7 +180,8 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
         else:
             days_list = utils.get_days_list(days_to_retrieve)
             var_list = [var_model]
-            if not rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, load_sensor_kw = retrieve_hass_conf['load_sensor_kw']):
+            sensors_in_kw = [var_model_in_kw]
+            if not rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, sensor_in_kw_list=sensors_in_kw):
                 return False
             df_input_data = rh.df_final.copy()
     elif set_type == "regressor-model-fit" or set_type == "regressor-model-predict":
@@ -404,6 +410,7 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
     data = copy.deepcopy(input_data_dict['df_input_data'])
     model_type = input_data_dict['params']['passed_data']['model_type']
     var_model = input_data_dict['params']['passed_data']['var_model']
+    var_model_in_kw = input_data_dict['params']['passed_data']['var_model_in_kw']
     sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
     num_lags = input_data_dict['params']['passed_data']['num_lags']
     split_date_delta = input_data_dict['params']['passed_data']['split_date_delta']

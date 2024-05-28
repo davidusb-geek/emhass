@@ -56,6 +56,7 @@ class TestMLForecaster(unittest.TestCase):
             "days_to_retrieve": 20,
             "model_type": "load_forecast",
             "var_model": "sensor.power_load_no_var_loads",
+            "var_model_in_kw": False,
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48
         }
@@ -68,6 +69,7 @@ class TestMLForecaster(unittest.TestCase):
         data = copy.deepcopy(self.input_data_dict['df_input_data'])
         model_type = self.input_data_dict['params']['passed_data']['model_type']
         var_model = self.input_data_dict['params']['passed_data']['var_model']
+        # var_model_in_kw not necessary if data is read from file, which should always be stored in W
         sklearn_model = self.input_data_dict['params']['passed_data']['sklearn_model']
         num_lags = self.input_data_dict['params']['passed_data']['num_lags']
         self.mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, emhass_conf, logger)

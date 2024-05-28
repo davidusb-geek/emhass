@@ -62,8 +62,9 @@ class TestForecast(unittest.TestCase):
         else:
             self.days_list = utils.get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
             self.var_list = [self.retrieve_hass_conf['var_load'], self.retrieve_hass_conf['var_PV']]
+            self.sensors_in_kw = [self.retrieve_hass_conf['var_load_in_kw'], self.retrieve_hass_conf['var_PV_in_kw']]
             self.rh.get_data(self.days_list, self.var_list,
-                            minimal_response=False, significant_changes_only=False, load_sensor_kw = self.retrieve_hass_conf['load_sensor_kw'])
+                            minimal_response=False, significant_changes_only=False, sensor_in_kw_list=sensors_in_kw)
         self.rh.prepare_data(self.retrieve_hass_conf['var_load'], load_negative = self.retrieve_hass_conf['load_negative'],
                              set_zero_min = self.retrieve_hass_conf['set_zero_min'], 
                              var_replace_zero = self.retrieve_hass_conf['var_replace_zero'], 
@@ -220,8 +221,9 @@ class TestForecast(unittest.TestCase):
         else:
             days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
             var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
+            sensors_in_kw = [retrieve_hass_conf['var_load_in_kw'], retrieve_hass_conf['var_PV_in_kw']]
             rh.get_data(days_list, var_list,
-                        minimal_response=False, significant_changes_only=False, load_sensor_kw = retrieve_hass_conf['load_sensor_kw'])
+                        minimal_response=False, significant_changes_only=False, sensor_in_kw_list=sensors_in_kw)
         rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
                         set_zero_min = retrieve_hass_conf['set_zero_min'], 
                         var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
@@ -357,8 +359,9 @@ class TestForecast(unittest.TestCase):
         else:
             days_list = utils.get_days_list(retrieve_hass_conf['days_to_retrieve'])
             var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
+            sensors_in_kw = [retrieve_hass_conf['var_load_in_kw'], retrieve_hass_conf['var_PV_in_kw']]
             rh.get_data(days_list, var_list,
-                        minimal_response=False, significant_changes_only=False, load_sensor_kw = retrieve_hass_conf['load_sensor_kw'])
+                        minimal_response=False, significant_changes_only=False, sensor_in_kw_list=sensors_in_kw)
         rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
                         set_zero_min = retrieve_hass_conf['set_zero_min'], 
                         var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
@@ -455,6 +458,7 @@ class TestForecast(unittest.TestCase):
             "days_to_retrieve": 20,
             "model_type": "load_forecast",
             "var_model": "sensor.power_load_no_var_loads",
+            "var_model_in_kw": False,
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48
         }
@@ -467,6 +471,7 @@ class TestForecast(unittest.TestCase):
         data = copy.deepcopy(input_data_dict['df_input_data'])
         model_type = input_data_dict['params']['passed_data']['model_type']
         var_model = input_data_dict['params']['passed_data']['var_model']
+        # TODO: is var_model_in_kw necessary to pass to MLForecaster()?
         sklearn_model = input_data_dict['params']['passed_data']['sklearn_model']
         num_lags = input_data_dict['params']['passed_data']['num_lags']
         mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, emhass_conf, logger)

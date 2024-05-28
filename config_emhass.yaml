@@ -4,8 +4,9 @@ retrieve_hass_conf:
   freq: 30 # The time step to resample retrieved data from hass in minutes
   days_to_retrieve: 2 # We will retrieve data from now and up to days_to_retrieve days
   var_PV: 'sensor.power_photovoltaics' # Photovoltaic produced power sensor in Watts
+  var_PV_in_kw: False # Photovoltaic sensor in kW rather than W
   var_load: 'sensor.power_load_no_var_loads' # Household power consumption sensor in Watts (deferrable loads should be substracted)
-  load_sensor_kw: False # photovoltaic and load_no_var_loads sensors in kW rather than W
+  var_load_in_kw: False # load_no_var_loads in kW rather than W
   load_negative: False # Set to True if the retrived load variable is negative by convention
   set_zero_min: True # A special treatment for a minimum value saturation to zero. Values below zero are replaced by nans
   var_replace_zero: # A list of retrived variables that we would want  to replace nans with zeros

@@ -26,6 +26,8 @@ The minimum number of `days_to_retrieve` is hard coded to 9 by default. But it i
 
 - `var_model`: the name of the sensor to retrieve data from Home Assistant. Example: `sensor.power_load_no_var_loads`.
 
+- `var_model_in_kw`: whether the sensor is in kW. Example: `False`.
+
 - `sklearn_model`: the `scikit-learn` model that will be used. For now only this options are possible: `LinearRegression`, `ElasticNet` and `KNeighborsRegressor`.
 
 - `num_lags`: the number of auto-regression lags to consider. A good starting point is to fix this as one day. For example if your time step is 30 minutes, then fix this to 48, if the time step is 1 hour the fix this to 24 and so on.

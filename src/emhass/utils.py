@@ -325,11 +325,17 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         else:
             model_type = runtimeparams["model_type"]
         params["passed_data"]["model_type"] = model_type
+
         if "var_model" not in runtimeparams.keys():
             var_model = "sensor.power_load_no_var_loads"
         else:
             var_model = runtimeparams["var_model"]
         params["passed_data"]["var_model"] = var_model
+        if "var_model_in_kw" not in runtimeparams.keys():
+            var_model_in_kw = False
+        else:
+            var_model_in_kw = eval(str(runtimeparams["var_model_in_kw"]).capitalize())
+        params["passed_data"]["var_model_in_kw"] = var_model_in_kw
         if "sklearn_model" not in runtimeparams.keys():
             sklearn_model = "KNeighborsRegressor"
         else:
@@ -673,7 +679,7 @@ def get_injection_dict_forecast_model_fit(df_fit_pred: pd.DataFrame, mlf: MLFore
         "<h4>Plotting train/test forecast model results for " + mlf.model_type + "</h4>"
     )
     injection_dict["subsubtitle0"] = (
-        "<h4>Forecasting variable " + mlf.var_model + "</h4>"
+            "<h4>Forecasting variable " + mlf.var_model + " (sensor in kW: " + mlf.var_model_in_kw + ")</h4>"
     )
     injection_dict["figure_0"] = image_path_0
     return injection_dict
@@ -743,8 +749,11 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int,
         params["retrieve_hass_conf"]["var_load"] = options.get(
             "sensor_power_load_no_var_loads", params["retrieve_hass_conf"]["var_load"]
         )
-        params["retrieve_hass_conf"]["load_sensor_kw"] = options.get(
-            "load_sensor_kw", params["retrieve_hass_conf"]["load_sensor_kw"]
+        params["retrieve_hass_conf"]["var_PV_in_kw"] = options.get(
+            "var_PV_in_kw", params["retrieve_hass_conf"]["var_PV_in_kw"]
+        )
+        params["retrieve_hass_conf"]["var_load_in_kw"] = options.get(
+            "var_load_in_kw", params["retrieve_hass_conf"]["var_load_in_kw"]
         )
         params["retrieve_hass_conf"]["load_negative"] = options.get(
             "load_negative", params["retrieve_hass_conf"]["load_negative"]

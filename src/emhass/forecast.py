@@ -643,7 +643,8 @@ class Forecast(object):
                     self.var_load_new = self.var_load+'_positive'
             else:
                 days_list = get_days_list(days_min_load_forecast) 
-                if not rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, load_sensor_kw = self.retrieve_hass_conf['load_sensor_kw']):
+                sensors_in_kw = [self.retrieve_hass_conf['var_load_in_kw']]
+                if not rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False, sensor_in_kw_list=sensors_in_kw):
                     return False
             if  not rh.prepare_data(
                 self.retrieve_hass_conf['var_load'], load_negative = self.retrieve_hass_conf['load_negative'],
