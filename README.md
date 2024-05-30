@@ -289,9 +289,9 @@ in configuration page/`config_emhass.yaml`
 In this automation the day-ahead optimization is performed once a day, everyday at 5:30am. 
 If the `freq` parameter is set to `30` *(default)* in the configuration, the results of the day-ahead optimization will generate 48 values (for each entity), a value for each 30 minutes in a day (i.e. 24 hrs x 2).
 
-Setting the parameter `continual_publish` to `true` in the configuration page, will allow EMHASS to store the optimization results as entities/sensors into json files. `continual_publish` will periodically (every `freq` amount of minutes) run a publish, and publish the optimization results of each generated entities/sensors to Home Assistant. The current state of the sensor/entity being updated every time publish runs, selecting one of the 48 stored values, by comparing the stored values timestamps, the current timestamp and [`"method_ts_round": "first"`](##Thepublish-dataspecificities) to select the optimal stored value.
+Setting the parameter `continual_publish` to `true` in the configuration page, will allow EMHASS to store the optimization results as entities/sensors into json files. `continual_publish` will periodically (every `freq` amount of minutes) run a publish, and publish the optimization results of each generated entities/sensors to Home Assistant. The current state of the sensor/entity being updated every time publish runs, selecting one of the 48 stored values, by comparing the stored values timestamps, the current timestamp and [`"method_ts_round": "first"`](#the-publish-data-specificities) to select the optimal stored value.
 
-option 1 and 2 are very similar, however option 2 (`continual_publish`) will require a cpu thread to constantly be run inside of EMHASS, lowering efficiency. The reason why you may pick one over the other is explained in more detail bellow in [continual_publish](####continual_publish).
+option 1 and 2 are very similar, however option 2 (`continual_publish`) will require a cpu thread to constantly be run inside of EMHASS, lowering efficiency. The reason why you may pick one over the other is explained in more detail bellow in [continual_publish](#continual_publish-emhass-automation).
 
 Lastly, the automation's bellow, link a EMHASS published entities/sensor's current state to a Home Assistant entity on/off switch,  controlling a desired controllable load. 
 For example, imagine that I want to control my water heater. I can use a published `deferrable` EMHASS entity to control my water heaters desired behavior. In this case, we could use an automation like below, to control the desired water heater on and off:
@@ -403,7 +403,7 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 *See examples bellow for more information for methods to achieve this.*
 
 #### continual_publish *(EMHASS Automation)*
-As discussed in [Common for any installation method](###Common-for-any-installation-method) option 2, setting `continual_publish` to `true` in the configuration saves the output of the optimization into the `data_path/entities` folder *(a .json file for each sensor/entity)*. A constant loop (in `freq` minutes) will run, observe the .json files in that folder, and publish the saved files periodically (updating the current state of the entity with date.now and the saved timestamps). 
+As discussed in [Common for any installation method - option 2](#option-2-emhass-automate-publish), setting `continual_publish` to `true` in the configuration saves the output of the optimization into the `data_path/entities` folder *(a .json file for each sensor/entity)*. A constant loop (in `freq` minutes) will run, observe the .json files in that folder, and publish the saved files periodically (updating the current state of the entity with date.now and the saved timestamps). 
 
 For users that wish to run multiple different optimizations, you can set the runtime parameter: `publish_prefix` to something like: `"mpc_"` or `"dh_"`. This will generate unique entity_id names per optimization and save these unique entities as separate files in the folder. All the entity files will then be updated when the next loop iteration runs. If a different `freq` integer was passed as a runtime parameter in an optimization, the `continual_publish` loop will be based on the lowest `freq` saved. An example:
 
@@ -561,7 +561,7 @@ Check the dedicated section in the documentation here: [https://emhass.readthedo
 
 ## Development
 
-Pull request are very much accepted on this project. For development you can find some instructions here [Development](https://emhass.readthedocs.io/en/latest/develop.html)
+Pull request are very much accepted on this project. For development you can find some instructions here [Development](https://emhass.readthedocs.io/en/latest/develop.html).
 
 ## Troubleshooting
 
