@@ -267,7 +267,7 @@ In `automations.yaml`:
   action:
   - service: shell_command.publish_data
 ```
-In these automation's the day-ahead optimization is performed once a day, everyday at 5:30am, and the data is published every 5 minutes.
+In these automation's the day-ahead optimization is performed once a day, everyday at 5:30am, and the data *(output of automation)* is published every 5 minutes.
 
 #### Option 2, EMHASS automate publish 
 
@@ -287,13 +287,13 @@ in configuration page/`config_emhass.yaml`
 "continual_publish": true
 ```
 In this automation the day-ahead optimization is performed once a day, everyday at 5:30am. 
-If the `freq` parameter is set to `30` *(default)* in the configuration, the results of the day-ahead optimization will generate 48 values (for each entity), a value for each 30 minutes in a day (i.e. 24 hrs x 2).
+If the `freq` parameter is set to `30` *(default)* in the configuration, the results of the day-ahead optimization will generate 48 values *(for each entity)*, a value for each 30 minutes in a day *(i.e. 24 hrs x 2)*.
 
-Setting the parameter `continual_publish` to `true` in the configuration page, will allow EMHASS to store the optimization results as entities/sensors into json files. `continual_publish` will periodically (every `freq` amount of minutes) run a publish, and publish the optimization results of each generated entities/sensors to Home Assistant. The current state of the sensor/entity being updated every time publish runs, selecting one of the 48 stored values, by comparing the stored values timestamps, the current timestamp and [`"method_ts_round": "first"`](#the-publish-data-specificities) to select the optimal stored value.
+Setting the parameter `continual_publish` to `true` in the configuration page, will allow EMHASS to store the optimization results as entities/sensors into seperate json files. `continual_publish` will periodically (every `freq` amount of minutes) run a publish, and publish the optimization results of each generated entities/sensors to Home Assistant. The current state of the sensor/entity being updated every time publish runs, selecting one of the 48 stored values, by comparing the stored values timestamps, the current timestamp and [`"method_ts_round": "first"`](#the-publish-data-specificities) to select the optimal stored value for the current state.
 
 option 1 and 2 are very similar, however option 2 (`continual_publish`) will require a cpu thread to constantly be run inside of EMHASS, lowering efficiency. The reason why you may pick one over the other is explained in more detail bellow in [continual_publish](#continual_publish-emhass-automation).
 
-Lastly, the automation's bellow, link a EMHASS published entities/sensor's current state to a Home Assistant entity on/off switch,  controlling a desired controllable load. 
+Lastly, we can link a EMHASS published entities/sensor's current state to a Home Assistant entity on/off switch, controlling a desired controllable load. 
 For example, imagine that I want to control my water heater. I can use a published `deferrable` EMHASS entity to control my water heaters desired behavior. In this case, we could use an automation like below, to control the desired water heater on and off:
   
 on:
@@ -326,7 +326,7 @@ automation:
     - service: homeassistant.turn_off
       entity_id: switch.water_heater_switch
 ```
-The result of these automation's will turn on and off the Home Assistant entity `switch.water_heater_switch` using the current state from the EMHASS entity `sensor.p_deferrable0`. `sensor.p_deferrable0`  being the entity generated from the EMHASS day-ahead optimization and publish examples above. The entities current state being updated every 30 minutes (or `freq` minutes) via automated publish option 1 or 2 selecting its 48 stored data values.
+The result of these automation's will turn on and off the Home Assistant entity `switch.water_heater_switch` using the current state from the EMHASS entity `sensor.p_deferrable0`. `sensor.p_deferrable0`  being the entity generated from the EMHASS day-ahead optimization and published by examples above. The `sensor.p_deferrable0` entity current state being updated every 30 minutes (or `freq` minutes) via a automated publish option 1 or 2. *(selecting one of the 48 stored data values)*
 
 ## The publish-data specificities
 
@@ -334,7 +334,7 @@ The result of these automation's will turn on and off the Home Assistant entity 
 
 The `publish-data` command will also publish PV and load forecast data on sensors `p_pv_forecast` and `p_load_forecast`. If using a battery, then the battery optimized power and the SOC will be published on sensors `p_batt_forecast` and `soc_batt_forecast`. On these sensors the future values are passed as nested attributes.
 
-If you run publish manually (or via a Home Assistant Automation), it is possible to provide custom sensor names for all the data exported by the `publish-data` command. For this, when using the `publish-data` endpoint we can just add some runtime parameters as dictionaries like this:
+If you run publish manually *(or via a Home Assistant Automation)*, it is possible to provide custom sensor names for all the data exported by the `publish-data` command. For this, when using the `publish-data` endpoint we can just add some runtime parameters as dictionaries like this:
 ```yaml
 shell_command:
   publish_data: "curl -i -H \"Content-Type:application/json\" -X POST -d '{\"custom_load_forecast_id\": {\"entity_id\": \"sensor.p_load_forecast\", \"unit_of_measurement\": \"W\", \"friendly_name\": \"Load Power Forecast\"}}' http://localhost:5000/action/publish-data"
@@ -399,11 +399,10 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 # Then publish teh results of dayahead
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
 ```
-*Note, that the published entities from the publish-data action will not update the entities current state. To update its state another publish would have to run later when the current time matched the next values timestamp.*
-*See examples bellow for more information for methods to achieve this.*
+*Note, the published entities from the publish-data action will not automatically update the entities current state (current state being used to check when to turn on and off appliances via Home Assistant automatons). To update the EMHASS entities state, another publish would have to be re-run later when the current time matches the next values timestamp (E.g every 30 minutes). See examples bellow for methods to automate the publish-action.*
 
 #### continual_publish *(EMHASS Automation)*
-As discussed in [Common for any installation method - option 2](#option-2-emhass-automate-publish), setting `continual_publish` to `true` in the configuration saves the output of the optimization into the `data_path/entities` folder *(a .json file for each sensor/entity)*. A constant loop (in `freq` minutes) will run, observe the .json files in that folder, and publish the saved files periodically (updating the current state of the entity with date.now and the saved timestamps). 
+As discussed in [Common for any installation method - option 2](#option-2-emhass-automate-publish), setting `continual_publish` to `true` in the configuration saves the output of the optimization into the `data_path/entities` folder *(a .json file for each sensor/entity)*. A constant loop (in `freq` minutes) will run, observe the .json files in that folder, and publish the saved files periodically (updating the current state of the entity by comparing date.now with the saved data value timestamps). 
 
 For users that wish to run multiple different optimizations, you can set the runtime parameter: `publish_prefix` to something like: `"mpc_"` or `"dh_"`. This will generate unique entity_id names per optimization and save these unique entities as separate files in the folder. All the entity files will then be updated when the next loop iteration runs. If a different `freq` integer was passed as a runtime parameter in an optimization, the `continual_publish` loop will be based on the lowest `freq` saved. An example:
 
@@ -415,9 +414,9 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"freq":5,"publish_prefix
 ```
 This will tell continual_publish to loop every 5 minutes based on the freq passed in MPC. All entities from the output of dayahead "dh_" and MPC "mpc_" will be published every 5 minutes.
 
-</BR>
+</br>
 
-*It is recommended to use the 2 other options bellow once you have a advance understanding of EMHASS.*
+*It is recommended to use the 2 other options bellow once you have a more advance understanding of EMHASS and/or Home Assistant.*
 
 #### Mixture of continual_publish and manual *(Home Assistant Automation for Publish)*
 
@@ -430,12 +429,12 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"dh_"}'
 curl -i -H 'Content-Type:application/json' -X POST -d '{"continual_publish":false,"freq":5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
 # Publish MPC output
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
-
 ```
+This example saves the dayahead optimization into `data_path/entities` as .json files, being included in the `continutal_publish` loop (publishing every 30 minutes). The MPC optimization will not be saved in `data_path/entities`, and therefore only into `data_path/opt_res_latest.csv`. Requiring a publish-data action to be run manually (or via a Home Assistant) Automation for the MPC results. 
 
 #### Manual *(Home Assistant Automation for Publish)*
 
-For users who wish to have full control of exactly when they will like to run a publish and have the ability to save multiple different optimization runs. The `entity_save` runtime parameter has been created to save the optimization output entities to .json files (whilst  `continual_publish` is set to `false` in the configuration):
+For users who wish to have full control of exactly when they will like to run a publish and have the ability to save multiple different optimizations. The `entity_save` runtime parameter has been created to save the optimization output entities to .json files whilst  `continual_publish` is set to `false` in the configuration. Allowing the user to reference the saved .json files manually via a publish:
 
 in configuration page/`config_emhass.yaml` :
 ```json
@@ -448,7 +447,7 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"entity_save": true, "pu
 # RUN MPC, with freq=5, prefix=mpc_, save entity
 curl -i -H 'Content-Type:application/json' -X POST -d '{"entity_save": true", "freq":5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
 ```
-You can then reference these saved entities with their `publish_prefix`. Include the same `publish_prefix` in the `publish_data` action:
+You can then reference these .json saved entities via their `publish_prefix`. Include the same `publish_prefix` in the `publish_data` action:
 ```bash
 #Publish the MPC optimization ran above 
 curl -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"mpc_"}'  http://localhost:5000/action/publish-data
@@ -456,12 +455,11 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"mpc_"}
 This will publish all entities from the MPC (_mpc) optimization above.
 </br>
 Alternatively, you can choose to publish all the saved files .json files with `publish_prefix` = all:
-
 ```bash
 #Publish all saved entities
 curl -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"all"}'  http://localhost:5000/action/publish-data
 ```
-This action will publish the dayahead (_dh) and MPC (_mpc) from the optimizations above.
+This action will publish the dayahead (_dh) and MPC (_mpc) optimization results from the optimizations above.
 
 ### Forecast data
 
