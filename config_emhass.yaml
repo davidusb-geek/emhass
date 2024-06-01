@@ -13,6 +13,7 @@ retrieve_hass_conf:
   - 'sensor.power_photovoltaics'
   - 'sensor.power_load_no_var_loads'
   method_ts_round: 'nearest' # Set the method for timestamp rounding, options are: first, last and nearest
+  continual_publish: False # Save published sensor data and check for state change every freq minutes
 
 optim_conf:
   set_use_battery: False # consider a battery storage

@@ -12,7 +12,6 @@ import pandas as pd
 import yaml
 import pytz
 
-
 import plotly.express as px
 
 pd.options.plotting.backend = "plotly"
@@ -443,6 +442,8 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             optim_conf["weight_battery_charge"] = runtimeparams["weight_battery_charge"]
         if 'freq' in runtimeparams.keys():
             retrieve_hass_conf['freq'] = pd.to_timedelta(runtimeparams['freq'], "minutes")
+        if 'continual_publish' in runtimeparams.keys():
+            retrieve_hass_conf['continual_publish'] = bool(runtimeparams['continual_publish'])  
         # Treat plant configuration parameters passed at runtime
         if "SOCtarget" in runtimeparams.keys():
             plant_conf["SOCtarget"] = runtimeparams["SOCtarget"]
@@ -487,12 +488,18 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             params["passed_data"]["custom_deferrable_forecast_id"] = runtimeparams[
                 "custom_deferrable_forecast_id"
             ]
-        # A condition to put a prefix on all published data
+        # A condition to put a prefix on all published data, or check for saved data under prefix name
         if "publish_prefix" not in runtimeparams.keys():
             publish_prefix = ""
         else:
             publish_prefix = runtimeparams["publish_prefix"]
         params["passed_data"]["publish_prefix"] = publish_prefix
+        # A condition to manually save entity data under data_path/entities after optimization
+        if "entity_save" not in runtimeparams.keys():
+            entity_save = ""
+        else:
+            entity_save = runtimeparams["entity_save"]
+        params["passed_data"]["entity_save"] = entity_save
     # Serialize the final params
     params = json.dumps(params)
     return params, retrieve_hass_conf, optim_conf, plant_conf
@@ -766,6 +773,9 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int,
         ]
         params["retrieve_hass_conf"]["method_ts_round"] = options.get(
             "method_ts_round", params["retrieve_hass_conf"]["method_ts_round"]
+        )
+        params["retrieve_hass_conf"]["continual_publish"] = options.get(
+            "continual_publish", params["retrieve_hass_conf"]["continual_publish"]
         )
         # Update params Secrets if specified
         params["params_secrets"] = params_secrets
