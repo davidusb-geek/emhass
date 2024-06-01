@@ -9,7 +9,6 @@ secrets_emhass.yaml
 .vscode/tasks.json
 *.html
 *.pkl
-data/actionLogs.txt
 **/app
 
 
@@ -40,6 +39,10 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+
+# Local session data 
+data/actionLogs.txt
+data/entities/*.json
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
