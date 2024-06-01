@@ -249,6 +249,7 @@ if __name__ == "__main__":
     CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
     OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
     DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
+    ROOT_PATH = os.getenv("ROOT_PATH", default=str(Path(__file__).parent))
     
     #options None by default
     options = None 
@@ -284,10 +285,11 @@ if __name__ == "__main__":
     #save paths to dictionary
     config_path = Path(CONFIG_PATH)
     data_path = Path(DATA_PATH)
+    root_path = Path(ROOT_PATH)
     emhass_conf = {}
     emhass_conf['config_path'] = config_path
     emhass_conf['data_path'] = data_path
-    emhass_conf['root_path'] = Path(config_path).parent #assume root is parent of config_path
+    emhass_conf['root_path'] = root_path 
     
     # Read the example default config file
     if config_path.exists():

@@ -528,7 +528,7 @@ def get_yaml_parse(emhass_conf: dict, use_secrets: Optional[bool] = True,
         input_conf = json.loads(params)
     if use_secrets:
         if params is None:
-            with open(emhass_conf["root_path"] / 'secrets_emhass.yaml', 'r') as file: #assume secrets file is in root path 
+            with open(emhass_conf["config_path"].parent / 'secrets_emhass.yaml', 'r') as file: # Assume secrets and config file paths are the same 
                 input_secrets = yaml.load(file, Loader=yaml.FullLoader)
         else:
             input_secrets = input_conf.pop("params_secrets", None)
