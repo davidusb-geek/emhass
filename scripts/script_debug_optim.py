@@ -71,14 +71,14 @@ if __name__ == '__main__':
     # Set special debug cases
     optim_conf.update({'treat_def_as_semi_cont': [True, True]})
     optim_conf.update({'set_def_constant': [False, False]})
-    # optim_conf.update({'P_deferrable_nom': [[500.0, 1000.0, 1000.0, 500.0], 750.0]})
+    optim_conf.update({'P_deferrable_nom': [[500.0, 1000.0, 1000.0, 500.0], 750.0]})
     
-    optim_conf.update({'set_use_battery': True})
+    optim_conf.update({'set_use_battery': False})
     optim_conf.update({'set_nocharge_from_grid': False})
     optim_conf.update({'set_battery_dynamic': True})
     optim_conf.update({'set_nodischarge_to_grid': True})
     
-    optim_conf.update({'inverter_is_hybrid': True})
+    optim_conf.update({'inverter_is_hybrid': False})
     
     df_input_data.loc[df_input_data.index[25:30],'unit_prod_price'] = -0.07
     df_input_data['P_PV_forecast'] = df_input_data['P_PV_forecast']*2
