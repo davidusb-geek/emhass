@@ -464,6 +464,7 @@ class Optimization:
                         sense = plp.LpConstraintEQ,
                         rhs = 1)
                     })
+<<<<<<< HEAD
 
             # Treat deferrable load as a semi-continuous variable
             if self.optim_conf['treat_def_as_semi_cont'][k]:
@@ -550,6 +551,15 @@ class Optimization:
                     rhs = def_total_hours[k]/self.timeStep)
                 })
 
+=======
+                    constraints.update({"constraint_pdef{}_start4".format(k) :
+                    plp.LpConstraint(
+                        e = plp.lpSum(P_def_bin2[k][i] for i in set_I),
+                        sense = plp.LpConstraintEQ,
+                        rhs = self.optim_conf['def_total_hours'][k]/self.timeStep)
+                    })
+            
+>>>>>>> f5e0df4a7de51cec11810c9ac936e5c6af742a54
         # The battery constraints
         if self.optim_conf['set_use_battery']:
             # Optional constraints to avoid charging the battery from the grid
