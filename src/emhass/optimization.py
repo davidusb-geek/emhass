@@ -333,27 +333,27 @@ class Optimization:
                         matrix.append(row[:n*2])
                     return matrix
                 matrix = create_matrix(power_sequence, n-sequence_length)
-                y = plp.LpVariable.dicts("y", (i for i in range(len(matrix))), cat='Binary')
+                y = plp.LpVariable.dicts(f"y{k}", (i for i in range(len(matrix))), cat='Binary')
                 constraints.update({f"SingleValueConstraint_{i}" :
                     plp.LpConstraint(
                         e = plp.lpSum(y[i] for i in range(len(matrix))) - 1,
                         sense = plp.LpConstraintEQ,
                         rhs = 0)
                     })
-                constraints.update({f"DefSumConstraint_{i}" :
-                    plp.LpConstraint(
-                        e = plp.lpSum(P_deferrable[k][i] for i in set_I) - np.sum(power_sequence),
-                        sense = plp.LpConstraintEQ,
-                        rhs = 0)
-                    })
-                constraints.update({f"DefPositiveConstraint_{i}" :
+                # constraints.update({f"pdef{k}_sumconstraint_{i}" :
+                #     plp.LpConstraint(
+                #         e = plp.lpSum(P_deferrable[k][i] for i in set_I) - np.sum(power_sequence),
+                #         sense = plp.LpConstraintEQ,
+                #         rhs = 0)
+                #     })
+                constraints.update({f"pdef{k}_positiveconstraint_{i}" :
                     plp.LpConstraint(
                         e = P_deferrable[k][i],
                         sense = plp.LpConstraintGE,
                         rhs = 0)
                     for i in set_I})
                 for num, mat in enumerate(matrix):
-                    constraints.update({f"ValueConstraint_{num}_{i}" :
+                    constraints.update({f"pdef{k}_valueconstraint_{num}_{i}" :
                         plp.LpConstraint(
                             e = P_deferrable[k][i] - mat[i]*y[num],
                             sense = plp.LpConstraintEQ,
