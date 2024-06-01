@@ -12,7 +12,7 @@ root = str(utils.get_root(__file__, num_parent=2))
 emhass_conf = {}
 emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
 emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
-emhass_conf['root_path'] = pathlib.Path(root)
+emhass_conf['root_path'] = pathlib.Path(root) / 'src/emhass/'
 
 # create logger
 logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
@@ -231,11 +231,11 @@ class TestCommandLineUtils(unittest.TestCase):
         params['retrieve_hass_conf'] = retrieve_hass_conf
         params['optim_conf'] = optim_conf
         params['plant_conf'] = plant_conf
-        options_json = emhass_conf['root_path'] / "options.json"
+        options_json = emhass_conf['config_path'].parent / "options.json"
         # Read options info
         with options_json.open('r') as data:
             options = json.load(data)
-        with open(emhass_conf['root_path'] / "secrets_emhass(example).yaml", 'r') as file:
+        with open(emhass_conf['config_path'].parent / "secrets_emhass(example).yaml", 'r') as file:
             params_secrets = yaml.load(file, Loader=yaml.FullLoader)
         addon = 1
         params = utils.build_params(params, params_secrets, options, addon, logger)
