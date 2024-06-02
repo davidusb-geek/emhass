@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.10.0 - Unreleased
+## 0.10.0 - 2024-06-02
 ### Improvement
 - Added support for hybrid inverters
 - Implemented a new `continual_publish` service that avoid the need of setting a special automation for data publish. Thanks to @GeoDerp
