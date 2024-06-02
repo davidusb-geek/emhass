@@ -134,6 +134,7 @@
       "strings_per_inverter": 1
     }
   ],
+  "inverter_is_hybrid": false,
   "set_use_battery": false,
   "battery_discharge_power_max": 1000,
   "battery_charge_power_max": 1000,
