@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.0 - Unreleased
+### Improvement
+- Added support for hybrid inverters
+- Implemented a new `continual_publish` service that avoid the need of setting a special automation for data publish. Thanks to @GeoDerp
+- Implement a deferrable load start penalty functionality. Thanks to @werdnum
+  - This feature also implement a `def_current_state` that can be passed at runtime to let the optimization consider that a deferrable load is currently scheduled or under operation when launching the optimization task
+### Fix
+- Fixed forecast methods to treat delta_forecast higher than 1 day
+- Fixed solar.forecast wrong interpolation of nan values
+
 ## 0.9.1 - 2024-05-13
 ### Fix
 - Fix patch for issue with paths to modules and inverters database
