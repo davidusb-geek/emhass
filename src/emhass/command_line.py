@@ -52,7 +52,7 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
     logger.info("Setting up needed data")
     # Parsing yaml
     retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-        emhass_conf, use_secrets=not (get_data_from_file), params=params)
+        emhass_conf, use_secrets=not(get_data_from_file), params=params)
     # Treat runtimeparams
     params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
         runtimeparams, params, retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)

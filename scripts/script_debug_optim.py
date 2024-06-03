@@ -75,7 +75,7 @@ if __name__ == '__main__':
     optim_conf.update({'set_def_constant': [False, False]})
     # optim_conf.update({'P_deferrable_nom': [[500.0, 100.0, 100.0, 500.0], 750.0]})
     
-    optim_conf.update({'set_use_battery': True})
+    optim_conf.update({'set_use_battery': False})
     optim_conf.update({'set_nocharge_from_grid': False})
     optim_conf.update({'set_battery_dynamic': True})
     optim_conf.update({'set_nodischarge_to_grid': True})
