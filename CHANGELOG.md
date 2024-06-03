@@ -1,8 +1,16 @@
 # Changelog
 
+## 0.10.1 - 2024-06-03
+### Fix
+- Fixed PV curtailment maximum possible value constraint
+- Added PV curtailement to variable to publish to HA
+
 ## 0.10.0 - 2024-06-02
+### BREAKING CHANGE
+- In this new version we have added support for PV curtailment computation. While doing this the nominal PV peak power is needed. The easiest way find this information is by directly using the `inverter_model` defined in the configuration. As this is needed in the optimization to correctly compute PV curtailment, this parameter need to be properly defined for your installation. Before this chage this parameter was only needed if using the PV forecast method `scrapper`, but now it is not optional as it is directly used in the optimization. 
+Use the dedicated webapp to find the correct model for your inverter, if you cannot find your exact brand/model then just pick an inverter with the same nominal power as yours: [https://emhass-pvlib-database.streamlit.app/](https://emhass-pvlib-database.streamlit.app/)
 ### Improvement
-- Added support for hybrid inverters
+- Added support for hybrid inverters and PV curtailment computation
 - Implemented a new `continual_publish` service that avoid the need of setting a special automation for data publish. Thanks to @GeoDerp
 - Implement a deferrable load start penalty functionality. Thanks to @werdnum
   - This feature also implement a `def_current_state` that can be passed at runtime to let the optimization consider that a deferrable load is currently scheduled or under operation when launching the optimization task

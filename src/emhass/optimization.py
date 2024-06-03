@@ -314,7 +314,7 @@ class Optimization:
         else:
             constraints.update({"constraint_curtailment_{}".format(i) :
                 plp.LpConstraint(
-                    e = P_PV[i] - P_PV_curtailment[i] - P_nom_inverter,
+                    e = P_PV_curtailment[i] - P_PV[i],
                     sense = plp.LpConstraintLE,
                     rhs = 0)
                 for i in set_I})
