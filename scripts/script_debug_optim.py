@@ -80,7 +80,7 @@ if __name__ == '__main__':
     optim_conf.update({'set_battery_dynamic': True})
     optim_conf.update({'set_nodischarge_to_grid': True})
     
-    plant_conf.update({'inverter_is_hybrid': True})
+    plant_conf.update({'inverter_is_hybrid': False})
     
     df_input_data.loc[df_input_data.index[25:30],'unit_prod_price'] = -0.07
     df_input_data['P_PV_forecast'] = df_input_data['P_PV_forecast']*2
@@ -105,7 +105,7 @@ if __name__ == '__main__':
     if plant_conf['inverter_is_hybrid']:
         vars_to_plot = vars_to_plot + ['P_hybrid_inverter']
     if optim_conf['set_use_battery']:
-        vars_to_plot = vars_to_plot + ['P_batt']
+        vars_to_plot = vars_to_plot + ['P_batt'] + ['SOC_opt']
     fig_res_dah = opt_res_dayahead[vars_to_plot].plot() # 'P_def_start_0', 'P_def_start_1', 'P_def_bin2_0', 'P_def_bin2_1'
     fig_res_dah.layout.template = template
     fig_res_dah.update_yaxes(title_text = "Powers (W)")
@@ -115,4 +115,6 @@ if __name__ == '__main__':
     
     print("System with: PV, two deferrable loads, dayahead optimization, profit >> total cost function sum: "+\
         str(opt_res_dayahead['cost_profit'].sum())+", Status: "+opt_res_dayahead['optim_status'].unique().item())
+    
+    print(opt_res_dayahead[vars_to_plot])
     

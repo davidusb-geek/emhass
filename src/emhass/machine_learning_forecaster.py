@@ -221,51 +221,52 @@ class MLForecaster:
         :return: The DataFrame with the forecasts using the optimized model.
         :rtype: pd.DataFrame
         """
-        # Bayesian search hyperparameter and lags with skforecast/optuna
-        # Lags used as predictors
-        if debug:
-            lags_grid = [3]
-            refit = False
-            num_lags = 3
-        else:
-            lags_grid = [6, 12, 24, 36, 48, 60, 72]
-            refit = True
-            num_lags = self.num_lags
         # Regressor hyperparameters search space
         if self.sklearn_model == 'LinearRegression':
             if debug:
                 def search_space(trial):
-                    search_space  = {'fit_intercept': trial.suggest_categorical('fit_intercept', [True])} 
+                    search_space  = {'fit_intercept': trial.suggest_categorical('fit_intercept', [True]),
+                                     'lags': trial.suggest_categorical('lags', [3])} 
                     return search_space
             else:
                 def search_space(trial):
-                    search_space  = {'fit_intercept': trial.suggest_categorical('fit_intercept', [True, False])} 
+                    search_space  = {'fit_intercept': trial.suggest_categorical('fit_intercept', [True, False]),
+                                     'lags': trial.suggest_categorical('lags', [6, 12, 24, 36, 48, 60, 72])}
                     return search_space
         elif self.sklearn_model == 'ElasticNet':
             if debug:
                 def search_space(trial):
-                    search_space  = {'selection': trial.suggest_categorical('selection', ['random'])} 
+                    search_space  = {'selection': trial.suggest_categorical('selection', ['random']),
+                                     'lags': trial.suggest_categorical('lags', [3])} 
                     return search_space
             else:
                 def search_space(trial):
                     search_space  = {'alpha': trial.suggest_float('alpha', 0.0, 2.0),
                                     'l1_ratio': trial.suggest_float('l1_ratio', 0.0, 1.0),
-                                    'selection': trial.suggest_categorical('selection', ['cyclic', 'random'])
-                                    } 
+                                    'selection': trial.suggest_categorical('selection', ['cyclic', 'random']),
+                                    'lags': trial.suggest_categorical('lags', [6, 12, 24, 36, 48, 60, 72])} 
                     return search_space
         elif self.sklearn_model == 'KNeighborsRegressor':
             if debug:
                 def search_space(trial):
-                    search_space  = {'weights': trial.suggest_categorical('weights', ['uniform'])} 
+                    search_space  = {'weights': trial.suggest_categorical('weights', ['uniform']),
+                                     'lags': trial.suggest_categorical('lags', [3])} 
                     return search_space
             else:
                 def search_space(trial):
                     search_space  = {'n_neighbors': trial.suggest_int('n_neighbors', 2, 20),
                                     'leaf_size': trial.suggest_int('leaf_size', 20, 40),
-                                    'weights': trial.suggest_categorical('weights', ['uniform', 'distance'])
-                                    } 
+                                    'weights': trial.suggest_categorical('weights', ['uniform', 'distance']),
+                                    'lags': trial.suggest_categorical('lags', [6, 12, 24, 36, 48, 60, 72])} 
                     return search_space
-        
+        # Bayesian search hyperparameter and lags with skforecast/optuna
+        # Lags used as predictors
+        if debug:
+            refit = False
+            num_lags = 3
+        else:
+            refit = True
+            num_lags = self.num_lags
         # The optimization routine call
         self.logger.info("Bayesian hyperparameter optimization with backtesting")
         start_time = time.time()
@@ -273,7 +274,6 @@ class MLForecaster:
             forecaster         = self.forecaster,
             y                  = self.data_train[self.var_model],
             exog               = self.data_train.drop(self.var_model, axis=1),
-            lags_grid          = lags_grid,
             search_space       = search_space,
             steps              = num_lags,
             metric             = MLForecaster.neg_r2_score,
