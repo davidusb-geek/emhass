@@ -161,6 +161,11 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             "unit_of_measurement": "W",
             "friendly_name": "Load Power Forecast",
         },
+        "custom_pv_curtailment_id": {
+            "entity_id": "sensor.p_pv_curtailment",
+            "unit_of_measurement": "W",
+            "friendly_name": "PV Power Curtailment",
+        },
         "custom_batt_forecast_id": {
             "entity_id": "sensor.p_batt_forecast",
             "unit_of_measurement": "W",
@@ -457,6 +462,10 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         if "custom_load_forecast_id" in runtimeparams.keys():
             params["passed_data"]["custom_load_forecast_id"] = runtimeparams[
                 "custom_load_forecast_id"
+            ]
+        if "custom_pv_curtailment_id" in runtimeparams.keys():
+            params["passed_data"]["custom_pv_curtailment_id"] = runtimeparams[
+                "custom_pv_curtailment_id"
             ]
         if "custom_batt_forecast_id" in runtimeparams.keys():
             params["passed_data"]["custom_batt_forecast_id"] = runtimeparams[
