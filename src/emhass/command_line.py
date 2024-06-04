@@ -97,6 +97,8 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
         # Get PV and load forecasts
         df_weather = fcst.get_weather_forecast(
             method=optim_conf["weather_forecast_method"])
+        if isinstance(df_weather, bool) and not df_weather:
+            return False
         P_PV_forecast = fcst.get_power_from_weather(df_weather)
         P_load_forecast = fcst.get_load_forecast(
             method=optim_conf['load_forecast_method'])
@@ -142,6 +144,8 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
         # Get PV and load forecasts
         df_weather = fcst.get_weather_forecast(
             method=optim_conf['weather_forecast_method'])
+        if isinstance(df_weather, bool) and not df_weather:
+            return False
         P_PV_forecast = fcst.get_power_from_weather(
             df_weather, set_mix_forecast=True, df_now=df_input_data)
         P_load_forecast = fcst.get_load_forecast(
@@ -242,6 +246,50 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
         'days_list': days_list
     }
     return input_data_dict
+
+def forecast_cache(emhass_conf: dict, params: str, 
+                   runtimeparams: str, logger: logging.Logger) -> bool:
+    """
+    Perform a call to get forecast function, intend to save results to cache.
+
+    :param emhass_conf: Dictionary containing the needed emhass paths
+    :type emhass_conf: dict
+    :param params: Configuration parameters passed from data/options.json
+    :type params: str
+    :param runtimeparams: Runtime optimization parameters passed as a dictionary
+    :type runtimeparams: str
+    :param logger: The passed logger object
+    :type logger: logging object
+    :return: A bool for function completion
+    :rtype: bool
+
+    """
+    
+    # Parsing yaml
+    retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
+        emhass_conf, use_secrets=True, params=params)
+    
+    # Treat runtimeparams
+    params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+        runtimeparams, params, retrieve_hass_conf, optim_conf, plant_conf, "forecast", logger)
+    
+    # Make sure forecast_cache is true
+    if (params != None) and (params != "null"):
+        params = json.loads(params)
+    else:
+        params = {}
+    params["passed_data"]["forecast_cache"] = True
+    params = json.dumps(params)
+
+    # Create Forecast object
+    fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
+                params, emhass_conf, logger)
+
+    result = fcst.get_weather_forecast(optim_conf["weather_forecast_method"])
+    if isinstance(result, bool) and not result:
+        return False
+
+    return True
 
 
 def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,

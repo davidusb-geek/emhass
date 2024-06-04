@@ -147,6 +147,7 @@ class TestForecast(unittest.TestCase):
             self.assertEqual(len(df_weather_scrap), len(P_PV_forecast))
 
     def test_get_weather_forecast_solcast_method_mock(self):
+        self.fcst.params = {'passed_data': {'forecast_cache': False}}
         with requests_mock.mock() as m:
             data = bz2.BZ2File(str(emhass_conf['data_path'] / 'test_response_solcast_get_method.pbz2'), "rb")
             data = cPickle.load(data)

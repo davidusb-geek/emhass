@@ -12,7 +12,7 @@ from distutils.util import strtobool
 
 from emhass.command_line import set_input_data_dict
 from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim
-from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune
+from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune, forecast_cache
 from emhass.command_line import regressor_model_fit, regressor_model_predict
 from emhass.command_line import publish_data, continual_publish
 from emhass.utils import get_injection_dict, get_injection_dict_forecast_model_fit, \
@@ -106,6 +106,17 @@ def action_call(action_name):
     if runtimeparams is not None and runtimeparams != '{}':
         app.logger.info("Passed runtime parameters: " + str(runtimeparams))
     runtimeparams = json.dumps(runtimeparams)
+    
+    # Run action if forecast_cache
+    if action_name == 'forecast-cache':
+        ActionStr = " >> Performing forecast, try to caching result"
+        app.logger.info(ActionStr)
+        forecast_cache(emhass_conf, params, runtimeparams, app.logger)
+        msg = f'EMHASS >> Forecast has run and results possibly cached... \n'
+        if not checkFileLog(ActionStr):
+            return make_response(msg, 201)
+        return make_response(grabLog(ActionStr), 400)
+
     ActionStr = " >> Setting input data dict"
     app.logger.info(ActionStr)
     input_data_dict = set_input_data_dict(emhass_conf, costfun, 
