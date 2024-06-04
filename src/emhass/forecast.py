@@ -182,6 +182,7 @@ class Forecast(object):
         
         """
         csv_path  = self.emhass_conf['data_path'] / csv_path
+        forecast_data_path = self.emhass_conf['data_path'] / "forecast_data.pkl"
 
         self.logger.info("Retrieving weather forecast data using method = "+method)
         self.weather_forecast_method = method # Saving this attribute for later use to identify csv method usage
@@ -223,26 +224,48 @@ class Forecast(object):
             data['relative_humidity'] = raw_data['Relative Humidity (%)']
             data['precipitable_water'] = pvlib.atmosphere.gueymard94_pw(
                 data['temp_air'], data['relative_humidity'])
-        elif method == 'solcast': # using solcast API
-            # Retrieve data from the solcast API
-            if 'solcast_api_key' not in self.retrieve_hass_conf:
-                self.logger.warning("The solcast_api_key parameter was not defined, using dummy values for testing")
-                self.retrieve_hass_conf['solcast_api_key'] = "123456"
-            if 'solcast_rooftop_id' not in self.retrieve_hass_conf:
-                self.logger.warning("The solcast_rooftop_id parameter was not defined, using dummy values for testing")
-                self.retrieve_hass_conf['solcast_rooftop_id'] = "123456"
-            headers = {
-                "Authorization": "Bearer " + self.retrieve_hass_conf['solcast_api_key'],
-                "content-type": "application/json",
-                }
-            days_solcast = int(len(self.forecast_dates)*self.freq.seconds/3600)
-            url = "https://api.solcast.com.au/rooftop_sites/"+self.retrieve_hass_conf['solcast_rooftop_id']+"/forecasts?hours="+str(days_solcast)
-            response = get(url, headers=headers)
-            '''import bz2 # Uncomment to save a serialized data for tests
-            import _pickle as cPickle
-            with bz2.BZ2File("data/test_response_solcast_get_method.pbz2", "w") as f: 
-                cPickle.dump(response, f)'''
-            data = response.json()
+        elif method == 'solcast': # using Solcast API
+            # Check if forecast_cache is true or if forecast_data file does not exist
+            if self.params["passed_data"]["forecast_cache"] or not os.path.isfile(forecast_data_path):
+                # Retrieve data from the Solcast API
+                if 'solcast_api_key' not in self.retrieve_hass_conf:
+                    self.logger.error("The solcast_api_key parameter was not defined, using dummy values for testing")
+                    self.retrieve_hass_conf['solcast_api_key'] = "123456"
+                if 'solcast_rooftop_id' not in self.retrieve_hass_conf:
+                    self.logger.error("The solcast_rooftop_id parameter was not defined, using dummy values for testing")
+                    self.retrieve_hass_conf['solcast_rooftop_id'] = "123456"
+                headers = {
+                    'User-Agent': 'EMHASS',
+                    "Authorization": "Bearer " + self.retrieve_hass_conf['solcast_api_key'],
+                    "content-type": "application/json",
+                    }
+                days_solcast = int(len(self.forecast_dates)*self.freq.seconds/3600)
+                # if forecast_cache, set request days as twice as long to avoid length issues 
+                if self.params["passed_data"]["forecast_cache"]:
+                    days_solcast = min(days_solcast * 2, 336)
+                url = "https://api.solcast.com.au/rooftop_sites/"+self.retrieve_hass_conf['solcast_rooftop_id']+"/forecasts?hours="+str(days_solcast)
+                response = get(url, headers=headers)
+                '''import bz2 # Uncomment to save a serialized data for tests
+                import _pickle as cPickle
+                with bz2.BZ2File("data/test_response_solcast_get_method.pbz2", "w") as f: 
+                    cPickle.dump(response, f)'''
+                if int(response.status_code) == 200:
+                    data = response.json()
+                    # If runtime forecast_cache is true save forecast result to file
+                    if self.params["passed_data"]["forecast_cache"]:
+                        with open(forecast_data_path, "w") as file:                 
+                            cPickle.dump(json.dumps(data), file)
+                elif int(response.status_code) == 402 or int(response.status_code) == 429:
+                    self.logger.error("Solcast error: May have exceeded your subscription limit")
+                    return False  
+                elif int(response.status_code) >= 400 or int(response.status_code) >= 202:
+                    self.logger.error("Solcast error: There was a issue with the solcast request, check solcast API key and rooftop ID")
+                    self.logger.error("Solcast error: Check that your subscription is valid and your network can connect to Solcast")
+                    return False  
+            # Else, open stored forecast_data.json file for previous forecast data
+            else:
+                with open(forecast_data_path, "r") as file:
+                    data = json.loads(cPickle.load(file))
             data_list = []
             for elm in data['forecasts']:
                 data_list.append(elm['pv_estimate']*1000) # Converting kW to W
@@ -839,4 +862,3 @@ class Forecast(object):
             self.logger.error("Passed method is not valid")
             return False
         return df_final
-    
