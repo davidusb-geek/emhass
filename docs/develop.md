@@ -83,7 +83,7 @@ python3 src/emhass/web_server.py
 **Run unitests**
 
 ```
-python3 -m unitest -v -RP -s ./tests -p 'test_*.py'
+python3 -m unittest discover -s ./tests -p 'test_*.py'
 ```
 
 _unitest will need to be installed prior_
@@ -303,6 +303,7 @@ git clone $repo
 cd emhass 
 git checkout $branch
 ```
+
 ```bash
 #testing addon (build and run)
 docker build -t emhass/docker --build-arg build_version=addon-local .
@@ -346,6 +347,17 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 curl -i -H "Content-Type:application/json" -X POST -d  '{"csv_file": "heating_prediction.csv", "features": ["degreeday", "solar"], "target": "hour", "regression_model": "RandomForestRegression", "model_type": "heating_hours_degreeday", "timestamp": "timestamp", "date_features": ["month", "day_of_week"], "new_values": [12.79, 4.766, 1, 2] }' http://localhost:5000/action/regressor-model-fit
 curl -i -H "Content-Type:application/json" -X POST -d  '{"mlr_predict_entity_id": "sensor.mlr_predict", "mlr_predict_unit_of_measurement": "h", "mlr_predict_friendly_name": "mlr predictor", "new_values": [8.2, 7.23, 2, 6], "model_type": "heating_hours_degreeday" }' http://localhost:5000/action/regressor-model-predict
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
+```
+
+```bash
+#testing unittest (run standalone with extra files)
+docker run --rm -it -p 5000:5000 --name emhass-container -v $(pwd)/tests/:/app/tests/ -v $(pwd)/data/:/app/data/ -v $(pwd)/"secrets_emhass(example).yaml":/app/"secrets_emhass(example).yaml" -v $(pwd)/options.json:/app/options.json -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/docker
+```
+```bash
+#run unittest's on separate terminal
+docker exec emhass-container apt-get update 
+docker exec emhass-container apt-get install python3-requests-mock -y
+docker exec emhass-container python3 -m unittest discover -s ./tests -p 'test_*.py' | grep error
 ```
 
 User may wish to re-test with tweaked parameters such as `lp_solver`, `weather_forecast_method` and `load_forecast_method`, in `config_emhass.yaml` *(standalone)* or `options.json` *(addon)*, to broaden the testing scope. 
