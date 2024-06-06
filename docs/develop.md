@@ -9,6 +9,16 @@ _Note: It is preferred to run both addon mode, standalone mode and unitest once 
 
 _With your preferred Git tool of choice:_  
 Fork the EMHASS github repository into your own account, then clone the forked repository into your local development platform. (ie. PC or Codespace)
+Here you may also wish to add the add the origional/upstream repository as a remote, allowing you to fetch and merge new updates from the origional repository.
+
+A command example may be:
+```bash
+# on GitHub, Fork url, then:
+git clone https://github.com/<YOURUSERNAME>/emhass.git
+cd emhass
+# add remote, call it upstream
+git remote add upstream https://github.com/OWNER/REPOSITORY.git
+```
 
 ## Step 2 - Develop
 
