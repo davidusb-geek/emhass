@@ -35,7 +35,7 @@ The minimum number of `days_to_retrieve` is hard coded to 9 by default. But it i
 - `perform_backtest`: if `True` then a back testing routine is performed to evaluate the performance of the model on the complete train set.
 
 The default values for these parameters are:
-```
+```yaml
 runtimeparams = {
     "days_to_retrieve": 9,
     "model_type": "load_forecast",
@@ -48,7 +48,7 @@ runtimeparams = {
 ```
 
 A correct `curl` call to launch a model fit can look like this:
-```
+```bash
 curl -i -H "Content-Type:application/json" -X POST -d '{}' http://localhost:5000/action/forecast-model-fit
 ```
 
@@ -90,7 +90,7 @@ To obtain a prediction using a previously trained model use the `forecast-model-
 curl -i -H "Content-Type:application/json" -X POST -d '{}' http://localhost:5000/action/forecast-model-predict
 ```
 If needed pass the correct `model_type` like this:
-```
+```bash
 curl -i -H "Content-Type:application/json" -X POST -d '{"model_type": "load_forecast"}' http://localhost:5000/action/forecast-model-predict
 ```
 The resulting forecast DataFrame is shown in the webui.
@@ -108,7 +108,7 @@ The list of parameters needed to set the data publish task is:
 - `model_predict_friendly_name`: the `friendly_name` to be used.
 
 The default values for these parameters are:
-```
+```yaml
 runtimeparams = {
     "model_predict_publish": False,
     "model_predict_entity_id": "sensor.p_load_forecast_custom_model",
@@ -122,7 +122,7 @@ runtimeparams = {
 With a previously fitted model you can use the `forecast-model-tune` end point to tune its hyperparameters. This will be using bayeasian optimization with a wrapper of `optuna` in the `skforecast` module.
 
 You can pass the same parameter you defined during the fit step, but `var_model` has to be defined at least. According to the example, the syntax will be:
-```
+```bash
 curl -i -H "Content-Type:application/json" -X POST -d '{"var_model": "sensor.power_load_no_var_loads"}' http://localhost:5000/action/forecast-model-tune
 ```
 This will launch the optimization routine and optimize the internal hyperparamters of the `scikit-learn` regressor and it will find the optimal number of lags.
