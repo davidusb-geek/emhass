@@ -247,7 +247,7 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
     }
     return input_data_dict
 
-def forecast_cache(emhass_conf: dict, params: str, 
+def weather_forecast_cache(emhass_conf: dict, params: str, 
                    runtimeparams: str, logger: logging.Logger) -> bool:
     """
     Perform a call to get forecast function, intend to save results to cache.
@@ -273,12 +273,12 @@ def forecast_cache(emhass_conf: dict, params: str,
     params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
         runtimeparams, params, retrieve_hass_conf, optim_conf, plant_conf, "forecast", logger)
     
-    # Make sure forecast_cache is true
+    # Make sure weather_forecast_cache is true
     if (params != None) and (params != "null"):
         params = json.loads(params)
     else:
         params = {}
-    params["passed_data"]["forecast_cache"] = True
+    params["passed_data"]["weather_forecast_cache"] = True
     params = json.dumps(params)
 
     # Create Forecast object
@@ -1174,7 +1174,7 @@ def main():
         logger.error("Could not find emhass/src foulder in: " + str(root_path))
         logger.error("Try setting emhass root path with --root")
         return False
-    # Additionnal argument
+    # Additional argument
     try:
         parser.add_argument(
             "--version",
