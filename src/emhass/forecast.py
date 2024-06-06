@@ -230,10 +230,10 @@ class Forecast(object):
                 # Retrieve data from the Solcast API
                 if 'solcast_api_key' not in self.retrieve_hass_conf:
                     self.logger.error("The solcast_api_key parameter was not defined, using dummy values for testing")
-                    self.retrieve_hass_conf['solcast_api_key'] = "123456"
+                    return False
                 if 'solcast_rooftop_id' not in self.retrieve_hass_conf:
                     self.logger.error("The solcast_rooftop_id parameter was not defined, using dummy values for testing")
-                    self.retrieve_hass_conf['solcast_rooftop_id'] = "123456"
+                    return False
                 headers = {
                     'User-Agent': 'EMHASS',
                     "Authorization": "Bearer " + self.retrieve_hass_conf['solcast_api_key'],
