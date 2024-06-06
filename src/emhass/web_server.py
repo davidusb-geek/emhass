@@ -12,7 +12,7 @@ from distutils.util import strtobool
 
 from emhass.command_line import set_input_data_dict
 from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim
-from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune, forecast_cache
+from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune, weather_forecast_cache
 from emhass.command_line import regressor_model_fit, regressor_model_predict
 from emhass.command_line import publish_data, continual_publish
 from emhass.utils import get_injection_dict, get_injection_dict_forecast_model_fit, \
@@ -107,11 +107,11 @@ def action_call(action_name):
         app.logger.info("Passed runtime parameters: " + str(runtimeparams))
     runtimeparams = json.dumps(runtimeparams)
     
-    # Run action if forecast_cache
+    # Run action if weather_forecast_cache
     if action_name == 'forecast-cache':
         ActionStr = " >> Performing forecast, try to caching result"
         app.logger.info(ActionStr)
-        forecast_cache(emhass_conf, params, runtimeparams, app.logger)
+        weather_forecast_cache(emhass_conf, params, runtimeparams, app.logger)
         msg = f'EMHASS >> Forecast has run and results possibly cached... \n'
         if not checkFileLog(ActionStr):
             return make_response(msg, 201)
@@ -470,14 +470,16 @@ if __name__ == "__main__":
     app.logger.addHandler(fileLogger)   
     clearFileLog() #Clear Action File logger file, ready for new instance
 
-
-    #If entity_path exists, remove any entity/metadata files 
+    # If entity_path exists, remove any entity/metadata files 
     entity_path = emhass_conf['data_path'] / "entities"
     if os.path.exists(entity_path): 
         entity_pathContents = os.listdir(entity_path)
         if len(entity_pathContents) > 0:
             for entity in entity_pathContents:
                 os.remove(entity_path / entity)
+    # If weather_forecast_cache pickle file exists, remove it
+    if os.path.isfile(emhass_conf['data_path'] / "weather_forecast_data.pkl"): 
+        os.remove(emhass_conf['data_path'] / "weather_forecast_data.pkl")
 
     # Initialise continual publish thread list
     continual_publish_thread = []
