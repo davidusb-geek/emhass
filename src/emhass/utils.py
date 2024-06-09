@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import yaml
 import pytz
+import ast
 
 import plotly.express as px
 
@@ -357,14 +358,12 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         if "perform_backtest" not in runtimeparams.keys():
             perform_backtest = False
         else:
-            perform_backtest = eval(str(runtimeparams["perform_backtest"]).capitalize())
+            perform_backtest = ast.literal_eval(str(runtimeparams["perform_backtest"]).capitalize())
         params["passed_data"]["perform_backtest"] = perform_backtest
         if "model_predict_publish" not in runtimeparams.keys():
             model_predict_publish = False
         else:
-            model_predict_publish = eval(
-                str(runtimeparams["model_predict_publish"]).capitalize()
-            )
+            model_predict_publish = ast.literal_eval(str(runtimeparams["model_predict_publish"]).capitalize())
         params["passed_data"]["model_predict_publish"] = model_predict_publish
         if "model_predict_entity_id" not in runtimeparams.keys():
             model_predict_entity_id = "sensor.p_load_forecast_custom_model"
@@ -421,12 +420,16 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             optim_conf["def_current_state"] = [bool(s) for s in runtimeparams["def_current_state"]]
         if "treat_def_as_semi_cont" in runtimeparams.keys():
             optim_conf["treat_def_as_semi_cont"] = [
-                eval(str(k).capitalize())
+                ast.literal_eval(str(k).capitalize())
                 for k in runtimeparams["treat_def_as_semi_cont"]
             ]
         if "set_def_constant" in runtimeparams.keys():
             optim_conf["set_def_constant"] = [
-                eval(str(k).capitalize()) for k in runtimeparams["set_def_constant"]
+                ast.literal_eval(str(k).capitalize()) for k in runtimeparams["set_def_constant"]
+            ]
+        if "def_start_penalty" in runtimeparams.keys():
+            optim_conf["def_start_penalty"] = [
+                ast.literal_eval(str(k).capitalize()) for k in runtimeparams["def_start_penalty"]
             ]
         if "solcast_api_key" in runtimeparams.keys():
             retrieve_hass_conf["solcast_api_key"] = runtimeparams["solcast_api_key"]
@@ -754,9 +757,7 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int,
         params["retrieve_hass_conf"]["var_load"] = options.get("sensor_power_load_no_var_loads", params["retrieve_hass_conf"]["var_load"])
         params["retrieve_hass_conf"]["load_negative"] = options.get("load_negative", params["retrieve_hass_conf"]["load_negative"])
         params["retrieve_hass_conf"]["set_zero_min"] = options.get("set_zero_min", params["retrieve_hass_conf"]["set_zero_min"])
-        params["retrieve_hass_conf"]["var_replace_zero"] = [
-            options.get("sensor_power_photovoltaics", params["retrieve_hass_conf"]["var_replace_zero"])
-        ]
+        params["retrieve_hass_conf"]["var_replace_zero"] = [options.get("sensor_power_photovoltaics", params["retrieve_hass_conf"]["var_replace_zero"])]
         params["retrieve_hass_conf"]["var_interp"] = [
             options.get("sensor_power_photovoltaics", params["retrieve_hass_conf"]["var_PV"]),
             options.get("sensor_power_load_no_var_loads", params["retrieve_hass_conf"]["var_load"])
@@ -773,20 +774,11 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int,
         params["optim_conf"]["set_use_battery"] = options.get("set_use_battery", params["optim_conf"]["set_use_battery"])
         params["optim_conf"]["num_def_loads"] = options.get("number_of_deferrable_loads", params["optim_conf"]["num_def_loads"])
         if options.get("list_nominal_power_of_deferrable_loads", None) != None:
-            params["optim_conf"]["P_deferrable_nom"] = [
-                i["nominal_power_of_deferrable_loads"]
-                for i in options.get("list_nominal_power_of_deferrable_loads")
-            ]
+            params["optim_conf"]["P_deferrable_nom"] = [i["nominal_power_of_deferrable_loads"] for i in options.get("list_nominal_power_of_deferrable_loads")]
         if options.get("list_operating_hours_of_each_deferrable_load", None) != None:
-            params["optim_conf"]["def_total_hours"] = [
-                i["operating_hours_of_each_deferrable_load"]
-                for i in options.get("list_operating_hours_of_each_deferrable_load")
-            ]
+            params["optim_conf"]["def_total_hours"] = [i["operating_hours_of_each_deferrable_load"] for i in options.get("list_operating_hours_of_each_deferrable_load")]
         if options.get("list_treat_deferrable_load_as_semi_cont", None) != None:
-            params["optim_conf"]["treat_def_as_semi_cont"] = [
-                i["treat_deferrable_load_as_semi_cont"]
-                for i in options.get("list_treat_deferrable_load_as_semi_cont")
-            ]
+            params["optim_conf"]["treat_def_as_semi_cont"] = [i["treat_deferrable_load_as_semi_cont"] for i in options.get("list_treat_deferrable_load_as_semi_cont")]
         params["optim_conf"]["weather_forecast_method"] = options.get("weather_forecast_method", params["optim_conf"]["weather_forecast_method"])
         # Update optional param secrets
         if params["optim_conf"]["weather_forecast_method"] == "solcast":
@@ -798,19 +790,14 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int,
         params["optim_conf"]["delta_forecast"] = options.get("delta_forecast_daily", params["optim_conf"]["delta_forecast"])
         params["optim_conf"]["load_cost_forecast_method"] = options.get("load_cost_forecast_method", params["optim_conf"]["load_cost_forecast_method"])
         if options.get("list_set_deferrable_load_single_constant", None) != None:
-            params["optim_conf"]["set_def_constant"] = [
-                i["set_deferrable_load_single_constant"]
-                for i in options.get("list_set_deferrable_load_single_constant")
-            ]
+            params["optim_conf"]["set_def_constant"] = [i["set_deferrable_load_single_constant"] for i in options.get("list_set_deferrable_load_single_constant")]
+        
+        if options.get("list_set_deferrable_startup_penalty", None) != None:
+            params["optim_conf"]["def_start_penalty"] = [i["set_deferrable_startup_penalty"] for i in options.get("list_set_deferrable_startup_penalty")]
+        
         if (options.get("list_peak_hours_periods_start_hours", None) != None and options.get("list_peak_hours_periods_end_hours", None) != None):
-            start_hours_list = [
-                i["peak_hours_periods_start_hours"]
-                for i in options["list_peak_hours_periods_start_hours"]
-            ]
-            end_hours_list = [
-                i["peak_hours_periods_end_hours"]
-                for i in options["list_peak_hours_periods_end_hours"]
-            ]
+            start_hours_list = [i["peak_hours_periods_start_hours"] for i in options["list_peak_hours_periods_start_hours"]]
+            end_hours_list = [i["peak_hours_periods_end_hours"] for i in options["list_peak_hours_periods_end_hours"]]
             num_peak_hours = len(start_hours_list)
             list_hp_periods_list = [{'period_hp_'+str(i+1):[{'start':start_hours_list[i]},{'end':end_hours_list[i]}]} for i in range(num_peak_hours)]
             params['optim_conf']['list_hp_periods'] = list_hp_periods_list
