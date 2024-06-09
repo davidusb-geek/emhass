@@ -62,6 +62,7 @@ These are the parameters needed to properly define the optimization problem.
 - `set_def_constant`: Define if we should set each deferrable load as a constant fixed value variable with just one startup for each optimization task. For example:
 	- False
 	- False
+- `def_start_penalty`: Set to a list of floats. For each deferrable load with a penalty `P`, each time the deferrable load turns on will incur an additional cost of `P * P_deferrable_nom * cost_of_electricity` at that time. 
 - `weather_forecast_method`: This will define the weather forecast method that will be used. The options are 'scrapper' for a scrapping method for weather forecast from clearoutside.com and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts. The default CSV file path that will be used is '/data/data_weather_forecast.csv'. Defaults to 'scrapper' method.
 - `load_forecast_method`: The load forecast method that will be used. The options are 'csv' to load a CSV file or 'naive' for a simple 1-day persistance model. The default CSV file path that will be used is '/data/data_load_forecast.csv'. Defaults to 'naive'.
 - `load_cost_forecast_method`: Define the method that will be used for load cost forecast. The options are 'hp_hc_periods' for peak and non-peak hours contracts and 'csv' to load custom cost from CSV file. The default CSV file path that will be used is '/data/data_load_cost_forecast.csv'.
@@ -106,7 +107,8 @@ Solution (2) would be to use SolCast and pass that data directly to emhass as a 
 - `surface_tilt`: The tilt angle of your solar panels. Defaults to 30. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 
 - `surface_azimuth`: The azimuth of your PV installation. Defaults to 205. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 
 - `modules_per_string`: The number of modules per string. Defaults to 16. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 
-- `strings_per_inverter`: The number of used strings per inverter. Defaults to 1. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 
+- `strings_per_inverter`: The number of used strings per inverter. Defaults to 1. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270).
+- `inverter_is_hybrid`: Set to True to consider that the installation inverter is hybrid for PV and batteries (Default False).
 
 If your system has a battery (set_use_battery=True), then you should define the following parameters:
 

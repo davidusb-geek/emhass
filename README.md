@@ -144,13 +144,9 @@ docker run -it --restart always -p 5000:5000  -e TZ="Europe/Paris"  -e LOCAL_COS
 ### Method 3) Legacy method using a Python virtual environment
 
 With this method it is recommended to install on a virtual environment.
-For this you will need `virtualenv`, install it using:
+Create and activate a virtual environment:
 ```bash
-sudo apt install python3-virtualenv
-```
-Then create and activate the virtual environment:
-```bash
-virtualenv -p /usr/bin/python3 emhassenv
+python3 -m venv emhassenv
 cd emhassenv
 source bin/activate
 ```
@@ -499,6 +495,8 @@ Here is the list of the other additional dictionary keys that can be passed at r
 - `def_start_timestep` for the timestep as from which each deferrable load is allowed to operate (if you don't want the deferrable load to use the whole optimization timewindow).
 
 - `def_end_timestep` for the timestep before which each deferrable load should operate (if you don't want the deferrable load to use the whole optimization timewindow).
+
+- `def_current_state` Pass this as a list of booleans (True/False) to indicate the current deferrable load state. This is used internally to avoid incorrectly penalizing a deferrable load start if a forecast is run when that load is already running.
 
 - `treat_def_as_semi_cont` to define if we should treat each deferrable load as a semi-continuous variable.
 
