@@ -477,7 +477,10 @@ if __name__ == "__main__":
         if len(entity_pathContents) > 0:
             for entity in entity_pathContents:
                 os.remove(entity_path / entity)
-
+    # If weather_forecast_cache pickle file exists, remove it
+    if os.path.isfile(emhass_conf['data_path'] / "weather_forecast_data.pkl"):
+        os.remove(emhass_conf['data_path'] / "weather_forecast_data.pkl")
+        
     # Initialise continual publish thread list
     continual_publish_thread = []
     
