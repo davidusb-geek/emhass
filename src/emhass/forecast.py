@@ -182,7 +182,7 @@ class Forecast(object):
         
         """
         csv_path  = self.emhass_conf['data_path'] / csv_path
-        w_forecast_cache_path = self.emhass_conf['data_path'] / "weather_forecast_data.pkl"
+        w_forecast_cache_path = os.path.abspath(self.emhass_conf['data_path'] / "weather_forecast_data.pkl")
 
         self.logger.info("Retrieving weather forecast data using method = "+method)
         self.weather_forecast_method = method # Saving this attribute for later use to identify csv method usage
