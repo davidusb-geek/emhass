@@ -299,8 +299,6 @@ class Forecast(object):
                     else:
                         self.logger.error("Unable to obtain cached Solcast forecast data within the requested timeframe range.")
                         self.logger.error("Try running optimization again. Optionally, add runtime parameter 'weather_forecast_cache': true to pull new data from Solcast and cache.")
-                        self.logger.info("Removing Solcast cache file")
-                        os.remove(w_forecast_cache_path)
                         return False    
         elif method == 'solar.forecast': # using the solar.forecast API
             # Retrieve data from the solar.forecast API
