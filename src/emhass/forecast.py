@@ -278,6 +278,8 @@ class Forecast(object):
                             cPickle.dump(data_cache, file)
                         if not os.path.isfile(w_forecast_cache_path):
                             self.logger.warning("Solcast Forecast data could not be saved to file")
+                        else:
+                            self.logger.ifno("Saved the Solcast results to cache, for later reference")    
                     # Trim request results to forecast_dates        
                     data_list = data_list[0:len(self.forecast_dates)]
                     data_dict = {'ts':self.forecast_dates, 'yhat':data_list}
@@ -296,6 +298,7 @@ class Forecast(object):
                     # Filter cached forecast data to match current forecast_dates start-end range (reduce forecast Dataframe size to appropriate length)
                     if self.forecast_dates[0] in data.index and self.forecast_dates[-1] in data.index:
                         data = data.loc[self.forecast_dates[0]:self.forecast_dates[-1]]
+                        self.logger.info("Retrieved Solcast data from the previously saved cache")
                     else:
                         self.logger.error("Unable to obtain cached Solcast forecast data within the requested timeframe range.")
                         self.logger.error("Try running optimization again. Optionally, add runtime parameter 'weather_forecast_cache': true to pull new data from Solcast and cache.")
