@@ -231,10 +231,10 @@ class Forecast(object):
                 if not self.params["passed_data"]["weather_forecast_cache_only"]:
                     # Retrieve data from the Solcast API
                     if 'solcast_api_key' not in self.retrieve_hass_conf:
-                        self.logger.error("The solcast_api_key parameter was not defined, using dummy values for testing.")
+                        self.logger.error("The solcast_api_key parameter was not defined")
                         return False
                     if 'solcast_rooftop_id' not in self.retrieve_hass_conf:
-                        self.logger.error("The solcast_rooftop_id parameter was not defined, using dummy values for testing.")
+                        self.logger.error("The solcast_rooftop_id parameter was not defined")
                         return False
                     headers = {
                         'User-Agent': 'EMHASS',
@@ -302,7 +302,7 @@ class Forecast(object):
                     if not isinstance(data, pd.DataFrame) or len(data) < len(self.forecast_dates):
                         self.logger.error("There has been a error obtaining cached Solcast forecast data.")
                         self.logger.error("Try running optimization again with 'weather_forecast_cache': true, or run action `forecast-cache`, to pull new data from Solcast and cache.")
-                        self.logger.info("Removing old Solcast cache file.")
+                        self.logger.warning("Removing old Solcast cache file. Next optimization will pull data from Solcast, unless 'weather_forecast_cache_only': true")
                         os.remove(w_forecast_cache_path)
                         return False
                     # Filter cached forecast data to match current forecast_dates start-end range (reduce forecast Dataframe size to appropriate length)
@@ -312,7 +312,7 @@ class Forecast(object):
                     else:
                         self.logger.error("Unable to obtain cached Solcast forecast data within the requested timeframe range.")
                         self.logger.error("Try running optimization again (not using cache). Optionally, add runtime parameter 'weather_forecast_cache': true to pull new data from Solcast and cache.")
-                        self.logger.info("Removing old Solcast cache file.")
+                        self.logger.warning("Removing old Solcast cache file. Next optimization will pull data from Solcast, unless 'weather_forecast_cache_only': true")
                         os.remove(w_forecast_cache_path)
                         return False    
         elif method == 'solar.forecast': # using the solar.forecast API
