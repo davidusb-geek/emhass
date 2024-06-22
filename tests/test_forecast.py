@@ -148,7 +148,7 @@ class TestForecast(unittest.TestCase):
             self.assertEqual(len(df_weather_scrap), len(P_PV_forecast))
 
     def test_get_weather_forecast_solcast_method_mock(self):
-        self.fcst.params = {'passed_data': {'weather_forecast_cache': False}}
+        self.fcst.params = {'passed_data': {'weather_forecast_cache': False, 'weather_forecast_cache_only': False}}
         self.fcst.retrieve_hass_conf['solcast_api_key'] = "123456"
         self.fcst.retrieve_hass_conf['solcast_rooftop_id'] =  "123456"
         if os.path.isfile(emhass_conf['data_path'] / "weather_forecast_data.pkl"): 
