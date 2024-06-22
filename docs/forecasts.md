@@ -35,19 +35,21 @@ The default method for PV power forecast is the scrapping of weather forecast da
 
 #### solcast 
 
-A second method uses the Solcast solar forecast service. Go to [https://solcast.com/](https://solcast.com/) and configure your system. You will need to set `method=solcast` and basically use two parameters `solcast_rooftop_id` and `solcast_api_key` that should be passed as parameters at runtime or provided in the configuration/secrets. The free hobbyist account will be limited to 10 API requests per day, the granularity will be 30 min and the forecast is updated every 6h. If needed, better performances may be obtained with paid plans: [https://solcast.com/pricing/live-and-forecast](https://solcast.com/pricing/live-and-forecast).
+The second method uses the Solcast solar forecast service. Go to [https://solcast.com/](https://solcast.com/) and configure your system. You will need to set `method=solcast` and use two parameters `solcast_rooftop_id` and `solcast_api_key` that should be passed as parameters at runtime or provided in the configuration/secrets. The free hobbyist account will be limited to 10 API requests per day, the granularity will be 30 minutes and the forecast is updated every 6h. If needed, better performances may be obtained with paid plans: [https://solcast.com/pricing/live-and-forecast](https://solcast.com/pricing/live-and-forecast).
 
 For example:
 ```yaml
 # Set weather_forecast_method parameter to solcast in your configuration (configuration page / config_emhass.yaml)
 weather_forecast_method: 'solcast'
 ```
-
 ```bash
+# Example of running day-ahead, passing Solcast secrets fyi runtime parameters (i.e. not set in configuration)
 curl -i -H "Content-Type:application/json" -X POST -d '{"solcast_rooftop_id":"<your_system_id>","solcast_api_key":"<your_secret_api_key>"}' http://localhost:5000/action/dayahead-optim
 ```
 </br>
-For those who use the free plan and wish to use Solcast with MPC, you may wish to cache the output of a Solcast weather forecast request, then reference it in your automated MPC actions:
+
+##### Caching Solcast
+For those who use the free plan and wish to use Solcast with MPC, you may like to cache the output of a Solcast weather forecast request, then reference it in your automated MPC actions:
 
 ```bash
 # Run forecast and cache results (Recommended to run this 1-10 times a day, throughout the day)
@@ -56,13 +58,24 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 # Then run your regular MPC call (E.g. every 5 minutes)
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/naive-mpc-optim
 ```
+EMHASS will see the saved Solcast cache and use it's data over pulling from Solcast.
 
-`weather_forecast_cache` can also be provided via a optimization to save the forecast results to cache:
+`weather_forecast_cache` can also be provided in an optimization to save the forecast results to cache:
 ```bash
 # Example of running day-ahead and optimization storing the retrieved Solcast data to cache
 curl -i -H 'Content-Type:application/json' -X POST -d '{"weather_forecast_cache":true}' http://localhost:5000/action/dayahead-optim
 ```
-*The runtime parameter may be preferable for users that run a day-ahead at the start of the day everyday*
+
+By default, if EMHASS finds a problem with the Solcast cache file, the cache will be automatically deleted. Due to the missing cache, the next optimization will run and pulling data from Solcast.
+If you wish to make sure that a certain optimization will only use the cached data, (otherwise present an error) the runtime parameter `weather_forecast_cache_only` can be used:
+```bash
+# Run the forecast action 1-10 times a day 
+curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-cache
+
+# Then run your regular MPC call (E.g. every 5 minutes) and make sure it only uses the Solcast cache. (do not pull from Solcast)
+curl -i -H 'Content-Type:application/json' -X POST -d '{"weather_forecast_cache_only":true}' http://localhost:5000/action/naive-mpc-optim
+```
+
 
 #### solar.forecast 
 
