@@ -157,6 +157,12 @@ class Optimization:
             def_end_timestep = self.optim_conf['end_timesteps_of_each_deferrable_load']
         type_self_conso = 'bigm' # maxmin
 
+        num_deferrable_loads = self.optim_conf['number_of_deferrable_loads']
+
+        def_total_hours = def_total_hours + [0] * (num_deferrable_loads - len(def_total_hours))
+        def_start_timestep = def_start_timestep + [0] * (num_deferrable_loads - len(def_start_timestep))
+        def_end_timestep = def_end_timestep + [0] * (num_deferrable_loads - len(def_end_timestep))
+
         #### The LP problem using Pulp ####
         opt_model = plp.LpProblem("LP_Model", plp.LpMaximize)
 
@@ -173,7 +179,7 @@ class Optimization:
                                           name="P_grid_pos{}".format(i)) for i in set_I}
         P_deferrable = []
         P_def_bin1 = []
-        for k in range(self.optim_conf['number_of_deferrable_loads']):
+        for k in range(num_deferrable_loads):
             if type(self.optim_conf['nominal_power_of_deferrable_loads'][k]) == list:
                 upBound = np.max(self.optim_conf['nominal_power_of_deferrable_loads'][k])
             else:
@@ -402,7 +408,7 @@ class Optimization:
                             rhs = 0)
                         for i in set_I})
             
-            elif "def_load_config" in self.optim_conf.keys():
+            elif "def_load_config" in self.optim_conf.keys() and len(self.optim_conf["def_load_config"]) > k:
                 if "thermal_config" in self.optim_conf["def_load_config"][k]:
                     # Special case of a thermal deferrable load
                     def_load_config = self.optim_conf['def_load_config'][k]
