@@ -488,8 +488,7 @@ class Optimization:
                         predicted_temps[k] = predicted_temp
             
             else:
-                
-                if def_total_hours[k] > 0:
+                if len(def_total_hours) > k and def_total_hours[k] > 0:
                     # Total time of deferrable load
                     constraints.update({"constraint_defload{}_energy".format(k) :
                         plp.LpConstraint(
