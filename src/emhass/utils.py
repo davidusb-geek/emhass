@@ -949,7 +949,8 @@ def set_df_index_freq(df: pd.DataFrame) -> pd.DataFrame:
 
     """
     idx_diff = np.diff(df.index)
+    # Sometimes there are zero values in this list.
+    idx_diff = idx_diff[np.nonzero(idx_diff)]
     sampling = pd.to_timedelta(np.median(idx_diff))
     df = df[~df.index.duplicated()]
-    df = df.asfreq(sampling)
-    return df
+    return df.asfreq(sampling)
