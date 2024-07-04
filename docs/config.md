@@ -109,6 +109,7 @@ Solution (2) would be to use SolCast and pass that data directly to emhass as a 
 - `modules_per_string`: The number of modules per string. Defaults to 16. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 
 - `strings_per_inverter`: The number of used strings per inverter. Defaults to 1. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270).
 - `inverter_is_hybrid`: Set to True to consider that the installation inverter is hybrid for PV and batteries (Default False).
+- `compute_curtailment`: Set to True to compute a special PV curtailment variable (Default False).
 
 If your system has a battery (set_use_battery=True), then you should define the following parameters:
 
