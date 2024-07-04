@@ -182,6 +182,7 @@ class Forecast(object):
         
         """
         csv_path  = self.emhass_conf['data_path'] / csv_path
+        w_forecast_cache_path = os.path.abspath(self.emhass_conf['data_path'] / "weather_forecast_data.pkl")
 
         self.logger.info("Retrieving weather forecast data using method = "+method)
         self.weather_forecast_method = method # Saving this attribute for later use to identify csv method usage
@@ -223,40 +224,97 @@ class Forecast(object):
             data['relative_humidity'] = raw_data['Relative Humidity (%)']
             data['precipitable_water'] = pvlib.atmosphere.gueymard94_pw(
                 data['temp_air'], data['relative_humidity'])
-        elif method == 'solcast': # using solcast API
-            # Retrieve data from the solcast API
-            if 'solcast_api_key' not in self.retrieve_hass_conf:
-                self.logger.warning("The solcast_api_key parameter was not defined, using dummy values for testing")
-                self.retrieve_hass_conf['solcast_api_key'] = "123456"
-            if 'solcast_rooftop_id' not in self.retrieve_hass_conf:
-                self.logger.warning("The solcast_rooftop_id parameter was not defined, using dummy values for testing")
-                self.retrieve_hass_conf['solcast_rooftop_id'] = "123456"
-            headers = {
-                "Authorization": "Bearer " + self.retrieve_hass_conf['solcast_api_key'],
-                "content-type": "application/json",
-                }
-            days_solcast = int(len(self.forecast_dates)*self.freq.seconds/3600)
-            url = "https://api.solcast.com.au/rooftop_sites/"+self.retrieve_hass_conf['solcast_rooftop_id']+"/forecasts?hours="+str(days_solcast)
-            response = get(url, headers=headers)
-            '''import bz2 # Uncomment to save a serialized data for tests
-            import _pickle as cPickle
-            with bz2.BZ2File("data/test_response_solcast_get_method.pbz2", "w") as f: 
-                cPickle.dump(response, f)'''
-            data = response.json()
-            data_list = []
-            for elm in data['forecasts']:
-                data_list.append(elm['pv_estimate']*1000) # Converting kW to W
-            # Check if the retrieved data has the correct length
-            if len(data_list) < len(self.forecast_dates):
-                self.logger.error("Not enough data retrived from SolCast service, try increasing the time step or use MPC")
+        elif method == 'solcast': # using Solcast API
+            # Check if weather_forecast_cache is true or if forecast_data file does not exist
+            if self.params["passed_data"]["weather_forecast_cache"] or not os.path.isfile(w_forecast_cache_path):
+                # Check if weather_forecast_cache_only is true, if so produce error for not finding cache file
+                if not self.params["passed_data"]["weather_forecast_cache_only"]:
+                    # Retrieve data from the Solcast API
+                    if 'solcast_api_key' not in self.retrieve_hass_conf:
+                        self.logger.error("The solcast_api_key parameter was not defined")
+                        return False
+                    if 'solcast_rooftop_id' not in self.retrieve_hass_conf:
+                        self.logger.error("The solcast_rooftop_id parameter was not defined")
+                        return False
+                    headers = {
+                        'User-Agent': 'EMHASS',
+                        "Authorization": "Bearer " + self.retrieve_hass_conf['solcast_api_key'],
+                        "content-type": "application/json",
+                        }
+                    days_solcast = int(len(self.forecast_dates)*self.freq.seconds/3600)
+                    # If weather_forecast_cache, set request days as twice as long to avoid length issues (add a buffer) 
+                    if self.params["passed_data"]["weather_forecast_cache"]:
+                        days_solcast = min((days_solcast * 2), 336)
+                    url = "https://api.solcast.com.au/rooftop_sites/"+self.retrieve_hass_conf['solcast_rooftop_id']+"/forecasts?hours="+str(days_solcast)
+                    response = get(url, headers=headers)
+                    '''import bz2 # Uncomment to save a serialized data for tests
+                    import _pickle as cPickle
+                    with bz2.BZ2File("data/test_response_solcast_get_method.pbz2", "w") as f: 
+                        cPickle.dump(response, f)'''
+                    # Verify the request passed
+                    if int(response.status_code) == 200:
+                        data = response.json()
+                    elif int(response.status_code) == 402 or int(response.status_code) == 429:
+                        self.logger.error("Solcast error: May have exceeded your subscription limit.")
+                        return False  
+                    elif int(response.status_code) >= 400 or int(response.status_code) >= 202:
+                        self.logger.error("Solcast error: There was a issue with the solcast request, check solcast API key and rooftop ID.")
+                        self.logger.error("Solcast error: Check that your subscription is valid and your network can connect to Solcast.")
+                        return False  
+                    data_list = []
+                    for elm in data['forecasts']:
+                        data_list.append(elm['pv_estimate']*1000) # Converting kW to W
+                    # Check if the retrieved data has the correct length
+                    if len(data_list) < len(self.forecast_dates):
+                        self.logger.error("Not enough data retried from Solcast service, try increasing the time step or use MPC.")
+                    else:
+                        # If runtime weather_forecast_cache is true save forecast result to file as cache
+                        if self.params["passed_data"]["weather_forecast_cache"]:
+                            # Add x2 forecast periods for cached results. This adds a extra delta_forecast amount of days for a buffer
+                            cached_forecast_dates =  self.forecast_dates.union(pd.date_range(self.forecast_dates[-1], periods=(len(self.forecast_dates) +1), freq=self.freq)[1:])
+                            cache_data_list = data_list[0:len(cached_forecast_dates)]
+                            cache_data_dict = {'ts':cached_forecast_dates, 'yhat':cache_data_list}
+                            data_cache = pd.DataFrame.from_dict(cache_data_dict)
+                            data_cache.set_index('ts', inplace=True)
+                            with open(w_forecast_cache_path, "wb") as file:    
+                                cPickle.dump(data_cache, file)
+                            if not os.path.isfile(w_forecast_cache_path):
+                                self.logger.warning("Solcast forecast data could not be saved to file.")
+                            else:
+                                self.logger.info("Saved the Solcast results to cache, for later reference.")    
+                        # Trim request results to forecast_dates        
+                        data_list = data_list[0:len(self.forecast_dates)]
+                        data_dict = {'ts':self.forecast_dates, 'yhat':data_list}
+                        # Define DataFrame
+                        data = pd.DataFrame.from_dict(data_dict)
+                        # Define index
+                        data.set_index('ts', inplace=True)
+            # Else, notify user to update cache
+                else:
+                    self.logger.error("Unable to obtain Solcast cache file.")
+                    self.logger.error("Try running optimization again with 'weather_forecast_cache_only': false")
+                    self.logger.error("Optionally, obtain new Solcast cache with runtime parameter 'weather_forecast_cache': true in an optimization, or run the `forecast-cache` action, to pull new data from Solcast and cache.")
+                    return False
+            # Else, open stored weather_forecast_data.pkl file for previous forecast data (cached data)
             else:
-                # Ensure correct length
-                data_list = data_list[0:len(self.forecast_dates)]
-                # Define DataFrame
-                data_dict = {'ts':self.forecast_dates, 'yhat':data_list}
-                data = pd.DataFrame.from_dict(data_dict)
-                # Define index
-                data.set_index('ts', inplace=True)
+                with open(w_forecast_cache_path, "rb") as file:
+                    data = cPickle.load(file)
+                    if not isinstance(data, pd.DataFrame) or len(data) < len(self.forecast_dates):
+                        self.logger.error("There has been a error obtaining cached Solcast forecast data.")
+                        self.logger.error("Try running optimization again with 'weather_forecast_cache': true, or run action `forecast-cache`, to pull new data from Solcast and cache.")
+                        self.logger.warning("Removing old Solcast cache file. Next optimization will pull data from Solcast, unless 'weather_forecast_cache_only': true")
+                        os.remove(w_forecast_cache_path)
+                        return False
+                    # Filter cached forecast data to match current forecast_dates start-end range (reduce forecast Dataframe size to appropriate length)
+                    if self.forecast_dates[0] in data.index and self.forecast_dates[-1] in data.index:
+                        data = data.loc[self.forecast_dates[0]:self.forecast_dates[-1]]
+                        self.logger.info("Retrieved Solcast data from the previously saved cache.")
+                    else:
+                        self.logger.error("Unable to obtain cached Solcast forecast data within the requested timeframe range.")
+                        self.logger.error("Try running optimization again (not using cache). Optionally, add runtime parameter 'weather_forecast_cache': true to pull new data from Solcast and cache.")
+                        self.logger.warning("Removing old Solcast cache file. Next optimization will pull data from Solcast, unless 'weather_forecast_cache_only': true")
+                        os.remove(w_forecast_cache_path)
+                        return False    
         elif method == 'solar.forecast': # using the solar.forecast API
             # Retrieve data from the solar.forecast API
             if 'solar_forecast_kwp' not in self.retrieve_hass_conf:
@@ -839,4 +897,3 @@ class Forecast(object):
             self.logger.error("Passed method is not valid")
             return False
         return df_final
-    
