@@ -303,6 +303,18 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         # Treat passed forecast data lists
         list_forecast_key = ['pv_power_forecast', 'load_power_forecast', 'load_cost_forecast', 'prod_price_forecast']
         forecast_methods = ['weather_forecast_method', 'load_forecast_method', 'load_cost_forecast_method', 'prod_price_forecast_method']
+        # Param to save forecast cache (i.e. Solcast)
+        if "weather_forecast_cache" not in runtimeparams.keys():
+            weather_forecast_cache = False
+        else:
+            weather_forecast_cache = runtimeparams["weather_forecast_cache"]
+        params["passed_data"]["weather_forecast_cache"] = weather_forecast_cache  
+        # Param to make sure optimization only uses cached data. (else produce error)
+        if "weather_forecast_cache_only" not in runtimeparams.keys():
+            weather_forecast_cache_only = False
+        else:
+            weather_forecast_cache_only = runtimeparams["weather_forecast_cache_only"]
+        params["passed_data"]["weather_forecast_cache_only"] = weather_forecast_cache_only  
         for method, forecast_key in enumerate(list_forecast_key):
             if forecast_key in runtimeparams.keys():
                 if type(runtimeparams[forecast_key]) == list and len(runtimeparams[forecast_key]) >= len(forecast_dates):

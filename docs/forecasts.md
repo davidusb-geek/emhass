@@ -12,7 +12,7 @@ EMHASS will basically need 4 forecasts to work properly:
 
 There are methods that are generalized to the 4 forecast needed. For all there forecasts it is possible to pass the data either as a passed list of values or by reading from a CSV file. With these methods it is then possible to use data from external forecast providers.
     
-Then there are the methods that are specific to each type of forecast and that proposed forecast treated and generated internally by this EMHASS forecast class. For the weather forecast a first method (`scrapper`) uses a scrapping to the ClearOutside webpage which proposes detailed forecasts based on Lat/Lon locations. Another method (`solcast`) is using the SolCast PV production forecast service. A final method (`solar.forecast`) is using another external service: Solar.Forecast, for which just the nominal PV peak installed power should be provided. Search the forecast section on the documentation for examples on how to implement these different methods.
+Then there are the methods that are specific to each type of forecast and that proposed forecast treated and generated internally by this EMHASS forecast class. For the weather forecast a first method (`scrapper`) uses a scrapping to the ClearOutside webpage which proposes detailed forecasts based on Lat/Lon locations. Another method (`solcast`) is using the Solcast PV production forecast service. A final method (`solar.forecast`) is using another external service: Solar.Forecast, for which just the nominal PV peak installed power should be provided. Search the forecast section on the documentation for examples on how to implement these different methods.
 
 The `get_power_from_weather` method is proposed here to convert from irradiance data to electrical power. The PVLib module is used to model the PV plant. A dedicated webapp will help you search for your correct PV module and inverter: [https://emhass-pvlib-database.streamlit.app/](https://emhass-pvlib-database.streamlit.app/)
 
@@ -29,19 +29,60 @@ For the PV production selling price and Load cost forecasts the privileged metho
 
 ## PV power production forecast
 
+#### scrapper 
+
 The default method for PV power forecast is the scrapping of weather forecast data from the [https://clearoutside.com/](https://clearoutside.com/) website. This is obtained using `method=scrapper`. This site proposes detailed forecasts based on Lat/Lon locations. This method seems quite stable but as with any scrape method it will fail if any changes are made to the webpage API. The weather forecast data is then converted into PV power production using the `list_pv_module_model` and `list_pv_inverter_model` paramters defined in the configuration.
 
-A second method uses the SolCast solar forecast service. Go to [https://solcast.com/](https://solcast.com/) and configure your system. You will need to set `method=solcast` and basically use two parameters `solcast_rooftop_id` and `solcast_api_key` that should be passed as parameters at runtime. This will be limited to 10 API requests per day, the granularity will be 30 min and the forecast is updated every 6h. If needed, better performances may be obtained with paid plans: [https://solcast.com/pricing/live-and-forecast](https://solcast.com/pricing/live-and-forecast).
+#### solcast 
+
+The second method uses the Solcast solar forecast service. Go to [https://solcast.com/](https://solcast.com/) and configure your system. You will need to set `method=solcast` and use two parameters `solcast_rooftop_id` and `solcast_api_key` that should be passed as parameters at runtime or provided in the configuration/secrets. The free hobbyist account will be limited to 10 API requests per day, the granularity will be 30 minutes and the forecast is updated every 6h. If needed, better performances may be obtained with paid plans: [https://solcast.com/pricing/live-and-forecast](https://solcast.com/pricing/live-and-forecast).
 
 For example:
+```yaml
+# Set weather_forecast_method parameter to solcast in your configuration (configuration page / config_emhass.yaml)
+weather_forecast_method: 'solcast'
 ```
+```bash
+# Example of running day-ahead, passing Solcast secrets fyi runtime parameters (i.e. not set in configuration)
 curl -i -H "Content-Type:application/json" -X POST -d '{"solcast_rooftop_id":"<your_system_id>","solcast_api_key":"<your_secret_api_key>"}' http://localhost:5000/action/dayahead-optim
 ```
+</br>
 
-A third method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the PV peak installed power in kW) that should be passed at runtime. This will be using the free public Solar.Forecast account with 12 API requests per hour, per IP, and 1h data resolution. As with SolCast, there are paid account services that may results in better forecasts.
+##### Caching Solcast
+For those who use the free plan and wish to use Solcast with MPC, you may like to cache the output of a Solcast weather forecast request, then reference it in your automated MPC actions:
+
+```bash
+# Run forecast and cache results (Recommended to run this 1-10 times a day, throughout the day)
+curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-cache
+
+# Then run your regular MPC call (E.g. every 5 minutes)
+curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/naive-mpc-optim
+```
+EMHASS will see the saved Solcast cache and use it's data over pulling from Solcast.
+
+`weather_forecast_cache` can also be provided in an optimization to save the forecast results to cache:
+```bash
+# Example of running day-ahead and optimization storing the retrieved Solcast data to cache
+curl -i -H 'Content-Type:application/json' -X POST -d '{"weather_forecast_cache":true}' http://localhost:5000/action/dayahead-optim
+```
+
+By default, if EMHASS finds a problem with the Solcast cache file, the cache will be automatically deleted. Due to the missing cache, the next optimization will run and pulling data from Solcast.
+If you wish to make sure that a certain optimization will only use the cached data, (otherwise present an error) the runtime parameter `weather_forecast_cache_only` can be used:
+```bash
+# Run the forecast action 1-10 times a day 
+curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-cache
+
+# Then run your regular MPC call (E.g. every 5 minutes) and make sure it only uses the Solcast cache. (do not pull from Solcast)
+curl -i -H 'Content-Type:application/json' -X POST -d '{"weather_forecast_cache_only":true}' http://localhost:5000/action/naive-mpc-optim
+```
+
+
+#### solar.forecast 
+
+A third method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the PV peak installed power in kW) that should be passed at runtime. This will be using the free public Solar.Forecast account with 12 API requests per hour, per IP, and 1h data resolution. As with Solcast, there are paid account services that may results in better forecasts.
 
 For example, for a 5 kWp installation:
-```
+```bash
 curl -i -H "Content-Type:application/json" -X POST -d '{"solar_forecast_kwp":5}' http://localhost:5000/action/dayahead-optim
 ```
 
@@ -129,17 +170,17 @@ The possible dictionnary keys to pass data are:
 - `prod_price_forecast` for the PV production selling price forecast.
 
 For example if using the add-on or the standalone docker installation you can pass this data as list of values to the data dictionnary during the `curl` POST:
-```
+```bash
 curl -i -H "Content-Type: application/json" -X POST -d '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}' http://localhost:5000/action/dayahead-optim
 ```
 
 You need to be careful here to send the correct amount of data on this list, the correct length. For example, if the data time step is defined to 1h and you are performing a day-ahead optimization, then this list length should be of 24 data points.
 
-### Example using: SolCast forecast + Amber prices
+### Example using: Solcast forecast + Amber prices
 
-If you're using SolCast then you can define the following sensors in your system:
+If you're using Solcast then you can define the following sensors in your system:
 
-```
+```yaml
 sensors:
 
   - platform: rest
@@ -166,11 +207,11 @@ sensors:
           {%- endfor %} {{ (values_all.all)[:48] }}
 ```
 
-With this you can now feed this SolCast forecast to EMHASS along with the mapping of the Amber prices. 
+With this you can now feed this Solcast forecast to EMHASS along with the mapping of the Amber prices. 
 
 A MPC call may look like this for 4 deferrable loads:
 
-```
+```yaml
     post_mpc_optim_solcast: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{(
           ([states('sensor.amber_general_price')|float(0)] +
           state_attr('sensor.amber_general_forecast', 'forecasts') |map(attribute='per_kwh')|list)[:48])
@@ -184,7 +225,7 @@ A MPC call may look like this for 4 deferrable loads:
 
 Thanks to [@purcell_labs](https://github.com/purcell-lab) for this example configuration.
 
-### Example combining multiple SolCast configurations
+### Example combining multiple Solcast configurations
 
 If you have multiple rooftops, for example for east-west facing solar panels, then you will need to fuze the sensors providing the different forecasts on a single one using templates in Home Assistant. Then feed that single sensor data passing the data as a list when calling the shell command.
 
@@ -192,7 +233,7 @@ Here is a sample configuration to achieve this, thanks to [@gieljnssns](https://
 
 The two sensors using rest sensors:
 
-```
+```yaml
 - platform: rest
   name: "Solcast Forecast huis"
   json_attributes:
@@ -220,7 +261,7 @@ The two sensors using rest sensors:
 
 Then two templates, one for each sensor:
 
-```
+```yaml
     solcast_24hrs_forecast_garage:
       value_template: >-
         {%- set power = state_attr('sensor.solcast_forecast_garage', 'forecasts') | map(attribute='pv_estimate') | list %}
@@ -242,7 +283,7 @@ Then two templates, one for each sensor:
 
 And the fusion of the two sensors:
 
-```
+```yaml
     solcast_24hrs_forecast:
       value_template: >-
         {% set a = states("sensor.solcast_24hrs_forecast_garage")[1:-1].split(',') | map('int') | list %}
@@ -256,7 +297,7 @@ And the fusion of the two sensors:
 
 And finally the shell command:
 
-```
+```yaml
 dayahead_optim: "curl -i -H \"Content-Type:application/json\" -X POST -d '{\"pv_power_forecast\":{{states('sensor.solcast_24hrs_forecast')}}}' http://localhost:5001/action/dayahead-optim"
 ```
 
@@ -269,7 +310,7 @@ After setup the sensors should appear in Home Assistant for raw `today` and `tom
 
 The subsequent shell command to concatenate `today` and `tomorrow` values can be for example:
 
-```
+```yaml
 shell_command:
   trigger_nordpool_forecast: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{((state_attr('sensor.nordpool', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24] }},\"prod_price_forecast\":{{((state_attr('sensor.nordpool', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24]}}}' http://localhost:5000/action/dayahead-optim"
 ```
