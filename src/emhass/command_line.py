@@ -849,19 +849,35 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     )
     cols_published = ["P_PV", "P_Load"]
     # Publish PV curtailment
-    custom_pv_curtailment_id = params["passed_data"]["custom_pv_curtailment_id"]
-    input_data_dict["rh"].post_data(
-        opt_res_latest["P_PV_curtailment"],
-        idx_closest,
-        custom_pv_curtailment_id["entity_id"],
-        custom_pv_curtailment_id["unit_of_measurement"],
-        custom_pv_curtailment_id["friendly_name"],
-        type_var="power",
-        publish_prefix=publish_prefix,
-        save_entities=entity_save,
-        dont_post=dont_post
-    )
-    cols_published = cols_published + ["P_PV_curtailment"]
+    if input_data_dict["cst"].plant_conf['compute_curtailment']:
+        custom_pv_curtailment_id = params["passed_data"]["custom_pv_curtailment_id"]
+        input_data_dict["rh"].post_data(
+            opt_res_latest["P_PV_curtailment"],
+            idx_closest,
+            custom_pv_curtailment_id["entity_id"],
+            custom_pv_curtailment_id["unit_of_measurement"],
+            custom_pv_curtailment_id["friendly_name"],
+            type_var="power",
+            publish_prefix=publish_prefix,
+            save_entities=entity_save,
+            dont_post=dont_post
+        )
+        cols_published = cols_published + ["P_PV_curtailment"]
+    # Publish P_hybrid_inverter
+    if input_data_dict["cst"].plant_conf['inverter_is_hybrid']:
+        custom_hybrid_inverter_id = params["passed_data"]["custom_hybrid_inverter_id"]
+        input_data_dict["rh"].post_data(
+            opt_res_latest["P_hybrid_inverter"],
+            idx_closest,
+            custom_hybrid_inverter_id["entity_id"],
+            custom_hybrid_inverter_id["unit_of_measurement"],
+            custom_hybrid_inverter_id["friendly_name"],
+            type_var="power",
+            publish_prefix=publish_prefix,
+            save_entities=entity_save,
+            dont_post=dont_post
+        )
+        cols_published = cols_published + ["P_hybrid_inverter"]
     # Publish deferrable loads
     custom_deferrable_forecast_id = params["passed_data"][
         "custom_deferrable_forecast_id"

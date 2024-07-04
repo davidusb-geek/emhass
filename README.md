@@ -457,7 +457,7 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"all"}'
 ```
 This action will publish the dayahead (_dh) and MPC (_mpc) optimization results from the optimizations above.
 
-### Forecast data
+### Forecast data at runtime
 
 It is possible to provide EMHASS with your own forecast data. For this just add the data as list of values to a data dictionary during the call to `emhass` using the `runtimeparams` option. 
 
@@ -480,7 +480,7 @@ The possible dictionary keys to pass data are:
 
 - `prod_price_forecast` for the PV production selling price forecast.
 
-### Passing other data
+### Passing other data at runtime
 
 It is possible to also pass other data during runtime in order to automate the energy management. For example, it could be useful to dynamically update the total number of hours for each deferrable load (`def_total_hours`) using for instance a correlation with the outdoor temperature (useful for water heater for example). 
 
@@ -508,7 +508,15 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `solar_forecast_kwp` for the PV peak installed power in kW used for the solar.forecast API call. 
 
+- `SOCmin` the minimum possible SOC.
+
+- `SOCmax` the maximum possible SOC.
+
 - `SOCtarget` for the desired target value of initial and final SOC.
+
+- `Pd_max` for the maximum battery discharge power.
+
+- `Pc_max` for the maximum battery charge power.
 
 - `publish_prefix` use this key to pass a common prefix to all published data. This will add a prefix to the sensor name but also to the forecasts attributes keys within the sensor.
 
