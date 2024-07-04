@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.2 - 2024-07-04
+### Improvement
+- Weather forecast caching and Solcast method fix by @GeoDerp
+- Added a new configuration parameter to control wether we compute PV curtailment or not
+- Added hybrid inverter to data publish
+- It is now possible to pass these battery parameters at runtime: `SOCmin`, `SOCmax`, `Pd_max` and `Pc_max`
+### Fix
+- Fixed problem with negative PV forecast values in optimization.py, by @GeoDerp
+
 ## 0.10.1 - 2024-06-03
 ### Fix
 - Fixed PV curtailment maximum possible value constraint

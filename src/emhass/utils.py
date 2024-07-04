@@ -167,6 +167,11 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             "unit_of_measurement": "W",
             "friendly_name": "PV Power Curtailment",
         },
+        "custom_hybrid_inverter_id": {
+            "entity_id": "sensor.p_hybrid_inverter",
+            "unit_of_measurement": "W",
+            "friendly_name": "PV Hybrid Inverter",
+        },
         "custom_batt_forecast_id": {
             "entity_id": "sensor.p_batt_forecast",
             "unit_of_measurement": "W",
@@ -248,7 +253,6 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             if "target" in runtimeparams:
                 target = runtimeparams["target"]
                 params["passed_data"]["target"] = target
-
         # Treating special data passed for MPC control case
         if set_type == "naive-mpc-optim":
             if "prediction_horizon" not in runtimeparams.keys():
@@ -467,8 +471,16 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         if 'continual_publish' in runtimeparams.keys():
             retrieve_hass_conf['continual_publish'] = bool(runtimeparams['continual_publish'])  
         # Treat plant configuration parameters passed at runtime
+        if "SOCmin" in runtimeparams.keys():
+            plant_conf["SOCmin"] = runtimeparams["SOCmin"]
+        if "SOCmax" in runtimeparams.keys():
+            plant_conf["SOCmax"] = runtimeparams["SOCmax"]
         if "SOCtarget" in runtimeparams.keys():
             plant_conf["SOCtarget"] = runtimeparams["SOCtarget"]
+        if "Pd_max" in runtimeparams.keys():
+            plant_conf["Pd_max"] = runtimeparams["Pd_max"]
+        if "Pc_max" in runtimeparams.keys():
+            plant_conf["Pc_max"] = runtimeparams["Pc_max"]
         # Treat custom entities id's and friendly names for variables
         if "custom_pv_forecast_id" in runtimeparams.keys():
             params["passed_data"]["custom_pv_forecast_id"] = runtimeparams[
@@ -481,6 +493,10 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         if "custom_pv_curtailment_id" in runtimeparams.keys():
             params["passed_data"]["custom_pv_curtailment_id"] = runtimeparams[
                 "custom_pv_curtailment_id"
+            ]
+        if "custom_hybrid_inverter_id" in runtimeparams.keys():
+            params["passed_data"]["custom_hybrid_inverter_id"] = runtimeparams[
+                "custom_hybrid_inverter_id"
             ]
         if "custom_batt_forecast_id" in runtimeparams.keys():
             params["passed_data"]["custom_batt_forecast_id"] = runtimeparams[
@@ -847,6 +863,7 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int,
         if options.get('list_strings_per_inverter',None) != None: 
             params['plant_conf']['strings_per_inverter'] = [i['strings_per_inverter'] for i in options.get('list_strings_per_inverter')]
         params["plant_conf"]["inverter_is_hybrid"] = options.get("inverter_is_hybrid", params["plant_conf"]["inverter_is_hybrid"])
+        params["plant_conf"]["compute_curtailment"] = options.get("compute_curtailment", params["plant_conf"]["compute_curtailment"])
         params['plant_conf']['Pd_max'] = options.get('battery_discharge_power_max', params['plant_conf']['Pd_max']) 
         params['plant_conf']['Pc_max'] = options.get('battery_charge_power_max', params['plant_conf']['Pc_max'])
         params['plant_conf']['eta_disch'] = options.get('battery_discharge_efficiency', params['plant_conf']['eta_disch'])

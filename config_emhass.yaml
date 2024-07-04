@@ -81,6 +81,7 @@ plant_conf:
   strings_per_inverter: # The number of used strings per inverter
   - 1
   inverter_is_hybrid: False # Set if it is a hybrid inverter (PV+batteries) or not
+  compute_curtailment: False # Compute a PV curtailment variable or not
   Pd_max: 1000 # If your system has a battery (set_use_battery=True), the maximum discharge power in Watts
   Pc_max: 1000 # If your system has a battery (set_use_battery=True), the maximum charge power in Watts
   eta_disch: 0.95 # If your system has a battery (set_use_battery=True), the discharge efficiency

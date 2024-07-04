@@ -143,6 +143,7 @@
     }
   ],
   "inverter_is_hybrid": false,
+  "compute_curtailment": false,
   "set_use_battery": false,
   "battery_discharge_power_max": 1000,
   "battery_charge_power_max": 1000,
