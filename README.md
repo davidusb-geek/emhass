@@ -144,13 +144,9 @@ docker run -it --restart always -p 5000:5000  -e TZ="Europe/Paris"  -e LOCAL_COS
 ### Method 3) Legacy method using a Python virtual environment
 
 With this method it is recommended to install on a virtual environment.
-For this you will need `virtualenv`, install it using:
+Create and activate a virtual environment:
 ```bash
-sudo apt install python3-virtualenv
-```
-Then create and activate the virtual environment:
-```bash
-virtualenv -p /usr/bin/python3 emhassenv
+python3 -m venv emhassenv
 cd emhassenv
 source bin/activate
 ```
@@ -461,7 +457,7 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"all"}'
 ```
 This action will publish the dayahead (_dh) and MPC (_mpc) optimization results from the optimizations above.
 
-### Forecast data
+### Forecast data at runtime
 
 It is possible to provide EMHASS with your own forecast data. For this just add the data as list of values to a data dictionary during the call to `emhass` using the `runtimeparams` option. 
 
@@ -484,7 +480,7 @@ The possible dictionary keys to pass data are:
 
 - `prod_price_forecast` for the PV production selling price forecast.
 
-### Passing other data
+### Passing other data at runtime
 
 It is possible to also pass other data during runtime in order to automate the energy management. For example, it could be useful to dynamically update the total number of hours for each deferrable load (`def_total_hours`) using for instance a correlation with the outdoor temperature (useful for water heater for example). 
 
@@ -500,6 +496,8 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `def_end_timestep` for the timestep before which each deferrable load should operate (if you don't want the deferrable load to use the whole optimization timewindow).
 
+- `def_current_state` Pass this as a list of booleans (True/False) to indicate the current deferrable load state. This is used internally to avoid incorrectly penalizing a deferrable load start if a forecast is run when that load is already running.
+
 - `treat_def_as_semi_cont` to define if we should treat each deferrable load as a semi-continuous variable.
 
 - `set_def_constant` to define if we should set each deferrable load as a constant fixed value variable with just one startup for each optimization task.
@@ -510,7 +508,15 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `solar_forecast_kwp` for the PV peak installed power in kW used for the solar.forecast API call. 
 
+- `SOCmin` the minimum possible SOC.
+
+- `SOCmax` the maximum possible SOC.
+
 - `SOCtarget` for the desired target value of initial and final SOC.
+
+- `Pd_max` for the maximum battery discharge power.
+
+- `Pc_max` for the maximum battery charge power.
 
 - `publish_prefix` use this key to pass a common prefix to all published data. This will add a prefix to the sensor name but also to the forecasts attributes keys within the sensor.
 

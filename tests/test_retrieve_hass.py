@@ -122,7 +122,7 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertEqual(len(self.rh.df_final.columns), len(self.var_list))
         self.assertEqual(self.rh.df_final.index.isin(self.days_list).sum(), len(self.days_list))
         self.assertEqual(self.rh.df_final.index.freq, self.retrieve_hass_conf['freq'])
-        self.assertEqual(self.rh.df_final.index.tz, pytz.UTC)
+        self.assertEqual(self.rh.df_final.index.tz, datetime.timezone.utc)
         self.rh.prepare_data(self.retrieve_hass_conf['var_load'], 
                              load_negative = self.retrieve_hass_conf['load_negative'],
                              set_zero_min = self.retrieve_hass_conf['set_zero_min'], 
