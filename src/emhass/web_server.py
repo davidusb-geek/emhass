@@ -108,11 +108,11 @@ def action_call(action_name):
     runtimeparams = json.dumps(runtimeparams)
     
     # Run action if weather_forecast_cache
-    if action_name == 'forecast-cache':
-        ActionStr = " >> Performing forecast, try to caching result"
+    if action_name == 'weather-forecast-cache':
+        ActionStr = " >> Performing weather forecast, try to caching result"
         app.logger.info(ActionStr)
         weather_forecast_cache(emhass_conf, params, runtimeparams, app.logger)
-        msg = f'EMHASS >> Forecast has run and results possibly cached... \n'
+        msg = f'EMHASS >> Weather Forecast has run and results possibly cached... \n'
         if not checkFileLog(ActionStr):
             return make_response(msg, 201)
         return make_response(grabLog(ActionStr), 400)
