@@ -52,8 +52,8 @@ curl -i -H "Content-Type:application/json" -X POST -d '{"solcast_rooftop_id":"<y
 For those who use the free plan and wish to use Solcast with MPC, you may like to cache the output of a Solcast weather forecast request, then reference it in your automated MPC actions:
 
 ```bash
-# Run forecast and cache results (Recommended to run this 1-10 times a day, throughout the day)
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-cache
+# Run weather forecast and cache results (Recommended to run this 1-10 times a day, throughout the day)
+curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/weather-forecast-cache
 
 # Then run your regular MPC call (E.g. every 5 minutes)
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/naive-mpc-optim
@@ -69,8 +69,8 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"weather_forecast_cache"
 By default, if EMHASS finds a problem with the Solcast cache file, the cache will be automatically deleted. Due to the missing cache, the next optimization will run and pulling data from Solcast.
 If you wish to make sure that a certain optimization will only use the cached data, (otherwise present an error) the runtime parameter `weather_forecast_cache_only` can be used:
 ```bash
-# Run the forecast action 1-10 times a day 
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/forecast-cache
+# Run the weather forecast action 1-10 times a day 
+curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/weather-forecast-cache
 
 # Then run your regular MPC call (E.g. every 5 minutes) and make sure it only uses the Solcast cache. (do not pull from Solcast)
 curl -i -H 'Content-Type:application/json' -X POST -d '{"weather_forecast_cache_only":true}' http://localhost:5000/action/naive-mpc-optim
