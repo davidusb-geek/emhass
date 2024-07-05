@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.10.2 - 2024-07-04
+## 0.10.2 - 2024-07-06
 ### Improvement
 - Weather forecast caching and Solcast method fix by @GeoDerp
 - Added a new configuration parameter to control wether we compute PV curtailment or not
