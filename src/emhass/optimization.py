@@ -639,7 +639,8 @@ class Optimization:
             opt_tp["SOC_opt"] = SOC_opt
         if self.plant_conf['inverter_is_hybrid']:
             opt_tp["P_hybrid_inverter"] = [P_hybrid_inverter[i].varValue for i in set_I]
-        opt_tp["P_PV_curtailment"] = [P_PV_curtailment[i].varValue for i in set_I]
+        if self.plant_conf['compute_curtailment']:
+            opt_tp["P_PV_curtailment"] = [P_PV_curtailment[i].varValue for i in set_I]
         opt_tp.index = data_opt.index
 
         # Lets compute the optimal cost function

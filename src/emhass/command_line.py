@@ -849,7 +849,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     )
     cols_published = ["P_PV", "P_Load"]
     # Publish PV curtailment
-    if input_data_dict["cst"].plant_conf['compute_curtailment']:
+    if input_data_dict["fcst"].plant_conf['compute_curtailment']:
         custom_pv_curtailment_id = params["passed_data"]["custom_pv_curtailment_id"]
         input_data_dict["rh"].post_data(
             opt_res_latest["P_PV_curtailment"],
@@ -864,7 +864,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         )
         cols_published = cols_published + ["P_PV_curtailment"]
     # Publish P_hybrid_inverter
-    if input_data_dict["cst"].plant_conf['inverter_is_hybrid']:
+    if input_data_dict["fcst"].plant_conf['inverter_is_hybrid']:
         custom_hybrid_inverter_id = params["passed_data"]["custom_hybrid_inverter_id"]
         input_data_dict["rh"].post_data(
             opt_res_latest["P_hybrid_inverter"],
