@@ -71,8 +71,8 @@ if __name__ == '__main__':
     # Set special debug cases
     optim_conf.update({'lp_solver': 'PULP_CBC_CMD'}) # set the name of the linear programming solver that will be used. Options are 'PULP_CBC_CMD', 'GLPK_CMD' and 'COIN_CMD'. 
     optim_conf.update({'lp_solver_path': 'empty'})  # set the path to the LP solver, COIN_CMD default is /usr/bin/cbc
-    optim_conf.update({'treat_def_as_semi_cont': [True, True]})
-    optim_conf.update({'set_def_constant': [False, False]})
+    optim_conf.update({'treat_def_as_semi_cont': [True, False]})
+    optim_conf.update({'set_def_constant': [True, False]})
     # optim_conf.update({'P_deferrable_nom': [[500.0, 100.0, 100.0, 500.0], 750.0]})
     
     optim_conf.update({'set_use_battery': False})
@@ -101,9 +101,11 @@ if __name__ == '__main__':
     if show_figures:
         fig_inputs_dah.show()
     
-    vars_to_plot = ['P_deferrable0', 'P_deferrable1','P_grid', 'P_PV', 'P_PV_curtailment']
+    vars_to_plot = ['P_deferrable0', 'P_deferrable1','P_grid', 'P_PV']
     if plant_conf['inverter_is_hybrid']:
         vars_to_plot = vars_to_plot + ['P_hybrid_inverter']
+    if plant_conf['compute_curtailment']:
+        vars_to_plot = vars_to_plot + ['P_PV_curtailment']
     if optim_conf['set_use_battery']:
         vars_to_plot = vars_to_plot + ['P_batt'] + ['SOC_opt']
     fig_res_dah = opt_res_dayahead[vars_to_plot].plot() # 'P_def_start_0', 'P_def_start_1', 'P_def_bin2_0', 'P_def_bin2_1'

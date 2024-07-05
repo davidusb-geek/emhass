@@ -37,6 +37,9 @@ optim_conf:
   set_def_constant: # set as a constant fixed value variable with just one startup for each 24h
   - False
   - False
+  def_start_penalty: # Set a penalty for each start up of a deferrable load
+  - 0.0
+  - 0.0
   weather_forecast_method: 'scrapper' # options are 'scrapper', 'csv', 'list', 'solcast' and 'solar.forecast'
   load_forecast_method: 'naive' # options are 'csv' to load a custom load forecast from a CSV file or 'naive' for a persistance model
   load_cost_forecast_method: 'hp_hc_periods' # options are 'hp_hc_periods' for peak and non-peak hours contracts and 'csv' to load custom cost from CSV file 
@@ -78,6 +81,7 @@ plant_conf:
   strings_per_inverter: # The number of used strings per inverter
   - 1
   inverter_is_hybrid: False # Set if it is a hybrid inverter (PV+batteries) or not
+  compute_curtailment: False # Compute a PV curtailment variable or not
   Pd_max: 1000 # If your system has a battery (set_use_battery=True), the maximum discharge power in Watts
   Pc_max: 1000 # If your system has a battery (set_use_battery=True), the maximum charge power in Watts
   eta_disch: 0.95 # If your system has a battery (set_use_battery=True), the discharge efficiency
