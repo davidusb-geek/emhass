@@ -807,6 +807,10 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int,
             params["optim_conf"]["def_total_hours"] = [i["operating_hours_of_each_deferrable_load"] for i in options.get("list_operating_hours_of_each_deferrable_load")]
         if options.get("list_treat_deferrable_load_as_semi_cont", None) != None:
             params["optim_conf"]["treat_def_as_semi_cont"] = [i["treat_deferrable_load_as_semi_cont"] for i in options.get("list_treat_deferrable_load_as_semi_cont")]
+        if options.get("list_set_deferrable_load_single_constant", None) != None:
+            params["optim_conf"]["set_def_constant"] = [i["set_deferrable_load_single_constant"] for i in options.get("list_set_deferrable_load_single_constant")]
+        if options.get("list_set_deferrable_startup_penalty", None) != None:
+            params["optim_conf"]["def_start_penalty"] = [i["set_deferrable_startup_penalty"] for i in options.get("list_set_deferrable_startup_penalty")]
         params["optim_conf"]["weather_forecast_method"] = options.get("weather_forecast_method", params["optim_conf"]["weather_forecast_method"])
         # Update optional param secrets
         if params["optim_conf"]["weather_forecast_method"] == "solcast":
@@ -817,12 +821,6 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int,
         params["optim_conf"]["load_forecast_method"] = options.get("load_forecast_method", params["optim_conf"]["load_forecast_method"])
         params["optim_conf"]["delta_forecast"] = options.get("delta_forecast_daily", params["optim_conf"]["delta_forecast"])
         params["optim_conf"]["load_cost_forecast_method"] = options.get("load_cost_forecast_method", params["optim_conf"]["load_cost_forecast_method"])
-        if options.get("list_set_deferrable_load_single_constant", None) != None:
-            params["optim_conf"]["set_def_constant"] = [i["set_deferrable_load_single_constant"] for i in options.get("list_set_deferrable_load_single_constant")]
-        
-        if options.get("list_set_deferrable_startup_penalty", None) != None:
-            params["optim_conf"]["def_start_penalty"] = [i["set_deferrable_startup_penalty"] for i in options.get("list_set_deferrable_startup_penalty")]
-        
         if (options.get("list_peak_hours_periods_start_hours", None) != None and options.get("list_peak_hours_periods_end_hours", None) != None):
             start_hours_list = [i["peak_hours_periods_start_hours"] for i in options["list_peak_hours_periods_start_hours"]]
             end_hours_list = [i["peak_hours_periods_end_hours"] for i in options["list_peak_hours_periods_end_hours"]]
@@ -889,7 +887,12 @@ def build_params(params: dict, params_secrets: dict, options: dict, addon: int,
         if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['treat_def_as_semi_cont']):
             logger.warning("treat_def_as_semi_cont / list_treat_deferrable_load_as_semi_cont does not match number in num_def_loads, adding default values to parameter")
             for x in range(len(params['optim_conf']['treat_def_as_semi_cont']), params['optim_conf']['num_def_loads']):
-                params['optim_conf']['treat_def_as_semi_cont'].append(True)        
+                params['optim_conf']['treat_def_as_semi_cont'].append(True)   
+        if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['def_start_penalty']):
+            logger.warning("def_start_penalty / list_set_deferrable_startup_penalty does not match number in num_def_loads, adding default values to parameter")
+            for x in range(len(params['optim_conf']['def_start_penalty']), params['optim_conf']['num_def_loads']):
+                params['optim_conf']['def_start_penalty'].append(0.0)            
+        # days_to_retrieve should be no less then 2     
         if params['optim_conf']['num_def_loads'] is not len(params['optim_conf']['def_total_hours']):
             logger.warning("def_total_hours / list_operating_hours_of_each_deferrable_load does not match number in num_def_loads, adding default values to parameter")
             for x in range(len(params['optim_conf']['def_total_hours']), params['optim_conf']['num_def_loads']):
