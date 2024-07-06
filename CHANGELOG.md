@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.3 - 2024-07-06
+### Improvement
+- Added improved support for `def_start_penalty` option
+- Improved documentation
+
 ## 0.10.2 - 2024-07-06
 ### Improvement
 - Weather forecast caching and Solcast method fix by @GeoDerp
