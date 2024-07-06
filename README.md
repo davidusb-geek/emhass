@@ -87,7 +87,7 @@ Installation instructions and example Home Assistant automation configurations a
 
 You must follow these steps to make EMHASS work properly:
 
-1) Define all the parameters in the configuration file according to your installation. See the description for each parameter in the **configuration** section.
+1) Define all the parameters in the configuration file according to your installation method. For the add-on method you need to use the configuration pane directly on the add-on page. For other installation methods it should be needed to set the variables using the `config_emhass.yaml` file. See below for details on the installation methods. See the description for each parameter in the **configuration** section. If you have a PV installation then this dedicated webapp can be useful to find your inverter and solar panel models: [https://emhass-pvlib-database.streamlit.app/](https://emhass-pvlib-database.streamlit.app/)
 
 2) You most notably will need to define the main data entering EMHASS. This will be the `sensor.power_photovoltaics` for the name of the your hass variable containing the PV produced power and the variable `sensor.power_load_no_var_loads` for the load power of your household excluding the power of the deferrable loads that you want to optimize.
 
