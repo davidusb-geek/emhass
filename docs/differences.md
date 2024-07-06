@@ -36,6 +36,7 @@ See bellow for a list of associations between the parameters from `config_emhass
 | optim_conf |  def_total_hours |  list_operating_hours_of_each_deferrable_load |  operating_hours_of_each_deferrable_load | 
 | optim_conf |  treat_def_as_semi_cont |  list_treat_deferrable_load_as_semi_cont |  treat_deferrable_load_as_semi_cont | 
 | optim_conf |  set_def_constant |  list_set_deferrable_load_single_constant |  set_deferrable_load_single_constant | 
+| optim_conf |  def_start_penalty |  list_set_deferrable_startup_penalty |  set_deferrable_startup_penalty | 
 | optim_conf |  weather_forecast_method |  weather_forecast_method | |
 | optim_conf |  load_forecast_method |  load_forecast_method | |
 | optim_conf |  delta_forecast |  delta_forecast_daily | |
