@@ -64,24 +64,31 @@ if __name__ == '__main__':
     
     df_input_data = fcst.get_load_cost_forecast(df_input_data)
     df_input_data = fcst.get_prod_price_forecast(df_input_data)
-    input_data_dict = {
-        'retrieve_hass_conf': retrieve_hass_conf,
-    }
+    input_data_dict = {'retrieve_hass_conf': retrieve_hass_conf}
     
     # Set special debug cases
+    
+    # Solver configurations
     optim_conf.update({'lp_solver': 'PULP_CBC_CMD'}) # set the name of the linear programming solver that will be used. Options are 'PULP_CBC_CMD', 'GLPK_CMD' and 'COIN_CMD'. 
     optim_conf.update({'lp_solver_path': 'empty'})  # set the path to the LP solver, COIN_CMD default is /usr/bin/cbc
+    
+    # Semi continuous and constant values
     optim_conf.update({'treat_def_as_semi_cont': [True, False]})
     optim_conf.update({'set_def_constant': [True, False]})
+    
+    # A sequence of values
     # optim_conf.update({'P_deferrable_nom': [[500.0, 100.0, 100.0, 500.0], 750.0]})
     
+    # Using a battery
     optim_conf.update({'set_use_battery': False})
     optim_conf.update({'set_nocharge_from_grid': False})
     optim_conf.update({'set_battery_dynamic': True})
     optim_conf.update({'set_nodischarge_to_grid': True})
     
+    # A hybrid inverter case
     plant_conf.update({'inverter_is_hybrid': False})
     
+    # Setting some negative values on production prices
     df_input_data.loc[df_input_data.index[25:30],'unit_prod_price'] = -0.07
     df_input_data['P_PV_forecast'] = df_input_data['P_PV_forecast']*2
     P_PV_forecast = P_PV_forecast*2

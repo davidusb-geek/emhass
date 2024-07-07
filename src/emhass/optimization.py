@@ -103,9 +103,9 @@ class Optimization:
         r"""
         Perform the actual optimization using linear programming (LP).
         
-        :param data_tp: A DataFrame containing the input data. The results of the \
+        :param data_opt: A DataFrame containing the input data. The results of the \
             optimization will be appended (decision variables, cost function values, etc)
-        :type data_tp: pd.DataFrame
+        :type data_opt: pd.DataFrame
         :param P_PV: The photovoltaic power values. This can be real historical \
             values or forecasted values.
         :type P_PV: numpy.array
@@ -400,9 +400,84 @@ class Optimization:
             for i in set_I})
 
         # Treat deferrable loads constraints
+        predicted_temps = {}
         for k in range(self.optim_conf['num_def_loads']):
             if type(self.optim_conf['P_deferrable_nom'][k]) == list:
-                continue
+                # Constraint for sequence of deferrable
+                # WARNING: This is experimental, formulation seems correct but feasibility problems.
+                # Probably uncomptabile with other constraints
+                power_sequence = self.optim_conf['P_deferrable_nom'][k]
+                sequence_length = len(power_sequence)
+                def create_matrix(input_list, n):
+                    matrix = []
+                    for i in range(n + 1):
+                        row = [0] * i + input_list + [0] * (n - i)
+                        matrix.append(row[:n*2])
+                    return matrix
+                matrix = create_matrix(power_sequence, n-sequence_length)
+                y = plp.LpVariable.dicts(f"y{k}", (i for i in range(len(matrix))), cat='Binary')
+                constraints.update({f"single_value_constraint_{k}" :
+                    plp.LpConstraint(
+                        e = plp.lpSum(y[i] for i in range(len(matrix))) - 1,
+                        sense = plp.LpConstraintEQ,
+                        rhs = 0)
+                    })
+                constraints.update({f"pdef{k}_sumconstraint_{i}" :
+                    plp.LpConstraint(
+                        e = plp.lpSum(P_deferrable[k][i] for i in set_I) - np.sum(power_sequence),
+                        sense = plp.LpConstraintEQ,
+                        rhs = 0)
+                    })
+                constraints.update({f"pdef{k}_positive_constraint_{i}" :
+                    plp.LpConstraint(
+                        e = P_deferrable[k][i],
+                        sense = plp.LpConstraintGE,
+                        rhs = 0)
+                    for i in set_I})
+                for num, mat in enumerate(matrix):
+                    constraints.update({f"pdef{k}_value_constraint_{num}_{i}" :
+                        plp.LpConstraint(
+                            e = P_deferrable[k][i] - mat[i]*y[num],
+                            sense = plp.LpConstraintEQ,
+                            rhs = 0)
+                        for i in set_I})
+            elif "def_load_config" in self.optim_conf and len(self.optim_conf["def_load_config"]) > k:
+                # Special case of a thermal deferrable load
+                def_load_config = self.optim_conf['def_load_config'][k]
+                if def_load_config and 'thermal_config' in def_load_config:
+                    hc = def_load_config["thermal_config"]
+                    self.logger.info("Thermal config %s found for deferrable load %s", hc, k)
+                    start_temperature = hc["start_temperature"]
+                    cooling_constant = hc["cooling_constant"]
+                    heating_rate = hc["heating_rate"]
+                    overshoot_temperature = hc["overshoot_temperature"]
+                    outdoor_temperature_forecast = data_opt['outdoor_temperature_forecast']
+                    desired_temperature = hc["desired_temperature"]
+                    sense = hc.get('sense', 'heat')
+                    predicted_temp = [start_temperature]
+                    for I in set_I:
+                        if I == 0:
+                            continue
+                        predicted_temp.append(
+                            predicted_temp[I-1]
+                            + (P_deferrable[k][I-1] * (heating_rate * self.timeStep / self.optim_conf['P_deferrable_nom'][k]))
+                            - (cooling_constant * (predicted_temp[I-1] - outdoor_temperature_forecast[I-1])))
+                        if len(desired_temperature) > I and desired_temperature[I]:
+                            constraints.update({"constraint_defload{}_temperature_{}".format(k, I):
+                                plp.LpConstraint(
+                                    e = predicted_temp[I],
+                                    sense = plp.LpConstraintGE if sense == 'heat' else plp.LpConstraintLE,
+                                    rhs = desired_temperature[I],
+                                )
+                            })
+                    constraints.update({"constraint_defload{}_overshoot_temp_{}".format(k, I):
+                        plp.LpConstraint(
+                            e = predicted_temp[I],
+                            sense = plp.LpConstraintLE if sense == 'heat' else plp.LpConstraintGE,
+                            rhs = overshoot_temperature,
+                        )
+                    for I in set_I})
+                    predicted_temps[k] = predicted_temp
             else:
                 # Total time of deferrable load
                 constraints.update({"constraint_defload{}_energy".format(k) :
@@ -685,6 +760,9 @@ class Optimization:
             for k in range(self.optim_conf["num_def_loads"]):
                 opt_tp[f"P_def_start_{k}"] = [P_def_start[k][i].varValue for i in set_I]
                 opt_tp[f"P_def_bin2_{k}"] = [P_def_bin2[k][i].varValue for i in set_I]
+        for i, predicted_temp in predicted_temps.items():
+            opt_tp[f"predicted_temp_heater{i}"] = pd.Series([round(pt.value(), 2) if isinstance(pt, plp.LpAffineExpression) else pt for pt in predicted_temp], index=opt_tp.index)
+            opt_tp[f"target_temp_heater{i}"] = pd.Series(self.optim_conf["def_load_config"][i]['thermal_config']["desired_temperature"], index=opt_tp.index)
 
         return opt_tp
 
