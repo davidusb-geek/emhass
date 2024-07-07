@@ -55,7 +55,7 @@ if __name__ == '__main__':
     df_input_data = rh.df_final.copy()
     
     fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
-                            params, emhass_conf, logger, get_data_from_file=get_data_from_file)
+                    params, emhass_conf, logger, get_data_from_file=get_data_from_file)
     df_weather = fcst.get_weather_forecast(method='csv')
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
     P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
@@ -76,23 +76,19 @@ if __name__ == '__main__':
     optim_conf.update({'treat_def_as_semi_cont': [True, False]})
     optim_conf.update({'set_def_constant': [True, False]})
     
-    # A sequence of values
-    # optim_conf.update({'P_deferrable_nom': [[500.0, 100.0, 100.0, 500.0], 750.0]})
+    # Thermal modeling
+    df_input_data['outdoor_temperature_forecast'] = [10]*48
     
-    # Using a battery
-    optim_conf.update({'set_use_battery': False})
-    optim_conf.update({'set_nocharge_from_grid': False})
-    optim_conf.update({'set_battery_dynamic': True})
-    optim_conf.update({'set_nodischarge_to_grid': True})
-    
-    # A hybrid inverter case
-    plant_conf.update({'inverter_is_hybrid': False})
-    
-    # Setting some negative values on production prices
-    df_input_data.loc[df_input_data.index[25:30],'unit_prod_price'] = -0.07
-    df_input_data['P_PV_forecast'] = df_input_data['P_PV_forecast']*2
-    P_PV_forecast = P_PV_forecast*2
-    
+    runtimeparams = {'heater_start_temperatures': [0, 15],
+                     'heater_desired_temperatures': [[], [21]*48]}
+    if 'def_load_config' in optim_conf:
+        for k in range(len(optim_conf['def_load_config'])):
+            if 'thermal_config' in optim_conf['def_load_config'][k]:
+                if 'heater_desired_temperatures' in runtimeparams and len(runtimeparams['heater_desired_temperatures']) > k:
+                    optim_conf["def_load_config"][k]['thermal_config']["desired_temperature"] = runtimeparams["heater_desired_temperatures"][k]
+                if 'heater_start_temperatures' in runtimeparams and len(runtimeparams['heater_start_temperatures']) > k:
+                    optim_conf["def_load_config"][k]['thermal_config']["start_temperature"] = runtimeparams["heater_start_temperatures"][k]
+
     costfun = 'profit'
     opt = Optimization(retrieve_hass_conf, optim_conf, plant_conf, 
                        fcst.var_load_cost, fcst.var_prod_price,  
@@ -108,7 +104,7 @@ if __name__ == '__main__':
     if show_figures:
         fig_inputs_dah.show()
     
-    vars_to_plot = ['P_deferrable0', 'P_deferrable1','P_grid', 'P_PV']
+    vars_to_plot = ['P_deferrable0', 'P_deferrable1','P_grid', 'P_PV', 'predicted_temp_heater1', 'target_temp_heater1']
     if plant_conf['inverter_is_hybrid']:
         vars_to_plot = vars_to_plot + ['P_hybrid_inverter']
     if plant_conf['compute_curtailment']:
