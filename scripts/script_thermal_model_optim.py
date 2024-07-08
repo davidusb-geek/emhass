@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import pickle
+import random
 import numpy as np
 import pandas as pd
 import pathlib
@@ -77,9 +78,9 @@ if __name__ == '__main__':
     optim_conf.update({'set_def_constant': [True, False]})
     
     # Thermal modeling
-    df_input_data['outdoor_temperature_forecast'] = [10]*48
+    df_input_data['outdoor_temperature_forecast'] = [random.normalvariate(10.0, 3.0) for _ in range(48)]
     
-    runtimeparams = {'heater_start_temperatures': [0, 15],
+    runtimeparams = {'heater_start_temperatures': [0, 20],
                      'heater_desired_temperatures': [[], [21]*48]}
     if 'def_load_config' in optim_conf:
         for k in range(len(optim_conf['def_load_config'])):
@@ -93,8 +94,13 @@ if __name__ == '__main__':
     opt = Optimization(retrieve_hass_conf, optim_conf, plant_conf, 
                        fcst.var_load_cost, fcst.var_prod_price,  
                        costfun, emhass_conf, logger)
-    opt_res_dayahead = opt.perform_dayahead_forecast_optim(
-        df_input_data, P_PV_forecast, P_load_forecast)
+    # opt_res_dayahead = opt.perform_dayahead_forecast_optim(
+    #     df_input_data, P_PV_forecast, P_load_forecast)
+    unit_load_cost = df_input_data[opt.var_load_cost].values # €/kWh
+    unit_prod_price = df_input_data[opt.var_prod_price].values # €/kWh
+    opt_res_dayahead = opt.perform_optimization(df_input_data, P_PV_forecast.values.ravel(), 
+                                                P_load_forecast.values.ravel(), 
+                                                unit_load_cost, unit_prod_price, debug=True)
     
     # Let's plot the input data
     fig_inputs_dah = df_input_data.plot()
@@ -104,7 +110,7 @@ if __name__ == '__main__':
     if show_figures:
         fig_inputs_dah.show()
     
-    vars_to_plot = ['P_deferrable0', 'P_deferrable1','P_grid', 'P_PV', 'predicted_temp_heater1', 'target_temp_heater1']
+    vars_to_plot = ['P_deferrable0', 'P_deferrable1','P_grid', 'P_PV', 'predicted_temp_heater1', 'target_temp_heater1', 'P_def_start_1', 'P_def_bin2_1']
     if plant_conf['inverter_is_hybrid']:
         vars_to_plot = vars_to_plot + ['P_hybrid_inverter']
     if plant_conf['compute_curtailment']:
