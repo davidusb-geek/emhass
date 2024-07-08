@@ -39,7 +39,7 @@ optim_conf:
   - False
   def_start_penalty: # Set a penalty for each start up of a deferrable load
   - 0.0
-  - 0.0
+  - 10.0
   def_load_config:
   - {}
   - thermal_config:
