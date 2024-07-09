@@ -412,7 +412,7 @@ class Optimization:
                     heating_rate = hc["heating_rate"]
                     overshoot_temperature = hc["overshoot_temperature"]
                     outdoor_temperature_forecast = data_opt['outdoor_temperature_forecast']
-                    desired_temperature = hc["desired_temperature"]
+                    desired_temperatures = hc["desired_temperatures"]
                     sense = hc.get('sense', 'heat')
                     predicted_temp = [start_temperature]
                     for I in set_I:
@@ -422,12 +422,12 @@ class Optimization:
                             predicted_temp[I-1]
                             + (P_deferrable[k][I-1] * (heating_rate * self.timeStep / self.optim_conf['P_deferrable_nom'][k]))
                             - (cooling_constant * (predicted_temp[I-1] - outdoor_temperature_forecast[I-1])))
-                        if len(desired_temperature) > I and desired_temperature[I]:
+                        if len(desired_temperatures) > I and desired_temperatures[I]:
                             constraints.update({"constraint_defload{}_temperature_{}".format(k, I):
                                 plp.LpConstraint(
                                     e = predicted_temp[I],
                                     sense = plp.LpConstraintGE if sense == 'heat' else plp.LpConstraintLE,
-                                    rhs = desired_temperature[I],
+                                    rhs = desired_temperatures[I],
                                 )
                             })
                     constraints.update({"constraint_defload{}_overshoot_temp_{}".format(k, I):
@@ -732,7 +732,7 @@ class Optimization:
                 opt_tp[f"P_def_bin2_{k}"] = [P_def_bin2[k][i].varValue for i in set_I]
         for i, predicted_temp in predicted_temps.items():
             opt_tp[f"predicted_temp_heater{i}"] = pd.Series([round(pt.value(), 2) if isinstance(pt, plp.LpAffineExpression) else pt for pt in predicted_temp], index=opt_tp.index)
-            opt_tp[f"target_temp_heater{i}"] = pd.Series(self.optim_conf["def_load_config"][i]['thermal_config']["desired_temperature"], index=opt_tp.index)
+            opt_tp[f"target_temp_heater{i}"] = pd.Series(self.optim_conf["def_load_config"][i]['thermal_config']["desired_temperatures"], index=opt_tp.index)
 
         return opt_tp
 
