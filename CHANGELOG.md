@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.4 - 2024-07-10
+### Improvement
+- Added a new thermal modeling, see the new section in the documentation for help to implement this of model for thermal deferrable loads
+- Improved documentation
+
 ## 0.10.3 - 2024-07-06
 ### Improvement
 - Added improved support for `def_start_penalty` option
