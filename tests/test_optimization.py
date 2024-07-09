@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import pathlib
 import pickle
+import random
 from datetime import datetime, timezone
 
 from emhass.retrieve_hass import RetrieveHass
@@ -265,20 +266,44 @@ class TestOptimization(unittest.TestCase):
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast, prediction_horizon,
             soc_init=soc_init, soc_final=soc_final, def_total_hours=def_total_hours, def_start_timestep=def_start_timestep, def_end_timestep=def_end_timestep)
         self.assertAlmostEqual(self.opt_res_dayahead.loc[self.opt_res_dayahead.index[-1],'SOC_opt'], soc_final)
+    
+    def test_thermal_load_optim(self):
+        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead['outdoor_temperature_forecast'] = [random.normalvariate(10.0, 3.0) for _ in range(48)]
+        runtimeparams = {
+            'def_load_config': [
+                {},
+                {'thermal_config': {
+                    'heating_rate': 5.0,
+                    'cooling_constant': 0.1,
+                    'overshoot_temperature': 24.0,
+                    'start_temperature': 20,
+                    'desired_temperatures': [21]*48,
+                    }
+                }
+            ]
+        }
+        self.optim_conf["def_load_config"] = runtimeparams['def_load_config']
+        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
+                                self.fcst.var_load_cost, self.fcst.var_prod_price,  
+                                self.costfun, emhass_conf, logger)
+        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values # €/kWh
+        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values # €/kWh
+        self.opt_res_dayahead = self.opt.perform_optimization(self.df_input_data_dayahead, 
+                                                              self.P_PV_forecast.values.ravel(), 
+                                                              self.P_load_forecast.values.ravel(), 
+                                                              unit_load_cost, unit_prod_price)
+        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+        self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+        self.assertTrue('cost_fun_'+self.costfun in self.opt_res_dayahead.columns)
+        self.assertTrue(self.opt.optim_status == 'Optimal')
         
-        
-
     def run_penalty_test_forecast(self):
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
+        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf,
+                                self.fcst.var_load_cost, self.fcst.var_prod_price,
+                                self.costfun, emhass_conf, logger)
         def_total_hours = [5 * self.retrieve_hass_conf["freq"].seconds / 3600.0]
         def_start_timestep = [0]
         def_end_timestep = [0]
