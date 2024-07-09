@@ -24,7 +24,7 @@
         <dc:format>image/svg+xml</dc:format>
         <dc:type
            rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
-        <dc:title></dc:title>
+        <dc:title />
       </cc:Work>
     </rdf:RDF>
   </metadata>
@@ -39,9 +39,9 @@
      inkscape:deskcolor="#d1d1d1"
      inkscape:document-units="mm"
      showgrid="false"
-     inkscape:zoom="1.0544998"
-     inkscape:cx="321.93728"
-     inkscape:cy="194.42059"
+     inkscape:zoom="1.4912879"
+     inkscape:cx="266.07721"
+     inkscape:cy="167.47372"
      inkscape:window-width="1920"
      inkscape:window-height="1010"
      inkscape:window-x="0"
@@ -436,7 +436,7 @@
                id="tspan2619-9-7"
                style="font-size:7.99998999px;fill:#000000;fill-opacity:1;stroke-width:1.5"
                x="147.37088"
-               y="-126.01638">Overshoot temeprature</tspan></text>
+               y="-126.01638">Overshoot temperature</tspan></text>
         </g>
         <path
            style="opacity:1;fill:none;fill-opacity:1;stroke:#000000;stroke-width:0.26458299;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;marker-end:url(#marker13371)"
@@ -481,7 +481,7 @@
                style="font-size:7.99998999px;fill:#000000;fill-opacity:1;stroke-width:1.5"
                x="147.37088"
                y="-116.0164"
-               id="tspan15609">temeprature</tspan></text>
+               id="tspan15609">temperature</tspan></text>
         </g>
         <g
            id="g2368-8-9-7-9"
@@ -518,7 +518,7 @@
                style="font-size:7.99998999px;fill:#000000;fill-opacity:1;stroke-width:1.5"
                x="153.90884"
                y="-150.71793"
-               id="tspan15611">temeprature</tspan></text>
+               id="tspan15611">temperature</tspan></text>
         </g>
         <path
            style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:0.26458299;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;marker-end:url(#marker13437-3)"
