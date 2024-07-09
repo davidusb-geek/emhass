@@ -23,6 +23,7 @@ lpems.md
 forecasts.md
 mlforecaster.md
 mlregressor.md
+thermal_model.md
 study_case.md
 config.md
 emhass.md

@@ -291,7 +291,6 @@ def weather_forecast_cache(emhass_conf: dict, params: str,
 
     return True
 
-
 def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
                            save_data_to_file: Optional[bool] = True, 
                            debug: Optional[bool] = False) -> pd.DataFrame:
@@ -334,8 +333,6 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     if not debug:
         opt_res.to_csv(
             input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
-        
-
     if not isinstance(input_data_dict["params"],dict):
         params = json.loads(input_data_dict["params"])
     else:
@@ -347,7 +344,6 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         publish_data(input_data_dict, logger, entity_save=True, dont_post=True)   
 
     return opt_res
-
 
 def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger, 
                             save_data_to_file: Optional[bool] = False, 
@@ -379,6 +375,9 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
+    if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
+        df_input_data_dayahead["outdoor_temperature_forecast"] = \
+            input_data_dict["params"]["passed_data"]["outdoor_temperature_forecast"]
     opt_res_dayahead = input_data_dict['opt'].perform_dayahead_forecast_optim(
         df_input_data_dayahead, input_data_dict['P_PV_forecast'], input_data_dict['P_load_forecast'])
     # Save CSV file for publish_data
@@ -397,7 +396,6 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         params = json.loads(input_data_dict["params"])
     else:
         params = input_data_dict["params"]
-
     
     # if continual_publish, save day_ahead results to data_path/entities json
     if input_data_dict["retrieve_hass_conf"].get("continual_publish",False) or params["passed_data"].get("entity_save",False):
@@ -405,7 +403,6 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         publish_data(input_data_dict, logger, entity_save=True, dont_post=True)   
         
     return opt_res_dayahead
-
 
 def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger, 
                     save_data_to_file: Optional[bool] = False, 
@@ -436,6 +433,9 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
         df_input_data_dayahead, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
+    if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
+        df_input_data_dayahead["outdoor_temperature_forecast"] = \
+            input_data_dict["params"]["passed_data"]["outdoor_temperature_forecast"]
     # The specifics params for the MPC at runtime
     prediction_horizon = input_data_dict["params"]["passed_data"]["prediction_horizon"]
     soc_init = input_data_dict["params"]["passed_data"]["soc_init"]
@@ -471,7 +471,6 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
 
     return opt_res_naive_mpc
 
-
 def forecast_model_fit(input_data_dict: dict, logger: logging.Logger, 
                        debug: Optional[bool] = False) -> Tuple[pd.DataFrame, pd.DataFrame, MLForecaster]:
     """Perform a forecast model fit from training data retrieved from Home Assistant.
@@ -506,7 +505,6 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
         with open(filename_path, 'wb') as outp:
             pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
     return df_pred, df_pred_backtest, mlf
-
 
 def forecast_model_predict(input_data_dict: dict, logger: logging.Logger, 
                            use_last_window: Optional[bool] = True, 
@@ -585,7 +583,6 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
             type_var="mlforecaster", publish_prefix=publish_prefix)
     return predictions
 
-
 def forecast_model_tune(input_data_dict: dict, logger: logging.Logger, 
                         debug: Optional[bool] = False, mlf: Optional[MLForecaster] = None
                         ) -> Tuple[pd.DataFrame, MLForecaster]:
@@ -625,7 +622,6 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
         with open(filename_path, 'wb') as outp:
             pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
     return df_pred_optim, mlf
-
 
 def regressor_model_fit(input_data_dict: dict, logger: logging.Logger, 
                         debug: Optional[bool] = False) -> MLRegressor:
@@ -680,7 +676,6 @@ def regressor_model_fit(input_data_dict: dict, logger: logging.Logger,
         with open(filename_path, "wb") as outp:
             pickle.dump(mlr, outp, pickle.HIGHEST_PROTOCOL)
     return mlr
-
 
 def regressor_model_predict(input_data_dict: dict, logger: logging.Logger, 
                             debug: Optional[bool] = False, mlr: Optional[MLRegressor] = None

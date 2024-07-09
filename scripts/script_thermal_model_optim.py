@@ -80,15 +80,21 @@ if __name__ == '__main__':
     # Thermal modeling
     df_input_data['outdoor_temperature_forecast'] = [random.normalvariate(10.0, 3.0) for _ in range(48)]
     
-    runtimeparams = {'heater_start_temperatures': [0, 20],
-                     'heater_desired_temperatures': [[], [21]*48]}
-    if 'def_load_config' in optim_conf:
-        for k in range(len(optim_conf['def_load_config'])):
-            if 'thermal_config' in optim_conf['def_load_config'][k]:
-                if 'heater_desired_temperatures' in runtimeparams and len(runtimeparams['heater_desired_temperatures']) > k:
-                    optim_conf["def_load_config"][k]['thermal_config']["desired_temperature"] = runtimeparams["heater_desired_temperatures"][k]
-                if 'heater_start_temperatures' in runtimeparams and len(runtimeparams['heater_start_temperatures']) > k:
-                    optim_conf["def_load_config"][k]['thermal_config']["start_temperature"] = runtimeparams["heater_start_temperatures"][k]
+    runtimeparams = {
+        'def_load_config': [
+            {},
+            {'thermal_config': {
+                'heating_rate': 5.0,
+                'cooling_constant': 0.1,
+                'overshoot_temperature': 24.0,
+                'start_temperature': 20,
+                'desired_temperatures': [21]*48,
+                }
+            }
+        ]
+    }
+    if 'def_load_config' in runtimeparams:
+        optim_conf["def_load_config"] = runtimeparams['def_load_config']
 
     costfun = 'profit'
     opt = Optimization(retrieve_hass_conf, optim_conf, plant_conf, 
