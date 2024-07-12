@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.5 - 2024-07-12
+### Improvement
+- Added support for pubishing thermal load data, namely the predicted room temperature
+
 ## 0.10.4 - 2024-07-10
 ### Improvement
 - Added a new thermal modeling, see the new section in the documentation for help to implement this of model for thermal deferrable loads
