@@ -896,6 +896,25 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                 dont_post=dont_post
             )
             cols_published = cols_published + ["P_deferrable{}".format(k)]
+    # Publish thermal model data (predicted temperature)
+    custom_predicted_temperature_id = params["passed_data"][
+        "custom_predicted_temperature_id"
+    ]
+    for k in range(input_data_dict["opt"].optim_conf["num_def_loads"]):
+        if "def_load_config" in input_data_dict["opt"].optim_conf.keys():
+            if "thermal_config" in input_data_dict["opt"].optim_conf["def_load_config"][k]:
+                input_data_dict["rh"].post_data(
+                    opt_res_latest["P_deferrable{}".format(k)],
+                    idx_closest,
+                    custom_predicted_temperature_id[k]["entity_id"],
+                    custom_predicted_temperature_id[k]["unit_of_measurement"],
+                    custom_predicted_temperature_id[k]["friendly_name"],
+                    type_var="temperature",
+                    publish_prefix=publish_prefix,
+                    save_entities=entity_save,
+                    dont_post=dont_post
+                )
+                cols_published = cols_published + ["predicted_temp_heater{}".format(k)]
     # Publish battery power
     if input_data_dict["opt"].optim_conf["set_use_battery"]:
         if "P_batt" not in opt_res_latest.columns:
@@ -967,18 +986,19 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         logger.warning(
             "no optim_status in opt_res_latest, run an optimization task first",
         )
-    input_data_dict["rh"].post_data(
-        opt_res_latest["optim_status"],
-        idx_closest,
-        custom_cost_fun_id["entity_id"],
-        custom_cost_fun_id["unit_of_measurement"],
-        custom_cost_fun_id["friendly_name"],
-        type_var="optim_status",
-        publish_prefix=publish_prefix,
-        save_entities=entity_save,
-        dont_post=dont_post
-    )
-    cols_published = cols_published + ["optim_status"]
+    else:
+        input_data_dict["rh"].post_data(
+            opt_res_latest["optim_status"],
+            idx_closest,
+            custom_cost_fun_id["entity_id"],
+            custom_cost_fun_id["unit_of_measurement"],
+            custom_cost_fun_id["friendly_name"],
+            type_var="optim_status",
+            publish_prefix=publish_prefix,
+            save_entities=entity_save,
+            dont_post=dont_post
+        )
+        cols_published = cols_published + ["optim_status"]
     # Publish unit_load_cost
     custom_unit_load_cost_id = params["passed_data"]["custom_unit_load_cost_id"]
     input_data_dict["rh"].post_data(

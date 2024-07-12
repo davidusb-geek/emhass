@@ -370,6 +370,9 @@ class RetrieveHass:
         elif type_var == "deferrable":
             data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement,
                                                    friendly_name, "deferrables_schedule", state)
+        elif type_var == "temperature":
+            data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement,
+                                                   friendly_name, "predicted_temperatures", state)
         elif type_var == "batt":
             data = RetrieveHass.get_attr_data_dict(data_df, idx, entity_id, unit_of_measurement,
                                                    friendly_name, "battery_scheduled_power", state)
