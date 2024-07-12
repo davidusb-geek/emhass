@@ -143,12 +143,20 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         params = {}
     # Some default data needed
     custom_deferrable_forecast_id = []
+    custom_predicted_temperature_id = []
     for k in range(optim_conf["num_def_loads"]):
         custom_deferrable_forecast_id.append(
             {
                 "entity_id": "sensor.p_deferrable{}".format(k),
                 "unit_of_measurement": "W",
                 "friendly_name": "Deferrable Load {}".format(k),
+            }
+        )
+        custom_predicted_temperature_id.append(
+            {
+                "entity_id": "sensor.temp_predicted{}".format(k),
+                "unit_of_measurement": "°C",
+                "friendly_name": "Predicted temperature {}".format(k),
             }
         )
     default_passed_dict = {
@@ -208,6 +216,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             "friendly_name": "Unit Prod Price",
         },
         "custom_deferrable_forecast_id": custom_deferrable_forecast_id,
+        "custom_predicted_temperature_id": custom_predicted_temperature_id,
         "publish_prefix": "",
     }
     if "passed_data" in params.keys():
@@ -520,6 +529,10 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         if "custom_deferrable_forecast_id" in runtimeparams.keys():
             params["passed_data"]["custom_deferrable_forecast_id"] = runtimeparams[
                 "custom_deferrable_forecast_id"
+            ]
+        if "custom_predicted_temperature_id" in runtimeparams.keys():
+            params["passed_data"]["custom_predicted_temperature_id"] = runtimeparams[
+                "custom_predicted_temperature_id"
             ]
         # A condition to put a prefix on all published data, or check for saved data under prefix name
         if "publish_prefix" not in runtimeparams.keys():
