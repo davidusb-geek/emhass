@@ -904,7 +904,7 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         if "def_load_config" in input_data_dict["opt"].optim_conf.keys():
             if "thermal_config" in input_data_dict["opt"].optim_conf["def_load_config"][k]:
                 input_data_dict["rh"].post_data(
-                    opt_res_latest["P_deferrable{}".format(k)],
+                    opt_res_latest["predicted_temp_heater{}".format(k)],
                     idx_closest,
                     custom_predicted_temperature_id[k]["entity_id"],
                     custom_predicted_temperature_id[k]["unit_of_measurement"],
