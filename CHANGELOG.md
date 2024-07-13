@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.6 - 2024-07-14
+### Fix
+- Fixed bug on predicted room temeprature publish, wrong key on DataFrame
+
 ## 0.10.5 - 2024-07-12
 ### Improvement
 - Added support for pubishing thermal load data, namely the predicted room temperature
