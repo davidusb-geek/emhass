@@ -67,52 +67,57 @@ rest_command:
       {% macro time_to_timestep(time) -%}
         {{ (((today_at(time) - now()) / timedelta(minutes=30)) | round(0, 'ceiling')) % 48 }}
       {%- endmacro %}
-      {%- set horizon = (state_attr('sensor.electricity_price_forecast', 'forecasts')|length) -%}
+      {%- set horizon = 24 -%}
       {%- set heated_intervals = [[time_to_timestep("06:30")|int, time_to_timestep("07:30")|int], [time_to_timestep("17:30")|int, time_to_timestep("23:00")|int]] -%}
+      {%- set pv_power_forecast = namespace(all=[]) -%}
+      {% for i in range(horizon) %}
+        {%- set pv_power_forecast.all = pv_power_forecast.all + [ 0.0 ] -%}
+      {% endfor %}
+      {%- set load_power_forecast = namespace(all=[]) -%}
+      {% for i in range(horizon) %}
+        {%- set load_power_forecast.all = load_power_forecast.all + [ 0.0 ] -%}
+      {% endfor %}
       {
         "prediction_horizon": {{ horizon }},
-        "load_cost_forecast": {{
-          (
-            [states('sensor.general_price')|float(0)]
-            + state_attr('sensor.electricity_price_forecast', 'forecasts')
-            |map(attribute='per_kwh')
-            |list
-          )[:horizon]
-        }},
-        "pv_power_forecast": [
-          {% set comma = joiner(", ") -%}
-          {%- for _ in range(horizon) %}{{ comma() }}0{% endfor %}
-        ],
-        "def_load_config": {
-          "thermal_config": {
+        "load_cost_forecast": {{ (state_attr('sensor.electricity_price_forecast', 'forecasts') | map(attribute='currency_per_kWh') | list)[:horizon] | tojson }},
+        "pv_power_forecast": {{ (pv_power_forecast.all)[:horizon] | tojson }},
+        "load_power_forecast": {{ (load_power_forecast.all)[:horizon] | tojson }},
+        "def_load_config": [
+          {"thermal_config": {
             "heating_rate": 5.0,
             "cooling_constant": 0.1,
-            "overshoot_temperature": 24.0,
-            "start_temperature": {{ state_attr("climate.living", "current_temperature") }},
-            "heater_desired_temperatures": [
+            "overshoot_temperature": {{ (states('sensor.my_room_temperature') | float) + 3.0 }},
+            "start_temperature": {{ states('sensor.my_room_temperature') }},
+            "desired_temperatures": [
               {%- set comma = joiner(", ") -%}
               {%- for i in range(horizon) -%}
                 {%- set timestep = i -%}
                 {{ comma() }}
                 {% for interval in heated_intervals if timestep >= interval[0] and timestep <= interval[1] %}
-                21
+                21.0
                 {%- else -%}
-                0
+                15.0
                 {%- endfor %}
               {%- endfor %}
-            ]
+            ]}
           }
-        },
-        "outdoor_temperature_forecast": [
-          {%- set comma = joiner(", ") -%}
-          {%- for fc in state_attr('weather.openweathermap', 'forecast') if (fc.datetime|as_datetime) > now() and (fc.datetime|as_datetime) - now() < timedelta(hours=24) -%}
-            {%- if loop.index0 * 2 < horizon -%}
-              {{ comma() }}{{ fc.temperature }}
-              {%- if loop.index0 * 2 + 1 < horizon -%}
-                {{ comma() }}{{ fc.temperature }}
-              {%- endif -%}
-            {%- endif -%}
-          {%- endfor %}
-        ]
+        ],
+        "outdoor_temperature_forecast": {{ ((state_attr("sensor.weather_hourly", "forecast") | map(attribute="temperature") | list)[:horizon] | tojson) }}
       }
 ```
+
+For the ddata publush command we need to provide the information about which deferrable loads are thermal loads.
+In the previous example with just one thermal load, the working example for a publish command will be:
+```
+shell_command:
+  publish_data: 'curl -i -H "Content-Type: application/json" -X POST -d ''{"def_load_config": [{"thermal_config": {}}]}'' http://localhost:5000/action/publish-data'
+```
+As we can see the thermal configuration can be left empty as what is needed is the `thermal_config` key.
+For a configuration with **three** deferrable loads where the **second** load is a thermal load the payload would have been:
+```
+{"def_load_config": [{},{"thermal_config": {}},{}]}
+```
+
+After the publish command is executed a sensor with each deferrable load power will be published to Home Assistant as usual.
+But for each thermal load also the predicted temperature will be published. For the example of just one deferrable and one thermal load this sensor is created: `sensor.temp_predicted0`.
+This temperature sensor can then be used to control your climate entity by setting the temperature setpoint to this predicted room temperature.
