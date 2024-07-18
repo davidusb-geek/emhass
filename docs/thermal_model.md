@@ -106,13 +106,13 @@ rest_command:
       }
 ```
 
-For the ddata publush command we need to provide the information about which deferrable loads are thermal loads.
+For the data publish command we need to provide the information about which deferrable loads are thermal loads.
 In the previous example with just one thermal load, the working example for a publish command will be:
 ```
 shell_command:
   publish_data: 'curl -i -H "Content-Type: application/json" -X POST -d ''{"def_load_config": [{"thermal_config": {}}]}'' http://localhost:5000/action/publish-data'
 ```
-As we can see the thermal configuration can be left empty as what is needed is the `thermal_config` key.
+As we can see the thermal configuration can be left empty as what is needed is the `thermal_config` key. This is needed if using the add-on, for user using a `config_emhass.yaml` configuration file this is not needed if the `def_load_config` dictionary is directly defined there. 
 For a configuration with **three** deferrable loads where the **second** load is a thermal load the payload would have been:
 ```
 {"def_load_config": [{},{"thermal_config": {}},{}]}
