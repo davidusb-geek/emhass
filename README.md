@@ -11,7 +11,10 @@
     <img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/davidusb-geek/emhass">
   </a>
   <a style="text-decoration:none" href="https://github.com/davidusb-geek/emhass/actions">
-    <img alt="GitHub Workflow Status" src="https://img.shields.io/github/actions/workflow/status/davidusb-geek/emhass/python-test.yml?branch=master">
+    <img alt="EMHASS GitHub Workflow Status" src="https://github.com/davidusb-geek/emhass/actions/workflows/publish_docker.yaml/badge.svg?event=release">
+  </a>
+   <a style="text-decoration:none" href="https://github.com/davidusb-geek/emhass-add-on/actions">
+    <img alt="EMHASS-Add-on GitHub Workflow Status" src="https://github.com/davidusb-geek/emhass-add-on/actions/workflows/publish_docker.yaml/badge.svg?event=release">
   </a>
   <a hstyle="text-decoration:none" ref="https://codecov.io/github/davidusb-geek/emhass" >
     <img src="https://codecov.io/github/davidusb-geek/emhass/branch/master/graph/badge.svg?token=BW7KSCHN90"/>
