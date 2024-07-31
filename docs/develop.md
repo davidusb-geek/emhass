@@ -111,9 +111,9 @@ The recommended steps to run are:
 ### Method 3 - Docker Virtual Environment
 
 With Docker, you can test EMHASS in both standalone and add-on mode via modifying the build argument: `build_version` with values: `standalone`, `addon-pip`, `addon-git`, `addon-local`.  
-Since emhass-add-on is using the same docker base, this method is good to test the add-on functionality of your code. _(addon-local)_
+Since emhass-add-on uses the same docker base, this method is good to test the add-on functionality of your code. _(addon-local)_
 
-Depending on your choice of running standalone or addon, `docker run` will require different passed variables/arguments to function. See following examples:
+Depending on your choice of running standalone or addon, `docker run` will require different passed variables/arguments to function. See the following examples:
 
 _Note: Make sure your terminal is in the root `emhass` directory before running the docker build._
 
@@ -193,7 +193,7 @@ docker build -t emhass/docker --build-arg build_version=addon-pip .
 
 docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" -v $(pwd)/options.json:/app/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
 ```
-To build with specific pip version, set with build arg: `build_pip_version`: 
+To build with a specific pip version, set with build arg: `build_pip_version`: 
 ```bash
 docker build -t emhass/docker --build-arg build_version=addon-pip --build-arg build_pip_version='==0.7.7' .
 
@@ -227,7 +227,7 @@ docker run... -v $(pwd)/data/heating_prediction.csv:/app/data/ ...
 ```
 
 #### Issue with TARGETARCH
-If your docker build fails with an error related to `TARGETARCH`. It may be best to add your devices architecture manually:
+If your docker build fails with an error related to `TARGETARCH`. It may be best to add your device's architecture manually:
 
 Example with armhf architecture 
 ```bash
@@ -257,7 +257,7 @@ _Linux:_
 docker build -t emhass/docker --build-arg build_version=addon-local . && docker run --rm -it -p 5000:5000 -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name emhass-container emhass/docker 
 ```
 
-_The example command chain rebuilds Docker image, and runs new container with newly built image. `--rm` has been added to the `docker run` to delete the container once ended to avoid manual deletion every time._  
+_The example command chain rebuilds the Docker image and runs a new container with the newly built image. `--rm` has been added to the `docker run` to delete the container once ended to avoid manual deletion every time._  
 _This use case may not require any volume mounts (unless you use secrets_emhass.yaml) as the Docker build process will pull the latest versions of the configs as it builds._
 
 
@@ -270,7 +270,7 @@ docker build -t emhass/docker --build-arg build_version=addon-local .
 docker run -it -p 5000:5000 --name emhass-container -e URL="YOURHAURLHERE" -e KEY="YOURHAKEYHERE" -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" emhass/docker
 ```
 
-This allows the user to set variables prior to build
+This allows the user to set variables before the build
 Linux:
 
 ```bash

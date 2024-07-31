@@ -1,18 +1,18 @@
 # The machine learning regressor
 
-Starting with v0.9.0, a new framework is proposed within EMHASS. It provides a machine learning module to predict values from a csv file using different regression models.
+Starting with v0.9.0, a new framework is proposed within EMHASS. It provides a machine learning module to predict values from a CSV file using different regression models.
 
 This API provides two main methods:
 
-- **fit**: To train a model with the passed data. This method is exposed with the `regressor-model-fit` end point.
+- **fit**: To train a model with the passed data. This method is exposed with the `regressor-model-fit` endpoint.
 
-- **predict**: To obtain a prediction from a pre-trained model. This method is exposed with the `regressor-model-predict` end point.
+- **predict**: To obtain a prediction from a pre-trained model. This method is exposed with the `regressor-model-predict` endpoint.
 
 ## A basic model fit
 
 To train a model use the `regressor-model-fit` end point.
 
-Some paramters can be optionally defined at runtime:
+Some parameters can be optionally defined at runtime:
 
 - `csv_file`: The name of the csv file containing your data.
 
@@ -20,9 +20,9 @@ Some paramters can be optionally defined at runtime:
 
 - `target`: The target, the value that has to be predicted.
 
-- `model_type`: Define the name of the model regressor that this will be used for. For example: `heating_hours_degreeday`. This should be an unique name if you are using multiple custom regressor models.
+- `model_type`: Define the name of the model regressor that this will be used for. For example: `heating_hours_degreeday`. This should be a unique name if you are using multiple custom regressor models.
 
-- `regression_model`: The regression model that will be used. For now only this options are possible: `LinearRegression`, `RidgeRegression`, `LassoRegression`, `RandomForestRegression`, `GradientBoostingRegression` and `AdaBoostRegression`.
+- `regression_model`: The regression model that will be used. For now, only these options are possible: `LinearRegression`, `RidgeRegression`, `LassoRegression`, `RandomForestRegression`, `GradientBoostingRegression` and `AdaBoostRegression`.
 
 - `timestamp`: If defined, the column key that has to be used for timestamp.
 
@@ -78,7 +78,7 @@ After fitting the model the following information is logged by EMHASS:
 
 ## The predict method
 
-To obtain a prediction using a previously trained model use the `regressor-model-predict` end point.
+To obtain a prediction using a previously trained model use the `regressor-model-predict` endpoint.
 
 The list of parameters needed to set the data publish task is:
 
@@ -144,24 +144,24 @@ The predict method will publish the result to a Home Assistant sensor.
 ## Storing CSV files  
 
 ### Standalone container - how to mount a .csv files in data_path folder
-If running EMHASS as Standalone container, you will need to volume mount a folder to be the `data_path`, or mount a single .csv file inside `data_path`
+If running EMHASS as a standalone container, you will need to volume mount a folder to be the `data_path`, or mount a single .csv file inside `data_path`
 
 Example of mounting a folder as data_path *(.csv files stored inside)*
 ```bash
 docker run -it --restart always -p 5000:5000 -e LOCAL_COSTFUN="profit" -v $(pwd)/data:/app/data -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
 ```
-Example of mounting a single csv file
+Example of mounting a single CSV file
 ```bash
 docker run -it --restart always -p 5000:5000 -e LOCAL_COSTFUN="profit" -v $(pwd)/data/heating_prediction.csv:/app/data/heating_prediction.csv -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
 ```
 
-### Add-on - How to store data in a csv file from Home Assistant
+### Add-on - How to store data in a CSV file from Home Assistant
 
 #### Change data_path
-If running EMHASS-Add-On, you will likley need to change the `data_path` to a folder your Home Assistant can access. 
+If running EMHASS-Add-On, you will likely need to change the `data_path` to a folder your Home Assistant can access. 
 To do this, set the `data_path` to `/share/` in the addon *Configuration* page. 
 
-#### Store sensor data to csv
+#### Store sensor data to CSV
 
 Notify to a file
 ```yaml
