@@ -12,6 +12,7 @@
                 "install",
                 "--no-deps",
                 "--force-reinstall",
+                "--break-system-packages",
                 "--editable",
                 "."
             ],
@@ -29,7 +30,7 @@
                 "isDefault": true
             },
             "args": [
-                "install", "--force-reinstall", "."
+                "install", "--break-system-packages", "--force-reinstall", "."
             ],
             "presentation": {
                 "echo": true,

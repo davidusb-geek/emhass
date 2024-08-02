@@ -1,15 +1,10 @@
 ## EMHASS Docker
 ## Docker run addon testing example:
-    ## docker build -t emhass/docker --build-arg build_version=addon-local .
+    ## docker build -t emhass/docker 
     ## docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
-## Docker run standalone example:
-    ## docker build -t emhass/docker --build-arg build_version=standalone .
-    ## docker run -it -p 5000:5000 --name emhass-container -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/docker
 
-#build_version options are: addon, addon-pip, addon-git, addon-local, standalone (default)
-ARG build_version=standalone
-
-
+#armhf,amd64,armv7,aarch64
+ARG TARGETARCH
 #armhf=raspbian, amd64,armv7,aarch64=debian
 ARG os_version=debian
 
@@ -80,79 +75,14 @@ COPY config_emhass.yaml /app/
 #make sure data directory exists
 RUN mkdir -p /app/data/
 
-#-------------------------
-##EMHASS-Add-on default (this has no emhass package)
-FROM base as addon
-
-LABEL \
-    io.hass.name="emhass" \
-    io.hass.description="EMHASS: Energy Management for Home Assistant" \
-    io.hass.version=${BUILD_VERSION} \
-    io.hass.type="addon" \
-    io.hass.arch="aarch64|amd64|armhf|armv7"
-
-#-----------
-#EMHASS-ADD-ON testing with pip emhass (EMHASS-Add-on testing reference)
-FROM addon as addon-pip
-#set build arg for pip version
-ARG build_pip_version=""
-RUN pip3 install --no-cache-dir --break-system-packages --upgrade --force-reinstall --no-deps --upgrade-strategy=only-if-needed -U emhass${build_pip_version}
-
-COPY options.json /app/
-
-ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True", "--no_response", "True"]
-
-#-----------
-#EMHASS-Add-on testing from local files
-FROM addon as addon-local
+#copy required EMHASS files
 COPY src/emhass/ /app/src/emhass/
 COPY src/emhass/templates/ /app/src/emhass/templates/
 COPY src/emhass/static/ /app/src/emhass/static/
 COPY src/emhass/static/img/ /app/src/emhass/static/img/
 COPY src/emhass/data/ /app/src/emhass/data/
 COPY data/opt_res_latest.csv /app/data/
-#add options.json, this otherwise would be generated via HA
 COPY options.json /app/
-COPY README.md /app/
-COPY setup.py /app/
-#compile EMHASS locally
-RUN pip3 install --no-cache-dir --break-system-packages --no-deps --force-reinstall  .
-ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True" , "--no_response", "True"]
-
-
-#-----------
-#EMHASS-Add-on testing with git
-FROM addon as addon-git
-ARG build_repo=https://github.com/davidusb-geek/emhass.git
-ARG build_branch=master
-WORKDIR /tmp/
-#Repo
-RUN git clone $build_repo
-WORKDIR /tmp/emhass
-#Branch
-RUN git checkout $build_branch
-RUN mkdir -p /app/src/emhass/data/
-RUN cp -r /tmp/emhass/src/emhass/. /app/src/emhass/
-RUN cp /tmp/emhass/src/emhass/data/*  /app/src/emhass/data/
-RUN cp /tmp/emhass/data/opt_res_latest.csv  /app/data/
-RUN cp /tmp/emhass/setup.py /app/
-RUN cp /tmp/emhass/README.md /app/
-#add options.json, this otherwise would be generated via HA
-RUN cp /tmp/emhass/options.json /app/
-WORKDIR /app
-RUN pip3 install --no-cache-dir --break-system-packages --no-deps --force-reinstall  .
-ENTRYPOINT [ "python3", "-m", "emhass.web_server","--addon", "True" , "--no_response", "True"]
-
-#-------------------------
-#EMHASS standalone
-FROM base as standalone
-
-COPY src/emhass/ /app/src/emhass/
-COPY src/emhass/templates/ /app/src/emhass/templates/
-COPY src/emhass/static/ /app/src/emhass/static/
-COPY src/emhass/static/img/ /app/src/emhass/static/img/
-COPY src/emhass/data/ /app/src/emhass/data/
-COPY data/opt_res_latest.csv /app/data/
 COPY README.md /app/
 COPY setup.py /app/
 #secrets file can be copied manually at docker run
@@ -161,11 +91,13 @@ COPY setup.py /app/
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
+LABEL \
+    io.hass.name="emhass" \
+    io.hass.description="EMHASS: Energy Management for Home Assistant" \
+    io.hass.version=${BUILD_VERSION} \
+    io.hass.type="addon" \
+    io.hass.arch="aarch64|amd64|armhf|armv7"
+
 #build EMHASS
 RUN pip3 install --no-cache-dir --break-system-packages --no-deps --force-reinstall  .
 ENTRYPOINT [ "python3", "-m", "emhass.web_server"]
-#-------------------------
-
-
-#check build arguments and build
-FROM ${build_version} AS final
