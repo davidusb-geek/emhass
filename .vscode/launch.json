@@ -23,30 +23,6 @@
         "OPTIONS_PATH": "/workspaces/emhass/options.json",
         "SECRETS_PATH": "/workspaces/emhass/secrets_emhass.yaml",
         "DATA_PATH": "/workspaces/emhass/data/",
-        "LOGGING_LEVEL": "DEBUG"
-      }
-    },
-    {
-      "name": "EMHASS run ADDON",
-      "type": "debugpy",
-      "request": "launch",
-      "module": "emhass.web_server",
-      "console": "integratedTerminal",
-      "args": [
-        "--addon",
-        "true",
-        "--no_response",
-        "true"
-      ],
-      "purpose": [
-        "debug-in-terminal"
-      ],
-      "justMyCode": true,
-      "env": {
-        "CONFIG_PATH": "/workspaces/emhass/config_emhass.yaml",
-        "OPTIONS_PATH": "/workspaces/emhass/options.json",
-        "SECRETS_PATH": "/workspaces/emhass/secrets_emhass.yaml",
-        "DATA_PATH": "/workspaces/emhass/data/",
         "EMHASS_URL": "http://HAIPHERE:8123/", //change
         "EMHASS_KEY": "PLACEKEYHERE", //change
         "TIME_ZONE": "Europe/Paris", //optional change

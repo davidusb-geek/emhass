@@ -242,81 +242,58 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--url', type=str, help='The URL to your Home Assistant instance, ex the external_url in your hass configuration')
     parser.add_argument('--key', type=str, help='Your access key. If using EMHASS in standalone this should be a Long-Lived Access Token')
-    parser.add_argument('--addon', type=strtobool, default='False', help='Define if we are usinng EMHASS with the add-on or in standalone mode')
+    parser.add_argument('--addon', type=strtobool, default='False', help='Define if we are using EMHASS with the add-on or in standalone mode')
     parser.add_argument('--no_response', type=strtobool, default='False', help='This is set if json response errors occur')
     args = parser.parse_args()
     
-    #Obtain url and key from ENV or ARG (if any)
-    hass_url = os.getenv("EMHASS_URL", default=args.url)
-    key =  os.getenv("SUPERVISOR_TOKEN", default=args.key) 
-    if hass_url != "http://supervisor/core/api":
-        key =  os.getenv("EMHASS_KEY", key)  
-    #If url or key is None, Set as empty string to reduce NoneType errors bellow
-    if key is None: key = ""
-    if hass_url is None: hass_url = ""
-    
-    #find env's, not not set defaults 
+    # Find env's, not not set defaults 
     use_options = os.getenv('USE_OPTIONS', default=False)
     CONFIG_PATH = os.getenv("CONFIG_PATH", default="/app/config_emhass.yaml")
     OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json")
     DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
     ROOT_PATH = os.getenv("ROOT_PATH", default=str(Path(__file__).parent))
     
-    #options None by default
+    # Options None by default
     options = None 
 
     # Define the paths
-    if args.addon==1:
-        options_json = Path(OPTIONS_PATH)
-        # Read options info
-        if options_json.exists():
-            with options_json.open('r') as data:
-                options = json.load(data)
-        else:
-            app.logger.error("options.json does not exist")
-            raise Exception("options.json does not exist in path: "+str(options_json)) 
-    else:
-        if use_options:
-            options_json = Path(OPTIONS_PATH)
-            # Read options info
-            if options_json.exists():
-                with options_json.open('r') as data:
-                    options = json.load(data)
-            else:
-                app.logger.error("options.json does not exist")
-                raise Exception("options.json does not exist in path: "+str(options_json)) 
-        else:
-            options = None       
-
-    #if data path specified by options.json
-    if options is not None:
-        if options.get('data_path', None) != None and options.get('data_path', None) != "default":
-            DATA_PATH = options.get('data_path', None);   
-
-    #save paths to dictionary
+    options_json = Path(OPTIONS_PATH)
     config_path = Path(CONFIG_PATH)
     data_path = Path(DATA_PATH)
     root_path = Path(ROOT_PATH)
     emhass_conf = {}
+    emhass_conf['config_path'] = options_json
     emhass_conf['config_path'] = config_path
     emhass_conf['data_path'] = data_path
     emhass_conf['root_path'] = root_path 
     
-    # Read the example default config file
+    # Read options info
+    if options_json.exists():
+        with options_json.open('r') as data:
+            options = json.load(data)
+    else:
+        app.logger.error("options.json does not exist")
+        raise Exception("options.json does not exist in path: "+str(options_json)) 
+        
+    # If data path specified by options.json
+    if options is not None:
+        if options.get('data_path', None) != None and options.get('data_path', None) != "default":
+            DATA_PATH = options.get('data_path', None);   
+    
+    # Check to see if legacy config_emhass.yaml was provided
+    params = {}
     if config_path.exists():
         with open(config_path, 'r') as file:
             config = yaml.load(file, Loader=yaml.FullLoader)
         retrieve_hass_conf = config['retrieve_hass_conf']
         optim_conf = config['optim_conf']
         plant_conf = config['plant_conf']
+        params['retrieve_hass_conf'] = retrieve_hass_conf
+        params['optim_conf'] = optim_conf
+        params['plant_conf'] = plant_conf
     else:
-        app.logger.error("Unable to open the default configuration yaml file")
-        raise Exception("Failed to open config file, config_path: "+str(config_path)) 
-
-    params = {}
-    params['retrieve_hass_conf'] = retrieve_hass_conf
-    params['optim_conf'] = optim_conf
-    params['plant_conf'] = plant_conf
+        params = {}
+    
     web_ui_url = '0.0.0.0'
 
     # Initialize this global dict
@@ -325,111 +302,67 @@ if __name__ == "__main__":
             injection_dict = pickle.load(fid)
     else:
         injection_dict = None
+        
+    ## secrets
+    params_secrets = {}
     
-    if args.addon==1:
-        # The cost function
-        costfun = options.get('costfun', 'profit')
-        # Some data from options
-        logging_level = options.get('logging_level','INFO')
-        url_from_options = options.get('hass_url', 'empty')
-        if url_from_options == 'empty' or url_from_options == '' or url_from_options == "http://supervisor/core/api":
-            url = "http://supervisor/core/api/config"
-        else:
-            hass_url = url_from_options
-            url = hass_url+"api/config"
-        token_from_options = options.get('long_lived_token', 'empty')
-        if token_from_options == 'empty' or token_from_options == '':
-            long_lived_token = key
-        else:
-            long_lived_token = token_from_options
+    # secrets from ARG or ENV?
+    hass_url = os.getenv("EMHASS_URL", default=args.url)
+    key = os.getenv("SUPERVISOR_TOKEN", os.getenv("EMHASS_KEY", args.key))   
+    params_secrets['time_zone'] = os.getenv("TIME_ZONE", default="Europe/Paris")
+    params_secrets['lat'] = float(os.getenv("LAT", default="45.83"))
+    params_secrets['lon'] = float(os.getenv("LON", default="6.86"))
+    params_secrets['alt'] = float(os.getenv("ALT", default="4807.8"))      
+    costfun = os.getenv('LOCAL_COSTFUN', options.get('costfun', 'profit'))
+    logging_level = os.getenv('LOGGING_LEVEL', options.get('logging_level','INFO'))
+    # if url or key is None, Set as empty string to reduce NoneType errors bellow
+    if key is None: key = ""
+    if hass_url is None: hass_url = ""
+
+    # secrets from Home Assistant?
+    url_from_options = options.get('hass_url', 'empty')
+    key_from_options = options.get('long_lived_token', 'empty')
+    # to use Home Assistant local API
+    if (url_from_options == 'empty' or url_from_options == '' or url_from_options == "http://supervisor/core/api") and os.getenv("SUPERVISOR_TOKEN", None) is not None:
+        hass_url = "http://supervisor/core/api/config"
         headers = {
-            "Authorization": "Bearer " + long_lived_token,
-            "content-type": "application/json"
+        "Authorization": "Bearer " + key,
+        "content-type": "application/json"
         }
         if not args.no_response==1:
-            response = get(url, headers=headers)
-            config_hass = response.json()
-            params_secrets = {
-            'hass_url': hass_url,
-            'long_lived_token': long_lived_token,
-            'time_zone': config_hass['time_zone'],
-            'lat': config_hass['latitude'],
-            'lon': config_hass['longitude'],
-            'alt': config_hass['elevation']
-            }
-        else: #if no_response is set to true
-            costfun = os.getenv('LOCAL_COSTFUN', default='profit')
-            logging_level = os.getenv('LOGGING_LEVEL', default='INFO')
-            # check if secrets file exists
-            if Path(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml')).is_file(): 
+            app.logger.debug("obtaining secrets from Home Assistant API")
+            response = get(hass_url, headers=headers)
+            if response.status_code < 400:
+                config_hass = response.json()
+                params_secrets = {
+                'hass_url': hass_url,
+                'long_lived_token': key,
+                'time_zone': config_hass['time_zone'],
+                'lat': config_hass['latitude'],
+                'lon': config_hass['longitude'],
+                'alt': config_hass['elevation']
+                }
+    else:
+        hass_url = url_from_options
+        if key_from_options == 'empty' or key_from_options == '':
+            key = key_from_options
+        # secrets from secrets_emhass.yaml?
+        if Path(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml')).is_file(): 
+                app.logger.debug("obtaining secrets from secrets file")
                 with open(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), 'r') as file:
                     params_secrets = yaml.load(file, Loader=yaml.FullLoader)
-                    app.logger.debug("Obtained secrets from secrets file")
-            #If cant find secrets_emhass file, use env
-            else: 
-                app.logger.debug("Failed to find secrets file: "+str(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml')))
-                app.logger.debug("Setting location defaults")
-                params_secrets = {} 
-                #If no secrets file try args, else set some defaults 
-                params_secrets['time_zone'] = os.getenv("TIME_ZONE", default="Europe/Paris")
-                params_secrets['lat'] = float(os.getenv("LAT", default="45.83"))
-                params_secrets['lon'] = float(os.getenv("LON", default="6.86"))
-                params_secrets['alt'] = float(os.getenv("ALT", default="4807.8"))      
-            #If ARG/ENV specify url and key, then override secrets file
-            if hass_url != "":
-                params_secrets['hass_url'] = hass_url
-                app.logger.debug("Using URL obtained from ARG/ENV")
-            else:
-                hass_url = params_secrets.get('hass_url',"http://localhost:8123/")      
-            if long_lived_token != "":
-                params_secrets['long_lived_token'] = long_lived_token
-                app.logger.debug("Using Key obtained from ARG/ENV")       
-    else: #If addon is false
-        costfun = os.getenv('LOCAL_COSTFUN', default='profit')
-        logging_level = os.getenv('LOGGING_LEVEL', default='INFO')
-        if Path(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml')).is_file(): 
-            with open(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), 'r') as file:
-                params_secrets = yaml.load(file, Loader=yaml.FullLoader)
-            #Check if URL and KEY are provided by file. If not attempt using values from ARG/ENV
-            if  params_secrets.get("hass_url", "empty") == "empty" or params_secrets['hass_url'] == "":
-                app.logger.info("No specified Home Assistant URL in secrets_emhass.yaml. Attempting to get from ARG/ENV") 
-                if hass_url != "":
-                     params_secrets['hass_url'] = hass_url    
-                else:
-                    app.logger.error("Can not find Home Assistant URL from secrets_emhass.yaml or ARG/ENV")
-                    raise Exception("Can not find Home Assistant URL from secrets_emhass.yaml or ARG/ENV")  
-            else:
-                hass_url = params_secrets['hass_url']
-            if  params_secrets.get("long_lived_token", "empty") == "empty" or params_secrets['long_lived_token'] == "":
-                app.logger.info("No specified Home Assistant KEY in secrets_emhass.yaml. Attempting to get from ARG/ENV") 
-                if key != "":
-                    params_secrets['long_lived_token'] = key
-                else:
-                    app.logger.error("Can not find Home Assistant KEY from secrets_emhass.yaml or ARG/ENV")
-                    raise Exception("Can not find Home Assistant KEY from secrets_emhass.yaml or ARG/ENV")  
-        else: #If no secrets file try args, else set some defaults 
-            app.logger.info("Failed to find secrets_emhass.yaml in directory:" + os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml') ) 
-            app.logger.info("Attempting to use secrets from arguments or environment variables")        
-            params_secrets = {} 
-            params_secrets['time_zone'] = os.getenv("TIME_ZONE", default="Europe/Paris")
-            params_secrets['lat'] = float(os.getenv("LAT", default="45.83"))
-            params_secrets['lon'] = float(os.getenv("LON", default="6.86"))
-            params_secrets['alt'] = float(os.getenv("ALT", default="4807.8"))      
-            if hass_url != "":
-                params_secrets['hass_url'] = hass_url
-            else: #If cant find secrets_emhass and passed url ENV/ARG, then send error
-                app.logger.error("No specified Home Assistant URL") 
-                raise Exception("Can not find Home Assistant URL from secrets_emhass.yaml or ARG/ENV") 
-            if key != "":
-                params_secrets['long_lived_token'] = key
-            else: #If cant find secrets_emhass and passed key ENV/ARG, then send error
-                app.logger.error("No specified Home Assistant KEY")     
-                raise Exception("Can not find Home Assistant KEY from secrets_emhass.yaml or ARG/ENV") 
+                #Check if URL and KEY are provided by file.
+                if  params_secrets.get("hass_url", "empty") != "empty":
+                    hass_url = params_secrets['hass_url']
+                if  params_secrets.get("long_lived_token", "empty") != "empty":
+                    key = params_secrets['long_lived_token']
+
+
+    params_secrets['hass_url'] = hass_url
+    params_secrets['long_lived_token'] = key
+    
     # Build params
-    if use_options:
-        params = build_params(params, params_secrets, options, 1, app.logger)
-    else:
-        params = build_params(params, params_secrets, options, args.addon, app.logger)
+    params = build_params(params, params_secrets, options, app.logger)
     if os.path.exists(str(emhass_conf['data_path'])): 
         with open(str(emhass_conf['data_path'] / 'params.pkl'), "wb") as fid:
             pickle.dump((config_path, params), fid)
@@ -437,11 +370,11 @@ if __name__ == "__main__":
         raise Exception("missing: " + str(emhass_conf['data_path']))   
 
     # Define logger
-    #stream logger
+    # Stream logger
     ch = logging.StreamHandler() 
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     ch.setFormatter(formatter)
-    #Action File logger
+    # Action file logger
     fileLogger = logging.FileHandler(str(emhass_conf['data_path'] / 'actionLogs.txt')) 
     formatter = logging.Formatter('%(levelname)s - %(name)s - %(message)s')
     fileLogger.setFormatter(formatter) # add format to Handler
@@ -468,7 +401,8 @@ if __name__ == "__main__":
     app.logger.propagate = False
     app.logger.addHandler(ch)
     app.logger.addHandler(fileLogger)   
-    clearFileLog() #Clear Action File logger file, ready for new instance
+    # Clear Action File logger file, ready for new instance
+    clearFileLog()
 
     # If entity_path exists, remove any entity/metadata files 
     entity_path = emhass_conf['data_path'] / "entities"
