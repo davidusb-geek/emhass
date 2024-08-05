@@ -567,24 +567,11 @@ def get_yaml_parse(emhass_conf: dict, use_secrets: Optional[bool] = True,
     :rtype: tuple(dict)
 
     """
-    if params is None:
-        with open(emhass_conf["config_path"], 'r') as file:
-            input_conf = yaml.load(file, Loader=yaml.FullLoader)
-    else:
-        input_conf = json.loads(params)
-    if use_secrets:
-        if params is None:
-            with open(emhass_conf["config_path"].parent / 'secrets_emhass.yaml', 'r') as file: # Assume secrets and config file paths are the same 
-                input_secrets = yaml.load(file, Loader=yaml.FullLoader)
-        else:
-            input_secrets = input_conf.pop("params_secrets", None)
+    input_conf = json.loads(params)
+    
+    input_secrets = input_conf.pop("params_secrets", None)
 
-    if type(input_conf["retrieve_hass_conf"]) == list:  # if using old config version
-        retrieve_hass_conf = dict(
-            {key: d[key] for d in input_conf["retrieve_hass_conf"] for key in d}
-        )
-    else:
-        retrieve_hass_conf = input_conf.get("retrieve_hass_conf", {})
+    retrieve_hass_conf = input_conf.get("retrieve_hass_conf", {})
 
     if use_secrets:
         retrieve_hass_conf.update(input_secrets)
@@ -598,20 +585,17 @@ def get_yaml_parse(emhass_conf: dict, use_secrets: Optional[bool] = True,
     retrieve_hass_conf["freq"] = pd.to_timedelta(retrieve_hass_conf["freq"], "minutes")
     retrieve_hass_conf["time_zone"] = pytz.timezone(retrieve_hass_conf["time_zone"])
 
-    if type(input_conf["optim_conf"]) == list:
-        optim_conf = dict({key: d[key] for d in input_conf["optim_conf"] for key in d})
-    else:
-        optim_conf = input_conf.get("optim_conf", {})
+    optim_conf = input_conf.get("optim_conf", {})
 
+    # Format list_hp_periods
     optim_conf["list_hp_periods"] = dict(
         (key, d[key]) for d in optim_conf["list_hp_periods"] for key in d
     )
+
+    #Format delta_forecast
     optim_conf["delta_forecast"] = pd.Timedelta(days=optim_conf["delta_forecast"])
 
-    if type(input_conf["plant_conf"]) == list:
-        plant_conf = dict({key: d[key] for d in input_conf["plant_conf"] for key in d})
-    else:
-        plant_conf = input_conf.get("plant_conf", {})
+    plant_conf = input_conf.get("plant_conf", {})
 
     return retrieve_hass_conf, optim_conf, plant_conf
 
@@ -851,7 +835,7 @@ def build_params(params: dict, params_secrets: dict, options: dict,
 
     logger.debug("Overriding config parameters with optional parameters with associations:")
     for i in associations:
-        #logger.debug(str(i[1]) +":" + str(params[i[0]][i[1]]))
+        #logger.info(str(i[1]) +":" + str(params[i[0]][i[1]]))
         #check if params parameter has multiple options
         if type(i[2]) is list:
             params[i[0]][i[1]] = []
@@ -867,7 +851,7 @@ def build_params(params: dict, params_secrets: dict, options: dict,
             else:    
                 params[i[0]][i[1]] = options[i[2]] 
             associations_dict.update({i[1]:i[2]})
-            #logger.debug(str(i[1]) +":" + str(params[i[0]][i[1]]))
+            #logger.info(str(i[1]) +":" + str(params[i[0]][i[1]]))
 
     # Update optional param secrets
     if params["optim_conf"]["weather_forecast_method"] == "solcast":
@@ -915,6 +899,7 @@ def build_params(params: dict, params_secrets: dict, options: dict,
         "alpha": None,
         "beta": None,
     }
+
     return params
 
 def check_def_loads(num_def_loads: int, parameter: list[dict], default, parameter_name: str, logger):
@@ -939,6 +924,7 @@ def check_def_loads(num_def_loads: int, parameter: list[dict], default, paramete
         logger.warning(parameter_name + " does not match number in num_def_loads, adding default values ("+ str(default) + ") to parameter")
         for x in range(len(parameter), num_def_loads):
             parameter.append(default)
+    return parameter
 
 
 def get_days_list(days_to_retrieve: int) -> pd.date_range:
