@@ -69,8 +69,8 @@ RUN apt-get purge -y --auto-remove \
     libnetcdf-dev \
     && rm -rf /var/lib/apt/lists/*
 
-#copy config file
-COPY config_emhass.yaml /app/
+#copy default parameters
+COPY config.json /app/
 
 #make sure data directory exists
 RUN mkdir -p /app/data/

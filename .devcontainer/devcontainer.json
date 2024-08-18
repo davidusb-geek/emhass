@@ -8,6 +8,13 @@
 		"args": { "TARGETARCH": "amd64"}
 	},
 	"features": {
+		"ghcr.io/devcontainers/features/common-utils:2": {
+			"installZsh": "true",
+			"configureZshAsDefaultShell": "true",
+			"installOhMyZsh": "false",
+			"installOhMyZshConfig": "false",
+			"upgradePackages": "true"
+		},
 		"ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
 	},
 	//"appPort": ["5000:5000"] //used to access app from external device (User discretion advised)
@@ -18,5 +25,8 @@
 		  // Add the IDs of extensions you want installed when the container is created.
 		  "extensions": ["ms-python.debugpy", "ms-python.python"]
 		}
-	  }
+	  },
+
+	"postCreateCommand": ["pip3", "install", "requests-mock", "--break-system-packages"]
+	  
 }

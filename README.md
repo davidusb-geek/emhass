@@ -279,13 +279,13 @@ In `automations.yaml`:
 ```
 in configuration page/`config_emhass.yaml` 
 ```json
-"method_ts_round": "first"
-"continual_publish": true
+'method_ts_round': "first"
+'continual_publish': true
 ```
 In this automation, the day-ahead optimization is performed once a day, every day at 5:30am. 
 If the `freq` parameter is set to `30` *(default)* in the configuration, the results of the day-ahead optimization will generate 48 values *(for each entity)*, a value for every 30 minutes in a day *(i.e. 24 hrs x 2)*.
 
-Setting the parameter `continual_publish` to `true` in the configuration page will allow EMHASS to store the optimization results as entities/sensors into separate json files. `continual_publish` will periodically (every `freq` amount of minutes) run a publish, and publish the optimization results of each generated entities/sensors to Home Assistant. The current state of the sensor/entity being updated every time publish runs, selecting one of the 48 stored values, by comparing the stored values' timestamps, the current timestamp and [`"method_ts_round": "first"`](#the-publish-data-specificities) to select the optimal stored value for the current state.
+Setting the parameter `continual_publish` to `true` in the configuration page will allow EMHASS to store the optimization results as entities/sensors into separate json files. `continual_publish` will periodically (every `freq` amount of minutes) run a publish, and publish the optimization results of each generated entities/sensors to Home Assistant. The current state of the sensor/entity being updated every time publish runs, selecting one of the 48 stored values, by comparing the stored values' timestamps, the current timestamp and [`'method_ts_round': "first"`](#the-publish-data-specificities) to select the optimal stored value for the current state.
 
 option 1 and 2 are very similar, however, option 2 (`continual_publish`) will require a CPU thread to constantly be run inside of EMHASS, lowering efficiency. The reason why you may pick one over the other is explained in more detail below in [continual_publish](#continual_publish-emhass-automation).
 
@@ -406,7 +406,7 @@ For users that wish to run multiple different optimizations, you can set the run
 # RUN dayahead, with freq=30 (default), prefix=dh_ 
 curl -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
 # RUN MPC, with freq=5, prefix=mpc_
-curl -i -H 'Content-Type:application/json' -X POST -d '{"freq":5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{'optimization_time_step':5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
 ```
 This will tell continual_publish to loop every 5 minutes based on the freq passed in MPC. All entities from the output of dayahead "dh_" and MPC "mpc_" will be published every 5 minutes.
 
@@ -416,13 +416,13 @@ This will tell continual_publish to loop every 5 minutes based on the freq passe
 
 #### Mixture of continual_publish and manual *(Home Assistant Automation for Publish)*
 
-You can choose to save one optimization for continual_publish and bypass another optimization by setting `"continual_publish":false` runtime parameter:
+You can choose to save one optimization for continual_publish and bypass another optimization by setting `'continual_publish':false` runtime parameter:
 ```bash
 # RUN dayahead, with freq=30 (default), prefix=dh_, included into continual_publish
 curl -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
 
 # RUN MPC, with freq=5, prefix=mpc_, Manually publish, excluded from continual_publish loop
-curl -i -H 'Content-Type:application/json' -X POST -d '{"continual_publish":false,"freq":5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{'continual_publish':false,'optimization_time_step':5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
 # Publish MPC output
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
 ```
@@ -434,14 +434,14 @@ For users who wish to have full control of exactly when they would like to run a
 
 in configuration page/`config_emhass.yaml` :
 ```json
-"continual_publish": false
+'continual_publish': false
 ```
 POST action :
 ```bash
 # RUN dayahead, with freq=30 (default), prefix=dh_, save entity
 curl -i -H 'Content-Type:application/json' -X POST -d '{"entity_save": true, "publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
 # RUN MPC, with freq=5, prefix=mpc_, save entity
-curl -i -H 'Content-Type:application/json' -X POST -d '{"entity_save": true", "freq":5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{"entity_save": true", 'optimization_time_step':5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
 ```
 You can then reference these .json saved entities via their `publish_prefix`. Include the same `publish_prefix` in the `publish_data` action:
 ```bash
@@ -554,7 +554,7 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 
 ```
 *Example with :`def_total_hours`, `def_start_timestep`, `def_end_timestep`.*
 ```bash
-curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"def_total_hours":[1,3],"def_start_timestep":[0,3],"def_end_timestep":[0,6]}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,'operating_hours_of_each_deferrable_load':[1,3],'start_timesteps_of_each_deferrable_load':[0,3],'end_timesteps_of_each_deferrable_load':[0,6]}' http://localhost:5000/action/naive-mpc-optim
 ```
 
 ## A machine learning forecaster
