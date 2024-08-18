@@ -5,7 +5,6 @@ import unittest
 from unittest.mock import patch
 import pathlib
 import json
-import yaml
 import copy
 import pickle
 import pandas as pd
@@ -19,11 +18,12 @@ from emhass.machine_learning_forecaster import MLForecaster
 from emhass import utils
 
 # the root folder
-root = str(utils.get_root(__file__, num_parent=2))
+root = pathlib.Path(utils.get_root(__file__, num_parent=2))
 emhass_conf = {}
-emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
-emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
-emhass_conf['root_path'] = pathlib.Path(root) / 'src/emhass/'
+emhass_conf['data_path'] = root / 'data/'
+emhass_conf['root_path'] = root / 'src/emhass/'
+emhass_conf['defaults_path'] = emhass_conf['data_path'] / 'config_defaults.json'
+emhass_conf['associations_path'] = emhass_conf['data_path'] / 'associations.csv'
 
 # create logger
 logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
@@ -32,28 +32,24 @@ class TestMLForecaster(unittest.TestCase):
     
     @staticmethod
     def get_test_params():
-        with open(emhass_conf['config_path'], 'r') as file:
-            params = yaml.load(file, Loader=yaml.FullLoader)
-        params.update({
-            'params_secrets': {
-                'hass_url': 'http://supervisor/core/api',
-                'long_lived_token': '${SUPERVISOR_TOKEN}',
-                'time_zone': 'Europe/Paris',
-                'lat': 45.83,
-                'lon': 6.86,
-                'alt': 8000.0
-            }
-            })
+        params = {}
+        if emhass_conf['defaults_path'].exists():
+            with emhass_conf['defaults_path'].open('r') as data:
+                defaults = json.load(data)
+                updated_emhass_conf, built_secrets = utils.build_secrets(emhass_conf,logger)
+                emhass_conf.update(updated_emhass_conf)
+                params.update(utils.build_params(emhass_conf, built_secrets, defaults, logger))
+        else:
+            raise Exception("config_defaults. does not exist in path: "+str(emhass_conf['defaults_path'] ))
         return params
 
     def setUp(self):
         params = TestMLForecaster.get_test_params()
-        params_json = json.dumps(params)
         costfun = 'profit'
         action = 'forecast-model-fit' # fit, predict and tune methods
-        params = copy.deepcopy(json.loads(params_json))
+        # Create runtime parameters
         runtimeparams = {
-            "days_to_retrieve": 20,
+            'historic_days_to_retrieve': 20,
             "model_type": "load_forecast",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
@@ -62,22 +58,25 @@ class TestMLForecaster(unittest.TestCase):
         runtimeparams_json = json.dumps(runtimeparams)
         params['passed_data'] = runtimeparams
         params['optim_conf']['load_forecast_method'] = 'skforecast'
+        #Create input dictionary
         params_json = json.dumps(params)
         self.input_data_dict = set_input_data_dict(emhass_conf, costfun, params_json, runtimeparams_json, 
                                                    action, logger, get_data_from_file=True)
+        # Create MLForcaster object
         data = copy.deepcopy(self.input_data_dict['df_input_data'])
         model_type = self.input_data_dict['params']['passed_data']['model_type']
         var_model = self.input_data_dict['params']['passed_data']['var_model']
         sklearn_model = self.input_data_dict['params']['passed_data']['sklearn_model']
         num_lags = self.input_data_dict['params']['passed_data']['num_lags']
         self.mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, emhass_conf, logger)
-        
+        # Create RetrieveHass Object
         get_data_from_file = True
         params = None
-        self.retrieve_hass_conf, self.optim_conf, _ = utils.get_yaml_parse(emhass_conf, use_secrets=False)
+        self.retrieve_hass_conf, self.optim_conf, _ = utils.get_yaml_parse(params_json,logger)
         self.rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
-                               self.retrieve_hass_conf['freq'], self.retrieve_hass_conf['time_zone'],
-                               params, emhass_conf, logger, get_data_from_file=get_data_from_file)
+                               self.retrieve_hass_conf['optimization_time_step'], self.retrieve_hass_conf['time_zone'],
+                               params_json, emhass_conf, logger, get_data_from_file=get_data_from_file)
+        # Open and extract saved sensor data to test against
         with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
             self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
         
