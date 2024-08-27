@@ -679,15 +679,3 @@ async function errorAlert(text) {
   return 0;
 }
 
-//check config works
-//remove logging
-//loading
-//tick and cross sizing
-//add config to .gitignore
-//remove old objects
-//clean up css
-//array values (refine pv peak)
-//error in send or retrive (alert box)
-//config path in data folder
-//cli paths
-//add redudency?
