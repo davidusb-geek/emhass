@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html class="adaptive">
+
+<head>
+  <title>EMHASS: Energy Management Optimization for Home Assistant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" type="text/css" href="static/style.css?version=1">
+  <link rel="icon" type="image/x-icon" href="static/img/emhass_logo_short.svg">
+  <script src="static/configuration_script.js"></script>
+</head>
+
+<body style="margin: auto; align-items:center; text-align:center;">
+
+  <div>
+    <!-- Icons by feather https://github.com/feathericons/feather -->
+    <div id="top-links">
+      <!-- configuration page  -->
+      <a href="/" style="margin-right: 12px; cursor: pointer; z-index: 1">
+        <svg class="feather">
+          <use class="feather" href="static/img/feather-sprite.svg#settings" />
+        </svg>
+      </a>
+      <!-- advanced or basic page switch -->
+      <a href="/configuration" style="margin-right: 24px; cursor: pointer; z-index: 1">
+        <svg class="feather">
+          <use class="feather" href="static/img/feather-sprite.svg#tool" />
+        </svg>
+      </a>
+      <a href="https://emhass.readthedocs.io/en/latest/">
+        <svg class="feather" style="margin-right: 12px;" ;>
+          <use class="feather" href="static/img/feather-sprite.svg#book" />
+        </svg>
+      </a>
+      <a href="https://github.com/davidusb-geek/emhass" target="_blank" rel="noopener noreferrer">
+        <svg class="feather" style="margin-right: 0px;">
+          <use class="feather" href="static/img/feather-sprite.svg#git-branch" />
+        </svg>
+      </a>
+    </div>
+    <!-- Title -->
+    <img src="static/img/emhass_icon.png" alt="">
+    <h2>EMHASS: Energy Management Optimization for Home Assistant</h2>
+  </div>
+  <div class="header-footer">
+    <div class="loading-div">
+      <h4>Configuration:</h4>
+      <div id=loader></div> <!-- status dynamic element -->
+    </div>
+    <a id="json-toggle">
+      <svg id="json" class="feather" class="header-footer-button">
+        <use class="feather" href="static/img/feather-sprite.svg#code" />
+      </svg>
+    </a>
+  </div>
+  <!-- parameter list/box elements section -->
+  <div id=configurationContainer>
+  </div>
+  <!-- send parameters to EMHASS to save to config.json -->
+  <div class="save_button header-footer">
+    <button type="button" id="save" class="">Save</button>
+    <button type="button" id="defaults" class="">Defaults</button>
+  </div>
+  <div style="display: none;" id="alert" class="alert">
+    <div>
+      <!-- alert box -->
+      <span onclick="this.parentElement.parentElement.style.display='none';">&times;</span>
+      <p id="alert-text"></p>
+    </div>
+  </div>
+  <footer class="footer">
+    <p style="margin-top:10px; text-align:center;">&copy; MIT License | Copyright (c) 2021-2023 David
+      HERNANDEZ</p>
+  </footer>
+  </div>
+</body>
+
+</html>

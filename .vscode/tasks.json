@@ -20,7 +20,7 @@
                 "echo": true,
                 "panel": "shared",
                 "focus": true
-            }
+            },
         },
         {
             "label": "EMHASS install with dependencies",
