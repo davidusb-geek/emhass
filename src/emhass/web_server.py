@@ -20,6 +20,7 @@ from emhass.utils import get_injection_dict, get_injection_dict_forecast_model_f
 
 # Define the Flask instance
 app = Flask(__name__)
+emhass_conf = {}
 
 # Check logfile for error, anything after string match if provided 
 def checkFileLog(refString=None):
@@ -55,7 +56,6 @@ def clearFileLog():
         with open(str(emhass_conf['data_path'] / 'actionLogs.txt'), "w") as fp:
             fp.truncate()    
 
-
 # Initial index page render
 @app.route('/')
 def index():
@@ -78,9 +78,86 @@ def index():
     
     return make_response(template.render(injection_dict=injection_dict))
 
+# Configuration page actions:
+# Render configuration page 
+@app.route('/configuration')
+def configuration():
+    app.logger.info("serving configuration.html...")
+    # Load HTML template
+    file_loader = PackageLoader('emhass', 'templates')
+    env = Environment(loader=file_loader)
+    template = env.get_template('configuration.html')
+    return make_response(template.render(config=params))
+
+# Get config
+@app.route('/get-config/', methods=['GET'])
+def parameter_get():
+    # Build config
+    config = build_config(emhass_conf,app.logger,emhass_conf["defaults_path"],emhass_conf["config_path"],emhass_conf["legacy_config_path"])
+    # Make sure we do not send any secret parameters
+    secret_params = ["hass_url", "time_zone", "Latitude", "Longitude", "Altitude", "long_lived_token", "solcast_api_key", "solcast_rooftop_id", "solar_forecast_kwp"]
+    for key in list(config.keys()):
+        if key in secret_params:
+            del config[key]
+    # Send config
+    return make_response(config,201)
+
+# Get default Config
+@app.route('/get-config/defaults', methods=['GET'])
+def config_get():
+    config = {}
+    if emhass_conf['defaults_path'] and Path(emhass_conf['defaults_path']).is_file():
+        with emhass_conf['defaults_path'].open('r') as data:
+            config = json.load(data)
+    else: 
+        app.logger.warning("Unable to pass default config to configuration page")
+        return make_response("failed to retrieve config save",400)
+    # Send params
+    return make_response(config,201)
+
+# Save config to file
+@app.route('/set-config', methods=['POST'])
+def parameter_set():
+    config = {}
+    # Load defaults as a reference point to override
+    if emhass_conf['defaults_path'] and Path(emhass_conf['defaults_path']).is_file():
+        with emhass_conf['defaults_path'].open('r') as data:
+            defaults = json.load(data)
+    
+    # Retrieve send config
+    config = request.get_json(force=True)
+    # Merge defaults with config 
+    config = defaults | config
+    # check if data is empty
+    if len(config) == 0:
+        return make_response("failed to retrieve config",400)
+    # Save config to config.json
+    if emhass_conf['config_path'] and Path(emhass_conf['config_path']).is_file():
+        with emhass_conf['config_path'].open('w') as f:
+            json.dump(config, f, indent=4)
+    else: 
+        return make_response("failed to retrieve config file",400)
+    
+    # Update current param save (build and save param with config)
+    if os.path.exists(str(emhass_conf['data_path'])): 
+        with open(str(emhass_conf['data_path'] / 'params.pkl'), "rb") as fid:
+            emhass_conf['config_path'], params = pickle.load(fid)
+    else: 
+        return make_response("failed to retrieve parameter file",400)
+    # Build params from config
+    webParams = build_params(emhass_conf,{},config,app.logger)
+    # Update (overwrite) params with retried params (config) 
+    params.update(webParams)
+    # Save updated params 
+    with open(str(emhass_conf['data_path'] / 'params.pkl'), "wb") as fid:
+        pickle.dump((config_path, params), fid)   
+    
+    app.logger.info("Saved parameters from webserver")
+    return make_response({},201)
+#
 
 #get actions 
-@app.route('/template/<action_name>', methods=['GET'])
+@app.route('/template/action_name', methods=['GET'])
 def template_action(action_name):
     app.logger.info(" >> Sending rendered template table data")
     if action_name == 'table-template':
@@ -254,7 +331,7 @@ if __name__ == "__main__":
     params = None 
     
     # Find env's, not not set defaults 
-    CONFIG_PATH = os.getenv('CONFIG_PATH', default="/app/config.json")
+    CONFIG_PATH = os.getenv('CONFIG_PATH', default="/share/config.json")
     OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json") 
     DEFAULTS_PATH = os.getenv('DEFAULTS_PATH', default="/app/data/config_defaults.json")
     ASSOCIATIONS_PATH = os.getenv('ASSOCIATIONS_PATH', default="/app/data/associations.csv")
@@ -270,7 +347,6 @@ if __name__ == "__main__":
     legacy_config_path = Path(LEGACY_CONFIG_PATH)
     data_path = Path(DATA_PATH)
     root_path = Path(ROOT_PATH)
-    emhass_conf = {}
     emhass_conf['config_path'] = config_path
     emhass_conf['options_path'] = options_path
     emhass_conf['defaults_path'] = defaults_path

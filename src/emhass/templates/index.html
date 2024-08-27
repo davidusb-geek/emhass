@@ -4,7 +4,7 @@
 <head>
     <title>EMHASS: Energy Management Optimization for Home Assistant</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" type="text/css" href="static/style.css?version=1"> <!-- change version on stylesheet changes  -->
+    <link rel="stylesheet" type="text/css" href="static/style.css?version=1">
     <link rel="icon" type="image/x-icon" href="static/img/emhass_logo_short.svg">
     <script src="static/script.js"></script>
 </head>
@@ -14,6 +14,12 @@
     <div>
         <!-- Icons by feather https://github.com/feathericons/feather -->
         <div id="top-links">
+            <!-- configuration page  -->
+            <a href="/configuration" style="margin-right: 12px; cursor: pointer; z-index: 1">
+                <svg class="feather">
+                    <use class="feather" href="static/img/feather-sprite.svg#settings" />
+                </svg>
+            </a>
             <!-- advanced or basic page switch -->
             <a id="basicOrAdvanced" style="margin-right: 24px; cursor: pointer; z-index: 1">
                 <svg class="feather">
@@ -21,12 +27,12 @@
                 </svg>
             </a>
             <a href="https://emhass.readthedocs.io/en/latest/">
-                <svg class="feather" style="margin-right: 12px;";>
+                <svg class="feather" style="margin-right: 12px;" ;>
                     <use class="feather" href="static/img/feather-sprite.svg#book" />
                 </svg>
             </a>
             <a href="https://github.com/davidusb-geek/emhass" target="_blank" rel="noopener noreferrer">
-                <svg class="feather" style="margin-right: 0px;" >
+                <svg class="feather" style="margin-right: 0px;">
                     <use class="feather" href="static/img/feather-sprite.svg#git-branch" />
                 </svg>
             </a>

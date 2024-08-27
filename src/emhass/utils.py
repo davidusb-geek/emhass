@@ -760,7 +760,7 @@ def build_config(emhass_conf: dict, logger: logging.Logger, defaults_path: Optio
     :rtype: dict
     """
 
-    # Read default parameters
+    # Read default parameters (default /app/data/config_defaults.json)
     if defaults_path and pathlib.Path(defaults_path).is_file():
         with defaults_path.open('r') as data:
             config = json.load(data)
@@ -768,7 +768,7 @@ def build_config(emhass_conf: dict, logger: logging.Logger, defaults_path: Optio
         logger.error("config_defaults. does not exist")
         raise Exception("config_defaults. does not exist in path: "+str(defaults_path)) 
     
-    # Read user config parameters
+    # Read user config parameters (default /share/config.json)
     if config_path and pathlib.Path(config_path).is_file():
         with config_path.open('r') as data:
             # Set override default parameters (config_defaults) with user given parameters (config.json)
@@ -777,10 +777,11 @@ def build_config(emhass_conf: dict, logger: logging.Logger, defaults_path: Optio
         logger.error("config.json does not exist")
         raise Exception("config.json does not exist in path: "+str(config_path)) 
         
-    # Check to see if legacy config_emhass.yaml was provided
+    # Check to see if legacy config_emhass.yaml was provided (default /app/config_emhass.yaml)
     if legacy_config_path and pathlib.Path(legacy_config_path).is_file():
         with open(legacy_config_path, 'r') as file:
             legacy_config = yaml.load(file, Loader=yaml.FullLoader)
+            #convert legacy naming conventions
             legacy_config_parameters = build_legacy_config_params(emhass_conf,legacy_config,logger)
             if type(legacy_config_parameters) is not bool:
                 config.update(legacy_config_parameters)     
@@ -906,7 +907,7 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
                         }
             else:
                 params_secrets['hass_url'] = url_from_options
-                # Obtain secrets if any from options.json
+                # Obtain secrets if any from options.json (default /app/options.json)
                 logger.debug("Obtaining secrets from options.json")
                 if options.get('time_zone',None) is not None or options['time_zone'] == "empty":
                     params_secrets['time_zone'] = options['time_zone']
@@ -919,7 +920,7 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
                 if key_from_options == 'empty' or key_from_options == '':
                     params_secrets['long_lived_token'] = key_from_options
      
-    # Obtain secrets from secrets_emhass.yaml?
+    # Obtain secrets from secrets_emhass.yaml? (default /app/secrets_emhass.yaml)
     if secrets_path and pathlib.Path(secrets_path).is_file():
         logger.debug("Obtaining secrets from secrets file")
         with open(pathlib.Path(secrets_path), 'r') as file:
@@ -1016,7 +1017,7 @@ def build_params(emhass_conf: dict, params_secrets: dict, config: dict,
 
 
     # Format list_hp_periods
-    if params['optim_conf'].get('load_peak_hour_periods',None) is not None:
+    if params['optim_conf'].get('load_peak_hour_periods',None) is not None and isinstance(type(params['optim_conf']['load_peak_hour_periods']), list):
         params['optim_conf']['load_peak_hour_periods'] = dict(
             (key, d[key]) for d in params['optim_conf']['load_peak_hour_periods'] for key in d
         )

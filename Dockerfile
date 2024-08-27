@@ -70,7 +70,7 @@ RUN apt-get purge -y --auto-remove \
     && rm -rf /var/lib/apt/lists/*
 
 #copy default parameters
-COPY config.json /app/
+COPY config.json /share/
 
 #make sure data directory exists
 RUN mkdir -p /app/data/
