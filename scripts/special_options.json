@@ -28,16 +28,16 @@
       "operating_hours_of_each_deferrable_load": 1                                                                                                                                                              
     }                                                                                                                                                                                                         
   ],                                                                                                                                                                                                             
-  "list_peak_hours_periods_start_hours": [                                                                                                                                                                       
-    {                                                                                                                                                                                                            
-      "peak_hours_periods_start_hours": "05:54"                                                                                                                                                                  
-    }                                                                                                                                                                                                            
-  ],                                                                                                                                                                                                             
-  "list_peak_hours_periods_end_hours": [                                                                                                                                                                                                                                                                                                                                                                                 
-    {                                                                                                                                                                                                            
-      "peak_hours_periods_end_hours": "05:54"                                                                                                                                                                    
-    }                                                                                                                                                                                                            
-  ],  
+  "load_peak_hour_periods": {
+    "period_hp_1": [
+      {
+        "start": "05:54"
+      },
+      {
+        "end": "05:54"
+      }
+    ]
+  },
   "list_treat_deferrable_load_as_semi_cont": [
     {
       "treat_deferrable_load_as_semi_cont": false

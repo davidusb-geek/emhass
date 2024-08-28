@@ -11,7 +11,7 @@ pd.options.plotting.backend = "plotly"
 
 from emhass.retrieve_hass import RetrieveHass
 from emhass.forecast import Forecast
-from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
+from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger, build_secrets, build_params
 
 from sklearn.cluster import KMeans
 from sklearn.linear_model import LinearRegression
@@ -33,11 +33,13 @@ from tslearn.preprocessing import TimeSeriesScalerMeanVariance, \
 
 
 # the root folder
-root = str(get_root(__file__, num_parent=2))
+root = pathlib.Path(str(get_root(__file__, num_parent=2)))
 emhass_conf = {}
-emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
-emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
-emhass_conf['root_path'] = pathlib.Path(root)
+emhass_conf['data_path'] = root / 'data/'
+emhass_conf['root_path'] = root / 'src/emhass/'
+emhass_conf['config_path'] = root / 'config.json'
+emhass_conf['defaults_path'] = emhass_conf['root_path']  / 'data/config_defaults.json'
+emhass_conf['associations_path'] = emhass_conf['root_path']  / 'data/associations.csv'
 
 # create logger
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=True)
@@ -49,7 +51,8 @@ if __name__ == '__main__':
     var_model = "sensor.power_load_positive"
     
     data_path = emhass_conf['data_path'] / str('data_train_'+model_type+'.pkl')
-    params = None
+    _,secrets = build_secrets(emhass_conf,logger,no_response=True)
+    params =  build_params(emhass_conf,secrets,{},logger)
     template = 'presentation'
 
     if data_path.is_file():
@@ -58,9 +61,9 @@ if __name__ == '__main__':
             data, var_model = pickle.load(fid)
     else:
         logger.info("Using EMHASS methods to retrieve the new forecast model train data")
-        retrieve_hass_conf, _, _ = get_yaml_parse(emhass_conf, use_secrets=True)
+        retrieve_hass_conf, _, _ = get_yaml_parse(params,logger)
         rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
-        retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
+        retrieve_hass_conf['optimization_time_step'], retrieve_hass_conf['time_zone'],
         params, emhass_conf, logger, get_data_from_file=False)
 
         days_list = get_days_list(days_to_retrieve)
