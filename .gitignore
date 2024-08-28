@@ -2,6 +2,8 @@
 test.py
 # Secret yaml file
 secrets_emhass.yaml
+# config json file 
+config.json
 *.tar
 .vscode/*
 .vscode/launch.json

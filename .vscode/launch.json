@@ -22,8 +22,6 @@
         "LEGACY_CONFIG_PATH": "/workspaces/emhass/config_emhass.yaml",
         "CONFIG_PATH": "/workspaces/emhass/config.json",
         "OPTIONS_PATH": "/workspaces/emhass/options.json",
-        "DEFAULTS_PATH": "/workspaces/emhass/data/config_defaults.json",
-        "ASSOCIATIONS_PATH": "/workspaces/emhass/data/associations.csv",
         "SECRETS_PATH": "/workspaces/emhass/secrets_emhass.yaml",
         "DATA_PATH": "/workspaces/emhass/data/",
         "EMHASS_URL": "http://HAIPHERE:8123/", //change

@@ -21,8 +21,8 @@ root = pathlib.Path(utils.get_root(__file__, num_parent=2))
 emhass_conf = {}
 emhass_conf['data_path'] = root / 'data/'
 emhass_conf['root_path'] = root / 'src/emhass/'
-emhass_conf['defaults_path'] = emhass_conf['data_path'] / 'config_defaults.json'
-emhass_conf['associations_path'] = emhass_conf['data_path'] / 'associations.csv'
+emhass_conf['defaults_path'] = emhass_conf['root_path']  / 'data/config_defaults.json'
+emhass_conf['associations_path'] = emhass_conf['root_path']  / 'data/associations.csv'
 
 
 # create logger
