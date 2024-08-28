@@ -149,6 +149,8 @@ class Forecast(object):
         self.var_prod_price = 'unit_prod_price'
         if params is None:
             self.params = params
+        elif type(params) is dict:
+            self.params = params
         else:
             self.params = json.loads(params)
         if self.method_ts_round == 'nearest':
@@ -226,9 +228,9 @@ class Forecast(object):
                 data['temp_air'], data['relative_humidity'])
         elif method == 'solcast': # using Solcast API
             # Check if weather_forecast_cache is true or if forecast_data file does not exist
-            if self.params["passed_data"]["weather_forecast_cache"] or not os.path.isfile(w_forecast_cache_path):
+            if not os.path.isfile(w_forecast_cache_path):
                 # Check if weather_forecast_cache_only is true, if so produce error for not finding cache file
-                if not self.params["passed_data"]["weather_forecast_cache_only"]:
+                if not (self.params.get("passed_data",None) is not None and self.params["passed_data"].get("weather_forecast_cache",False)):
                     # Retrieve data from the Solcast API
                     if 'solcast_api_key' not in self.retrieve_hass_conf:
                         self.logger.error("The solcast_api_key parameter was not defined")
@@ -243,7 +245,7 @@ class Forecast(object):
                         }
                     days_solcast = int(len(self.forecast_dates)*self.freq.seconds/3600)
                     # If weather_forecast_cache, set request days as twice as long to avoid length issues (add a buffer) 
-                    if self.params["passed_data"]["weather_forecast_cache"]:
+                    if self.params["passed_data"].get("weather_forecast_cache",False):
                         days_solcast = min((days_solcast * 2), 336)
                     url = "https://api.solcast.com.au/rooftop_sites/"+self.retrieve_hass_conf['solcast_rooftop_id']+"/forecasts?hours="+str(days_solcast)
                     response = get(url, headers=headers)
@@ -269,7 +271,7 @@ class Forecast(object):
                         self.logger.error("Not enough data retried from Solcast service, try increasing the time step or use MPC.")
                     else:
                         # If runtime weather_forecast_cache is true save forecast result to file as cache
-                        if self.params["passed_data"]["weather_forecast_cache"]:
+                        if self.params["passed_data"].get("weather_forecast_cache",False):
                             # Add x2 forecast periods for cached results. This adds a extra delta_forecast amount of days for a buffer
                             cached_forecast_dates =  self.forecast_dates.union(pd.date_range(self.forecast_dates[-1], periods=(len(self.forecast_dates) +1), freq=self.freq)[1:])
                             cache_data_list = data_list[0:len(cached_forecast_dates)]
@@ -326,7 +328,7 @@ class Forecast(object):
             if self.optim_conf['delta_forecast_daily'].days > 1:
                 self.logger.warning("The free public tier for solar.forecast only provides one day forecasts")
                 self.logger.warning("Continuing with just the first day of data, the other days are filled with 0.0.")
-                self.logger.warning("Use the other available methods for delta_forecast > 1")
+                self.logger.warning("Use the other available methods for delta_forecast_daily > 1")
             headers = {
                 "Accept": "application/json"
                 }

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import json
 import pickle
 import numpy as np
 import pandas as pd
@@ -12,50 +13,53 @@ pd.options.plotting.backend = "plotly"
 from emhass.retrieve_hass import RetrieveHass
 from emhass.optimization import Optimization
 from emhass.forecast import Forecast
-from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
+from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger, build_config, build_params
 
 # the root folder
-root = str(get_root(__file__, num_parent=2))
+root = pathlib.Path(str(get_root(__file__, num_parent=2)))
 emhass_conf = {}
-emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
-emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
-emhass_conf['root_path'] = pathlib.Path(root)
+emhass_conf['data_path'] = root / 'data/'
+emhass_conf['root_path'] = root / 'src/emhass/'
+emhass_conf['config_path'] = root / 'config.json'
+emhass_conf['defaults_path'] = emhass_conf['root_path']  / 'data/config_defaults.json'
+emhass_conf['associations_path'] = emhass_conf['root_path']  / 'data/associations.csv'
 
 # create logger
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
 if __name__ == '__main__':
     get_data_from_file = True
-    params = None
     show_figures = True
     template = 'presentation'
     
-    retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf, use_secrets=False)
+    config = build_config(emhass_conf,logger,emhass_conf['defaults_path'])
+    params =  build_params(emhass_conf,{},config,logger)
+    retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(params, logger)
     retrieve_hass_conf, optim_conf, plant_conf = \
         retrieve_hass_conf, optim_conf, plant_conf
     rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
-                            retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
+                            retrieve_hass_conf['optimization_time_step'], retrieve_hass_conf['time_zone'],
                             params, emhass_conf, logger)
     if get_data_from_file:
         with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
             rh.df_final, days_list, var_list = pickle.load(inp)
-        retrieve_hass_conf['var_load'] = str(var_list[0])
-        retrieve_hass_conf['var_PV'] = str(var_list[1])
-        retrieve_hass_conf['var_interp'] = [retrieve_hass_conf['var_PV'], retrieve_hass_conf['var_load']]
-        retrieve_hass_conf['var_replace_zero'] = [retrieve_hass_conf['var_PV']]
+        retrieve_hass_conf['sensor_power_load_no_var_loads'] = str(var_list[0])
+        retrieve_hass_conf['sensor_power_photovoltaics'] = str(var_list[1])
+        retrieve_hass_conf['sensor_linear_interp'] = [retrieve_hass_conf['sensor_power_photovoltaics'], retrieve_hass_conf['sensor_power_load_no_var_loads']]
+        retrieve_hass_conf['sensor_replace_zero'] = [retrieve_hass_conf['sensor_power_photovoltaics']]
     else:
-        days_list = get_days_list(retrieve_hass_conf['days_to_retrieve'])
-        var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
+        days_list = get_days_list(retrieve_hass_conf['historic_days_to_retrieve'])
+        var_list = [retrieve_hass_conf['sensor_power_load_no_var_loads'], retrieve_hass_conf['sensor_power_photovoltaics']]
         rh.get_data(days_list, var_list,
                         minimal_response=False, significant_changes_only=False)
-    rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
+    rh.prepare_data(retrieve_hass_conf['sensor_power_load_no_var_loads'], load_negative = retrieve_hass_conf['load_negative'],
                             set_zero_min = retrieve_hass_conf['set_zero_min'], 
-                            var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
-                            var_interp = retrieve_hass_conf['var_interp'])
+                            var_replace_zero = retrieve_hass_conf['sensor_replace_zero'], 
+                            var_interp = retrieve_hass_conf['sensor_linear_interp'])
     df_input_data = rh.df_final.copy()
     
     fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
-                            params, emhass_conf, logger, get_data_from_file=get_data_from_file)
+                            json.dumps(params, default=str), emhass_conf, logger, get_data_from_file=get_data_from_file)
     df_weather = fcst.get_weather_forecast(method='csv')
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
     P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
@@ -73,11 +77,11 @@ if __name__ == '__main__':
     optim_conf.update({'lp_solver_path': 'empty'})  # set the path to the LP solver, COIN_CMD default is /usr/bin/cbc
     
     # Semi continuous and constant values
-    optim_conf.update({'treat_def_as_semi_cont': [True, False]})
-    optim_conf.update({'set_def_constant': [True, False]})
+    optim_conf.update({'treat_deferrable_load_as_semi_cont': [True, False]})
+    optim_conf.update({'set_deferrable_load_single_constant': [True, False]})
     
     # A sequence of values
-    # optim_conf.update({'P_deferrable_nom': [[500.0, 100.0, 100.0, 500.0], 750.0]})
+    # optim_conf.update({'nominal_power_of_deferrable_loads': [[500.0, 100.0, 100.0, 500.0], 750.0]})
     
     # Using a battery
     optim_conf.update({'set_use_battery': False})

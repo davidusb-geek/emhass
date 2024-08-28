@@ -1,9 +1,9 @@
 {
   "hass_url": "empty",
   "long_lived_token": "empty",
-  "optional_solcast_api_key": "empty",
-  "optional_solcast_rooftop_id": "empty",
-  "optional_solar_forecast_kwp": 0,
+  "solcast_api_key": "empty",
+  "solcast_rooftop_id": "empty",
+  "solar_forecast_kwp": 0,
   "time_zone": "Europe/Paris",
   "Latitude": 0,
   "Longitude": 0,
