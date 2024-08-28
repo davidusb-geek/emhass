@@ -1161,8 +1161,6 @@ def main():
                         help='Define path to the config.json/defaults.json file')
     parser.add_argument('--params', type=str, default=None,
                      help='String of configuration parameters passed')
-    parser.add_argument('--associations', type=str,
-                        help='Define path to the associations.csv file')
     parser.add_argument('--data', type=str,
                         help='Define path to the Data files (.csv & .pkl)')
     parser.add_argument('--root', type=str, help='Define path emhass root')
@@ -1182,22 +1180,21 @@ def main():
     if args.config is not None:
         config_path = pathlib.Path(args.config)
     else:
-        config_path = pathlib.Path(
-            str(utils.get_root(__file__, num_parent=3) / 'config.json'))
+        config_path = pathlib.Path(str(utils.get_root(__file__, num_parent=3) / 'config.json'))
+    
     if args.data is not None:
         data_path = pathlib.Path(args.data)
     else:
         data_path = (config_path.parent / 'data/')
+    
     if args.root is not None:
         root_path = pathlib.Path(args.root)
     else:
         root_path = utils.get_root(__file__, num_parent=1) 
-    if args.associations is not None:
-        associations_path = pathlib.Path(args.associations)
-    else:
-        associations_path = data_path / 'associations.csv'
+    
+    associations_path = root_path / 'data/associations.csv'
 
-    defaults_path = data_path / 'config_defaults.json'
+    defaults_path = root_path / 'data/config_defaults.json'
    
     emhass_conf = {}
     emhass_conf['config_path'] = config_path

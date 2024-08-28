@@ -975,7 +975,7 @@ def build_params(emhass_conf: dict, params_secrets: dict, config: dict,
         logger.error("Cant find associations file (associations.csv) in: "  + str(emhass_conf['associations_path']))
         return False
 
-    # Use association list to append parameters from config into params (with corresponding config catagories)
+    # Use association list to append parameters from config into params (with corresponding config catagorie)
     for association in associations:
         if config.get(association[2],None) is not None:
             params[association[0]][association[2]] = config[association[2]]

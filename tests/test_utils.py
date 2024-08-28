@@ -14,8 +14,8 @@ emhass_conf['data_path'] = root / 'data/'
 emhass_conf['root_path'] = root / 'src/emhass/'
 emhass_conf['options_path'] = root / 'options.json'
 emhass_conf['secrets_path'] = root / 'secrets_emhass(example).yaml'
-emhass_conf['defaults_path'] = emhass_conf['data_path'] / 'config_defaults.json'
-emhass_conf['associations_path'] = emhass_conf['data_path'] / 'associations.csv'
+emhass_conf['defaults_path'] = emhass_conf['root_path']  / 'data/config_defaults.json'
+emhass_conf['associations_path'] = emhass_conf['root_path']  / 'data/associations.csv'
 
 # Create logger
 logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)

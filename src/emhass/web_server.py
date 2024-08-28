@@ -331,14 +331,14 @@ if __name__ == "__main__":
     params = None 
     
     # Find env's, not not set defaults 
-    CONFIG_PATH = os.getenv('CONFIG_PATH', default="/share/config.json")
-    OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json") 
-    DEFAULTS_PATH = os.getenv('DEFAULTS_PATH', default="/app/data/config_defaults.json")
-    ASSOCIATIONS_PATH = os.getenv('ASSOCIATIONS_PATH', default="/app/data/associations.csv")
-    LEGACY_CONFIG_PATH = os.getenv("LEGACY_CONFIG_PATH", default="/app/config_emhass.yaml")
     DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
     ROOT_PATH = os.getenv("ROOT_PATH", default=str(Path(__file__).parent))
-    
+    CONFIG_PATH = os.getenv('CONFIG_PATH', default="/share/config.json")
+    OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json") 
+    DEFAULTS_PATH = os.getenv('DEFAULTS_PATH', default=ROOT_PATH +"/data/config_defaults.json")
+    ASSOCIATIONS_PATH = os.getenv('ASSOCIATIONS_PATH', default=ROOT_PATH + "/data/associations.csv")
+    LEGACY_CONFIG_PATH = os.getenv("LEGACY_CONFIG_PATH", default="/app/config_emhass.yaml")
+
     # Define the paths
     config_path = Path(CONFIG_PATH)
     options_path = Path(OPTIONS_PATH)
@@ -446,3 +446,4 @@ if __name__ == "__main__":
     except PackageNotFoundError:
         app.logger.info("Using development emhass version")
     serve(app, host=web_ui_url, port=port, threads=8)
+
