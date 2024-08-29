@@ -19,7 +19,7 @@
       ],
       "justMyCode": true,
       "env": {
-        "LEGACY_CONFIG_PATH": "/workspaces/emhass/config_emhass.yaml",
+        //"LEGACY_CONFIG_PATH": "/workspaces/emhass/tests/config_emhass.yaml",
         "CONFIG_PATH": "/workspaces/emhass/config.json",
         "OPTIONS_PATH": "/workspaces/emhass/options.json",
         "SECRETS_PATH": "/workspaces/emhass/secrets_emhass.yaml",
