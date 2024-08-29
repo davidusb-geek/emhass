@@ -30,11 +30,9 @@ class TestMLRegressor(unittest.TestCase):
     def get_test_params():
         params = {}
         if emhass_conf['defaults_path'].exists():
-            with emhass_conf['defaults_path'].open('r') as data:
-                defaults = json.load(data)
-                updated_emhass_conf, built_secrets = utils.build_secrets(emhass_conf,logger)
-                emhass_conf.update(updated_emhass_conf)
-                params.update(utils.build_params(emhass_conf, built_secrets, defaults, logger))
+                config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'])
+                _,secrets = utils.build_secrets(emhass_conf,logger,no_response=True)
+                params =  utils.build_params(emhass_conf,secrets,config,logger)
         else:
             raise Exception("config_defaults. does not exist in path: "+str(emhass_conf['defaults_path'] ))
         return params

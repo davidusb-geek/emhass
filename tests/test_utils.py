@@ -13,7 +13,9 @@ emhass_conf = {}
 emhass_conf['data_path'] = root / 'data/'
 emhass_conf['root_path'] = root / 'src/emhass/'
 emhass_conf['options_path'] = root / 'options.json'
+emhass_conf['config_path'] = root / 'config.json'
 emhass_conf['secrets_path'] = root / 'secrets_emhass(example).yaml'
+emhass_conf['legacy_config_path'] = root / 'tests/config_emhass.yaml' 
 emhass_conf['defaults_path'] = emhass_conf['root_path']  / 'data/config_defaults.json'
 emhass_conf['associations_path'] = emhass_conf['root_path']  / 'data/associations.csv'
 
@@ -24,14 +26,11 @@ class TestCommandLineUtils(unittest.TestCase):
     
     @staticmethod
     def get_test_params():
-        params = {}
         if emhass_conf['defaults_path'].exists():
-            with emhass_conf['defaults_path'].open('r') as data:
-                defaults = json.load(data)
-                updated_emhass_conf, built_secrets = utils.build_secrets(emhass_conf,logger)
-                emhass_conf.update(updated_emhass_conf)
-                built_secrets['Altitude'] = 8000.0
-                params.update(utils.build_params(emhass_conf, built_secrets, defaults, logger))
+            config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'])
+            _,secrets = utils.build_secrets(emhass_conf,logger,no_response=True)
+            secrets['Altitude'] = 8000.0
+            params =  utils.build_params(emhass_conf,secrets,config,logger)
         else:
             raise Exception("config_defaults. does not exist in path: "+str(emhass_conf['defaults_path'] ))
                 
@@ -53,13 +52,37 @@ class TestCommandLineUtils(unittest.TestCase):
         params['optim_conf']['load_cost_forecast_method'] = 'list'
         params['optim_conf']['production_price_forecast_method'] = 'list'
         self.params_json = json.dumps(params)
+
+    def test_build_config(self):
+        # Test building with the different config methods
+        config = {}
+        params = {}
+        # Test with defaults 
+        config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'])
+        params = utils.build_params(emhass_conf,{},config,logger)
+        self.assertTrue(params['optim_conf']['lp_solver'] == "default")
+        self.assertTrue(params['optim_conf']['lp_solver_path'] == "empty")
+        self.assertTrue(config['load_peak_hour_periods'] == {'period_hp_1': [{'start': '02:54'}, {'end': '15:24'}], 'period_hp_2': [{'start': '17:24'}, {'end': '20:24'}]})
+        self.assertTrue(params['retrieve_hass_conf']['sensor_replace_zero'] == ['sensor.power_photovoltaics','sensor.power_load_no_var_loads'])
+        # Test with config.json 
+        config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'],emhass_conf['config_path'])
+        params = utils.build_params(emhass_conf,{},config,logger)
+        self.assertTrue(params['optim_conf']['lp_solver'] == "COIN_CMD")
+        self.assertTrue(params['optim_conf']['lp_solver_path'] == "/usr/bin/cbc")
+        # Test with lagacy config_emhass yaml
+        config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'],legacy_config_path=emhass_conf['legacy_config_path'])
+        params = utils.build_params(emhass_conf,{},config,logger)
+        self.assertTrue(params['retrieve_hass_conf']['sensor_replace_zero'] == ['sensor.power_photovoltaics'])
+        self.assertTrue(config['load_peak_hour_periods'] == {'period_hp_1': [{'start': '02:54'}, {'end': '15:24'}], 'period_hp_2': [{'start': '17:24'}, {'end': '20:24'}]})
+        self.assertTrue(params['plant_conf']['battery_charge_efficiency'] == 0.95)
+
         
     def test_get_yaml_parse(self):
         # Test get_yaml_parse with only secrets
         params = {}
-        updated_emhass_conf, built_secrets = utils.build_secrets(emhass_conf,logger)
+        updated_emhass_conf, secrets = utils.build_secrets(emhass_conf,logger)
         emhass_conf.update(updated_emhass_conf)
-        params.update(utils.build_params(emhass_conf, built_secrets, {}, logger))
+        params.update(utils.build_params(emhass_conf, secrets, {}, logger))
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(json.dumps(params),logger)
         self.assertIsInstance(retrieve_hass_conf, dict)
         self.assertIsInstance(optim_conf, dict)
@@ -221,17 +244,19 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(params['retrieve_hass_conf']['long_lived_token'] == "thatverylongtokenhere")      
         # Test Secrets from options.json
         params = {}
-        _, built_secrets = utils.build_secrets(emhass_conf,logger,options_path=emhass_conf["options_path"])
-        params = utils.build_params(emhass_conf, built_secrets, {}, logger)
+        secrets = {}
+        _, secrets = utils.build_secrets(emhass_conf,logger,options_path=emhass_conf["options_path"],secrets_path="",no_response=True)
+        params = utils.build_params(emhass_conf, secrets, {}, logger)
         for key in expected_keys:
             self.assertTrue(key in params.keys())
         self.assertTrue(params['retrieve_hass_conf']['time_zone'] == "Europe/Paris")
-        self.assertTrue(params['retrieve_hass_conf']['hass_url'] == "empty")
-        self.assertTrue(params['retrieve_hass_conf']['long_lived_token'] == "empty")
+        self.assertTrue(params['retrieve_hass_conf']['hass_url'] == "https://myhass.duckdns.org/")
+        self.assertTrue(params['retrieve_hass_conf']['long_lived_token'] == "thatverylongtokenhere")
         # Test Secrets from secrets_emhass(example).yaml
         params = {}
-        _, built_secrets = utils.build_secrets(emhass_conf,logger,secrets_path=emhass_conf["secrets_path"])
-        params = utils.build_params(emhass_conf, built_secrets, {}, logger)
+        secrets = {}
+        _, secrets = utils.build_secrets(emhass_conf,logger,secrets_path=emhass_conf["secrets_path"])
+        params = utils.build_params(emhass_conf, secrets, {}, logger)
         for key in expected_keys:
             self.assertTrue(key in params.keys())
         self.assertTrue(params['retrieve_hass_conf']['time_zone'] == "Europe/Paris")
@@ -239,9 +264,10 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(params['retrieve_hass_conf']['long_lived_token'] == "thatverylongtokenhere")
         # Test Secrets from arguments (command_line cli)
         params = {}
-        _, built_secrets = utils.build_secrets(emhass_conf,logger,{"url":"test.url", "key":"test.key" })
+        secrets = {}
+        _, secrets = utils.build_secrets(emhass_conf,logger,{"url":"test.url", "key":"test.key" },secrets_path="")
         logger.debug("Obtaining long_lived_token from passed argument") 
-        params = utils.build_params(emhass_conf, built_secrets, {}, logger)
+        params = utils.build_params(emhass_conf, secrets, {}, logger)
         for key in expected_keys:
             self.assertTrue(key in params.keys())
         self.assertTrue(params['retrieve_hass_conf']['time_zone'] == "Europe/Paris")

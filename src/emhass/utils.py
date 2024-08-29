@@ -780,7 +780,7 @@ def build_config(emhass_conf: dict, logger: logging.Logger, defaults_path: Optio
     :rtype: dict
     """
 
-    # Read default parameters (default /app/data/config_defaults.json)
+    # Read default parameters (default root_path/data/config_defaults.json)
     if defaults_path and pathlib.Path(defaults_path).is_file():
         with defaults_path.open('r') as data:
             config = json.load(data)
@@ -839,9 +839,12 @@ def build_legacy_config_params(emhass_conf: dict, legacy_config: dict,
     
     # Append config with legacy config parameters (converting alternative parameter naming conventions with associations list)
     for association in associations:
-        if legacy_config.get(association[0],None) is not None and legacy_config[0].get(association[1],None) is not None:
-            config[2] = legacy_config[0][1]
-
+        if legacy_config.get(association[0],None) is not None and legacy_config[association[0]].get(association[1],None) is not None:
+            config[association[2]] = legacy_config[association[0]][association[1]]
+            # if load_peak_hour_periods extract from list to dict
+            if association[2] == "load_peak_hour_periods" and type(config[association[2]]) is list:
+                config[association[2]] = dict((key, d[key]) for d in config[association[2]] for key in d)
+            
     return config
     # params['associations_dict'] = associations_dict
 
@@ -872,9 +875,9 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
         "hass_url": "https://myhass.duckdns.org/",
         "long_lived_token": "thatverylongtokenhere",
         "time_zone": "Europe/Paris",
-        "lat": 45.83,
-        "lon": 6.86,
-        "alt": 4807.8,
+        "Latitude": 45.83,
+        "Longitude": 6.86,
+        "Altitude": 4807.8,
         "solcast_api_key": "yoursecretsolcastapikey",
         "solcast_rooftop_id": "yourrooftopid",
         "solar_forecast_kwp": 5
@@ -883,10 +886,10 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
     # Obtain Secrets from ARG or ENV?
     params_secrets['hass_url'] = os.getenv("EMHASS_URL",params_secrets['hass_url'])
     params_secrets['long_lived_token'] = os.getenv("SUPERVISOR_TOKEN", params_secrets['long_lived_token'])   
-    params_secrets['time_zone'] = os.getenv("TIME_ZONE", default="Europe/Paris")
-    params_secrets['Latitude'] = float(os.getenv("LAT", default="45.83"))
-    params_secrets['Longitude'] = float(os.getenv("LON", default="6.86"))
-    params_secrets['Altitude'] = float(os.getenv("ALT", default="4807.8"))      
+    params_secrets['time_zone'] = os.getenv("TIME_ZONE", params_secrets['time_zone'])
+    params_secrets['Latitude'] = float(os.getenv("LAT", params_secrets['Latitude']))
+    params_secrets['Longitude'] = float(os.getenv("LON",  params_secrets['Longitude']))
+    params_secrets['Altitude'] = float(os.getenv("ALT", params_secrets['Altitude']))      
 
     # Obtain secrets from options.json (from EMHASS-Add-on)
     options = {}
@@ -904,46 +907,53 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
                     emhass_conf['data_path'] = pathlib.Path(options['data_path']);  
             
             # Check to use Home Assistant local API
-            if (url_from_options == 'empty' or url_from_options == '' or url_from_options == "http://supervisor/core/api") and os.getenv("SUPERVISOR_TOKEN", None) is not None:
+            if not no_response and \
+                (url_from_options == 'empty' or url_from_options == '' or url_from_options == "http://supervisor/core/api") and \
+                os.getenv("SUPERVISOR_TOKEN", None) is not None:
+                
+                params_secrets['long_lived_token'] = os.getenv("SUPERVISOR_TOKEN", None)
                 params_secrets['hass_url'] = "http://supervisor/core/api/config"
                 headers = {
                 "Authorization": "Bearer " + params_secrets['long_lived_token'],
                 "content-type": "application/json"
                 }
-                if not no_response:
-                    # Obtain secrets from Home Assistant via API
-                    logger.debug("Obtaining secrets from Home Assistant API")
-                    response = get(params_secrets['hass_url'], headers=headers)
-                    if response.status_code < 400:
-                        config_hass = response.json()
-                        params_secrets = {
-                        'hass_url': params_secrets['hass_url'],
-                        'long_lived_token': params_secrets['long_lived_token'],
-                        'time_zone': config_hass['time_zone'],
-                        'Latitude': config_hass['latitude'],
-                        'Longitude': config_hass['longitude'],
-                        'Altitude': config_hass['elevation']
-                        }
-            # else:
-                params_secrets['hass_url'] = url_from_options
-                # Obtain secrets if any from options.json (default /app/options.json)
-                logger.debug("Obtaining secrets from options.json")
-                if options.get('time_zone',None) is not None or options['time_zone'] == "empty":
-                    params_secrets['time_zone'] = options['time_zone']
-                if options.get('time_zone',None) is not None:
-                    params_secrets['Latitude'] = options['Latitude']
-                if options.get('Longitude',None) is not None:
-                    params_secrets['Longitude'] = options['Longitude']
-                if options.get('Altitude',None) is not None:
-                    params_secrets['Altitude'] = options['Altitude']
-                if options.get('solcast_api_key',None) is not None:
-                    params_secrets['solcast_api_key'] = options['solcast_api_key']
-                if options.get('solcast_rooftop_id',None) is not None:
-                    params_secrets['solcast_rooftop_id'] = options['solcast_rooftop_id']
-                if options.get('solar_forecast_kwp',None) is not None:
-                    params_secrets['solar_forecast_kwp'] = options['solar_forecast_kwp']
-                if key_from_options == 'empty' or key_from_options == '':
+                # Obtain secrets from Home Assistant via API
+                logger.debug("Obtaining secrets from Home Assistant API")
+                response = get(params_secrets['hass_url'], headers=headers)
+                if response.status_code < 400:
+                    config_hass = response.json()
+                    params_secrets = {
+                    'hass_url': params_secrets['hass_url'],
+                    'long_lived_token': params_secrets['long_lived_token'],
+                    'time_zone': config_hass['time_zone'],
+                    'Latitude': config_hass['latitude'],
+                    'Longitude': config_hass['longitude'],
+                    'Altitude': config_hass['elevation']
+                    }
+            else:
+                # Obtain the url and key secrets if any from options.json (default /app/options.json)
+                logger.debug("Obtaining url and key secrets from options.json")
+                if url_from_options != 'empty' and url_from_options != '':
+                    params_secrets['hass_url'] = url_from_options
+                if key_from_options != 'empty' and key_from_options != '':
                     params_secrets['long_lived_token'] = key_from_options
+            
+            # Obtain the other secrets if any from options.json (default /app/options.json)
+            logger.debug("Obtaining secrets from options.json")
+            if options.get('time_zone',"empty") != "empty" and options['time_zone'] != '':
+                params_secrets['time_zone'] = options['time_zone']
+            if options.get('Latitude',None) is not None and bool(options['Latitude']):
+                params_secrets['Latitude'] = options['Latitude']
+            if options.get('Longitude',None) is not None and bool(options['Longitude']):
+                params_secrets['Longitude'] = options['Longitude']
+            if options.get('Altitude',None) is not None and bool(options['Altitude']):
+                params_secrets['Altitude'] = options['Altitude']
+            if options.get('solcast_api_key',"empty") != "empty" and options['solcast_api_key'] != '':
+                params_secrets['solcast_api_key'] = options['solcast_api_key']
+            if options.get('solcast_rooftop_id',"empty") != "empty" and options['solcast_rooftop_id'] != '':
+                params_secrets['solcast_rooftop_id'] = options['solcast_rooftop_id']
+            if options.get('solar_forecast_kwp',None) is bool(options['solar_forecast_kwp']):
+                params_secrets['solar_forecast_kwp'] = options['solar_forecast_kwp']
      
     # Obtain secrets from secrets_emhass.yaml? (default /app/secrets_emhass.yaml)
     if secrets_path and pathlib.Path(secrets_path).is_file():
@@ -1020,7 +1030,8 @@ def build_params(emhass_conf: dict, params_secrets: dict, config: dict,
             params['optim_conf']['load_peak_hour_periods'] = list_hp_periods_list
     else:
         if params['optim_conf'].get('load_peak_hour_periods',None) is None:
-            logger.warning("Unable to detect or create load_peak_hour_periods parameter") 
+            logger.warning("Unable to detect or create load_peak_hour_periods parameter")
+
 
     # Check parameter lists have the same amounts as deferrable loads
     # If not, set defaults it fill in gaps

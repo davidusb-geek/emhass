@@ -32,12 +32,13 @@ class TestRetrieveHass(unittest.TestCase):
         get_data_from_file = True
         save_data_to_file = False
 
-        params = {}
-        # Build secrets file with 'secrets_emhass(example).yaml'
-        updated_emhass_conf, built_secrets = utils.build_secrets(emhass_conf,logger,secrets_path=emhass_conf['secrets_path'] )
-        emhass_conf.update(updated_emhass_conf)
-        params.update(utils.build_params(emhass_conf, built_secrets, {}, logger=logger))
-        retrieve_hass_conf, _, _ = get_yaml_parse(params,logger)
+        #build secrets and params
+        if emhass_conf['defaults_path'].exists():   
+            _,secrets = utils.build_secrets(emhass_conf,logger,no_response=True)
+            params =  utils.build_params(emhass_conf,secrets,{},logger)
+            retrieve_hass_conf, _, _ = get_yaml_parse(params,logger)
+        else:
+            raise Exception("config_defaults. does not exist in path: "+str(emhass_conf['defaults_path'] ))
 
         # Force config params for testing
         retrieve_hass_conf["optimization_time_step"] = pd.to_timedelta(30, "minutes")
