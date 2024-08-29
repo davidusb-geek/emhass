@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from emhass.retrieve_hass import RetrieveHass
 from emhass.optimization import Optimization
 from emhass.forecast import Forecast
-from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger, build_params, build_secrets
+from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger,build_config, build_params, build_secrets
 from pandas.testing import assert_series_equal
 
 # the root folder
@@ -36,11 +36,9 @@ class TestOptimization(unittest.TestCase):
         params = {}
         # Obtain configs and build params
         if emhass_conf['defaults_path'].exists():
-            with emhass_conf['defaults_path'].open('r') as data:
-                defaults = json.load(data)
-                updated_emhass_conf, built_secrets = build_secrets(emhass_conf,logger)
-                emhass_conf.update(updated_emhass_conf)
-                params.update(build_params(emhass_conf, built_secrets, defaults, logger))
+            config = build_config(emhass_conf,logger,emhass_conf['defaults_path'])
+            _,secrets = build_secrets(emhass_conf,logger,no_response=True)
+            params =  build_params(emhass_conf,secrets,config,logger)
         else:
             raise Exception("config_defaults. does not exist in path: "+str(emhass_conf['defaults_path'] ))
         retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(json.dumps(params),logger)

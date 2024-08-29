@@ -7,8 +7,8 @@
   "continual_publish": false,
   "data_path": "default",
   "set_total_pv_sell": false,
-  "lp_solver": "COIN_CMD",
-  "lp_solver_path": "/usr/bin/cbc",
+  "lp_solver": "default",
+  "lp_solver_path": "empty",
   "set_nocharge_from_grid": false,
   "set_nodischarge_to_grid": true,
   "set_battery_dynamic": false,
@@ -76,18 +76,18 @@
   "load_peak_hour_periods": {
     "period_hp_1": [
       {
-        "start": "15:24"
+        "start": "02:54"
       },
       {
-        "end": "02:54"
+        "end": "15:24"
       }
     ],
     "period_hp_2": [
       {
-        "start": "15:24"
+        "start": "17:24"
       },
       {
-        "end": "02:54"
+        "end": "20:24"
       }
     ]
   },

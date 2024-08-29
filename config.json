@@ -76,18 +76,18 @@
     "load_peak_hour_periods": {
         "period_hp_1": [
             {
-                "start": "15:24"
+                "start": "02:54"
             },
             {
-                "end": "02:54"
+                "end": "15:24"
             }
         ],
         "period_hp_2": [
             {
-                "start": "15:24"
+                "start": "17:24"
             },
             {
-                "end": "02:54"
+                "end": "20:24"
             }
         ]
     },
