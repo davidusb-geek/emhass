@@ -842,9 +842,7 @@ def build_legacy_config_params(emhass_conf: dict, legacy_config: dict,
         if legacy_config.get(association[0],None) is not None and legacy_config[association[0]].get(association[1],None) is not None:
             # If list, expand with dicts, using param name as key
             if len(association) == 4 and type(legacy_config[association[0]][association[1]]) is list:
-                logger.info(legacy_config[association[0]][association[1]])
                 config[association[3]] = list(map(lambda e: {association[2]:e}, legacy_config[association[0]][association[1]]))
-                logger.info(config[association[3]])
             else:
                 config[association[2]] = legacy_config[association[0]][association[1]]
             
