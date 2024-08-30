@@ -1,5 +1,16 @@
 {
   "Local": {
+    "costfun": {
+      "friendly_name": "Cost function",
+      "Description": "Define the type of cost function.",
+      "input": "select",
+      "select_options": [
+        "profit",
+        "cost",
+        "self-consumption"
+      ],
+      "default_value": "profit"
+    },
     "sensor_power_photovoltaics": {
       "friendly_name": "Sensor power sensor",
       "Description": "This is the name of the photovoltaic power-produced sensor in Watts from Home Assistant. For example: ‘sensor.power_photovoltaics’.",
@@ -29,6 +40,18 @@
       "Description": "set to True to save entities to .json after an optimization run. Then automatically republish the saved entities (with updated current state value) every freq minutes. entity data saved to data_path/entities.",
       "input": "boolean",
       "default_value": false
+    },
+    "logging_level": {
+      "friendly_name": "logging level",
+      "Description": "This is the name of the photovoltaic power-produced sensor in Watts from Home Assistant. For example: ‘sensor.power_photovoltaics’.",
+      "input": "select",
+      "select_options": [
+        "INFO",
+        "DEBUG",  
+        "WARNING",
+        "ERROR"
+      ],
+      "default_value": "INFO"
     }
   },
   "System": {
@@ -159,14 +182,7 @@
       "Description": "A list of peak hour periods for load consumption from the grid. This is useful if you have a contract with peak and non-peak hours.",
       "input": "array.time",
       "default_value": {
-        "period_hp_1": {
-          "start": "02:54",
-          "end": "15:24"
-        },
-        "period_hp_2": {
-          "start": "02:54",
-          "end": "15:24"
-        }
+        "period_hp_template": [{"start": "02:54"},{"end": "15:24"}]
       },
       "requires": {
         "load_cost_forecast_method": "hp_hc_periods"

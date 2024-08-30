@@ -22,16 +22,16 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          {buildx: linux/amd64, target_arch: amd64, os_version: debian},
-          {buildx: linux/arm/v7, target_arch: armv7, os_version: debian},
-          {buildx: linux/arm/v7, target_arch: armhf, os_version: raspbian},
-          {buildx: linux/arm64,  target_arch: aarch64, os_version: debian}
+          {target_arch: amd64, os_version: debian},
+          {target_arch: armv7, os_version: debian},
+          {target_arch: armhf, os_version: raspbian},
+          {target_arch: aarch64, os_version: debian}
         ]
     steps:
     # Pull git repo and build each architecture image separately (with QEMU and Buildx)
       - name: lowercase repo
         run: |
-          echo "IMAGE_NAME_LOWER=${GITHUB_REPOSITORY ,,}" >>${GITHUB_ENV}
+          echo "IMAGE_NAME_LOWER=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
       - name: Checkout the repository
         uses: actions/checkout@v4
       - name: Set up QEMU
@@ -54,12 +54,12 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          platforms: ${{ matrix.platform.buildx }}
+          platforms: linux/${{ matrix.platform.target_arch }}
           build-args: |
             TARGETARCH=${{ matrix.platform.target_arch }}
             os_version=${{ matrix.platform.os_version }}
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.IMAGE_NAME_LOWER }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }},push-by-digest=true,name-canonical=true,push=true
       # Export the build images as artifact for the next job of merging
       - name: Export digest
         run: |
@@ -77,12 +77,17 @@ jobs:
   merge:
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
     needs:
       - build
     steps:
       - name: lowercase repo  
         run: |
-          echo "IMAGE_NAME_LOWER=${GITHUB_REPOSITORY ,,}" >>${GITHUB_ENV}
+          echo "IMAGE_NAME_LOWER=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
       - name: Download digests
         uses: actions/download-artifact@v4
         with:
@@ -109,11 +114,4 @@ jobs:
             $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}@sha256:%s ' *)
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect  images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}:${{ steps.meta.outputs.version }}    
-      - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@v1
-        with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER}}
-          subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
-      
+          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}:${{ steps.meta.outputs.version }}

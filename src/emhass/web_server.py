@@ -132,7 +132,7 @@ def parameter_set():
     if len(config) == 0:
         return make_response("failed to retrieve config",400)
     # Save config to config.json
-    if emhass_conf['config_path'] and Path(emhass_conf['config_path']).is_file():
+    if emhass_conf['config_path']:
         with emhass_conf['config_path'].open('w') as f:
             json.dump(config, f, indent=4)
     else: 
