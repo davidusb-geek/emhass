@@ -374,7 +374,14 @@ function minusElements(param) {
     param_input = param_inputs[param_inputs.length - 1];
   }
 
-  if (param_inputs.length > 1) {
+  if (param == "load_peak_hour_periods") {
+    if (param_inputs.length > 2) {
+      brs = document.getElementById(param).getElementsByTagName("br");
+      param_inputs[param_inputs.length - 1].remove();
+      param_inputs[param_inputs.length - 1].remove();
+      brs[brs.length - 1].remove();
+    }
+  } else if (param_inputs.length > 1) {
     param_input.remove();
   }
 }
@@ -678,4 +685,3 @@ async function errorAlert(text) {
   document.getElementById("alert").style.textAlign = "left";
   return 0;
 }
-
