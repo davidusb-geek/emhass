@@ -18,60 +18,36 @@
   "weight_battery_charge": 1.0,
   "sensor_power_photovoltaics": "sensor.power_photovoltaics",
   "sensor_power_load_no_var_loads": "sensor.power_load_no_var_loads",
-  "list_sensor_replace_zero": [
-    {
-      "sensor_replace_zero": "sensor.power_photovoltaics"
-    },
-    {
-      "sensor_replace_zero": "sensor.power_load_no_var_loads"
-    }
+  "sensor_replace_zero": [
+    "sensor.power_photovoltaics",
+    "sensor.power_load_no_var_loads"
   ],
-  "list_sensor_linear_interp": [
-    {
-      "sensor_linear_interp": "sensor.power_photovoltaics"
-    },
-    {
-      "sensor_linear_interp": "sensor.power_load_no_var_loads"
-    }
+  "sensor_linear_interp": [
+    "sensor.power_photovoltaics",
+    "sensor.power_load_no_var_loads"
   ],
   "load_negative": false,
   "set_zero_min": true,
   "number_of_deferrable_loads": 2,
-  "list_nominal_power_of_deferrable_loads": [
-    {
-      "nominal_power_of_deferrable_loads": 3000.0
-    },
-    {
-      "nominal_power_of_deferrable_loads": 750.0
-    }
+  "nominal_power_of_deferrable_loads": [
+    3000.0,
+    750.0
   ],
-  "list_operating_hours_of_each_deferrable_load": [
-    {
-      "operating_hours_of_each_deferrable_load": 4
-    },
-    {
-      "operating_hours_of_each_deferrable_load": 0
-    }
+  "operating_hours_of_each_deferrable_load": [
+    4,
+    0
   ],
   "weather_forecast_method": "scrapper",
   "load_forecast_method": "naive",
   "delta_forecast_daily": 1,
   "load_cost_forecast_method": "hp_hc_periods",
-  "list_start_timesteps_of_each_deferrable_load": [
-    {
-      "start_timesteps_of_each_deferrable_load": 0
-    },
-    {
-      "start_timesteps_of_each_deferrable_load": 0
-    }
+  "start_timesteps_of_each_deferrable_load": [
+    0,
+    0
   ],
-  "list_end_timesteps_of_each_deferrable_load": [
-    {
-      "end_timesteps_of_each_deferrable_load": 0
-    },
-    {
-      "end_timesteps_of_each_deferrable_load": 0
-    }
+  "end_timesteps_of_each_deferrable_load": [
+    0,
+    0
   ],
   "load_peak_hour_periods": {
     "period_hp_1": [
@@ -91,29 +67,17 @@
       }
     ]
   },
-  "list_treat_deferrable_load_as_semi_cont": [
-    {
-      "treat_deferrable_load_as_semi_cont": true
-    },
-    {
-      "treat_deferrable_load_as_semi_cont": true
-    }
+  "treat_deferrable_load_as_semi_cont": [
+    true,
+    true
   ],
-  "list_set_deferrable_load_single_constant": [
-    {
-      "set_deferrable_load_single_constant": false
-    },
-    {
-      "set_deferrable_load_single_constant": false
-    }
+  "set_deferrable_load_single_constant": [
+    false,
+    false
   ],
-  "list_set_deferrable_startup_penalty": [
-    {
-      "set_deferrable_startup_penalty": 0.0
-    },
-    {
-      "set_deferrable_startup_penalty": 0.0
-    }
+  "set_deferrable_startup_penalty": [
+    0.0,
+    0.0
   ],
   "load_peak_hours_cost": 0.1907,
   "load_offpeak_hours_cost": 0.1419,
@@ -121,35 +85,23 @@
   "photovoltaic_production_sell_price": 0.1419,
   "maximum_power_from_grid": 9000,
   "maximum_power_to_grid": 9000,
-  "list_pv_module_model": [
-    {
-      "pv_module_model": "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M"
-    }
+  "pv_module_model": [
+    "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M"
   ],
-  "list_pv_inverter_model": [
-    {
-      "pv_inverter_model": "Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_"
-    }
+  "pv_inverter_model": [
+    "Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_"
   ],
-  "list_surface_tilt": [
-    {
-      "surface_tilt": 30
-    }
+  "surface_tilt": [
+    30
   ],
-  "list_surface_azimuth": [
-    {
-      "surface_azimuth": 205
-    }
+  "surface_azimuth": [
+    205
   ],
-  "list_modules_per_string": [
-    {
-      "modules_per_string": 16
-    }
+  "modules_per_string": [
+    16
   ],
-  "list_strings_per_inverter": [
-    {
-      "strings_per_inverter": 1
-    }
+  "strings_per_inverter": [
+    1
   ],
   "inverter_is_hybrid": false,
   "compute_curtailment": false,

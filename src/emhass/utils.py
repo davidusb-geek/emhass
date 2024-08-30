@@ -840,11 +840,7 @@ def build_legacy_config_params(emhass_conf: dict, legacy_config: dict,
     # Append config with legacy config parameters (converting alternative parameter naming conventions with associations list)
     for association in associations:
         if legacy_config.get(association[0],None) is not None and legacy_config[association[0]].get(association[1],None) is not None:
-            # If list, expand with dicts, using param name as key
-            if len(association) == 4 and type(legacy_config[association[0]][association[1]]) is list:
-                config[association[3]] = list(map(lambda e: {association[2]:e}, legacy_config[association[0]][association[1]]))
-            else:
-                config[association[2]] = legacy_config[association[0]][association[1]]
+            config[association[2]] = legacy_config[association[0]][association[1]]
             
             # if load_peak_hour_periods extract from list to dict
             if association[2] == "load_peak_hour_periods" and type(config[association[2]]) is list:
@@ -852,6 +848,26 @@ def build_legacy_config_params(emhass_conf: dict, legacy_config: dict,
                 
     return config
     # params['associations_dict'] = associations_dict
+
+def param_to_config(param: dict,
+                 logger: logging.Logger) -> dict:
+    """
+    A function that reverts the parameters from param to the config json format
+    
+    :param config: The dictionary of pre-built parameters (config)
+    :type config: dict
+    :param logger: The logger object
+    :type logger: logging.Logger
+    """ 
+    return_config = {}
+
+    logger.debug("Converting param to config")
+
+    config_sections = ["retrieve_hass_conf","optim_conf","plant_conf"]
+    for config in config_sections:
+        for parameter in param[config]:
+                return_config[str(parameter)] = param[config][parameter]
+    return return_config
 
 def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[dict] = {}, options_path: Optional[str] = None, 
                  secrets_path: Optional[str] = None, no_response: Optional[bool] = False) -> Tuple[dict, dict]:    
@@ -957,7 +973,7 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
                 params_secrets['solcast_api_key'] = options['solcast_api_key']
             if options.get('solcast_rooftop_id',"empty") != "empty" and options['solcast_rooftop_id'] != '':
                 params_secrets['solcast_rooftop_id'] = options['solcast_rooftop_id']
-            if options.get('solar_forecast_kwp',None) is bool(options['solar_forecast_kwp']):
+            if options.get('solar_forecast_kwp',None) and bool(options['solar_forecast_kwp']):
                 params_secrets['solar_forecast_kwp'] = options['solar_forecast_kwp']
      
     # Obtain secrets from secrets_emhass.yaml? (default /app/secrets_emhass.yaml)
@@ -1014,7 +1030,7 @@ def build_params(emhass_conf: dict, params_secrets: dict, config: dict,
         logger.error("Cant find associations file (associations.csv) in: "  + str(emhass_conf['associations_path']))
         return False
 
-    # Use association list to append parameters from config into params (with corresponding config catagorie)
+    # Use association list to append parameters from config into params (with corresponding config catagories)
     for association in associations:
         if config.get(association[2],None) is not None:
             params[association[0]][association[2]] = config[association[2]]
