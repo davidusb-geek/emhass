@@ -16,7 +16,8 @@ from emhass.command_line import forecast_model_fit, forecast_model_predict, fore
 from emhass.command_line import regressor_model_fit, regressor_model_predict
 from emhass.command_line import publish_data, continual_publish
 from emhass.utils import get_injection_dict, get_injection_dict_forecast_model_fit, \
-    get_injection_dict_forecast_model_tune,  build_config, build_secrets, build_params
+    get_injection_dict_forecast_model_tune,  build_config, build_secrets, build_params, \
+    param_to_config
 
 # Define the Flask instance
 app = Flask(__name__)
@@ -94,26 +95,31 @@ def configuration():
 def parameter_get():
     # Build config
     config = build_config(emhass_conf,app.logger,emhass_conf["defaults_path"],emhass_conf["config_path"],emhass_conf["legacy_config_path"])
+    params = build_params(emhass_conf,{},config,app.logger)
+    return_config = param_to_config(params,app.logger)
     # Make sure we do not send any secret parameters
     secret_params = ["hass_url", "time_zone", "Latitude", "Longitude", "Altitude", "long_lived_token", "solcast_api_key", "solcast_rooftop_id", "solar_forecast_kwp"]
-    for key in list(config.keys()):
+    for key in list(return_config.keys()):
         if key in secret_params:
-            del config[key]
+            del return_config[key]
     # Send config
-    return make_response(config,201)
+    return make_response(return_config,201)
 
 # Get default Config
 @app.route('/get-config/defaults', methods=['GET'])
 def config_get():
-    config = {}
-    if emhass_conf['defaults_path'] and Path(emhass_conf['defaults_path']).is_file():
-        with emhass_conf['defaults_path'].open('r') as data:
-            config = json.load(data)
-    else: 
-        app.logger.warning("Unable to pass default config to configuration page")
-        return make_response("failed to retrieve config save",400)
+    #return default parameters, if options.json exists, return with options overwriting defaults (legacy support)
+    config = build_config(emhass_conf,app.logger,emhass_conf["defaults_path"],emhass_conf["options_path"])
+    params = build_params(emhass_conf,{},config,app.logger)
+    return_config = param_to_config(params,app.logger)
+    # Make sure we do not send any secret parameters
+    secret_params = ["hass_url", "time_zone", "Latitude", "Longitude", "Altitude", "long_lived_token", "solcast_api_key", "solcast_rooftop_id", "solar_forecast_kwp"]
+    for key in list(return_config.keys()):
+        if key in secret_params:
+            del return_config[key]
+
     # Send params
-    return make_response(config,201)
+    return make_response(return_config,201)
 
 # Save config to file
 @app.route('/set-config', methods=['POST'])

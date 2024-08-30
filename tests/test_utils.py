@@ -67,8 +67,8 @@ class TestCommandLineUtils(unittest.TestCase):
         # Test with config.json 
         config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'],emhass_conf['config_path'])
         params = utils.build_params(emhass_conf,{},config,logger)
-        self.assertTrue(params['optim_conf']['lp_solver'] == "COIN_CMD")
-        self.assertTrue(params['optim_conf']['lp_solver_path'] == "/usr/bin/cbc")
+        self.assertTrue(params['optim_conf']['lp_solver'] == "default")
+        self.assertTrue(params['optim_conf']['lp_solver_path'] == "empty")
         # Test with lagacy config_emhass yaml
         config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'],legacy_config_path=emhass_conf['legacy_config_path'])
         params = utils.build_params(emhass_conf,{},config,logger)

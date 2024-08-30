@@ -121,7 +121,7 @@ function loadConfigurationListPage(param_definitions, config, list_html) {
         //set value of input
         header_input_element.value = value;
         //checkboxes (for Booleans) use checked instead of value
-        if (header_input_element.tagName == "checkbox") {
+        if (header_input_element.type == "checkbox") {
           header_input_element.checked = value;
         }
         //manually trigger header element event listener for initial state
@@ -466,15 +466,6 @@ function checkConfigParam(value, config, parameter_definition_name) {
     if (parameter_definition_name in config) {
       value = config[parameter_definition_name];
     }
-    //check values saved in config are dict arrays (E.g. sensor_replace_zero in list_sensor_replace_zero)
-    //extract values and return object array
-    if ("list_" + parameter_definition_name in config) {
-      isArray = true;
-      // extract parameter values from object array
-      value = config["list_" + parameter_definition_name].map(function (a) {
-        return a[parameter_definition_name];
-      });
-    }
   }
   return value;
 }
@@ -504,7 +495,7 @@ async function saveConfiguration(param_definitions) {
         //extract inputs from param
         if (param_element != null) {
           //check if param_element is also param_input (ex. for header param)
-          if (param_element.tagName == "INPUT" && param_inputs.length === 0) {
+          if (param_element.tagName == "INPUT") {
             param_inputs = [param_element];
           } else {
             param_inputs = param_element.getElementsByClassName("param_input");
@@ -529,8 +520,6 @@ async function saveConfiguration(param_definitions) {
             }
           }
           //build parameters using values from inputs
-          if (param_array) {
-            //load_peak_hour_periods (object of objects )
             if (
               parameter_definition_object["input"] == "array.time" &&
               param_values.length % 2 === 0
@@ -542,20 +531,15 @@ async function saveConfiguration(param_definitions) {
                     (Object.keys(config[parameter_definition_name]).length + 1)
                 ] = [{ start: param_values[i] }, { end: param_values[++i] }];
               }
+              continue;
             }
-            //array list (array of objects)
-            else {
-              config["list_" + parameter_definition_name] = [];
-              for (const value of param_values) {
-                config["list_" + parameter_definition_name].push({
-                  [parameter_definition_name]: value,
-                });
-              }
-            }
-          }
           //single value
-          if (!param_array && param_values.length) {
+          if (param_values.length && !param_array) {
             config[parameter_definition_name] = param_values[0];
+          }
+          //array value
+          else if (param_values.length) {
+            config[parameter_definition_name] = param_values;
           }
         }
       }

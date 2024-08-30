@@ -117,6 +117,7 @@
       "Description": "Set the name of the linear programming solver that will be used. Defaults to ‘COIN_CMD’. The options are ‘PULP_CBC_CMD’, ‘GLPK_CMD’ and ‘COIN_CMD’.",
       "input": "select",
       "select_options": [
+        "default",
         "COIN_CMD",
         "PULP_CBC_CMD",
         "GLPK_CMD"
