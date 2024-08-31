@@ -77,15 +77,23 @@ RUN mkdir -p /app/data/
 
 #copy required EMHASS files
 COPY src/emhass/ /app/src/emhass/
+
+# webserver files
 COPY src/emhass/templates/ /app/src/emhass/templates/
 COPY src/emhass/static/ /app/src/emhass/static/
+COPY src/emhass/static/data/ /app/src/emhass/static/data/
 COPY src/emhass/static/img/ /app/src/emhass/static/img/
+
+# emhass extra packadge data 
 COPY src/emhass/data/ /app/src/emhass/data/
+
+# pre generated optimization resuts 
 COPY data/opt_res_latest.csv /app/data/
-COPY options.json /app/
 COPY README.md /app/
 COPY setup.py /app/
-#secrets file can be copied manually at docker run
+
+# secrets file (secrets_emhass.yaml) can be copied into the container with volume mounts with docker run (example: ) 
+# options.json file will be automatically generated from Home Assistant using the addon
 
 #set python env variables
 ENV PYTHONDONTWRITEBYTECODE 1
