@@ -163,7 +163,7 @@ def parameter_set():
 #
 
 #get actions 
-@app.route('/template/action_name', methods=['GET'])
+@app.route('/template/<action_name>', methods=['GET'])
 def template_action(action_name):
     app.logger.info(" >> Sending rendered template table data")
     if action_name == 'table-template':
@@ -360,13 +360,13 @@ if __name__ == "__main__":
     emhass_conf['data_path'] = data_path
     emhass_conf['root_path'] = root_path 
 
-    web_ui_url = '0.0.0.0'
-    costfun = os.getenv('LOCAL_COSTFUN', config.get('costfun', 'profit'))
-    logging_level = os.getenv('LOGGING_LEVEL', config.get('logging_level','INFO'))
-
     config = {}
     # Combine parameters from all configuration files (if exists)
     config.update(build_config(emhass_conf,app.logger,defaults_path,config_path,legacy_config_path))
+
+    web_ui_url = '0.0.0.0'
+    costfun = os.getenv('LOCAL_COSTFUN', config.get('costfun', 'profit'))
+    logging_level = os.getenv('LOGGING_LEVEL', config.get('logging_level','INFO'))
         
     ## secrets
     argument = {}
@@ -446,6 +446,7 @@ if __name__ == "__main__":
     app.logger.info("Launching the emhass webserver at: http://"+web_ui_url+":"+str(port))
     app.logger.info("Home Assistant data fetch will be performed using url: "+params_secrets['hass_url'])
     app.logger.info("The data path is: "+str(emhass_conf['data_path']))
+    app.logger.info("The logging is: "+str(logging_level))
     try:
         app.logger.info("Using core emhass version: "+version('emhass'))
     except PackageNotFoundError:

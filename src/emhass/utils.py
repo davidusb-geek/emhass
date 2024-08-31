@@ -803,6 +803,7 @@ def build_config(emhass_conf: dict, logger: logging.Logger, defaults_path: Optio
             #convert legacy naming conventions
             legacy_config_parameters = build_legacy_config_params(emhass_conf,legacy_config,logger)
             if type(legacy_config_parameters) is not bool:
+                logger.debug("Overriding parameters from config_emhass.yaml:")
                 config.update(legacy_config_parameters)     
 
     return config
@@ -834,8 +835,6 @@ def build_legacy_config_params(emhass_conf: dict, legacy_config: dict,
     else:
         logger.error("Cant find associations file (associations.csv) in: "  + str(emhass_conf['associations_path']))
         return False
-
-    logger.debug("Overriding parameters from config_emhass.yaml:")
     
     # Append config with legacy config parameters (converting alternative parameter naming conventions with associations list)
     for association in associations:
