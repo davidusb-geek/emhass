@@ -1,7 +1,7 @@
 ## EMHASS Docker
 ## Docker run addon testing example:
-    ## docker build -t emhass/docker 
-    ## docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
+    ## docker build -t emhass .
+    ## docker run -it -p 5000:5000 --name emhass-container -v ./config.json:/share/emhass/config.json -v ./secrets_emhass.yaml:/app/secrets_emhass.yaml emhass
 
 #armhf,amd64,armv7,aarch64
 ARG TARGETARCH
@@ -69,11 +69,11 @@ RUN apt-get purge -y --auto-remove \
     libnetcdf-dev \
     && rm -rf /var/lib/apt/lists/*
 
-#copy default parameters
-COPY config.json /share/
-
 #make sure data directory exists
 RUN mkdir -p /app/data/
+
+#make sure emhass share directory exists
+RUN mkdir -p /share/emhass/
 
 #copy required EMHASS files
 COPY src/emhass/ /app/src/emhass/

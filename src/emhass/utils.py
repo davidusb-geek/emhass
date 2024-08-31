@@ -788,7 +788,7 @@ def build_config(emhass_conf: dict, logger: logging.Logger, defaults_path: Optio
         logger.error("config_defaults. does not exist")
         raise Exception("config_defaults. does not exist in path: "+str(defaults_path)) 
     
-    # Read user config parameters (default /share/config.json)
+    # Read user config parameters (default /share/emhass/config.json)
     if config_path and pathlib.Path(config_path).is_file():
         with config_path.open('r') as data:
             # Set override default parameters (config_defaults) with user given parameters (config.json)
@@ -932,7 +932,7 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
                 (url_from_options == 'empty' or url_from_options == '' or url_from_options == "http://supervisor/core/api") and \
                 os.getenv("SUPERVISOR_TOKEN", None) is not None:
                 
-                params_secrets['long_lived_token'] = os.getenv["SUPERVISOR_TOKEN"]
+                params_secrets['long_lived_token'] = os.getenv("SUPERVISOR_TOKEN",None)
                 params_secrets['hass_url'] = "http://supervisor/core/api/config"
                 headers = {
                 "Authorization": "Bearer " + params_secrets['long_lived_token'],
