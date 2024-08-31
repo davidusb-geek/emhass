@@ -1,5 +1,5 @@
 {
-    "logging_level": "INFO",
+    "logging_level": "DEBUG",
     "costfun": "profit",
     "optimization_time_step": 30,
     "historic_days_to_retrieve": 2,
@@ -30,8 +30,8 @@
     "set_zero_min": true,
     "number_of_deferrable_loads": 2,
     "nominal_power_of_deferrable_loads": [
-        3000.0,
-        750.0
+        3000,
+        750
     ],
     "operating_hours_of_each_deferrable_load": [
         4,
@@ -42,11 +42,11 @@
     "delta_forecast_daily": 1,
     "load_cost_forecast_method": "hp_hc_periods",
     "start_timesteps_of_each_deferrable_load": [
-        0,
+        1,
         0
     ],
     "end_timesteps_of_each_deferrable_load": [
-        0,
+        -1,
         0
     ],
     "load_peak_hour_periods": {
@@ -76,8 +76,8 @@
         false
     ],
     "set_deferrable_startup_penalty": [
-        0.0,
-        0.0
+        1,
+        0
     ],
     "load_peak_hours_cost": 0.1907,
     "load_offpeak_hours_cost": 0.1419,
