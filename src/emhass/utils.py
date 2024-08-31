@@ -932,7 +932,7 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
                 (url_from_options == 'empty' or url_from_options == '' or url_from_options == "http://supervisor/core/api") and \
                 os.getenv("SUPERVISOR_TOKEN", None) is not None:
                 
-                params_secrets['long_lived_token'] = os.getenv("SUPERVISOR_TOKEN", None)
+                params_secrets['long_lived_token'] = os.getenv["SUPERVISOR_TOKEN"]
                 params_secrets['hass_url'] = "http://supervisor/core/api/config"
                 headers = {
                 "Authorization": "Bearer " + params_secrets['long_lived_token'],
@@ -951,6 +951,13 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
                     'Longitude': config_hass['longitude'],
                     'Altitude': config_hass['elevation']
                     }
+                else: 
+                    # Obtain the url and key secrets if any from options.json (default /app/options.json)
+                    logger.debug("Obtaining url and key secrets from options.json")
+                    if url_from_options != 'empty' and url_from_options != '':
+                        params_secrets['hass_url'] = url_from_options
+                    if key_from_options != 'empty' and key_from_options != '':
+                        params_secrets['long_lived_token'] = key_from_options
             else:
                 # Obtain the url and key secrets if any from options.json (default /app/options.json)
                 logger.debug("Obtaining url and key secrets from options.json")
