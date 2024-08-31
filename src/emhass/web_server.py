@@ -151,9 +151,9 @@ def parameter_set():
     else: 
         return make_response("failed to retrieve parameter file",400)
     # Build params from config
-    webParams = build_params(emhass_conf,{},config,app.logger)
-    # Update (overwrite) params with retried params (config) 
-    params.update(webParams)
+    web_Params = build_params(emhass_conf,params_secrets,config,app.logger)
+    # Update (overwrite) params with params from the web
+    params.update(web_Params)
     # Save updated params 
     with open(str(emhass_conf['data_path'] / 'params.pkl'), "wb") as fid:
         pickle.dump((config_path, params), fid)   
@@ -338,7 +338,7 @@ if __name__ == "__main__":
     # Find env's, not not set defaults 
     DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
     ROOT_PATH = os.getenv("ROOT_PATH", default=str(Path(__file__).parent))
-    CONFIG_PATH = os.getenv('CONFIG_PATH', default="/share/config.json")
+    CONFIG_PATH = os.getenv('CONFIG_PATH', default="/share/emhass/config.json")
     OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json") 
     DEFAULTS_PATH = os.getenv('DEFAULTS_PATH', default=ROOT_PATH +"/data/config_defaults.json")
     ASSOCIATIONS_PATH = os.getenv('ASSOCIATIONS_PATH', default=ROOT_PATH + "/data/associations.csv")
@@ -376,8 +376,8 @@ if __name__ == "__main__":
         argument['key'] = args.key
 
     # Combine secrets from ENV,ARG, Secrets file and/or Home Assistant
-    emhass_conf, built_secrets = build_secrets(emhass_conf,app.logger,argument,options_path,os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), bool(args.no_response))
-    params_secrets.update(built_secrets)
+    emhass_conf, secrets = build_secrets(emhass_conf,app.logger,argument,options_path,os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), bool(args.no_response))
+    params_secrets.update(secrets)
 
     # Initialize this global dict
     if (emhass_conf['data_path'] / 'injection_dict.pkl').exists():
