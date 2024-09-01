@@ -49,7 +49,7 @@ async function getParamDefinitions() {
 //obtain emhass built config
 async function obtainConfig() {
   config = {};
-  response = await fetch(`/get-config`, {
+  const response = await fetch(`get-config`, {
     method: "GET",
   });
   blob = await response.blob(); //get data blob
@@ -63,7 +63,7 @@ async function obtainConfig() {
 //obtain emhass default config
 async function ObtainDefaultConfig() {
   config = {};
-  response = await fetch(`/get-config/defaults`, {
+  const response = await fetch(`get-config/defaults`, {
     method: "GET",
   });
   blob = await response.blob(); //get data blob
@@ -564,7 +564,7 @@ async function saveConfiguration(param_definitions) {
   }
 
   //send built config to emhass
-  const response = await fetch(`/set-config`, {
+  const response = await fetch(`set-config`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
