@@ -351,7 +351,7 @@ if __name__ == "__main__":
     defaults_path = Path(DEFAULTS_PATH)
     associations_path = Path(ASSOCIATIONS_PATH)
     legacy_config_path = Path(LEGACY_CONFIG_PATH)
-    data_path = Path("/workspaces/emhass/data/data")
+    data_path = Path(DATA_PATH)
     root_path = Path(ROOT_PATH)
     emhass_conf['config_path'] = config_path
     emhass_conf['options_path'] = options_path
