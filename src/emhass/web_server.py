@@ -59,6 +59,7 @@ def clearFileLog():
 
 # Initial index page render
 @app.route('/')
+@app.route('/index')
 def index():
     app.logger.info("EMHASS server online, serving index.html...")
     # Load HTML template
@@ -90,8 +91,8 @@ def configuration():
     template = env.get_template('configuration.html')
     return make_response(template.render(config=params))
 
-# Get config
-@app.route('/get-config/', methods=['GET'])
+# Get latest built config
+@app.route('/get-config', methods=['GET'])
 def parameter_get():
     # Build config
     config = build_config(emhass_conf,app.logger,emhass_conf["defaults_path"],emhass_conf["config_path"],emhass_conf["legacy_config_path"])
@@ -121,7 +122,7 @@ def config_get():
     # Send params
     return make_response(return_config,201)
 
-# Save config to file
+# Save config to file (config.json and param.pkl)
 @app.route('/set-config', methods=['POST'])
 def parameter_set():
     config = {}
@@ -162,7 +163,7 @@ def parameter_set():
     return make_response({},201)
 #
 
-#get actions 
+#get template actions 
 @app.route('/template/<action_name>', methods=['GET'])
 def template_action(action_name):
     app.logger.info(" >> Sending rendered template table data")
@@ -330,15 +331,15 @@ if __name__ == "__main__":
 
     # Pre-built parameters (raw from config.json, legacy config (config_emhass.yaml), options.json (Home Assistant Secrets) and secrets_emhass.yaml parameter files)
     config = {} 
-    # secrets
+    # Secrets
     params_secrets = {}
-    # Built parameters (inc. config and parameters)
+    # Built parameters (inc. config + secrets)
     params = None 
     
     # Find env's, not not set defaults 
     DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
     ROOT_PATH = os.getenv("ROOT_PATH", default=str(Path(__file__).parent))
-    CONFIG_PATH = os.getenv('CONFIG_PATH', default="/share/emhass/config.json")
+    CONFIG_PATH = os.getenv('CONFIG_PATH', default="/share/config.json")
     OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json") 
     DEFAULTS_PATH = os.getenv('DEFAULTS_PATH', default=ROOT_PATH +"/data/config_defaults.json")
     ASSOCIATIONS_PATH = os.getenv('ASSOCIATIONS_PATH', default=ROOT_PATH + "/data/associations.csv")
@@ -350,7 +351,7 @@ if __name__ == "__main__":
     defaults_path = Path(DEFAULTS_PATH)
     associations_path = Path(ASSOCIATIONS_PATH)
     legacy_config_path = Path(LEGACY_CONFIG_PATH)
-    data_path = Path(DATA_PATH)
+    data_path = Path("/workspaces/emhass/data/data")
     root_path = Path(ROOT_PATH)
     emhass_conf['config_path'] = config_path
     emhass_conf['options_path'] = options_path
@@ -375,7 +376,7 @@ if __name__ == "__main__":
     if args.key:
         argument['key'] = args.key
 
-    # Combine secrets from ENV,ARG, Secrets file and/or Home Assistant
+    # Combine secrets from ENV,ARG, Secrets file and/or Home Assistant (if exist)
     emhass_conf, secrets = build_secrets(emhass_conf,app.logger,argument,options_path,os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), bool(args.no_response))
     params_secrets.update(secrets)
 
@@ -386,15 +387,16 @@ if __name__ == "__main__":
     else:
         injection_dict = None
 
-    # Build params from config and param_secrets
+    # Build params from config and param_secrets, save result for later reference
     params = build_params(emhass_conf, params_secrets, config, app.logger)
     if type(params) is bool:
-        raise Exception("A error has occured while building parameters")   
+        raise Exception("A error has occurred while building parameters")   
     if os.path.exists(str(emhass_conf['data_path'])): 
         with open(str(emhass_conf['data_path'] / 'params.pkl'), "wb") as fid:
             pickle.dump((config_path, params), fid)
     else: 
         raise Exception("missing: " + str(emhass_conf['data_path']))   
+
 
     # Define loggers
     ch = logging.StreamHandler() 

@@ -123,7 +123,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
 
     :param runtimeparams: Json string containing the runtime parameters dict.
     :type runtimeparams: str
-    :param params: Configuration parameters passed from data/options.json
+    :param params: Built configuration parameters
     :type params: str
     :param retrieve_hass_conf: Container for data retrieving parameters.
     :type retrieve_hass_conf: dict
@@ -579,7 +579,7 @@ def get_yaml_parse(params: str, logger: logging.Logger) -> Tuple[dict, dict, dic
     """
     Perform parsing of the config.yaml file.
     
-    :param params: Configuration parameters passed from config
+    :param params: Built configuration parameters
     :type params: str
     :param logger: The logger object
     :type logger: logging.Logger
@@ -764,7 +764,7 @@ def build_config(emhass_conf: dict, logger: logging.Logger, defaults_path: Optio
                  legacy_config_path: Optional[str] = None) -> dict:
     """
     Retrieve parameters from configuration files. 
-    priority order = legacy_config_path, config_path, defaults_path
+    priority order = defaults_path, config_path legacy_config_path
 
     :param emhass_conf: Dictionary containing the needed emhass paths
     :type emhass_conf: dict
@@ -788,7 +788,7 @@ def build_config(emhass_conf: dict, logger: logging.Logger, defaults_path: Optio
         logger.error("config_defaults. does not exist")
         raise Exception("config_defaults. does not exist in path: "+str(defaults_path)) 
     
-    # Read user config parameters (default /share/emhass/config.json)
+    # Read user config parameters (default /share/config.json)
     if config_path and pathlib.Path(config_path).is_file():
         with config_path.open('r') as data:
             # Set override default parameters (config_defaults) with user given parameters (config.json)
@@ -853,10 +853,12 @@ def param_to_config(param: dict,
     """
     A function that reverts the parameters from param to the config json format
     
-    :param config: The dictionary of pre-built parameters (config)
-    :type config: dict
+    :param params: Built configuration parameters
+    :type param: dict
     :param logger: The logger object
     :type logger: logging.Logger
+    :return: The built config dictionary
+    :rtype: dict
     """ 
     return_config = {}
 
@@ -872,7 +874,7 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
                  secrets_path: Optional[str] = None, no_response: Optional[bool] = False) -> Tuple[dict, dict]:    
     """
     Retrieve parameters from secrets locations (ENV,ARG, Secrets file (secrets_emhass.yaml) and/or Home Assistant (via API))
-    priority order = defaults (written bellow), ENV, options file, secrets file, Home Assistant API. arguments
+    priority order = Defaults (written bellow), ENV, Options json file, Secrets yaml file, Home Assistant API. Arguments
     
     :param emhass_conf: Dictionary containing the needed emhass paths
     :type emhass_conf: dict
@@ -884,9 +886,9 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
     :type options_path: str
     :param secrets_path: path to secrets file (secrets_emhass.yaml)
     :type secrets_path: str
-    :param secrets_path: bypass get request to Home Assistant (json response errors)
-    :type secrets_path: bool
-    :return: The built secrets dictionary
+    :param no_response: bypass get request to Home Assistant (json response errors)
+    :type no_response: bool
+    :return: Updated emhass_conf, The built secrets dictionary
     :rtype: Tuple[dict, dict]:
     """
 
@@ -1007,7 +1009,7 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
 def build_params(emhass_conf: dict, params_secrets: dict, config: dict,
                  logger: logging.Logger) -> dict:
     """
-    Build the main params dictionary from the loaded config
+    Build the main params dictionary from the config
     
     :param emhass_conf: Dictionary containing the needed emhass paths
     :type emhass_conf: dict
