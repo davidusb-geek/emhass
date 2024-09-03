@@ -94,6 +94,7 @@ def configuration():
 # Get latest built config
 @app.route('/get-config', methods=['GET'])
 def parameter_get():
+    app.logger.debug("Obtaining current saved parameters as config")
     # Build config
     config = build_config(emhass_conf,app.logger,emhass_conf["defaults_path"],emhass_conf["config_path"],emhass_conf["legacy_config_path"])
     params = build_params(emhass_conf,{},config,app.logger)
@@ -106,11 +107,13 @@ def parameter_get():
     # Send config
     return make_response(return_config,201)
 
+
 # Get default Config
 @app.route('/get-config/defaults', methods=['GET'])
 def config_get():
-    #return default parameters, if options.json exists, return with options overwriting defaults (legacy support)
-    config = build_config(emhass_conf,app.logger,emhass_conf["defaults_path"],emhass_conf["options_path"])
+    app.logger.debug("Obtaining default parameters")
+    #return default parameters
+    config = build_config(emhass_conf,app.logger,emhass_conf["defaults_path"])
     params = build_params(emhass_conf,{},config,app.logger)
     return_config = param_to_config(params,app.logger)
     # Make sure we do not send any secret parameters
@@ -121,6 +124,34 @@ def config_get():
 
     # Send params
     return make_response(return_config,201)
+
+
+# Get yaml-to-json config
+@app.route('/get-json', methods=['POST'])
+def json_convert():
+    app.logger.debug("Attempting to convert yaml to json")
+    data = request.get_data()
+    # Parse yaml 
+    yaml_config = yaml.safe_load(data)
+
+    if yaml_config is None:
+        return make_response("failed to retrieve yaml config",400)
+    
+    # Format yaml to params
+    params = build_params(emhass_conf,{},yaml_config,app.logger)
+    # Format params to config.json format (simplify)
+    config = param_to_config(params,app.logger)
+
+    # Make sure we do not send any secret parameters
+    secret_params = ["hass_url", "time_zone", "Latitude", "Longitude", "Altitude", "long_lived_token", "solcast_api_key", "solcast_rooftop_id", "solar_forecast_kwp"]
+    for key in list(config.keys()):
+        if key in secret_params:
+            del config[key]
+
+    config = json.dumps(config)
+
+    # Send params
+    return make_response(config,201)
 
 # Save config to file (config.json and param.pkl)
 @app.route('/set-config', methods=['POST'])
@@ -340,7 +371,7 @@ if __name__ == "__main__":
     DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
     ROOT_PATH = os.getenv("ROOT_PATH", default=str(Path(__file__).parent))
     CONFIG_PATH = os.getenv('CONFIG_PATH', default="/share/config.json")
-    OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/app/options.json") 
+    OPTIONS_PATH = os.getenv('OPTIONS_PATH', default="/data/options.json") 
     DEFAULTS_PATH = os.getenv('DEFAULTS_PATH', default=ROOT_PATH +"/data/config_defaults.json")
     ASSOCIATIONS_PATH = os.getenv('ASSOCIATIONS_PATH', default=ROOT_PATH + "/data/associations.csv")
     LEGACY_CONFIG_PATH = os.getenv("LEGACY_CONFIG_PATH", default="/app/config_emhass.yaml")
