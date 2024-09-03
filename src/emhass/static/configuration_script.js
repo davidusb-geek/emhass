@@ -20,6 +20,11 @@ window.onload = async function () {
     .getElementById("save")
     .addEventListener("click", () => saveConfiguration(param_definitions));
 
+  //add defaults listener to convert yaml to json
+  document.getElementById("yaml").addEventListener("click", () => yamlToJson());
+  //hide yaml button by default (display in box view)
+  document.getElementById("yaml").style.display = "none";
+
   //add defaults listener to save button
   document
     .getElementById("defaults")
@@ -520,19 +525,19 @@ async function saveConfiguration(param_definitions) {
             }
           }
           //build parameters using values from inputs
-            if (
-              parameter_definition_object["input"] == "array.time" &&
-              param_values.length % 2 === 0
-            ) {
-              config[parameter_definition_name] = {};
-              for (let i = 0; i < param_values.length; i++) {
-                config[parameter_definition_name][
-                  "period_hp_" +
-                    (Object.keys(config[parameter_definition_name]).length + 1)
-                ] = [{ start: param_values[i] }, { end: param_values[++i] }];
-              }
-              continue;
+          if (
+            parameter_definition_object["input"] == "array.time" &&
+            param_values.length % 2 === 0
+          ) {
+            config[parameter_definition_name] = {};
+            for (let i = 0; i < param_values.length; i++) {
+              config[parameter_definition_name][
+                "period_hp_" +
+                  (Object.keys(config[parameter_definition_name]).length + 1)
+              ] = [{ start: param_values[i] }, { end: param_values[++i] }];
             }
+            continue;
+          }
           //single value
           if (param_values.length && !param_array) {
             config[parameter_definition_name] = param_values[0];
@@ -581,6 +586,8 @@ async function ToggleView(param_definitions, list_html, default_reset) {
 
   //find out if list or box view is active
   configuration_container = document.getElementById("configurationContainer");
+  //get yaml button
+  yaml_button = document.getElementById("yaml");
   // if section-cards (config sections/list) exists
   config_card = configuration_container.getElementsByClassName("section-card");
   //selected view (0 = box)
@@ -609,10 +616,12 @@ async function ToggleView(param_definitions, list_html, default_reset) {
     case "box":
       //load list
       loadConfigurationListPage(param_definitions, config, list_html);
+      yaml_button.style.display = "none";
       break;
     case "list":
       //load box
       loadConfigurationBoxPage(config);
+      yaml_button.style.display = "block";
       break;
   }
 }
@@ -667,5 +676,33 @@ async function errorAlert(text) {
   document.getElementById("alert-text").textContent = "\r\n" + text + "\r\n";
   document.getElementById("alert").style.display = "block";
   document.getElementById("alert").style.textAlign = "left";
+  return 0;
+}
+
+//convert yaml box into json box
+async function yamlToJson() {
+  //get box element
+  config_box_element = document.getElementById("config-box");
+
+  //if config box does exist
+  if (config_box_element != null) {
+    const response = await fetch(`get-json`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: config_box_element.value,
+    });
+    response_status = await response.status; //return status
+    blob = await response.blob(); //get data blob
+    config = await new Response(blob).json(); //obtain json from blob
+    showChangeStatus(response_status, config);
+
+    //if successful, overwrite box
+    if (response.status == 201) {
+      config_box_element.value = JSON.stringify(config, null, 2);
+    }
+  }
+
   return 0;
 }

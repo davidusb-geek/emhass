@@ -8,11 +8,6 @@ window.onload = async function () {
   document
     .getElementById("basicOrAdvanced")
     .addEventListener("click", () => SwitchBasicOrAdvanced());
-
-  //add listerner for configuration page toggle
-  document
-    .getElementById("paramConfig")
-    .addEventListener("click", () => SwitchBasicOrAdvanced());
 };
 
 //add listeners to buttons (based on page)

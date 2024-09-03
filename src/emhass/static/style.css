@@ -1027,13 +1027,12 @@ select,
   display: block;
   min-height: fit-content;
   margin-left: auto;
-  margin-right: 2%;
 }
 
 /* configuration list page */
 
 .section-card {
-  max-width: 95%;
+  max-width: 99%;
   margin-left: auto;
   margin-right: auto;
   margin-bottom: 1vh;
