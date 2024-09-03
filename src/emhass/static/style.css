@@ -752,12 +752,12 @@ tr:hover td:last-child {
   margin-right: 13px;
 }
 
-#loader {
+/* #loader {
   min-width: 3.5em;
   min-height: 3.5em;
   width: 3.5em;
   height: 3.5em;
-}
+} */
 
 .loading {
   /* loading animation  */
@@ -1010,6 +1010,7 @@ select,
 .header-footer p {
   margin: 20px 0;
 }
+
 
 .header-footer h4 {
   color: darkblue;
