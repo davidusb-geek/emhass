@@ -17,7 +17,7 @@ from emhass.command_line import regressor_model_fit, regressor_model_predict
 from emhass.command_line import publish_data, continual_publish
 from emhass.utils import get_injection_dict, get_injection_dict_forecast_model_fit, \
     get_injection_dict_forecast_model_tune,  build_config, build_secrets, build_params, \
-    param_to_config
+    param_to_config, build_legacy_config_params
 
 # Define the Flask instance
 app = Flask(__name__)
@@ -136,6 +136,11 @@ def json_convert():
 
     if yaml_config is None:
         return make_response("failed to retrieve yaml config",400)
+
+    #Test yaml is legacy (config_emhass.yaml)
+    test_legacy_config = build_legacy_config_params(emhass_conf,yaml_config, app.logger)    
+    if test_legacy_config:
+        yaml_config = test_legacy_config
     
     # Format yaml to params
     params = build_params(emhass_conf,{},yaml_config,app.logger)
