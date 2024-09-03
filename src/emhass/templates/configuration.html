@@ -37,11 +37,8 @@
     <h2>EMHASS: Energy Management Optimization for Home Assistant</h2>
   </div>
   <div class="header-footer">
-    <div class="loading-div">
-      <h4>Configuration:</h4>
-      <div id=loader></div> <!-- status dynamic element -->
-    </div>
-    <a id="json-toggle">
+    <h4>Configuration:</h4>
+    <a id="json-toggle" title="List and Box view toggle">
       <svg id="json" class="feather" class="header-footer-button">
         <use class="feather" href="static/img/feather-sprite.svg#code" />
       </svg>
@@ -52,9 +49,12 @@
   </div>
   <!-- send parameters to EMHASS to save to config.json -->
   <div class="save_button header-footer">
-    <button style="margin-right: 5px;" type="button" id="yaml" class="">YAML</button>
-    <button type="button" id="defaults" class="">Defaults</button>
-    <button type="button" id="save" class="">Save</button>
+    <button style="margin-right: 5px;" type="button" id="yaml" title="Convert yaml to json" class="">YAML</button>
+    <button type="button" id="defaults" title="Restore to default parameter values" class="">Defaults</button>
+    <button type="button" id="save" title="Save Config to EMHASS" class="">Save</button>
+    <div class="loading-div">
+      <div id=loader></div> <!-- status dynamic element -->
+    </div>
   </div>
   <div style="display: none;" id="alert" class="alert">
     <div>
