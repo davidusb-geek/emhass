@@ -49,7 +49,8 @@ if __name__ == '__main__':
     days_to_retrieve = 240
     model_type = "load_clustering"
     var_model = "sensor.power_load_positive"
-    
+
+    # Build params with no config and default secrets
     data_path = emhass_conf['data_path'] / str('data_train_'+model_type+'.pkl')
     _,secrets = build_secrets(emhass_conf,logger,no_response=True)
     params =  build_params(emhass_conf,secrets,{},logger)

@@ -62,7 +62,12 @@ class RetrieveHass:
         self.long_lived_token = long_lived_token
         self.freq = freq
         self.time_zone = time_zone
-        self.params = params
+        if params is None:
+            self.params = {}
+        elif type(params) is dict:
+            self.params = params
+        else:
+            self.params = json.loads(params)
         self.emhass_conf = emhass_conf
         self.logger = logger
         self.get_data_from_file = get_data_from_file

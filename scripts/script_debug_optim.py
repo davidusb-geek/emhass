@@ -32,6 +32,7 @@ if __name__ == '__main__':
     show_figures = True
     template = 'presentation'
     
+    # Build params with default config (no secrets) 
     config = build_config(emhass_conf,logger,emhass_conf['defaults_path'])
     params =  build_params(emhass_conf,{},config,logger)
     retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(params, logger)
@@ -59,7 +60,7 @@ if __name__ == '__main__':
     df_input_data = rh.df_final.copy()
     
     fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
-                            json.dumps(params, default=str), emhass_conf, logger, get_data_from_file=get_data_from_file)
+                            params, emhass_conf, logger, get_data_from_file=get_data_from_file)
     df_weather = fcst.get_weather_forecast(method='csv')
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
     P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])

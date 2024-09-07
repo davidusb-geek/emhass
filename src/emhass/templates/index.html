@@ -1,3 +1,4 @@
+<!-- Index page html -->
 <!DOCTYPE html>
 <html class="adaptive">
 
@@ -15,24 +16,24 @@
         <!-- Icons by feather https://github.com/feathericons/feather -->
         <div id="top-links">
             <!-- configuration page  -->
-            <a href="configuration" style="margin-right: 12px; cursor: pointer; z-index: 1">
+            <a href="configuration" title="Configuration Page" style="margin-right: 12px; cursor: pointer; z-index: 1">
                 <svg class="feather">
                     <use class="feather" href="static/img/feather-sprite.svg#settings" />
                 </svg>
             </a>
             <!-- advanced or basic page switch -->
-            <a id="basicOrAdvanced" style="margin-right: 24px; cursor: pointer; z-index: 1">
+            <a id="basicOrAdvanced" title="Advanced Toggle" style="margin-right: 24px; cursor: pointer; z-index: 1">
                 <svg class="feather">
                     <use class="feather" href="static/img/feather-sprite.svg#tool" />
                 </svg>
             </a>
             <a href="https://emhass.readthedocs.io/en/latest/">
-                <svg class="feather" style="margin-right: 12px;" ;>
+                <svg class="feather" title="EMHASS Docs" style="margin-right: 12px;" ;>
                     <use class="feather" href="static/img/feather-sprite.svg#book" />
                 </svg>
             </a>
             <a href="https://github.com/davidusb-geek/emhass" target="_blank" rel="noopener noreferrer">
-                <svg class="feather" style="margin-right: 0px;">
+                <svg class="feather" title="EMHASS Git" style="margin-right: 0px;">
                     <use class="feather" href="static/img/feather-sprite.svg#git-branch" />
                 </svg>
             </a>
@@ -45,18 +46,18 @@
 
     <div class="center">
         <div id=TabSelection class="form">
-            <!-- Basic and Advance pages will be loaded here  -->
+            <!-- Basic and Advance pages will be dynamically loaded here  -->
         </div>
     </div>
-    <!-- alert box element (for json parse issue) -->
+    <!-- alert box element -->
     <div style="display: none;" id="alert" class="alert">
         <div>
             <span onclick="this.parentElement.parentElement.style.display='none';">&times;</span>
             <p id="alert-text"></p>
         </div>
     </div>
-    <!-- -->
     <br>
+
     <!-- dynamic table/diagram elements section -->
     </div>
     <div id="template"> <!-- table/diagram container element  -->
@@ -66,7 +67,7 @@
         </div>
         {% endfor %}
         <div>
-            <!-- -->
+
             <footer class="footer">
                 <p style="margin-top:10px; text-align:center;">&copy; MIT License | Copyright (c) 2021-2023 David
                     HERNANDEZ</p>

@@ -59,6 +59,7 @@ if __name__ == '__main__':
     sklearn_model = "KNeighborsRegressor"
     num_lags = 48
     
+    # Build params with no config and default secrets
     data_path = emhass_conf['data_path'] / str('data_train_'+model_type+'.pkl')
     _,secrets = build_secrets(emhass_conf,logger,no_response=True)
     params =  build_params(emhass_conf,secrets,{},logger)

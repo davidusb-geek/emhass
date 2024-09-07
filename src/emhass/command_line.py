@@ -670,7 +670,9 @@ def regressor_model_fit(input_data_dict: dict, logger: logging.Logger,
     # The MLRegressor object
     mlr = MLRegressor(data, model_type, regression_model, features, target, timestamp, logger)
     # Fit the ML model
-    mlr.fit(date_features=date_features)
+    fit = mlr.fit(date_features=date_features)
+    if not fit:
+        return False
     # Save model
     if not debug:
         filename = model_type + "_mlr.pkl"
@@ -1181,19 +1183,20 @@ def main():
         config_path = pathlib.Path(args.config)
     else:
         config_path = pathlib.Path(str(utils.get_root(__file__, num_parent=3) / 'config.json'))
-    
     if args.data is not None:
         data_path = pathlib.Path(args.data)
     else:
         data_path = (config_path.parent / 'data/')
-    
     if args.root is not None:
         root_path = pathlib.Path(args.root)
     else:
         root_path = utils.get_root(__file__, num_parent=1) 
-    
-    associations_path = root_path / 'data/associations.csv'
+    if args.secrets is not None:
+        secrets_path = pathlib.Path(args.secrets)
+    else:
+        secrets_path = pathlib.Path(config_path.parent / 'secrets_emhass.yaml')   
 
+    associations_path = root_path / 'data/associations.csv'
     defaults_path = root_path / 'data/config_defaults.json'
    
     emhass_conf = {}
@@ -1216,10 +1219,9 @@ def main():
         logger.error("Try setting config file path with --associations")
         return False
     if not config_path.exists():   
-        logger.error(
+        logger.warning(
             "Could not find config_emhass.yaml file in: " + str(config_path))
-        logger.error("Try setting config file path with --config")
-        return False
+        logger.warning("Try setting config file path with --config")
     if not os.path.isdir(data_path):
         logger.error("Could not find data folder in: " + str(data_path))
         logger.error("Try setting data path with --data")
@@ -1227,6 +1229,9 @@ def main():
     if not os.path.isdir(root_path):
         logger.error("Could not find emhass/src folder in: " + str(root_path))
         logger.error("Try setting emhass root path with --root")
+        return False
+    if not secrets_path.exists():
+        logger.error("Could not find secrets file in: " + str(secrets_path))
         return False
     
     # Additional argument
@@ -1242,37 +1247,37 @@ def main():
             "Version not found for emhass package. Or importlib exited with PackageNotFoundError.",
         )
 
-    # Setup parameters
+    # Setup config
     config = {}
-    # Check if config is yaml of json, build params accordingly
-    config_file_ending = re.findall("(?<=\.).*$", str(config_path))
-    if len(config_file_ending) > 0:
-        match(config_file_ending[0]):
-            case "json":
-                config = utils.build_config(emhass_conf,logger,defaults_path,config_path,)
-            case "yaml":
-                config = utils.build_config(emhass_conf,logger,defaults_path,config_path=config_path)
-            case "yml":
-                config = utils.build_config(emhass_conf,logger,defaults_path,config_path=config_path)
+    # Check if passed config file is yaml of json, build config accordingly
+    if config_path.exists():
+        config_file_ending = re.findall("(?<=\.).*$", str(config_path))
+        if len(config_file_ending) > 0:
+            match(config_file_ending[0]):
+                case "json":
+                    config = utils.build_config(emhass_conf,logger,defaults_path,config_path)
+                case "yaml":
+                    config = utils.build_config(emhass_conf,logger,defaults_path,config_path=config_path)
+                case "yml":
+                    config = utils.build_config(emhass_conf,logger,defaults_path,config_path=config_path)
+    # If unable to find config file, use only defaults_config.json
+    else:
+        logger.warning("Unable to obtain config.json file, building parameters with only defaults")
+        config = utils.build_config(emhass_conf,logger,defaults_path)
+    if type(config) is bool and not config:
+                raise Exception("Failed to find default config")
     
 
     # Obtain secrets from secrets_emhass.yaml?
     params_secrets = {}
-    secrets_path = ""
-    if args.secrets is not None:
-        secrets_path = pathlib.Path(args.secrets)
-    else:
-        secrets_path = pathlib.Path(config_path.parent / 'secrets_emhass.yaml')   
-    # Combine secrets from ENV,ARG, Secrets file 
     emhass_conf, built_secrets = utils.build_secrets(emhass_conf,logger,secrets_path=secrets_path)
     params_secrets.update(built_secrets)
 
     # Build params
     params = utils.build_params(emhass_conf, params_secrets, config, logger)
     if type(params) is bool:
-        raise Exception("A error has occured while building parameters")  
-
-    # Add any argument params
+        raise Exception("A error has occurred while building parameters")  
+    # Add any passed params from args to params
     if args.params:
         params.update(json.loads(args.params))
    
@@ -1280,7 +1285,7 @@ def main():
                                           args.costfun, json.dumps(params), args.runtimeparams, args.action,
                                           logger, args.debug)
     if type(input_data_dict) is bool:
-        raise Exception("A error has occured while creating action objects")  
+        raise Exception("A error has occurred while creating action objects")  
 
     # Perform selected action
     if args.action == "perfect-optim":

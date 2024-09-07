@@ -32,7 +32,7 @@ def get_forecast_optim_objects(retrieve_hass_conf, optim_conf, plant_conf,
                                params, get_data_from_file):
 
     fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
-                    json.dumps(params, default=str), emhass_conf, logger, get_data_from_file=get_data_from_file)
+                    params, emhass_conf, logger, get_data_from_file=get_data_from_file)
     df_weather = fcst.get_weather_forecast(method=optim_conf['weather_forecast_method'])
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
     P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
@@ -48,6 +48,7 @@ if __name__ == '__main__':
     save_figures = False
     save_html = False
     get_data_from_file = True
+    # Build params with default config and default secrets
     config = build_config(emhass_conf,logger,emhass_conf['defaults_path'])
     _,secrets = build_secrets(emhass_conf,logger,no_response=True)
     params =  build_params(emhass_conf,secrets,config,logger)
