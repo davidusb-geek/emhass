@@ -1,3 +1,4 @@
+/*! EMHASS Style Sheet */
 /*! style.css v1.0.0 (modified version) | ISC License | https://github.com/ungoldman/style.css */
 
 /* color reference css */
@@ -977,12 +978,12 @@ select,
 }
 
 /* config page */
-#configurationContainer {
+#configuration-container {
   border: 1px solid;
   border-width: 1px 0px;
 }
 
-#configurationContainer,
+#configuration-container,
 .header-footer {
   margin-bottom: 5px;
   padding: 20px 0px;
@@ -1051,6 +1052,11 @@ select,
   padding: 0px 10px;
   border-bottom: 1px solid rgba(0, 0, 0, 0.355);
   /* justify-content: center; */
+}
+
+.section-body {
+  -webkit-transition: .4s;
+  transition: .4s;
 }
 
 .switch,
@@ -1124,6 +1130,7 @@ input:checked+.slider:before {
   min-width: 40%;
   max-width: 70%;
 }
+
 
 .section-card-header input {
   min-width: calc(27px - 7px);
@@ -1357,7 +1364,7 @@ p {
   }
 
 
-  #configurationContainer {
+  #configuration-container {
     background-color: #ffffff07;
     border: 0;
   }

@@ -1,3 +1,4 @@
+<!-- Configuration page html -->
 <!DOCTYPE html>
 <html class="adaptive">
 
@@ -14,24 +15,24 @@
   <div>
     <!-- Icons by feather https://github.com/feathericons/feather -->
     <div id="top-links">
-      <!-- configuration page  -->
-      <a href="index" style="margin-right: 12px; cursor: pointer; z-index: 1">
+      <!-- index page  -->
+      <a href="index" title="Home" style="margin-right: 12px; cursor: pointer; z-index: 1">
         <svg class="feather">
           <use class="feather" href="static/img/feather-sprite.svg#home" />
         </svg>
       </a>
-      <!-- advanced or basic page switch -->
       <a href="https://emhass.readthedocs.io/en/latest/">
-        <svg class="feather" style="margin-right: 12px;" ;>
+        <svg class="feather" title="EMHASS Docs" style="margin-right: 12px;" ;>
           <use class="feather" href="static/img/feather-sprite.svg#book" />
         </svg>
       </a>
       <a href="https://github.com/davidusb-geek/emhass" target="_blank" rel="noopener noreferrer">
-        <svg class="feather" style="margin-right: 0px;">
+        <svg class="feather" title="EMHASS Git" style="margin-right: 0px;">
           <use class="feather" href="static/img/feather-sprite.svg#git-branch" />
         </svg>
       </a>
     </div>
+
     <!-- Title -->
     <img src="static/img/emhass_icon.png" alt="">
     <h2>EMHASS: Energy Management Optimization for Home Assistant</h2>
@@ -44,21 +45,22 @@
       </svg>
     </a>
   </div>
+
   <!-- parameter list/box elements section -->
-  <div id=configurationContainer>
+  <div id=configuration-container>
   </div>
-  <!-- send parameters to EMHASS to save to config.json -->
+  <!-- configuration buttons (defaults, save, yaml) -->
   <div class="save_button header-footer">
     <button style="margin-right: 5px;" type="button" id="yaml" title="Convert yaml to json" class="">YAML</button>
     <button type="button" id="defaults" title="Restore to default parameter values" class="">Defaults</button>
     <button type="button" id="save" title="Save Config to EMHASS" class="">Save</button>
-    <div class="loading-div">
-      <div id=loader></div> <!-- status dynamic element -->
+    <div class="loading-div"> <!-- dynamic tick/cross element -->
+      <div id=loader></div> 
     </div>
   </div>
+  <!-- alert box -->
   <div style="display: none;" id="alert" class="alert">
     <div>
-      <!-- alert box -->
       <span onclick="this.parentElement.parentElement.style.display='none';">&times;</span>
       <p id="alert-text"></p>
     </div>

@@ -29,6 +29,7 @@ emhass_conf['data_path'] = root / 'data/'
 emhass_conf['root_path'] = root / 'src/emhass/'
 emhass_conf['docs_path'] = root / 'docs/'
 emhass_conf['config_path'] = root / 'config.json'
+emhass_conf['secrets_path'] =  root / 'secrets_emhass.yaml'
 emhass_conf['defaults_path'] = emhass_conf['root_path']  / 'data/config_defaults.json'
 emhass_conf['associations_path'] = emhass_conf['root_path']  / 'data/associations.csv'
 
@@ -38,7 +39,7 @@ logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 def get_forecast_optim_objects(retrieve_hass_conf, optim_conf, plant_conf,
                                params, get_data_from_file):
     fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
-                    json.dumps(params, default=str), emhass_conf, logger, get_data_from_file=get_data_from_file)
+                    params, emhass_conf, logger, get_data_from_file=get_data_from_file)
     df_weather = fcst.get_weather_forecast(method='solar.forecast')
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
     P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
@@ -53,8 +54,9 @@ if __name__ == '__main__':
     get_data_from_file = False
     params = None
     save_figures = False
+    # Build params with default config and secrets file
     config = build_config(emhass_conf,logger,emhass_conf['defaults_path'])
-    _,secrets = build_secrets(emhass_conf,logger,no_response=True)
+    _,secrets = build_secrets(emhass_conf,logger,secrets_path=emhass_conf['secrets_path'],no_response=True)
     params =  build_params(emhass_conf,secrets,config,logger)
     retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(params, logger)
     rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 

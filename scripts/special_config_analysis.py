@@ -40,7 +40,7 @@ logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 def get_forecast_optim_objects(retrieve_hass_conf, optim_conf, plant_conf,
                                params, get_data_from_file):
     fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
-                    json.dumps(params, default=str), emhass_conf, logger, get_data_from_file=get_data_from_file)
+                    params, emhass_conf, logger, get_data_from_file=get_data_from_file)
     df_weather = fcst.get_weather_forecast(method='solar.forecast')
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
     P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
@@ -54,10 +54,9 @@ def get_forecast_optim_objects(retrieve_hass_conf, optim_conf, plant_conf,
 if __name__ == '__main__':
     get_data_from_file = False
 
+    # Build params with defaults, secret file, and added special config and secrets
     config = build_config(emhass_conf,logger,emhass_conf['defaults_path'],emhass_conf['scripts_path'] / 'special_options.json')
-
     emhass_conf,secrets = build_secrets(emhass_conf,logger,options_path=emhass_conf['scripts_path'] / 'special_options.json',secrets_path=emhass_conf['secrets_path'],no_response=True)
-    
     params = build_params(emhass_conf, secrets, config, logger)
         
     pv_power_forecast = [0, 8, 27, 42, 47, 41, 25, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 19, 52, 73, 74, 68, 44, 12, 0, 0, 0, 0]
@@ -92,7 +91,7 @@ if __name__ == '__main__':
     else:
         rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
                           retrieve_hass_conf['optimization_time_step'], retrieve_hass_conf['time_zone'],
-                          json.dumps(params, default=str), emhass_conf, logger)
+                          params, emhass_conf, logger)
         days_list = get_days_list(retrieve_hass_conf['historic_days_to_retrieve'])
         var_list = [retrieve_hass_conf['sensor_power_load_no_var_loads'], retrieve_hass_conf['sensor_power_photovoltaics']]
         rh.get_data(days_list, var_list,

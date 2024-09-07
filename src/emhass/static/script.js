@@ -1,4 +1,9 @@
-//configuration for processing index page 
+//configuration for dynamically processing index page
+//loads either the basic or advance html
+
+//used static files
+//advanced.html : template html for displaying all the actions + runtime parameter input
+//basic.html : template html for displaying a minimal view of actions
 
 //on page reload get saved data
 window.onload = async function () {
@@ -186,7 +191,7 @@ async function showChangeStatus(status, logJson) {
     //then show a cross
     loading.classList.remove("loading");
     loading.innerHTML = `<p class=cross>&#x292C;</p>`; //show cross icon to indicate an error
-    if (logJson.length != 0) {
+    if (logJson.length != 0 && document.getElementById("alert-text") !== null) {
       document.getElementById("alert-text").textContent =
         "\r\n\u2022 " + logJson.join("\r\n\u2022 "); //show received log data in alert box
       document.getElementById("alert").style.display = "block";
@@ -199,7 +204,7 @@ async function showChangeStatus(status, logJson) {
 async function getTemplate() {
   //fetch data from webserver.py
   let htmlTemplateData = "";
-  response = await fetch(`template/table-template`, {
+  response = await fetch(`template`, {
     method: "GET",
   });
   blob = await response.blob(); //get data blob

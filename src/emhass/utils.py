@@ -64,7 +64,10 @@ def get_logger(fun_name: str, emhass_conf: dict, save_to_file: Optional[bool] = 
     logger.propagate = True
     logger.fileSetting = save_to_file
     if save_to_file:
-        ch = logging.FileHandler(emhass_conf['data_path'] / 'logger_emhass.log')
+        if  os.path.isdir(emhass_conf['data_path']):
+            ch = logging.FileHandler(emhass_conf['data_path'] / 'logger_emhass.log')
+        else:
+            raise Exception("Unable to access data_path: "+emhass_conf['data_path'])  
     else:
         ch = logging.StreamHandler()
     if logging_level == "DEBUG":
@@ -139,11 +142,13 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
     :rtype: Tuple[str, dict]
 
     """
+    # check if passed params is a dict
     if (params != None) and (params != "null"):
         if type(params) is str:
-           params = json.loads(params)
+            params = json.loads(params)
     else:
         params = {}
+
     # Some default data needed
     custom_deferrable_forecast_id = []
     custom_predicted_temperature_id = []
@@ -227,13 +232,19 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             params["passed_data"][key] = value
     else:
         params["passed_data"] = default_passed_dict
+
     if runtimeparams is not None:
         if type(runtimeparams) is str:
             runtimeparams = json.loads(runtimeparams)
-        optimization_time_step = int(retrieve_hass_conf['optimization_time_step'].seconds / 60.0)
+       # Format required date/time parameters 
+        optimization_time_step = int(
+            retrieve_hass_conf['optimization_time_step'].seconds / 60.0)
         delta_forecast = int(optim_conf['delta_forecast_daily'].days)
-        forecast_dates = get_forecast_dates(optimization_time_step, delta_forecast)
-        if set_type == "regressor-model-fit":            
+        forecast_dates = get_forecast_dates(
+            optimization_time_step, delta_forecast)
+       
+       # regressor-model-fit
+        if set_type == "regressor-model-fit":
             if "csv_file" in runtimeparams:
                 csv_file = runtimeparams["csv_file"]
                 params["passed_data"]["csv_file"] = csv_file
@@ -253,6 +264,8 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             else:
                 date_features = runtimeparams["date_features"]
                 params["passed_data"]["date_features"] = date_features
+        
+        # regressor-model-predict
         if set_type == "regressor-model-predict":
             if "new_values" in runtimeparams:
                 new_values = runtimeparams["new_values"]
@@ -266,6 +279,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             if "target" in runtimeparams:
                 target = runtimeparams["target"]
                 params["passed_data"]["target"] = target
+        
         # Treating special data passed for MPC control case
         if set_type == "naive-mpc-optim":
             if "prediction_horizon" not in runtimeparams.keys():
@@ -291,14 +305,17 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             if 'start_timesteps_of_each_deferrable_load' in runtimeparams.keys():
                 def_start_timestep = runtimeparams['start_timesteps_of_each_deferrable_load']
             else:
-                def_start_timestep = runtimeparams.get('def_start_timestep',optim_conf['start_timesteps_of_each_deferrable_load'])
+                def_start_timestep = runtimeparams.get(
+                    'def_start_timestep', optim_conf['start_timesteps_of_each_deferrable_load'])
             params["passed_data"]['start_timesteps_of_each_deferrable_load'] = def_start_timestep
             if 'end_timesteps_of_each_deferrable_load' in runtimeparams.keys():
                 def_end_timestep = runtimeparams['end_timesteps_of_each_deferrable_load']
             else:
-                def_end_timestep = runtimeparams.get('def_end_timestep',optim_conf['end_timesteps_of_each_deferrable_load'])
+                def_end_timestep = runtimeparams.get(
+                    'def_end_timestep', optim_conf['end_timesteps_of_each_deferrable_load'])
             params["passed_data"]['end_timesteps_of_each_deferrable_load'] = def_end_timestep
-            forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
+            forecast_dates = copy.deepcopy(forecast_dates)[
+                0:prediction_horizon]
         else:
             params["passed_data"]["prediction_horizon"] = None
             params["passed_data"]["soc_init"] = None
@@ -307,41 +324,38 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             params["passed_data"]['start_timesteps_of_each_deferrable_load'] = None
             params["passed_data"]['end_timesteps_of_each_deferrable_load'] = None
         # Treat passed forecast data lists
-        list_forecast_key = ['pv_power_forecast', 'load_power_forecast', 'load_cost_forecast', 'prod_price_forecast', 'outdoor_temperature_forecast']
-        forecast_methods = ['weather_forecast_method', 'load_forecast_method', 'load_cost_forecast_method', 'production_price_forecast_method', 'outdoor_temperature_forecast_method']
-        # Param to save forecast cache (i.e. Solcast)
-        if "weather_forecast_cache" not in runtimeparams.keys():
-            weather_forecast_cache = False
-        else:
-            weather_forecast_cache = runtimeparams["weather_forecast_cache"]
-        params["passed_data"]["weather_forecast_cache"] = weather_forecast_cache  
-        # Param to make sure optimization only uses cached data. (else produce error)
-        if "weather_forecast_cache_only" not in runtimeparams.keys():
-            weather_forecast_cache_only = False
-        else:
-            weather_forecast_cache_only = runtimeparams["weather_forecast_cache_only"]
-        params["passed_data"]["weather_forecast_cache_only"] = weather_forecast_cache_only  
-        # loop forecasts, check if value is a list and greaterthan or equal to forecast_dates
+        list_forecast_key = ['pv_power_forecast', 'load_power_forecast',
+                             'load_cost_forecast', 'prod_price_forecast', 'outdoor_temperature_forecast']
+        forecast_methods = ['weather_forecast_method', 'load_forecast_method', 'load_cost_forecast_method',
+                            'production_price_forecast_method', 'outdoor_temperature_forecast_method']
+        
+        # loop forecasts, check if value is a list and greater than or equal to forecast_dates
         for method, forecast_key in enumerate(list_forecast_key):
             if forecast_key in runtimeparams.keys():
                 if type(runtimeparams[forecast_key]) == list and len(runtimeparams[forecast_key]) >= len(forecast_dates):
                     params['passed_data'][forecast_key] = runtimeparams[forecast_key]
                     optim_conf[forecast_methods[method]] = 'list'
                 else:
-                    logger.error(f"ERROR: The passed data is either not a list or the length is not correct, length should be {str(len(forecast_dates))}")
-                    logger.error(f"Passed type is {str(type(runtimeparams[forecast_key]))} and length is {str(len(runtimeparams[forecast_key]))}")
-                list_non_digits = [x for x in runtimeparams[forecast_key] if not (isinstance(x, int) or isinstance(x, float))]
+                    logger.error(
+                        f"ERROR: The passed data is either not a list or the length is not correct, length should be {str(len(forecast_dates))}")
+                    logger.error(
+                        f"Passed type is {str(type(runtimeparams[forecast_key]))} and length is {str(len(runtimeparams[forecast_key]))}")
+                list_non_digits = [x for x in runtimeparams[forecast_key] if not (
+                    isinstance(x, int) or isinstance(x, float))]
                 if len(list_non_digits) > 0:
-                    logger.warning(f"There are non numeric values on the passed data for {forecast_key}, check for missing values (nans, null, etc)")
+                    logger.warning(
+                        f"There are non numeric values on the passed data for {forecast_key}, check for missing values (nans, null, etc)")
                     for x in list_non_digits:
-                        logger.warning(f"This value in {forecast_key} was detected as non digits: {str(x)}")
+                        logger.warning(
+                            f"This value in {forecast_key} was detected as non digits: {str(x)}")
             else:
                 params['passed_data'][forecast_key] = None
+       
         # Treat passed data for forecast model fit/predict/tune at runtime
         if 'historic_days_to_retrieve' in runtimeparams.keys():
             days_to_retrieve = runtimeparams['historic_days_to_retrieve']
         else:
-            days_to_retrieve = runtimeparams.get('days_to_retrieve',9)
+            days_to_retrieve = runtimeparams.get('days_to_retrieve', 9)
         params["passed_data"]['historic_days_to_retrieve'] = days_to_retrieve
         if "model_type" not in runtimeparams.keys():
             model_type = "load_forecast"
@@ -376,12 +390,14 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         if "perform_backtest" not in runtimeparams.keys():
             perform_backtest = False
         else:
-            perform_backtest = ast.literal_eval(str(runtimeparams["perform_backtest"]).capitalize())
+            perform_backtest = ast.literal_eval(
+                str(runtimeparams["perform_backtest"]).capitalize())
         params["passed_data"]["perform_backtest"] = perform_backtest
         if "model_predict_publish" not in runtimeparams.keys():
             model_predict_publish = False
         else:
-            model_predict_publish = ast.literal_eval(str(runtimeparams["model_predict_publish"]).capitalize())
+            model_predict_publish = ast.literal_eval(
+                str(runtimeparams["model_predict_publish"]).capitalize())
         params["passed_data"]["model_predict_publish"] = model_predict_publish
         if "model_predict_entity_id" not in runtimeparams.keys():
             model_predict_entity_id = "sensor.p_load_forecast_custom_model"
@@ -413,6 +429,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         else:
             mlr_predict_friendly_name = runtimeparams["mlr_predict_friendly_name"]
         params["passed_data"]["mlr_predict_friendly_name"] = mlr_predict_friendly_name
+        
         # Treat passed data for other parameters
         if "alpha" not in runtimeparams.keys():
             alpha = 0.5
@@ -424,7 +441,32 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         else:
             beta = runtimeparams["beta"]
         params["passed_data"]["beta"] = beta
-        # Treat optimization configuration parameters passed at runtime
+        # Param to save forecast cache (i.e. Solcast)
+        if "weather_forecast_cache" not in runtimeparams.keys():
+            weather_forecast_cache = False
+        else:
+            weather_forecast_cache = runtimeparams["weather_forecast_cache"]
+        params["passed_data"]["weather_forecast_cache"] = weather_forecast_cache
+        # Param to make sure optimization only uses cached data. (else produce error)
+        if "weather_forecast_cache_only" not in runtimeparams.keys():
+            weather_forecast_cache_only = False
+        else:
+            weather_forecast_cache_only = runtimeparams["weather_forecast_cache_only"]
+        params["passed_data"]["weather_forecast_cache_only"] = weather_forecast_cache_only
+        # A condition to manually save entity data under data_path/entities after optimization
+        if "entity_save" not in runtimeparams.keys():
+            entity_save = ""
+        else:
+            entity_save = runtimeparams["entity_save"]
+        params["passed_data"]["entity_save"] = entity_save
+        # A condition to put a prefix on all published data, or check for saved data under prefix name
+        if "publish_prefix" not in runtimeparams.keys():
+            publish_prefix = ""
+        else:
+            publish_prefix = runtimeparams["publish_prefix"]
+        params["passed_data"]["publish_prefix"] = publish_prefix
+
+        # Treat optimization (optim_conf) configuration parameters passed at runtime
         if 'number_of_deferrable_loads' in runtimeparams.keys():
             optim_conf['number_of_deferrable_loads'] = runtimeparams['number_of_deferrable_loads']
         if 'num_def_loads' in runtimeparams.keys():
@@ -442,7 +484,8 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         if 'end_timesteps_of_each_deferrable_load' in runtimeparams.keys():
             optim_conf['end_timesteps_of_each_deferrable_load'] = runtimeparams['end_timesteps_of_each_deferrable_load']
         if "def_current_state" in runtimeparams.keys():
-            optim_conf["def_current_state"] = [bool(s) for s in runtimeparams["def_current_state"]]
+            optim_conf["def_current_state"] = [
+                bool(s) for s in runtimeparams["def_current_state"]]
         if 'treat_deferrable_load_as_semi_cont' in runtimeparams.keys():
             optim_conf['treat_deferrable_load_as_semi_cont'] = [
                 ast.literal_eval(str(k).capitalize())
@@ -471,6 +514,20 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             ]
         if 'def_load_config' in runtimeparams:
             optim_conf["def_load_config"] = runtimeparams['def_load_config']
+        if 'weight_battery_discharge' in runtimeparams.keys():
+            optim_conf['weight_battery_discharge'] = runtimeparams[
+                'weight_battery_discharge'
+            ]
+        if 'weight_battery_charge' in runtimeparams.keys():
+            optim_conf['weight_battery_charge'] = runtimeparams['weight_battery_charge']
+
+        # Treat retrieve data from Home Assistant (retrieve_hass_conf) configuration parameters passed at runtime
+        if 'optimization_time_step' in runtimeparams.keys():
+            retrieve_hass_conf['optimization_time_step'] = pd.to_timedelta(
+                runtimeparams['optimization_time_step'], "minutes")
+        if 'continual_publish' in runtimeparams.keys():
+            retrieve_hass_conf['continual_publish'] = bool(
+                runtimeparams['continual_publish'])
         if "solcast_api_key" in runtimeparams.keys():
             retrieve_hass_conf["solcast_api_key"] = runtimeparams["solcast_api_key"]
             optim_conf['weather_forecast_method'] = "solcast"
@@ -484,27 +541,24 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
                 "solar_forecast_kwp"
             ]
             optim_conf['weather_forecast_method'] = "solar.forecast"
-        if 'weight_battery_discharge' in runtimeparams.keys():
-            optim_conf['weight_battery_discharge'] = runtimeparams[
-                'weight_battery_discharge'
-            ]
-        if 'weight_battery_charge' in runtimeparams.keys():
-            optim_conf['weight_battery_charge'] = runtimeparams['weight_battery_charge']
-        if 'optimization_time_step' in runtimeparams.keys():
-            retrieve_hass_conf['optimization_time_step'] = pd.to_timedelta(runtimeparams['optimization_time_step'], "minutes")
-        if 'continual_publish' in runtimeparams.keys():
-            retrieve_hass_conf['continual_publish'] = bool(runtimeparams['continual_publish'])
-        # Treat plant configuration parameters passed at runtime
+
+        # Treat system model parameters (plant) configuration parameters passed at runtime
         if 'battery_minimum_state_of_charge' in runtimeparams.keys() or 'SOCmin' in runtimeparams.keys():
-            plant_conf['battery_minimum_state_of_charge'] = runtimeparams.get('battery_minimum_state_of_charge',runtimeparams.get('SOCmin'))
+            plant_conf['battery_minimum_state_of_charge'] = runtimeparams.get(
+                'battery_minimum_state_of_charge', runtimeparams.get('SOCmin'))
         if 'battery_maximum_state_of_charge' in runtimeparams.keys() or 'SOCmax' in runtimeparams.keys():
-            plant_conf['battery_maximum_state_of_charge'] = runtimeparams.get('battery_maximum_state_of_charge',runtimeparams.get('SOCmax'))
+            plant_conf['battery_maximum_state_of_charge'] = runtimeparams.get(
+                'battery_maximum_state_of_charge', runtimeparams.get('SOCmax'))
         if 'battery_target_state_of_charge' in runtimeparams.keys() or 'SOCtarget' in runtimeparams.keys():
-            plant_conf['battery_target_state_of_charge'] = runtimeparams.get('battery_target_state_of_charge',runtimeparams.get('SOCtarget'))
+            plant_conf['battery_target_state_of_charge'] = runtimeparams.get(
+                'battery_target_state_of_charge', runtimeparams.get('SOCtarget'))
         if 'battery_discharge_power_max' in runtimeparams.keys() or 'Pd_max' in runtimeparams.keys():
-            plant_conf['battery_discharge_power_max'] = runtimeparams.get('battery_discharge_power_max',runtimeparams.get('Pd_max'))
+            plant_conf['battery_discharge_power_max'] = runtimeparams.get(
+                'battery_discharge_power_max', runtimeparams.get('Pd_max'))
         if 'battery_charge_power_max' in runtimeparams.keys() or 'Pc_max' in runtimeparams.keys():
-            plant_conf['battery_charge_power_max'] = runtimeparams.get('battery_charge_power_max',runtimeparams.get('Pc_max'))
+            plant_conf['battery_charge_power_max'] = runtimeparams.get(
+                'battery_charge_power_max', runtimeparams.get('Pc_max'))
+        
         # Treat custom entities id's and friendly names for variables
         if "custom_pv_forecast_id" in runtimeparams.keys():
             params["passed_data"]["custom_pv_forecast_id"] = runtimeparams[
@@ -558,18 +612,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             params["passed_data"]["custom_predicted_temperature_id"] = runtimeparams[
                 "custom_predicted_temperature_id"
             ]
-        # A condition to put a prefix on all published data, or check for saved data under prefix name
-        if "publish_prefix" not in runtimeparams.keys():
-            publish_prefix = ""
-        else:
-            publish_prefix = runtimeparams["publish_prefix"]
-        params["passed_data"]["publish_prefix"] = publish_prefix
-        # A condition to manually save entity data under data_path/entities after optimization
-        if "entity_save" not in runtimeparams.keys():
-            entity_save = ""
-        else:
-            entity_save = runtimeparams["entity_save"]
-        params["passed_data"]["entity_save"] = entity_save
+       
     # Serialize the final params
     params = json.dumps(params, default=str)
     return params, retrieve_hass_conf, optim_conf, plant_conf
@@ -577,7 +620,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
 
 def get_yaml_parse(params: str, logger: logging.Logger) -> Tuple[dict, dict, dict]:
     """
-    Perform parsing of the config.yaml file.
+    Perform parsing of the params into the configuration catagories 
     
     :param params: Built configuration parameters
     :type params: str
@@ -760,22 +803,22 @@ def get_injection_dict_forecast_model_tune(df_pred_optim: pd.DataFrame, mlf: MLF
     injection_dict["figure_0"] = image_path_0
     return injection_dict
 
-def build_config(emhass_conf: dict, logger: logging.Logger, defaults_path: Optional[str] = None, config_path: Optional[str] = None, 
+def build_config(emhass_conf: dict, logger: logging.Logger, defaults_path: str, config_path: Optional[str] = None, 
                  legacy_config_path: Optional[str] = None) -> dict:
     """
     Retrieve parameters from configuration files. 
-    priority order = defaults_path, config_path legacy_config_path
+    priority order (low - high) = defaults_path, config_path legacy_config_path
 
     :param emhass_conf: Dictionary containing the needed emhass paths
     :type emhass_conf: dict
     :param logger: The logger object
     :type logger: logging.Logger
-    :param defaults_path: path to config file storing parameter defaults (config_defaults.json)
+    :param defaults_path: path to config file for parameter defaults (config_defaults.json)
     :type defaults_path: str
     :param config_path: path to the main configuration file (config.json)
     :type config_path: str
-    :param legacy_config_path: path to legacy config file (if its provided) (config_emhass.yaml)
-    :type legacy_config_path: dict
+    :param legacy_config_path: path to legacy config file (config_emhass.yaml)
+    :type legacy_config_path: str
     :return: The built config dictionary
     :rtype: dict
     """
@@ -785,25 +828,27 @@ def build_config(emhass_conf: dict, logger: logging.Logger, defaults_path: Optio
         with defaults_path.open('r') as data:
             config = json.load(data)
     else:
-        logger.error("config_defaults. does not exist")
-        raise Exception("config_defaults. does not exist in path: "+str(defaults_path)) 
+        logger.error("config_defaults.json. does not exist ")
+        return False
     
-    # Read user config parameters (default /share/config.json)
+    # Read user config parameters if provided (default /share/config.json)
     if config_path and pathlib.Path(config_path).is_file():
         with config_path.open('r') as data:
             # Set override default parameters (config_defaults) with user given parameters (config.json)
+            logger.info("Obtaining parameters from config.json:")
             config.update(json.load(data))
     else:
-        logger.warning("config.json does not exist, or has not been passed")
+        logger.info("config.json does not exist, or has not been passed")
+        logger.info("you may like to generate the config.json file on the configuration page")
 
     # Check to see if legacy config_emhass.yaml was provided (default /app/config_emhass.yaml)
+    # Convert legacy parameter definitions/format to match config.json
     if legacy_config_path and pathlib.Path(legacy_config_path).is_file():
-        with open(legacy_config_path, 'r') as file:
-            legacy_config = yaml.load(file, Loader=yaml.FullLoader)
-            #convert legacy naming conventions
+        with open(legacy_config_path, 'r') as data:
+            legacy_config = yaml.load(data, Loader=yaml.FullLoader)
             legacy_config_parameters = build_legacy_config_params(emhass_conf,legacy_config,logger)
             if type(legacy_config_parameters) is not bool:
-                logger.debug("Overriding parameters from config_emhass.yaml:")
+                logger.info("Obtaining parameters from config_emhass.yaml:")
                 config.update(legacy_config_parameters)     
 
     return config
@@ -812,23 +857,34 @@ def build_config(emhass_conf: dict, logger: logging.Logger, defaults_path: Optio
 def build_legacy_config_params(emhass_conf: dict, legacy_config: dict,
                  logger: logging.Logger) -> dict:
     """
-    Build the config dictionary with legacy config_emhass.yaml
+    Build a config dictionary with legacy config_emhass.yaml file. 
+    Uses the associations file to convert parameter naming conventions (to config.json/config_defaults.json).
+    Extracts the parameter values and formats to match config.json.
 
     :param emhass_conf: Dictionary containing the needed emhass paths
     :type emhass_conf: dict
-    :param legacy_config: The legacy config parameters dictionary
+    :param legacy_config: The legacy config dictionary
     :type legacy_config: dict
     :param logger: The logger object
     :type logger: logging.Logger
     :return: The built config dictionary
     :rtype: dict
     """
+
+
+    # Association file key reference
+    # association[0] = config catagories
+    # association[1] = legacy parameter name
+    # association[2] = parameter (config.json/config_defaults.json)
+    # association[3] = parameter list name if exists (not used, from legacy options.json) 
+
+    # Check each config catagories exists, else create blank dict for categories (avoid errors)
     legacy_config['retrieve_hass_conf'] = legacy_config.get('retrieve_hass_conf',{})
     legacy_config['optim_conf'] = legacy_config.get('optim_conf',{})
     legacy_config['plant_conf'] = legacy_config.get('plant_conf',{})
     config = {}
 
-    # Use associations list to map legacy parameter name with new parameter name
+    # Use associations list to map legacy parameter name with config.json parameter name
     if emhass_conf['associations_path'].exists():
             with emhass_conf['associations_path'].open('r') as data:
                 associations = list(csv.reader(data, delimiter=","))
@@ -836,12 +892,14 @@ def build_legacy_config_params(emhass_conf: dict, legacy_config: dict,
         logger.error("Cant find associations file (associations.csv) in: "  + str(emhass_conf['associations_path']))
         return False
     
-    # Append config with legacy config parameters (converting alternative parameter naming conventions with associations list)
+    # Loop through all parameters in association file
+    # Append config with existing legacy config parameters (converting alternative parameter naming conventions with associations list)
     for association in associations:
+        # if legacy config catagories exists and if legacy parameter exists in config catagories
         if legacy_config.get(association[0],None) is not None and legacy_config[association[0]].get(association[1],None) is not None:
             config[association[2]] = legacy_config[association[0]][association[1]]
             
-            # if load_peak_hour_periods extract from list to dict
+            # If config now has load_peak_hour_periods, extract from list of dict
             if association[2] == "load_peak_hour_periods" and type(config[association[2]]) is list:
                 config[association[2]] = dict((key, d[key]) for d in config[association[2]] for key in d)
                 
@@ -851,7 +909,9 @@ def build_legacy_config_params(emhass_conf: dict, legacy_config: dict,
 def param_to_config(param: dict,
                  logger: logging.Logger) -> dict:
     """
-    A function that reverts the parameters from param to the config json format
+    A function that extracts the parameters from param back to the config.json format.
+    Extracts parameters from config catagories.
+    Attempts to exclude secrets hosed in retrieve_hass_conf.
     
     :param params: Built configuration parameters
     :type param: dict
@@ -860,21 +920,27 @@ def param_to_config(param: dict,
     :return: The built config dictionary
     :rtype: dict
     """ 
-    return_config = {}
-
     logger.debug("Converting param to config")
 
-    config_sections = ["retrieve_hass_conf","optim_conf","plant_conf"]
-    for config in config_sections:
+    return_config = {}
+
+    config_catagories = ["retrieve_hass_conf","optim_conf","plant_conf"]
+    secret_params = ["hass_url", "time_zone", "Latitude", "Longitude", "Altitude", "long_lived_token", "solcast_api_key", "solcast_rooftop_id", "solar_forecast_kwp"]
+    
+    # Loop through config catagories that contain config params, and extract
+    for config in config_catagories:
         for parameter in param[config]:
-                return_config[str(parameter)] = param[config][parameter]
+                # If parameter is not a secret, append to return_config
+                if parameter not in secret_params:
+                    return_config[str(parameter)] = param[config][parameter]
+    
     return return_config
 
 def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[dict] = {}, options_path: Optional[str] = None, 
                  secrets_path: Optional[str] = None, no_response: Optional[bool] = False) -> Tuple[dict, dict]:    
     """
-    Retrieve parameters from secrets locations (ENV,ARG, Secrets file (secrets_emhass.yaml) and/or Home Assistant (via API))
-    priority order = Defaults (written bellow), ENV, Options json file, Secrets yaml file, Home Assistant API. Arguments
+    Retrieve and build parameters from secrets locations (ENV, ARG, Secrets file (secrets_emhass.yaml/options.json) and/or Home Assistant (via API))
+    priority order (lwo to high) = Defaults (written in function), ENV, Options json file, Secrets yaml file, Home Assistant API, Arguments
     
     :param emhass_conf: Dictionary containing the needed emhass paths
     :type emhass_conf: dict
@@ -882,13 +948,13 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
     :type logger: logging.Logger
     :param argument: dictionary of secrets arguments passed (url,key)
     :type argument: dict
-    :param options_path: path to the options file (options.json) (provided bt EMHASS-Add-on)
+    :param options_path: path to the options file (options.json) (usually provided bt EMHASS-Add-on)
     :type options_path: str
     :param secrets_path: path to secrets file (secrets_emhass.yaml)
     :type secrets_path: str
     :param no_response: bypass get request to Home Assistant (json response errors)
     :type no_response: bool
-    :return: Updated emhass_conf, The built secrets dictionary
+    :return: Updated emhass_conf, the built secrets dictionary
     :rtype: Tuple[dict, dict]:
     """
 
@@ -905,7 +971,7 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
         "solar_forecast_kwp": 5
     }
 
-    # Obtain Secrets from ARG or ENV?
+    # Obtain Secrets from ENV?
     params_secrets['hass_url'] = os.getenv("EMHASS_URL",params_secrets['hass_url'])
     params_secrets['long_lived_token'] = os.getenv("SUPERVISOR_TOKEN", params_secrets['long_lived_token'])   
     params_secrets['time_zone'] = os.getenv("TIME_ZONE", params_secrets['time_zone'])
@@ -913,7 +979,8 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
     params_secrets['Longitude'] = float(os.getenv("LON",  params_secrets['Longitude']))
     params_secrets['Altitude'] = float(os.getenv("ALT", params_secrets['Altitude']))      
 
-    # Obtain secrets from options.json (from EMHASS-Add-on)
+    # Obtain secrets from options.json (Generated from EMHASS-Add-on, Home Assistant addon Configuration page) or Home Assistant API (from local Supervisor API)?
+    # Use local supervisor API to obtain secrets from Home Assistant if hass_url in options.json is empty and SUPERVISOR_TOKEN ENV exists (provided by Home Assistant when running the container as addon)
     options = {}
     if options_path and pathlib.Path(options_path).is_file():
         with options_path.open('r') as data:
@@ -921,12 +988,11 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
             
             # Obtain secrets from Home Assistant?
             url_from_options = options.get('hass_url', 'empty')
-            key_from_options = options.get('long_lived_token', 'empty')
+            key_from_options = options.get('long_lived_token', 'empty') 
 
-            # If data path specified by options
-            if options is not None:
-                if options.get('data_path', None) != None and pathlib.Path(options['data_path']).exists():
-                    emhass_conf['data_path'] = pathlib.Path(options['data_path']);  
+            # If data path specified by options.json, overwrite emhass_conf['data_path']
+            if options.get('data_path', None) != None and pathlib.Path(options['data_path']).exists():
+                emhass_conf['data_path'] = pathlib.Path(options['data_path']);  
             
             # Check to use Home Assistant local API
             if not no_response and \
@@ -940,7 +1006,7 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
                 "content-type": "application/json"
                 }
                 # Obtain secrets from Home Assistant via API
-                logger.debug("Obtaining secrets from Home Assistant API")
+                logger.debug("Obtaining secrets from Home Assistant Supervisor API")
                 response = get(params_secrets['hass_url'], headers=headers)
                 if response.status_code < 400:
                     config_hass = response.json()
@@ -954,11 +1020,20 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
                     }
                 else: 
                     # Obtain the url and key secrets if any from options.json (default /app/options.json)
+                    logger.warning("Error obtaining secrets from Home Assistant Supervisor API")
                     logger.debug("Obtaining url and key secrets from options.json")
                     if url_from_options != 'empty' and url_from_options != '':
                         params_secrets['hass_url'] = url_from_options
                     if key_from_options != 'empty' and key_from_options != '':
                         params_secrets['long_lived_token'] = key_from_options
+                    if options.get('time_zone',"empty") != "empty" and options['time_zone'] != '':
+                        params_secrets['time_zone'] = options['time_zone']
+                    if options.get('Latitude',None) is not None and bool(options['Latitude']):
+                        params_secrets['Latitude'] = options['Latitude']
+                    if options.get('Longitude',None) is not None and bool(options['Longitude']):
+                        params_secrets['Longitude'] = options['Longitude']         
+                    if options.get('Altitude',None) is not None and bool(options['Altitude']):
+                        params_secrets['Altitude'] = options['Altitude']
             else:
                 # Obtain the url and key secrets if any from options.json (default /app/options.json)
                 logger.debug("Obtaining url and key secrets from options.json")
@@ -966,35 +1041,33 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
                     params_secrets['hass_url'] = url_from_options
                 if key_from_options != 'empty' and key_from_options != '':
                     params_secrets['long_lived_token'] = key_from_options
-            
-            # Obtain the other secrets if any from options.json (default /app/options.json)
-            logger.debug("Obtaining secrets from options.json")
-            if options.get('time_zone',"empty") != "empty" and options['time_zone'] != '':
-                params_secrets['time_zone'] = options['time_zone']
-            if options.get('Latitude',None) is not None and bool(options['Latitude']):
-                params_secrets['Latitude'] = options['Latitude']
-            if options.get('Longitude',None) is not None and bool(options['Longitude']):
-                params_secrets['Longitude'] = options['Longitude']
-            if options.get('Altitude',None) is not None and bool(options['Altitude']):
-                params_secrets['Altitude'] = options['Altitude']
-            if options.get('solcast_api_key',"empty") != "empty" and options['solcast_api_key'] != '':
-                params_secrets['solcast_api_key'] = options['solcast_api_key']
-            if options.get('solcast_rooftop_id',"empty") != "empty" and options['solcast_rooftop_id'] != '':
-                params_secrets['solcast_rooftop_id'] = options['solcast_rooftop_id']
-            if options.get('solar_forecast_kwp',None) and bool(options['solar_forecast_kwp']):
-                params_secrets['solar_forecast_kwp'] = options['solar_forecast_kwp']
+                if options.get('time_zone',"empty") != "empty" and options['time_zone'] != '':
+                    params_secrets['time_zone'] = options['time_zone']
+                if options.get('Latitude',None) is not None and bool(options['Latitude']):
+                    params_secrets['Latitude'] = options['Latitude']
+                if options.get('Longitude',None) is not None and bool(options['Longitude']):
+                    params_secrets['Longitude'] = options['Longitude']
+                if options.get('Altitude',None) is not None and bool(options['Altitude']):
+                    params_secrets['Altitude'] = options['Altitude']
+                
+            # Obtain the forecast secrets (if any) from options.json (default /app/options.json)
+            forecast_secrets = ["solcast_api_key","solcast_rooftop_id","solar_forecast_kwp"]
+            if any(x in forecast_secrets for x in list(options.keys())):
+                logger.debug("Obtaining forecast secrets from options.json")
+                if options.get('solcast_api_key',"empty") != "empty" and options['solcast_api_key'] != '':
+                    params_secrets['solcast_api_key'] = options['solcast_api_key']
+                if options.get('solcast_rooftop_id',"empty") != "empty" and options['solcast_rooftop_id'] != '':
+                    params_secrets['solcast_rooftop_id'] = options['solcast_rooftop_id']
+                if options.get('solar_forecast_kwp',None) and bool(options['solar_forecast_kwp']):
+                    params_secrets['solar_forecast_kwp'] = options['solar_forecast_kwp']
      
     # Obtain secrets from secrets_emhass.yaml? (default /app/secrets_emhass.yaml)
     if secrets_path and pathlib.Path(secrets_path).is_file():
         logger.debug("Obtaining secrets from secrets file")
         with open(pathlib.Path(secrets_path), 'r') as file:
             params_secrets.update(yaml.load(file, Loader=yaml.FullLoader))
-    elif pathlib.Path(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml')).is_file(): 
-        logger.debug("Obtaining secrets from secrets file")
-        with open(os.getenv('SECRETS_PATH', default='/app/secrets_emhass.yaml'), 'r') as file:
-            params_secrets.update(yaml.load(file, Loader=yaml.FullLoader))
 
-    # Receive key and url from arguments 
+    # Receive key and url from ARG/arguments? 
     if argument.get('url',None) is not None:
        params_secrets['hass_url'] = argument['url']
        logger.debug("Obtaining url from passed argument")  
@@ -1009,60 +1082,77 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
 def build_params(emhass_conf: dict, params_secrets: dict, config: dict,
                  logger: logging.Logger) -> dict:
     """
-    Build the main params dictionary from the config
+    Build the main params dictionary from the config and secrets
+    Appends configuration catagories used by emhass to the parameters. (with use of the associations file as a reference)
     
     :param emhass_conf: Dictionary containing the needed emhass paths
     :type emhass_conf: dict
-    :param params_secrets: The dictionary containing the secret protected variables
+    :param params_secrets: The dictionary containing the built secret variables
     :type params_secrets: dict
-    :param config: The dictionary of pre-built parameters (config)
+    :param config: The dictionary of built config parameters 
     :type config: dict
     :param logger: The logger object
     :type logger: logging.Logger
-    :return: The builded dictionary
+    :return: The built param dictionary
     :rtype: dict
     """
     if type(params_secrets) is not dict:
         params_secrets = {}
     
     params = {}
+    #Start with blank config catagories
     params['retrieve_hass_conf'] = {}
     params['params_secrets'] = {}
     params['optim_conf'] = {}
     params['plant_conf'] = {}
 
+    # Obtain associations to categorize parameters to their corresponding config catagories 
     if emhass_conf.get('associations_path', get_root(__file__, num_parent=2) / 'data/associations.csv').exists():
         with emhass_conf['associations_path'].open('r') as data:
             associations = list(csv.reader(data, delimiter=","))
     else:
-        logger.error("Cant find associations file (associations.csv) in: "  + str(emhass_conf['associations_path']))
+        logger.error("Unable to obtain the associations file (associations.csv) in: "  + str(emhass_conf['associations_path']))
         return False
+
+    # Association file key reference
+    # association[0] = config catagories
+    # association[1] = legacy parameter name
+    # association[2] = parameter (config.json/config_defaults.json)
+    # association[3] = parameter list name if exists (not used, from legacy options.json) 
 
     # Use association list to append parameters from config into params (with corresponding config catagories)
     for association in associations:
-        if config.get(association[2],None) is not None:
-            params[association[0]][association[2]] = config[association[2]]
-        # If parameter contains list name 
-        elif len(association) == 4 and config.get(association[3],None) is not None:
+        # If parameter has list_ name and parameter in config is presented with its list name 
+        # (ie, config parameter is in legacy options.json format)
+        if len(association) == 4 and config.get(association[3],None) is not None:
             # Extract lists of dictionaries
             if config[association[3]] and type(config[association[3]][0]) is dict:
                 params[association[0]][association[2]] = [i[association[2]] for i in config[association[3]]]
             else:
                 params[association[0]][association[2]] = config[association[3]]
+        # Else, directly set value of config parameter to param  
+        elif config.get(association[2],None) is not None:
+            params[association[0]][association[2]] = config[association[2]]
 
-    # Check if we need to create `list_hp_periods` from config.json
-    if params.get('optim_conf',None) is not None and params['optim_conf'].get('load_peak_hour_periods',None) is None and config.get("list_peak_hours_periods_start_hours", None) is not None and config.get("list_peak_hours_periods_end_hours", None) is not None:
+    # Check if we need to create `list_hp_periods` from config (ie. legacy options.json format)
+    if params.get('optim_conf',None) is not None and config.get("list_peak_hours_periods_start_hours", None) is not None and config.get("list_peak_hours_periods_end_hours", None) is not None:
             start_hours_list = [i["peak_hours_periods_start_hours"] for i in config["list_peak_hours_periods_start_hours"]]
             end_hours_list = [i["peak_hours_periods_end_hours"] for i in config["list_peak_hours_periods_end_hours"]]
             num_peak_hours = len(start_hours_list)
             list_hp_periods_list = [{'period_hp_'+str(i+1):[{'start':start_hours_list[i]},{'end':end_hours_list[i]}]} for i in range(num_peak_hours)]
             params['optim_conf']['load_peak_hour_periods'] = list_hp_periods_list
     else:
+        # Else, check param already contains load_peak_hour_periods from config
         if params['optim_conf'].get('load_peak_hour_periods',None) is None:
             logger.warning("Unable to detect or create load_peak_hour_periods parameter")
 
+    # Format load_peak_hour_periods (if required)
+    if params['optim_conf'].get('load_peak_hour_periods',None) is not None and isinstance(type(params['optim_conf']['load_peak_hour_periods']), list):
+        params['optim_conf']['load_peak_hour_periods'] = dict(
+            (key, d[key]) for d in params['optim_conf']['load_peak_hour_periods'] for key in d
+        )
 
-    # Check parameter lists have the same amounts as deferrable loads
+    # Call function to check parameter lists that require the same length as deferrable loads
     # If not, set defaults it fill in gaps
     if params['optim_conf'].get('number_of_deferrable_loads',None) is not None:
         num_def_loads = params['optim_conf']['number_of_deferrable_loads']
@@ -1075,19 +1165,16 @@ def build_params(emhass_conf: dict, params_secrets: dict, config: dict,
         params['optim_conf']['nominal_power_of_deferrable_loads'] = check_def_loads(num_def_loads,params['optim_conf'],0,'nominal_power_of_deferrable_loads',logger)
     else:
         logger.warning("unable to obtain parameter: number_of_deferrable_loads")
-    # days_to_retrieve should be no less then 2
-    if params["retrieve_hass_conf"].get('historic_days_to_retrieve',None) is not None and params["retrieve_hass_conf"]['historic_days_to_retrieve'] < 2:
-        params["retrieve_hass_conf"]['historic_days_to_retrieve'] = 2
-        logger.warning("days_to_retrieve should not be lower then 2, setting days_to_retrieve to 2. Make sure your sensors also have at least 2 days of history")
+    # historic_days_to_retrieve should be no less then 2
+    if params["retrieve_hass_conf"].get('historic_days_to_retrieve',None) is not None:
+        if params["retrieve_hass_conf"]['historic_days_to_retrieve'] < 2:
+            params["retrieve_hass_conf"]['historic_days_to_retrieve'] = 2
+            logger.warning("days_to_retrieve should not be lower then 2, setting days_to_retrieve to 2. Make sure your sensors also have at least 2 days of history")
+    else:
+        logger.warning("unable to obtain parameter: historic_days_to_retrieve")
 
-
-    # Format list_hp_periods
-    if params['optim_conf'].get('load_peak_hour_periods',None) is not None and isinstance(type(params['optim_conf']['load_peak_hour_periods']), list):
-        params['optim_conf']['load_peak_hour_periods'] = dict(
-            (key, d[key]) for d in params['optim_conf']['load_peak_hour_periods'] for key in d
-        )
-
-    # Configure secrets
+    # Configure secrets, set params to correct config categorie
+    # retrieve_hass_conf
     params['retrieve_hass_conf']["hass_url"] = params_secrets.get("hass_url",None)
     params['retrieve_hass_conf']["long_lived_token"] = params_secrets.get("long_lived_token",None)
     params['retrieve_hass_conf']["time_zone"] = params_secrets.get("time_zone",None)
@@ -1106,9 +1193,14 @@ def build_params(emhass_conf: dict, params_secrets: dict, config: dict,
             params["params_secrets"]["solar_forecast_kwp"] = params_secrets.get("solar_forecast_kwp", 5)
     else:
         logger.warning("Unable to detect weather_forecast_method parameter")   
+    #  Check if secrets parameters still defaults values
+    secret_params = ["https://myhass.duckdns.org/","thatverylongtokenhere",45.83,6.86,4807.8]
+    if any(x in secret_params for x in params['retrieve_hass_conf'].values()):
+        logger.warning("Some secret parameters values are still matching their defaults")
     
 
-    # The params dict
+    # Set empty dict objects for params passed_data
+    # To be latter populated with runtime parameters (treat_runtimeparams)
     params["passed_data"] = {
         "pv_power_forecast": None,
         "load_power_forecast": None,

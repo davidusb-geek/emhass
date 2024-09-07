@@ -148,7 +148,7 @@ class Forecast(object):
         self.var_load_cost = 'unit_load_cost'
         self.var_prod_price = 'unit_prod_price'
         if params is None:
-            self.params = params
+            self.params = {}
         elif type(params) is dict:
             self.params = params
         else:
@@ -230,7 +230,7 @@ class Forecast(object):
             # Check if weather_forecast_cache is true or if forecast_data file does not exist
             if not os.path.isfile(w_forecast_cache_path):
                 # Check if weather_forecast_cache_only is true, if so produce error for not finding cache file
-                if not (self.params.get("passed_data",None) is not None and self.params["passed_data"].get("weather_forecast_cache",False)):
+                if not self.params["passed_data"].get("weather_forecast_cache_only",False):
                     # Retrieve data from the Solcast API
                     if 'solcast_api_key' not in self.retrieve_hass_conf:
                         self.logger.error("The solcast_api_key parameter was not defined")
@@ -291,11 +291,11 @@ class Forecast(object):
                         data = pd.DataFrame.from_dict(data_dict)
                         # Define index
                         data.set_index('ts', inplace=True)
-            # Else, notify user to update cache
+                # Else, notify user to update cache
                 else:
                     self.logger.error("Unable to obtain Solcast cache file.")
                     self.logger.error("Try running optimization again with 'weather_forecast_cache_only': false")
-                    self.logger.error("Optionally, obtain new Solcast cache with runtime parameter 'weather_forecast_cache': true in an optimization, or run the `forecast-cache` action, to pull new data from Solcast and cache.")
+                    self.logger.error("Optionally, obtain new Solcast cache with runtime parameter 'weather_forecast_cache': true in an optimization, or run the `weather-forecast-cache` action, to pull new data from Solcast and cache.")
                     return False
             # Else, open stored weather_forecast_data.pkl file for previous forecast data (cached data)
             else:
@@ -303,7 +303,7 @@ class Forecast(object):
                     data = cPickle.load(file)
                     if not isinstance(data, pd.DataFrame) or len(data) < len(self.forecast_dates):
                         self.logger.error("There has been a error obtaining cached Solcast forecast data.")
-                        self.logger.error("Try running optimization again with 'weather_forecast_cache': true, or run action `forecast-cache`, to pull new data from Solcast and cache.")
+                        self.logger.error("Try running optimization again with 'weather_forecast_cache': true, or run action `weather-forecast-cache`, to pull new data from Solcast and cache.")
                         self.logger.warning("Removing old Solcast cache file. Next optimization will pull data from Solcast, unless 'weather_forecast_cache_only': true")
                         os.remove(w_forecast_cache_path)
                         return False

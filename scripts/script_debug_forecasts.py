@@ -34,14 +34,16 @@ if __name__ == '__main__':
     methods_list = ['solar.forecast', 'solcast', 'scrapper'] # 
     
     for k, method in enumerate(methods_list):
+        # Build params with default config, weather_forecast_method=method and default secrets
         config = build_config(emhass_conf,logger,emhass_conf['defaults_path'])
         config['weather_forecast_method'] = method
         _,secrets = build_secrets(emhass_conf,logger,secrets_path=emhass_conf['secrets_path'],no_response=True)
         params =  build_params(emhass_conf,secrets,config,logger)
+        
         retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(params,logger)
         optim_conf['delta_forecast_daily'] = pd.Timedelta(days=2)
         fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
-                        json.dumps(params, default=str), emhass_conf, logger, get_data_from_file=get_data_from_file)
+                        params, emhass_conf, logger, get_data_from_file=get_data_from_file)
         df_weather = fcst.get_weather_forecast(method=method)
         P_PV_forecast = fcst.get_power_from_weather(df_weather)
         P_PV_forecast = P_PV_forecast.to_frame(name=f'PV_forecast {method}')
