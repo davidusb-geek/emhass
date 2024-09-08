@@ -109,7 +109,11 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
         df_input_data_dayahead = pd.DataFrame(np.transpose(np.vstack(
             [P_PV_forecast.values, P_load_forecast.values])), index=P_PV_forecast.index,
             columns=["P_PV_forecast", "P_load_forecast"])
-        df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
+        if "freq" in retrieve_hass_conf and retrieve_hass_conf["freq"]:
+            freq = pd.to_timedelta(retrieve_hass_conf["freq"], "minute")
+            df_input_data_dayahead = df_input_data_dayahead.asfreq(freq)
+        else:
+            df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
         params = json.loads(params)
         if ("prediction_horizon" in params["passed_data"] and params["passed_data"]["prediction_horizon"] is not None):
             prediction_horizon = params["passed_data"]["prediction_horizon"]
@@ -155,7 +159,11 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
                 "Unable to get sensor power photovoltaics, or sensor power load no var loads. Check HA sensors and their daily data")
             return False
         df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
-        df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
+        if "freq" in retrieve_hass_conf and retrieve_hass_conf["freq"]:
+            freq = pd.to_timedelta(retrieve_hass_conf["freq"], "minute")
+            df_input_data_dayahead = df_input_data_dayahead.asfreq(freq)
+        else:
+            df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
         df_input_data_dayahead.columns = ["P_PV_forecast", "P_load_forecast"]
         params = json.loads(params)
         if ("prediction_horizon" in params["passed_data"] and params["passed_data"]["prediction_horizon"] is not None):
