@@ -9,13 +9,14 @@ from emhass import utils
 
 # The root folder
 root = pathlib.Path(utils.get_root(__file__, num_parent=2))
+# Build emhass_conf paths
 emhass_conf = {}
 emhass_conf['data_path'] = root / 'data/'
 emhass_conf['root_path'] = root / 'src/emhass/'
 emhass_conf['options_path'] = root / 'options.json'
 emhass_conf['config_path'] = root / 'config.json'
 emhass_conf['secrets_path'] = root / 'secrets_emhass(example).yaml'
-emhass_conf['legacy_config_path'] = root / 'tests/config_emhass.yaml' 
+emhass_conf['legacy_config_path'] = pathlib.Path(utils.get_root(__file__, num_parent=1)) / 'config_emhass.yaml' 
 emhass_conf['defaults_path'] = emhass_conf['root_path']  / 'data/config_defaults.json'
 emhass_conf['associations_path'] = emhass_conf['root_path']  / 'data/associations.csv'
 
@@ -26,9 +27,12 @@ class TestCommandLineUtils(unittest.TestCase):
     
     @staticmethod
     def get_test_params():
+        print(emhass_conf['legacy_config_path'])
+        # Build params with default config and secrets
         if emhass_conf['defaults_path'].exists():
             config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'])
             _,secrets = utils.build_secrets(emhass_conf,logger,no_response=True)
+            # Add Altitude secret manually for testing get_yaml_parse
             secrets['Altitude'] = 8000.0
             params =  utils.build_params(emhass_conf,secrets,config,logger)
         else:
@@ -69,7 +73,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = utils.build_params(emhass_conf,{},config,logger)
         self.assertTrue(params['optim_conf']['lp_solver'] == "default")
         self.assertTrue(params['optim_conf']['lp_solver_path'] == "empty")
-        # Test with lagacy config_emhass yaml
+        # Test with legacy config_emhass yaml
         config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'],legacy_config_path=emhass_conf['legacy_config_path'])
         params = utils.build_params(emhass_conf,{},config,logger)
         self.assertTrue(params['retrieve_hass_conf']['sensor_replace_zero'] == ['sensor.power_photovoltaics'])
@@ -217,6 +221,28 @@ class TestCommandLineUtils(unittest.TestCase):
             'load_power_forecast':'[1,2,3,4,5,6,7,8,9,10]',
             'load_cost_forecast':'[1,2,3,4,5,6,7,8,9,10]',
             'prod_price_forecast':'[1,2,3,4,5,6,7,8,9,10]'
+        }
+        params['passed_data'] = runtimeparams
+        params['optim_conf']['weather_forecast_method'] = 'list'
+        params['optim_conf']['load_forecast_method'] = 'list'
+        params['optim_conf']['load_cost_forecast_method'] = 'list'
+        params['optim_conf']['production_price_forecast_method'] = 'list'
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params,logger)
+        set_type = 'dayahead-optim'
+        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+            runtimeparams, params,
+            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
+        self.assertIsInstance(runtimeparams['pv_power_forecast'], list)
+        self.assertIsInstance(runtimeparams['load_power_forecast'], list)
+        self.assertIsInstance(runtimeparams['load_cost_forecast'], list)
+        self.assertIsInstance(runtimeparams['prod_price_forecast'], list)
+        # Test string of numbers
+        params = TestCommandLineUtils.get_test_params()
+        runtimeparams = {
+            'pv_power_forecast':'1,2,3,4,5,6,7,8,9,10',
+            'load_power_forecast':'1,2,3,4,5,6,7,8,9,10',
+            'load_cost_forecast':'1,2,3,4,5,6,7,8,9,10',
+            'prod_price_forecast':'1,2,3,4,5,6,7,8,9,10'
         }
         params['passed_data'] = runtimeparams
         params['optim_conf']['weather_forecast_method'] = 'list'

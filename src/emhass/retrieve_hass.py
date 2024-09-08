@@ -62,7 +62,7 @@ class RetrieveHass:
         self.long_lived_token = long_lived_token
         self.freq = freq
         self.time_zone = time_zone
-        if params is None:
+        if (params == None) or (params == "null"):
             self.params = {}
         elif type(params) is dict:
             self.params = params

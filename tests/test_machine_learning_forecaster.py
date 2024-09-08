@@ -17,8 +17,9 @@ from emhass.retrieve_hass import RetrieveHass
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass import utils
 
-# the root folder
+# The root folder
 root = pathlib.Path(utils.get_root(__file__, num_parent=2))
+# Build emhass_conf paths
 emhass_conf = {}
 emhass_conf['data_path'] = root / 'data/'
 emhass_conf['root_path'] = root / 'src/emhass/'
@@ -33,12 +34,11 @@ class TestMLForecaster(unittest.TestCase):
     
     @staticmethod
     def get_test_params():
-        params = {}
+        # Build params with default config and secrets
         if emhass_conf['defaults_path'].exists():
-            with emhass_conf['defaults_path'].open('r') as data:
-                config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'])
-                _,secrets = utils.build_secrets(emhass_conf,logger,no_response=True)
-                params =  utils.build_params(emhass_conf,secrets,config,logger)
+            config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'])
+            _,secrets = utils.build_secrets(emhass_conf,logger,no_response=True)
+            params =  utils.build_params(emhass_conf,secrets,config,logger)
         else:
             raise Exception("config_defaults. does not exist in path: "+str(emhass_conf['defaults_path'] ))
         return params

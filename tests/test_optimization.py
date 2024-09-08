@@ -11,20 +11,21 @@ import pickle
 import random
 from datetime import datetime, timezone
 
+from emhass import utils
 from emhass.retrieve_hass import RetrieveHass
 from emhass.optimization import Optimization
 from emhass.forecast import Forecast
-from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger,build_config, build_params, build_secrets
+from emhass.utils import get_yaml_parse, get_days_list, get_logger,build_config, build_params, build_secrets
 from pandas.testing import assert_series_equal
 
-# the root folder
-root = pathlib.Path(get_root(__file__, num_parent=2))
+# The root folder
+root = pathlib.Path(utils.get_root(__file__, num_parent=2))
+# Build emhass_conf paths
 emhass_conf = {}
 emhass_conf['data_path'] = root / 'data/'
 emhass_conf['root_path'] = root / 'src/emhass/'
 emhass_conf['defaults_path'] = emhass_conf['root_path']  / 'data/config_defaults.json'
 emhass_conf['associations_path'] = emhass_conf['root_path']  / 'data/associations.csv'
-
 
 # create logger
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
@@ -34,7 +35,7 @@ class TestOptimization(unittest.TestCase):
     def setUp(self):
         get_data_from_file = True
         params = {}
-        # Obtain configs and build params
+        # Build params with default config and secrets
         if emhass_conf['defaults_path'].exists():
             config = build_config(emhass_conf,logger,emhass_conf['defaults_path'])
             _,secrets = build_secrets(emhass_conf,logger,no_response=True)
@@ -47,7 +48,7 @@ class TestOptimization(unittest.TestCase):
         #Build RetrieveHass object
         self.rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                                self.retrieve_hass_conf['optimization_time_step'], self.retrieve_hass_conf['time_zone'],
-                               json.dumps(params), emhass_conf, logger)
+                               params, emhass_conf, logger)
         # Obtain sensor values from saved file
         if get_data_from_file:
             with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
@@ -70,7 +71,7 @@ class TestOptimization(unittest.TestCase):
         self.df_input_data = self.rh.df_final.copy()
         #Build Forecast object
         self.fcst = Forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf,
-                             json.dumps(params), emhass_conf, logger, get_data_from_file=get_data_from_file)
+                             params, emhass_conf, logger, get_data_from_file=get_data_from_file)
         self.df_weather = self.fcst.get_weather_forecast(method='csv')
         self.P_PV_forecast = self.fcst.get_power_from_weather(self.df_weather)
         self.P_load_forecast = self.fcst.get_load_forecast(method=optim_conf['load_forecast_method'])

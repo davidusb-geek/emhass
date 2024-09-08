@@ -329,7 +329,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         forecast_methods = ['weather_forecast_method', 'load_forecast_method', 'load_cost_forecast_method',
                             'production_price_forecast_method', 'outdoor_temperature_forecast_method']
         
-        # loop forecasts, check if value is a list and greater than or equal to forecast_dates
+        # Loop forecasts, check if value is a list and greater than or equal to forecast_dates
         for method, forecast_key in enumerate(list_forecast_key):
             if forecast_key in runtimeparams.keys():
                 if type(runtimeparams[forecast_key]) == list and len(runtimeparams[forecast_key]) >= len(forecast_dates):
@@ -340,6 +340,10 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
                         f"ERROR: The passed data is either not a list or the length is not correct, length should be {str(len(forecast_dates))}")
                     logger.error(
                         f"Passed type is {str(type(runtimeparams[forecast_key]))} and length is {str(len(runtimeparams[forecast_key]))}")
+                # Check if string contains list, if so extract
+                if type(runtimeparams[forecast_key]) == str:
+                    if type(ast.literal_eval(runtimeparams[forecast_key])) == list:
+                        runtimeparams[forecast_key] = ast.literal_eval(runtimeparams[forecast_key])
                 list_non_digits = [x for x in runtimeparams[forecast_key] if not (
                     isinstance(x, int) or isinstance(x, float))]
                 if len(list_non_digits) > 0:

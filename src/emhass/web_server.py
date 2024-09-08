@@ -37,8 +37,8 @@ def checkFileLog(refString=None) -> bool:
        logArray = grabLog(refString) #grab reduced log array (everything after string match)
     else: 
         if ((emhass_conf['data_path'] / 'actionLogs.txt')).exists():
-            with open(str(emhass_conf['data_path'] / 'actionLogs.txt'), "r") as data:
-                    logArray = data.readlines()
+            with open(str(emhass_conf['data_path'] / 'actionLogs.txt'), "r") as fp:
+                    logArray = fp.readlines()
         else:
             app.logger.debug("Unable to obtain actionLogs.txt")
     for logString in logArray:
@@ -59,8 +59,8 @@ def grabLog(refString) -> list:
     isFound = []
     output = []
     if ((emhass_conf['data_path'] / 'actionLogs.txt')).exists():
-            with open(str(emhass_conf['data_path'] / 'actionLogs.txt'), "r") as data:
-                    logArray = data.readlines()
+            with open(str(emhass_conf['data_path'] / 'actionLogs.txt'), "r") as fp:
+                    logArray = fp.readlines()
             # Find all string matches, log key (line Number) in isFound
             for x in range(len(logArray)-1):
                 if (re.search(refString,logArray[x])):
@@ -96,7 +96,7 @@ def index():
     #check if index.html exists
     if 'index.html' not in env.list_templates():
         app.logger.error("Unable to find index.html in emhass module")
-        return make_response(["ERROR: unable to find index.html in emhass module"],400)
+        return make_response(["ERROR: unable to find index.html in emhass module"],404)
     template = env.get_template('index.html')
     # Load cached dict (if exists), to present generated plot tables
     if (emhass_conf['data_path'] / 'injection_dict.pkl').exists():
@@ -127,7 +127,7 @@ def configuration():
     #check if configuration.html exists
     if 'configuration.html' not in env.list_templates():
         app.logger.error("Unable to find configuration.html in emhass module")
-        return make_response(["ERROR: unable to find configuration.html in emhass module"],400)
+        return make_response(["ERROR: unable to find configuration.html in emhass module"],404)
     template = env.get_template('configuration.html')
     return make_response(template.render(config=params))
 
@@ -145,7 +145,7 @@ def template_action():
     # Check if template.html exists
     if 'template.html' not in env.list_templates():
         app.logger.error("Unable to find template.html in emhass module")
-        return make_response(["WARNING: unable to find template.html in emhass module"],400)
+        return make_response(["WARNING: unable to find template.html in emhass module"],404)
     template = env.get_template('template.html')
     if (emhass_conf['data_path'] / 'injection_dict.pkl').exists():
         with open(str(emhass_conf['data_path'] / 'injection_dict.pkl'), "rb") as fid:
@@ -166,11 +166,11 @@ def parameter_get():
     # Build config from all possible sources (inc. legacy yaml config)
     config = build_config(emhass_conf,app.logger,emhass_conf["defaults_path"],emhass_conf["config_path"],emhass_conf["legacy_config_path"])
     if type(config) is bool and not config:
-        return make_response(["failed to retrieve default config file"],400)
+        return make_response(["failed to retrieve default config file"],500)
     # Format parameters in config with params (converting legacy json parameters from options.json if any)
     params = build_params(emhass_conf,{},config,app.logger)
     if type(params) is bool and not params:
-        return make_response(["Unable to obtain associations file"],400)
+        return make_response(["Unable to obtain associations file"],500)
     # Covert formatted parameters from params back into config.json format
     return_config = param_to_config(params,app.logger)
     # Send config
@@ -188,11 +188,11 @@ def config_get():
     # Build config, passing only default file
     config = build_config(emhass_conf,app.logger,emhass_conf["defaults_path"])
     if type(config) is bool and not config:
-        return make_response(["failed to retrieve default config file"],400)
+        return make_response(["failed to retrieve default config file"],500)
     # Format parameters in config with params
     params = build_params(emhass_conf,{},config,app.logger)
     if type(params) is bool and not params:
-        return make_response(["Unable to obtain associations file"],400)
+        return make_response(["Unable to obtain associations file"],500)
     # Covert formatted parameters from params back into config.json format
     return_config = param_to_config(params,app.logger)
     # Send params
@@ -212,7 +212,7 @@ def json_convert():
 
     # If filed to Parse YAML
     if yaml_config is None:
-        return make_response(["failed to retrieve YAML from data"],400)
+        return make_response(["failed to Parse YAML from data"],400)
     # Test YAML is legacy config format (from config_emhass.yaml)
     test_legacy_config = build_legacy_config_params(emhass_conf,yaml_config, app.logger)    
     if test_legacy_config:
@@ -220,7 +220,7 @@ def json_convert():
     # Format YAML to params (format params. check if params match legacy option.json format)
     params = build_params(emhass_conf,{},yaml_config,app.logger)
     if type(params) is bool and not params:
-        return make_response(["Unable to obtain associations file"],400)
+        return make_response(["Unable to obtain associations file"],500)
     # Covert formatted parameters from params back into config.json format
     config = param_to_config(params,app.logger)
     # convert json to str
@@ -236,9 +236,13 @@ def parameter_set():
 
     """
     config = {}
+    if not emhass_conf['defaults_path']:
+        return make_response(["Unable to Obtain defaults_path from emhass_conf"],500)
+    if not emhass_conf['config_path']:
+        return make_response(["Unable to Obtain config_path from emhass_conf"],500)
     
     # Load defaults as a reference point (for sorting) and a base to override
-    if emhass_conf['defaults_path'] and Path(emhass_conf['defaults_path']).is_file():
+    if os.path.exists(emhass_conf['defaults_path']) and Path(emhass_conf['defaults_path']).is_file():
         with emhass_conf['defaults_path'].open('r') as data:
             config = json.load(data)
     else:
@@ -249,27 +253,30 @@ def parameter_set():
 
     # check if data is empty
     if len(request_data) == 0:
-        return make_response(["failed to retrieve config"],400)
+        return make_response(["failed to retrieve config json"],400)
     
     # Format config to params (format params. check if params match legacy option.json format. If so format)
     params = build_params(emhass_conf,params_secrets,request_data,app.logger)
     if type(params) is bool and not params:
-        return make_response(["Unable to obtain associations file"],400)
+        return make_response(["Unable to obtain associations file"],500)
     
     # Covert formatted parameters from params back into config.json format.
     # Overwrite existing default parameters in config (if any)
     config.update(param_to_config(params,app.logger))
 
     # Save config to config.json
-    if emhass_conf['config_path']:
+    if os.path.exists(emhass_conf['config_path'].parent):
         with emhass_conf['config_path'].open('w') as f:
             json.dump(config, f, indent=4)
     else: 
-        return make_response(["failed to retrieve config file"],400)
+        return make_response(["Unable to save config file"],500)
         
     # Save updated params 
-    with open(str(emhass_conf['data_path'] / 'params.pkl'), "wb") as fid:
-        pickle.dump((config_path, params), fid)   
+    if os.path.exists(emhass_conf['data_path']):
+        with open(str(emhass_conf['data_path'] / 'params.pkl'), "wb") as fid:
+            pickle.dump((config_path, params), fid)   
+    else: 
+        return make_response(["Unable to save params file"],500)
     
     app.logger.info("Saved parameters from webserver")
     return make_response({},201)
@@ -294,7 +301,7 @@ def action_call(action_name):
         if runtimeparams != '{}':
             app.logger.info("Passed runtime parameters: " + str(runtimeparams))
     else:
-        app.logger.warning("Unable to pass runtime parameters")
+        app.logger.warning("Unable to parse runtime parameters")
         runtimeparams = {} 
     runtimeparams = json.dumps(runtimeparams)
 
@@ -487,7 +494,7 @@ if __name__ == "__main__":
 
     costfun = os.getenv('LOCAL_COSTFUN', config.get('costfun', 'profit'))
     logging_level = os.getenv('LOGGING_LEVEL', config.get('logging_level','INFO'))
-    #temporary set logging level if debug
+    # Temporary set logging level if debug
     if logging_level == "DEBUG":
         app.logger.setLevel(logging.DEBUG)
         

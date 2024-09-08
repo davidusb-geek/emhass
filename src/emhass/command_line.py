@@ -51,6 +51,14 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
 
     """
     logger.info("Setting up needed data")
+
+    # check if passed params is a dict
+    if (params != None) and (params != "null"):
+        if type(params) is str:
+            params = json.loads(params)
+    else:
+        params = {}
+
     # Parsing yaml
     retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params,logger)
     if type(retrieve_hass_conf) is bool:
@@ -1222,6 +1230,9 @@ def main():
         logger.warning(
             "Could not find config_emhass.yaml file in: " + str(config_path))
         logger.warning("Try setting config file path with --config")
+    if not secrets_path.exists():
+        logger.warning("Could not find secrets file in: " + str(secrets_path))
+        logger.warning("Try setting secrets file path with --secrets")
     if not os.path.isdir(data_path):
         logger.error("Could not find data folder in: " + str(data_path))
         logger.error("Try setting data path with --data")
@@ -1229,9 +1240,6 @@ def main():
     if not os.path.isdir(root_path):
         logger.error("Could not find emhass/src folder in: " + str(root_path))
         logger.error("Try setting emhass root path with --root")
-        return False
-    if not secrets_path.exists():
-        logger.error("Could not find secrets file in: " + str(secrets_path))
         return False
     
     # Additional argument
@@ -1265,7 +1273,7 @@ def main():
         logger.warning("Unable to obtain config.json file, building parameters with only defaults")
         config = utils.build_config(emhass_conf,logger,defaults_path)
     if type(config) is bool and not config:
-                raise Exception("Failed to find default config")
+        raise Exception("Failed to find default config")
     
 
     # Obtain secrets from secrets_emhass.yaml?

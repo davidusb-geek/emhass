@@ -5,7 +5,7 @@
 //configuration_list.html : template html to act as a base for the list view. (Params get dynamically added after)
 
 //Div layout
-  /* <div configuration-container>
+/* <div configuration-container>
   <div class="section-card">
     <div class="section-card-header"> POSSIBLE HEADER INPUT HERE WITH PARAMETER ID</div>
     <div class="section-body">
@@ -70,12 +70,16 @@ async function obtainConfig() {
   const response = await fetch(`get-config`, {
     method: "GET",
   });
-  if (response.status !== 200 && response.status !== 201) {
-    errorAlert("Unable to obtain config file from EMHASS");
+  response_status = await response.status; //return status
+  //if request failed
+  if (response_status !== 200 && response_status !== 201) {
+    showChangeStatus(response_status, await response.json());
     return {};
   }
+  //else extract json rom data
   blob = await response.blob(); //get data blob
   config = await new Response(blob).json(); //obtain json from blob
+  showChangeStatus(response_status, {});
   return config;
 }
 
@@ -85,12 +89,16 @@ async function ObtainDefaultConfig() {
   const response = await fetch(`get-config/defaults`, {
     method: "GET",
   });
-  if (response.status !== 200 && response.status !== 201) {
-    errorAlert("Unable to obtain default config file from EMHASS");
+  //if request failed
+  response_status = await response.status; //return status
+  if (response_status !== 200 && response_status !== 201) {
+    showChangeStatus(response_status, await response.json());
     return {};
   }
+  //else extract json rom data
   blob = await response.blob(); //get data blob
   config = await new Response(blob).json(); //obtain json from blob
+  showChangeStatus(response_status, {});
   return config;
 }
 
@@ -466,7 +474,7 @@ function minusElements(param) {
   param_input_list = param_element.getElementsByTagName("input");
   if (param_input_list.length == 0) {
     console.log(
-      "Unable to find " + parameter_definition_name + " param inputs"
+      "Unable to find " + parameter_definition_name + " param input/s"
     );
   }
 
@@ -606,7 +614,7 @@ async function saveConfiguration(param_definitions) {
   //if true, in list view
   if (Boolean(config_card.length)) {
     //retrieve params and their input/s by looping though param_definitions list
-    // loop through the sections
+    //loop through the sections
     for (var [section_name, section_object] of Object.entries(
       param_definitions
     )) {
@@ -732,7 +740,7 @@ async function ToggleView(param_definitions, list_html, default_reset) {
   //get yaml button
   yaml_button = document.getElementById("yaml");
   if (yaml_button == null) {
-    console.log("Unable to find yaml button");
+    console.log("Unable to obtain yaml button");
   }
 
   // if section-cards (config sections/list) exists
@@ -838,8 +846,7 @@ async function yamlToJson() {
   config_box_element = document.getElementById("config-box");
   if (config_box_element == null) {
     errorAlert("Unable to obtain config box");
-  } 
-  else {
+  } else {
     const response = await fetch(`get-json`, {
       method: "POST",
       headers: {
@@ -853,8 +860,7 @@ async function yamlToJson() {
       blob = await response.blob(); //get data blob
       config = await new Response(blob).json(); //obtain json from blob
       config_box_element.value = JSON.stringify(config, null, 2);
-    }
-    else {
+    } else {
       showChangeStatus(response_status, await response.json());
     }
   }

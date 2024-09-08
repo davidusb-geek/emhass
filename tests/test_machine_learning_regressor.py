@@ -12,8 +12,9 @@ from emhass.command_line import set_input_data_dict
 from emhass.machine_learning_regressor import MLRegressor
 from sklearn.pipeline import Pipeline
 
-# the root folder
+# The root folder
 root = pathlib.Path(utils.get_root(__file__, num_parent=2))
+# Build emhass_conf paths
 emhass_conf = {}
 emhass_conf['data_path'] = root / 'data/'
 emhass_conf['root_path'] = root / 'src/emhass/'
@@ -28,11 +29,11 @@ logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 class TestMLRegressor(unittest.TestCase):
     @staticmethod
     def get_test_params():
-        params = {}
+        # Build params with default config and secrets
         if emhass_conf['defaults_path'].exists():
-                config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'])
-                _,secrets = utils.build_secrets(emhass_conf,logger,no_response=True)
-                params =  utils.build_params(emhass_conf,secrets,config,logger)
+            config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'])
+            _,secrets = utils.build_secrets(emhass_conf,logger,no_response=True)
+            params =  utils.build_params(emhass_conf,secrets,config,logger)
         else:
             raise Exception("config_defaults. does not exist in path: "+str(emhass_conf['defaults_path'] ))
         return params
