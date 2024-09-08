@@ -11,10 +11,11 @@ import pickle as cPickle
 
 from emhass import utils
 from emhass.retrieve_hass import RetrieveHass
-from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger, build_params
+from emhass.utils import get_yaml_parse, get_days_list, get_logger
 
-# the root folder
-root = pathlib.Path(get_root(__file__, num_parent=2))
+# The root folder
+root = pathlib.Path(utils.get_root(__file__, num_parent=2))
+# Build emhass_conf paths
 emhass_conf = {}
 emhass_conf['data_path'] = root / 'data/'
 emhass_conf['root_path'] = root / 'src/emhass/'
@@ -32,7 +33,7 @@ class TestRetrieveHass(unittest.TestCase):
         get_data_from_file = True
         save_data_to_file = False
 
-        #build secrets and params
+        # Build params with default secrets (no config)
         if emhass_conf['defaults_path'].exists():   
             _,secrets = utils.build_secrets(emhass_conf,logger,no_response=True)
             params =  utils.build_params(emhass_conf,secrets,{},logger)

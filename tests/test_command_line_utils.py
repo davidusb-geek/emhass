@@ -24,8 +24,9 @@ from emhass.command_line import publish_data
 from emhass.command_line import main
 from emhass import utils
 
-# create paths
+# The root folder
 root = pathlib.Path(utils.get_root(__file__, num_parent=2))
+# Build emhass_conf paths
 emhass_conf = {}
 emhass_conf['data_path'] = root / 'data/'
 emhass_conf['root_path'] = root / 'src/emhass/'
@@ -41,8 +42,7 @@ class TestCommandLineUtils(unittest.TestCase):
     
     @staticmethod
     def get_test_params():
-        # Build default params
-        params = {}
+        # Build params with default config and secrets
         if emhass_conf['defaults_path'].exists():
             config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'])
             _,secrets = utils.build_secrets(emhass_conf,logger,no_response=True)

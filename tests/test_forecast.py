@@ -16,8 +16,9 @@ from emhass.forecast import Forecast
 from emhass.optimization import Optimization
 from emhass import utils
 
-# the root folder
+# The root folder
 root = pathlib.Path(utils.get_root(__file__, num_parent=2))
+# Build emhass_conf paths
 emhass_conf = {}
 emhass_conf['data_path'] = root / 'data/'
 emhass_conf['root_path'] = root / 'src/emhass/'
@@ -33,15 +34,11 @@ class TestForecast(unittest.TestCase):
     @staticmethod
     def get_test_params():
         params = {}
+        # Build params with default config and secrets
         if emhass_conf['defaults_path'].exists():
-            with emhass_conf['defaults_path'].open('r') as data:
-                # defaults = json.load(data)
-                # updated_emhass_conf, built_secrets = utils.build_secrets(emhass_conf,logger)
-                # emhass_conf.update(updated_emhass_conf)
-                # params.update(utils.build_params(emhass_conf, built_secrets, defaults, logger))
-                config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'])
-                _,secrets = utils.build_secrets(emhass_conf,logger,no_response=True)
-                params =  utils.build_params(emhass_conf,secrets,config,logger)
+            config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'])
+            _,secrets = utils.build_secrets(emhass_conf,logger,no_response=True)
+            params =  utils.build_params(emhass_conf,secrets,config,logger)
         else:
             raise Exception("config_defaults. does not exist in path: "+str(emhass_conf['defaults_path'] ))
         return params
@@ -257,7 +254,7 @@ class TestForecast(unittest.TestCase):
         df_input_data = rh.df_final.copy()
         # Build Forecast Object
         fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf, 
-                        params_json, emhass_conf, logger, get_data_from_file=True)
+                        params, emhass_conf, logger, get_data_from_file=True)
         # Obtain only 48 rows of data and remove last column for input
         df_input_data = copy.deepcopy(df_input_data).iloc[-49:-1]
         # Get Weather forecast with list, check dataframe output
@@ -323,7 +320,7 @@ class TestForecast(unittest.TestCase):
             optim_conf, plant_conf, set_type, logger)
         # Create Forecast Object
         fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf, 
-                        params_json, emhass_conf, logger, get_data_from_file=True)
+                        params, emhass_conf, logger, get_data_from_file=True)
         # Get weather forecast with list, check dataframe output
         P_PV_forecast = fcst.get_weather_forecast(method='list')
         self.assertIsInstance(P_PV_forecast, type(pd.DataFrame()))
@@ -407,7 +404,7 @@ class TestForecast(unittest.TestCase):
         df_input_data = rh.df_final.copy()
         # Create forecast object
         fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf, 
-                        params_json, emhass_conf, logger, get_data_from_file=True)
+                        params, emhass_conf, logger, get_data_from_file=True)
         # Obtain only 48 rows of data and remove last column for input
         df_input_data = copy.deepcopy(df_input_data).iloc[-49:-1]
         # Get weather forecast with list 

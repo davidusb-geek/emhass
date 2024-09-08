@@ -147,7 +147,7 @@ class Forecast(object):
         self.get_data_from_file = get_data_from_file
         self.var_load_cost = 'unit_load_cost'
         self.var_prod_price = 'unit_prod_price'
-        if params is None:
+        if (params == None) or (params == "null"):
             self.params = {}
         elif type(params) is dict:
             self.params = params
