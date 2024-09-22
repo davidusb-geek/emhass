@@ -395,7 +395,10 @@ function buildParamElement(
     if (parameter_definition_object["input"] == "select") {
       let inputs = `<select class="param_input">`;
       for (const options of parameter_definition_object["select_options"]) {
-        inputs += `<option value="${options}">${options}</option>`;
+        selected = ""
+        //if item in select is the same as the config value, then append "selected" tag
+        if (options==value) {selected = `selected="selected"`}
+        inputs += `<option ${selected}>${options}</option>`;
       }
       inputs += `</select>`;
       return inputs;
