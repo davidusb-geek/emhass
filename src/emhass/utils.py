@@ -944,7 +944,7 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
                  secrets_path: Optional[str] = None, no_response: Optional[bool] = False) -> Tuple[dict, dict]:    
     """
     Retrieve and build parameters from secrets locations (ENV, ARG, Secrets file (secrets_emhass.yaml/options.json) and/or Home Assistant (via API))
-    priority order (lwo to high) = Defaults (written in function), ENV, Options json file, Secrets yaml file, Home Assistant API, Arguments
+    priority order (lwo to high) = Defaults (written in function), ENV, Options json file, Home Assistant API,  Secrets yaml file, Arguments
     
     :param emhass_conf: Dictionary containing the needed emhass paths
     :type emhass_conf: dict
@@ -1143,18 +1143,16 @@ def build_params(emhass_conf: dict, params_secrets: dict, config: dict,
             start_hours_list = [i["peak_hours_periods_start_hours"] for i in config["list_peak_hours_periods_start_hours"]]
             end_hours_list = [i["peak_hours_periods_end_hours"] for i in config["list_peak_hours_periods_end_hours"]]
             num_peak_hours = len(start_hours_list)
-            list_hp_periods_list = [{'period_hp_'+str(i+1):[{'start':start_hours_list[i]},{'end':end_hours_list[i]}]} for i in range(num_peak_hours)]
+            list_hp_periods_list = {'period_hp_'+str(i+1):[{'start':start_hours_list[i]},{'end':end_hours_list[i]}] for i in range(num_peak_hours)}
             params['optim_conf']['load_peak_hour_periods'] = list_hp_periods_list
     else:
         # Else, check param already contains load_peak_hour_periods from config
         if params['optim_conf'].get('load_peak_hour_periods',None) is None:
             logger.warning("Unable to detect or create load_peak_hour_periods parameter")
 
-    # Format load_peak_hour_periods (if required)
-    if params['optim_conf'].get('load_peak_hour_periods',None) is not None and isinstance(type(params['optim_conf']['load_peak_hour_periods']), list):
-        params['optim_conf']['load_peak_hour_periods'] = dict(
-            (key, d[key]) for d in params['optim_conf']['load_peak_hour_periods'] for key in d
-        )
+    # Format load_peak_hour_periods list to dict if necessary
+    if params['optim_conf'].get('load_peak_hour_periods',None) is not None and isinstance(params['optim_conf']['load_peak_hour_periods'], list):
+        params['optim_conf']['load_peak_hour_periods'] = dict((key, d[key]) for d in params['optim_conf']['load_peak_hour_periods'] for key in d)
 
     # Call function to check parameter lists that require the same length as deferrable loads
     # If not, set defaults it fill in gaps
