@@ -21,16 +21,27 @@
       "env": {
         //"LEGACY_CONFIG_PATH": "/workspaces/emhass/tests/config_emhass.yaml",
         "CONFIG_PATH": "/workspaces/emhass/config.json",
-        "OPTIONS_PATH": "/workspaces/emhass/options.json",
         "SECRETS_PATH": "/workspaces/emhass/secrets_emhass.yaml",
         "DATA_PATH": "/workspaces/emhass/data/",
-        "EMHASS_URL": "http://HAIPHERE:8123/", //change
-        "EMHASS_KEY": "PLACEKEYHERE", //change
-        "TIME_ZONE": "Europe/Paris", //optional change
-        "LAT": "45.83", //optional change
-        "LON": "6.86", //optional change
-        "ALT": "4807.8", //optional change
-        "LOGGING_LEVEL": "DEBUG" //optional change
+        "LOGGING_LEVEL": "DEBUG" 
+      },
+    },
+    {
+      "name": "EMHASS with options.json",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "emhass.web_server",
+      "console": "integratedTerminal",
+      "purpose": [
+        "debug-in-terminal"
+      ],
+      "justMyCode": true,
+      "env": {
+        "CONFIG_PATH": "/workspaces/emhass/config.json",
+        "OPTIONS_PATH": "/workspaces/emhass/options.json",
+        "DATA_PATH": "/workspaces/emhass/data/",
+        "LOGGING_LEVEL": "DEBUG", 
+        //"SUPERVISOR_TOKEN": "test" //test
       },
     }
   ]
