@@ -1004,14 +1004,14 @@ def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[
                 os.getenv("SUPERVISOR_TOKEN", None) is not None:
                 
                 params_secrets['long_lived_token'] = os.getenv("SUPERVISOR_TOKEN",None)
-                params_secrets['hass_url'] = "http://supervisor/core/api/config"
+                params_secrets['hass_url'] = "http://supervisor/core/api"
                 headers = {
                 "Authorization": "Bearer " + params_secrets['long_lived_token'],
                 "content-type": "application/json"
                 }
                 # Obtain secrets from Home Assistant via API
                 logger.debug("Obtaining secrets from Home Assistant Supervisor API")
-                response = get(params_secrets['hass_url'], headers=headers)
+                response = get((params_secrets['hass_url'] + "/config"), headers=headers)
                 if response.status_code < 400:
                     config_hass = response.json()
                     params_secrets = {
