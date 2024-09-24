@@ -455,11 +455,11 @@ class RetrieveHass:
                     metadata = {}
                 with open(entities_path / "metadata.json", "w") as file:                       
                     # Save entity metadata, key = entity_id 
-                    metadata[entity_id] = {'name': data_df.name, 'unit_of_measurement': unit_of_measurement,'friendly_name': friendly_name,'type_var': type_var, 'freq': int(self.freq.seconds / 60)}
+                    metadata[entity_id] = {'name': data_df.name, 'unit_of_measurement': unit_of_measurement,'friendly_name': friendly_name,'type_var': type_var, 'optimization_time_step': int(self.freq.seconds / 60)}
                     
                     # Find lowest frequency to set for continual loop freq
-                    if metadata.get("lowest_freq",None) == None or metadata["lowest_freq"] > int(self.freq.seconds / 60):
-                        metadata["lowest_freq"] = int(self.freq.seconds / 60)
+                    if metadata.get("lowest_time_step",None) == None or metadata["lowest_time_step"] > int(self.freq.seconds / 60):
+                        metadata["lowest_time_step"] = int(self.freq.seconds / 60)
                     json.dump(metadata,file, indent=4)
 
                     self.logger.debug("Saved " + entity_id + " to json file")   
