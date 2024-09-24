@@ -1072,6 +1072,13 @@ def continual_publish(input_data_dict: dict, entity_path: pathlib.Path, logger: 
                 if entity != "metadata.json":
                     # Call publish_json with entity file, build entity, and publish                     
                     publish_json(entity, input_data_dict, entity_path, logger, 'continual_publish')
+             # Retrieve entity metadata from file
+            if os.path.isfile(entity_path / "metadata.json"):
+                with open(entity_path / "metadata.json", "r") as file:
+                    metadata = json.load(file)
+                    # Check if freq should be shorter
+                    if not metadata.get("lowest_time_step",None) == None:
+                        freq = pd.to_timedelta(metadata["lowest_time_step"], "minutes")
         pass 
     # This function should never return           
     return False 
@@ -1096,9 +1103,7 @@ def publish_json(entity: dict, input_data_dict: dict, entity_path: pathlib.Path,
     # Retrieve entity metadata from file
     if os.path.isfile(entity_path / "metadata.json"):
         with open(entity_path / "metadata.json", "r") as file:
-            metadata = json.load(file) 
-            if not metadata.get("lowest_freq",None) == None:
-                freq = pd.to_timedelta(metadata["lowest_freq"], "minutes")
+            metadata = json.load(file)
     else:
         logger.error("unable to located metadata.json in:" + entity_path)
         return False            

@@ -255,13 +255,13 @@ def parameter_set():
     if len(request_data) == 0:
         return make_response(["failed to retrieve config json"],400)
     
-    # Format config to params (format params. check if params match legacy option.json format. If so format)
+    # Format config by converting to params (format params. check if params match legacy option.json format. If so format)
     params = build_params(emhass_conf,params_secrets,request_data,app.logger)
     if type(params) is bool and not params:
         return make_response(["Unable to obtain associations file"],500)
     
     # Covert formatted parameters from params back into config.json format.
-    # Overwrite existing default parameters in config (if any)
+    # Overwrite existing default parameters in config
     config.update(param_to_config(params,app.logger))
 
     # Save config to config.json
@@ -270,13 +270,15 @@ def parameter_set():
             json.dump(config, f, indent=4)
     else: 
         return make_response(["Unable to save config file"],500)
-        
-    # Save updated params 
+    request_data
+    app.logger.info(params)
+
+    # Save params with updated config 
     if os.path.exists(emhass_conf['data_path']):
         with open(str(emhass_conf['data_path'] / 'params.pkl'), "wb") as fid:
-            pickle.dump((config_path, params), fid)   
+            pickle.dump((config_path, build_params(emhass_conf,params_secrets,config,app.logger)), fid)
     else: 
-        return make_response(["Unable to save params file"],500)
+        return make_response(["Unable to save params file, missing data_path"],500)
     
     app.logger.info("Saved parameters from webserver")
     return make_response({},201)
@@ -292,9 +294,13 @@ def action_call(action_name):
     """
     # Setting up parameters
     # Params
-    with open(str(emhass_conf['data_path'] / 'params.pkl'), "rb") as fid:
-        emhass_conf['config_path'], params = pickle.load(fid)
-        params = json.dumps(params)
+    if (emhass_conf['data_path'] / 'params.pkl').exists():
+        with open(str(emhass_conf['data_path'] / 'params.pkl'), "rb") as fid:
+            emhass_conf['config_path'], params = pickle.load(fid)
+            params = json.dumps(params)
+    else:
+        app.logger.error("Unable to find params.pkl file")
+        return make_response(grabLog(ActionStr), 400)
     # Runtime
     runtimeparams = request.get_json(force=True,silent=True)
     if runtimeparams is not None:
