@@ -48,7 +48,7 @@ setup(
         'pytz>=2021.1',
         'requests>=2.25.1',
         'beautifulsoup4>=4.9.3',
-        'h5py==3.11.0',
+        'h5py==3.12.1',
         'pulp>=2.4',
         'pyyaml>=5.4.1',
         'tables<=3.9.1',
