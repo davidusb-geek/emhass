@@ -3,12 +3,22 @@
 There are multiple different approaches to developing EMHASS.  
 The choice depends on EMHASS mode (standalone/add-on) and preference (Python venv/DevContainer/Docker).  
 Below are some development workflow examples:  
-_Note: It is preferred to run both addon mode, standalone mode and unitest once before submitting and pull request._
+_Note: It is preferred to run both addon mode, standalone mode and unittest once before submitting and pull request._
 
 ## Step 1 - Fork
 
 _With your preferred Git tool of choice:_  
 Fork the EMHASS github repository into your own account, then clone the forked repository into your local development platform. (ie. PC or Codespace)
+Here you may also wish to add the add the original/upstream repository as a remote, allowing you to fetch and merge new updates from the original repository.
+
+A command example may be:
+```bash
+# on GitHub, Fork url, then:
+git clone https://github.com/<YOURUSERNAME>/emhass.git
+cd emhass
+# add remote, call it upstream
+git remote add upstream https://github.com/OWNER/REPOSITORY.git
+```
 
 ## Step 2 - Develop
 
@@ -16,7 +26,7 @@ To develop and test code choose one of the following methods:
 
 ### Method 1 - Python Virtual Environment
 
-We can use python virtual environments to build, develop and test/unitest the code.
+We can use python virtual environments to build, develop and test/unittest the code.
 This method works well with standalone mode.
 
 _confirm terminal is in the root `emhass` directory before starting_
@@ -80,13 +90,13 @@ _Make sure `secrets_emhass.yaml` has been created and set. Copy `secrets_emhass(
 python3 src/emhass/web_server.py
 ```
 
-**Run unitests**
+**Run unittests**
 
 ```
-python3 -m unitest -v -RP -s ./tests -p 'test_*.py'
+python3 -m unittest discover -s ./tests -p 'test_*.py'
 ```
 
-_unitest will need to be installed prior_
+_unittest will need to be installed prior_
 
 ### Method 2: VS-Code Debug and Run via DevContainer
 
@@ -99,21 +109,29 @@ The recommended steps to run are:
 - Edit some code...
 - Compile emhass by pressing `control+shift+p` > `Tasks: Run Task` > `EMHASS Install`.
   This has been set up in the [tasks.json](https://github.com/davidusb-geek/emhass/blob/master/.vscode/tasks.json) file. - Before _run & debug_, re-run `EMHASS Install` task every time a change has been made to emhass.
-- Launch and debug the application via selecting the [`Run and Debug`](https://code.visualstudio.com/docs/editor/debugging) tab /`Ctrl+Shift+D` > `EMHASS run Addon`. This has been set up in the [Launch.json](https://github.com/davidusb-geek/emhass/blob/master/.vscode/launch.json) .
 
-  - You will need to modify the `EMHASS_URL` _(http://HAIPHERE:8123/)_ and `EMHASS_KEY` _(PLACEKEYHERE)_ inside of Launch.json that matches your HA environment before running.
-  - If you want to change your parameters, you can edit options.json file before launch.
-  - you can also choose to run `EMHASS run` instead of `EMHASS run Addon`. This acts more like standalone mode an removes the use of options.json. _(user sets parameters in config_emhass.yaml instead)_
+#### Standalone Mode
+- Launch and debug the application via selecting the [`Run and Debug`](https://code.visualstudio.com/docs/editor/debugging) tab /`Ctrl+Shift+D` > `EMHASS run` (standalone). This has been set up in the [Launch.json](https://github.com/davidusb-geek/emhass/blob/master/.vscode/launch.json) .
+- you will need input your HomeAssistant URL and HomeAssistant KEY inside of secrets_emhass.yaml
+    - Both Add-On and Standalone mods can also accept secrets via environment variables, see [Docker section bellow](method-3---docker-virtual-environment) for examples of environment variole secrets in use.
+- to change your parameters, you can edit emhass_config.yaml file before launch.
 
-- You can run all the unitests by heading to the [`Testing`](https://code.visualstudio.com/docs/python/testing) tab on the left hand side.  
+#### Add-On Mode
+- Launch and debug the application via selecting the [`Run and Debug`](https://code.visualstudio.com/docs/editor/debugging) tab /`Ctrl+Shift+D` > `EMHASS run Addon` (Add-on). This has been set up in the [Launch.json](https://github.com/davidusb-geek/emhass/blob/master/.vscode/launch.json) .
+- You will need to modify the `EMHASS_URL` _(http://HAIPHERE:8123/)_ and `EMHASS_KEY` _(PLACEKEYHERE)_ inside of Launch.json that matches your HA environment before running.
+- to change your parameters, you can edit options.json file before launch.
+
+
+#### Unittests
+You can run all the unittests by heading to the [`Testing`](https://code.visualstudio.com/docs/python/testing) tab on the left hand side.  
   This is recommended before creating a pull request.
 
 ### Method 3 - Docker Virtual Environment
 
-With Docker, you can test EMHASS in both standalone and add-on mode via modifying the build argument: `build_version` with values: `standalone`, `addon-pip`, `addon-git`, `addon-local`.  
-Since emhass-add-on uses the same docker base, this method is good to test the add-on functionality of your code. _(addon-local)_
+With Docker, you can test the production EMHASS environment in both standalone and add-on mode via modifying the build argument: `build_version` with values: `standalone`, `addon-pip`, `addon-git`, `addon-local`.  
 
-Depending on your choice of running standalone or addon, `docker run` will require different passed variables/arguments to function. See the following examples:
+Depending on your choice of running standalone or addon, `docker run` will require different passed variables/arguments to function. See following examples:
+Depending on your siltation, you may wish to build EMHASS using a version from a particular git/branch or pip PyPI version. There are examples bellow for these alternative builds. 
 
 _Note: Make sure your terminal is in the root `emhass` directory before running the docker build._
 
@@ -287,7 +305,7 @@ docker run -it -p 5000:5000 --name emhass-container -e EMHASS_KEY -e EMHASS_URL 
 ```
 
 ### Example Docker testing pipeline 
-If you are wishing to test your changes compatibility, check out this example as a template:
+The following pipeline will run unittest and most of the EMHASS actions in both Standalone and Add-on mode. This may be a good options for those who wish to test their changes against the production EMHASS environment.
 
 *Linux:*  
 *Assuming docker and git installed*
@@ -303,6 +321,7 @@ git clone $repo
 cd emhass 
 git checkout $branch
 ```
+
 ```bash
 #testing addon (build and run)
 docker build -t emhass/docker --build-arg build_version=addon-local .
@@ -346,6 +365,17 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 curl -i -H "Content-Type:application/json" -X POST -d  '{"csv_file": "heating_prediction.csv", "features": ["degreeday", "solar"], "target": "hour", "regression_model": "RandomForestRegression", "model_type": "heating_hours_degreeday", "timestamp": "timestamp", "date_features": ["month", "day_of_week"], "new_values": [12.79, 4.766, 1, 2] }' http://localhost:5000/action/regressor-model-fit
 curl -i -H "Content-Type:application/json" -X POST -d  '{"mlr_predict_entity_id": "sensor.mlr_predict", "mlr_predict_unit_of_measurement": "h", "mlr_predict_friendly_name": "mlr predictor", "new_values": [8.2, 7.23, 2, 6], "model_type": "heating_hours_degreeday" }' http://localhost:5000/action/regressor-model-predict
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
+```
+
+```bash
+#testing unittest (run standalone with extra files)
+docker run --rm -it -p 5000:5000 --name emhass-container -v $(pwd)/tests/:/app/tests/ -v $(pwd)/data/:/app/data/ -v $(pwd)/"secrets_emhass(example).yaml":/app/"secrets_emhass(example).yaml" -v $(pwd)/options.json:/app/options.json -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/docker
+```
+```bash
+#run unittest's on separate terminal
+docker exec emhass-container apt-get update 
+docker exec emhass-container apt-get install python3-requests-mock -y
+docker exec emhass-container python3 -m unittest discover -s ./tests -p 'test_*.py' | grep error
 ```
 
 User may wish to re-test with tweaked parameters such as `lp_solver`, `weather_forecast_method` and `load_forecast_method`, in `config_emhass.yaml` *(standalone)* or `options.json` *(addon)*, to broaden the testing scope. 
