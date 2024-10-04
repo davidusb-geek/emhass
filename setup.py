@@ -62,7 +62,7 @@ setup(
             'emhass=emhass.command_line:main',
         ],
     },
-    package_data={'emhass': ['templates/index.html','templates/template.html','static/advanced.html','static/basic.html', 'static/script.js',
-    'static/style.css','static/img/emhass_icon.png','static/img/emhass_logo_short.svg', 'static/img/feather-sprite.svg',
-    'data/cec_modules.pbz2', 'data/cec_inverters.pbz2']},
+    package_data={'emhass': ['templates/index.html','templates/template.html','templates/configuration.html','static/advanced.html','static/basic.html', 'static/script.js', 'static/configuration_script.js',
+    'static/style.css','static/configuration_list.html','static/img/emhass_icon.png','static/img/emhass_logo_short.svg', 'static/img/feather-sprite.svg','static/data/param_definitions.json',
+    'data/cec_modules.pbz2', 'data/cec_inverters.pbz2','data/associations.csv','data/config_defaults.json']},
 )

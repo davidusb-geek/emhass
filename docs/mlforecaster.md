@@ -37,7 +37,7 @@ The minimum number of `days_to_retrieve` is hard coded to 9 by default. However,
 The default values for these parameters are:
 ```yaml
 runtimeparams = {
-    "days_to_retrieve": 9,
+    'historic_days_to_retrieve': 9,
     "model_type": "load_forecast",
     "var_model": "sensor.power_load_no_var_loads",
     "sklearn_model": "KNeighborsRegressor",

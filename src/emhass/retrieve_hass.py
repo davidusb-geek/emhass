@@ -62,7 +62,12 @@ class RetrieveHass:
         self.long_lived_token = long_lived_token
         self.freq = freq
         self.time_zone = time_zone
-        self.params = params
+        if (params == None) or (params == "null"):
+            self.params = {}
+        elif type(params) is dict:
+            self.params = params
+        else:
+            self.params = json.loads(params)
         self.emhass_conf = emhass_conf
         self.logger = logger
         self.get_data_from_file = get_data_from_file
@@ -450,11 +455,11 @@ class RetrieveHass:
                     metadata = {}
                 with open(entities_path / "metadata.json", "w") as file:                       
                     # Save entity metadata, key = entity_id 
-                    metadata[entity_id] = {'name': data_df.name, 'unit_of_measurement': unit_of_measurement,'friendly_name': friendly_name,'type_var': type_var, 'freq': int(self.freq.seconds / 60)}
+                    metadata[entity_id] = {'name': data_df.name, 'unit_of_measurement': unit_of_measurement,'friendly_name': friendly_name,'type_var': type_var, 'optimization_time_step': int(self.freq.seconds / 60)}
                     
                     # Find lowest frequency to set for continual loop freq
-                    if metadata.get("lowest_freq",None) == None or metadata["lowest_freq"] > int(self.freq.seconds / 60):
-                        metadata["lowest_freq"] = int(self.freq.seconds / 60)
+                    if metadata.get("lowest_time_step",None) == None or metadata["lowest_time_step"] > int(self.freq.seconds / 60):
+                        metadata["lowest_time_step"] = int(self.freq.seconds / 60)
                     json.dump(metadata,file, indent=4)
 
                     self.logger.debug("Saved " + entity_id + " to json file")   

@@ -141,7 +141,8 @@ class MLForecaster:
         elif self.sklearn_model == 'KNeighborsRegressor':
             base_model = KNeighborsRegressor()
         else:
-            self.logger.error("Passed sklearn model "+self.sklearn_model+" is not valid")
+            self.logger.error("Passed sklearn model "+self.sklearn_model+" is not valid. Defaulting to KNeighborsRegressor")
+            base_model = KNeighborsRegressor()
         # Define the forecaster object
         self.forecaster = ForecasterAutoreg(
             regressor = base_model,

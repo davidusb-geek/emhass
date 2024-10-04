@@ -10,7 +10,7 @@ pd.options.plotting.backend = "plotly"
 
 from emhass.retrieve_hass import RetrieveHass
 from emhass.forecast import Forecast
-from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
+from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger, build_secrets, build_params
 
 from sklearn.linear_model import LinearRegression
 from sklearn.linear_model import ElasticNet
@@ -26,15 +26,17 @@ from skforecast.utils import load_forecaster
 
 
 # the root folder
-root = str(get_root(__file__, num_parent=2))
+root = pathlib.Path(str(get_root(__file__, num_parent=2)))
 emhass_conf = {}
-emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
-emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
-emhass_conf['root_path'] = pathlib.Path(root)
+emhass_conf['data_path'] = root / 'data/'
+emhass_conf['docs_path'] = root / 'docs/'
+emhass_conf['root_path'] = root / 'src/emhass/'
+emhass_conf['config_path'] = root / 'config.json'
+emhass_conf['defaults_path'] = emhass_conf['root_path']  / 'data/config_defaults.json'
+emhass_conf['associations_path'] = emhass_conf['root_path']  / 'data/associations.csv'
 
 # create logger
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=True)
-
 
 def add_date_features(data):
     df = copy.deepcopy(data)
@@ -57,8 +59,10 @@ if __name__ == '__main__':
     sklearn_model = "KNeighborsRegressor"
     num_lags = 48
     
+    # Build params with no config and default secrets
     data_path = emhass_conf['data_path'] / str('data_train_'+model_type+'.pkl')
-    params = None
+    _,secrets = build_secrets(emhass_conf,logger,no_response=True)
+    params =  build_params(emhass_conf,secrets,{},logger)
     template = 'presentation'
 
     if data_path.is_file():
@@ -67,9 +71,9 @@ if __name__ == '__main__':
             data, var_model = pickle.load(fid)
     else:
         logger.info("Using EMHASS methods to retrieve the new forecast model train data")
-        retrieve_hass_conf, _, _ = get_yaml_parse(emhass_conf, use_secrets=True)
+        retrieve_hass_conf, _, _ = get_yaml_parse(params,logger)
         rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
-        retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
+        retrieve_hass_conf['optimization_time_step'], retrieve_hass_conf['time_zone'],
         params, emhass_conf, logger, get_data_from_file=False)
 
         days_list = get_days_list(days_to_retrieve)
@@ -87,7 +91,7 @@ if __name__ == '__main__':
     fig.update_yaxes(title_text = "Power (W)")
     fig.update_xaxes(title_text = "Time")
     fig.show()
-    fig.write_image(emhass_conf['root_path'] / "docs/images/inputs_power_load_forecast.svg", width=1080, height=0.8*1080)
+    fig.write_image(emhass_conf['docs_path'] / "images/inputs_power_load_forecast.svg", width=1080, height=0.8*1080)
 
     data.index = pd.to_datetime(data.index)
     data.sort_index(inplace=True)
@@ -140,7 +144,7 @@ if __name__ == '__main__':
     fig.update_xaxes(title_text = "Time")
     fig.update_xaxes(range=[date_train+pd.Timedelta('10days'), data_exo.index[-1]])
     fig.show()
-    fig.write_image(emhass_conf['root_path'] / "docs/images/load_forecast_knn_bare.svg", width=1080, height=0.8*1080)
+    fig.write_image(emhass_conf['docs_path'] / "images/load_forecast_knn_bare.svg", width=1080, height=0.8*1080)
     
     logger.info("Simple backtesting")
     start_time = time.time()
@@ -166,7 +170,7 @@ if __name__ == '__main__':
     fig.update_yaxes(title_text = "Power (W)")
     fig.update_xaxes(title_text = "Time")
     fig.show()
-    fig.write_image(emhass_conf['root_path'] / "docs/images/load_forecast_knn_bare_backtest.svg", width=1080, height=0.8*1080)
+    fig.write_image(emhass_conf['docs_path'] / "images/load_forecast_knn_bare_backtest.svg", width=1080, height=0.8*1080)
     
     # Bayesian search hyperparameter and lags with Skopt
     
@@ -224,7 +228,7 @@ if __name__ == '__main__':
     fig.update_xaxes(title_text = "Time")
     fig.update_xaxes(range=[date_train+pd.Timedelta('10days'), data_exo.index[-1]])
     fig.show()
-    fig.write_image(emhass_conf['root_path'] / "docs/images/load_forecast_knn_optimized.svg", width=1080, height=0.8*1080)
+    fig.write_image(emhass_conf['docs_path'] / "images/load_forecast_knn_optimized.svg", width=1080, height=0.8*1080)
     
     logger.info("######################## Train/Test R2 score comparison ######################## ")
     pred_naive_metric_train = r2_score(df.loc[data_train.index,'train'],df.loc[data_train.index,'pred_naive'])
@@ -251,11 +255,11 @@ if __name__ == '__main__':
     
     # Then retrieve some data and perform a prediction mocking a production env
     rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
-                      retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
+                      retrieve_hass_conf['optimization_time_step'], retrieve_hass_conf['time_zone'],
                       params, emhass_conf, logger, get_data_from_file=False)
 
     days_list = get_days_list(days_needed)
-    var_model = retrieve_hass_conf['var_load']
+    var_model = retrieve_hass_conf['sensor_power_load_no_var_loads']
     var_list = [var_model]
     rh.get_data(days_list, var_list)
     data_last_window = copy.deepcopy(rh.df_final)
@@ -275,4 +279,4 @@ if __name__ == '__main__':
     fig.update_yaxes(title_text = "Power (W)")
     fig.update_xaxes(title_text = "Time")
     fig.show()
-    fig.write_image(emhass_conf['root_path'] / "docs/images/load_forecast_production.svg", width=1080, height=0.8*1080)
+    fig.write_image(emhass_conf['docs_path'] / "images/load_forecast_production.svg", width=1080, height=0.8*1080)

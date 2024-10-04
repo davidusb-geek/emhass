@@ -238,7 +238,7 @@ Either in the Home Assistant add-on config screen:
 
 Either as runtime parameter:
 ```
-curl -i -H 'Content-Type:application/json' -X POST -d '{"prediction_horizon":30, "def_total_hours":[4,2],"def_start_timestep":[4,0],"def_end_timestep":[27,23]}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{"prediction_horizon":30, 'operating_hours_of_each_deferrable_load':[4,2],'start_timesteps_of_each_deferrable_load':[4,0],'end_timesteps_of_each_deferrable_load':[27,23]}' http://localhost:5000/action/naive-mpc-optim
 ```
 
 Please note that the proposed deferrable load time windows will be submitted to a validation step & can be automatically corrected.

@@ -21,11 +21,14 @@ from emhass.utils import get_root, get_logger
 if __name__ == '__main__':
 
     # the root folder
-    root = str(get_root(__file__, num_parent=2))
+    root = pathlib.Path(str(get_root(__file__, num_parent=2)))
     emhass_conf = {}
-    emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
-    emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
-    emhass_conf['root_path'] = pathlib.Path(root)
+    emhass_conf['data_path'] = root / 'data/'
+    emhass_conf['root_path'] = root / 'src/emhass/'
+    emhass_conf['docs_path'] = root / 'docs/'
+    emhass_conf['config_path'] = root / 'config.json'
+    emhass_conf['defaults_path'] = emhass_conf['root_path']  / 'data/config_defaults.json'
+    emhass_conf['associations_path'] = emhass_conf['root_path']  / 'data/associations.csv'
 
     # create logger
     logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
@@ -137,7 +140,7 @@ if __name__ == '__main__':
     this_figure.show()
 
     if save_figs:
-        fig_filename = emhass_conf['root_path'] / "docs/images/optim_results"
+        fig_filename = emhass_conf['docs_path'] / "images/optim_results"
         this_figure.write_image(str(fig_filename) + ".png", width=1.5*768, height=1.5*1.5*768)
 
     fig_bar = px.bar(np.arange(len(cf)), x=[c+" (+"+"{:.2f}".format(np.sum(data['gain_'+c])*100/np.sum(
@@ -151,5 +154,5 @@ if __name__ == '__main__':
     fig_bar.show()
 
     if save_figs:
-        fig_filename = emhass_conf['root_path'] / "docs/images/optim_results_bar_plot"
+        fig_filename = emhass_conf['docs_path'] / "images/optim_results_bar_plot"
         fig_bar.write_image(str(fig_filename) + ".png", width=1080, height=0.8*1080)

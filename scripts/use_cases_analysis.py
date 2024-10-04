@@ -7,6 +7,7 @@
     Before running this script you should perform a perfect optimization for each type of cost function:
     profit, cost and self-consumption 
 '''
+import json
 import numpy as np
 import pandas as pd
 import pathlib
@@ -19,14 +20,18 @@ pd.options.plotting.backend = "plotly"
 from emhass.retrieve_hass import RetrieveHass
 from emhass.optimization import Optimization
 from emhass.forecast import Forecast
-from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
+from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger, build_config, build_secrets, build_params
 
 # the root folder
-root = str(get_root(__file__, num_parent=2))
+root = pathlib.Path(str(get_root(__file__, num_parent=2)))
 emhass_conf = {}
-emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
-emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
-emhass_conf['root_path'] = pathlib.Path(root)
+emhass_conf['data_path'] = root / 'data/'
+emhass_conf['root_path'] = root / 'src/emhass/'
+emhass_conf['docs_path'] = root / 'docs/'
+emhass_conf['config_path'] = root / 'config.json'
+emhass_conf['secrets_path'] =  root / 'secrets_emhass.yaml'
+emhass_conf['defaults_path'] = emhass_conf['root_path']  / 'data/config_defaults.json'
+emhass_conf['associations_path'] = emhass_conf['root_path']  / 'data/associations.csv'
 
 # create logger
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
@@ -49,18 +54,22 @@ if __name__ == '__main__':
     get_data_from_file = False
     params = None
     save_figures = False
-    retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf, use_secrets=True)
+    # Build params with default config and secrets file
+    config = build_config(emhass_conf,logger,emhass_conf['defaults_path'])
+    _,secrets = build_secrets(emhass_conf,logger,secrets_path=emhass_conf['secrets_path'],no_response=True)
+    params =  build_params(emhass_conf,secrets,config,logger)
+    retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(params, logger)
     rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
-                      retrieve_hass_conf['freq'], retrieve_hass_conf['time_zone'],
+                      retrieve_hass_conf['optimization_time_step'], retrieve_hass_conf['time_zone'],
                       params, emhass_conf, logger)
-    days_list = get_days_list(retrieve_hass_conf['days_to_retrieve'])
-    var_list = [retrieve_hass_conf['var_load'], retrieve_hass_conf['var_PV']]
+    days_list = get_days_list(retrieve_hass_conf['historic_days_to_retrieve'])
+    var_list = [retrieve_hass_conf['sensor_power_load_no_var_loads'], retrieve_hass_conf['sensor_power_photovoltaics']]
     rh.get_data(days_list, var_list,
                     minimal_response=False, significant_changes_only=False)
-    rh.prepare_data(retrieve_hass_conf['var_load'], load_negative = retrieve_hass_conf['load_negative'],
+    rh.prepare_data(retrieve_hass_conf['sensor_power_load_no_var_loads'], load_negative = retrieve_hass_conf['load_negative'],
                             set_zero_min = retrieve_hass_conf['set_zero_min'], 
-                            var_replace_zero = retrieve_hass_conf['var_replace_zero'], 
-                            var_interp = retrieve_hass_conf['var_interp'])
+                            var_replace_zero = retrieve_hass_conf['sensor_replace_zero'], 
+                            var_interp = retrieve_hass_conf['sensor_linear_interp'])
     df_input_data = rh.df_final.copy()
     fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt = \
         get_forecast_optim_objects(retrieve_hass_conf, optim_conf, plant_conf,
@@ -71,14 +80,14 @@ if __name__ == '__main__':
     template = 'presentation'
     
     # Let's plot the input data
-    fig_inputs1 = df_input_data[[str(retrieve_hass_conf['var_PV']),
-                                str(retrieve_hass_conf['var_load'] + '_positive')]].plot()
+    fig_inputs1 = df_input_data[[str(retrieve_hass_conf['sensor_power_photovoltaics']),
+                                str(retrieve_hass_conf['sensor_power_load_no_var_loads'] + '_positive')]].plot()
     fig_inputs1.layout.template = template
     fig_inputs1.update_yaxes(title_text = "Powers (W)")
     fig_inputs1.update_xaxes(title_text = "Time")
     fig_inputs1.show()
     if save_figures:
-        fig_inputs1.write_image(emhass_conf['root_path'] / "docs/images/inputs_power.svg", 
+        fig_inputs1.write_image(emhass_conf['docs_path'] / "images/inputs_power.svg", 
                                 width=1080, height=0.8*1080)
     
     fig_inputs2 = df_input_data[['unit_load_cost',
@@ -88,7 +97,7 @@ if __name__ == '__main__':
     fig_inputs2.update_xaxes(title_text = "Time")
     fig_inputs2.show()
     if save_figures:
-        fig_inputs2.write_image(emhass_conf['root_path'] / "docs/images/inputs_cost_price.svg", 
+        fig_inputs2.write_image(emhass_conf['docs_path'] / "images/inputs_cost_price.svg", 
                                 width=1080, height=0.8*1080)
     
     fig_inputs_dah = df_input_data_dayahead.plot()
@@ -97,7 +106,7 @@ if __name__ == '__main__':
     fig_inputs_dah.update_xaxes(title_text = "Time")
     fig_inputs_dah.show()
     if save_figures:
-        fig_inputs_dah.write_image(emhass_conf['root_path'] / "docs/images/inputs_dayahead.svg", 
+        fig_inputs_dah.write_image(emhass_conf['docs_path'] / "images/inputs_dayahead.svg", 
                                    width=1080, height=0.8*1080)
     
     # Let's first perform a perfect optimization
@@ -108,7 +117,7 @@ if __name__ == '__main__':
     fig_res.update_xaxes(title_text = "Time")
     fig_res.show()
     if save_figures:
-        fig_res.write_image(emhass_conf['root_path'] / "docs/images/optim_results_PV_defLoads_perfectOptim.svg", 
+        fig_res.write_image(emhass_conf['docs_path'] / "images/optim_results_PV_defLoads_perfectOptim.svg", 
                             width=1080, height=0.8*1080)
     
     print("System with: PV, two deferrable loads, perfect optimization, profit >> total cost function sum: "+\
@@ -124,7 +133,7 @@ if __name__ == '__main__':
     fig_res_dah.update_xaxes(title_text = "Time")
     fig_res_dah.show()
     if save_figures:
-        fig_res_dah.write_image(emhass_conf['root_path'] / "docs/images/optim_results_PV_defLoads_dayaheadOptim.svg", 
+        fig_res_dah.write_image(emhass_conf['docs_path'] / "images/optim_results_PV_defLoads_dayaheadOptim.svg", 
                                 width=1080, height=0.8*1080)
     
     print("System with: PV, two deferrable loads, dayahead optimization, profit >> total cost function sum: "+\
@@ -144,7 +153,7 @@ if __name__ == '__main__':
     fig_res_dah.update_xaxes(title_text = "Time")
     fig_res_dah.show()
     if save_figures:
-        fig_res_dah.write_image(emhass_conf['root_path'] / "docs/images/optim_results_defLoads_dayaheadOptim.svg", 
+        fig_res_dah.write_image(emhass_conf['docs_path'] / "images/optim_results_defLoads_dayaheadOptim.svg", 
                                 width=1080, height=0.8*1080)
     
     print("System with: two deferrable loads, dayahead optimization, profit >> total cost function sum: "+\
@@ -165,7 +174,7 @@ if __name__ == '__main__':
     fig_res_dah.update_xaxes(title_text = "Time")
     fig_res_dah.show()
     if save_figures:
-        fig_res_dah.write_image(emhass_conf['root_path'] / "docs/images/optim_results_PV_Batt_defLoads_dayaheadOptim.svg", 
+        fig_res_dah.write_image(emhass_conf['docs_path'] / "images/optim_results_PV_Batt_defLoads_dayaheadOptim.svg", 
                                 width=1080, height=0.8*1080)
     fig_res_dah = opt_res_dah[['SOC_opt']].plot()
     fig_res_dah.layout.template = template
@@ -173,7 +182,7 @@ if __name__ == '__main__':
     fig_res_dah.update_xaxes(title_text = "Time")
     fig_res_dah.show()
     if save_figures:
-        fig_res_dah.write_image(emhass_conf['root_path'] / "docs/images/optim_results_PV_Batt_defLoads_dayaheadOptim_SOC.svg", 
+        fig_res_dah.write_image(emhass_conf['docs_path'] / "images/optim_results_PV_Batt_defLoads_dayaheadOptim_SOC.svg", 
                                 width=1080, height=0.8*1080)
     
     print("System with: PV, Battery, two deferrable loads, dayahead optimization, profit >> total cost function sum: "+\
