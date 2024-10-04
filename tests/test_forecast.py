@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import unittest
+import os
 import requests_mock
 import pandas as pd
 import pathlib, pickle, json, copy, yaml
@@ -147,6 +148,11 @@ class TestForecast(unittest.TestCase):
             self.assertEqual(len(df_weather_scrap), len(P_PV_forecast))
 
     def test_get_weather_forecast_solcast_method_mock(self):
+        self.fcst.params = {'passed_data': {'weather_forecast_cache': False, 'weather_forecast_cache_only': False}}
+        self.fcst.retrieve_hass_conf['solcast_api_key'] = "123456"
+        self.fcst.retrieve_hass_conf['solcast_rooftop_id'] =  "123456"
+        if os.path.isfile(emhass_conf['data_path'] / "weather_forecast_data.pkl"): 
+            os.rename(emhass_conf['data_path'] / "weather_forecast_data.pkl", emhass_conf['data_path'] / "temp_weather_forecast_data.pkl")
         with requests_mock.mock() as m:
             data = bz2.BZ2File(str(emhass_conf['data_path'] / 'test_response_solcast_get_method.pbz2'), "rb")
             data = cPickle.load(data)
@@ -160,6 +166,8 @@ class TestForecast(unittest.TestCase):
             self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_scrap.index)
             self.assertEqual(len(df_weather_scrap), 
                             int(self.optim_conf['delta_forecast'].total_seconds()/3600/self.fcst.timeStep))
+            if os.path.isfile(emhass_conf['data_path'] / "temp_weather_forecast_data.pkl"): 
+                os.rename(emhass_conf['data_path'] / "temp_weather_forecast_data.pkl", emhass_conf['data_path'] / "weather_forecast_data.pkl")
         
     def test_get_weather_forecast_solarforecast_method_mock(self):
         with requests_mock.mock() as m:

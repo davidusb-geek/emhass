@@ -97,6 +97,8 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
         # Get PV and load forecasts
         df_weather = fcst.get_weather_forecast(
             method=optim_conf["weather_forecast_method"])
+        if isinstance(df_weather, bool) and not df_weather:
+            return False
         P_PV_forecast = fcst.get_power_from_weather(df_weather)
         P_load_forecast = fcst.get_load_forecast(
             method=optim_conf['load_forecast_method'])
@@ -107,7 +109,11 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
         df_input_data_dayahead = pd.DataFrame(np.transpose(np.vstack(
             [P_PV_forecast.values, P_load_forecast.values])), index=P_PV_forecast.index,
             columns=["P_PV_forecast", "P_load_forecast"])
-        df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
+        if "freq" in retrieve_hass_conf and retrieve_hass_conf["freq"]:
+            freq = pd.to_timedelta(retrieve_hass_conf["freq"], "minute")
+            df_input_data_dayahead = df_input_data_dayahead.asfreq(freq)
+        else:
+            df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
         params = json.loads(params)
         if ("prediction_horizon" in params["passed_data"] and params["passed_data"]["prediction_horizon"] is not None):
             prediction_horizon = params["passed_data"]["prediction_horizon"]
@@ -142,6 +148,8 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
         # Get PV and load forecasts
         df_weather = fcst.get_weather_forecast(
             method=optim_conf['weather_forecast_method'])
+        if isinstance(df_weather, bool) and not df_weather:
+            return False
         P_PV_forecast = fcst.get_power_from_weather(
             df_weather, set_mix_forecast=True, df_now=df_input_data)
         P_load_forecast = fcst.get_load_forecast(
@@ -151,7 +159,11 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
                 "Unable to get sensor power photovoltaics, or sensor power load no var loads. Check HA sensors and their daily data")
             return False
         df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
-        df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
+        if "freq" in retrieve_hass_conf and retrieve_hass_conf["freq"]:
+            freq = pd.to_timedelta(retrieve_hass_conf["freq"], "minute")
+            df_input_data_dayahead = df_input_data_dayahead.asfreq(freq)
+        else:
+            df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
         df_input_data_dayahead.columns = ["P_PV_forecast", "P_load_forecast"]
         params = json.loads(params)
         if ("prediction_horizon" in params["passed_data"] and params["passed_data"]["prediction_horizon"] is not None):
@@ -243,6 +255,49 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
     }
     return input_data_dict
 
+def weather_forecast_cache(emhass_conf: dict, params: str, 
+                   runtimeparams: str, logger: logging.Logger) -> bool:
+    """
+    Perform a call to get forecast function, intend to save results to cache.
+
+    :param emhass_conf: Dictionary containing the needed emhass paths
+    :type emhass_conf: dict
+    :param params: Configuration parameters passed from data/options.json
+    :type params: str
+    :param runtimeparams: Runtime optimization parameters passed as a dictionary
+    :type runtimeparams: str
+    :param logger: The passed logger object
+    :type logger: logging object
+    :return: A bool for function completion
+    :rtype: bool
+
+    """
+    
+    # Parsing yaml
+    retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
+        emhass_conf, use_secrets=True, params=params)
+    
+    # Treat runtimeparams
+    params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+        runtimeparams, params, retrieve_hass_conf, optim_conf, plant_conf, "forecast", logger)
+    
+    # Make sure weather_forecast_cache is true
+    if (params != None) and (params != "null"):
+        params = json.loads(params)
+    else:
+        params = {}
+    params["passed_data"]["weather_forecast_cache"] = True
+    params = json.dumps(params)
+
+    # Create Forecast object
+    fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
+                params, emhass_conf, logger)
+
+    result = fcst.get_weather_forecast(optim_conf["weather_forecast_method"])
+    if isinstance(result, bool) and not result:
+        return False
+
+    return True
 
 def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
                            save_data_to_file: Optional[bool] = True, 
@@ -286,8 +341,6 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
     if not debug:
         opt_res.to_csv(
             input_data_dict['emhass_conf']['data_path'] / filename, index_label='timestamp')
-        
-
     if not isinstance(input_data_dict["params"],dict):
         params = json.loads(input_data_dict["params"])
     else:
@@ -299,7 +352,6 @@ def perfect_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         publish_data(input_data_dict, logger, entity_save=True, dont_post=True)   
 
     return opt_res
-
 
 def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger, 
                             save_data_to_file: Optional[bool] = False, 
@@ -331,6 +383,9 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
+    if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
+        df_input_data_dayahead["outdoor_temperature_forecast"] = \
+            input_data_dict["params"]["passed_data"]["outdoor_temperature_forecast"]
     opt_res_dayahead = input_data_dict['opt'].perform_dayahead_forecast_optim(
         df_input_data_dayahead, input_data_dict['P_PV_forecast'], input_data_dict['P_load_forecast'])
     # Save CSV file for publish_data
@@ -349,7 +404,6 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         params = json.loads(input_data_dict["params"])
     else:
         params = input_data_dict["params"]
-
     
     # if continual_publish, save day_ahead results to data_path/entities json
     if input_data_dict["retrieve_hass_conf"].get("continual_publish",False) or params["passed_data"].get("entity_save",False):
@@ -357,7 +411,6 @@ def dayahead_forecast_optim(input_data_dict: dict, logger: logging.Logger,
         publish_data(input_data_dict, logger, entity_save=True, dont_post=True)   
         
     return opt_res_dayahead
-
 
 def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger, 
                     save_data_to_file: Optional[bool] = False, 
@@ -388,6 +441,9 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
         df_input_data_dayahead, method=input_data_dict['fcst'].optim_conf['prod_price_forecast_method'])
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
+    if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
+        df_input_data_dayahead["outdoor_temperature_forecast"] = \
+            input_data_dict["params"]["passed_data"]["outdoor_temperature_forecast"]
     # The specifics params for the MPC at runtime
     prediction_horizon = input_data_dict["params"]["passed_data"]["prediction_horizon"]
     soc_init = input_data_dict["params"]["passed_data"]["soc_init"]
@@ -423,7 +479,6 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
 
     return opt_res_naive_mpc
 
-
 def forecast_model_fit(input_data_dict: dict, logger: logging.Logger, 
                        debug: Optional[bool] = False) -> Tuple[pd.DataFrame, pd.DataFrame, MLForecaster]:
     """Perform a forecast model fit from training data retrieved from Home Assistant.
@@ -458,7 +513,6 @@ def forecast_model_fit(input_data_dict: dict, logger: logging.Logger,
         with open(filename_path, 'wb') as outp:
             pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
     return df_pred, df_pred_backtest, mlf
-
 
 def forecast_model_predict(input_data_dict: dict, logger: logging.Logger, 
                            use_last_window: Optional[bool] = True, 
@@ -537,7 +591,6 @@ def forecast_model_predict(input_data_dict: dict, logger: logging.Logger,
             type_var="mlforecaster", publish_prefix=publish_prefix)
     return predictions
 
-
 def forecast_model_tune(input_data_dict: dict, logger: logging.Logger, 
                         debug: Optional[bool] = False, mlf: Optional[MLForecaster] = None
                         ) -> Tuple[pd.DataFrame, MLForecaster]:
@@ -577,7 +630,6 @@ def forecast_model_tune(input_data_dict: dict, logger: logging.Logger,
         with open(filename_path, 'wb') as outp:
             pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
     return df_pred_optim, mlf
-
 
 def regressor_model_fit(input_data_dict: dict, logger: logging.Logger, 
                         debug: Optional[bool] = False) -> MLRegressor:
@@ -632,7 +684,6 @@ def regressor_model_fit(input_data_dict: dict, logger: logging.Logger,
         with open(filename_path, "wb") as outp:
             pickle.dump(mlr, outp, pickle.HIGHEST_PROTOCOL)
     return mlr
-
 
 def regressor_model_predict(input_data_dict: dict, logger: logging.Logger, 
                             debug: Optional[bool] = False, mlr: Optional[MLRegressor] = None
@@ -801,19 +852,35 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
     )
     cols_published = ["P_PV", "P_Load"]
     # Publish PV curtailment
-    custom_pv_curtailment_id = params["passed_data"]["custom_pv_curtailment_id"]
-    input_data_dict["rh"].post_data(
-        opt_res_latest["P_PV_curtailment"],
-        idx_closest,
-        custom_pv_curtailment_id["entity_id"],
-        custom_pv_curtailment_id["unit_of_measurement"],
-        custom_pv_curtailment_id["friendly_name"],
-        type_var="power",
-        publish_prefix=publish_prefix,
-        save_entities=entity_save,
-        dont_post=dont_post
-    )
-    cols_published = cols_published + ["P_PV_curtailment"]
+    if input_data_dict["fcst"].plant_conf['compute_curtailment']:
+        custom_pv_curtailment_id = params["passed_data"]["custom_pv_curtailment_id"]
+        input_data_dict["rh"].post_data(
+            opt_res_latest["P_PV_curtailment"],
+            idx_closest,
+            custom_pv_curtailment_id["entity_id"],
+            custom_pv_curtailment_id["unit_of_measurement"],
+            custom_pv_curtailment_id["friendly_name"],
+            type_var="power",
+            publish_prefix=publish_prefix,
+            save_entities=entity_save,
+            dont_post=dont_post
+        )
+        cols_published = cols_published + ["P_PV_curtailment"]
+    # Publish P_hybrid_inverter
+    if input_data_dict["fcst"].plant_conf['inverter_is_hybrid']:
+        custom_hybrid_inverter_id = params["passed_data"]["custom_hybrid_inverter_id"]
+        input_data_dict["rh"].post_data(
+            opt_res_latest["P_hybrid_inverter"],
+            idx_closest,
+            custom_hybrid_inverter_id["entity_id"],
+            custom_hybrid_inverter_id["unit_of_measurement"],
+            custom_hybrid_inverter_id["friendly_name"],
+            type_var="power",
+            publish_prefix=publish_prefix,
+            save_entities=entity_save,
+            dont_post=dont_post
+        )
+        cols_published = cols_published + ["P_hybrid_inverter"]
     # Publish deferrable loads
     custom_deferrable_forecast_id = params["passed_data"][
         "custom_deferrable_forecast_id"
@@ -837,6 +904,25 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
                 dont_post=dont_post
             )
             cols_published = cols_published + ["P_deferrable{}".format(k)]
+    # Publish thermal model data (predicted temperature)
+    custom_predicted_temperature_id = params["passed_data"][
+        "custom_predicted_temperature_id"
+    ]
+    for k in range(input_data_dict["opt"].optim_conf["num_def_loads"]):
+        if "def_load_config" in input_data_dict["opt"].optim_conf.keys():
+            if "thermal_config" in input_data_dict["opt"].optim_conf["def_load_config"][k]:
+                input_data_dict["rh"].post_data(
+                    opt_res_latest["predicted_temp_heater{}".format(k)],
+                    idx_closest,
+                    custom_predicted_temperature_id[k]["entity_id"],
+                    custom_predicted_temperature_id[k]["unit_of_measurement"],
+                    custom_predicted_temperature_id[k]["friendly_name"],
+                    type_var="temperature",
+                    publish_prefix=publish_prefix,
+                    save_entities=entity_save,
+                    dont_post=dont_post
+                )
+                cols_published = cols_published + ["predicted_temp_heater{}".format(k)]
     # Publish battery power
     if input_data_dict["opt"].optim_conf["set_use_battery"]:
         if "P_batt" not in opt_res_latest.columns:
@@ -908,18 +994,19 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         logger.warning(
             "no optim_status in opt_res_latest, run an optimization task first",
         )
-    input_data_dict["rh"].post_data(
-        opt_res_latest["optim_status"],
-        idx_closest,
-        custom_cost_fun_id["entity_id"],
-        custom_cost_fun_id["unit_of_measurement"],
-        custom_cost_fun_id["friendly_name"],
-        type_var="optim_status",
-        publish_prefix=publish_prefix,
-        save_entities=entity_save,
-        dont_post=dont_post
-    )
-    cols_published = cols_published + ["optim_status"]
+    else:
+        input_data_dict["rh"].post_data(
+            opt_res_latest["optim_status"],
+            idx_closest,
+            custom_cost_fun_id["entity_id"],
+            custom_cost_fun_id["unit_of_measurement"],
+            custom_cost_fun_id["friendly_name"],
+            type_var="optim_status",
+            publish_prefix=publish_prefix,
+            save_entities=entity_save,
+            dont_post=dont_post
+        )
+        cols_published = cols_published + ["optim_status"]
     # Publish unit_load_cost
     custom_unit_load_cost_id = params["passed_data"]["custom_unit_load_cost_id"]
     input_data_dict["rh"].post_data(
@@ -1126,7 +1213,7 @@ def main():
         logger.error("Could not find emhass/src foulder in: " + str(root_path))
         logger.error("Try setting emhass root path with --root")
         return False
-    # Additionnal argument
+    # Additional argument
     try:
         parser.add_argument(
             "--version",

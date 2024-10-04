@@ -131,7 +131,7 @@ You can run all the unittests by heading to the [`Testing`](https://code.visuals
 With Docker, you can test the production EMHASS environment in both standalone and add-on mode via modifying the build argument: `build_version` with values: `standalone`, `addon-pip`, `addon-git`, `addon-local`.  
 
 Depending on your choice of running standalone or addon, `docker run` will require different passed variables/arguments to function. See following examples:
-Depending on your siltation, you may wish to build EMHASS using a version from a particular git/branch or pip PyPI version. There are examples bellow for these alternative builds.  
+Depending on your siltation, you may wish to build EMHASS using a version from a particular git/branch or pip PyPI version. There are examples bellow for these alternative builds. 
 
 _Note: Make sure your terminal is in the root `emhass` directory before running the docker build._
 
@@ -211,7 +211,7 @@ docker build -t emhass/docker --build-arg build_version=addon-pip .
 
 docker run -it -p 5000:5000 --name emhass-container -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" -v $(pwd)/options.json:/app/options.json emhass/docker --url YOURHAURLHERE --key YOURHAKEYHERE
 ```
-To build with specific pip version, set with build arg: `build_pip_version`: 
+To build with a specific pip version, set with build arg: `build_pip_version`: 
 ```bash
 docker build -t emhass/docker --build-arg build_version=addon-pip --build-arg build_pip_version='==0.7.7' .
 
@@ -245,7 +245,7 @@ docker run... -v $(pwd)/data/heating_prediction.csv:/app/data/ ...
 ```
 
 #### Issue with TARGETARCH
-If your docker build fails with an error related to `TARGETARCH`. It may be best to add your devices architecture manually:
+If your docker build fails with an error related to `TARGETARCH`. It may be best to add your device's architecture manually:
 
 Example with armhf architecture 
 ```bash
@@ -275,7 +275,7 @@ _Linux:_
 docker build -t emhass/docker --build-arg build_version=addon-local . && docker run --rm -it -p 5000:5000 -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name emhass-container emhass/docker 
 ```
 
-_The example command chain rebuilds Docker image, and runs new container with newly built image. `--rm` has been added to the `docker run` to delete the container once ended to avoid manual deletion every time._  
+_The example command chain rebuilds the Docker image and runs a new container with the newly built image. `--rm` has been added to the `docker run` to delete the container once ended to avoid manual deletion every time._  
 _This use case may not require any volume mounts (unless you use secrets_emhass.yaml) as the Docker build process will pull the latest versions of the configs as it builds._
 
 
@@ -288,7 +288,7 @@ docker build -t emhass/docker --build-arg build_version=addon-local .
 docker run -it -p 5000:5000 --name emhass-container -e URL="YOURHAURLHERE" -e KEY="YOURHAKEYHERE" -e LAT="45.83" -e LON="6.86" -e ALT="4807.8" -e TIME_ZONE="Europe/Paris" emhass/docker
 ```
 
-This allows the user to set variables prior to build
+This allows the user to set variables before the build
 Linux:
 
 ```bash

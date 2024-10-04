@@ -1,23 +1,23 @@
 # The forecast module
 
-EMHASS will basically need 4 forecasts to work properly:
+EMHASS will need 4 forecasts to work properly:
 
 - PV power production forecast (internally based on the weather forecast and the characteristics of your PV plant). This is given in Watts.
 
-- Load power forecast: how much power your house will demand on the next 24h. This is given in Watts.
+- Load power forecast: how much power your house will demand in the next 24 hours. This is given in Watts.
 
-- Load cost forecast: the price of the energy from the grid on the next 24h. This is given in EUR/kWh.
+- Load cost forecast: the price of the energy from the grid in the next 24 hours. This is given in EUR/kWh.
 
-- PV production selling price forecast: at what price are you selling your excess PV production on the next 24h. This is given in EUR/kWh.
+- PV production selling price forecast: the price at which you will sell your excess PV production in the next 24 hours. This is given in EUR/kWh.
 
-There are methods that are generalized to the 4 forecast needed. For all there forecasts it is possible to pass the data either as a passed list of values or by reading from a CSV file. With these methods it is then possible to use data from external forecast providers.
+Some methods are generalized to the 4 forecasts needed. For all the forecasts it is possible to pass the data either as a passed list of values or by reading from a CSV file. With these methods, it is then possible to use data from external forecast providers.
     
-Then there are the methods that are specific to each type of forecast and that proposed forecast treated and generated internally by this EMHASS forecast class. For the weather forecast a first method (`scrapper`) uses a scrapping to the ClearOutside webpage which proposes detailed forecasts based on Lat/Lon locations. Another method (`solcast`) is using the SolCast PV production forecast service. A final method (`solar.forecast`) is using another external service: Solar.Forecast, for which just the nominal PV peak installed power should be provided. Search the forecast section on the documentation for examples on how to implement these different methods.
+Then there are the methods that are specific to each type of forecast and that proposed forecast is treated and generated internally by this EMHASS forecast class. For the weather forecast, the first method (`scrapper`) uses scrapping to the ClearOutside webpage which proposes detailed forecasts based on Lat/Lon locations. Another method (`solcast`) is using the Solcast PV production forecast service. A final method (`solar.forecast`) is using another external service: Solar.Forecast, for which just the nominal PV peak installed power should be provided. Search the forecast section on the documentation for examples of how to implement these different methods.
 
-The `get_power_from_weather` method is proposed here to convert from irradiance data to electrical power. The PVLib module is used to model the PV plant. A dedicated webapp will help you search for your correct PV module and inverter: [https://emhass-pvlib-database.streamlit.app/](https://emhass-pvlib-database.streamlit.app/)
+The `get_power_from_weather` method is proposed here to convert irradiance data to electrical power. The PVLib module is used to model the PV plant. A dedicated web app will help you search for your correct PV module and inverter: [https://emhass-pvlib-database.streamlit.app/](https://emhass-pvlib-database.streamlit.app/)
 
-The specific methods for the load forecast are a first method (`naive`) that uses a naive approach, also called persistance. It simply assumes that the forecast for 
-a future period will be equal to the observed values in a past period. The past period is controlled using parameter `delta_forecast`. A second method (`mlforecaster`)
+The specific methods for the load forecast is a first method (`naive`) that uses a naive approach, also called persistence. It simply assumes that the forecast for 
+a future period will be equal to the observed values in a past period. The past period is controlled using the parameter `delta_forecast`. A second method (`mlforecaster`)
 uses an internal custom forecasting model using machine learning. There is a section in the documentation explaining how to use this method.
     
 ```{note} 
@@ -25,34 +25,75 @@ uses an internal custom forecasting model using machine learning. There is a sec
 This custom machine learning model is introduced from v0.4.0. EMHASS proposed this new `mlforecaster` class with `fit`, `predict` and `tune` methods. Only the `predict` method is used here to generate new forecasts, but it is necessary to previously fit a forecaster model and it is a good idea to optimize the model hyperparameters using the `tune` method. See the dedicated section in the documentation for more help.
 ```
 
-For the PV production selling price and Load cost forecasts the privileged method is a direct read from a user provided list of values. The list should be passed as a runtime parameter during the `curl` to the EMHASS API.
+For the PV production selling price and Load cost forecasts the privileged method is a direct read from a user-provided list of values. The list should be passed as a runtime parameter during the `curl` to the EMHASS API.
 
 ## PV power production forecast
 
-The default method for PV power forecast is the scrapping of weather forecast data from the [https://clearoutside.com/](https://clearoutside.com/) website. This is obtained using `method=scrapper`. This site proposes detailed forecasts based on Lat/Lon locations. This method seems quite stable but as with any scrape method it will fail if any changes are made to the webpage API. The weather forecast data is then converted into PV power production using the `list_pv_module_model` and `list_pv_inverter_model` paramters defined in the configuration.
+#### scrapper 
 
-A second method uses the SolCast solar forecast service. Go to [https://solcast.com/](https://solcast.com/) and configure your system. You will need to set `method=solcast` and basically use two parameters `solcast_rooftop_id` and `solcast_api_key` that should be passed as parameters at runtime. This will be limited to 10 API requests per day, the granularity will be 30 min and the forecast is updated every 6h. If needed, better performances may be obtained with paid plans: [https://solcast.com/pricing/live-and-forecast](https://solcast.com/pricing/live-and-forecast).
+The default method for PV power forecast is the scrapping of weather forecast data from the [https://clearoutside.com/](https://clearoutside.com/) website. This is obtained using `method=scrapper`. This site proposes detailed forecasts based on Lat/Lon locations. This method seems quite stable but as with any scrape method, it will fail if any changes are made to the webpage API. The weather forecast data is then converted into PV power production using the `list_pv_module_model` and `list_pv_inverter_model` parameters defined in the configuration.
+
+#### solcast 
+
+The second method uses the Solcast solar forecast service. Go to [https://solcast.com/](https://solcast.com/) and configure your system. You will need to set `method=solcast` and use two parameters `solcast_rooftop_id` and `solcast_api_key` that should be passed as parameters at runtime or provided in the configuration/secrets. The free hobbyist account will be limited to 10 API requests per day, the granularity will be 30 minutes and the forecast will be updated every 6 hours. If needed, better performances may be obtained with paid plans: [https://solcast.com/pricing/live-and-forecast](https://solcast.com/pricing/live-and-forecast).
 
 For example:
+```yaml
+# Set weather_forecast_method parameter to solcast in your configuration (configuration page / config_emhass.yaml)
+weather_forecast_method: 'solcast'
 ```
+```bash
+# Example of running day-ahead, passing Solcast secrets fyi runtime parameters (i.e. not set in configuration)
 curl -i -H "Content-Type:application/json" -X POST -d '{"solcast_rooftop_id":"<your_system_id>","solcast_api_key":"<your_secret_api_key>"}' http://localhost:5000/action/dayahead-optim
 ```
+</br>
 
-A third method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the PV peak installed power in kW) that should be passed at runtime. This will be using the free public Solar.Forecast account with 12 API requests per hour, per IP, and 1h data resolution. As with SolCast, there are paid account services that may results in better forecasts.
+##### Caching Solcast
+For those who use the free plan and wish to use Solcast with MPC, you may like to cache the output of a Solcast weather forecast request, then reference it in your automated MPC actions:
 
-For example, for a 5 kWp installation:
+```bash
+# Run weather forecast and cache results (Recommended to run this 1-10 times a day, throughout the day)
+curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/weather-forecast-cache
+
+# Then run your regular MPC call (E.g. every 5 minutes)
+curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/naive-mpc-optim
 ```
+EMHASS will see the saved Solcast cache and use its data over pulling from Solcast.
+
+`weather_forecast_cache` can also be provided in an optimization to save the forecast results to cache:
+```bash
+# Example of running day-ahead and optimization storing the retrieved Solcast data to cache
+curl -i -H 'Content-Type:application/json' -X POST -d '{"weather_forecast_cache":true}' http://localhost:5000/action/dayahead-optim
+```
+
+By default, if EMHASS finds a problem with the Solcast cache file, the cache will be automatically deleted. Due to the missing cache, the next optimization will run and pull data from Solcast.
+If you wish to make sure that a certain optimization will only use the cached data, (otherwise present an error) the runtime parameter `weather_forecast_cache_only` can be used:
+```bash
+# Run the weather forecast action 1-10 times a day 
+curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/weather-forecast-cache
+
+# Then run your regular MPC call (E.g. every 5 minutes) and make sure it only uses the Solcast cache. (do not pull from Solcast)
+curl -i -H 'Content-Type:application/json' -X POST -d '{"weather_forecast_cache_only":true}' http://localhost:5000/action/naive-mpc-optim
+```
+
+
+#### solar.forecast 
+
+A third method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the PV peak installed power in kW) that should be passed at runtime. This will be using the free public Solar.Forecast account with 12 API requests per hour, per IP, and 1h data resolution. As with Solcast, there are paid account services that may result in better forecasts.
+
+For example, for a 5 kW installation:
+```bash
 curl -i -H "Content-Type:application/json" -X POST -d '{"solar_forecast_kwp":5}' http://localhost:5000/action/dayahead-optim
 ```
 
 ```{note} 
 
-If you use the Solar.Forecast or Solcast methods, or explicitly pass the PV power forecast values (see below), the list_pv_module_model and list_pv_inverter_model paramters defined in the configuration will be ignored.
+If you use the Solar.Forecast or Solcast methods, or explicitly pass the PV power forecast values (see below), the list_pv_module_model and list_pv_inverter_model parameters defined in the configuration will be ignored.
 ```
 
 ## Load power forecast
 
-The default method for load forecast is a naive method, also called persistence. This is obtained using `method=naive`. This method simply assumes that the forecast for a future period will be equal to the observed values in a past period. The past period is controlled using parameter `delta_forecast` and the default value for this is 24h.
+The default method for load forecast is a naive method, also called persistence. This is obtained using `method=naive`. This method simply assumes that the forecast for a future period will be equal to the observed values in a past period. The past period is controlled using the parameter `delta_forecast` and the default value for this is 24h.
 
 This is presented graphically here:
 
@@ -63,7 +104,7 @@ This is presented graphically here:
 New in EMHASS v0.4.0: machine learning forecast models!
 ```
 
-Starting with v0.4.0, a new forecast framework is proposed within EMHASS. It provides a more efficient way to forecast the power load consumption. It is based on the `skforecast` module that uses `scikit-learn` regression models considering auto-regression lags as features. The hyperparameter optimization is proposed using bayesian optimization from the `optuna` module. To use this change to `method=mlforecaster` in the configuration.
+Starting with v0.4.0, a new forecast framework is proposed within EMHASS. It provides a more efficient way to forecast the power load consumption. It is based on the `skforecast` module that uses `scikit-learn` regression models considering auto-regression lags as features. The hyperparameter optimization is proposed using Bayesian optimization from the `optuna` module. To use this change to `method=mlforecaster` in the configuration.
 
 The API provides fit, predict and tune methods.
 
@@ -71,9 +112,9 @@ The following is an example of a trained model using a KNN regressor:
 
 ![](./images/load_forecast_knn_optimized.svg)
 
-The naive persistance model performs very well on the 2 day test period, however is well out-performed by the KNN regressor when back-testing on the complete training set (10 months of 30 minute time step data).
+The naive persistence model performs very well on the 2-day test period, however, is well outperformed by the KNN regressor when back-testing on the complete training set (10 months of 30-minute time step data).
 
-The hyperparameter tuning using bayesian optimization improves the bare KNN regressor from $R^2=0.59$ to $R^2=0.75$. The optimized number of lags is $48$.
+The hyperparameter tuning using Bayesian optimization improves the bare KNN regressor from $R^2=0.59$ to $R^2=0.75$. The optimized number of lags is $48$.
 
 See the [machine learning forecaster](mlforecaster.md) section for more details.
 
@@ -107,7 +148,7 @@ Then you will need to define the `prod_sell_price` variable to provide the corre
 
 ## Passing your own forecast data
 
-For all the needed forecasts in EMHASS two other methods allows the user to provide their own forecast value. This may be used to provide a forecast provided by a more powerful and accurate forecaster. The two methods are: `csv` and `list`.
+For all the needed forecasts in EMHASS, two other methods allow the user to provide their own forecast value. This may be used to provide a forecast provided by a more powerful and accurate forecaster. The two methods are: `csv` and `list`.
 
 For the `csv` method you should push a csv file to the `data` folder. The CSV file should contain no header and the timestamped data should have the following format:
     
@@ -116,9 +157,9 @@ For the `csv` method you should push a csv file to the `data` folder. The CSV fi
     2021-04-29 01:00:00+00:00,243.38
     ...
 
-For the list method you just have to add the data as a list of values to a data dictionnary during the call to `emhass` using the `runtimeparams` option.
+For the list method, you just have to add the data as a list of values to a data dictionary during the call to `emhass` using the `runtimeparams` option.
 
-The possible dictionnary keys to pass data are:
+The possible dictionary keys to pass data are:
 
 - `pv_power_forecast` for the PV power production forecast.
 
@@ -128,18 +169,18 @@ The possible dictionnary keys to pass data are:
 
 - `prod_price_forecast` for the PV production selling price forecast.
 
-For example if using the add-on or the standalone docker installation you can pass this data as list of values to the data dictionnary during the `curl` POST:
-```
+For example, if using the add-on or the standalone docker installation you can pass this data as a list of values to the data dictionary during the `curl` POST:
+```bash
 curl -i -H "Content-Type: application/json" -X POST -d '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}' http://localhost:5000/action/dayahead-optim
 ```
 
-You need to be careful here to send the correct amount of data on this list, the correct length. For example, if the data time step is defined to 1h and you are performing a day-ahead optimization, then this list length should be of 24 data points.
+You need to be careful here to send the correct amount of data on this list, the correct length. For example, if the data time step is defined as 1 hour and you are performing a day-ahead optimization, then this list length should be 24 data points.
 
-### Example using: SolCast forecast + Amber prices
+### Example using: Solcast forecast + Amber prices
 
-If you're using SolCast then you can define the following sensors in your system:
+If you're using Solcast then you can define the following sensors in your system:
 
-```
+```yaml
 sensors:
 
   - platform: rest
@@ -166,11 +207,11 @@ sensors:
           {%- endfor %} {{ (values_all.all)[:48] }}
 ```
 
-With this you can now feed this SolCast forecast to EMHASS along with the mapping of the Amber prices. 
+With this, you can now feed this Solcast forecast to EMHASS along with the mapping of the Amber prices. 
 
-A MPC call may look like this for 4 deferrable loads:
+An MPC call may look like this for 4 deferrable loads:
 
-```
+```yaml
     post_mpc_optim_solcast: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{(
           ([states('sensor.amber_general_price')|float(0)] +
           state_attr('sensor.amber_general_forecast', 'forecasts') |map(attribute='per_kwh')|list)[:48])
@@ -184,7 +225,7 @@ A MPC call may look like this for 4 deferrable loads:
 
 Thanks to [@purcell_labs](https://github.com/purcell-lab) for this example configuration.
 
-### Example combining multiple SolCast configurations
+### Example combining multiple Solcast configurations
 
 If you have multiple rooftops, for example for east-west facing solar panels, then you will need to fuze the sensors providing the different forecasts on a single one using templates in Home Assistant. Then feed that single sensor data passing the data as a list when calling the shell command.
 
@@ -192,7 +233,7 @@ Here is a sample configuration to achieve this, thanks to [@gieljnssns](https://
 
 The two sensors using rest sensors:
 
-```
+```yaml
 - platform: rest
   name: "Solcast Forecast huis"
   json_attributes:
@@ -220,7 +261,7 @@ The two sensors using rest sensors:
 
 Then two templates, one for each sensor:
 
-```
+```yaml
     solcast_24hrs_forecast_garage:
       value_template: >-
         {%- set power = state_attr('sensor.solcast_forecast_garage', 'forecasts') | map(attribute='pv_estimate') | list %}
@@ -242,7 +283,7 @@ Then two templates, one for each sensor:
 
 And the fusion of the two sensors:
 
-```
+```yaml
     solcast_24hrs_forecast:
       value_template: >-
         {% set a = states("sensor.solcast_24hrs_forecast_garage")[1:-1].split(',') | map('int') | list %}
@@ -256,7 +297,7 @@ And the fusion of the two sensors:
 
 And finally the shell command:
 
-```
+```yaml
 dayahead_optim: "curl -i -H \"Content-Type:application/json\" -X POST -d '{\"pv_power_forecast\":{{states('sensor.solcast_24hrs_forecast')}}}' http://localhost:5001/action/dayahead-optim"
 ```
 
@@ -269,16 +310,16 @@ After setup the sensors should appear in Home Assistant for raw `today` and `tom
 
 The subsequent shell command to concatenate `today` and `tomorrow` values can be for example:
 
-```
+```yaml
 shell_command:
   trigger_nordpool_forecast: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"load_cost_forecast\":{{((state_attr('sensor.nordpool', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24] }},\"prod_price_forecast\":{{((state_attr('sensor.nordpool', 'raw_today') | map(attribute='value') | list  + state_attr('sensor.nordpool', 'raw_tomorrow') | map(attribute='value') | list))[now().hour:][:24]}}}' http://localhost:5000/action/dayahead-optim"
 ```
 
 ## Now/current values in forecasts
 
-When implementing MPC applications with high optimization frequencies it can be interesting if at each MPC iteration the forecast values are updated with the real now/current values measured from live data. This is useful to improve the accuracy of the short-term forecasts. As shown in some of the references below, mixing with a persistance model make sense since this type of model performs very good at low temporal resolutions (intra-hour).
+When implementing MPC applications with high optimization frequencies it can be interesting if, at each MPC iteration, the forecast values are updated with the real now/current values measured from live data. This is useful to improve the accuracy of the short-term forecasts. As shown in some of the references below, mixing with a persistence model makes sense since this type of model performs very well at low temporal resolutions (intra-hour).
 
-A simple integration of current/now values for PV and load forecast is implemented using a mixed one-observation presistence model and the one-step-ahead forecasted values from the current passed method. 
+A simple integration of current/now values for PV and load forecast is implemented using a mixed one-observation persistence model and the one-step-ahead forecasted values from the current passed method. 
 
 This can be represented by the following equation at time $t=k$: 
 
@@ -286,9 +327,9 @@ $$
 P^{mix}_{PV} = \alpha \hat{P}_{PV}(k) + \beta P_{PV}(k-1)
 $$
 
-Where $P^{mix}_{PV}$ is the mixed power forecast for PV prodduction, $\hat{P}_{PV}(k)$ is the current first element of the original forecast data, $P_{PV}(k-1)$ is the now/current value of PV production and $\alpha$ and $\beta$ are coefficients that can be fixed to reflect desired dominance of now/current values over the original forecast data or viceversa.
+Where $P^{mix}_{PV}$ is the mixed power forecast for PV production, $\hat{P}_{PV}(k)$ is the current first element of the original forecast data, $P_{PV}(k-1)$ is the now/current value of PV production and $\alpha$ and $\beta$ are coefficients that can be fixed to reflect desired dominance of now/current values over the original forecast data or vice-versa.
 
-The `alpha` and `beta` values can be passed in the dictionnary using the `runtimeparams` option during the call to `emhass`. If not passed they will both take the default 0.5 value. These values should be fixed following your own analysis on how much weight you want to put on measured values to be used as the persistance forecast. This will also depend on your fixed optimization time step. As a default they will be at 0.5, but if you want to give more weight to measured persistance values, then you can try lower $\alpha$ and rising $\beta$, for example: `alpha=0.25`, `beta=0.75`. After this you will need to check with the recored history if these values fits your needs.
+The `alpha` and `beta` values can be passed in the dictionary using the `runtimeparams` option during the call to `emhass`. If not passed they will both take the default 0.5 value. These values should be fixed following your own analysis of how much weight you want to put on measured values to be used as the persistence forecast. This will also depend on your fixed optimization time step. As a default, they will be at 0.5, but if you want to give more weight to measured persistence values, then you can try lower $\alpha$ and rising $\beta$, for example: `alpha=0.25`, `beta=0.75`. After this, you will need to check with the recorded history if these values fit your needs.
 
 ## References
 

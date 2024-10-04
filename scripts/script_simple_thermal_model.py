@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import pickle
+import random
 import numpy as np
 import pandas as pd
 import pathlib
@@ -55,7 +56,7 @@ if __name__ == '__main__':
     df_input_data = rh.df_final.copy()
     
     fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
-                            params, emhass_conf, logger, get_data_from_file=get_data_from_file)
+                    params, emhass_conf, logger, get_data_from_file=get_data_from_file)
     df_weather = fcst.get_weather_forecast(method='csv')
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
     P_load_forecast = fcst.get_load_forecast(method=optim_conf['load_forecast_method'])
@@ -72,33 +73,49 @@ if __name__ == '__main__':
     optim_conf.update({'lp_solver': 'PULP_CBC_CMD'}) # set the name of the linear programming solver that will be used. Options are 'PULP_CBC_CMD', 'GLPK_CMD' and 'COIN_CMD'. 
     optim_conf.update({'lp_solver_path': 'empty'})  # set the path to the LP solver, COIN_CMD default is /usr/bin/cbc
     
-    # Semi continuous and constant values
-    optim_conf.update({'treat_def_as_semi_cont': [True, False]})
-    optim_conf.update({'set_def_constant': [True, False]})
+    # Config for a single thermal model
+    optim_conf.update({'num_def_loads': 1})
+    optim_conf.update({'P_deferrable_nom': [1000.0]})
+    optim_conf.update({'def_total_hours': [0]})
+    optim_conf.update({'def_start_timestep': [0]})
+    optim_conf.update({'def_end_timestep': [0]})
+    optim_conf.update({'treat_def_as_semi_cont': [False]})
+    optim_conf.update({'set_def_constant': [False]})
+    optim_conf.update({'def_start_penalty': [0.0]})
     
-    # A sequence of values
-    # optim_conf.update({'P_deferrable_nom': [[500.0, 100.0, 100.0, 500.0], 750.0]})
+    # Thermal modeling
+    df_input_data['outdoor_temperature_forecast'] = [random.normalvariate(10.0, 3.0) for _ in range(48)]
     
-    # Using a battery
-    optim_conf.update({'set_use_battery': False})
-    optim_conf.update({'set_nocharge_from_grid': False})
-    optim_conf.update({'set_battery_dynamic': True})
-    optim_conf.update({'set_nodischarge_to_grid': True})
-    
-    # A hybrid inverter case
-    plant_conf.update({'inverter_is_hybrid': False})
-    
-    # Setting some negative values on production prices
-    df_input_data.loc[df_input_data.index[25:30],'unit_prod_price'] = -0.07
-    df_input_data['P_PV_forecast'] = df_input_data['P_PV_forecast']*2
-    P_PV_forecast = P_PV_forecast*2
-    
+    runtimeparams = {
+        'def_load_config': [
+            {'thermal_config': {
+                'heating_rate': 5.0,
+                'cooling_constant': 0.1,
+                'overshoot_temperature': 24.0,
+                'start_temperature': 20,
+                'desired_temperatures': [21]*48,
+                }
+            }
+        ]
+    }
+    if 'def_load_config' in runtimeparams:
+        optim_conf["def_load_config"] = runtimeparams['def_load_config']
+
     costfun = 'profit'
     opt = Optimization(retrieve_hass_conf, optim_conf, plant_conf, 
                        fcst.var_load_cost, fcst.var_prod_price,  
                        costfun, emhass_conf, logger)
-    opt_res_dayahead = opt.perform_dayahead_forecast_optim(
-        df_input_data, P_PV_forecast, P_load_forecast)
+    P_PV_forecast.loc[:] = 0
+    P_load_forecast.loc[:] = 0
+    
+    df_input_data.loc[df_input_data.index[25:30],'unit_load_cost'] = 2.0 # A price peak
+    unit_load_cost = df_input_data[opt.var_load_cost].values # €/kWh
+    unit_prod_price = df_input_data[opt.var_prod_price].values # €/kWh
+    
+    
+    opt_res_dayahead = opt.perform_optimization(df_input_data, P_PV_forecast.values.ravel(), 
+                                                P_load_forecast.values.ravel(), 
+                                                unit_load_cost, unit_prod_price, debug=True)
     
     # Let's plot the input data
     fig_inputs_dah = df_input_data.plot()
@@ -108,7 +125,7 @@ if __name__ == '__main__':
     if show_figures:
         fig_inputs_dah.show()
     
-    vars_to_plot = ['P_deferrable0', 'P_deferrable1','P_grid', 'P_PV']
+    vars_to_plot = ['P_deferrable0', 'unit_load_cost', 'predicted_temp_heater0', 'target_temp_heater0', 'P_def_start_0']
     if plant_conf['inverter_is_hybrid']:
         vars_to_plot = vars_to_plot + ['P_hybrid_inverter']
     if plant_conf['compute_curtailment']:

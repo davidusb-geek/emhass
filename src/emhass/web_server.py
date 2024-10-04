@@ -12,7 +12,7 @@ from distutils.util import strtobool
 
 from emhass.command_line import set_input_data_dict
 from emhass.command_line import perfect_forecast_optim, dayahead_forecast_optim, naive_mpc_optim
-from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune
+from emhass.command_line import forecast_model_fit, forecast_model_predict, forecast_model_tune, weather_forecast_cache
 from emhass.command_line import regressor_model_fit, regressor_model_predict
 from emhass.command_line import publish_data, continual_publish
 from emhass.utils import get_injection_dict, get_injection_dict_forecast_model_fit, \
@@ -106,6 +106,17 @@ def action_call(action_name):
     if runtimeparams is not None and runtimeparams != '{}':
         app.logger.info("Passed runtime parameters: " + str(runtimeparams))
     runtimeparams = json.dumps(runtimeparams)
+    
+    # Run action if weather_forecast_cache
+    if action_name == 'weather-forecast-cache':
+        ActionStr = " >> Performing weather forecast, try to caching result"
+        app.logger.info(ActionStr)
+        weather_forecast_cache(emhass_conf, params, runtimeparams, app.logger)
+        msg = f'EMHASS >> Weather Forecast has run and results possibly cached... \n'
+        if not checkFileLog(ActionStr):
+            return make_response(msg, 201)
+        return make_response(grabLog(ActionStr), 400)
+
     ActionStr = " >> Setting input data dict"
     app.logger.info(ActionStr)
     input_data_dict = set_input_data_dict(emhass_conf, costfun, 
@@ -459,15 +470,14 @@ if __name__ == "__main__":
     app.logger.addHandler(fileLogger)   
     clearFileLog() #Clear Action File logger file, ready for new instance
 
-
-    #If entity_path exists, remove any entity/metadata files 
+    # If entity_path exists, remove any entity/metadata files 
     entity_path = emhass_conf['data_path'] / "entities"
     if os.path.exists(entity_path): 
         entity_pathContents = os.listdir(entity_path)
         if len(entity_pathContents) > 0:
             for entity in entity_pathContents:
                 os.remove(entity_path / entity)
-
+        
     # Initialise continual publish thread list
     continual_publish_thread = []
     
