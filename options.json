@@ -98,6 +98,14 @@
       "set_deferrable_load_single_constant": false
     }
   ],
+  "list_set_deferrable_startup_penalty": [
+    {
+      "set_deferrable_startup_penalty": 0.0
+    },
+    {
+      "set_deferrable_startup_penalty": 0.0
+    }
+  ],
   "load_peak_hours_cost": 0.1907,
   "load_offpeak_hours_cost": 0.1419,
   "production_price_forecast_method": "constant",
@@ -135,6 +143,7 @@
     }
   ],
   "inverter_is_hybrid": false,
+  "compute_curtailment": false,
   "set_use_battery": false,
   "battery_discharge_power_max": 1000,
   "battery_charge_power_max": 1000,
