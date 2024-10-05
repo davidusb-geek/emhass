@@ -295,6 +295,24 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
                 def_end_timestep = runtimeparams["def_end_timestep"]
             params["passed_data"]["def_end_timestep"] = def_end_timestep
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
+
+            if "def_load_config" in optim_conf:
+                for k in range(len(optim_conf["def_load_config"])):
+                    if "thermal_config" in optim_conf["def_load_config"][k]:
+                        if (
+                            "heater_desired_temperatures" in runtimeparams
+                            and len(runtimeparams["heater_desired_temperatures"]) > k
+                        ):
+                            optim_conf["def_load_config"][k]["thermal_config"][
+                                "desired_temperatures"
+                            ] = runtimeparams["heater_desired_temperatures"][k]
+                        if (
+                            "heater_start_temperatures" in runtimeparams
+                            and len(runtimeparams["heater_start_temperatures"]) > k
+                        ):
+                            optim_conf["def_load_config"][k]["thermal_config"][
+                                "start_temperature"
+                            ] = runtimeparams["heater_start_temperatures"][k]
         else:
             params["passed_data"]["prediction_horizon"] = None
             params["passed_data"]["soc_init"] = None
