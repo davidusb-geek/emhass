@@ -65,6 +65,8 @@ class Optimization:
         """
         self.retrieve_hass_conf = retrieve_hass_conf
         self.optim_conf = optim_conf
+        optimal_conf = OptimalConfiguration(optim_conf)
+        self.deferrables = optimal_conf.deferrables
         self.plant_conf = plant_conf
         self.freq = self.retrieve_hass_conf['freq']
         self.time_zone = self.retrieve_hass_conf['time_zone']
@@ -173,11 +175,11 @@ class Optimization:
                                           name="P_grid_pos{}".format(i)) for i in set_I}
         P_deferrable = []
         P_def_bin1 = []
-        for k in range(self.optim_conf['num_def_loads']):
-            if type(self.optim_conf['P_deferrable_nom'][k]) == list:
-                upBound = np.max(self.optim_conf['P_deferrable_nom'][k])
+        for k in range(len(self.deferrables)):
+            if type(self.deferrables[k].power) == list:
+                upBound = np.max(self.deferrables[k].power)
             else:
-                upBound = self.optim_conf['P_deferrable_nom'][k]
+                upBound = self.deferrables[k].power
             if self.optim_conf['treat_def_as_semi_cont'][k]:
                 P_deferrable.append({(i):plp.LpVariable(cat='Continuous',
                                                         name="P_deferrable{}_{}".format(k, i)) for i in set_I})
@@ -189,7 +191,7 @@ class Optimization:
                                                   name="P_def{}_bin1_{}".format(k, i)) for i in set_I})
         P_def_start = []
         P_def_bin2 = []
-        for k in range(self.optim_conf['num_def_loads']):
+        for k in range(len(self.deferrables)):
             P_def_start.append({(i):plp.LpVariable(cat='Binary',
                                                    name="P_def{}_start_{}".format(k, i)) for i in set_I})
             P_def_bin2.append({(i):plp.LpVariable(cat='Binary',
@@ -221,7 +223,7 @@ class Optimization:
         ## Define objective
         P_def_sum= []
         for i in set_I:
-            P_def_sum.append(plp.lpSum(P_deferrable[k][i] for k in range(self.optim_conf['num_def_loads'])))
+            P_def_sum.append(plp.lpSum(P_deferrable[k][i] for k in range(len(self.deferrables))))
         if self.costfun == 'profit':
             if self.optim_conf['set_total_pv_sell']:
                 objective = plp.lpSum(-0.001*self.timeStep*(unit_load_cost[i]*(P_load[i] + P_def_sum[i]) + \
@@ -253,11 +255,11 @@ class Optimization:
 
         # Add term penalizing each startup where configured
         if ("def_start_penalty" in self.optim_conf and self.optim_conf["def_start_penalty"]):
-            for k in range(self.optim_conf["num_def_loads"]):
+            for k in range(len(self.deferrables)):
                 if (len(self.optim_conf["def_start_penalty"]) > k and self.optim_conf["def_start_penalty"][k]):
                     objective = objective + plp.lpSum(
                         -0.001 * self.timeStep * self.optim_conf["def_start_penalty"][k] * P_def_start[k][i] *\
-                            unit_load_cost[i] * self.optim_conf['P_deferrable_nom'][k]
+                            unit_load_cost[i] * self.deferrables[k].power
                         for i in set_I)
 
         opt_model.setObjective(objective)
@@ -360,13 +362,13 @@ class Optimization:
 
         # Treat deferrable loads constraints
         predicted_temps = {}
-        for k in range(self.optim_conf['num_def_loads']):
+        for k in range(len(self.deferrables)):
             
-            if type(self.optim_conf['P_deferrable_nom'][k]) == list:
+            if type(self.deferrables[k].power) == list:
                 # Constraint for sequence of deferrable
                 # WARNING: This is experimental, formulation seems correct but feasibility problems.
                 # Probably uncomptabile with other constraints
-                power_sequence = self.optim_conf['P_deferrable_nom'][k]
+                power_sequence = self.deferrables[k].power
                 sequence_length = len(power_sequence)
                 def create_matrix(input_list, n):
                     matrix = []
@@ -421,7 +423,7 @@ class Optimization:
                                 continue
                             predicted_temp.append(
                                 predicted_temp[I-1]
-                                + (P_deferrable[k][I-1] * (heating_rate * self.timeStep / self.optim_conf['P_deferrable_nom'][k]))
+                                + (P_deferrable[k][I-1] * (heating_rate * self.timeStep / self.deferrables[k].power))
                                 - (cooling_constant * (predicted_temp[I-1] - outdoor_temperature_forecast[I-1])))
                             if len(desired_temperatures) > I and desired_temperatures[I]:
                                 constraints.update({"constraint_defload{}_temperature_{}".format(k, I):
@@ -448,7 +450,7 @@ class Optimization:
                         plp.LpConstraint(
                             e = plp.lpSum(P_deferrable[k][i]*self.timeStep for i in set_I),
                             sense = plp.LpConstraintEQ,
-                            rhs = def_total_hours[k]*self.optim_conf['P_deferrable_nom'][k])
+                            rhs = def_total_hours[k]*self.deferrables[k].power)
                         })
                 
             # Ensure deferrable loads consume energy between def_start_timestep & def_end_timestep
@@ -536,13 +538,13 @@ class Optimization:
             if self.optim_conf['treat_def_as_semi_cont'][k]:
                 constraints.update({"constraint_pdef{}_semicont1_{}".format(k, i) : 
                     plp.LpConstraint(
-                        e=P_deferrable[k][i] - self.optim_conf['P_deferrable_nom'][k]*P_def_bin1[k][i],
+                        e=P_deferrable[k][i] - self.deferrables[k].power*P_def_bin1[k][i],
                         sense=plp.LpConstraintGE,
                         rhs=0)
                     for i in set_I})
                 constraints.update({"constraint_pdef{}_semicont2_{}".format(k, i) :
                     plp.LpConstraint(
-                        e=P_deferrable[k][i] - self.optim_conf['P_deferrable_nom'][k]*P_def_bin1[k][i],
+                        e=P_deferrable[k][i] - self.deferrables[k].power*P_def_bin1[k][i],
                         sense=plp.LpConstraintLE,
                         rhs=0)
                     for i in set_I})
@@ -667,7 +669,7 @@ class Optimization:
         opt_tp = pd.DataFrame()
         opt_tp["P_PV"] = [P_PV[i] for i in set_I]
         opt_tp["P_Load"] = [P_load[i] for i in set_I]
-        for k in range(self.optim_conf['num_def_loads']):
+        for k in range(len(self.deferrables)):
             opt_tp["P_deferrable{}".format(k)] = [P_deferrable[k][i].varValue for i in set_I]
         opt_tp["P_grid_pos"] = [P_grid_pos[i].varValue for i in set_I]
         opt_tp["P_grid_neg"] = [P_grid_neg[i].varValue for i in set_I]
@@ -692,7 +694,7 @@ class Optimization:
         # Lets compute the optimal cost function
         P_def_sum_tp = []
         for i in set_I:
-            P_def_sum_tp.append(sum(P_deferrable[k][i].varValue for k in range(self.optim_conf['num_def_loads'])))
+            P_def_sum_tp.append(sum(P_deferrable[k][i].varValue for k in range(len(self.deferrables))))
         opt_tp["unit_load_cost"] = [unit_load_cost[i] for i in set_I]
         opt_tp["unit_prod_price"] = [unit_prod_price[i] for i in set_I]
         if self.optim_conf['set_total_pv_sell']:
@@ -728,7 +730,7 @@ class Optimization:
 
         # Debug variables
         if debug:
-            for k in range(self.optim_conf["num_def_loads"]):
+            for k in range(len(self.deferrables)):
                 opt_tp[f"P_def_start_{k}"] = [P_def_start[k][i].varValue for i in set_I]
                 opt_tp[f"P_def_bin2_{k}"] = [P_def_bin2[k][i].varValue for i in set_I]
         for i, predicted_temp in predicted_temps.items():
