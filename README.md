@@ -91,7 +91,7 @@ Installation instructions and example Home Assistant automation configurations a
 You must follow these steps to make EMHASS work properly:
 
 1) Install and run EMHASS.
-    - There are multiple methods of installing and Running EMHASS. See [Installation Method](##Installation-Methods) bellow to pick a method that best suits your use case.
+    - There are multiple methods of installing and Running EMHASS. See [Installation Method](##Installation-Methods) below to pick a method that best suits your use case.
 
 2) Define all the parameters in the configuration file *(`config.json`)* or configuration page *(`YOURIP:5000/configuration`)*. 
     - See the description for each parameter in the [configuration](https://emhass.readthedocs.io/en/latest/config.html) docs. 
@@ -166,7 +166,7 @@ docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v ./
 
 #### Docker, things to note 
 
-- You can create a `config.json` file prior to running emhass. *(obtain a example from: [config_defaults.json](https://github.com/davidusb-geek/emhass/blob/enhass-standalone-addon-merge/src/emhass/data/config_defaults.json)* Alteratively, you can insert your parameters into the configuration page on the EMHASS web server. (for EMHASS to auto create a config.json) With either option, the volume mount `v ./config.json:/share/config.json` should be applied to make sure your config is stored on the host device. (to be not deleted when the EMHASS container gets removed/image updated)*
+- You can create a `config.json` file prior to running emhass. *(obtain a example from: [config_defaults.json](https://github.com/davidusb-geek/emhass/blob/enhass-standalone-addon-merge/src/emhass/data/config_defaults.json)* Alteratively, you can insert your parameters into the configuration page on the EMHASS web server. (for EMHASS to auto create a config.json) With either option, the volume mount `-v ./config.json:/share/config.json` should be applied to make sure your config is stored on the host device. (to be not deleted when the EMHASS container gets removed/image updated)*
 
 - If you wish to keep a local, semi-persistent copy of the EMHASS-generated data, create a local folder on your device, then mount said folder inside the container.  
   ```bash
@@ -185,16 +185,16 @@ If you wish to run EMHASS optimizations with cli commands. *(no persistent web s
 With this method it is recommended to install on a virtual environment.
 - Create and activate a virtual environment:
   ```bash
-  python3 -m venv emhassenv
-  cd emhassenv
+  python3 -m venv ~/emhassenv
+  cd ~/emhassenv
   source bin/activate
   ```
 - Install using the distribution files:
   ```bash
   python3 -m pip install emhass
   ```
-- Create and store configuration (config.json), secret (secrets_emhass.yaml) and data (/data) files in the emhass dir (`/emhassenv`)  
-Note: You may wish to copy the `config.json` (config_defaults.json), `secrets_emhass.yaml` (secrets_emhass(example).yaml) and/or `/scripts/` files from this repository to the `/emhassenv` folder for a starting point and/or to run the bash scripts described bellow. 
+- Create and store configuration (config.json), secret (secrets_emhass.yaml) and data (/data) files in the emhass dir (`~/emhassenv`)  
+Note: You may wish to copy the `config.json` (config_defaults.json), `secrets_emhass.yaml` (secrets_emhass(example).yaml) and/or `/scripts/` files from this repository to the `~/emhassenv` folder for a starting point and/or to run the bash scripts described below. 
 
 - To upgrade the installation in the future just use:
   ```bash
@@ -237,7 +237,7 @@ The available arguments are:
 
 For example, the following line command can be used to perform a day-ahead optimization task:
 ```bash
-emhass --action 'dayahead-optim' --config ~/emhass/config_emhass.yaml --costfun 'profit'
+emhass --action 'dayahead-optim' --config ~/emhass/config.json --costfun 'profit'
 ```
 Before running any valuable command you need to modify the `config.json` and `secrets_emhass.yaml` files. These files should contain the information adapted to your own system. To do this take a look at the special section for this in the [documentation](https://emhass.readthedocs.io/en/latest/config.html).
 
@@ -260,27 +260,27 @@ shell_command:
 In `configuration.yaml`:
 ```yaml
 shell_command:
-  dayahead_optim: /home/user/emhass/scripts/dayahead_optim.sh
-  publish_data: /home/user/emhass/scripts/publish_data.sh
+  dayahead_optim: ~/emhass/scripts/dayahead_optim.sh
+  publish_data: ~/emhass/scripts/publish_data.sh
 ```
 Create the file `dayahead_optim.sh` with the following content:
 ```bash
 #!/bin/bash
-. /home/user/emhassenv/bin/activate
-emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.yaml'
+. ~/emhassenv/bin/activate
+emhass --action 'dayahead-optim' --config ~/emhass/config.json
 ```
 And the file `publish_data.sh` with the following content:
 ```bash
 #!/bin/bash
-. /home/user/emhassenv/bin/activate
-emhass --action 'publish-data' --config '/home/user/emhass/config_emhass.yaml'
+. ~/emhassenv/bin/activate
+emhass --action 'publish-data' --config ~/emhass/config.json
 ```
 Then specify user rights and make the files executables:
 ```bash
-sudo chmod -R 755 /home/user/emhass/scripts/dayahead_optim.sh
-sudo chmod -R 755 /home/user/emhass/scripts/publish_data.sh
-sudo chmod +x /home/user/emhass/scripts/dayahead_optim.sh
-sudo chmod +x /home/user/emhass/scripts/publish_data.sh
+sudo chmod -R 755 ~/emhass/scripts/dayahead_optim.sh
+sudo chmod -R 755 ~/emhass/scripts/publish_data.sh
+sudo chmod +x ~/emhass/scripts/dayahead_optim.sh
+sudo chmod +x ~/emhass/scripts/publish_data.sh
 ```
 ### Common for any installation method
 
@@ -315,7 +315,7 @@ In `automations.yaml`:
   - service: shell_command.dayahead_optim
   - service: shell_command.publish_data
 ```
-in configuration page/`config_emhass.yaml` 
+in configuration page/`config.json` 
 ```json
 'method_ts_round': "first"
 'continual_publish': true
@@ -470,7 +470,7 @@ This example saves the dayahead optimization into `data_path/entities` as .json 
 
 For users who wish to have full control of exactly when they would like to run a publish and have the ability to save multiple different optimizations. The `entity_save` runtime parameter has been created to save the optimization output entities to .json files whilst  `continual_publish` is set to `false` in the configuration. Allowing the user to reference the saved .json files manually via a publish:
 
-in configuration page/`config_emhass.yaml` :
+in configuration page/`config.json` :
 ```json
 'continual_publish': false
 ```
@@ -505,7 +505,7 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 
 ```
 Or if using the legacy method using a Python virtual environment:
 ```bash
-emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.yaml' --runtimeparams '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}'
+emhass --action 'dayahead-optim' --config ~/emhass/config.json --runtimeparams '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}'
 ```
 
 The possible dictionary keys to pass data are:
