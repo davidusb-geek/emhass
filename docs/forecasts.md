@@ -17,7 +17,7 @@ Then there are the methods that are specific to each type of forecast and that p
 The `get_power_from_weather` method is proposed here to convert irradiance data to electrical power. The PVLib module is used to model the PV plant. A dedicated web app will help you search for your correct PV module and inverter: [https://emhass-pvlib-database.streamlit.app/](https://emhass-pvlib-database.streamlit.app/)
 
 The specific methods for the load forecast is a first method (`naive`) that uses a naive approach, also called persistence. It simply assumes that the forecast for 
-a future period will be equal to the observed values in a past period. The past period is controlled using the parameter `delta_forecast`. A second method (`mlforecaster`)
+a future period will be equal to the observed values in a past period. The past period is controlled using the parameter `delta_forecast_daily`. A second method (`mlforecaster`)
 uses an internal custom forecasting model using machine learning. There is a section in the documentation explaining how to use this method.
     
 ```{note} 
@@ -93,7 +93,7 @@ If you use the Solar.Forecast or Solcast methods, or explicitly pass the PV powe
 
 ## Load power forecast
 
-The default method for load forecast is a naive method, also called persistence. This is obtained using `method=naive`. This method simply assumes that the forecast for a future period will be equal to the observed values in a past period. The past period is controlled using the parameter `delta_forecast` and the default value for this is 24h.
+The default method for load forecast is a naive method, also called persistence. This is obtained using `method=naive`. This method simply assumes that the forecast for a future period will be equal to the observed values in a past period. The past period is controlled using the parameter `delta_forecast_daily` and the default value for this is 24h.
 
 This is presented graphically here:
 
@@ -126,15 +126,15 @@ When using this method you can provide a list of peak-hour periods, so you can a
 
 As an example for a two peak-hour periods contract you will need to define the following list in the configuration file:
 
-    - list_hp_periods:
+    - load_peak_hour_periods:
         - period_hp_1:
             - start: '02:54'
             - end: '15:24'
         - period_hp_2:
             - start: '17:24'
             - end: '20:24'
-    - load_cost_hp: 0.1907
-    - load_cost_hc: 0.1419
+    - load_peak_hours_cost: 0.1907
+    - load_offpeak_hours_cost: 0.1419
 
 This example is presented graphically here:
 
@@ -144,7 +144,7 @@ This example is presented graphically here:
 
 The default method for this forecast is simply a constant value. This can be obtained using `method=constant`.
 
-Then you will need to define the `prod_sell_price` variable to provide the correct price for energy injected to the grid from excedent PV production in €/kWh.
+Then you will need to define the `photovoltaic_production_sell_price` variable to provide the correct price for energy injected to the grid from excedent PV production in €/kWh.
 
 ## Passing your own forecast data
 
@@ -220,7 +220,7 @@ An MPC call may look like this for 4 deferrable loads:
           state_attr('sensor.amber_feed_in_forecast', 'forecasts')|map(attribute='per_kwh')|list)[:48]) 
           }}, \"pv_power_forecast\":{{states('sensor.solcast_24hrs_forecast')
           }}, \"prediction_horizon\":48,\"soc_init\":{{(states('sensor.powerwall_charge')|float(0))/100
-          }},\"soc_final\":0.05,\"def_total_hours\":[2,0,0,0]}' http://localhost:5000/action/naive-mpc-optim"
+          }},\"soc_final\":0.05,\"operating_hours_of_each_deferrable_load\":[2,0,0,0]}' http://localhost:5000/action/naive-mpc-optim"
 ```
 
 Thanks to [@purcell_labs](https://github.com/purcell-lab) for this example configuration.
@@ -317,7 +317,7 @@ shell_command:
 
 ## Now/current values in forecasts
 
-When implementing MPC applications with high optimization frequencies it can be interesting if, at each MPC iteration, the forecast values are updated with the real now/current values measured from live data. This is useful to improve the accuracy of the short-term forecasts. As shown in some of the references below, mixing with a persistence model makes sense since this type of model performs very well at low temporal resolutions (intra-hour).
+When implementing MPC applications with high optimization_time_step it can be interesting if, at each MPC iteration, the forecast values are updated with the real now/current values measured from live data. This is useful to improve the accuracy of the short-term forecasts. As shown in some of the references below, mixing with a persistence model makes sense since this type of model performs very well at low temporal resolutions (intra-hour).
 
 A simple integration of current/now values for PV and load forecast is implemented using a mixed one-observation persistence model and the one-step-ahead forecasted values from the current passed method. 
 
