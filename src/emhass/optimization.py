@@ -12,7 +12,7 @@ import numpy as np
 import pulp as plp
 from pulp import PULP_CBC_CMD, COIN_CMD, GLPK_CMD
 from math import ceil
-
+from emhass.optimal_configuration import OptimalConfiguration
 
 class Optimization:
     r"""
