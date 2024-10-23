@@ -5,6 +5,7 @@ The choice depends on your and preference (Python venv/DevContainer/Docker).
 Below are some development workflow examples:  
 _Note: It is preferred to run the actions and unittest once before submitting and pull request._
 
+
 ## Step 1 - Fork
 
 _With your preferred Git tool of choice:_  
@@ -27,6 +28,7 @@ To develop and test code choose one of the following methods:
 ### Method 1 - Python Virtual Environment
 
 We can use python virtual environments to build, develop and test/unittest the code.
+
 
 _confirm terminal is in the root `emhass` directory before starting_
 
@@ -100,6 +102,7 @@ python3 -m unittest discover -s ./tests -p 'test_*.py'
 ```
 _Note:unittest will need to be installed prior_
 
+
 ### Method 2: VS-Code Debug and Run via DevContainer
 
 In VS-Code, you can run a Docker DevContainer to set up a virtual environment. The DevContainer's Container will be almost identical to the one build for EMHASS (Docker/Add-on). There you can edit and test EMHASS.
@@ -129,6 +132,7 @@ This is recommended before creating a pull request.
 With Docker, you can test the production EMHASS environment for both Docker and Add-on methods.
 
 Depending on the method you wish to test, the `docker run` command will require different passed variables/arguments passed to function. See following examples:
+
 
 _Note: Make sure your terminal is in the root `emhass` directory before running the docker build._
 
@@ -229,6 +233,7 @@ docker run -it -p 5000:5000 --name emhass-test -e EMHASS_KEY -e EMHASS_URL -e TI
 ### Example Docker testing pipeline 
 The following pipeline will run unittest and most of the EMHASS actions. This may be a good options for those who wish to test their changes against the production EMHASS environment.
 
+
 *Linux:*  
 *Assuming docker and git installed*
 ```bash
@@ -276,6 +281,7 @@ docker exec emhass-test python3 -m unittest discover -s ./tests -p 'test_*.py' |
 
 User may wish to re-test with tweaked parameters such as `lp_solver`, `weather_forecast_method` and `load_forecast_method`, in `config.json` to broaden the testing scope. 
 *See [Differences](https://emhass.readthedocs.io/en/latest/differences.html) for more information on how the different methods of running EMHASS differ.*
+
 
 
 ## Step 3 - Pull request
