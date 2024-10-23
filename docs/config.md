@@ -1,12 +1,11 @@
 # Configuration file
 
-In this section, we will explain all the parts of the `config_emhass.yaml` needed to properly run EMHASS.
+In this section, we will explain all parameters used by EMHASS.
 
-We will find three main parts in the configuration file:
-
-- The parameters needed to retrieve data from Home Assistant (retrieve_hass_conf)
-- The parameters to define the optimization problem (optim_conf)
-- The parameters used to model the system (plant_conf)
+Note: For some context, the parameters bellow are grouped in configuration catagories. EMHASS will receive the and secrets parameters from `config.json` file and secret locations, then sort and format the parameters into their retrospective categories when migrating from the `config` dictionary to the `params` dictionary.
+- The parameters needed to retrieve data from Home Assistant (`retrieve_hass_conf`)
+- The parameters to define the optimization problem (`optim_conf`)
+- The parameters used to model the system (`plant_conf`)
 
 ## Retrieve HASS data configuration
 
