@@ -24,14 +24,14 @@
       "default_value": "sensor.power_load_no_var_loads"
     },
     "sensor_replace_zero": {
-      "friendly_name": "Sensor Nan values with 0s",
-      "Description": "The list of retrieved variables that we would want to replace nans (if they exist) with zeros.",
+      "friendly_name": "Sensor to replace NAN values with 0s",
+      "Description": "The list of retrieved variables that we would want to replace NANs (if they exist) with zeros.",
       "input": "array.string",
       "default_value": "sensor.power_photovoltaics"
     },
     "sensor_linear_interp": {
-      "friendly_name": "Sensor NAN values with linear interpolation",
-      "Description": "The list of retrieved variables that we would want to interpolate nans values using linear interpolation",
+      "friendly_name": "Sensor to replace NAN values with linear interpolation",
+      "Description": "The list of retrieved variables that we would want to interpolate NANs values using linear interpolation",
       "input": "array.string",
       "default_value": "sensor.power_photovoltaics"
     },
@@ -42,7 +42,7 @@
       "default_value": false
     },
     "logging_level": {
-      "friendly_name": "logging level",
+      "friendly_name": "Logging level",
       "Description": "This is the name of the photovoltaic power-produced sensor in Watts from Home Assistant. For example: ‘sensor.power_photovoltaics’.",
       "input": "select",
       "select_options": [
@@ -62,7 +62,7 @@
       "default_value": 30
     },
     "historic_days_to_retrieve": {
-      "friendly_name": "historic days to retrieve",
+      "friendly_name": "Historic days to retrieve",
       "Description": "We will retrieve data from now to days_to_retrieve days. Defaults to 2",
       "input": "int",
       "default_value": 2
@@ -325,13 +325,13 @@
       "default_value": false
     },
     "set_nocharge_from_grid": {
-      "friendly_name": "forbid charging battery from grid",
+      "friendly_name": "Forbid charging battery from grid",
       "Description": "Set this to true if you want to forbid charging the battery from the grid. The battery will only be charged from excess PV",
       "input": "boolean",
       "default_value": false
     },
     "set_nodischarge_to_grid": {
-      "friendly_name": "forbid battery discharge to the grid",
+      "friendly_name": "Forbid battery discharge to the grid",
       "Description": "Set this to true if you want to forbid discharging battery power to the grid.",
       "input": "boolean",
       "default_value": true
@@ -343,7 +343,7 @@
       "default_value": false
     },
     "battery_dynamic_max": {
-      "friendly_name": "maximum percentage of battery discharge per timestep",
+      "friendly_name": "Maximum percentage of battery discharge per timestep",
       "Description": "The maximum positive (for discharge) battery power dynamic. This is the allowed power variation (in percentage) of battery maximum power per unit of timestep",
       "input": "float",
       "default_value": 0.9,
@@ -352,7 +352,7 @@
       }
     },
     "battery_dynamic_min": {
-      "friendly_name": "maximum percentage of battery charge per timestep",
+      "friendly_name": "Maximum percentage of battery charge per timestep",
       "Description": "The maximum negative (for charge) battery power dynamic. This is the allowed power variation (in percentage) of battery maximum power per timestep.",
       "input": "float",
       "default_value": -0.9,

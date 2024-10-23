@@ -120,9 +120,9 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
         df_input_data_dayahead = pd.DataFrame(np.transpose(np.vstack(
             [P_PV_forecast.values, P_load_forecast.values])), index=P_PV_forecast.index,
             columns=["P_PV_forecast", "P_load_forecast"])
-        if "freq" in retrieve_hass_conf and retrieve_hass_conf["freq"]:
-            freq = pd.to_timedelta(retrieve_hass_conf["freq"], "minute")
-            df_input_data_dayahead = df_input_data_dayahead.asfreq(freq)
+        if "optimization_time_step" in retrieve_hass_conf and retrieve_hass_conf["optimization_time_step"]:
+            optimization_time_step = pd.to_timedelta(retrieve_hass_conf["optimization_time_step"], "minute")
+            df_input_data_dayahead = df_input_data_dayahead.asfreq(optimization_time_step)
         else:
             df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
         params = json.loads(params)
@@ -170,9 +170,9 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
                 "Unable to get sensor power photovoltaics, or sensor power load no var loads. Check HA sensors and their daily data")
             return False
         df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
-        if "freq" in retrieve_hass_conf and retrieve_hass_conf["freq"]:
-            freq = pd.to_timedelta(retrieve_hass_conf["freq"], "minute")
-            df_input_data_dayahead = df_input_data_dayahead.asfreq(freq)
+        if "optimization_time_step" in retrieve_hass_conf and retrieve_hass_conf["optimization_time_step"]:
+            optimization_time_step = pd.to_timedelta(retrieve_hass_conf["optimization_time_step"], "minute")
+            df_input_data_dayahead = df_input_data_dayahead.asfreq(optimization_time_step)
         else:
             df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
         df_input_data_dayahead.columns = ["P_PV_forecast", "P_load_forecast"]
@@ -1241,7 +1241,7 @@ def main():
         return False
     if not config_path.exists():   
         logger.warning(
-            "Could not find config_emhass.yaml file in: " + str(config_path))
+            "Could not find config.json file in: " + str(config_path))
         logger.warning("Try setting config file path with --config")
     if not secrets_path.exists():
         logger.warning("Could not find secrets file in: " + str(secrets_path))

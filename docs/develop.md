@@ -5,7 +5,6 @@ The choice depends on your and preference (Python venv/DevContainer/Docker).
 Below are some development workflow examples:  
 _Note: It is preferred to run the actions and unittest once before submitting and pull request._
 
-
 ## Step 1 - Fork
 
 _With your preferred Git tool of choice:_  
@@ -29,12 +28,11 @@ To develop and test code choose one of the following methods:
 
 We can use python virtual environments to build, develop and test/unittest the code.
 
-
 _confirm terminal is in the root `emhass` directory before starting_
 
 **Install requirements**
 ```bash
-python3 -m pip install -r requirements.txt #if arm, try setting --extra-index-url=https://www.piwheels.org/simple
+python3 -m pip install -r requirements.txt #if on ARM, try setting --extra-index-url=https://www.piwheels.org/simple
 ```
 
 **Create a developer environment:**
@@ -70,16 +68,16 @@ python3 -m pip install -e .
 - Linux
   ```bash
   export OPTIONS_PATH="${PWD}/options.json" && export USE_OPTIONS="True" ##optional to test options.json
-  export CONFIG_PATH="${PWD}/config_emhass.yaml"
-  export SECRETS_PATH="${PWD}/secrets_emhass.yaml"
+  export CONFIG_PATH="${PWD}/config.yaml"
+  export SECRETS_PATH="${PWD}/secrets_emhass.yaml" ##optional to test secrets_emhass.yaml
   export DATA_PATH="${PWD}/data/"
   ```
 - windows
-  ```cmd
+  ```batch
   set "OPTIONS_PATH=%cd%/options.json"  & ::  optional to test options.json
   set "USE_OPTIONS=True"                & ::  optional to test options.json
-  set "CONFIG_PATH=%cd%/config_emhass.yaml"
-  set "SECRETS_PATH=%cd%/secrets_emhass.yaml"
+  set "CONFIG_PATH=%cd%/config.json"
+  set "SECRETS_PATH=%cd%/secrets_emhass.yaml" & ::  optional to test secrets_emhass.yam
   set "DATA_PATH=%cd%/data/"
   ```
 
@@ -92,7 +90,7 @@ python3 src/emhass/web_server.py
 ```
 or 
 ``` bash
-emhass --action 'dayahead-optim' --config ~/emhass/config_emhass.yaml --root=$(pwd)/src/emhass --costfun 'profit' --data=$(pwd)/data
+emhass --action 'dayahead-optim' --config ./config.json --root ./src/emhass --costfun 'profit' --data ./data
 ```
 
 **Run unittests**
@@ -102,10 +100,9 @@ python3 -m unittest discover -s ./tests -p 'test_*.py'
 ```
 _Note:unittest will need to be installed prior_
 
+### Method 2: VS-Code Debug and Run via Dev Container
 
-### Method 2: VS-Code Debug and Run via DevContainer
-
-In VS-Code, you can run a Docker DevContainer to set up a virtual environment. The DevContainer's Container will be almost identical to the one build for EMHASS (Docker/Add-on). There you can edit and test EMHASS.
+In VS-Code, you can run a Docker Dev Container to set up a virtual environment. The Dev Container's Container will be almost identical to the one build for EMHASS (Docker/Add-on). There you can edit and test EMHASS.
 
 The recommended steps to run are:
 
@@ -117,37 +114,37 @@ The recommended steps to run are:
 - Launch and debug the program via the [`Run and Debug`](https://code.visualstudio.com/docs/editor/debugging) tab /`Ctrl+Shift+D` > `EMHASS run` This has been set up in the [Launch.json](https://github.com/davidusb-geek/emhass/blob/master/.vscode/launch.json) .
 
 #### Simulate Docker Method or Add-on method
-Since the main difference between the two methods are how secrets are passed. You can switch between the two methods by:
-**Docker**:
-  - Create a `secrets_emhass.yaml` file and append your secret parameters
-**Add-on**
-  - Modify the `options.json` file to contain you secret parameters
+Since the main difference between the two methods are how secrets are passed. You can switch between the two methods by:  
+  
+**Docker**:  
+  - Create a `secrets_emhass.yaml` file and append your secret parameters  
+
+**Add-on**:  
+  - Modify the `options.json` file to contain you secret parameters  
 
 #### Unittests
-Lastly, you can run all the unittests by heading to the [`Testing`](https://code.visualstudio.com/docs/python/testing) tab on the left hand side.  
-This is recommended before creating a pull request.
+Lastly, you can run all the unittests by heading to the [`Testing`](https://code.visualstudio.com/docs/python/testing) tab on the left hand side.  This is recommended before creating a pull request.
 
 ### Method 3 - Docker Virtual Environment
 
 With Docker, you can test the production EMHASS environment for both Docker and Add-on methods.
 
-Depending on the method you wish to test, the `docker run` command will require different passed variables/arguments passed to function. See following examples:
+Depending on the method you wish to test, the `docker run` command will require different passed arguments to function. See following examples:
 
-
-_Note: Make sure your terminal is in the root `emhass` directory before running the docker build._
+_Note: Make sure your terminal is in the root `emhass` repository directory before running the docker build._
 
 #### Docker run Add-on Method:
 
 ```bash
 docker build -t emhass/test .
 
-# pass secrets via options.json (similar to Home Assistant Addon configuration page)
+# pass secrets via options.json (similar to what Home Assistant automatically creates from the addon configuration page)
 docker run -it -p 5000:5000 --name emhass-test -v ./options.json:/data/options.json emhass/test
 ```
 
 **Note:**
-- to apply a file chang in the local EMHASS repository, you will need to re-build and re-run the Docker image/container in order for the change to take effect. (excluding volume mounted (-v) configs)
-- if you are planning to modify the configs: `options.json`, `secrets_emhass.yaml` or `config.json`, you can volume mount them with `-v`. This syncs the Host file to the file inside the container.
+- to apply a file change in the local EMHASS repository, you will need to re-build and re-run the Docker image/container in order for the change to take effect. (excluding volume mounted (-v) files/folders)
+- if you are planning to modify the configs: `options.json`, `secrets_emhass.yaml` or `config.json`, you can [volume mount](https://docs.docker.com/engine/storage/bind-mounts/) them with `-v`. This syncs the Host file to the file inside the container.
 *If running inside of podman, add :z at the end of the volume mount E.g:`-v ./options.json:/data/options.json:z`*
 
 #### Docker run for Docker Method:
@@ -160,12 +157,12 @@ docker run -it -p 5000:5000 --name emhass-test -v ./secrets_emhass.yaml:/app/sec
 ```
 
 #### Sync with local data folder 
-For those who wish to mount/sync the local `data` folder with the data folder from the docker container, volume mount the data folder with `-v` .
+For those who wish to mount/sync the local `data` folder with the data folder from inside the docker container, volume mount the data folder with `-v` .
 ```bash
 docker run ... -v ./data/:/app/data ...
 ```
 
-You can also mount data (ex .csv)  files separately
+You can also mount data files (ex .csv)  separately
 ```bash
 docker run... -v ./data/heating_prediction.csv:/app/data/ ...
 ```
@@ -177,7 +174,7 @@ Example with `armhf` architecture
 ```bash
 docker build ... --build-arg TARGETARCH=armhf --build-arg os_version=raspbian ...
 ```
-*For `armhf` only, create a build-arg for `os_version=raspbian`* 
+*For `armhf` only, also pass a build-arg for `os_version=raspbian`* 
 
 
 #### Delete built Docker image
@@ -231,8 +228,7 @@ docker run -it -p 5000:5000 --name emhass-test -e EMHASS_KEY -e EMHASS_URL -e TI
 ```
 
 ### Example Docker testing pipeline 
-The following pipeline will run unittest and most of the EMHASS actions. This may be a good options for those who wish to test their changes against the production EMHASS environment.
-
+The following pipeline will run unittest and most of the EMHASS actions. This may be a good option for those who wish to test their changes against the production EMHASS environment.
 
 *Linux:*  
 *Assuming docker and git installed*
@@ -281,7 +277,6 @@ docker exec emhass-test python3 -m unittest discover -s ./tests -p 'test_*.py' |
 
 User may wish to re-test with tweaked parameters such as `lp_solver`, `weather_forecast_method` and `load_forecast_method`, in `config.json` to broaden the testing scope. 
 *See [Differences](https://emhass.readthedocs.io/en/latest/differences.html) for more information on how the different methods of running EMHASS differ.*
-
 
 
 ## Step 3 - Pull request
