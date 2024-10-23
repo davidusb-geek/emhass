@@ -86,7 +86,7 @@ For this system, the total value of the obtained cost function is -1.23 EUR, a s
 
 As we showed in the forecast module section, we can pass our own forecast data using lists of values passed at runtime using templates. However, it is possible to also pass other data during runtime to automate energy management.
 
-For example, let's suppose that for the default configuration with two deferrable loads, we want to correlate and control them to the outside temperature. This will be used to build a list of the total number of hours for each deferrable load (`def_total_hours`). In this example, the first deferrable load is a water heater and the second is the pool pump.
+For example, let's suppose that for the default configuration with two deferrable loads, we want to correlate and control them to the outside temperature. This will be used to build a list of the total number of hours for each deferrable load (`operating_hours_of_each_deferrable_load`). In this example, the first deferrable load is a water heater and the second is the pool pump.
 
 We will begin by defining a temperature sensor on a 12 hours sliding window using the filter platform for the outside temperature:
 ```
@@ -121,7 +121,7 @@ The values for the total number of operating hours were tuned by trial and error
 Finally, my two shell commands for EMHASS will look like this:
 ```
 shell_command:
-  dayahead_optim: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"def_total_hours\":{{states('sensor.list_operating_hours_of_each_deferrable_load')}}}' http://localhost:5000/action/dayahead-optim"
+  dayahead_optim: "curl -i -H \"Content-Type: application/json\" -X POST -d '{\"operating_hours_of_each_deferrable_load\":{{states('sensor.list_operating_hours_of_each_deferrable_load')}}}' http://localhost:5000/action/dayahead-optim"
   publish_data: "curl -i -H \"Content-Type: application/json\" -X POST -d '{}' http://localhost:5000/action/publish-data"
 ```
 The dedicated automation for these shell commands can be for example:

@@ -16,10 +16,10 @@ To train a model use the `forecast-model-fit` end point.
 
 Some parameters can be optionally defined at runtime:
 
-- `days_to_retrieve`: the total days to retrieve from Home Assistant for model training. Define this to retrieve as much history data as possible.
+- `historic_days_to_retrieve`: the total days to retrieve from Home Assistant for model training. Define this to retrieve as much history data as possible.
 
 ```{note}
-The minimum number of `days_to_retrieve` is hard coded to 9 by default. However, it is advised to provide more data for better accuracy by modifying your Home Assistant recorder settings. 
+The minimum number of `historic_days_to_retrieve` is hard coded to 9 by default. However, it is advised to provide more data for better accuracy by modifying your Home Assistant recorder settings. 
 ```
 
 - `model_type`: define the type of model forecast that this will be used for. For example: `load_forecast`. This should be a unique name if you are using multiple custom forecast models.
@@ -147,7 +147,7 @@ The hyperparameter tuning using Bayesian optimization improves the bare KNN regr
 
 ```{warning} 
 
-The tuning routine can be computing intense. If you have problems with computation times, try to reduce the `days_to_retrieve` parameter. In the example shown, for a 240-day train period, the optimization routine took almost 20 min to finish on an amd64 Linux architecture machine with an i5 processor and 8 GB of RAM. This is a task that should be performed once in a while, for example, every week.
+The tuning routine can be computing intense. If you have problems with computation times, try to reduce the `historic_days_to_retrieve` parameter. In the example shown, for a 240-day train period, the optimization routine took almost 20 min to finish on an amd64 Linux architecture machine with an i5 processor and 8 GB of RAM. This is a task that should be performed once in a while, for example, every week.
 ```
 
 ## How does this work? 

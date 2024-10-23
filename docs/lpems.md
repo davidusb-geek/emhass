@@ -218,16 +218,16 @@ When applying this controller, the following `runtimeparams` should be defined:
 
 - `soc_final` for the final value of the battery SOC for the current iteration of the MPC. 
 
-- `def_total_hours` for the list of deferrable loads functioning hours. These values can decrease as the day advances to take into account receding horizon daily energy objectives for each deferrable load.
+- `operating_hours_of_each_deferrable_load` for the list of deferrable loads functioning hours. These values can decrease as the day advances to take into account receding horizon daily energy objectives for each deferrable load.
 
-- `def_start_timestep` for the timestep as from which each deferrable load is allowed to operate (if you don't want the deferrable load to use the whole optimization timewindow). If you specify a value of 0 (or negative), the deferrable load will be optimized as from the beginning of the complete prediction horizon window.
+- `start_timesteps_of_each_deferrable_load` for the timestep as from which each deferrable load is allowed to operate (if you don't want the deferrable load to use the whole optimization timewindow). If you specify a value of 0 (or negative), the deferrable load will be optimized as from the beginning of the complete prediction horizon window.
 
-- `def_end_timestep` for the timestep before which each deferrable load should operate (if you don't want the deferrable load to use the whole optimization timewindow). If you specify a value of 0 (or negative), the deferrable load will be optimized over the complete prediction horizon window.
+- `end_timesteps_of_each_deferrable_load` for the timestep before which each deferrable load should operate (if you don't want the deferrable load to use the whole optimization timewindow). If you specify a value of 0 (or negative), the deferrable load will be optimized over the complete prediction horizon window.
 
 In a practical use case, the values for `soc_init` and `soc_final` for each MPC optimization can be taken from the initial day-ahead optimization performed at the beginning of each day.
 
 ### Time windows for deferrable loads
-Since v0.7.0, the user has the possibility to limit the operation of each deferrable load to a specific timewindow, which can be smaller than the prediction horizon. This is done by means of the `def_start_timestep` and `def_end_timestep` parameters. These parameters can either be set in the configuration screen of the Home Assistant EMHASS add-on, or in the config_emhass.yaml file, or provided as runtime parameters.
+Since v0.7.0, the user has the possibility to limit the operation of each deferrable load to a specific timewindow, which can be smaller than the prediction horizon. This is done by means of the `start_timesteps_of_each_deferrable_load` and `end_timesteps_of_each_deferrable_load` parameters. These parameters can either be set in the configuration screen of the Home Assistant EMHASS add-on, or in the config_emhass.yaml file, or provided as runtime parameters.
 
 Take the example of two electric vehicles that need to charge, but which are not available during the whole prediction horizon:
 ![image](./images/deferrable_timewindow_evexample.png)
