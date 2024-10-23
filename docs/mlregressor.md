@@ -143,16 +143,16 @@ The predict method will publish the result to a Home Assistant sensor.
 
 ## Storing CSV files  
 
-### Standalone container - how to mount a .csv files in data_path folder
-If running EMHASS as a standalone container, you will need to volume mount a folder to be the `data_path`, or mount a single .csv file inside `data_path`
+### Docker container - how to mount a .csv files in data_path folder
+If running EMHASS with the Docker method, you will need to volume mount a folder to be the `data_path`, or mount a single .csv file inside `data_path`
 
 Example of mounting a folder as data_path *(.csv files stored inside)*
 ```bash
-docker run -it --restart always -p 5000:5000 -e LOCAL_COSTFUN="profit" -v $(pwd)/data:/app/data -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
+docker run -it --restart always -p 5000:5000 -e LOCAL_COSTFUN="profit" -v ./data:/app/data -v ./config_emhass.yaml:/app/config_emhass.yaml -v ./secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
 ```
 Example of mounting a single CSV file
 ```bash
-docker run -it --restart always -p 5000:5000 -e LOCAL_COSTFUN="profit" -v $(pwd)/data/heating_prediction.csv:/app/data/heating_prediction.csv -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
+docker run -it --restart always -p 5000:5000 -e LOCAL_COSTFUN="profit" -v ./data/heating_prediction.csv:/app/data/heating_prediction.csv -v ./config_emhass.yaml:/app/config_emhass.yaml -v ./secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
 ```
 
 ### Add-on - How to store data in a CSV file from Home Assistant

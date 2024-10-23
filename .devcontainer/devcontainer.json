@@ -12,12 +12,20 @@
 			"installZsh": "true",
 			"configureZshAsDefaultShell": "true",
 			"installOhMyZsh": "false",
-			"installOhMyZshConfig": "false",
-			"upgradePackages": "true"
-		},
-		"ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+			"installOhMyZshConfig": "false"
+		}
+		// "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
 	},
 	//"appPort": ["5000:5000"] //used to access app from external device (User discretion advised)
+
+
+	"runArgs": [
+		"--userns=keep-id",
+		"--pid=host"
+	],
+	"remoteUser": "root",
+	"containerUser": "root",
+
 
 	"customizations": {
 		// Configure properties specific to VS Code.
