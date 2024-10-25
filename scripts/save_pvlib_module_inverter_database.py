@@ -20,11 +20,14 @@ from emhass.forecast import Forecast
 from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
 
 # the root folder
-root = str(get_root(__file__, num_parent=2))
+root = pathlib.Path(str(get_root(__file__, num_parent=2)))
 emhass_conf = {}
-emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
-emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
-emhass_conf['root_path'] = pathlib.Path(root)
+emhass_conf['data_path'] = root / 'data/'
+emhass_conf['root_path'] = root / 'src/emhass/'
+emhass_conf['docs_path'] = root / 'docs/'
+emhass_conf['config_path'] = root / 'config.json'
+emhass_conf['defaults_path'] = emhass_conf['root_path']  / 'data/config_defaults.json'
+emhass_conf['associations_path'] = emhass_conf['root_path']  / 'data/associations.csv'
 
 # create logger
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
@@ -52,9 +55,9 @@ if __name__ == '__main__':
     logger.info('Inverters databases')
     print(tabulate(cec_inverters.head(20).iloc[:,:3], headers='keys', tablefmt='psql'))
     if save_new_files:
-        with bz2.BZ2File(emhass_conf['root_path'] + '/src/emhass/data/cec_modules.pbz2', "w") as f: 
+        with bz2.BZ2File(emhass_conf['root_path'] + '/data/cec_modules.pbz2', "w") as f: 
             cPickle.dump(cec_modules, f)    
     if save_new_files:
-        with bz2.BZ2File(emhass_conf['root_path'] + '/src/emhass/data/cec_inverters.pbz2', "w") as f: 
+        with bz2.BZ2File(emhass_conf['root_path'] + '/data/cec_inverters.pbz2', "w") as f: 
             cPickle.dump(cec_inverters, f)
     

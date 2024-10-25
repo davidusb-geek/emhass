@@ -34,10 +34,9 @@ jobs:
           context: .
           platforms: ${{ matrix.platform.buildx }}
           build-args: |
-            build_version=standalone
             TARGETARCH=${{ matrix.platform.target_arch }}
             os_version=${{ matrix.platform.os_version }}
-          tags: emhass/standalone-test
+          tags: emhass
           load: true
-      - name: Test #assume docker fail with FileNotFound secrets_emhass.yaml error
-        run: docker run --rm -it emhass/standalone-test | grep -q secrets_emhass.yaml && echo 0 || echo 1
+      - name: Test # Run docker for 2min, if the output contains waitress   INFO  "Serving on" http://0.0.0.0:5000 assume it worked
+        run: timeout 2 docker run --rm -it emhass | grep -q "Serving on"  && echo 0 || echo 1
