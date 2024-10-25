@@ -138,7 +138,7 @@ docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v ./
 You can also build your image locally. For this clone this repository, and build the image from the Dockerfile:
 ```bash
 # git clone EMHASS repo
-git clone docker pull ghcr.io/geoderp/emhass:v0.21.3
+git clone https://github.com/davidusb-geek/emhass.git
 # move to EMHASS directory 
 cd emhass
 # build Docker image 
