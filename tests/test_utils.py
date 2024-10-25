@@ -100,7 +100,8 @@ class TestCommandLineUtils(unittest.TestCase):
         retrieve_hass_conf, optim_conf, _ = utils.get_yaml_parse(self.params_json,logger)
         freq = int(retrieve_hass_conf['optimization_time_step'].seconds/60.0)
         delta_forecast = int(optim_conf['delta_forecast_daily'].days)
-        forecast_dates = utils.get_forecast_dates(freq, delta_forecast)
+        time_zone = retrieve_hass_conf['time_zone']
+        forecast_dates = utils.get_forecast_dates(freq, delta_forecast, time_zone)
         self.assertIsInstance(forecast_dates, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertTrue(len(forecast_dates)==int(delta_forecast*60*24/freq))
         

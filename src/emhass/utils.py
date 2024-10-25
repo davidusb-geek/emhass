@@ -94,7 +94,7 @@ def get_logger(fun_name: str, emhass_conf: dict, save_to_file: Optional[bool] = 
     return logger, ch
 
 
-def get_forecast_dates(freq: int, delta_forecast: int, timedelta_days: Optional[int] = 0
+def get_forecast_dates(freq: int, delta_forecast: int, time_zone: datetime.tzinfo, timedelta_days: Optional[int] = 0
                        ) -> pd.core.indexes.datetimes.DatetimeIndex:
     """
     Get the date_range list of the needed future dates using the delta_forecast parameter.
@@ -114,7 +114,7 @@ def get_forecast_dates(freq: int, delta_forecast: int, timedelta_days: Optional[
     end_forecast = (start_forecast + pd.Timedelta(days=delta_forecast)).replace(microsecond=0)
     forecast_dates = pd.date_range(start=start_forecast, 
         end=end_forecast+timedelta(days=timedelta_days)-freq, 
-        freq=freq).round(freq, ambiguous='infer', nonexistent='shift_forward')
+        freq=freq, tz=time_zone).tz_convert('utc').round(freq, ambiguous='infer', nonexistent='shift_forward').tz_convert(time_zone)
     return forecast_dates
 
 
@@ -240,8 +240,9 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         optimization_time_step = int(
             retrieve_hass_conf['optimization_time_step'].seconds / 60.0)
         delta_forecast = int(optim_conf['delta_forecast_daily'].days)
+        time_zone = retrieve_hass_conf["time_zone"]
         forecast_dates = get_forecast_dates(
-            optimization_time_step, delta_forecast)
+            optimization_time_step, delta_forecast, time_zone)
        
        # regressor-model-fit
         if set_type == "regressor-model-fit":
