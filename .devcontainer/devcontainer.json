@@ -19,12 +19,13 @@
 	//"appPort": ["5000:5000"] //used to access app from external device (User discretion advised)
 
 
-	"runArgs": [
-		"--userns=keep-id",
-		"--pid=host"
-	],
-	"remoteUser": "root",
-	"containerUser": "root",
+	// Security issue, may be needed for Podman
+	// "runArgs": [
+	// 	"--userns=keep-id",
+	// 	"--pid=host"
+	// ],
+	// "remoteUser": "root",
+	// "containerUser": "root",
 
 
 	"customizations": {
