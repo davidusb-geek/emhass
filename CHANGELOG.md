@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.0 - 2024-10-25
+### Automatic version bot improvements
+- Bump h5py from 3.11.0 to 3.12.1
+- Bump markupsafe from 2.1.5 to 3.0.2
+
 ## 0.10.6 - 2024-07-14
 ### Fix
 - Fixed bug on predicted room temeprature publish, wrong key on DataFrame
