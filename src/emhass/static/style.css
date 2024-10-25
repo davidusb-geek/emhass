@@ -1,3 +1,4 @@
+/*! EMHASS Style Sheet */
 /*! style.css v1.0.0 (modified version) | ISC License | https://github.com/ungoldman/style.css */
 
 /* color reference css */
@@ -570,6 +571,8 @@ button,
 .mystyle,
 .alert,
 .info,
+.section-card,
+select,
 table {
   border-radius: 7px;
   /* overflow: visible; */
@@ -578,6 +581,7 @@ table {
 button,
 .alert,
 .info,
+.section-card,
 select {
   text-transform: none;
   border-width: 1px;
@@ -599,6 +603,8 @@ select {
 
 h2 {
   margin-bottom: .3em;
+  margin-right: .3em;
+  margin-left: .3em;
 }
 
 .table_div h4 {
@@ -747,12 +753,12 @@ tr:hover td:last-child {
   margin-right: 13px;
 }
 
-#loader {
+/* #loader {
   min-width: 3.5em;
   min-height: 3.5em;
   width: 3.5em;
   height: 3.5em;
-}
+} */
 
 .loading {
   /* loading animation  */
@@ -787,7 +793,7 @@ tr:hover td:last-child {
 
 .tick {
   /* tick symbol  */
-  color: #158b00;
+  color: #bfebbc;
   vertical-align: text-top;
   font-size: 4.0em;
   animation-name: fadeInOpacity;
@@ -798,7 +804,7 @@ tr:hover td:last-child {
 
 .cross {
   /* cross symbol  */
-  color: #a71515;
+  color: #e3b7b7;
   vertical-align: text-top;
   font-size: 4.0em;
   animation-name: fadeInOpacity;
@@ -941,7 +947,8 @@ select,
 
 
 .input-list input,
-.input-box textarea {
+.input-box textarea,
+#config-box {
   border-collapse: collapse;
   border-radius: 7px;
   border-style: solid;
@@ -970,7 +977,229 @@ select,
   margin: 0;
 }
 
-/* */
+/* config page */
+#configuration-container {
+  border: 1px solid;
+  border-width: 1px 0px;
+}
+
+#configuration-container,
+.header-footer {
+  margin-bottom: 5px;
+  padding: 20px 0px;
+  border-radius: 7px;
+  max-width: 90%;
+  margin: auto;
+}
+
+
+.header-footer {
+  background-color: #0000;
+  display: flex;
+  justify-content: space-between;
+}
+
+.header-footer h4,
+.header-footer div,
+.header-footer a {
+  line-height: 0;
+  margin: auto 0;
+
+}
+
+/* loading icons */
+.header-footer p {
+  margin: 20px 0;
+}
+
+
+.header-footer h4 {
+  color: darkblue;
+}
+
+.header-footer .feather {
+  height: 3em !important;
+  stroke-width: 3 !important;
+}
+
+#save,
+#json {
+  min-width: 15%;
+  height: auto;
+  display: block;
+  min-height: fit-content;
+  margin-left: auto;
+}
+
+/* configuration list page */
+
+.section-card {
+  max-width: 99%;
+  margin-left: auto;
+  margin-right: auto;
+  margin-bottom: 1vh;
+}
+
+.section-card h4 {
+  margin-top: 5px;
+  background-color: #0000 !important;
+}
+
+.section-card-header {
+  background-color: #e1e1e15e;
+  display: flex;
+  align-items: center;
+  padding: 0px 10px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.355);
+  /* justify-content: center; */
+}
+
+.section-body {
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+.switch,
+.section-card-header input {
+  position: relative;
+  display: inline-block;
+  width: 52px;
+  height: 27px;
+  margin-left: auto;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: calc(27px - 7px);
+  width: calc(27px - 7px);
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+input:checked+.slider {
+  background-color: darkblue;
+}
+
+input:checked+.slider:before {
+  -webkit-transform: translateX(26px);
+  -ms-transform: translateX(26px);
+  transform: translateX(26px);
+}
+
+.slider,
+.slider:before {
+  border-radius: 7px
+}
+
+/* param container and content styling  */
+.param {
+  text-align: left;
+  padding: 5px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.355);
+  transition: 1s;
+}
+
+.param input,
+.section-card-header input {
+  background-color: #ffffff11;
+  border-radius: 7px;
+  border: solid 1px;
+  color: #181818;
+  min-width: 40%;
+  max-width: 70%;
+}
+
+
+.section-card-header input {
+  min-width: calc(27px - 7px);
+}
+
+.param p,
+.param i {
+  font-size: .7em;
+  margin-top: 4px;
+}
+
+.param i {
+  font-size: .7em;
+  margin-bottom: 5px;
+}
+
+.param p {
+  padding-right: 5px;
+  max-width: 777px;
+}
+
+.param h5 {
+  font-size: 1em;
+}
+
+.param h5,
+p {
+  margin: 5px;
+  margin-left: 0px;
+  margin-bottom: 0px;
+}
+
+.param button {
+  width: 20px;
+  height: 20px;
+  line-height: 0;
+  padding: 1px;
+  box-shadow: none;
+  margin-bottom: 5px;
+}
+
+.param-input {
+  display: block;
+  float: left;
+  min-width: 100%;
+}
+
+.param-input input {
+  min-width: 70%;
+}
+
+.param-input input[type="time"] {
+  min-width: 35%;
+}
+
+/* when requirement param is not met */
+.requirement-disable {
+  pointer-events: none;
+  filter: opacity(25%);
+}
+
+/* configuration box page */
+
+#config-box {
+  min-width: 100%;
+  min-height: 85vh;
+}
+
+
 
 
 /* mobile only changes */
@@ -988,6 +1217,9 @@ select,
     max-width: 100%;
   }
 }
+
+
+
 
 /* Dark Theme Support */
 @media (prefers-color-scheme: dark) {
@@ -1031,6 +1263,9 @@ select,
   }
 
   h2,
+  h3,
+  h4,
+  .header-footer h4,
   kbd,
   a {
     background-color: #111111;
@@ -1094,7 +1329,8 @@ select,
   }
 
   .input-list input,
-  .input-box textarea {
+  .input-box textarea,
+  #config-box {
     background-color: #282928;
     border-color: #e1e1e1;
     color: #e1e1e1
@@ -1108,6 +1344,29 @@ select,
     /* loading animation  */
     border: 16px solid #282928;
     border-top: 16px solid #ccf3ff;
+  }
+
+  input:checked+.slider {
+    background-color: #ccf3ff;
+  }
+
+  .param {
+    border-color: rgba(255, 255, 255, 0.355);
+  }
+
+  .param input,
+  .section-card-header input {
+    color: #e1e1e1;
+  }
+
+  .section-card-header {
+    background-color: #ffffff11;
+  }
+
+
+  #configuration-container {
+    background-color: #ffffff07;
+    border: 0;
   }
 
 
