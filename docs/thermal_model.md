@@ -112,7 +112,7 @@ In the previous example with just one thermal load, the working example for a pu
 shell_command:
   publish_data: 'curl -i -H "Content-Type: application/json" -X POST -d ''{"def_load_config": [{"thermal_config": {}}]}'' http://localhost:5000/action/publish-data'
 ```
-As we can see the thermal configuration can be left empty as what is needed is the `thermal_config` key.
+As we can see the thermal configuration can be left empty as what is needed is just the `thermal_config` key.
 For a configuration with **three** deferrable loads where the **second** load is a thermal load the payload would have been:
 ```
 {"def_load_config": [{},{"thermal_config": {}},{}]}
