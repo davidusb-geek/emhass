@@ -3,7 +3,7 @@ scipy==1.12.0
 pandas<=2.0.3
 pvlib>=0.10.2
 protobuf>=3.0.0
-pytz>=2021.1,<2024.2
+pytz>=2021.1
 requests>=2.25.1
 beautifulsoup4>=4.9.3
 h5py==3.11.0
