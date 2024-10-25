@@ -1,8 +1,8 @@
 # Deferrable load thermal model
 
 EMHASS supports defining a deferrable load as a thermal model.
-This is useful to control thermal equipement as: heaters, air conditioners, etc.
-The advantage of using this approach is that you will be able to define your desired room temperature jsut as you will do with your real equipmenet thermostat.
+This is useful to control thermal equipment such as heaters, heat pumps, air conditioners, etc.
+The advantage of using this approach is that you will be able to define your desired room temperature just as you will do with your real equipment thermostat.
 Then EMHASS will deliver the operating schedule to maintain that desired temperature while minimizing the energy bill and taking into account the forecasted outdoor temperature.
 
 A big thanks to @werdnum for proposing this model and the initial code for implementing this.
@@ -23,7 +23,7 @@ In this model we can see two main configuration parameters:
 
 These parameters are defined according to the thermal characteristics of the building/house.
 It was reported by @werdnum, that values of $\alpha_h=5.0$ and $\gamma_c=0.1$ were reasonable in his case. 
-Of course these parameters should be adapted to each use case. This can be done with with history values of the deferrable load operation and the differents temperatures (indoor/outdoor).
+Of course, these parameters should be adapted to each use case. This can be done with historical values of the deferrable load operation and the different temperatures (indoor/outdoor).
 
 The following diagram tries to represent an example behavior of this model:
 
@@ -36,7 +36,7 @@ To implement this model we need to provide a configuration for the discussed par
 We will control this by using data passed at runtime.
 The first step will be to define a new entry `def_load_config`, this will be used as a dictionary to store any needed special configuration for each deferrable load.
 
-For example if we have just **two** deferrable loads and the **second** load is a **thermal load** then we will define `def_load_config` as for example:
+For example, if we have just **two** deferrable loads and the **second** load is a **thermal load** then we will define `def_load_config` as:
 ```
 'def_load_config': {
     {},
@@ -55,7 +55,7 @@ Here the `desired_temperatures` is a list of float values for each time step.
 Now we also need to define the other needed input, the `outdoor_temperature_forecast`, which is a list of float values. The list of floats for `desired_temperatures` and the list in `outdoor_temperature_forecast` should have proper lengths, if using MPC the length should be at least equal to the prediction horizon.
 
 Here is an example modified from a working example provided by @werdnum to pass all the needed data at runtime.
-This example is given for the following configuration: just one deferrable load (a thermal load), no PV, no battery, an MPC application, pre-defined heating intervals times. 
+This example is given for the following configuration: just one deferrable load (a thermal load), no PV, no battery, an MPC application, and pre-defined heating intervals times. 
 
 ```
 rest_command:
@@ -106,13 +106,15 @@ rest_command:
       }
 ```
 
-For the ddata publush command we need to provide the information about which deferrable loads are thermal loads.
+For the data publish command we need to provide the information about which deferrable loads are thermal loads.
 In the previous example with just one thermal load, the working example for a publish command will be:
 ```
 shell_command:
   publish_data: 'curl -i -H "Content-Type: application/json" -X POST -d ''{"def_load_config": [{"thermal_config": {}}]}'' http://localhost:5000/action/publish-data'
 ```
-As we can see the thermal configuration can be left empty as what is needed is just the `thermal_config` key.
+
+As we can see the thermal configuration can be left empty as what is needed is the `thermal_config` key. This is needed if using the add-on, for user using a `config_emhass.yaml` configuration file this is not needed if the `def_load_config` dictionary is directly defined there. 
+
 For a configuration with **three** deferrable loads where the **second** load is a thermal load the payload would have been:
 ```
 {"def_load_config": [{},{"thermal_config": {}},{}]}

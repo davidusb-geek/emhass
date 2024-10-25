@@ -1,0 +1,424 @@
+{
+  "Local": {
+    "costfun": {
+      "friendly_name": "Cost function",
+      "Description": "Define the type of cost function.",
+      "input": "select",
+      "select_options": [
+        "profit",
+        "cost",
+        "self-consumption"
+      ],
+      "default_value": "profit"
+    },
+    "sensor_power_photovoltaics": {
+      "friendly_name": "Sensor power sensor",
+      "Description": "This is the name of the photovoltaic power-produced sensor in Watts from Home Assistant. For example: ‘sensor.power_photovoltaics’.",
+      "input": "string",
+      "default_value": "sensor.power_photovoltaics"
+    },
+    "sensor_power_load_no_var_loads": {
+      "friendly_name": "Sensor power loads with no variable loads",
+      "Description": "The name of the household power consumption sensor in Watts from Home Assistant. The deferrable loads that we will want to include in the optimization problem should be subtracted from this sensor in HASS. For example: ‘sensor.power_load_no_var_loads’",
+      "input": "string",
+      "default_value": "sensor.power_load_no_var_loads"
+    },
+    "sensor_replace_zero": {
+      "friendly_name": "Sensor to replace NAN values with 0s",
+      "Description": "The list of retrieved variables that we would want to replace NANs (if they exist) with zeros.",
+      "input": "array.string",
+      "default_value": "sensor.power_photovoltaics"
+    },
+    "sensor_linear_interp": {
+      "friendly_name": "Sensor to replace NAN values with linear interpolation",
+      "Description": "The list of retrieved variables that we would want to interpolate NANs values using linear interpolation",
+      "input": "array.string",
+      "default_value": "sensor.power_photovoltaics"
+    },
+    "continual_publish": {
+      "friendly_name": "Continually publish optimization results",
+      "Description": "set to True to save entities to .json after an optimization run. Then automatically republish the saved entities (with updated current state value) every freq minutes. entity data saved to data_path/entities.",
+      "input": "boolean",
+      "default_value": false
+    },
+    "logging_level": {
+      "friendly_name": "Logging level",
+      "Description": "This is the name of the photovoltaic power-produced sensor in Watts from Home Assistant. For example: ‘sensor.power_photovoltaics’.",
+      "input": "select",
+      "select_options": [
+        "INFO",
+        "DEBUG",  
+        "WARNING",
+        "ERROR"
+      ],
+      "default_value": "INFO"
+    }
+  },
+  "System": {
+    "optimization_time_step": {
+      "friendly_name": "Optimization steps per minute (timesteps)",
+      "Description": "The time step to resample retrieved data from hass. This parameter is given in minutes. It should not be defined too low or you will run into memory problems when defining the Linear Programming optimization. Defaults to 30",
+      "input": "int",
+      "default_value": 30
+    },
+    "historic_days_to_retrieve": {
+      "friendly_name": "Historic days to retrieve",
+      "Description": "We will retrieve data from now to days_to_retrieve days. Defaults to 2",
+      "input": "int",
+      "default_value": 2
+    },
+    "load_negative": {
+      "friendly_name": "Load negative values",
+      "Description": "Set this parameter to True if the retrieved load variable is negative by convention. Defaults to False",
+      "input": "boolean",
+      "default_value": false
+    },
+    "set_zero_min": {
+      "friendly_name": "Remove Negatives",
+      "Description": "Set this parameter to True to give a special treatment for a minimum value saturation to zero for power consumption data. Values below zero are replaced by nans. Defaults to True.",
+      "input": "boolean",
+      "default_value": true
+    },
+    "method_ts_round": {
+      "friendly_name": "Timestamp rounding method",
+      "Description": "Set the method for timestamp rounding, options are: first, last and nearest.",
+      "input": "select",
+      "select_options": [
+        "nearest",
+        "first",
+        "last"
+      ],
+      "default_value": "nearest"
+    },
+    "delta_forecast_daily": {
+      "friendly_name": "Number of forecasted days",
+      "Description": "The number of days for forecasted data. Defaults to 1.",
+      "input": "int",
+      "default_value": 1
+    },
+    "load_forecast_method": {
+      "friendly_name": "Load forecast method",
+      "Description": "The load forecast method that will be used. The options are ‘csv’ to load a CSV file or ‘naive’ for a simple 1-day persistence model.",
+      "input": "select",
+      "select_options": [
+        "naive",
+        "csv"
+      ],
+      "default_value": "naive"
+    },
+    "set_total_pv_sell": {
+      "friendly_name": "PV straight to grid",
+      "Description": "Set this parameter to true to consider that all the PV power produced is injected to the grid. No direct self-consumption. The default is false, for a system with direct self-consumption.",
+      "input": "boolean",
+      "default_value": false
+    },
+    "lp_solver": {
+      "friendly_name": "Linear programming solver",
+      "Description": "Set the name of the linear programming solver that will be used. Defaults to ‘COIN_CMD’. The options are ‘PULP_CBC_CMD’, ‘GLPK_CMD’ and ‘COIN_CMD’.",
+      "input": "select",
+      "select_options": [
+        "default",
+        "COIN_CMD",
+        "PULP_CBC_CMD",
+        "GLPK_CMD"
+      ],
+      "default_value": "COIN_CMD"
+    },
+    "lp_solver_path": {
+      "friendly_name": "Linear programming solver program path",
+      "Description": "Set the path to the LP solver. Defaults to ‘/usr/bin/cbc’.",
+      "input": "text",
+      "default_value": "/usr/bin/cbc"
+    },
+    "weather_forecast_method": {
+      "friendly_name": "Weather forecast method",
+      "Description": "This will define the weather forecast method that will be used. options are 'scrapper' (ClearOutside), 'Solcast', 'solar.forecast' (forecast.solar) and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts.",
+      "input": "select",
+      "select_options": [
+        "scrapper",
+        "solcast",
+        "solar.forecast",
+        "csv"
+      ],
+      "default_value": "scrapper"
+    },
+    "maximum_power_from_grid": {
+      "friendly_name": "Max power from grid",
+      "Description": "The maximum power that can be supplied by the utility grid in Watts (consumption). Defaults to 9000.",
+      "input": "int",
+      "default_value": 9000
+    },
+    "maximum_power_to_grid": {
+      "friendly_name": "Max export power to grid",
+      "Description": "The maximum power that can be supplied to the utility grid in Watts (injection). Defaults to 9000.",
+      "input": "int",
+      "default_value": 9000
+    },
+    "inverter_is_hybrid": {
+      "friendly_name": "Inverter is a hybrid",
+      "Description": "Set to True to consider that the installation inverter is hybrid for PV and batteries (Default False)",
+      "input": "boolean",
+      "default_value": false
+    },
+    "compute_curtailment": {
+      "friendly_name": "Set compute curtailment (grid export limit)",
+      "Description": "Set to True to compute a special PV curtailment variable (Default False)",
+      "input": "boolean",
+      "default_value": false
+    }
+  },
+  "Tariff": {
+    "load_cost_forecast_method": {
+      "friendly_name": "Load cost method",
+      "Description": "Define the method that will be used for load cost forecast. The options are ‘hp_hc_periods’ for peak and non-peak hours contracts, and ‘csv’ to load custom cost from CSV file.",
+      "input": "select",
+      "select_options": [
+        "hp_hc_periods",
+        "csv"
+      ],
+      "default_value": "hp_hc_periods"
+    },
+    "load_peak_hour_periods": {
+      "friendly_name": "List peak hour periods",
+      "Description": "A list of peak hour periods for load consumption from the grid. This is useful if you have a contract with peak and non-peak hours.",
+      "input": "array.time",
+      "default_value": {
+        "period_hp_template": [{"start": "02:54"},{"end": "15:24"}]
+      },
+      "requires": {
+        "load_cost_forecast_method": "hp_hc_periods"
+      }
+    },
+    "load_peak_hours_cost": {
+      "friendly_name": "Peak hours electrical energy cost",
+      "Description": "The cost of the electrical energy during peak hours",
+      "input": "float",
+      "requires": {
+        "load_cost_forecast_method": "hp_hc_periods"
+      },
+      "default_value": 0.1907
+    },
+    "load_offpeak_hours_cost": {
+      "friendly_name": "Off-peak hours electrical energy cost",
+      "Description": "The cost of the electrical energy during off-peak hours",
+      "input": "float",
+      "requires": {
+        "load_cost_forecast_method": "hp_hc_periods"
+      },
+      "default_value": 0.1419
+    },
+    "production_price_forecast_method": {
+      "friendly_name": "PV power production price forecast method",
+      "Description": "Define the method that will be used for PV power production price forecast. This is the price that is paid by the utility for energy injected into the grid. The options are ‘constant’ for a constant fixed value or ‘csv’ to load custom price forecasts from a CSV file.",
+      "input": "select",
+      "select_options": [
+        "constant",
+        "csv"
+      ],
+      "default_value": "constant"
+    },
+    "photovoltaic_production_sell_price": {
+      "friendly_name": "Constant PV power production price",
+      "Description": "The paid price for energy injected to the grid from excess PV production in €/kWh.",
+      "input": "float",
+      "default_value": 0.1419,
+      "requires": {
+        "production_price_forecast_method": "constant"
+      }
+    }
+  },
+  "Solar System (PV)": {
+    "pv_module_model": {
+      "friendly_name": "PV module model name",
+      "Description": "The PV module model. This parameter can be a list of items to enable the simulation of mixed orientation systems.",
+      "input": "array.string",
+      "input_attributes": "_'s",
+      "default_value": "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M"
+    },
+    "pv_inverter_model": {
+      "friendly_name": "The PV inverter model name",
+      "Description": "The PV inverter model.  This parameter can be a list of items to enable the simulation of mixed orientation systems.",
+      "input": "array.string",
+      "input_attributes": "_'s",
+      "default_value": "Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_"
+    },
+    "surface_tilt": {
+      "friendly_name": "The PV panel tilt",
+      "Description": "The tilt angle of your solar panels. Defaults to 30. This parameter can be a list of items to enable the simulation of mixed orientation systems.",
+      "input": "array.int",
+      "default_value": 30
+    },
+    "surface_azimuth": {
+      "friendly_name": "The PV azimuth (direction)",
+      "Description": "The azimuth of your PV installation. Defaults to 205. This parameter can be a list of items to enable the simulation of mixed orientation systems.",
+      "input": "array.int",
+      "default_value": 205
+    },
+    "modules_per_string": {
+      "friendly_name": "Number of modules per string",
+      "Description": "The number of modules per string. Defaults to 16. This parameter can be a list of items to enable the simulation of mixed orientation systems.",
+      "input": "array.int",
+      "default_value": 16
+    },
+    "strings_per_inverter": {
+      "friendly_name": "Number of strings per inverter",
+      "Description": "The number of used strings per inverter. Defaults to 1. This parameter can be a list of items to enable the simulation of mixed orientation systems.",
+      "input": "array.int",
+      "default_value": 1
+    }
+  },
+  "Deferrable Loads": {
+    "number_of_deferrable_loads": {
+      "friendly_name": "Number of deferrable loads",
+      "Description": "Define the number of deferrable loads (appliances to shift) to consider. Defaults to 2.",
+      "input": "int",
+      "default_value": 2
+    },
+    "nominal_power_of_deferrable_loads": {
+      "friendly_name": "Deferrable load nominal power",
+      "Description": "The nominal (calculated max) power for each deferrable load in Watts.",
+      "input": "array.float",
+      "default_value": 3000.0
+    },
+    "operating_hours_of_each_deferrable_load": {
+      "friendly_name": "Deferrable load operating hours",
+      "Description": "The total number of hours that each deferrable load should operate",
+      "input": "array.int",
+      "default_value": 0
+    },
+    "treat_deferrable_load_as_semi_cont": {
+      "friendly_name": "Deferrable load as semi-continuous (on/off) variable",
+      "Description": "Semi-continuous variables (True) are variables that must take a value that can be either their maximum or minimum/zero (for example On = Maximum load, Off = 0 W). Non semi-continuous (which means continuous) variables (False) can take any values between their maximum and minimum",
+      "input": "array.boolean",
+      "default_value": true
+    },
+    "set_deferrable_load_single_constant": {
+      "friendly_name": "Deferrable load run single constant per optimization",
+      "Description": "Define if we should set each deferrable load as a constant fixed value variable with just one startup for each optimization task",
+      "input": "array.boolean",
+      "default_value": false
+    },
+    "set_deferrable_startup_penalty": {
+      "friendly_name": "Set deferrable startup penalty",
+      "Description": "For penalty P, each time the deferrable load turns on will incur an additional cost of P * number_of_deferrable_loads * cost_of_electricity at that time",
+      "input": "array.float",
+      "default_value": 0.0
+    },
+    "start_timesteps_of_each_deferrable_load": {
+      "friendly_name": "Deferrable start timestamp",
+      "Description": "The timestep as from which each deferrable load is allowed to operate (if you don’t want the deferrable load to use the whole optimization time window). If you specify a value of 0 (or negative), the deferrable load will be optimized as from the beginning of the complete prediction horizon window.",
+      "input": "array.int",
+      "default_value": 0
+    },
+    "end_timesteps_of_each_deferrable_load": {
+      "friendly_name": "Deferrable end timestamp",
+      "Description": "The timestep before which each deferrable load should operate. The deferrable load is not allowed to operate after the specified time step. If a value of 0 (or negative) is provided, the deferrable load is allowed to operate in the complete optimization window)",
+      "input": "array.int",
+      "default_value": 0
+    }
+  },
+  "Battery": {
+    "set_use_battery": {
+      "friendly_name": "Enable Battery",
+      "Description": "Set to True if we should consider an energy storage device such as a Li-Ion battery. Defaults to False",
+      "input": "boolean",
+      "default_value": false
+    },
+    "set_nocharge_from_grid": {
+      "friendly_name": "Forbid charging battery from grid",
+      "Description": "Set this to true if you want to forbid charging the battery from the grid. The battery will only be charged from excess PV",
+      "input": "boolean",
+      "default_value": false
+    },
+    "set_nodischarge_to_grid": {
+      "friendly_name": "Forbid battery discharge to the grid",
+      "Description": "Set this to true if you want to forbid discharging battery power to the grid.",
+      "input": "boolean",
+      "default_value": true
+    },
+    "set_battery_dynamic": {
+      "friendly_name": "Set Battery dynamic (dis)charge power limiting",
+      "Description": "Set a power dynamic limiting condition to the battery power. This is an additional constraint on the battery dynamic in power per unit of time (timestep), which allows you to set a percentage of the battery’s nominal full power as the maximum power allowed for (dis)charge.",
+      "input": "boolean",
+      "default_value": false
+    },
+    "battery_dynamic_max": {
+      "friendly_name": "Maximum percentage of battery discharge per timestep",
+      "Description": "The maximum positive (for discharge) battery power dynamic. This is the allowed power variation (in percentage) of battery maximum power per unit of timestep",
+      "input": "float",
+      "default_value": 0.9,
+      "requires": {
+        "set_battery_dynamic": true
+      }
+    },
+    "battery_dynamic_min": {
+      "friendly_name": "Maximum percentage of battery charge per timestep",
+      "Description": "The maximum negative (for charge) battery power dynamic. This is the allowed power variation (in percentage) of battery maximum power per timestep.",
+      "input": "float",
+      "default_value": -0.9,
+      "requires": {
+        "set_battery_dynamic": true
+      }
+    },
+    "weight_battery_discharge": {
+      "friendly_name": "Add cost weight for battery discharge",
+      "Description": "An additional weight (currency/ kWh) applied in the cost function to battery usage for discharging",
+      "input": "float",
+      "default_value": 1.0
+    },
+    "weight_battery_charge": {
+      "friendly_name": "Add cost weight for battery charge",
+      "Description": "An additional weight (currency/ kWh) applied in the cost function to battery usage for charging",
+      "input": "float",
+      "default_value": 1.0
+    },
+    "battery_discharge_power_max": {
+      "friendly_name": "Max battery discharge power",
+      "Description": "The maximum discharge power in Watts",
+      "input": "int",
+      "default_value": 1000
+    },
+    "battery_charge_power_max": {
+      "friendly_name": "Max battery charge power",
+      "Description": "The maximum charge power in Watts",
+      "input": "int",
+      "default_value": 1000
+    },
+    "battery_discharge_efficiency": {
+      "friendly_name": "Battery discharge efficiency",
+      "Description": "The discharge efficiency. (percentage/100)",
+      "input": "float",
+      "default_value": 0.95
+    },
+    "battery_charge_efficiency": {
+      "friendly_name": "Battery charge efficiency",
+      "Description": "The charge efficiency. (percentage/100)",
+      "input": "float",
+      "default_value": 0.95
+    },
+    "battery_nominal_energy_capacity": {
+      "friendly_name": "Battery total capacity",
+      "Description": "The total capacity of the battery stack in Wh",
+      "input": "int",
+      "default_value": 5000
+    },
+    "battery_minimum_state_of_charge": {
+      "friendly_name": "Minimum Battery charge percentage",
+      "Description": "The minimum allowable battery state of charge. (percentage/100)",
+      "input": "float",
+      "default_value": 0.3
+    },
+    "battery_maximum_state_of_charge": {
+      "friendly_name": "Maximum Battery charge percentage",
+      "Description": "The maximum allowable battery state of charge. (percentage/100)",
+      "input": "float",
+      "default_value": 0.9
+    },
+    "battery_target_state_of_charge": {
+      "friendly_name": "Battery desired percentage after optimization",
+      "Description": "The desired battery state of charge at the end of each optimization cycle. (percentage/100)",
+      "input": "float",
+      "default_value": 0.6
+    }
+  }
+}

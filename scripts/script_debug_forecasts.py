@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import json
 import pickle
 import numpy as np
 import pandas as pd
@@ -10,14 +11,17 @@ pio.renderers.default = 'browser'
 pd.options.plotting.backend = "plotly"
 
 from emhass.forecast import Forecast
-from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger
+from emhass.utils import get_root, get_yaml_parse, get_days_list, get_logger, build_config, build_secrets, build_params
 
 # the root folder
-root = str(get_root(__file__, num_parent=2))
+root = pathlib.Path(str(get_root(__file__, num_parent=2)))
 emhass_conf = {}
-emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
-emhass_conf['data_path'] = pathlib.Path(root) / 'data/'
-emhass_conf['root_path'] = pathlib.Path(root)
+emhass_conf['data_path'] = root / 'data/'
+emhass_conf['root_path'] = root / 'src/emhass/'
+emhass_conf['config_path'] = root / 'config.json'
+emhass_conf['secrets_path'] = root  / 'secrets_emhass.yaml'
+emhass_conf['defaults_path'] = emhass_conf['root_path']  / 'data/config_defaults.json'
+emhass_conf['associations_path'] = emhass_conf['root_path']  / 'data/associations.csv'
 
 # create logger
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
@@ -25,14 +29,19 @@ logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 if __name__ == '__main__':
 
     get_data_from_file = True
-    params = None
     template = 'presentation'
     
     methods_list = ['solar.forecast', 'solcast', 'scrapper'] # 
     
     for k, method in enumerate(methods_list):
-        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(emhass_conf)
-        optim_conf['delta_forecast'] = pd.Timedelta(days=2)
+        # Build params with default config, weather_forecast_method=method and default secrets
+        config = build_config(emhass_conf,logger,emhass_conf['defaults_path'])
+        config['weather_forecast_method'] = method
+        _,secrets = build_secrets(emhass_conf,logger,secrets_path=emhass_conf['secrets_path'],no_response=True)
+        params =  build_params(emhass_conf,secrets,config,logger)
+        
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(params,logger)
+        optim_conf['delta_forecast_daily'] = pd.Timedelta(days=2)
         fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf,
                         params, emhass_conf, logger, get_data_from_file=get_data_from_file)
         df_weather = fcst.get_weather_forecast(method=method)

@@ -1,0 +1,117 @@
+{
+  "logging_level": "INFO",
+  "costfun": "profit",
+  "optimization_time_step": 30,
+  "historic_days_to_retrieve": 2,
+  "method_ts_round": "nearest",
+  "continual_publish": false,
+  "data_path": "default",
+  "set_total_pv_sell": false,
+  "lp_solver": "default",
+  "lp_solver_path": "empty",
+  "set_nocharge_from_grid": false,
+  "set_nodischarge_to_grid": true,
+  "set_battery_dynamic": false,
+  "battery_dynamic_max": 0.9,
+  "battery_dynamic_min": -0.9,
+  "weight_battery_discharge": 1.0,
+  "weight_battery_charge": 1.0,
+  "sensor_power_photovoltaics": "sensor.power_photovoltaics",
+  "sensor_power_load_no_var_loads": "sensor.power_load_no_var_loads",
+  "sensor_replace_zero": [
+    "sensor.power_photovoltaics",
+    "sensor.power_load_no_var_loads"
+  ],
+  "sensor_linear_interp": [
+    "sensor.power_photovoltaics",
+    "sensor.power_load_no_var_loads"
+  ],
+  "load_negative": false,
+  "set_zero_min": true,
+  "number_of_deferrable_loads": 2,
+  "nominal_power_of_deferrable_loads": [
+    3000.0,
+    750.0
+  ],
+  "operating_hours_of_each_deferrable_load": [
+    4,
+    0
+  ],
+  "weather_forecast_method": "scrapper",
+  "load_forecast_method": "naive",
+  "delta_forecast_daily": 1,
+  "load_cost_forecast_method": "hp_hc_periods",
+  "start_timesteps_of_each_deferrable_load": [
+    0,
+    0
+  ],
+  "end_timesteps_of_each_deferrable_load": [
+    0,
+    0
+  ],
+  "load_peak_hour_periods": {
+    "period_hp_1": [
+      {
+        "start": "02:54"
+      },
+      {
+        "end": "15:24"
+      }
+    ],
+    "period_hp_2": [
+      {
+        "start": "17:24"
+      },
+      {
+        "end": "20:24"
+      }
+    ]
+  },
+  "treat_deferrable_load_as_semi_cont": [
+    true,
+    true
+  ],
+  "set_deferrable_load_single_constant": [
+    false,
+    false
+  ],
+  "set_deferrable_startup_penalty": [
+    0.0,
+    0.0
+  ],
+  "load_peak_hours_cost": 0.1907,
+  "load_offpeak_hours_cost": 0.1419,
+  "production_price_forecast_method": "constant",
+  "photovoltaic_production_sell_price": 0.1419,
+  "maximum_power_from_grid": 9000,
+  "maximum_power_to_grid": 9000,
+  "pv_module_model": [
+    "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M"
+  ],
+  "pv_inverter_model": [
+    "Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_"
+  ],
+  "surface_tilt": [
+    30
+  ],
+  "surface_azimuth": [
+    205
+  ],
+  "modules_per_string": [
+    16
+  ],
+  "strings_per_inverter": [
+    1
+  ],
+  "inverter_is_hybrid": false,
+  "compute_curtailment": false,
+  "set_use_battery": false,
+  "battery_discharge_power_max": 1000,
+  "battery_charge_power_max": 1000,
+  "battery_discharge_efficiency": 0.95,
+  "battery_charge_efficiency": 0.95,
+  "battery_nominal_energy_capacity": 5000,
+  "battery_minimum_state_of_charge": 0.3,
+  "battery_maximum_state_of_charge": 0.9,
+  "battery_target_state_of_charge": 0.6
+}
