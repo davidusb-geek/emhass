@@ -19,7 +19,7 @@ long_description = (here / 'README.md').read_text(encoding='utf-8')
 
 setup(
     name='emhass',  # Required
-    version='0.10.6',  # Required
+    version='0.11.0',  # Required
     description='An Energy Management System for Home Assistant',  # Optional
     long_description=long_description,  # Optional
     long_description_content_type='text/markdown',  # Optional (see note above)
@@ -48,11 +48,11 @@ setup(
         'pytz>=2021.1',
         'requests>=2.25.1',
         'beautifulsoup4>=4.9.3',
-        'h5py==3.11.0',
+        'h5py==3.12.1',
         'pulp>=2.4',
         'pyyaml>=5.4.1',
         'tables<=3.9.1',
-        'skforecast==0.12.1',
+        'skforecast==0.13.0',
         'flask>=2.0.3',
         'waitress>=2.1.1',
         'plotly>=5.6.0'
@@ -62,7 +62,7 @@ setup(
             'emhass=emhass.command_line:main',
         ],
     },
-    package_data={'emhass': ['templates/index.html','templates/template.html','static/advanced.html','static/basic.html', 'static/script.js',
-    'static/style.css','static/img/emhass_icon.png','static/img/emhass_logo_short.svg', 'static/img/feather-sprite.svg',
-    'data/cec_modules.pbz2', 'data/cec_inverters.pbz2']},
+    package_data={'emhass': ['templates/index.html','templates/template.html','templates/configuration.html','static/advanced.html','static/basic.html', 'static/script.js', 'static/configuration_script.js',
+    'static/style.css','static/configuration_list.html','static/img/emhass_icon.png','static/img/emhass_logo_short.svg', 'static/img/feather-sprite.svg','static/data/param_definitions.json',
+    'data/cec_modules.pbz2', 'data/cec_inverters.pbz2','data/associations.csv','data/config_defaults.json']},
 )

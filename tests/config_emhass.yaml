@@ -1,5 +1,4 @@
-# Configuration file for EMHASS
-
+# Legacy YAML Configuration file for EMHASS Tests
 retrieve_hass_conf:
   freq: 30 # The time step to resample retrieved data from hass in minutes
   days_to_retrieve: 2 # We will retrieve data from now and up to days_to_retrieve days
