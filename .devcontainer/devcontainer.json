@@ -3,13 +3,30 @@
 {
 	"name": "EMHASS",
 	"build": {
-		"dockerfile": "Dockerfile",
-		"context": ".."
+		"dockerfile": "../Dockerfile",
+		"context": "../",
+		"args": { "TARGETARCH": "amd64"}
 	},
 	"features": {
-		"ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+		"ghcr.io/devcontainers/features/common-utils:2": {
+			"installZsh": "true",
+			"configureZshAsDefaultShell": "true",
+			"installOhMyZsh": "false",
+			"installOhMyZshConfig": "false"
+		}
+		// "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
 	},
 	//"appPort": ["5000:5000"] //used to access app from external device (User discretion advised)
+
+
+	// Security issue, may be needed for Podman
+	// "runArgs": [
+	// 	"--userns=keep-id",
+	// 	"--pid=host"
+	// ],
+	// "remoteUser": "root",
+	// "containerUser": "root",
+
 
 	"customizations": {
 		// Configure properties specific to VS Code.
@@ -17,17 +34,8 @@
 		  // Add the IDs of extensions you want installed when the container is created.
 		  "extensions": ["ms-python.debugpy", "ms-python.python"]
 		}
-	  }
-	
-	
-	// Features to add to the dev container. More info: https://containers.dev/features.
-	// "features": {},
-	// Use 'forwardPorts' to make a list of ports inside the container available locally.
-	// "forwardPorts": [],
-	// Use 'postCreateCommand' to run commands after the container is created.
-	// "postCreateCommand": "pip3 install --user -r requirements.txt",
-	// Configure tool-specific properties.
-	// "customizations": {},
-	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
-	// "remoteUser": "root"
+	  },
+
+	"postCreateCommand": ["pip3", "install", "requests-mock", "--break-system-packages"]
+	  
 }

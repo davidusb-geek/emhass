@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.11.0 - 2024-10-25
+
+This version marks huge improvement works by @GeoDerp aiming to simplfy the intial and normal setup of EMHASS. The workflow for setting the EMHASS configuration regardless of the installation method has now been centralized on the single `config.json` file. The webserver has now a configuration tab that can be used to to modify and save the `config.json` file.
+
+The complete discussion of the changes on this thread:
+[https://github.com/davidusb-geek/emhass/pull/334](https://github.com/davidusb-geek/emhass/pull/334)
+
+### Automatic version bot improvements
+- Bump h5py from 3.11.0 to 3.12.1
+- Bump markupsafe from 2.1.5 to 3.0.2
+
+### Fix
+- Revert to myst-parser==3.0.1 to solve documentation compilation failures
+
 ## 0.10.6 - 2024-07-14
 ### Fix
 - Fixed bug on predicted room temeprature publish, wrong key on DataFrame
