@@ -278,6 +278,46 @@ docker exec emhass-test python3 -m unittest discover -s ./tests -p 'test_*.py' |
 User may wish to re-test with tweaked parameters such as `lp_solver`, `weather_forecast_method` and `load_forecast_method`, in `config.json` to broaden the testing scope. 
 *See [Differences](https://emhass.readthedocs.io/en/latest/differences.html) for more information on how the different methods of running EMHASS differ.*
 
+### Adding a parameter
+When enhancing EMHASS, users may like to add or modify the EMHASS parameters. To add a new parameter see the following steps:
+
+*Example parameter = `this_parameter_is_amazing`*
+
+Append a line into `associations.csv` :
+*So that build_params() knows what config catagorie to allocate the parameter*
+```csv
+...
+retrieve_hass_conf,,this_parameter_is_amazing
+```
+ - Alternatively if you want to support this parameter with the yaml conversion *(Ie. allow the parameter to be converted from config_emhass.yaml)*
+    ```csv
+    ...
+    retrieve_hass_conf,his_parameter_is_amazing,this_parameter_is_amazing
+    ```
+
+Append a line into the `config_defaults.json`
+*To set a default value for the user if none is provided in `config.json`*
+```json
+"...": "...",
+  "this_parameter_is_amazing": [
+    0.1,
+    0.1
+  ]
+```
+
+Lastly, to support the configuration website to generate the parameter in the list view, append the `param_definitions.json` file:
+```json
+"this_parameter_is_amazing": {
+      "friendly_name": "This parameter is amazing",
+      "Description": "This parameter functions as you expect. It makes EMHASS AMAZING!",
+      "input": "array.float",
+      "default_value": 0.777
+    }
+```
+*Note: The `default_value` in this case acts (or should act) as last resort fallback if default_config.json is not found. It also acts as the default value when you append (press plus) to an array.\* parameter*
+
+![Screenshot from 2024-09-09 16-45-32](https://github.com/user-attachments/assets/01e7984f-3332-4e25-8076-160f51a2e0c4)
+
 
 ## Step 3 - Pull request
 
