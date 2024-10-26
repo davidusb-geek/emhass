@@ -129,7 +129,7 @@ _Note: Both EMHASS via Docker and EMHASS-Add-on contain the same Docker image. T
 You can also install EMHASS using Docker as a container. This can be in the same machine as Home Assistant (if your running Home Assistant as a Docker container) or in a different distant machine. To install first pull the latest image:
 ```bash
 # pull Docker image
-docker docker pull ghcr.io/davidusb-geek/emhass:latest
+docker pull ghcr.io/davidusb-geek/emhass:latest
 # run Docker image, mounting config.json and secrets_emhass.yaml from host
 docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v ./config.json:/share/config.json -v ./secrets_emhass.yaml:/app/secrets_emhass.yaml ghcr.io/davidusb-geek/emhass:latest
 ```
@@ -138,7 +138,7 @@ docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v ./
 You can also build your image locally. For this clone this repository, and build the image from the Dockerfile:
 ```bash
 # git clone EMHASS repo
-git clone docker pull ghcr.io/geoderp/emhass:v0.21.3
+git clone https://github.com/davidusb-geek/emhass.git
 # move to EMHASS directory 
 cd emhass
 # build Docker image 
