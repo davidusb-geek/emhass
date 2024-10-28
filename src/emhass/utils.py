@@ -843,7 +843,7 @@ def build_config(emhass_conf: dict, logger: logging.Logger, defaults_path: str, 
             logger.info("Obtaining parameters from config.json:")
             config.update(json.load(data))
     else:
-        logger.info("config.json does not exist, or has not been passed")
+        logger.info("config.json does not exist, or has not been passed. config parameters may default to config_defaults.json")
         logger.info("you may like to generate the config.json file on the configuration page")
 
     # Check to see if legacy config_emhass.yaml was provided (default /app/config_emhass.yaml)
@@ -853,7 +853,7 @@ def build_config(emhass_conf: dict, logger: logging.Logger, defaults_path: str, 
             legacy_config = yaml.load(data, Loader=yaml.FullLoader)
             legacy_config_parameters = build_legacy_config_params(emhass_conf,legacy_config,logger)
             if type(legacy_config_parameters) is not bool:
-                logger.info("Obtaining parameters from config_emhass.yaml:")
+                logger.info("Obtaining parameters from config_emhass.yaml: (will overwrite config parameters)")
                 config.update(legacy_config_parameters)     
 
     return config
