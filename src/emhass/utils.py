@@ -312,8 +312,9 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             if 'end_timesteps_of_each_deferrable_load' in runtimeparams.keys():
                 def_end_timestep = runtimeparams['end_timesteps_of_each_deferrable_load']
             else:
-                def_end_timestep = runtimeparams["def_end_timestep"]
-            params["passed_data"]["def_end_timestep"] = def_end_timestep
+                def_end_timestep = runtimeparams.get(
+                    'def_end_timestep', optim_conf['end_timesteps_of_each_deferrable_load'])
+            params["passed_data"]["end_timesteps_of_each_deferrable_load"] = def_end_timestep
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
             # Load the default config
             if "def_load_config" in optim_conf:
