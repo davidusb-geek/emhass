@@ -249,7 +249,7 @@ function buildParamContainers(
           `;
   }
 
-  //After looping though, build and appending the parameters in the corresponding section:
+  //after looping though, build and appending the parameters in the corresponding section:
   //create add button (array plus) event listeners
   let plus = SectionContainer.querySelectorAll(".input-plus");
   plus.forEach(function (answer) {
@@ -549,6 +549,7 @@ function headerElement(element, param_definitions, config) {
     //if set_use_battery, add or remove battery section (inc. params)
     case "set_use_battery":
       if (element.checked) {
+        param_container.innerHTML = "";
         buildParamContainers("Battery", param_definitions["Battery"], config, [
           "set_use_battery",
         ]);
