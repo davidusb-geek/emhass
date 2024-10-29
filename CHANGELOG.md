@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.1 - 2024-10-29
+### Fix
+- Fix parameter saving and duplicate battery bugs 
+- utils.py add more specific logging information for config 
+- Fix issue where thermal runtime parameters were not being propagated into optim_conf 
+
 ## 0.11.0 - 2024-10-25
 
 This version marks huge improvement works by @GeoDerp aiming to simplfy the intial and normal setup of EMHASS. The workflow for setting the EMHASS configuration regardless of the installation method has now been centralized on the single `config.json` file. The webserver has now a configuration tab that can be used to to modify and save the `config.json` file.
