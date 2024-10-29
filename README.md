@@ -13,9 +13,6 @@
   <a style="text-decoration:none" href="https://github.com/davidusb-geek/emhass/actions">
     <img alt="EMHASS GitHub Workflow Status" src="https://github.com/davidusb-geek/emhass/actions/workflows/publish_docker.yaml/badge.svg?event=release">
   </a>
-   <a style="text-decoration:none" href="https://github.com/davidusb-geek/emhass-add-on/actions">
-    <img alt="EMHASS-Add-on GitHub Workflow Status" src="https://github.com/davidusb-geek/emhass-add-on/actions/workflows/publish_docker.yaml/badge.svg?event=release">
-  </a>
   <a hstyle="text-decoration:none" ref="https://codecov.io/github/davidusb-geek/emhass" >
     <img src="https://codecov.io/github/davidusb-geek/emhass/branch/master/graph/badge.svg?token=BW7KSCHN90"/>
   </a>
