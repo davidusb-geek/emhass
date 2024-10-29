@@ -407,7 +407,7 @@ function buildParamElement(
     else {
       return `
           ${type_specific_html}
-          <input class="param_input" type="${type}" value=${value} placeholder=${parameter_definition_object["default_value"]}>
+          <input class="param_input" type="${type}" placeholder=${parameter_definition_object["default_value"]} value=${value} >
           ${type_specific_html_end}
           `;
     }
@@ -418,9 +418,9 @@ function buildParamElement(
     if (typeof Object.values(value)[0] === "object") {
       for (param of Object.values(value)) {
         for (items of Object.values(param)) {
-          inputs += `<input class="param_input" type="${type}" value=${
+          inputs += `<input class="param_input" type="${type}" placeholder=${Object.values(items)[0]} value=${
             Object.values(items)[0]
-          } placeholder=${Object.values(items)[0]}>`;
+          }>`;
         }
         inputs += `</br>`;
       }
@@ -432,7 +432,7 @@ function buildParamElement(
       for (param of value) {
         inputs += `
           ${type_specific_html}
-          <input class="param_input" type="${type}" value=${param} placeholder=${parameter_definition_object["default_value"]}>
+          <input class="param_input" type="${type}" placeholder=${parameter_definition_object["default_value"]} value=${param}>
           ${type_specific_html_end}
           `;
       }
