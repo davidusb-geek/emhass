@@ -67,7 +67,7 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(params['optim_conf']['lp_solver'] == "default")
         self.assertTrue(params['optim_conf']['lp_solver_path'] == "empty")
         self.assertTrue(config['load_peak_hour_periods'] == {'period_hp_1': [{'start': '02:54'}, {'end': '15:24'}], 'period_hp_2': [{'start': '17:24'}, {'end': '20:24'}]})
-        self.assertTrue(params['retrieve_hass_conf']['sensor_replace_zero'] == ['sensor.power_photovoltaics','sensor.power_load_no_var_loads'])
+        self.assertTrue(params['retrieve_hass_conf']['sensor_replace_zero'] == ['sensor.power_photovoltaics'])
         # Test with config.json 
         config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'],emhass_conf['config_path'])
         params = utils.build_params(emhass_conf,{},config,logger)
