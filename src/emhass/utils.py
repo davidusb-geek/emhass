@@ -365,12 +365,16 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
                 params['passed_data'][forecast_key] = None
        
         # Treat passed data for forecast model fit/predict/tune at runtime
-        if 'historic_days_to_retrieve' not in runtimeparams.keys() and 'days_to_retrieve' not in  runtimeparams.keys():
+        if 'historic_days_to_retrieve' not in runtimeparams.keys() and 'days_to_retrieve' not in runtimeparams.keys():
             historic_days_to_retrieve = retrieve_hass_conf.get('historic_days_to_retrieve') 
         else:
            historic_days_to_retrieve = runtimeparams.get(
                     'historic_days_to_retrieve', runtimeparams.get('days_to_retrieve')) 
-        params["passed_data"]['historic_days_to_retrieve']  = historic_days_to_retrieve
+        if historic_days_to_retrieve < 9:
+            logger.warning("warning `days_to_retrieve` is set to a value less than 9, this could cause an error with the fit")
+            logger.warning("setting`passed_data:days_to_retrieve` to 9 for fit/predict/tune")
+            historic_days_to_retrieve = 9
+        params["passed_data"]['historic_days_to_retrieve'] = historic_days_to_retrieve
         if "model_type" not in runtimeparams.keys():
             model_type = "load_forecast"
         else:
