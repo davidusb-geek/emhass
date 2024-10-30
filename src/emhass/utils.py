@@ -288,7 +288,7 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             else:
                 prediction_horizon = runtimeparams["prediction_horizon"]
             params["passed_data"]["prediction_horizon"] = prediction_horizon
-            if "soc_init" not in runtimeparams.keys():
+            if 'soc_init' not in runtimeparams.keys():
                 soc_init = plant_conf['battery_target_state_of_charge']
             else:
                 soc_init = runtimeparams["soc_init"]
@@ -298,23 +298,24 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             else:
                 soc_final = runtimeparams["soc_final"]
             params["passed_data"]["soc_final"] = soc_final
-            if 'operating_hours_of_each_deferrable_load' not in runtimeparams.keys():
-                def_total_hours = optim_conf['operating_hours_of_each_deferrable_load']
+            if 'operating_hours_of_each_deferrable_load' not in runtimeparams.keys() and  'def_total_hours'  not in runtimeparams.keys():
+                def_total_hours = optim_conf.get('operating_hours_of_each_deferrable_load') 
             else:
-                def_total_hours = runtimeparams['operating_hours_of_each_deferrable_load']
+                def_total_hours = runtimeparams.get(
+                'operating_hours_of_each_deferrable_load', runtimeparams.get('def_total_hours')) 
             params["passed_data"]['operating_hours_of_each_deferrable_load'] = def_total_hours
-            if 'start_timesteps_of_each_deferrable_load' in runtimeparams.keys():
-                def_start_timestep = runtimeparams['start_timesteps_of_each_deferrable_load']
-            else:
+            if 'start_timesteps_of_each_deferrable_load' not in runtimeparams.keys() and  'def_start_timestep' in runtimeparams.keys():
+                def_start_timestep = optim_conf.get('start_timesteps_of_each_deferrable_load') 
+            else:    
                 def_start_timestep = runtimeparams.get(
-                    'def_start_timestep', optim_conf['start_timesteps_of_each_deferrable_load'])
+                    'start_timesteps_of_each_deferrable_load', runtimeparams.get('def_start_timestep'))
             params["passed_data"]['start_timesteps_of_each_deferrable_load'] = def_start_timestep
-            if 'end_timesteps_of_each_deferrable_load' in runtimeparams.keys():
-                def_end_timestep = runtimeparams['end_timesteps_of_each_deferrable_load']
+            if 'end_timesteps_of_each_deferrable_load' not in  runtimeparams.keys() and 'def_end_timestep' not in  runtimeparams.keys():
+                def_end_timestep = optim_conf.get('end_timesteps_of_each_deferrable_load') 
             else:
                 def_end_timestep = runtimeparams.get(
-                    'def_end_timestep', optim_conf['end_timesteps_of_each_deferrable_load'])
-            params["passed_data"]["end_timesteps_of_each_deferrable_load"] = def_end_timestep
+                    'end_timesteps_of_each_deferrable_load', runtimeparams.get('def_end_timestep'))
+            params["passed_data"]['end_timesteps_of_each_deferrable_load'] = def_end_timestep
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
             # Load the default config
             if "def_load_config" in optim_conf:
@@ -364,11 +365,16 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
                 params['passed_data'][forecast_key] = None
        
         # Treat passed data for forecast model fit/predict/tune at runtime
-        if 'historic_days_to_retrieve' in runtimeparams.keys():
-            days_to_retrieve = runtimeparams['historic_days_to_retrieve']
+        if 'historic_days_to_retrieve' not in runtimeparams.keys() and 'days_to_retrieve' not in runtimeparams.keys():
+            historic_days_to_retrieve = retrieve_hass_conf.get('historic_days_to_retrieve') 
         else:
-            days_to_retrieve = runtimeparams.get('days_to_retrieve', 9)
-        params["passed_data"]['historic_days_to_retrieve'] = days_to_retrieve
+           historic_days_to_retrieve = runtimeparams.get(
+                    'historic_days_to_retrieve', runtimeparams.get('days_to_retrieve')) 
+        if historic_days_to_retrieve < 9:
+            logger.warning("warning `days_to_retrieve` is set to a value less than 9, this could cause an error with the fit")
+            logger.warning("setting`passed_data:days_to_retrieve` to 9 for fit/predict/tune")
+            historic_days_to_retrieve = 9
+        params["passed_data"]['historic_days_to_retrieve'] = historic_days_to_retrieve
         if "model_type" not in runtimeparams.keys():
             model_type = "load_forecast"
         else:
@@ -479,50 +485,35 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
         params["passed_data"]["publish_prefix"] = publish_prefix
 
         # Treat optimization (optim_conf) configuration parameters passed at runtime
-        if 'number_of_deferrable_loads' in runtimeparams.keys():
-            optim_conf['number_of_deferrable_loads'] = runtimeparams['number_of_deferrable_loads']
-        if 'num_def_loads' in runtimeparams.keys():
-            optim_conf['number_of_deferrable_loads'] = runtimeparams['num_def_loads']
-        if 'nominal_power_of_deferrable_loads' in runtimeparams.keys():
-            optim_conf['nominal_power_of_deferrable_loads'] = runtimeparams['nominal_power_of_deferrable_loads']
-        if 'P_deferrable_nom' in runtimeparams.keys():
-            optim_conf['nominal_power_of_deferrable_loads'] = runtimeparams['P_deferrable_nom']
-        if 'operating_hours_of_each_deferrable_load' in runtimeparams.keys():
-            optim_conf['operating_hours_of_each_deferrable_load'] = runtimeparams['operating_hours_of_each_deferrable_load']
-        if 'def_total_hours' in runtimeparams.keys():
-            optim_conf['operating_hours_of_each_deferrable_load'] = runtimeparams['def_total_hours']
-        if 'start_timesteps_of_each_deferrable_load' in runtimeparams.keys():
-            optim_conf['start_timesteps_of_each_deferrable_load'] = runtimeparams['start_timesteps_of_each_deferrable_load']
-        if 'end_timesteps_of_each_deferrable_load' in runtimeparams.keys():
-            optim_conf['end_timesteps_of_each_deferrable_load'] = runtimeparams['end_timesteps_of_each_deferrable_load']
+        if 'number_of_deferrable_loads' in runtimeparams.keys() or 'num_def_loads' in runtimeparams.keys():
+            optim_conf['number_of_deferrable_loads'] = runtimeparams.get(
+                    'number_of_deferrable_loads', runtimeparams.get('num_def_loads'))
+        if 'nominal_power_of_deferrable_loads' in runtimeparams.keys() or 'P_deferrable_nom' in runtimeparams.keys():
+            optim_conf['nominal_power_of_deferrable_loads'] = runtimeparams.get(
+                    'nominal_power_of_deferrable_loads', runtimeparams.get('P_deferrable_nom'))
+        if 'operating_hours_of_each_deferrable_load' in runtimeparams.keys() or 'def_total_hours' in runtimeparams.keys():
+            optim_conf['operating_hours_of_each_deferrable_load'] = runtimeparams.get(
+                'operating_hours_of_each_deferrable_load', runtimeparams.get('def_total_hours')) 
+        if 'start_timesteps_of_each_deferrable_load' in runtimeparams.keys() or 'def_start_timestep' in runtimeparams.keys():
+            optim_conf['start_timesteps_of_each_deferrable_load'] = runtimeparams.get(
+                    'start_timesteps_of_each_deferrable_load', runtimeparams.get('def_start_timestep'))
+        if 'end_timesteps_of_each_deferrable_load' in runtimeparams.keys() or 'def_end_timestep' in runtimeparams.keys():
+            optim_conf['end_timesteps_of_each_deferrable_load'] = runtimeparams.get(
+                    'end_timesteps_of_each_deferrable_load', runtimeparams.get('def_end_timestep'))  
         if "def_current_state" in runtimeparams.keys():
             optim_conf["def_current_state"] = [
                 bool(s) for s in runtimeparams["def_current_state"]]
-        if 'treat_deferrable_load_as_semi_cont' in runtimeparams.keys():
+        if 'treat_deferrable_load_as_semi_cont' in runtimeparams.keys() or 'treat_def_as_semi_cont' in runtimeparams.keys():
             optim_conf['treat_deferrable_load_as_semi_cont'] = [
-                ast.literal_eval(str(k).capitalize())
-                for k in runtimeparams['treat_deferrable_load_as_semi_cont']
-            ]
-        if 'treat_def_as_semi_cont' in runtimeparams.keys():
-            optim_conf['treat_deferrable_load_as_semi_cont'] = [
-                ast.literal_eval(str(k).capitalize())
-                for k in runtimeparams['treat_def_as_semi_cont']
-            ]
-        if 'set_deferrable_load_single_constant' in runtimeparams.keys():
+                ast.literal_eval(str(k).capitalize()) for k in runtimeparams.get('treat_deferrable_load_as_semi_cont',runtimeparams.get('treat_def_as_semi_cont'))
+            ]    
+        if 'set_deferrable_load_single_constant' in runtimeparams.keys() or 'set_def_constant' in runtimeparams.keys():
             optim_conf['set_deferrable_load_single_constant'] = [
-                ast.literal_eval(str(k).capitalize()) for k in runtimeparams['set_deferrable_load_single_constant']
+                ast.literal_eval(str(k).capitalize()) for k in runtimeparams.get('set_deferrable_load_single_constant',runtimeparams.get('set_def_constant'))
             ]
-        if 'set_def_constant' in runtimeparams.keys():
-            optim_conf['set_deferrable_load_single_constant'] = [
-                ast.literal_eval(str(k).capitalize()) for k in runtimeparams['set_def_constant']
-            ]
-        if 'set_deferrable_startup_penalty' in runtimeparams.keys():
+        if 'set_deferrable_startup_penalty' in runtimeparams.keys() or 'def_start_penalty' in runtimeparams.keys():
             optim_conf['set_deferrable_startup_penalty'] = [
-                ast.literal_eval(str(k).capitalize()) for k in runtimeparams['set_deferrable_startup_penalty']
-            ]
-        if 'def_start_penalty' in runtimeparams.keys():
-            optim_conf['set_deferrable_startup_penalty'] = [
-                ast.literal_eval(str(k).capitalize()) for k in runtimeparams['def_start_penalty']
+                ast.literal_eval(str(k).capitalize()) for k in runtimeparams.get('set_deferrable_startup_penalty',runtimeparams.get('def_start_penalty'))
             ]
         if 'def_load_config' in runtimeparams:
             optim_conf["def_load_config"] = runtimeparams['def_load_config']
@@ -534,9 +525,9 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             optim_conf['weight_battery_charge'] = runtimeparams['weight_battery_charge']
 
         # Treat retrieve data from Home Assistant (retrieve_hass_conf) configuration parameters passed at runtime
-        if 'optimization_time_step' in runtimeparams.keys():
-            retrieve_hass_conf['optimization_time_step'] = pd.to_timedelta(
-                runtimeparams['optimization_time_step'], "minutes")
+        if 'optimization_time_step' in runtimeparams.keys() or 'freq' in runtimeparams.keys():
+            retrieve_hass_conf['optimization_time_step'] = pd.to_timedelta(runtimeparams.get(
+                    'optimization_time_step', runtimeparams.get('freq')), "minutes")
         if 'continual_publish' in runtimeparams.keys():
             retrieve_hass_conf['continual_publish'] = bool(
                 runtimeparams['continual_publish'])
