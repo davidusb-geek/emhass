@@ -30,21 +30,18 @@ logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 class TestRetrieveHass(unittest.TestCase):
 
     def setUp(self):
-        get_data_from_file = True
+        self.get_data_from_file = True
         save_data_to_file = False
 
         # Build params with default secrets (no config)
         if emhass_conf['defaults_path'].exists():
-            if get_data_from_file:
+            if self.get_data_from_file:
                 _,secrets = utils.build_secrets(emhass_conf,logger,no_response=True)
                 params =  utils.build_params(emhass_conf,secrets,{},logger)
                 retrieve_hass_conf, _, _ = get_yaml_parse(params,logger)
             else:
                 emhass_conf['secrets_path'] = root / 'secrets_emhass.yaml'
-                emhass_conf['config_path'] = root / 'config.json'
-                #emhass_conf['legacy_path'] = root / 'emhass_config.yaml'
                 config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'])
-                #config = utils.build_config(emhass_conf,logger,legacy_config_path=emhass_conf['legacy_path'])
                 _,secrets = utils.build_secrets(emhass_conf,logger,secrets_path=emhass_conf['secrets_path'],no_response=True)
                 params =  utils.build_params(emhass_conf,secrets,config,logger)
                 retrieve_hass_conf, _, _ = get_yaml_parse(params,logger)
@@ -64,9 +61,9 @@ class TestRetrieveHass(unittest.TestCase):
         self.retrieve_hass_conf = retrieve_hass_conf
         self.rh = RetrieveHass(self.retrieve_hass_conf['hass_url'], self.retrieve_hass_conf['long_lived_token'], 
                                self.retrieve_hass_conf['optimization_time_step'], self.retrieve_hass_conf['time_zone'],
-                               params, emhass_conf, logger, get_data_from_file=get_data_from_file)
+                               params, emhass_conf, logger, get_data_from_file=self.get_data_from_file)
         # Obtain sensor values from saved file
-        if get_data_from_file:
+        if self.get_data_from_file:
             with open(emhass_conf['data_path'] / 'test_df_final.pkl', 'rb') as inp:
                 self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
         # Else obtain sensor values from HA
@@ -86,7 +83,8 @@ class TestRetrieveHass(unittest.TestCase):
     def test_get_yaml_parse(self):
         self.assertIsInstance(self.retrieve_hass_conf, dict)
         self.assertTrue('hass_url' in self.retrieve_hass_conf.keys())
-        self.assertTrue(self.retrieve_hass_conf['hass_url'] == 'https://myhass.duckdns.org/')
+        if self.get_data_from_file:
+            self.assertTrue(self.retrieve_hass_conf['hass_url'] == 'https://myhass.duckdns.org/')
     
     # Check yaml parse worked   
     def test_yaml_parse_web_server(self):
@@ -107,7 +105,10 @@ class TestRetrieveHass(unittest.TestCase):
         days_list = get_days_list(1)
         var_list = [self.retrieve_hass_conf['sensor_power_load_no_var_loads']]
         response = self.rh.get_data(days_list, var_list)
-        self.assertFalse(response)
+        if self.get_data_from_file:
+            self.assertFalse(response)
+        else:
+            self.assertTrue(response)
 
     # Test with html mock response
     def test_get_data_mock(self):
