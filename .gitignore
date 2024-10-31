@@ -5,7 +5,7 @@ config_emhass.yaml
 # Secret yaml file
 secrets_emhass.yaml
 # config json file 
-*config.json
+**/config.json
 *.tar
 .vscode/*
 .vscode/launch.json
