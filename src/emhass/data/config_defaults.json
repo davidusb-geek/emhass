@@ -104,7 +104,7 @@
   ],
   "inverter_is_hybrid": false,
   "compute_curtailment": false,
-  "set_use_battery": false,
+  "set_use_battery": true,
   "battery_discharge_power_max": 1000,
   "battery_charge_power_max": 1000,
   "battery_discharge_efficiency": 0.95,
