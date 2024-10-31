@@ -41,8 +41,13 @@ class TestRetrieveHass(unittest.TestCase):
                 retrieve_hass_conf, _, _ = get_yaml_parse(params,logger)
             else:
                 emhass_conf['secrets_path'] = root / 'secrets_emhass.yaml'
-                emhass_conf['config_path'] = pathlib.Path(root) / 'config_emhass.yaml'
-                retrieve_hass_conf, _, _ = utils.get_legacy_yaml_parse(emhass_conf)
+                emhass_conf['config_path'] = root / 'config.json'
+                #emhass_conf['legacy_path'] = root / 'emhass_config.yaml'
+                config = utils.build_config(emhass_conf,logger,emhass_conf['defaults_path'])
+                #config = utils.build_config(emhass_conf,logger,legacy_config_path=emhass_conf['legacy_path'])
+                _,secrets = utils.build_secrets(emhass_conf,logger,secrets_path=emhass_conf['secrets_path'],no_response=True)
+                params =  utils.build_params(emhass_conf,secrets,config,logger)
+                retrieve_hass_conf, _, _ = get_yaml_parse(params,logger)
                 params = None
         else:
             raise Exception("config_defaults. does not exist in path: "+str(emhass_conf['defaults_path'] ))
@@ -66,8 +71,8 @@ class TestRetrieveHass(unittest.TestCase):
                 self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
         # Else obtain sensor values from HA
         else:
-            self.days_list = get_days_list(self.retrieve_hass_conf['days_to_retrieve'])
-            self.var_list = [self.retrieve_hass_conf['var_PV'], self.retrieve_hass_conf['var_load']]
+            self.days_list = get_days_list(self.retrieve_hass_conf['historic_days_to_retrieve'])
+            self.var_list = [self.retrieve_hass_conf['sensor_power_load_no_var_loads'], self.retrieve_hass_conf['sensor_power_photovoltaics']]
             self.rh.get_data(self.days_list, self.var_list,
                              minimal_response=False, significant_changes_only=False)
             # Check to save updated data to file 
