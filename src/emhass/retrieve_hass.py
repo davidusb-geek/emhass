@@ -72,6 +72,19 @@ class RetrieveHass:
         self.logger = logger
         self.get_data_from_file = get_data_from_file
 
+    def get_ha_config(self):
+        """
+        Extract some configuration data from HA.
+        
+        """
+        headers = {
+            "Authorization": "Bearer " + self.long_lived_token,
+            "content-type": "application/json"
+            }
+        url = self.hass_url+"api/config"
+        response_config = get(url, headers=headers)
+        self.ha_config = response_config.json()
+    
     def get_data(self, days_list: pd.date_range, var_list: list, 
                  minimal_response: Optional[bool] = False, significant_changes_only: Optional[bool] = False,
                  test_url: Optional[str] = "empty") -> None:
@@ -98,15 +111,17 @@ class RetrieveHass:
             are experimental
         """
         self.logger.info("Retrieve hass get data method initiated...")
+        headers = {
+            "Authorization": "Bearer " + self.long_lived_token,
+            "content-type": "application/json"
+            }
+        # Looping on each day from days list
         self.df_final = pd.DataFrame()
         x = 0  # iterate based on days
-        # Looping on each day from days list
         for day in days_list:
             for i, var in enumerate(var_list):
                 if test_url == "empty":
-                    if (
-                        self.hass_url == "http://supervisor/core/api"
-                    ):  # If we are using the supervisor API
+                    if (self.hass_url == "http://supervisor/core/api"):  # If we are using the supervisor API
                         url = (
                             self.hass_url
                             + "/history/period/"
@@ -124,16 +139,10 @@ class RetrieveHass:
                         )
                     if minimal_response:  # A support for minimal response
                         url = url + "?minimal_response"
-                    if (
-                        significant_changes_only
-                    ):  # And for signicant changes only (check the HASS restful API for more info)
+                    if (significant_changes_only):  # And for signicant changes only (check the HASS restful API for more info)
                         url = url + "?significant_changes_only"
                 else:
                     url = test_url
-                headers = {
-                    "Authorization": "Bearer " + self.long_lived_token,
-                    "content-type": "application/json",
-                }
                 try:
                     response = get(url, headers=headers)
                 except Exception:

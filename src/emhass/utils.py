@@ -644,9 +644,7 @@ def get_yaml_parse(params: str, logger: logging.Logger) -> Tuple[dict, dict, dic
         return False, False, False
 
     optim_conf = input_conf.get("optim_conf", {})
-
     retrieve_hass_conf = input_conf.get("retrieve_hass_conf", {})
-
     plant_conf = input_conf.get("plant_conf", {})
 
     # Format time parameters
@@ -656,6 +654,70 @@ def get_yaml_parse(params: str, logger: logging.Logger) -> Tuple[dict, dict, dic
         retrieve_hass_conf['optimization_time_step'] = pd.to_timedelta(retrieve_hass_conf['optimization_time_step'], "minutes")
     if retrieve_hass_conf.get('time_zone',None) is not None:
         retrieve_hass_conf["time_zone"] = pytz.timezone(retrieve_hass_conf["time_zone"])    
+
+    return retrieve_hass_conf, optim_conf, plant_conf
+
+def get_legacy_yaml_parse(emhass_conf: dict, use_secrets: Optional[bool] = True,
+                          params: Optional[str] = None) -> Tuple[dict, dict, dict]:
+    """
+    Perform parsing of the config.yaml file.
+    
+    :param emhass_conf: Dictionary containing the needed emhass paths
+    :type emhass_conf: dict
+    :param use_secrets: Indicate if we should use a secrets file or not.
+        Set to False for unit tests.
+    :type use_secrets: bool, optional
+    :param params: Configuration parameters passed from data/options.json
+    :type params: str
+    :return: A tuple with the dictionaries containing the parsed data
+    :rtype: tuple(dict)
+
+    """
+    if params is None:
+        with open(emhass_conf["config_path"], 'r') as file:
+            input_conf = yaml.load(file, Loader=yaml.FullLoader)
+    else:
+        input_conf = json.loads(params)
+    if use_secrets:
+        if params is None:
+            with open(emhass_conf["config_path"].parent / 'secrets_emhass.yaml', 'r') as file: # Assume secrets and config file paths are the same 
+                input_secrets = yaml.load(file, Loader=yaml.FullLoader)
+        else:
+            input_secrets = input_conf.pop("params_secrets", None)
+
+    if type(input_conf["retrieve_hass_conf"]) == list:  # if using old config version
+        retrieve_hass_conf = dict(
+            {key: d[key] for d in input_conf["retrieve_hass_conf"] for key in d}
+        )
+    else:
+        retrieve_hass_conf = input_conf.get("retrieve_hass_conf", {})
+
+    if use_secrets:
+        retrieve_hass_conf.update(input_secrets)
+    else:
+        retrieve_hass_conf["hass_url"] = "http://supervisor/core/api"
+        retrieve_hass_conf["long_lived_token"] = "${SUPERVISOR_TOKEN}"
+        retrieve_hass_conf["time_zone"] = "Europe/Paris"
+        retrieve_hass_conf["lat"] = 45.83
+        retrieve_hass_conf["lon"] = 6.86
+        retrieve_hass_conf["alt"] = 4807.8
+    retrieve_hass_conf["freq"] = pd.to_timedelta(retrieve_hass_conf["freq"], "minutes")
+    retrieve_hass_conf["time_zone"] = pytz.timezone(retrieve_hass_conf["time_zone"])
+
+    if type(input_conf["optim_conf"]) == list:
+        optim_conf = dict({key: d[key] for d in input_conf["optim_conf"] for key in d})
+    else:
+        optim_conf = input_conf.get("optim_conf", {})
+
+    optim_conf["list_hp_periods"] = dict(
+        (key, d[key]) for d in optim_conf["list_hp_periods"] for key in d
+    )
+    optim_conf["delta_forecast"] = pd.Timedelta(days=optim_conf["delta_forecast"])
+
+    if type(input_conf["plant_conf"]) == list:
+        plant_conf = dict({key: d[key] for d in input_conf["plant_conf"] for key in d})
+    else:
+        plant_conf = input_conf.get("plant_conf", {})
 
     return retrieve_hass_conf, optim_conf, plant_conf
 
@@ -858,7 +920,7 @@ def build_config(emhass_conf: dict, logger: logging.Logger, defaults_path: str, 
 
 
 def build_legacy_config_params(emhass_conf: dict, legacy_config: dict,
-                 logger: logging.Logger) -> dict:
+                               logger: logging.Logger) -> dict:
     """
     Build a config dictionary with legacy config_emhass.yaml file. 
     Uses the associations file to convert parameter naming conventions (to config.json/config_defaults.json).
@@ -909,8 +971,7 @@ def build_legacy_config_params(emhass_conf: dict, legacy_config: dict,
     return config
     # params['associations_dict'] = associations_dict
 
-def param_to_config(param: dict,
-                 logger: logging.Logger) -> dict:
+def param_to_config(param: dict, logger: logging.Logger) -> dict:
     """
     A function that extracts the parameters from param back to the config.json format.
     Extracts parameters from config catagories.
@@ -940,7 +1001,7 @@ def param_to_config(param: dict,
     return return_config
 
 def build_secrets(emhass_conf: dict, logger: logging.Logger, argument: Optional[dict] = {}, options_path: Optional[str] = None, 
-                 secrets_path: Optional[str] = None, no_response: Optional[bool] = False) -> Tuple[dict, dict]:    
+                  secrets_path: Optional[str] = None, no_response: Optional[bool] = False) -> Tuple[dict, dict]:    
     """
     Retrieve and build parameters from secrets locations (ENV, ARG, Secrets file (secrets_emhass.yaml/options.json) and/or Home Assistant (via API))
     priority order (lwo to high) = Defaults (written in function), ENV, Options json file, Home Assistant API,  Secrets yaml file, Arguments

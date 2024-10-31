@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.2 - 2024-10-31
+### Improvement
+- Added support to retrieve HA configuration. This will be used in the future to automatically retrieve some parameters as the currency
+### Fix
+- utils fix runtime parameter merge bugs 
+- configuration_script.js fix placeholder value bug 
+
 ## 0.11.1 - 2024-10-29
 ### Fix
 - Fix parameter saving and duplicate battery bugs 
