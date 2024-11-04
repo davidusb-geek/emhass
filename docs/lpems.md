@@ -203,7 +203,7 @@ This is an informal/naive representation of a MPC controller.
 
 This type of controller performs the following actions:
 
-- Set the prediction horizon and receding horizon parameters.
+- Set the prediction horizon: a fixed value for a receding horizon or a variable value for a shrinking horizon approach.
 - Perform an optimization on the prediction horizon.
 - Apply the first element of the obtained optimized control variables.
 - Repeat at a relatively high frequency, ex: 5 min.
@@ -218,7 +218,7 @@ When applying this controller, the following `runtimeparams` should be defined:
 
 - `soc_final` for the final value of the battery SOC for the current iteration of the MPC. 
 
-- `operating_hours_of_each_deferrable_load` for the list of deferrable loads functioning hours. These values can decrease as the day advances to take into account receding horizon daily energy objectives for each deferrable load.
+- `operating_hours_of_each_deferrable_load` for the list of deferrable loads functioning hours. These values can decrease as the day advances to take into account the shrinking horizon daily energy objectives for each deferrable load.
 
 - `start_timesteps_of_each_deferrable_load` for the timestep as from which each deferrable load is allowed to operate (if you don't want the deferrable load to use the whole optimization timewindow). If you specify a value of 0 (or negative), the deferrable load will be optimized as from the beginning of the complete prediction horizon window.
 
