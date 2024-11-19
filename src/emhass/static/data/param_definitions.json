@@ -43,7 +43,7 @@
     },
     "logging_level": {
       "friendly_name": "Logging level",
-      "Description": "This is the name of the photovoltaic power-produced sensor in Watts from Home Assistant. For example: ‘sensor.power_photovoltaics’.",
+      "Description": "DEBUG provides detailed diagnostic information, INFO gives general operational messages, WARNING highlights potential issues, and ERROR indicates critical problems that may disrupt functionality.",
       "input": "select",
       "select_options": [
         "INFO",
