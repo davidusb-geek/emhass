@@ -517,12 +517,17 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
             ]
         if 'def_load_config' in runtimeparams:
             optim_conf["def_load_config"] = runtimeparams['def_load_config']
+        # Battery
         if 'weight_battery_discharge' in runtimeparams.keys():
             optim_conf['weight_battery_discharge'] = runtimeparams[
                 'weight_battery_discharge'
             ]
         if 'weight_battery_charge' in runtimeparams.keys():
             optim_conf['weight_battery_charge'] = runtimeparams['weight_battery_charge']
+        if 'set_nocharge_from_grid' in runtimeparams.keys():
+            optim_conf['set_nocharge_from_grid'] = bool(runtimeparams['set_nocharge_from_grid'])
+        if 'set_nodischarge_to_grid' in runtimeparams.keys():
+            optim_conf['set_nodischarge_to_grid'] = bool(runtimeparams['set_nodischarge_to_grid'])
 
         # Treat retrieve data from Home Assistant (retrieve_hass_conf) configuration parameters passed at runtime
         if 'optimization_time_step' in runtimeparams.keys() or 'freq' in runtimeparams.keys():
