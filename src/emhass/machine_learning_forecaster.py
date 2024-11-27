@@ -13,7 +13,7 @@ from sklearn.linear_model import ElasticNet
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.metrics import r2_score
 
-from skforecast.ForecasterAutoreg import ForecasterAutoreg
+from skforecast.recursive import ForecasterRecursive
 from skforecast.model_selection import bayesian_search_forecaster, backtesting_forecaster, TimeSeriesFold
 
 import warnings
@@ -143,7 +143,7 @@ class MLForecaster:
             self.logger.error("Passed sklearn model "+self.sklearn_model+" is not valid. Defaulting to KNeighborsRegressor")
             base_model = KNeighborsRegressor()
         # Define the forecaster object
-        self.forecaster = ForecasterAutoreg(
+        self.forecaster = ForecasterRecursive(
             regressor = base_model,
             lags      = self.num_lags
             )
