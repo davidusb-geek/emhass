@@ -1,5 +1,4 @@
 config_categorie,legacy_parameter_name,parameter,list_name 
-retrieve_hass_conf,logging_level,logging_level
 retrieve_hass_conf,freq,optimization_time_step
 retrieve_hass_conf,days_to_retrieve,historic_days_to_retrieve
 retrieve_hass_conf,var_PV,sensor_power_photovoltaics
@@ -15,6 +14,7 @@ params_secrets,lat,Latitude
 params_secrets,lon,Longitude
 params_secrets,alt,Altitude
 optim_conf,costfun,costfun
+optim_conf,logging_level,logging_level
 optim_conf,set_use_battery,set_use_battery
 optim_conf,num_def_loads,number_of_deferrable_loads
 optim_conf,P_deferrable_nom,nominal_power_of_deferrable_loads,list_nominal_power_of_deferrable_loads
