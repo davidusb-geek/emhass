@@ -1,80 +1,107 @@
 # -*- coding: utf-8 -*-
-'''
-    This is a script for analysis plot.
-    To use this script you will need plotly and kaleido. Install them using: 
-        pip install plotly
-        pip install kaleido
-    Before running this script you should perform a perfect optimization for each type of cost function:
-    profit, cost and self-consumption 
-'''
+"""
+This is a script for analysis plot.
+To use this script you will need plotly and kaleido. Install them using:
+    pip install plotly
+    pip install kaleido
+Before running this script you should perform a perfect optimization for each type of cost function:
+profit, cost and self-consumption
+"""
+
+import pathlib
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
-import plotly.subplots as sp
 import plotly.io as pio
-import pathlib
-pio.renderers.default = 'browser'
+import plotly.subplots as sp
+
+pio.renderers.default = "browser"
 pd.options.plotting.backend = "plotly"
 
-from emhass.utils import get_root, get_logger
+from emhass.utils import get_logger, get_root
 
-if __name__ == '__main__':
-
+if __name__ == "__main__":
     # the root folder
     root = pathlib.Path(str(get_root(__file__, num_parent=2)))
     emhass_conf = {}
-    emhass_conf['data_path'] = root / 'data/'
-    emhass_conf['root_path'] = root / 'src/emhass/'
-    emhass_conf['docs_path'] = root / 'docs/'
-    emhass_conf['config_path'] = root / 'config.json'
-    emhass_conf['defaults_path'] = emhass_conf['root_path']  / 'data/config_defaults.json'
-    emhass_conf['associations_path'] = emhass_conf['root_path']  / 'data/associations.csv'
+    emhass_conf["data_path"] = root / "data/"
+    emhass_conf["root_path"] = root / "src/emhass/"
+    emhass_conf["docs_path"] = root / "docs/"
+    emhass_conf["config_path"] = root / "config.json"
+    emhass_conf["defaults_path"] = (
+        emhass_conf["root_path"] / "data/config_defaults.json"
+    )
+    emhass_conf["associations_path"] = (
+        emhass_conf["root_path"] / "data/associations.csv"
+    )
 
     # create logger
     logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
     # Reading CSV files
-    path_file = emhass_conf['data_path'] / "opt_res_perfect_optim_cost.csv"
-    data_cost = pd.read_csv(path_file, index_col='timestamp')
+    path_file = emhass_conf["data_path"] / "opt_res_perfect_optim_cost.csv"
+    data_cost = pd.read_csv(path_file, index_col="timestamp")
     data_cost.index = pd.to_datetime(data_cost.index)
-    path_file = emhass_conf['data_path'] / "opt_res_perfect_optim_profit.csv"
-    data_profit = pd.read_csv(path_file, index_col='timestamp')
+    path_file = emhass_conf["data_path"] / "opt_res_perfect_optim_profit.csv"
+    data_profit = pd.read_csv(path_file, index_col="timestamp")
     data_profit.index = pd.to_datetime(data_profit.index)
-    path_file = emhass_conf['data_path'] / "opt_res_perfect_optim_self-consumption.csv"
-    data_selfcons = pd.read_csv(path_file, index_col='timestamp')
+    path_file = emhass_conf["data_path"] / "opt_res_perfect_optim_self-consumption.csv"
+    data_selfcons = pd.read_csv(path_file, index_col="timestamp")
     data_selfcons.index = pd.to_datetime(data_selfcons.index)
 
     # Creating DF to plot
-    cols_to_plot = ['P_PV', 'P_Load', 'P_def_sum_cost', 'P_def_sum_profit', 'P_def_sum_selfcons',
-                    'gain_cost', 'gain_profit', 'gain_selfcons']
+    cols_to_plot = [
+        "P_PV",
+        "P_Load",
+        "P_def_sum_cost",
+        "P_def_sum_profit",
+        "P_def_sum_selfcons",
+        "gain_cost",
+        "gain_profit",
+        "gain_selfcons",
+    ]
     data = pd.DataFrame(index=data_cost.index, columns=cols_to_plot)
-    data['P_PV'] = data_cost['P_PV']
-    data['P_Load'] = data_cost['P_Load']
-    data['P_def_sum_cost'] = (data_cost['P_deferrable0']+data_cost['P_deferrable1']).clip(lower=0)
-    data['P_def_sum_profit'] = (data_profit['P_deferrable0']+data_profit['P_deferrable1']).clip(lower=0)
-    data['P_def_sum_selfcons'] = (data_selfcons['P_deferrable0']+data_selfcons['P_deferrable1']).clip(lower=0)
-    data['gain_cost'] = data_cost['cost_profit']
-    data['gain_profit'] = data_profit['cost_profit']
-    data['gain_selfcons'] = data_selfcons['cost_profit']
+    data["P_PV"] = data_cost["P_PV"]
+    data["P_Load"] = data_cost["P_Load"]
+    data["P_def_sum_cost"] = (
+        data_cost["P_deferrable0"] + data_cost["P_deferrable1"]
+    ).clip(lower=0)
+    data["P_def_sum_profit"] = (
+        data_profit["P_deferrable0"] + data_profit["P_deferrable1"]
+    ).clip(lower=0)
+    data["P_def_sum_selfcons"] = (
+        data_selfcons["P_deferrable0"] + data_selfcons["P_deferrable1"]
+    ).clip(lower=0)
+    data["gain_cost"] = data_cost["cost_profit"]
+    data["gain_profit"] = data_profit["cost_profit"]
+    data["gain_selfcons"] = data_selfcons["cost_profit"]
 
     # Meta parameters
     save_figs = True
-    symbols =['circle', 'square', 'diamond', 'star', 'triangle-left', 'triangle-right']
-    template = 'presentation'
+    symbols = ["circle", "square", "diamond", "star", "triangle-left", "triangle-right"]
+    template = "presentation"
     symbol_size = 5
-    cf = ['cost', 'profit', 'selfcons']
+    cf = ["cost", "profit", "selfcons"]
 
     # Plotting using plotly
-    this_figure = sp.make_subplots(rows=4, cols=1,
-                                shared_xaxes=True, vertical_spacing=0.04,
-                                subplot_titles=['System powers: cost function = cost',
-                                                'System powers: cost function = profit',
-                                                'System powers: cost function = self-consumption',
-                                                'Cost function values'],
-                                x_title="Date")
+    this_figure = sp.make_subplots(
+        rows=4,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.04,
+        subplot_titles=[
+            "System powers: cost function = cost",
+            "System powers: cost function = profit",
+            "System powers: cost function = self-consumption",
+            "Cost function values",
+        ],
+        x_title="Date",
+    )
 
-    fig = px.line(data, x=data.index, y=cols_to_plot[0:3], markers=True,
-                template = template)
+    fig = px.line(
+        data, x=data.index, y=cols_to_plot[0:3], markers=True, template=template
+    )
 
     fig.update_traces(marker=dict(size=symbol_size))
 
@@ -85,10 +112,15 @@ if __name__ == '__main__':
         fig_traces.append(trace_to_append)
     for traces in fig_traces:
         this_figure.append_trace(traces, row=1, col=1)
-        
-    fig2 = px.line(data, x=data.index, y=cols_to_plot[0:2]+[cols_to_plot[3]], 
-                markers=True, template = template, 
-                color_discrete_sequence=['#1F77B4', '#FF7F0E', '#D62728'])
+
+    fig2 = px.line(
+        data,
+        x=data.index,
+        y=cols_to_plot[0:2] + [cols_to_plot[3]],
+        markers=True,
+        template=template,
+        color_discrete_sequence=["#1F77B4", "#FF7F0E", "#D62728"],
+    )
 
     fig2.update_traces(marker=dict(size=symbol_size))
 
@@ -103,10 +135,15 @@ if __name__ == '__main__':
         fig_traces.append(trace_to_append)
     for traces in fig_traces:
         this_figure.append_trace(traces, row=2, col=1)
-        
-    fig3 = px.line(data, x=data.index, y=cols_to_plot[0:2]+[cols_to_plot[4]], 
-                markers=True, template = template,
-                color_discrete_sequence=['#1F77B4', '#FF7F0E', '#9467BD'])
+
+    fig3 = px.line(
+        data,
+        x=data.index,
+        y=cols_to_plot[0:2] + [cols_to_plot[4]],
+        markers=True,
+        template=template,
+        color_discrete_sequence=["#1F77B4", "#FF7F0E", "#9467BD"],
+    )
 
     fig3.update_traces(marker=dict(size=symbol_size))
 
@@ -122,11 +159,11 @@ if __name__ == '__main__':
     for traces in fig_traces:
         this_figure.append_trace(traces, row=3, col=1)
 
-    fig4 = px.line(data, x=data.index, y=cols_to_plot[5:], markers=False,
-                template = template)
+    fig4 = px.line(
+        data, x=data.index, y=cols_to_plot[5:], markers=False, template=template
+    )
 
-    fig4.update_traces(marker=dict(size=symbol_size),
-                    line=dict(dash='solid'))
+    fig4.update_traces(marker=dict(size=symbol_size), line=dict(dash="solid"))
 
     fig_traces = []
     for trace in range(len(fig4["data"])):
@@ -140,19 +177,31 @@ if __name__ == '__main__':
     this_figure.show()
 
     if save_figs:
-        fig_filename = emhass_conf['docs_path'] / "images/optim_results"
-        this_figure.write_image(str(fig_filename) + ".png", width=1.5*768, height=1.5*1.5*768)
+        fig_filename = emhass_conf["docs_path"] / "images/optim_results"
+        this_figure.write_image(
+            str(fig_filename) + ".png", width=1.5 * 768, height=1.5 * 1.5 * 768
+        )
 
-    fig_bar = px.bar(np.arange(len(cf)), x=[c+" (+"+"{:.2f}".format(np.sum(data['gain_'+c])*100/np.sum(
-                        data['gain_profit'])-100)+"%)" for c in cf], 
-                    y=[np.sum(data['gain_'+c]) for c in cf],
-                    text=[np.sum(data['gain_'+c]) for c in cf], 
-                    template = template)
+    fig_bar = px.bar(
+        np.arange(len(cf)),
+        x=[
+            c
+            + " (+"
+            + "{:.2f}".format(
+                np.sum(data["gain_" + c]) * 100 / np.sum(data["gain_profit"]) - 100
+            )
+            + "%)"
+            for c in cf
+        ],
+        y=[np.sum(data["gain_" + c]) for c in cf],
+        text=[np.sum(data["gain_" + c]) for c in cf],
+        template=template,
+    )
     fig_bar.update_yaxes(title_text="Cost function total value")
-    fig_bar.update_traces(texttemplate='%{text:.4s}', textposition='outside')
-    fig_bar.update_xaxes(title_text = "Cost function")
+    fig_bar.update_traces(texttemplate="%{text:.4s}", textposition="outside")
+    fig_bar.update_xaxes(title_text="Cost function")
     fig_bar.show()
 
     if save_figs:
-        fig_filename = emhass_conf['docs_path'] / "images/optim_results_bar_plot"
-        fig_bar.write_image(str(fig_filename) + ".png", width=1080, height=0.8*1080)
+        fig_filename = emhass_conf["docs_path"] / "images/optim_results_bar_plot"
+        fig_bar.write_image(str(fig_filename) + ".png", width=1080, height=0.8 * 1080)
