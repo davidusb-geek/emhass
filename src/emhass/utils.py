@@ -482,7 +482,6 @@ def treat_runtimeparams(
                 params["passed_data"]["historic_days_to_retrieve"] = params[
                     "retrieve_hass_conf"
                 ]["historic_days_to_retrieve"]
-
         if "model_type" not in runtimeparams.keys():
             model_type = "load_forecast"
         else:

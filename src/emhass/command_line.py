@@ -798,25 +798,30 @@ def publish_data(input_data_dict: dict, logger: logging.Logger,
         if os.path.exists(entity_path) and len(os.listdir(entity_path)) > 0:
             # Obtain all files in entity_path
             entity_path_contents =  os.listdir(entity_path)    
-            for entity in entity_path_contents:
-                if entity != "metadata.json": 
-                    # If publish_prefix is "all" publish all saved entities to Home Assistant 
-                    # If publish_prefix matches the prefix from saved entities, publish to Home Assistant
-                    if publish_prefix in entity or publish_prefix == "all":
-                        entity_data = publish_json(entity,input_data_dict,entity_path,logger)    
-                        if not isinstance(entity_data, bool):
-                            opt_res_list.append(entity_data)
-                            opt_res_list_names.append(entity.replace(".json", ""))
-                        else:
-                            return False      
-            # Build a DataFrame with published entities
-            opt_res = pd.concat(opt_res_list, axis=1)
-            opt_res.columns = opt_res_list_names
-            return opt_res
+            # Confirm the entity path contains at least one file containing publish prefix or publish_prefix='all'
+            if any(publish_prefix in entity for entity in entity_path_contents) or publish_prefix == "all":
+                # Loop through all items in entity path
+                for entity in entity_path_contents:
+                        # If publish_prefix is "all" publish all saved entities to Home Assistant 
+                        # If publish_prefix matches the prefix from saved entities, publish to Home Assistant
+                        if entity != "metadata.json" and (publish_prefix in entity or publish_prefix == "all"):
+                            entity_data = publish_json(entity,input_data_dict,entity_path,logger)    
+                            if not isinstance(entity_data, bool):
+                                opt_res_list.append(entity_data)
+                                opt_res_list_names.append(entity.replace(".json", ""))
+                            else:
+                                return False 
+                # Build a DataFrame with published entities
+                opt_res = pd.concat(opt_res_list, axis=1)
+                opt_res.columns = opt_res_list_names
+                return opt_res
+            else:
+                logger.warning("No saved entity json files that match prefix: " + str(publish_prefix))     
+                logger.warning("Falling back to opt_res_latest")
         else:
-            logger.warning("no saved entity json files in path:" + str(entity_path))     
-            logger.warning("falling back to opt_res_latest")
-            filename = "opt_res_latest.csv"            
+            logger.warning("No saved entity json files in path:" + str(entity_path))     
+            logger.warning("Falling back to opt_res_latest")
+        filename = "opt_res_latest.csv"            
     else:
         filename = "opt_res_latest.csv"
     if opt_res_latest is None:

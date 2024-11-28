@@ -296,6 +296,9 @@ def action_call(action_name):
     if (emhass_conf['data_path'] / 'params.pkl').exists():
         with open(str(emhass_conf['data_path'] / 'params.pkl'), "rb") as fid:
             emhass_conf['config_path'], params = pickle.load(fid)
+            # Set local costfun variable
+            if params.get("optim_conf",None) is not None:
+                costfun = params["optim_conf"].get("costfun","profit")
             params = json.dumps(params)
     else:
         app.logger.error("Unable to find params.pkl file")
@@ -322,6 +325,7 @@ def action_call(action_name):
 
     ActionStr = " >> Setting input data dict"
     app.logger.info(ActionStr)
+    app.logger.warning(costfun)
     input_data_dict = set_input_data_dict(emhass_conf, costfun, 
         params, runtimeparams, action_name, app.logger)
     if not input_data_dict:
@@ -497,6 +501,7 @@ if __name__ == "__main__":
     if type(config) is bool and not config:
         raise Exception("Failed to find default config")
 
+    # Set local variables
     costfun = os.getenv('LOCAL_COSTFUN', config.get('costfun', 'profit'))
     logging_level = os.getenv('LOGGING_LEVEL', config.get('logging_level','INFO'))
     # Temporary set logging level if debug
@@ -536,7 +541,11 @@ if __name__ == "__main__":
     params = build_params(emhass_conf, params_secrets, config, app.logger)
     if type(params) is bool:
         raise Exception("A error has occurred while building params")   
+    # Update params with local variables
+    params["optim_conf"]["costfun"] = costfun
+    params["optim_conf"]["logging_level"] = logging_level
     
+    # Save params to file for later reference
     if os.path.exists(str(emhass_conf['data_path'])): 
         with open(str(emhass_conf['data_path'] / 'params.pkl'), "wb") as fid:
             pickle.dump((config_path, params), fid)
@@ -599,4 +608,3 @@ if __name__ == "__main__":
     except PackageNotFoundError:
         app.logger.info("Using development emhass version")
     serve(app, host=server_ip, port=port, threads=8)
-
