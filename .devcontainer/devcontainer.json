@@ -32,9 +32,21 @@
 		// Configure properties specific to VS Code.
 		"vscode": {
 		  // Add the IDs of extensions you want installed when the container is created.
-		  "extensions": ["ms-python.debugpy", "ms-python.python","charliermarsh.ruff"]
+		  "extensions": ["ms-python.debugpy", "ms-python.python","charliermarsh.ruff"],
+		  "settings": {
+			"[python]": {
+			  "editor.formatOnSave": true,
+			  "editor.codeActionsOnSave": {
+				"source.fixAll": "explicit",
+				"source.organizeImports": "explicit"
+			  },
+			  "editor.defaultFormatter": "charliermarsh.ruff"
+			}
+		  }
 		}
 	  },
+
+	  
 
 	"postCreateCommand": ["pip3", "install", "requests-mock", "--break-system-packages"]
 	  
