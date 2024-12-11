@@ -42,16 +42,15 @@ jobs:
           build-args: |
             TARGETARCH=${{ matrix.platform.target_arch }}
             os_version=${{ matrix.platform.os_version }}
-          tags: emhass
           load: true
       - name: Test #Assume Docker fail with FileNotFound secrets_emhass.yaml error
-        run: docker run --rm -it emhass/standalone-test | grep -q secrets_emhass.yaml && echo 0 || echo 1             
+        run: docker run --rm -it ${{ steps.build.outputs.imageid }} | grep -q secrets_emhass.yaml && echo 0 || echo 1             
       # Google OSV-Scanner  
       # Extract Debian and Python packadge list stored in Image
       - name: Export Debian package list
-        run: mkdir OSV && docker run --rm --entrypoint '/bin/cat' emhass/standalone-test /var/lib/dpkg/status >> ./OSV/${{ matrix.platform.target_arch }}.status
+        run: mkdir OSV && docker run --rm --entrypoint '/bin/cat' ${{ steps.build.outputs.imageid }} /var/lib/dpkg/status >> ./OSV/${{ matrix.platform.target_arch }}.status
       - name: Export Python package list
-        run: docker run --rm --entrypoint '/usr/bin/pip3' emhass/standalone-test freeze >> ./OSV/${{ matrix.platform.target_arch }}-requirements.txt
+        run: docker run --rm --entrypoint '/usr/bin/pip3' ${{ steps.build.outputs.imageid }} freeze >> ./OSV/${{ matrix.platform.target_arch }}-requirements.txt
       # Check Docker image debian and python packages list for known vulnerabilities 
       - name: "Run scanner" 
         uses: google/osv-scanner-action/osv-scanner-action@v1.7.1
