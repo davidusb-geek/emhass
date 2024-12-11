@@ -17,6 +17,8 @@ jobs:
     with:
       scan-args: |-
         --recursive
+        --skip-git=true
+        ./
   build:
     runs-on: ${{ matrix.os }}
     needs:
