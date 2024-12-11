@@ -48,9 +48,9 @@ jobs:
       # Google OSV-Scanner  
       # Extract Debian and Python packadge list stored in Image
       - name: Export Debian package list
-        run: mkdir OSV && docker run --rm --entrypoint '/bin/cat' ${{ steps.build.outputs.imageid }} /var/lib/dpkg/status >> ./OSV/${{ matrix.platform.target_arch }}.status
+        run: mkdir OSV && docker run --rm --entrypoint '/bin/cat' ${{ steps.build.outputs.imageid }} /var/lib/dpkg/status >> ./${{ matrix.platform.target_arch }}.status
       - name: Export Python package list
-        run: docker run --rm --entrypoint '/usr/bin/pip3' ${{ steps.build.outputs.imageid }} freeze >> ./OSV/${{ matrix.platform.target_arch }}-requirements.txt
+        run: docker run --rm --entrypoint '/usr/bin/pip3' ${{ steps.build.outputs.imageid }} freeze >> ./${{ matrix.platform.target_arch }}-requirements.txt
       # Check Docker image debian and python packages list for known vulnerabilities 
       - name: "Run scanner" 
         uses: google/osv-scanner-action/osv-scanner-action@v1.7.1
