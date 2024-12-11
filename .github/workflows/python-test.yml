@@ -6,9 +6,21 @@ on:
   pull_request:
     branches: [ master ]
 
+permissions:
+  security-events: write
+  contents: read
+
 jobs:
+  # Google OSV-Scanner  
+  scan-pr:
+    uses: "GeoDerp/osv-scanner/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
+    with:
+      scan-args: |-
+        --recursive
   build:
     runs-on: ${{ matrix.os }}
+    needs:
+      - scan-pr
     strategy:
       fail-fast: false
       matrix:

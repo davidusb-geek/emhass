@@ -6,6 +6,16 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Google OSV-Scanner  
+  osv-scan:
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
+    with:
+      scan-args: |-
+        --recursive
+        --skip-git
+        ./
+    permissions:
+      security-events: write
   build:
     runs-on: ubuntu-latest
     steps:
@@ -28,6 +38,7 @@ jobs:
     name: >-
       Publish Python 🐍 distribution 📦 to PyPI
     needs:
+    - osv-scan
     - build
     runs-on: ubuntu-latest
     environment:

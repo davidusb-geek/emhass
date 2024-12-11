@@ -6,6 +6,10 @@ on:
     types: [published]
   workflow_dispatch:
 
+permissions:
+  actions: read
+  security-events: write
+  contents: read
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
@@ -44,12 +48,39 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      
+      # Build and save Docker image locally to check security of container packages
+      - name: Build Docker image and cache
+        id: cache
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: ${{ matrix.platform.buildx }}
+          build-args: |
+            TARGETARCH=${{ matrix.platform.target_arch }}
+            os_version=${{ matrix.platform.os_version }}
+          load: true
+      # Extract a list of the installed Debian packages, export as artifact for vulnerability scanning with OSV
+      - name: Export Debian package list
+        run: mkdir OSV && docker run --rm --entrypoint '/bin/cat' ${{ steps.cache.outputs.imageid }} /var/lib/dpkg/status >> ./OSV/${{ matrix.platform.target_arch }}.status
+      - name: Export Python package list
+        run: docker run --rm --entrypoint '/usr/bin/pip3' ${{ steps.cache.outputs.imageid }} freeze >> ./OSV/${{ matrix.platform.target_arch }}-requirements.txt
+      - name: Upload package list as digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform.target_arch }}-packages
+          path: ./OSV/*
+          if-no-files-found: error
+          retention-days: 1
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}
-      - name: Build and push by digest
+      
+      
+      # Build Docker image for pushing to registry
+      - name: Build and push Docker image by digest
         id: build
         uses: docker/build-push-action@v5
         with:
@@ -59,7 +90,8 @@ jobs:
             TARGETARCH=${{ matrix.platform.target_arch }}
             os_version=${{ matrix.platform.os_version }}
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }},push-by-digest=true,name-canonical=true
+          push: true
       # Export the build images as artifact for the next job of merging
       - name: Export digest
         run: |
@@ -73,7 +105,32 @@ jobs:
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
- # Merge platforms into images into a multi-platform image 
+
+  # Google OSV-Scanner (check known vulnerabilities for Python & Debian packages )
+  osv-scan:
+    needs:
+      - build
+    strategy:
+      matrix:
+        platform: [
+          {target_arch: amd64},
+          {target_arch: armv7},
+          {target_arch: armhf},
+          {target_arch: aarch64}
+        ]
+    uses: "GeoDerp/osv-scanner/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
+    with:
+      download-artifact: "${{ matrix.platform.target_arch }}-packages"
+      results-file-name: "${{ matrix.platform.target_arch }}.sarif"
+      security-category: "${{ matrix.platform.target_arch }}-OSV-Scanner"
+      scan-args: |-
+        --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
+        --lockfile=requirements.txt:./${{matrix.platform.target_arch }}-requirements.txt
+        --recursive
+        --skip-git
+        ./
+  
+# Merge platforms into images into a multi-platform image
   merge:
     if: always()
     runs-on: ubuntu-latest
@@ -83,6 +140,7 @@ jobs:
       attestations: write
       id-token: write
     needs:
+      - osv-scan
       - build
     steps:
       - name: lowercase repo  
