@@ -110,7 +110,13 @@ jobs:
   osv-scan:
     needs:
       - build
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
     strategy:
+      fail-fast: false
       matrix:
         platform: [
           {target_arch: amd64},
