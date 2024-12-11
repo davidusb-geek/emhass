@@ -1,5 +1,5 @@
 #This action test builds EMHASS standalone Docker images, in each architecture.
-name: "Test Docker Standalone"
+name: "Test Docker"
 
 on:
   push:
@@ -47,16 +47,20 @@ jobs:
       - name: Test #Assume Docker fail with FileNotFound secrets_emhass.yaml error
         run: docker run --rm -it emhass/standalone-test | grep -q secrets_emhass.yaml && echo 0 || echo 1             
       # Google OSV-Scanner  
-      - name: "Run scanner" #Test check Docker image debian packadges for vulnerabilities 
+      # Extract Debian and Python packadge list stored in Image
+      - name: Export Debian package list
+        run: mkdir OSV && docker run --rm --entrypoint '/bin/cat' emhass/standalone-test /var/lib/dpkg/status >> ./OSV/${{ matrix.platform.target_arch }}.status
+      - name: Export Python package list
+        run: docker run --rm --entrypoint '/usr/bin/pip3' emhass/standalone-test freeze >> ./OSV/${{ matrix.platform.target_arch }}-requirements.txt
+      # Check Docker image debian and python packages list for known vulnerabilities 
+      - name: "Run scanner" 
         uses: google/osv-scanner-action/osv-scanner-action@v1.7.1
         with:
           scan-args: |-
             --output=results.json
             --format=json
-            --recursive
-            --skip-git
-            --docker emhass/standalone-test
-            ./
+            --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
+            --lockfile=requirements.txt:./${{matrix.platform.target_arch }}-requirements.txt
         continue-on-error: true 
       - name: "Run osv-scanner-reporter"
         uses: google/osv-scanner-action/osv-reporter-action@v1.7.1
