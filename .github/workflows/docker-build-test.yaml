@@ -21,10 +21,10 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          {buildx: linux/amd64, target_arch: amd64, os_version: debian},
-          {buildx: linux/arm/v7, target_arch: armv7, os_version: debian},
-          {buildx: linux/arm/v7, target_arch: armhf, os_version: raspbian},
-          {buildx: linux/arm64,  target_arch: aarch64, os_version: debian}
+          {target_arch: amd64, os_version: debian},
+          {target_arch: armv7, os_version: debian},
+          {target_arch: armhf, os_version: raspbian},
+          {target_arch: aarch64, os_version: debian}
         ]
     steps:
       - name: Checkout the repository
@@ -65,7 +65,7 @@ jobs:
             --output=${{ inputs.results-file-name }}
             --new=results.json
             --gh-annotations=false
-            --fail-on-vuln=true 
+            --fail-on-vuln=true
       # Upload the results to GitHub's code scanning dashboard.
       - name: "Upload to code-scanning"
         if: "${{ !cancelled() }}"
