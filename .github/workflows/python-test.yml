@@ -2,16 +2,16 @@ name: Python test
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ master ]
+    branches: [master]
 
 permissions:
   security-events: write
   contents: read
 
 jobs:
-  # Google OSV-Scanner  
+  # Google OSV-Scanner
   scan-pr:
     uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr@v0.0.1"
     with:
@@ -21,6 +21,8 @@ jobs:
         ./
     permissions:
       security-events: write
+      contents: read
+      actions: read
   build:
     runs-on: ${{ matrix.os }}
     needs:
@@ -35,25 +37,25 @@ jobs:
       PYTHON: ${{ matrix.python-version }}
 
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-        
-    - name: Special dependencies for macos
-      run: |
-        brew install hdf5
-        pip3 install numpy==1.26.0
-        pip3 install tables==3.9.1
-      if: ${{ matrix.os == 'macos-latest' }}
-        
-    - name: Install dependencies
-      run: |
-        pip install pytest requests-mock
-        pip install .
-        
-    - name: Test with pytest
-      run: |
-        pytest
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Special dependencies for macos
+        run: |
+          brew install hdf5
+          pip3 install numpy==1.26.0
+          pip3 install tables==3.9.1
+        if: ${{ matrix.os == 'macos-latest' }}
+
+      - name: Install dependencies
+        run: |
+          pip install pytest requests-mock
+          pip install .
+
+      - name: Test with pytest
+        run: |
+          pytest

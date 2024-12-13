@@ -16,6 +16,8 @@ jobs:
         ./
     permissions:
       security-events: write
+      contents: read
+      actions: read
   build:
     runs-on: ubuntu-latest
     steps:

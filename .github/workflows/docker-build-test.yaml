@@ -3,11 +3,10 @@ name: "Test Docker"
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ master ]
+    branches: [master]
   workflow_dispatch:
-
 
 permissions:
   actions: read
@@ -20,12 +19,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [
-          {target_arch: amd64, os_version: debian},
-          {target_arch: armv7, os_version: debian},
-          {target_arch: armhf, os_version: raspbian},
-          {target_arch: aarch64, os_version: debian}
-        ]
+        platform:
+          [
+            { target_arch: amd64, os_version: debian },
+            { target_arch: armv7, os_version: debian },
+            { target_arch: armhf, os_version: raspbian },
+            { target_arch: aarch64, os_version: debian },
+          ]
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v4
@@ -44,15 +44,15 @@ jobs:
             os_version=${{ matrix.platform.os_version }}
           load: true
       - name: Test #Assume Docker fail with FileNotFound secrets_emhass.yaml error
-        run: docker run --rm -it ${{ steps.build.outputs.imageid }} | grep -q secrets_emhass.yaml && echo 0 || echo 1             
-      # Google OSV-Scanner  
+        run: docker run --rm -it ${{ steps.build.outputs.imageid }} | grep -q secrets_emhass.yaml && echo 0 || echo 1
+      # Google OSV-Scanner
       # Extract Debian and Python packadge list stored in Image
       - name: Export Debian package list
         run: mkdir OSV && docker run --rm --entrypoint '/bin/cat' ${{ steps.build.outputs.imageid }} /var/lib/dpkg/status >> ./${{ matrix.platform.target_arch }}.status
       - name: Export Python package list
         run: docker run --rm --entrypoint '/usr/bin/pip3' ${{ steps.build.outputs.imageid }} freeze >> ./${{ matrix.platform.target_arch }}-requirements.txt
-      # Check Docker image debian and python packages list for known vulnerabilities 
-      - name: "Run scanner" 
+      # Check Docker image debian and python packages list for known vulnerabilities
+      - name: "Run scanner"
         uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
         with:
           download-artifact: "${{ matrix.platform.target_arch }}-packages"
@@ -65,3 +65,5 @@ jobs:
             ./
         permissions:
           security-events: write
+          contents: read
+          actions: read
