@@ -70,22 +70,20 @@ jobs:
             { target_arch: amd64 },
             { target_arch: armv7 },
             { target_arch: armhf },
-            { target_arch: aarch64 },
+            { target_arch: aarch64 }
           ]
-          steps:
-            # Check Docker image debian and python packages list for known vulnerabilities
-            - name: "Run scanner"
-              uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
-              with:
-                download-artifact: "${{ matrix.platform.target_arch }}-packages"
-                matrix-property: "-${{ matrix.platform.target_arch }}"
-                scan-args: |-
-                  --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
-                  --lockfile=requirements.txt:./${{matrix.platform.target_arch }}-requirements.txt
-                  --recursive
-                  --skip-git
-                  ./
-              permissions:
-                security-events: write
-                contents: read
-                actions: read
+    # Check Docker image debian and python packages list for known vulnerabilities
+    uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
+    with:
+      download-artifact: "${{ matrix.platform.target_arch }}-packages"
+      matrix-property: "-${{ matrix.platform.target_arch }}"
+      scan-args: |-
+        --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
+        --lockfile=requirements.txt:./${{matrix.platform.target_arch }}-requirements.txt
+        --recursive
+        --skip-git
+        ./
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
