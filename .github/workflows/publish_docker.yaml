@@ -6,11 +6,6 @@ on:
     types: [published]
   workflow_dispatch:
 
-permissions:
-  actions: read
-  security-events: write
-  contents: read
-
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
