@@ -16,12 +16,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest  
-    permissions:
-      contents: read
-      packages: write
-      attestations: write
-      id-token: write
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -110,11 +105,6 @@ jobs:
   osv-scan:
     needs:
       - build
-    permissions:
-      contents: read
-      packages: write
-      attestations: write
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -134,16 +124,13 @@ jobs:
         --recursive
         --skip-git
         ./
+    permissions:
+      security-events: write
   
 # Merge platforms into images into a multi-platform image
   merge:
     if: always()
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      attestations: write
-      id-token: write
     needs:
       - osv-scan
       - build

@@ -19,6 +19,8 @@ jobs:
         --recursive
         --skip-git=true
         ./
+    permissions:
+      security-events: write
   build:
     runs-on: ${{ matrix.os }}
     needs:

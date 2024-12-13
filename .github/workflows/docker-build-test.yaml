@@ -53,7 +53,7 @@ jobs:
         run: docker run --rm --entrypoint '/usr/bin/pip3' ${{ steps.build.outputs.imageid }} freeze >> ./${{ matrix.platform.target_arch }}-requirements.txt
       # Check Docker image debian and python packages list for known vulnerabilities 
       - name: "Run scanner" 
-        uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v1.9.1@v0.0.1"
+        uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
         with:
           download-artifact: "${{ matrix.platform.target_arch }}-packages"
           matrix-property: "-${{ matrix.platform.target_arch }}"
@@ -63,3 +63,5 @@ jobs:
             --recursive
             --skip-git
             ./
+        permissions:
+          security-events: write
