@@ -53,25 +53,13 @@ jobs:
         run: docker run --rm --entrypoint '/usr/bin/pip3' ${{ steps.build.outputs.imageid }} freeze >> ./${{ matrix.platform.target_arch }}-requirements.txt
       # Check Docker image debian and python packages list for known vulnerabilities 
       - name: "Run scanner" 
-        uses: google/osv-scanner-action/osv-scanner-action@v1.7.1
+        uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v1.9.1@v0.0.1"
         with:
+          download-artifact: "${{ matrix.platform.target_arch }}-packages"
+          matrix-property: "-${{ matrix.platform.target_arch }}"
           scan-args: |-
-            --output=results.json
-            --format=json
             --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
             --lockfile=requirements.txt:./${{matrix.platform.target_arch }}-requirements.txt
-        continue-on-error: true 
-      - name: "Run osv-scanner-reporter"
-        uses: google/osv-scanner-action/osv-reporter-action@v1.7.1
-        with:
-          scan-args: |-
-            --output=${{ inputs.results-file-name }}
-            --new=results.json
-            --gh-annotations=false
-            --fail-on-vuln=true
-      # Upload the results to GitHub's code scanning dashboard.
-      - name: "Upload to code-scanning"
-        if: "${{ !cancelled() }}"
-        uses: github/codeql-action/upload-sarif@407ffafae6a767df3e0230c3df91b6443ae8df75 # v2.22.8
-        with:
-          sarif_file: ${{ inputs.results-file-name }}
+            --recursive
+            --skip-git
+            ./
