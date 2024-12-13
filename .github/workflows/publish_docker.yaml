@@ -124,11 +124,10 @@ jobs:
           {target_arch: armhf},
           {target_arch: aarch64}
         ]
-    uses: "GeoDerp/osv-scanner/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
+    uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
     with:
       download-artifact: "${{ matrix.platform.target_arch }}-packages"
-      results-file-name: "${{ matrix.platform.target_arch }}.sarif"
-      security-category: "${{ matrix.platform.target_arch }}-OSV-Scanner"
+      matrix-property: "-${{ matrix.platform.target_arch }}"
       scan-args: |-
         --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
         --lockfile=requirements.txt:./${{matrix.platform.target_arch }}-requirements.txt
