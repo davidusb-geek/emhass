@@ -66,7 +66,7 @@ def set_input_data_dict(emhass_conf: dict, costfun: str,
         
     # Treat runtimeparams
     params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
-        runtimeparams, params, retrieve_hass_conf, optim_conf, plant_conf, set_type, logger, emhass_conf)
+        runtimeparams, params, retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
     # Define main objects
     rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'],
                       retrieve_hass_conf['optimization_time_step'], retrieve_hass_conf['time_zone'],
@@ -295,7 +295,7 @@ def weather_forecast_cache(emhass_conf: dict, params: str,
     
     # Treat runtimeparams
     params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
-        runtimeparams, params, retrieve_hass_conf, optim_conf, plant_conf, "forecast", logger, emhass_conf)
+        runtimeparams, params, retrieve_hass_conf, optim_conf, plant_conf, "forecast", logger)
     
     # Make sure weather_forecast_cache is true
     if (params != None) and (params != "null"):
@@ -464,9 +464,9 @@ def naive_mpc_optim(input_data_dict: dict, logger: logging.Logger,
     prediction_horizon = input_data_dict["params"]["passed_data"]["prediction_horizon"]
     soc_init = input_data_dict["params"]["passed_data"]["soc_init"]
     soc_final = input_data_dict["params"]["passed_data"]["soc_final"]
-    def_total_hours = input_data_dict["params"]["optim_conf"]['operating_hours_of_each_deferrable_load']
-    def_start_timestep = input_data_dict["params"]["optim_conf"]['start_timesteps_of_each_deferrable_load']
-    def_end_timestep = input_data_dict["params"]["optim_conf"]['end_timesteps_of_each_deferrable_load']
+    def_total_hours = input_data_dict["params"]["passed_data"]['operating_hours_of_each_deferrable_load']
+    def_start_timestep = input_data_dict["params"]["passed_data"]['start_timesteps_of_each_deferrable_load']
+    def_end_timestep = input_data_dict["params"]["passed_data"]['end_timesteps_of_each_deferrable_load']
     opt_res_naive_mpc = input_data_dict["opt"].perform_naive_mpc_optim(
         df_input_data_dayahead, input_data_dict["P_PV_forecast"], input_data_dict["P_load_forecast"],
         prediction_horizon, soc_init, soc_final, def_total_hours,
