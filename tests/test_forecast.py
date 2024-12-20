@@ -227,7 +227,7 @@ class TestForecast(unittest.TestCase):
         set_type = "dayahead-optim"
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             runtimeparams_json, params_json, retrieve_hass_conf, 
-            optim_conf, plant_conf, set_type, logger, emhass_conf)
+            optim_conf, plant_conf, set_type, logger)
         # Build RetrieveHass Object
         rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
                           retrieve_hass_conf['optimization_time_step'], retrieve_hass_conf['time_zone'],
@@ -317,7 +317,7 @@ class TestForecast(unittest.TestCase):
         optim_conf['delta_forecast_daily'] = pd.Timedelta(days=3)
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             runtimeparams_json, params_json, retrieve_hass_conf, 
-            optim_conf, plant_conf, set_type, logger, emhass_conf)
+            optim_conf, plant_conf, set_type, logger)
         # Create Forecast Object
         fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf, 
                         params, emhass_conf, logger, get_data_from_file=True)
@@ -377,7 +377,7 @@ class TestForecast(unittest.TestCase):
         set_type = "dayahead-optim"
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             runtimeparams_json, params_json, retrieve_hass_conf, 
-            optim_conf, plant_conf, set_type, logger, emhass_conf)
+            optim_conf, plant_conf, set_type, logger)
         # Create RetrieveHass Object
         rh = RetrieveHass(retrieve_hass_conf['hass_url'], retrieve_hass_conf['long_lived_token'], 
                           retrieve_hass_conf['optimization_time_step'], retrieve_hass_conf['time_zone'],
