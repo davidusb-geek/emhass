@@ -13,9 +13,8 @@ from sklearn.linear_model import ElasticNet
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.metrics import r2_score
 
-from skforecast.ForecasterAutoreg import ForecasterAutoreg
-from skforecast.model_selection import bayesian_search_forecaster
-from skforecast.model_selection import backtesting_forecaster
+from skforecast.recursive import ForecasterRecursive
+from skforecast.model_selection import bayesian_search_forecaster, backtesting_forecaster, TimeSeriesFold
 
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -144,7 +143,7 @@ class MLForecaster:
             self.logger.error("Passed sklearn model "+self.sklearn_model+" is not valid. Defaulting to KNeighborsRegressor")
             base_model = KNeighborsRegressor()
         # Define the forecaster object
-        self.forecaster = ForecasterAutoreg(
+        self.forecaster = ForecasterRecursive(
             regressor = base_model,
             lags      = self.num_lags
             )
@@ -168,16 +167,22 @@ class MLForecaster:
             # Using backtesting tool to evaluate the model
             self.logger.info("Performing simple backtesting of fitted model")
             start_time = time.time()
+            cv = TimeSeriesFold(
+                steps                 = self.num_lags,
+                initial_train_size    = None,
+                fixed_train_size      = False,
+                gap                   = 0,
+                allow_incomplete_fold = True,
+                refit                 = False
+            )
             metric, predictions_backtest = backtesting_forecaster(
                 forecaster         = self.forecaster,
                 y                  = self.data_train[self.var_model],
                 exog               = self.data_train.drop(self.var_model, axis=1),
-                initial_train_size = None,
-                fixed_train_size   = False,
-                steps              = self.num_lags,
+                cv                 = cv,
                 metric             = MLForecaster.neg_r2_score,
-                refit              = False,
-                verbose            = False
+                verbose            = False,
+                show_progress      = True
             )
             self.logger.info(f"Elapsed backtesting time: {time.time() - start_time}")
             self.logger.info(f"Backtest R2 score: {-metric}")
@@ -271,21 +276,25 @@ class MLForecaster:
         # The optimization routine call
         self.logger.info("Bayesian hyperparameter optimization with backtesting")
         start_time = time.time()
+        cv = TimeSeriesFold(
+            steps                 = num_lags,
+            initial_train_size    = len(self.data_exo.loc[:self.date_train]),
+            fixed_train_size      = True,
+            gap                   = 0,
+            skip_folds            = None,
+            allow_incomplete_fold = True,
+            refit                 = refit
+        )
         self.optimize_results, self.optimize_results_object = bayesian_search_forecaster(
             forecaster         = self.forecaster,
             y                  = self.data_train[self.var_model],
             exog               = self.data_train.drop(self.var_model, axis=1),
+            cv                 = cv,
             search_space       = search_space,
-            steps              = num_lags,
             metric             = MLForecaster.neg_r2_score,
-            refit              = refit,
-            initial_train_size = len(self.data_exo.loc[:self.date_train]),
-            fixed_train_size   = True,
             n_trials           = 10,
             random_state       = 123,
-            return_best        = True,
-            verbose            = False,
-            engine             = 'optuna'
+            return_best        = True
         )
         self.logger.info(f"Elapsed time: {time.time() - start_time}")
         self.is_tuned = True
