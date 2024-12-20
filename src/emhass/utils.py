@@ -371,8 +371,8 @@ def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dic
            historic_days_to_retrieve = runtimeparams.get(
                     'historic_days_to_retrieve', runtimeparams.get('days_to_retrieve')) 
         if historic_days_to_retrieve < 9:
-            logger.warning("warning `days_to_retrieve` is set to a value less than 9, this could cause an error with the fit")
-            logger.warning("setting`passed_data:days_to_retrieve` to 9 for fit/predict/tune")
+            logger.warning("`days_to_retrieve` is set to a value less than 9, this could cause an error with the fit")
+            logger.warning("setting fit/predict/tune `days_to_retrieve` to 9")
             historic_days_to_retrieve = 9
         params["passed_data"]['historic_days_to_retrieve'] = historic_days_to_retrieve
         if "model_type" not in runtimeparams.keys():
