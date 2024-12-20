@@ -111,7 +111,7 @@ class TestCommandLineUtils(unittest.TestCase):
         set_type = 'dayahead-optim'
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             self.runtimeparams_json, self.params_json,
-            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
+            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger, emhass_conf)
         self.assertIsInstance(params, str)
         params = json.loads(params)
         self.assertIsInstance(params['passed_data']['pv_power_forecast'], list)
@@ -126,13 +126,13 @@ class TestCommandLineUtils(unittest.TestCase):
         set_type = 'naive-mpc-optim'
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             self.runtimeparams_json, self.params_json,
-            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
+            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger,emhass_conf)
         self.assertIsInstance(params, str)
         params = json.loads(params)
         self.assertTrue(params['passed_data']['prediction_horizon'] == 10)
         self.assertTrue(params['passed_data']['soc_init'] == plant_conf['battery_target_state_of_charge'])
         self.assertTrue(params['passed_data']['soc_final'] == plant_conf['battery_target_state_of_charge'])
-        self.assertTrue(params['passed_data']['operating_hours_of_each_deferrable_load'] == optim_conf['operating_hours_of_each_deferrable_load'])     
+        self.assertTrue(params['optim_conf']['operating_hours_of_each_deferrable_load'] == optim_conf['operating_hours_of_each_deferrable_load'])     
         # Test passing optimization and plant configuration parameters at runtime        
         runtimeparams = json.loads(self.runtimeparams_json)
         runtimeparams.update({'number_of_deferrable_loads':3})
@@ -161,7 +161,7 @@ class TestCommandLineUtils(unittest.TestCase):
         set_type = 'dayahead-optim'
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             runtimeparams, self.params_json,
-            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
+            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger, emhass_conf)
         self.assertIsInstance(params, str)
         params = json.loads(params)
         self.assertIsInstance(params['passed_data']['pv_power_forecast'], list)
@@ -209,7 +209,7 @@ class TestCommandLineUtils(unittest.TestCase):
         set_type = 'dayahead-optim'
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             runtimeparams, params,
-            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
+            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger, emhass_conf)
         
         self.assertTrue(len([x for x in runtimeparams['pv_power_forecast'] if not str(x).isdigit()])>0)
         self.assertTrue(len([x for x in runtimeparams['load_power_forecast'] if not str(x).isdigit()])>0)
@@ -232,7 +232,7 @@ class TestCommandLineUtils(unittest.TestCase):
         set_type = 'dayahead-optim'
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             runtimeparams, params,
-            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
+            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger, emhass_conf)
         self.assertIsInstance(runtimeparams['pv_power_forecast'], list)
         self.assertIsInstance(runtimeparams['load_power_forecast'], list)
         self.assertIsInstance(runtimeparams['load_cost_forecast'], list)
@@ -254,7 +254,7 @@ class TestCommandLineUtils(unittest.TestCase):
         set_type = 'dayahead-optim'
         params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
             runtimeparams, params,
-            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger)
+            retrieve_hass_conf, optim_conf, plant_conf, set_type, logger, emhass_conf)
         self.assertIsInstance(runtimeparams['pv_power_forecast'], str)
         self.assertIsInstance(runtimeparams['load_power_forecast'], str)
         self.assertIsInstance(runtimeparams['load_cost_forecast'], str)
