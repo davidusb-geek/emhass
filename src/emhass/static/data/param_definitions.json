@@ -365,13 +365,13 @@
       "friendly_name": "Add cost weight for battery discharge",
       "Description": "An additional weight (currency/ kWh) applied in the cost function to battery usage for discharging",
       "input": "float",
-      "default_value": 1.0
+      "default_value": 0.0
     },
     "weight_battery_charge": {
       "friendly_name": "Add cost weight for battery charge",
       "Description": "An additional weight (currency/ kWh) applied in the cost function to battery usage for charging",
       "input": "float",
-      "default_value": 1.0
+      "default_value": 0.0
     },
     "battery_discharge_power_max": {
       "friendly_name": "Max battery discharge power",
