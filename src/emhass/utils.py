@@ -21,6 +21,7 @@ from emhass.machine_learning_forecaster import MLForecaster
 
 pd.options.plotting.backend = "plotly"
 
+from emhass.machine_learning_forecaster import MLForecaster
 
 def get_root(file: str, num_parent: Optional[int] = 3) -> str:
     """
@@ -138,16 +139,9 @@ def get_forecast_dates(
     return forecast_dates
 
 
-def treat_runtimeparams(
-    runtimeparams: str,
-    params: str,
-    retrieve_hass_conf: dict,
-    optim_conf: dict,
-    plant_conf: dict,
-    set_type: str,
-    logger: logging.Logger,
-    emhass_conf: dict,
-) -> Tuple[str, dict]:
+def treat_runtimeparams(runtimeparams: str, params: str, retrieve_hass_conf: dict, optim_conf: dict,
+                        plant_conf: dict, set_type: str, logger: logging.Logger
+                        ) -> Tuple[str, dict]:
     """
     Treat the passed optimization runtime parameters.
 
@@ -155,38 +149,31 @@ def treat_runtimeparams(
     :type runtimeparams: str
     :param params: Built configuration parameters
     :type params: str
-    :param retrieve_hass_conf: Config dictionary for data retrieving parameters.
+    :param retrieve_hass_conf: Container for data retrieving parameters.
     :type retrieve_hass_conf: dict
-    :param optim_conf: Config dictionary for optimization parameters.
+    :param optim_conf: Container for optimization parameters.
     :type optim_conf: dict
-    :param plant_conf: Config dictionary for technical plant parameters.
+    :param plant_conf: Container for technical plant parameters.
     :type plant_conf: dict
     :param set_type: The type of action to be performed.
     :type set_type: str
     :param logger: The logger object.
     :type logger: logging.Logger
-    :param emhass_conf: Dictionary containing the needed emhass paths
-    :type emhass_conf: dict
     :return: Returning the params and optimization parameter container.
     :rtype: Tuple[str, dict]
 
     """
-    # Check if passed params is a dict
+    # check if passed params is a dict
     if (params != None) and (params != "null"):
         if type(params) is str:
             params = json.loads(params)
     else:
         params = {}
 
-    # Merge current config categories to params
-    params["retrieve_hass_conf"].update(retrieve_hass_conf)
-    params["optim_conf"].update(optim_conf)
-    params["plant_conf"].update(plant_conf)
-
     # Some default data needed
     custom_deferrable_forecast_id = []
     custom_predicted_temperature_id = []
-    for k in range(params["optim_conf"]["number_of_deferrable_loads"]):
+    for k in range(optim_conf['number_of_deferrable_loads']):
         custom_deferrable_forecast_id.append(
             {
                 "entity_id": "sensor.p_deferrable{}".format(k),
@@ -267,132 +254,18 @@ def treat_runtimeparams(
     else:
         params["passed_data"] = default_passed_dict
 
-    # If any runtime parameters where passed in action call
     if runtimeparams is not None:
         if type(runtimeparams) is str:
             runtimeparams = json.loads(runtimeparams)
-
-        # Loop though parameters stored in association file, Check to see if any stored in runtime
-        # If true, set runtime parameter to params
-        if emhass_conf["associations_path"].exists():
-            with emhass_conf["associations_path"].open("r") as data:
-                associations = list(csv.reader(data, delimiter=","))
-                # Association file key reference
-                # association[0] = config categories
-                # association[1] = legacy parameter name
-                # association[2] = parameter (config.json/config_defaults.json)
-                # association[3] = parameter list name if exists (not used, from legacy options.json)
-                for association in associations:
-                    # Check parameter name exists in runtime
-                    if runtimeparams.get(association[2], None) is not None:
-                        params[association[0]][association[2]] = runtimeparams[
-                            association[2]
-                        ]
-                    # Check Legacy parameter name runtime
-                    elif runtimeparams.get(association[1], None) is not None:
-                        params[association[0]][association[2]] = runtimeparams[
-                            association[1]
-                        ]
-        else:
-            logger.warning(
-                "Cant find associations file (associations.csv) in: "
-                + str(emhass_conf["associations_path"])
-            )
-
-        # Generate forecast_dates
-        if (
-            "optimization_time_step" in runtimeparams.keys()
-            or "freq" in runtimeparams.keys()
-        ):
-            optimization_time_step = int(
-                runtimeparams.get("optimization_time_step", runtimeparams.get("freq"))
-            )
-            params["retrieve_hass_conf"]["optimization_time_step"] = pd.to_timedelta(
-                optimization_time_step
-            )
-        else:
-            optimization_time_step = int(
-                params["retrieve_hass_conf"]["optimization_time_step"].seconds / 60.0
-            )
-        if (
-            runtimeparams.get("delta_forecast_daily", None) is not None
-            or runtimeparams.get("delta_forecast", None) is not None
-        ):
-            delta_forecast = int(
-                runtimeparams.get(
-                    "delta_forecast_daily", runtimeparams["delta_forecast"]
-                )
-            )
-            params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(
-                days=optim_conf["delta_forecast_daily"]
-            )
-        else:
-            delta_forecast = int(params["optim_conf"]["delta_forecast_daily"].days)
-        if runtimeparams.get("time_zone", None) is not None:
-            time_zone = pytz.timezone(params["retrieve_hass_conf"]["time_zone"])
-            params["retrieve_hass_conf"]["time_zone"] = time_zone
-        else:
-            time_zone = params["retrieve_hass_conf"]["time_zone"]
-
+       # Format required date/time parameters 
+        optimization_time_step = int(
+            retrieve_hass_conf['optimization_time_step'].seconds / 60.0)
+        delta_forecast = int(optim_conf['delta_forecast_daily'].days)
+        time_zone = retrieve_hass_conf["time_zone"]
         forecast_dates = get_forecast_dates(
-            optimization_time_step, delta_forecast, time_zone
-        )
-
-        # Treat passed forecast data lists
-        list_forecast_key = [
-            "pv_power_forecast",
-            "load_power_forecast",
-            "load_cost_forecast",
-            "prod_price_forecast",
-            "outdoor_temperature_forecast",
-        ]
-        forecast_methods = [
-            "weather_forecast_method",
-            "load_forecast_method",
-            "load_cost_forecast_method",
-            "production_price_forecast_method",
-            "outdoor_temperature_forecast_method",
-        ]
-
-        # Loop forecasts, check if value is a list and greater than or equal to forecast_dates
-        for method, forecast_key in enumerate(list_forecast_key):
-            if forecast_key in runtimeparams.keys():
-                if isinstance(runtimeparams[forecast_key], list) and len(
-                    runtimeparams[forecast_key]
-                ) >= len(forecast_dates):
-                    params["passed_data"][forecast_key] = runtimeparams[forecast_key]
-                    params["optim_conf"][forecast_methods[method]] = "list"
-                else:
-                    logger.error(
-                        f"ERROR: The passed data is either not a list or the length is not correct, length should be {str(len(forecast_dates))}"
-                    )
-                    logger.error(
-                        f"Passed type is {str(type(runtimeparams[forecast_key]))} and length is {str(len(runtimeparams[forecast_key]))}"
-                    )
-                # Check if string contains list, if so extract
-                if isinstance(runtimeparams[forecast_key], str):
-                    if isinstance(ast.literal_eval(runtimeparams[forecast_key]), list):
-                        runtimeparams[forecast_key] = ast.literal_eval(
-                            runtimeparams[forecast_key]
-                        )
-                list_non_digits = [
-                    x
-                    for x in runtimeparams[forecast_key]
-                    if not (isinstance(x, int) or isinstance(x, float))
-                ]
-                if len(list_non_digits) > 0:
-                    logger.warning(
-                        f"There are non numeric values on the passed data for {forecast_key}, check for missing values (nans, null, etc)"
-                    )
-                    for x in list_non_digits:
-                        logger.warning(
-                            f"This value in {forecast_key} was detected as non digits: {str(x)}"
-                        )
-            else:
-                params["passed_data"][forecast_key] = None
-
-        # Add runtime exclusive (not in config) parameters to params
-        # regressor-model-fit
+            optimization_time_step, delta_forecast, time_zone)
+       
+       # regressor-model-fit
         if set_type == "regressor-model-fit":
             if "csv_file" in runtimeparams:
                 csv_file = runtimeparams["csv_file"]
@@ -413,7 +286,7 @@ def treat_runtimeparams(
             else:
                 date_features = runtimeparams["date_features"]
                 params["passed_data"]["date_features"] = date_features
-
+        
         # regressor-model-predict
         if set_type == "regressor-model-predict":
             if "new_values" in runtimeparams:
@@ -428,80 +301,101 @@ def treat_runtimeparams(
             if "target" in runtimeparams:
                 target = runtimeparams["target"]
                 params["passed_data"]["target"] = target
-
-        # MPC control case
+        
+        # Treating special data passed for MPC control case
         if set_type == "naive-mpc-optim":
             if "prediction_horizon" not in runtimeparams.keys():
                 prediction_horizon = 10  # 10 time steps by default
             else:
                 prediction_horizon = runtimeparams["prediction_horizon"]
             params["passed_data"]["prediction_horizon"] = prediction_horizon
-            if "soc_init" not in runtimeparams.keys():
-                soc_init = params["plant_conf"]["battery_target_state_of_charge"]
+            if 'soc_init' not in runtimeparams.keys():
+                soc_init = plant_conf['battery_target_state_of_charge']
             else:
                 soc_init = runtimeparams["soc_init"]
             params["passed_data"]["soc_init"] = soc_init
             if "soc_final" not in runtimeparams.keys():
-                soc_final = params["plant_conf"]["battery_target_state_of_charge"]
+                soc_final = plant_conf['battery_target_state_of_charge']
             else:
                 soc_final = runtimeparams["soc_final"]
             params["passed_data"]["soc_final"] = soc_final
-
+            if 'operating_hours_of_each_deferrable_load' not in runtimeparams.keys() and  'def_total_hours'  not in runtimeparams.keys():
+                def_total_hours = optim_conf.get('operating_hours_of_each_deferrable_load') 
+            else:
+                def_total_hours = runtimeparams.get(
+                'operating_hours_of_each_deferrable_load', runtimeparams.get('def_total_hours')) 
+            params["passed_data"]['operating_hours_of_each_deferrable_load'] = def_total_hours
+            if 'start_timesteps_of_each_deferrable_load' not in runtimeparams.keys() and  'def_start_timestep' in runtimeparams.keys():
+                def_start_timestep = optim_conf.get('start_timesteps_of_each_deferrable_load') 
+            else:    
+                def_start_timestep = runtimeparams.get(
+                    'start_timesteps_of_each_deferrable_load', runtimeparams.get('def_start_timestep'))
+            params["passed_data"]['start_timesteps_of_each_deferrable_load'] = def_start_timestep
+            if 'end_timesteps_of_each_deferrable_load' not in  runtimeparams.keys() and 'def_end_timestep' not in  runtimeparams.keys():
+                def_end_timestep = optim_conf.get('end_timesteps_of_each_deferrable_load') 
+            else:
+                def_end_timestep = runtimeparams.get(
+                    'end_timesteps_of_each_deferrable_load', runtimeparams.get('def_end_timestep'))
+            params["passed_data"]['end_timesteps_of_each_deferrable_load'] = def_end_timestep
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
-
             # Load the default config
-            if "def_load_config" in runtimeparams:
-                params["optim_conf"]["def_load_config"] = runtimeparams[
-                    "def_load_config"
-                ]
-            if "def_load_config" in params["optim_conf"]:
-                for k in range(len(params["optim_conf"]["def_load_config"])):
-                    if "thermal_config" in params["optim_conf"]["def_load_config"][k]:
-                        if (
-                            "heater_desired_temperatures" in runtimeparams
-                            and len(runtimeparams["heater_desired_temperatures"]) > k
-                        ):
-                            params["optim_conf"]["def_load_config"][k][
-                                "thermal_config"
-                            ]["desired_temperatures"] = runtimeparams[
-                                "heater_desired_temperatures"
-                            ][k]
-                        if (
-                            "heater_start_temperatures" in runtimeparams
-                            and len(runtimeparams["heater_start_temperatures"]) > k
-                        ):
-                            params["optim_conf"]["def_load_config"][k][
-                                "thermal_config"
-                            ]["start_temperature"] = runtimeparams[
-                                "heater_start_temperatures"
-                            ][k]
+            if "def_load_config" in optim_conf:
+                for k in range(len(optim_conf["def_load_config"])):
+                    if "thermal_config" in optim_conf["def_load_config"][k]:
+                        if ("heater_desired_temperatures" in runtimeparams and len(runtimeparams["heater_desired_temperatures"]) > k):
+                            optim_conf["def_load_config"][k]["thermal_config"]["desired_temperatures"] = runtimeparams["heater_desired_temperatures"][k]
+                        if ("heater_start_temperatures" in runtimeparams and len(runtimeparams["heater_start_temperatures"]) > k):
+                            optim_conf["def_load_config"][k]["thermal_config"]["start_temperature"] = runtimeparams["heater_start_temperatures"][k]
         else:
             params["passed_data"]["prediction_horizon"] = None
             params["passed_data"]["soc_init"] = None
             params["passed_data"]["soc_final"] = None
-
-        # Treat passed data for forecast model fit/predict/tune at runtime
-        if (
-            params["passed_data"].get("historic_days_to_retrieve", None) is not None
-            and params["passed_data"]["historic_days_to_retrieve"] < 9
-        ):
-            logger.warning(
-                "warning `days_to_retrieve` is set to a value less than 9, this could cause an error with the fit"
-            )
-            logger.warning(
-                "setting`passed_data:days_to_retrieve` to 9 for fit/predict/tune"
-            )
-            params["passed_data"]["historic_days_to_retrieve"] = 9
-        else:
-            if params["retrieve_hass_conf"].get("historic_days_to_retrieve", 0) < 9:
-                logger.debug(
-                    "setting`passed_data:days_to_retrieve` to 9 for fit/predict/tune"
-                )
-                params["passed_data"]["historic_days_to_retrieve"] = 9
+            params["passed_data"]['operating_hours_of_each_deferrable_load'] = None
+            params["passed_data"]['start_timesteps_of_each_deferrable_load'] = None
+            params["passed_data"]['end_timesteps_of_each_deferrable_load'] = None
+        # Treat passed forecast data lists
+        list_forecast_key = ['pv_power_forecast', 'load_power_forecast',
+                             'load_cost_forecast', 'prod_price_forecast', 'outdoor_temperature_forecast']
+        forecast_methods = ['weather_forecast_method', 'load_forecast_method', 'load_cost_forecast_method',
+                            'production_price_forecast_method', 'outdoor_temperature_forecast_method']
+        
+        # Loop forecasts, check if value is a list and greater than or equal to forecast_dates
+        for method, forecast_key in enumerate(list_forecast_key):
+            if forecast_key in runtimeparams.keys():
+                if type(runtimeparams[forecast_key]) == list and len(runtimeparams[forecast_key]) >= len(forecast_dates):
+                    params['passed_data'][forecast_key] = runtimeparams[forecast_key]
+                    optim_conf[forecast_methods[method]] = 'list'
+                else:
+                    logger.error(
+                        f"ERROR: The passed data is either not a list or the length is not correct, length should be {str(len(forecast_dates))}")
+                    logger.error(
+                        f"Passed type is {str(type(runtimeparams[forecast_key]))} and length is {str(len(runtimeparams[forecast_key]))}")
+                # Check if string contains list, if so extract
+                if type(runtimeparams[forecast_key]) == str:
+                    if type(ast.literal_eval(runtimeparams[forecast_key])) == list:
+                        runtimeparams[forecast_key] = ast.literal_eval(runtimeparams[forecast_key])
+                list_non_digits = [x for x in runtimeparams[forecast_key] if not (
+                    isinstance(x, int) or isinstance(x, float))]
+                if len(list_non_digits) > 0:
+                    logger.warning(
+                        f"There are non numeric values on the passed data for {forecast_key}, check for missing values (nans, null, etc)")
+                    for x in list_non_digits:
+                        logger.warning(
+                            f"This value in {forecast_key} was detected as non digits: {str(x)}")
             else:
-                params["passed_data"]["historic_days_to_retrieve"] = params[
-                    "retrieve_hass_conf"
-                ]["historic_days_to_retrieve"]
+                params['passed_data'][forecast_key] = None
+       
+        # Treat passed data for forecast model fit/predict/tune at runtime
+        if 'historic_days_to_retrieve' not in runtimeparams.keys() and 'days_to_retrieve' not in runtimeparams.keys():
+            historic_days_to_retrieve = retrieve_hass_conf.get('historic_days_to_retrieve') 
+        else:
+           historic_days_to_retrieve = runtimeparams.get(
+                    'historic_days_to_retrieve', runtimeparams.get('days_to_retrieve')) 
+        if historic_days_to_retrieve < 9:
+            logger.warning("`days_to_retrieve` is set to a value less than 9, this could cause an error with the fit")
+            logger.warning("setting fit/predict/tune `days_to_retrieve` to 9")
+            historic_days_to_retrieve = 9
+        params["passed_data"]['historic_days_to_retrieve'] = historic_days_to_retrieve
         if "model_type" not in runtimeparams.keys():
             model_type = "load_forecast"
         else:
@@ -536,15 +430,13 @@ def treat_runtimeparams(
             perform_backtest = False
         else:
             perform_backtest = ast.literal_eval(
-                str(runtimeparams["perform_backtest"]).capitalize()
-            )
+                str(runtimeparams["perform_backtest"]).capitalize())
         params["passed_data"]["perform_backtest"] = perform_backtest
         if "model_predict_publish" not in runtimeparams.keys():
             model_predict_publish = False
         else:
             model_predict_publish = ast.literal_eval(
-                str(runtimeparams["model_predict_publish"]).capitalize()
-            )
+                str(runtimeparams["model_predict_publish"]).capitalize())
         params["passed_data"]["model_predict_publish"] = model_predict_publish
         if "model_predict_entity_id" not in runtimeparams.keys():
             model_predict_entity_id = "sensor.p_load_forecast_custom_model"
@@ -554,19 +446,13 @@ def treat_runtimeparams(
         if "model_predict_unit_of_measurement" not in runtimeparams.keys():
             model_predict_unit_of_measurement = "W"
         else:
-            model_predict_unit_of_measurement = runtimeparams[
-                "model_predict_unit_of_measurement"
-            ]
-        params["passed_data"]["model_predict_unit_of_measurement"] = (
-            model_predict_unit_of_measurement
-        )
+            model_predict_unit_of_measurement = runtimeparams["model_predict_unit_of_measurement"]
+        params["passed_data"]["model_predict_unit_of_measurement"] = model_predict_unit_of_measurement
         if "model_predict_friendly_name" not in runtimeparams.keys():
             model_predict_friendly_name = "Load Power Forecast custom ML model"
         else:
             model_predict_friendly_name = runtimeparams["model_predict_friendly_name"]
-        params["passed_data"]["model_predict_friendly_name"] = (
-            model_predict_friendly_name
-        )
+        params["passed_data"]["model_predict_friendly_name"] = model_predict_friendly_name
         if "mlr_predict_entity_id" not in runtimeparams.keys():
             mlr_predict_entity_id = "sensor.mlr_predict"
         else:
@@ -575,18 +461,14 @@ def treat_runtimeparams(
         if "mlr_predict_unit_of_measurement" not in runtimeparams.keys():
             mlr_predict_unit_of_measurement = None
         else:
-            mlr_predict_unit_of_measurement = runtimeparams[
-                "mlr_predict_unit_of_measurement"
-            ]
-        params["passed_data"]["mlr_predict_unit_of_measurement"] = (
-            mlr_predict_unit_of_measurement
-        )
+            mlr_predict_unit_of_measurement = runtimeparams["mlr_predict_unit_of_measurement"]
+        params["passed_data"]["mlr_predict_unit_of_measurement"] = mlr_predict_unit_of_measurement
         if "mlr_predict_friendly_name" not in runtimeparams.keys():
             mlr_predict_friendly_name = "mlr predictor"
         else:
             mlr_predict_friendly_name = runtimeparams["mlr_predict_friendly_name"]
         params["passed_data"]["mlr_predict_friendly_name"] = mlr_predict_friendly_name
-
+        
         # Treat passed data for other parameters
         if "alpha" not in runtimeparams.keys():
             alpha = 0.5
@@ -598,30 +480,24 @@ def treat_runtimeparams(
         else:
             beta = runtimeparams["beta"]
         params["passed_data"]["beta"] = beta
-
         # Param to save forecast cache (i.e. Solcast)
         if "weather_forecast_cache" not in runtimeparams.keys():
             weather_forecast_cache = False
         else:
             weather_forecast_cache = runtimeparams["weather_forecast_cache"]
         params["passed_data"]["weather_forecast_cache"] = weather_forecast_cache
-
         # Param to make sure optimization only uses cached data. (else produce error)
         if "weather_forecast_cache_only" not in runtimeparams.keys():
             weather_forecast_cache_only = False
         else:
             weather_forecast_cache_only = runtimeparams["weather_forecast_cache_only"]
-        params["passed_data"]["weather_forecast_cache_only"] = (
-            weather_forecast_cache_only
-        )
-
+        params["passed_data"]["weather_forecast_cache_only"] = weather_forecast_cache_only
         # A condition to manually save entity data under data_path/entities after optimization
         if "entity_save" not in runtimeparams.keys():
             entity_save = ""
         else:
             entity_save = runtimeparams["entity_save"]
         params["passed_data"]["entity_save"] = entity_save
-
         # A condition to put a prefix on all published data, or check for saved data under prefix name
         if "publish_prefix" not in runtimeparams.keys():
             publish_prefix = ""
@@ -630,25 +506,83 @@ def treat_runtimeparams(
         params["passed_data"]["publish_prefix"] = publish_prefix
 
         # Treat optimization (optim_conf) configuration parameters passed at runtime
+        if 'number_of_deferrable_loads' in runtimeparams.keys() or 'num_def_loads' in runtimeparams.keys():
+            optim_conf['number_of_deferrable_loads'] = runtimeparams.get(
+                    'number_of_deferrable_loads', runtimeparams.get('num_def_loads'))
+        if 'nominal_power_of_deferrable_loads' in runtimeparams.keys() or 'P_deferrable_nom' in runtimeparams.keys():
+            optim_conf['nominal_power_of_deferrable_loads'] = runtimeparams.get(
+                    'nominal_power_of_deferrable_loads', runtimeparams.get('P_deferrable_nom'))
+        if 'operating_hours_of_each_deferrable_load' in runtimeparams.keys() or 'def_total_hours' in runtimeparams.keys():
+            optim_conf['operating_hours_of_each_deferrable_load'] = runtimeparams.get(
+                'operating_hours_of_each_deferrable_load', runtimeparams.get('def_total_hours')) 
+        if 'start_timesteps_of_each_deferrable_load' in runtimeparams.keys() or 'def_start_timestep' in runtimeparams.keys():
+            optim_conf['start_timesteps_of_each_deferrable_load'] = runtimeparams.get(
+                    'start_timesteps_of_each_deferrable_load', runtimeparams.get('def_start_timestep'))
+        if 'end_timesteps_of_each_deferrable_load' in runtimeparams.keys() or 'def_end_timestep' in runtimeparams.keys():
+            optim_conf['end_timesteps_of_each_deferrable_load'] = runtimeparams.get(
+                    'end_timesteps_of_each_deferrable_load', runtimeparams.get('def_end_timestep'))  
         if "def_current_state" in runtimeparams.keys():
-            params["optim_conf"]["def_current_state"] = [
-                bool(s) for s in runtimeparams["def_current_state"]
+            optim_conf["def_current_state"] = [
+                bool(s) for s in runtimeparams["def_current_state"]]
+        if 'treat_deferrable_load_as_semi_cont' in runtimeparams.keys() or 'treat_def_as_semi_cont' in runtimeparams.keys():
+            optim_conf['treat_deferrable_load_as_semi_cont'] = [
+                ast.literal_eval(str(k).capitalize()) for k in runtimeparams.get('treat_deferrable_load_as_semi_cont',runtimeparams.get('treat_def_as_semi_cont'))
+            ]    
+        if 'set_deferrable_load_single_constant' in runtimeparams.keys() or 'set_def_constant' in runtimeparams.keys():
+            optim_conf['set_deferrable_load_single_constant'] = [
+                ast.literal_eval(str(k).capitalize()) for k in runtimeparams.get('set_deferrable_load_single_constant',runtimeparams.get('set_def_constant'))
             ]
+        if 'set_deferrable_startup_penalty' in runtimeparams.keys() or 'def_start_penalty' in runtimeparams.keys():
+            optim_conf['set_deferrable_startup_penalty'] = [
+                ast.literal_eval(str(k).capitalize()) for k in runtimeparams.get('set_deferrable_startup_penalty',runtimeparams.get('def_start_penalty'))
+            ]
+        if 'def_load_config' in runtimeparams:
+            optim_conf["def_load_config"] = runtimeparams['def_load_config']
+        if 'weight_battery_discharge' in runtimeparams.keys():
+            optim_conf['weight_battery_discharge'] = runtimeparams[
+                'weight_battery_discharge'
+            ]
+        if 'weight_battery_charge' in runtimeparams.keys():
+            optim_conf['weight_battery_charge'] = runtimeparams['weight_battery_charge']
 
         # Treat retrieve data from Home Assistant (retrieve_hass_conf) configuration parameters passed at runtime
-        # Secrets passed at runtime
+        if 'optimization_time_step' in runtimeparams.keys() or 'freq' in runtimeparams.keys():
+            retrieve_hass_conf['optimization_time_step'] = pd.to_timedelta(runtimeparams.get(
+                    'optimization_time_step', runtimeparams.get('freq')), "minutes")
+        if 'continual_publish' in runtimeparams.keys():
+            retrieve_hass_conf['continual_publish'] = bool(
+                runtimeparams['continual_publish'])
         if "solcast_api_key" in runtimeparams.keys():
-            params["retrieve_hass_conf"]["solcast_api_key"] = runtimeparams[
-                "solcast_api_key"
-            ]
+            retrieve_hass_conf["solcast_api_key"] = runtimeparams["solcast_api_key"]
+            optim_conf['weather_forecast_method'] = "solcast"
         if "solcast_rooftop_id" in runtimeparams.keys():
-            params["retrieve_hass_conf"]["solcast_rooftop_id"] = runtimeparams[
+            retrieve_hass_conf["solcast_rooftop_id"] = runtimeparams[
                 "solcast_rooftop_id"
             ]
+            optim_conf['weather_forecast_method'] = "solcast"
         if "solar_forecast_kwp" in runtimeparams.keys():
-            params["retrieve_hass_conf"]["solar_forecast_kwp"] = runtimeparams[
+            retrieve_hass_conf["solar_forecast_kwp"] = runtimeparams[
                 "solar_forecast_kwp"
             ]
+            optim_conf['weather_forecast_method'] = "solar.forecast"
+
+        # Treat system model parameters (plant) configuration parameters passed at runtime
+        if 'battery_minimum_state_of_charge' in runtimeparams.keys() or 'SOCmin' in runtimeparams.keys():
+            plant_conf['battery_minimum_state_of_charge'] = runtimeparams.get(
+                'battery_minimum_state_of_charge', runtimeparams.get('SOCmin'))
+        if 'battery_maximum_state_of_charge' in runtimeparams.keys() or 'SOCmax' in runtimeparams.keys():
+            plant_conf['battery_maximum_state_of_charge'] = runtimeparams.get(
+                'battery_maximum_state_of_charge', runtimeparams.get('SOCmax'))
+        if 'battery_target_state_of_charge' in runtimeparams.keys() or 'SOCtarget' in runtimeparams.keys():
+            plant_conf['battery_target_state_of_charge'] = runtimeparams.get(
+                'battery_target_state_of_charge', runtimeparams.get('SOCtarget'))
+        if 'battery_discharge_power_max' in runtimeparams.keys() or 'Pd_max' in runtimeparams.keys():
+            plant_conf['battery_discharge_power_max'] = runtimeparams.get(
+                'battery_discharge_power_max', runtimeparams.get('Pd_max'))
+        if 'battery_charge_power_max' in runtimeparams.keys() or 'Pc_max' in runtimeparams.keys():
+            plant_conf['battery_charge_power_max'] = runtimeparams.get(
+                'battery_charge_power_max', runtimeparams.get('Pc_max'))
+        
         # Treat custom entities id's and friendly names for variables
         if "custom_pv_forecast_id" in runtimeparams.keys():
             params["passed_data"]["custom_pv_forecast_id"] = runtimeparams[
@@ -702,12 +636,7 @@ def treat_runtimeparams(
             params["passed_data"]["custom_predicted_temperature_id"] = runtimeparams[
                 "custom_predicted_temperature_id"
             ]
-
-    # split config categories from params
-    retrieve_hass_conf = params["retrieve_hass_conf"]
-    optim_conf = params["optim_conf"]
-    plant_conf = params["plant_conf"]
-
+       
     # Serialize the final params
     params = json.dumps(params, default=str)
     return params, retrieve_hass_conf, optim_conf, plant_conf
