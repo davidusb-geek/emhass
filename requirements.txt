@@ -10,7 +10,7 @@ h5py==3.12.1
 pulp>=2.4
 pyyaml>=5.4.1
 tables<=3.9.1
-skforecast==0.13.0
+skforecast==0.14.0
 # web server packages
 flask>=3.1.0
 waitress>=3.0.2
