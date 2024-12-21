@@ -26,7 +26,6 @@ RUN apt-get update \
     python3.11 \
     python3-pip \
     python3.11-dev \
-    python3-numba \
     git \
     gcc \
     patchelf \
@@ -46,7 +45,13 @@ RUN apt-get update \
     glpk-utils \
     libatlas3-base \
     libatlas-base-dev \
-    libopenblas-dev
+    libopenblas-dev \
+    libopenblas0-pthread \
+    libgfortran5 \
+    libsz2 \
+    libaec0 \
+    libhdf5-hl-100 \
+    libhdf5-103-1
 # specify hdf5
 RUN ln -s /usr/include/hdf5/serial /usr/include/hdf5/include && export HDF5_DIR=/usr/include/hdf5
 
