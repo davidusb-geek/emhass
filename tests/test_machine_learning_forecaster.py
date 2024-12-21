@@ -10,7 +10,7 @@ import pickle
 import pandas as pd
 import numpy as np
 
-from skforecast.ForecasterAutoreg import ForecasterAutoreg
+from skforecast.recursive import ForecasterRecursive
 
 from emhass.command_line import set_input_data_dict
 from emhass.retrieve_hass import RetrieveHass
@@ -82,12 +82,12 @@ class TestMLForecaster(unittest.TestCase):
         
     def test_fit(self):
         df_pred, df_pred_backtest = self.mlf.fit()
-        self.assertIsInstance(self.mlf.forecaster, ForecasterAutoreg)
+        self.assertIsInstance(self.mlf.forecaster, ForecasterRecursive)
         self.assertIsInstance(df_pred, pd.DataFrame)
         self.assertTrue(df_pred_backtest == None)
         # Refit with backtest evaluation
         df_pred, df_pred_backtest = self.mlf.fit(perform_backtest=True)
-        self.assertIsInstance(self.mlf.forecaster, ForecasterAutoreg)
+        self.assertIsInstance(self.mlf.forecaster, ForecasterRecursive)
         self.assertIsInstance(df_pred, pd.DataFrame)
         self.assertIsInstance(df_pred_backtest, pd.DataFrame)
         
