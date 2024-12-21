@@ -22,6 +22,7 @@ COPY requirements.txt /app/
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     libffi-dev \
+    llvm-dev \
     python3.11 \
     python3-pip \
     python3.11-dev \
