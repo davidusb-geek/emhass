@@ -91,7 +91,7 @@ COPY src/emhass/data/ /app/src/emhass/data/
 # pre generated optimization results 
 COPY data/opt_res_latest.csv /app/data/
 COPY README.md /app/
-COPY setup.py /app/
+COPY pyproject.toml /app/
 
 # secrets file (secrets_emhass.yaml) can be copied into the container with volume mounts with docker run
 # options.json file will be automatically generated and passed from Home Assistant using the addon
