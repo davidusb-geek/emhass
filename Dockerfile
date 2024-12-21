@@ -22,7 +22,7 @@ COPY requirements.txt /app/
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     llvm-dev \
-    python3-numpy \
+    libffi-dev \
     python3.11 \
     python3-pip \
     python3.11-dev \
@@ -43,6 +43,7 @@ RUN apt-get update \
     coinor-libcbc-dev \
     libglpk-dev \
     glpk-utils \
+    libatlas3-base \
     libatlas-base-dev \
     libopenblas-dev
 # specify hdf5
