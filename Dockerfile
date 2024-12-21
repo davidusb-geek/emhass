@@ -106,7 +106,9 @@ LABEL \
     io.hass.description="EMHASS: Energy Management for Home Assistant" \
     io.hass.version=${BUILD_VERSION} \
     io.hass.type="addon" \
-    io.hass.arch="aarch64|amd64|armhf|armv7"
+    io.hass.arch="aarch64|amd64|armhf|armv7" \
+    org.opencontainers.image.source="https://github.com/davidusb-geek/emhass"
+    org.opencontainers.image.description="EMHASS python package and requirements, in Home Assistant Debian container."
 
 # build EMHASS
 RUN pip3 install --no-cache-dir --break-system-packages --no-deps --force-reinstall  .
