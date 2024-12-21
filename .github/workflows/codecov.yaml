@@ -23,7 +23,7 @@ jobs:
     - name: Generate Report
       run: |
         python -m pip install --upgrade pip
-        python pip install .[test]
+        pip install .[test]
         coverage run -m --source=emhass unittest
         coverage report
         coverage xml
