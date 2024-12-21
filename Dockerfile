@@ -22,9 +22,9 @@ COPY requirements.txt /app/
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     libffi-dev \
-    python3 \
+    python3.11 \
     python3-pip \
-    python3-dev \
+    python3.11-dev \
     git \
     gcc \
     patchelf \
