@@ -9,7 +9,7 @@ import numpy as np
 import pathlib
 import pickle
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from emhass.retrieve_hass import RetrieveHass
 from emhass.optimization import Optimization
@@ -69,6 +69,7 @@ class TestOptimization(unittest.TestCase):
                              var_interp = self.retrieve_hass_conf['sensor_linear_interp'])
         self.df_input_data = self.rh.df_final.copy()
         #Build Forecast object
+
         self.fcst = Forecast(self.retrieve_hass_conf, self.optim_conf, self.plant_conf,
                              params, emhass_conf, logger, get_data_from_file=get_data_from_file)
         self.df_weather = self.fcst.get_weather_forecast(method='csv')
@@ -86,8 +87,8 @@ class TestOptimization(unittest.TestCase):
         self.input_data_dict = {
             'retrieve_hass_conf': retrieve_hass_conf,
         }
-        
     # Check formatting of output from perfect optimization
+
     def test_perform_perfect_forecast_optim(self):
         self.opt_res = self.opt.perform_perfect_forecast_optim(self.df_input_data, self.days_list)
         self.assertIsInstance(self.opt_res, type(pd.DataFrame()))
@@ -96,6 +97,7 @@ class TestOptimization(unittest.TestCase):
         self.assertTrue('cost_fun_'+self.costfun in self.opt_res.columns)
         
     
+
     def test_perform_dayahead_forecast_optim(self):
         # Check formatting of output from dayahead optimization
         self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
@@ -181,7 +183,7 @@ class TestOptimization(unittest.TestCase):
         self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf, 
                                 self.fcst.var_load_cost, self.fcst.var_prod_price,  
                                 self.costfun, emhass_conf, logger)
-        
+
         unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
         unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
         self.opt_res_dayahead = self.opt.perform_optimization(
@@ -257,7 +259,7 @@ class TestOptimization(unittest.TestCase):
             self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
             self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
             self.assertIsInstance(self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-        
+
     def test_perform_naive_mpc_optim(self):
         self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
         self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
@@ -325,31 +327,43 @@ class TestOptimization(unittest.TestCase):
         self.assertTrue(self.opt.optim_status == 'Optimal')
         
     # Setup function to run dayahead optimization for the following tests
-    def run_penalty_test_forecast(self):
-        self.opt = Optimization(self.retrieve_hass_conf, self.optim_conf, self.plant_conf,
-                                self.fcst.var_load_cost, self.fcst.var_prod_price,
-                                self.costfun, emhass_conf, logger)
-        def_total_hours = [5 * self.retrieve_hass_conf['optimization_time_step'].seconds / 3600.0]
+
+    def run_test_forecast(self, prediction_horizon: int = 10, def_total_hours: list[int] = [0], passed_data: dict = {}, input_data: pd.DataFrame = pd.DataFrame()):
+        self.opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
         def_start_timestep = [0]
         def_end_timestep = [0]
-        prediction_horizon = 10
-        self.optim_conf.update({'number_of_deferrable_loads': 1})
 
-        self.fcst.params["passed_data"]["prod_price_forecast"] = [0 for i in range(prediction_horizon)]
-        self.fcst.params["passed_data"]["solar_forecast_kwp"] = [
+        passed_data["prediction_horizon"] = prediction_horizon
+
+        self.optim_conf.update({"num_def_loads": 1, "photovoltaic_production_sell_price": 0, "prediction_horizon": prediction_horizon})
+
+        # Irrelevant stuff
+        passed_data["solar_forecast_kwp"] = [
             0 for i in range(prediction_horizon)
         ]
-        self.fcst.params["passed_data"]["prediction_horizon"] = prediction_horizon
 
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
-            self.df_input_data_dayahead, method="list"
+        self.fcst.params["passed_data"].update(passed_data)
+
+        input_data = self.fcst.get_load_cost_forecast(
+            input_data, method="list"
         )
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(
-            self.df_input_data_dayahead, method="list"
+        input_data = self.fcst.get_prod_price_forecast(
+            input_data, method="constant"
         )
+
+        print(repr(input_data))
 
         self.opt_res_dayahead = self.opt.perform_naive_mpc_optim(
-            self.df_input_data_dayahead,
+            input_data,
             self.P_PV_forecast,
             self.P_load_forecast,
             prediction_horizon,
@@ -358,7 +372,13 @@ class TestOptimization(unittest.TestCase):
             def_end_timestep=def_end_timestep
         )
 
+        print(repr(self.opt_res_dayahead))
+        self.assertTrue((self.opt_res_dayahead['optim_status'] == 'Optimal').all())
+
     # Test load is constant
+    def run_penalty_test_forecast(self):
+        return self.run_test_forecast(prediction_horizon = 10, def_total_hours=[5 * (self.retrieve_hass_conf['optimization_time_step'].seconds/3600)])
+
     def test_constant_load(self):
         self.fcst.params["passed_data"]["load_cost_forecast"] = [2,1,1,1,1,1.5,1.1,2,2,2]
         self.optim_conf.update({'set_deferrable_load_single_constant': [True]})
@@ -443,6 +463,190 @@ class TestOptimization(unittest.TestCase):
             check_names=False,
         )
 
+    def run_thermal_forecast(self, outdoor_temp=10, prices=[1, 1, 1, 1, 1, 1, 1, 1, 1, 1]):
+        self.fcst.params["passed_data"]["load_cost_forecast"] = prices
+        times = pd.date_range(start=datetime.now(), periods=10, freq=self.fcst.freq, tz=self.fcst.time_zone).tz_convert("utc").round(self.fcst.freq, ambiguous='infer', nonexistent='shift_forward').tz_convert(self.fcst.time_zone)
+        input_data = pd.DataFrame.from_dict({"outdoor_temperature_forecast": [outdoor_temp]*10})
+        input_data.set_index(times, inplace=True)
+        self.run_test_forecast(input_data=input_data)
+
+    def test_thermal_management(self):
+        self.optim_conf.update(
+            {
+                "def_load_config": [
+                    {
+                        "thermal_config": {
+                            "start_temperature": 20,
+                            "cooling_constant": 0.1,
+                            "heating_rate": 10,
+                            "overshoot_temperature": 25,
+                            "desired_temperatures": [0, 0, 21, 0, 0, 0, 0, 0, 0, 0],
+                            "sense": "heat",
+                            "mode": "constrain",
+                        }
+                    }
+                ]
+            }
+        )
+
+        self.run_thermal_forecast()
+
+        assert_series_equal(
+            self.opt_res_dayahead["P_deferrable0"],
+            self.optim_conf["nominal_power_of_deferrable_loads"][0]
+            * pd.Series(
+                [0, 1, 0, 0, 0, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index
+            ),
+            check_names=False,
+        )
+
+    def test_thermal_management_overshoot(self):
+        self.optim_conf.update(
+            {
+                "treat_deferrable_load_as_semi_cont": [False, False],
+                "def_load_config": [
+                    {
+                        "thermal_config": {
+                            "start_temperature": 20,
+                            "cooling_constant": 0.2,
+                            "heating_rate": 10,
+                            "overshoot_temperature": 22,
+                            "desired_temperatures": [0, 0, 21, 0, 0, 0, 0, 0, 0, 0],
+                            "sense": "heat",
+                            "mode": "constrain",
+                        }
+                    }
+                ]
+            }
+        )
+
+        self.run_thermal_forecast(prices=[1, 2000, 2000, 1, 1, 1, 1, 1, 1, 1])
+
+        # Ensure we didn't overshoot the temp we wanted
+        predicted_temps = self.opt_res_dayahead['predicted_temp_heater0']
+
+        self.assertFalse((predicted_temps > 22).any(), "Overshot in some timesteps. Predicted temperatures: " + repr(predicted_temps))
+
+        self.assertTrue(predicted_temps.iloc[2] >= 21, "Failed to meet temperature requirement")
+
+    def test_thermal_management_overshoot_cooling(self):
+        self.optim_conf.update(
+            {
+                "treat_deferrable_load_as_semi_cont": [False, False],
+                "def_load_config": [
+                    {
+                        "thermal_config": {
+                            "start_temperature": 25,
+                            "cooling_constant": 0.2,
+                            "heating_rate": -20,
+                            "overshoot_temperature": 19,
+                            "desired_temperatures": [0, 0, 0, 20, 0, 0, 0, 0, 0, 0],
+                            "sense": "cool",
+                            "mode": "constrain",
+                        }
+                    }
+                ]
+            }
+        )
+
+        self.run_thermal_forecast(outdoor_temp=30,prices=[1, 2000, 2000, 1, 1, 1, 1, 1, 1, 1])
+
+        # Ensure we didn't overshoot the temp we wanted
+        predicted_temps = self.opt_res_dayahead['predicted_temp_heater0']
+
+        self.assertFalse((predicted_temps < 18).any(), "Overshot in some timesteps. Predicted temperatures: " + repr(predicted_temps))
+
+        self.assertTrue(predicted_temps.iloc[3] <= 20, "Failed to meet temperature requirement")
+
+    def test_thermal_management_cooling(self):
+        self.optim_conf.update(
+            {
+                "def_load_config": [
+                    {
+                        "thermal_config": {
+                            "start_temperature": 25,
+                            "cooling_constant": 0.1,
+                            "heating_rate": -10,
+                            "overshoot_temperature": 15,
+                            "desired_temperatures": [0, 0, 20, 0, 0, 0, 0, 0, 0, 0],
+                            "sense": "cool",
+                            "mode": "constrain",
+                        }
+                    }
+                ]
+            }
+        )
+
+        self.run_thermal_forecast(outdoor_temp=20)
+
+        assert_series_equal(
+            self.opt_res_dayahead["P_deferrable0"],
+            self.optim_conf["nominal_power_of_deferrable_loads"][0]
+            * pd.Series(
+                [0, 1, 0, 0, 0, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index
+            ),
+            check_names=False,
+        )
+
+    def test_thermal_management_penalty(self):
+        self.optim_conf.update(
+            {
+                "def_load_config": [
+                    {
+                        "thermal_config": {
+                            "start_temperature": 20,
+                            "cooling_constant": 0.1,
+                            "heating_rate": 10,
+                            "overshoot_temperature": 50,
+                            "desired_temperatures": [0, 0, 40, 0, 0, 0, 0, 0, 0, 0],
+                            "sense": "heat",
+                            "mode": "penalize",
+                        }
+                    }
+                ]
+            }
+        )
+
+        self.run_thermal_forecast()
+
+        assert_series_equal(
+            self.opt_res_dayahead["P_deferrable0"],
+            self.optim_conf["nominal_power_of_deferrable_loads"][0]
+            * pd.Series(
+                [1, 1, 0, 0, 0, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index
+            ),
+            check_names=False,
+        )
+
+    def test_thermal_management_cooling_penalty(self):
+        self.optim_conf.update(
+            {
+                "def_load_config": [
+                    {
+                        "thermal_config": {
+                            "start_temperature": 25,
+                            "cooling_constant": 0.1,
+                            "heating_rate": -10,
+                            "overshoot_temperature": 10,
+                            "desired_temperatures": [0, 0, 15, 0, 0, 0, 0, 0, 0, 0],
+                            "sense": "cool",
+                            "mode": "penalize",
+                        }
+                    }
+                ]
+            }
+        )
+
+        self.run_thermal_forecast(outdoor_temp=20)
+
+        assert_series_equal(
+            self.opt_res_dayahead["P_deferrable0"],
+            self.optim_conf["nominal_power_of_deferrable_loads"][0]
+            * pd.Series(
+                [1, 1, 0, 0, 0, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index
+            ),
+            check_names=False,
+        )
 
 if __name__ == '__main__':
     unittest.main()
