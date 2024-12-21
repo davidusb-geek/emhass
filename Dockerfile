@@ -26,6 +26,7 @@ RUN apt-get update \
     python3.11 \
     python3-pip \
     python3.11-dev \
+    python3-numba \
     git \
     gcc \
     patchelf \
