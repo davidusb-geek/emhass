@@ -51,10 +51,9 @@ jobs:
           pip3 install tables==3.9.1
         if: ${{ matrix.os == 'macos-latest' }}
 
-      - name: Install dependencies
+      - name: Install EMHASS with test dependencies
         run: |
-          pip install pytest requests-mock
-          pip install .
+          pip install .[test]
 
       - name: Test with pytest
         run: |
