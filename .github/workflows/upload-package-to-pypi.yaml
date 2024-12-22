@@ -12,7 +12,6 @@ jobs:
     with:
       scan-args: |-
         --recursive
-        --skip-git
         ./
     permissions:
       security-events: write
