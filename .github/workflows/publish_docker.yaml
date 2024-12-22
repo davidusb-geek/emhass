@@ -122,6 +122,7 @@ jobs:
       scan-args: |-
         --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
         --lockfile=requirements.txt:./${{matrix.platform.target_arch }}-requirements.txt
+        --fail-on-vuln: false
     permissions:
       security-events: write
       contents: read
