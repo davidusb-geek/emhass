@@ -1,12 +1,17 @@
 #This action test builds EMHASS standalone Docker images, in each architecture.
-name: "Test Docker Standalone"
+name: "Test Docker"
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ master ]
+    branches: [master]
   workflow_dispatch:
+
+permissions:
+  actions: read
+  security-events: write
+  contents: read
 
 jobs:
   build:
@@ -14,12 +19,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [
-          {buildx: linux/amd64, target_arch: amd64, os_version: debian},
-          {buildx: linux/arm/v7, target_arch: armv7, os_version: debian},
-          {buildx: linux/arm/v7, target_arch: armhf, os_version: raspbian},
-          {buildx: linux/arm64,  target_arch: aarch64, os_version: debian}
-        ]
+        platform:
+          [
+            { target_arch: amd64, os_version: debian },
+            { target_arch: armv7, os_version: debian },
+            { target_arch: armhf, os_version: raspbian },
+            { target_arch: aarch64, os_version: debian },
+          ]
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v4
@@ -36,7 +42,46 @@ jobs:
           build-args: |
             TARGETARCH=${{ matrix.platform.target_arch }}
             os_version=${{ matrix.platform.os_version }}
-          tags: emhass
           load: true
-      - name: Test # Run docker for 2min, if the output contains waitress   INFO  "Serving on" http://0.0.0.0:5000 assume it worked
-        run: timeout 2 docker run --rm -it emhass | grep -q "Serving on"  && echo 0 || echo 1
+      - name: Test Image #Assume Docker fail with FileNotFound secrets_emhass.yaml error
+        run: docker run --rm -it ${{ steps.build.outputs.imageid }} | grep -q secrets_emhass.yaml && echo 0 || echo 1
+      # Google OSV-Scanner
+      # Extract Debian and Python packadge list stored in Image
+      - name: Export Debian package list
+        run: mkdir OSV && docker run --rm --entrypoint '/bin/cat' ${{ steps.build.outputs.imageid }} /var/lib/dpkg/status >> ./OSV/${{ matrix.platform.target_arch }}.status
+      - name: Export Python package list
+        run: docker run --rm --entrypoint '/usr/bin/pip3' ${{ steps.build.outputs.imageid }} freeze >> ./OSV/${{ matrix.platform.target_arch }}-requirements.txt
+      - name: Upload package list as digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform.target_arch }}-packages
+          path: ./OSV/*
+          if-no-files-found: error
+          retention-days: 1
+
+  osv-scan:
+    needs:
+      - build
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          [
+            { target_arch: amd64 },
+            { target_arch: armv7 },
+            { target_arch: armhf },
+            { target_arch: aarch64 }
+          ]
+    # Check Docker image debian and python packages list for known vulnerabilities
+    uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
+    with:
+      download-artifact: "${{ matrix.platform.target_arch }}-packages"
+      matrix-property: "${{ matrix.platform.target_arch }}-"
+      scan-args: |-
+        --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
+        --lockfile=requirements.txt:./${{matrix.platform.target_arch }}-requirements.txt
+        --fail-on-vuln: false
+    permissions:
+      security-events: write
+      contents: read
+      actions: read

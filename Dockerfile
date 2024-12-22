@@ -22,9 +22,9 @@ COPY requirements.txt /app/
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     libffi-dev \
-    python3 \
+    python3.11 \
     python3-pip \
-    python3-dev \
+    python3.11-dev \
     git \
     gcc \
     patchelf \
@@ -42,13 +42,23 @@ RUN apt-get update \
     coinor-libcbc-dev \
     libglpk-dev \
     glpk-utils \
+    libatlas3-base \
     libatlas-base-dev \
-    libopenblas-dev
+    libopenblas-dev \
+    libopenblas0-pthread \
+    libgfortran5 \
+    libsz2 \
+    libaec0 \
+    libhdf5-hl-100 \
+    libhdf5-103-1
 # specify hdf5
 RUN ln -s /usr/include/hdf5/serial /usr/include/hdf5/include && export HDF5_DIR=/usr/include/hdf5
 
+# note, its a good idea to remove the "llvm-dev" package and "LLVM_CONFIG=/usr/bin/llvm-config pip3 install 'llvmlite>=0.43'" once the llvmlite package has been fixed in piwheels
+RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] && apt-get update && apt-get install -y --no-install-recommends llvm-dev && LLVM_CONFIG=/usr/bin/llvm-config pip3 install --no-cache-dir --break-system-packages 'llvmlite>=0.43' ||  echo "skipping llvm-dev install"
+
 # install packages from pip, use piwheels if arm 32bit
-RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] &&  pip3 install --index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -r requirements.txt ||  pip3 install --no-cache-dir --break-system-packages -r requirements.txt
+RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] && pip3 install --index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -r requirements.txt ||  pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
 # try, symlink apt cbc, to pulp cbc, in python directory (for 32bit)
 RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7"  ]] &&  ln -sf /usr/bin/cbc /usr/local/lib/python3.11/dist-packages/pulp/solverdir/cbc/linux/32/cbc || echo "cbc symlink didnt work/not required"
@@ -91,7 +101,7 @@ COPY src/emhass/data/ /app/src/emhass/data/
 # pre generated optimization results 
 COPY data/opt_res_latest.csv /app/data/
 COPY README.md /app/
-COPY setup.py /app/
+COPY pyproject.toml /app/
 
 # secrets file (secrets_emhass.yaml) can be copied into the container with volume mounts with docker run
 # options.json file will be automatically generated and passed from Home Assistant using the addon
@@ -106,7 +116,9 @@ LABEL \
     io.hass.description="EMHASS: Energy Management for Home Assistant" \
     io.hass.version=${BUILD_VERSION} \
     io.hass.type="addon" \
-    io.hass.arch="aarch64|amd64|armhf|armv7"
+    io.hass.arch="aarch64|amd64|armhf|armv7" \
+    org.opencontainers.image.source="https://github.com/davidusb-geek/emhass" \
+    org.opencontainers.image.description="EMHASS python package and requirements, in Home Assistant Debian container."
 
 # build EMHASS
 RUN pip3 install --no-cache-dir --break-system-packages --no-deps --force-reinstall  .
