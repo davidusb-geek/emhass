@@ -122,9 +122,6 @@ jobs:
       scan-args: |-
         --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
         --lockfile=requirements.txt:./${{matrix.platform.target_arch }}-requirements.txt
-        --recursive
-        --skip-git
-        ./
     permissions:
       security-events: write
       contents: read
