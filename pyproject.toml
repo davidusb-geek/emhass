@@ -10,10 +10,8 @@ version = "0.11.2"
 description = "An Energy Management System for Home Assistant"
 readme = "README.md"
 requires-python = ">=3.10, <3.12"
-authors = [
-    {name = "David HERNANDEZ", email = "davidusb@gmail.com"},
-]
-license = {text = "MIT"}
+authors = [{ name = "David HERNANDEZ", email = "davidusb@gmail.com" }]
+license = { text = "MIT" }
 keywords = ["energy", "management", "optimization", "hass"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -40,15 +38,15 @@ dependencies = [
     "skforecast==0.14.0",
     "flask>=2.0.3",
     "waitress>=2.1.1",
-    "plotly>=5.6.0"
+    "plotly>=5.6.0",
 ]
 
 [project.optional-dependencies]
 docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
-test = ["requests_mock","pytest","coverage","snakeviz","ruff"]
+test = ["requests_mock", "pytest", "coverage", "snakeviz", "ruff"]
 
 [tool.setuptools.packages]
-find = {where = ["src"]}
+find = { where = ["src"] }
 
 [tool.setuptools.package-data]
 emhass = [
@@ -68,7 +66,7 @@ emhass = [
     "data/cec_modules.pbz2",
     "data/cec_inverters.pbz2",
     "data/associations.csv",
-    "data/config_defaults.json"
+    "data/config_defaults.json",
 ]
 
 [project.scripts]
