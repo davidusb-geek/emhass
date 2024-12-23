@@ -1091,7 +1091,7 @@ def build_secrets(
     :type logger: logging.Logger
     :param argument: dictionary of secrets arguments passed (url,key)
     :type argument: dict
-    :param options_path: path to the options file (options.json) (usually provided bt EMHASS-Add-on)
+    :param options_path: path to the options file (options.json) (usually provided by EMHASS-Add-on)
     :type options_path: str
     :param secrets_path: path to secrets file (secrets_emhass.yaml)
     :type secrets_path: str
