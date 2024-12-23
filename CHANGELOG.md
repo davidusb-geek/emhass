@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.11.3 - 2024-10-31
+### Improvement
+- Runtime parameters now support all config parameters
+- Adopted the Ruff code fomatting
+- Added a Github Actions for Google OSV security code scan 
+- Updated the param_definitions.json 
+- Bump skforecast from 0.13.0 to 0.14.0. This needed upgrading a bunch of deprecated options. Notably skforcast now uses the time series cross-validation object (cv) from sklearn 
+### Fix
+- Updated the default battery optimization weights
+- Fix publish_data defaulting to opt_res_latest, tweak warning logs
+- Added MLForecaster options to load_forecast_method for param_definitions.json
+
 ## 0.11.2 - 2024-10-31
 ### Improvement
 - Added support to retrieve HA configuration. This will be used in the future to automatically retrieve some parameters as the currency
