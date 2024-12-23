@@ -308,7 +308,7 @@ def treat_runtimeparams(
                 runtimeparams.get("optimization_time_step", runtimeparams.get("freq"))
             )
             params["retrieve_hass_conf"]["optimization_time_step"] = pd.to_timedelta(
-                optimization_time_step
+                optimization_time_step, "minutes"
             )
         else:
             optimization_time_step = int(
