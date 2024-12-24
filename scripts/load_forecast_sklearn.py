@@ -13,11 +13,8 @@ import plotly.io as pio
 pio.renderers.default = "browser"
 pd.options.plotting.backend = "plotly"
 
-from skforecast.ForecasterAutoreg import ForecasterAutoreg
-from skforecast.model_selection import (
-    backtesting_forecaster,
-    bayesian_search_forecaster,
-)
+from skforecast.recursive import ForecasterRecursive
+from skforecast.model_selection import bayesian_search_forecaster, backtesting_forecaster, TimeSeriesFold
 from skforecast.utils import load_forecaster, save_forecaster
 from sklearn.linear_model import ElasticNet, LinearRegression
 from sklearn.metrics import r2_score
@@ -148,7 +145,7 @@ if __name__ == "__main__":
     else:
         logger.error("Passed sklearn model " + sklearn_model + " is not valid")
 
-    forecaster = ForecasterAutoreg(regressor=base_model, lags=num_lags)
+    forecaster = ForecasterRecursive(regressor=base_model, lags=num_lags)
 
     logger.info("Training a KNN regressor")
     start_time = time.time()
@@ -215,30 +212,40 @@ if __name__ == "__main__":
     lags_grid = [6, 12, 24, 36, 48, 60, 72]
 
     # Regressor hyperparameters search space
-    search_space = {
-        "n_neighbors": Integer(2, 20, "uniform", name="n_neighbors"),
-        "leaf_size": Integer(20, 40, "log-uniform", name="leaf_size"),
-        "weights": Categorical(["uniform", "distance"], name="weights"),
-    }
+    def search_space(trial):
+        search_space = {
+            "n_neighbors": trial.suggest_int("n_neighbors", 2, 20),
+            "leaf_size": trial.suggest_int("leaf_size", 20, 40),
+            "weights": trial.suggest_categorical(
+                "weights", ["uniform", "distance"]
+            ),
+            "lags": trial.suggest_categorical(
+                "lags", [6, 12, 24, 36, 48, 60, 72]
+            ),
+        }
+        return search_space
+
     logger.info("Backtesting and bayesian hyperparameter optimization")
     start_time = time.time()
+    cv = TimeSeriesFold(
+        steps                 = num_lags,
+        initial_train_size    = len(data_exo.loc[:date_train]),
+        fixed_train_size      = True,
+        gap                   = 0,
+        skip_folds            = None,
+        allow_incomplete_fold = True,
+        refit                 = True
+    )
     results, optimize_results_object = bayesian_search_forecaster(
-        forecaster=forecaster,
-        y=data_train[var_model],
-        exog=data_train.drop(var_model, axis=1),
-        lags_grid=lags_grid,
-        search_space=search_space,
-        steps=num_lags,
-        metric=neg_r2_score,
-        refit=True,
-        initial_train_size=len(data_exo.loc[:date_train]),
-        fixed_train_size=True,
-        n_trials=10,
-        random_state=123,
-        return_best=True,
-        verbose=False,
-        engine="skopt",
-        kwargs_gp_minimize={},
+        forecaster         = forecaster,
+        y                  = data_train[var_model],
+        exog               = data_train.drop(var_model, axis=1),
+        cv                 = cv,
+        search_space       = search_space,
+        metric             = neg_r2_score,
+        n_trials           = 10,
+        random_state       = 123,
+        return_best        = True
     )
     logger.info(f"Elapsed time: {time.time() - start_time}")
     logger.info(results)
