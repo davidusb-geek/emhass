@@ -308,7 +308,7 @@ def treat_runtimeparams(
                 runtimeparams.get("optimization_time_step", runtimeparams.get("freq"))
             )
             params["retrieve_hass_conf"]["optimization_time_step"] = pd.to_timedelta(
-                optimization_time_step
+                optimization_time_step, "minutes"
             )
         else:
             optimization_time_step = int(
@@ -337,59 +337,6 @@ def treat_runtimeparams(
         forecast_dates = get_forecast_dates(
             optimization_time_step, delta_forecast, time_zone
         )
-
-        # Treat passed forecast data lists
-        list_forecast_key = [
-            "pv_power_forecast",
-            "load_power_forecast",
-            "load_cost_forecast",
-            "prod_price_forecast",
-            "outdoor_temperature_forecast",
-        ]
-        forecast_methods = [
-            "weather_forecast_method",
-            "load_forecast_method",
-            "load_cost_forecast_method",
-            "production_price_forecast_method",
-            "outdoor_temperature_forecast_method",
-        ]
-
-        # Loop forecasts, check if value is a list and greater than or equal to forecast_dates
-        for method, forecast_key in enumerate(list_forecast_key):
-            if forecast_key in runtimeparams.keys():
-                if isinstance(runtimeparams[forecast_key], list) and len(
-                    runtimeparams[forecast_key]
-                ) >= len(forecast_dates):
-                    params["passed_data"][forecast_key] = runtimeparams[forecast_key]
-                    params["optim_conf"][forecast_methods[method]] = "list"
-                else:
-                    logger.error(
-                        f"ERROR: The passed data is either not a list or the length is not correct, length should be {str(len(forecast_dates))}"
-                    )
-                    logger.error(
-                        f"Passed type is {str(type(runtimeparams[forecast_key]))} and length is {str(len(runtimeparams[forecast_key]))}"
-                    )
-                # Check if string contains list, if so extract
-                if isinstance(runtimeparams[forecast_key], str):
-                    if isinstance(ast.literal_eval(runtimeparams[forecast_key]), list):
-                        runtimeparams[forecast_key] = ast.literal_eval(
-                            runtimeparams[forecast_key]
-                        )
-                list_non_digits = [
-                    x
-                    for x in runtimeparams[forecast_key]
-                    if not (isinstance(x, int) or isinstance(x, float))
-                ]
-                if len(list_non_digits) > 0:
-                    logger.warning(
-                        f"There are non numeric values on the passed data for {forecast_key}, check for missing values (nans, null, etc)"
-                    )
-                    for x in list_non_digits:
-                        logger.warning(
-                            f"This value in {forecast_key} was detected as non digits: {str(x)}"
-                        )
-            else:
-                params["passed_data"][forecast_key] = None
 
         # Add runtime exclusive (not in config) parameters to params
         # regressor-model-fit
@@ -447,6 +394,16 @@ def treat_runtimeparams(
                 soc_final = runtimeparams["soc_final"]
             params["passed_data"]["soc_final"] = soc_final
 
+            params["passed_data"]["operating_hours_of_each_deferrable_load"] = params[
+                "optim_conf"
+            ].get("operating_hours_of_each_deferrable_load", None)
+            params["passed_data"]["start_timesteps_of_each_deferrable_load"] = params[
+                "optim_conf"
+            ].get("start_timesteps_of_each_deferrable_load", None)
+            params["passed_data"]["end_timesteps_of_each_deferrable_load"] = params[
+                "optim_conf"
+            ].get("end_timesteps_of_each_deferrable_load", None)
+
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
 
             # Load the default config
@@ -479,6 +436,59 @@ def treat_runtimeparams(
             params["passed_data"]["prediction_horizon"] = None
             params["passed_data"]["soc_init"] = None
             params["passed_data"]["soc_final"] = None
+
+        # Treat passed forecast data lists
+        list_forecast_key = [
+            "pv_power_forecast",
+            "load_power_forecast",
+            "load_cost_forecast",
+            "prod_price_forecast",
+            "outdoor_temperature_forecast",
+        ]
+        forecast_methods = [
+            "weather_forecast_method",
+            "load_forecast_method",
+            "load_cost_forecast_method",
+            "production_price_forecast_method",
+            "outdoor_temperature_forecast_method",
+        ]
+
+        # Loop forecasts, check if value is a list and greater than or equal to forecast_dates
+        for method, forecast_key in enumerate(list_forecast_key):
+            if forecast_key in runtimeparams.keys():
+                if isinstance(runtimeparams[forecast_key], list) and len(
+                    runtimeparams[forecast_key]
+                ) >= len(forecast_dates):
+                    params["passed_data"][forecast_key] = runtimeparams[forecast_key]
+                    params["optim_conf"][forecast_methods[method]] = "list"
+                else:
+                    logger.error(
+                        f"ERROR: The passed data is either not a list or the length is not correct, length should be {str(len(forecast_dates))}"
+                    )
+                    logger.error(
+                        f"Passed type is {str(type(runtimeparams[forecast_key]))} and length is {str(len(runtimeparams[forecast_key]))}"
+                    )
+                # Check if string contains list, if so extract
+                if isinstance(runtimeparams[forecast_key], str):
+                    if isinstance(ast.literal_eval(runtimeparams[forecast_key]), list):
+                        runtimeparams[forecast_key] = ast.literal_eval(
+                            runtimeparams[forecast_key]
+                        )
+                list_non_digits = [
+                    x
+                    for x in runtimeparams[forecast_key]
+                    if not (isinstance(x, int) or isinstance(x, float))
+                ]
+                if len(list_non_digits) > 0:
+                    logger.warning(
+                        f"There are non numeric values on the passed data for {forecast_key}, check for missing values (nans, null, etc)"
+                    )
+                    for x in list_non_digits:
+                        logger.warning(
+                            f"This value in {forecast_key} was detected as non digits: {str(x)}"
+                        )
+            else:
+                params["passed_data"][forecast_key] = None
 
         # Treat passed data for forecast model fit/predict/tune at runtime
         if (

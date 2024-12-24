@@ -14,6 +14,7 @@ from pathlib import Path
 
 import yaml
 from flask import Flask, make_response, request
+from flask import logging as log
 from jinja2 import Environment, PackageLoader
 from waitress import serve
 
@@ -384,7 +385,6 @@ def action_call(action_name):
 
     ActionStr = " >> Setting input data dict"
     app.logger.info(ActionStr)
-    app.logger.warning(costfun)
     input_data_dict = set_input_data_dict(
         emhass_conf, costfun, params, runtimeparams, action_name, app.logger
     )
@@ -652,37 +652,30 @@ if __name__ == "__main__":
         raise Exception("missing: " + str(emhass_conf["data_path"]))
 
     # Define loggers
-    ch = logging.StreamHandler()
     formatter = logging.Formatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
-    ch.setFormatter(formatter)
+    log.default_handler.setFormatter(formatter)
     # Action file logger
     fileLogger = logging.FileHandler(str(emhass_conf["data_path"] / "actionLogs.txt"))
     formatter = logging.Formatter("%(levelname)s - %(name)s - %(message)s")
     fileLogger.setFormatter(formatter)  # add format to Handler
     if logging_level == "DEBUG":
         app.logger.setLevel(logging.DEBUG)
-        ch.setLevel(logging.DEBUG)
         fileLogger.setLevel(logging.DEBUG)
     elif logging_level == "INFO":
         app.logger.setLevel(logging.INFO)
-        ch.setLevel(logging.INFO)
         fileLogger.setLevel(logging.INFO)
     elif logging_level == "WARNING":
         app.logger.setLevel(logging.WARNING)
-        ch.setLevel(logging.WARNING)
         fileLogger.setLevel(logging.WARNING)
     elif logging_level == "ERROR":
         app.logger.setLevel(logging.ERROR)
-        ch.setLevel(logging.ERROR)
         fileLogger.setLevel(logging.ERROR)
     else:
         app.logger.setLevel(logging.DEBUG)
-        ch.setLevel(logging.DEBUG)
         fileLogger.setLevel(logging.DEBUG)
     app.logger.propagate = False
-    app.logger.addHandler(ch)
     app.logger.addHandler(fileLogger)
     # Clear Action File logger file, ready for new instance
     clearFileLog()
