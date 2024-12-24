@@ -385,7 +385,6 @@ def action_call(action_name):
 
     ActionStr = " >> Setting input data dict"
     app.logger.info(ActionStr)
-    app.logger.warning(costfun)
     input_data_dict = set_input_data_dict(
         emhass_conf, costfun, params, runtimeparams, action_name, app.logger
     )
