@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.11.3 - 2024-10-31
+## 0.11.4 - 2024-12-24
+### Fix
+- Fix bug when treating runtime params, fix optimization_time_step timedelta 
+
+## 0.11.3 - 2024-12-23
 ### Improvement
 - Runtime parameters now support all config parameters
 - Adopted the Ruff code fomatting
