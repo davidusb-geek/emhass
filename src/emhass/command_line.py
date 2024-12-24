@@ -70,17 +70,6 @@ def set_input_data_dict(
     if type(retrieve_hass_conf) is bool:
         return False
 
-    # Treat runtimeparams
-    params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
-        runtimeparams,
-        params,
-        retrieve_hass_conf,
-        optim_conf,
-        plant_conf,
-        set_type,
-        logger,
-        emhass_conf,
-    )
     # Define main objects
     rh = RetrieveHass(
         retrieve_hass_conf["hass_url"],
@@ -111,12 +100,30 @@ def set_input_data_dict(
         emhass_conf,
         logger,
     )
+    # Retrieve basic configuration data from hass
+    if get_data_from_file:
+        with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
+            _, _, _, rh.ha_config = pickle.load(inp)
+    else:
+        rh.get_ha_config()
+    # Treat runtimeparams
+    params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+        runtimeparams,
+        params,
+        retrieve_hass_conf,
+        optim_conf,
+        plant_conf,
+        set_type,
+        logger,
+        emhass_conf,
+        rh.ha_config,
+    )
     # Perform setup based on type of action
     if set_type == "perfect-optim":
         # Retrieve data from hass
         if get_data_from_file:
             with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
-                rh.df_final, days_list, var_list = pickle.load(inp)
+                rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
             retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
             retrieve_hass_conf["sensor_power_photovoltaics"] = str(var_list[1])
             retrieve_hass_conf["sensor_linear_interp"] = [
@@ -208,7 +215,7 @@ def set_input_data_dict(
         # Retrieve data from hass
         if get_data_from_file:
             with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
-                rh.df_final, days_list, var_list = pickle.load(inp)
+                rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
             retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
             retrieve_hass_conf["sensor_power_photovoltaics"] = str(var_list[1])
             retrieve_hass_conf["sensor_linear_interp"] = [
@@ -403,10 +410,8 @@ def weather_forecast_cache(
     :rtype: bool
 
     """
-
     # Parsing yaml
     retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params, logger)
-
     # Treat runtimeparams
     params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
         runtimeparams,
@@ -417,8 +422,8 @@ def weather_forecast_cache(
         "forecast",
         logger,
         emhass_conf,
+        {},
     )
-
     # Make sure weather_forecast_cache is true
     if (params != None) and (params != "null"):
         params = json.loads(params)
@@ -426,12 +431,10 @@ def weather_forecast_cache(
         params = {}
     params["passed_data"]["weather_forecast_cache"] = True
     params = json.dumps(params)
-
     # Create Forecast object
     fcst = Forecast(
         retrieve_hass_conf, optim_conf, plant_conf, params, emhass_conf, logger
     )
-
     result = fcst.get_weather_forecast(optim_conf["weather_forecast_method"])
     if isinstance(result, bool) and not result:
         return False

@@ -73,7 +73,7 @@ class TestOptimization(unittest.TestCase):
         # Obtain sensor values from saved file
         if get_data_from_file:
             with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
-                self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
+                self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = pickle.load(inp)
             self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(
                 self.var_list[0]
             )
