@@ -956,7 +956,7 @@ class Forecast(object):
             if self.get_data_from_file:
                 filename_path = self.emhass_conf["data_path"] / "test_df_final.pkl"
                 with open(filename_path, "rb") as inp:
-                    rh.df_final, days_list, var_list = pickle.load(inp)
+                    rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
                     self.var_load = var_list[0]
                     self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = (
                         self.var_load

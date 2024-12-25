@@ -149,6 +149,7 @@ class TestCommandLineUtils(unittest.TestCase):
             "load_power_forecast": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
             "load_cost_forecast": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
             "prod_price_forecast": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            "prediction_horizon": 10,
         }
         runtimeparams_json = json.dumps(runtimeparams)
         params = copy.deepcopy(json.loads(self.params_json))
