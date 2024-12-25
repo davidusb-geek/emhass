@@ -162,6 +162,7 @@ class TestCommandLineUtils(unittest.TestCase):
             set_type,
             logger,
             emhass_conf,
+            {},
         )
         self.assertIsInstance(params, str)
         params = json.loads(params)
@@ -184,6 +185,7 @@ class TestCommandLineUtils(unittest.TestCase):
             set_type,
             logger,
             emhass_conf,
+            {},
         )
         self.assertIsInstance(params, str)
         params = json.loads(params)
@@ -249,6 +251,7 @@ class TestCommandLineUtils(unittest.TestCase):
             set_type,
             logger,
             emhass_conf,
+            {},
         )
         self.assertIsInstance(params, str)
         params = json.loads(params)
@@ -344,6 +347,7 @@ class TestCommandLineUtils(unittest.TestCase):
             set_type,
             logger,
             emhass_conf,
+            {},
         )
 
         self.assertTrue(
@@ -402,6 +406,7 @@ class TestCommandLineUtils(unittest.TestCase):
             set_type,
             logger,
             emhass_conf,
+            {},
         )
         self.assertIsInstance(runtimeparams["pv_power_forecast"], list)
         self.assertIsInstance(runtimeparams["load_power_forecast"], list)
@@ -433,6 +438,7 @@ class TestCommandLineUtils(unittest.TestCase):
             set_type,
             logger,
             emhass_conf,
+            {},
         )
         self.assertIsInstance(runtimeparams["pv_power_forecast"], str)
         self.assertIsInstance(runtimeparams["load_power_forecast"], str)
