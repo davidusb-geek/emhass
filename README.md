@@ -88,7 +88,7 @@ Installation instructions and example Home Assistant automation configurations a
 You must follow these steps to make EMHASS work properly:
 
 1) Install and run EMHASS.
-    - There are multiple methods of installing and Running EMHASS. See [Installation Method](##Installation-Methods) below to pick a method that best suits your use case.
+    - There are multiple methods of installing and Running EMHASS. See [Installation Method](#Installation-Methods) below to pick a method that best suits your use case.
 
 2) Define all the parameters in the configuration file *(`config.json`)* or configuration page *(`YOURIP:5000/configuration`)*. 
     - See the description for each parameter in the [configuration](https://emhass.readthedocs.io/en/latest/config.html) docs. 
