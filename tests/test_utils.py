@@ -162,7 +162,6 @@ class TestCommandLineUtils(unittest.TestCase):
             set_type,
             logger,
             emhass_conf,
-            {},
         )
         self.assertIsInstance(params, str)
         params = json.loads(params)
@@ -185,7 +184,6 @@ class TestCommandLineUtils(unittest.TestCase):
             set_type,
             logger,
             emhass_conf,
-            {},
         )
         self.assertIsInstance(params, str)
         params = json.loads(params)
@@ -251,7 +249,6 @@ class TestCommandLineUtils(unittest.TestCase):
             set_type,
             logger,
             emhass_conf,
-            {},
         )
         self.assertIsInstance(params, str)
         params = json.loads(params)
@@ -347,7 +344,6 @@ class TestCommandLineUtils(unittest.TestCase):
             set_type,
             logger,
             emhass_conf,
-            {},
         )
 
         self.assertTrue(
@@ -406,7 +402,6 @@ class TestCommandLineUtils(unittest.TestCase):
             set_type,
             logger,
             emhass_conf,
-            {},
         )
         self.assertIsInstance(runtimeparams["pv_power_forecast"], list)
         self.assertIsInstance(runtimeparams["load_power_forecast"], list)
@@ -438,12 +433,42 @@ class TestCommandLineUtils(unittest.TestCase):
             set_type,
             logger,
             emhass_conf,
-            {},
         )
         self.assertIsInstance(runtimeparams["pv_power_forecast"], str)
         self.assertIsInstance(runtimeparams["load_power_forecast"], str)
         self.assertIsInstance(runtimeparams["load_cost_forecast"], str)
         self.assertIsInstance(runtimeparams["prod_price_forecast"], str)
+
+    def test_update_params_with_ha_config(self):
+        # Test dayahead runtime params
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
+            self.params_json, logger
+        )
+        set_type = "dayahead-optim"
+        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+            self.runtimeparams_json,
+            self.params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            set_type,
+            logger,
+            emhass_conf,
+        )
+        ha_config = {
+            'currency': 'USD',
+            'unit_system': {'temperature': '°F'}
+        }
+        params_json = utils.update_params_with_ha_config(
+            params,
+            ha_config,
+        )
+        params = json.loads(params_json)
+        self.assertTrue(params["passed_data"]["custom_predicted_temperature_id"][0]["unit_of_measurement"] == "°F")
+        self.assertTrue(params["passed_data"]["custom_predicted_temperature_id"][1]["unit_of_measurement"] == "°F")
+        self.assertTrue(params["passed_data"]["custom_cost_fun_id"]["unit_of_measurement"] == '$')
+        self.assertTrue(params["passed_data"]["custom_unit_load_cost_id"]["unit_of_measurement"] == '$/kWh')
+        self.assertTrue(params["passed_data"]["custom_unit_prod_price_id"]["unit_of_measurement"] == '$/kWh')
 
     def test_build_secrets(self):
         # Test the build_secrets defaults from get_test_params()
