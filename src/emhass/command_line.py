@@ -69,8 +69,20 @@ def set_input_data_dict(
     retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params, logger)
     if type(retrieve_hass_conf) is bool:
         return False
-
-    # Define main objects
+    
+    # Treat runtimeparams
+    params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+        runtimeparams,
+        params,
+        retrieve_hass_conf,
+        optim_conf,
+        plant_conf,
+        set_type,
+        logger,
+        emhass_conf,
+    )
+    
+    # Define the data retrieve object
     rh = RetrieveHass(
         retrieve_hass_conf["hass_url"],
         retrieve_hass_conf["long_lived_token"],
@@ -81,6 +93,21 @@ def set_input_data_dict(
         logger,
         get_data_from_file=get_data_from_file,
     )
+    
+    # Retrieve basic configuration data from hass
+    if get_data_from_file:
+        with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
+            _, _, _, rh.ha_config = pickle.load(inp)
+    else:
+        rh.get_ha_config()
+    
+    # Update the params dict using data from the HA configuration
+    params = utils.update_params_with_ha_config(
+        params,
+        rh.ha_config,
+    )
+    
+    # Define the forecast and optimization objects
     fcst = Forecast(
         retrieve_hass_conf,
         optim_conf,
@@ -100,24 +127,7 @@ def set_input_data_dict(
         emhass_conf,
         logger,
     )
-    # Retrieve basic configuration data from hass
-    if get_data_from_file:
-        with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
-            _, _, _, rh.ha_config = pickle.load(inp)
-    else:
-        rh.get_ha_config()
-    # Treat runtimeparams
-    params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
-        runtimeparams,
-        params,
-        retrieve_hass_conf,
-        optim_conf,
-        plant_conf,
-        set_type,
-        logger,
-        emhass_conf,
-        rh.ha_config,
-    )
+
     # Perform setup based on type of action
     if set_type == "perfect-optim":
         # Retrieve data from hass
