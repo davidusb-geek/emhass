@@ -142,6 +142,21 @@ def update_params_with_ha_config(
     params: str,
     ha_config: dict,
 ) -> dict:
+    """
+    Update the params with the Home Assistant configuration.
+
+    Parameters
+    ----------
+    params : str
+        The serialized params.
+    ha_config : dict
+        The Home Assistant configuration.
+
+    Returns
+    -------
+    dict
+        The updated params.
+    """
     # Load serialized params
     params = json.loads(params)
     # Update params
