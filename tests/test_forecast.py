@@ -416,7 +416,6 @@ class TestForecast(unittest.TestCase):
             set_type,
             logger,
             emhass_conf,
-            {},
         )
         # Build RetrieveHass Object
         rh = RetrieveHass(
@@ -561,7 +560,6 @@ class TestForecast(unittest.TestCase):
             set_type,
             logger,
             emhass_conf,
-            {},
         )
         # Create Forecast Object
         fcst = Forecast(
@@ -655,7 +653,6 @@ class TestForecast(unittest.TestCase):
             set_type,
             logger,
             emhass_conf,
-            {},
         )
         # Create RetrieveHass Object
         rh = RetrieveHass(
