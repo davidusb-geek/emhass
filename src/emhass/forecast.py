@@ -886,10 +886,47 @@ class Forecast(object):
                 forecast_out = pd.concat([forecast_out, forecast_tp], axis=0)
         return forecast_out
 
+    @staticmethod
+    def get_typical_load_forecast(data, forecast_date):
+        """
+        Forecast the load profile for the next day based on historic data.
+        
+        Parameters:
+        - data: pd.DataFrame with a DateTimeIndex containing the historic load data. Must include a 'load' column.
+        - forecast_date: pd.Timestamp for the date of the forecast.
+        - freq: frequency of the time series (e.g., '1H' for hourly).
+        
+        Returns:
+        - forecast: pd.Series with the forecasted load profile for the next day.
+        - used_days: list of days used to calculate the forecast.
+        """
+        # Ensure the 'load' column exists
+        if 'load' not in data.columns:
+            raise ValueError("Data must have a 'load' column.")
+        # Filter historic data for the same month and day of the week
+        month = forecast_date.month
+        day_of_week = forecast_date.dayofweek
+        historic_data = data[(data.index.month == month) & (data.index.dayofweek == day_of_week)]
+        used_days = np.unique(historic_data.index.date)
+        # Align all historic data to the forecast day
+        aligned_data = []
+        for day in used_days:
+            daily_data = data[data.index.date == pd.Timestamp(day).date()]
+            aligned_daily_data = daily_data.copy()
+            aligned_daily_data.index = aligned_daily_data.index.map(
+                lambda x: x.replace(year=forecast_date.year, month=forecast_date.month, day=forecast_date.day)
+            )
+            aligned_data.append(aligned_daily_data)
+        # Combine all aligned historic data into a single DataFrame
+        combined_data = pd.concat(aligned_data)
+        # Compute the mean load for each timestamp
+        forecast = combined_data.groupby(combined_data.index).mean()
+        return forecast, used_days
+    
     def get_load_forecast(
         self,
         days_min_load_forecast: Optional[int] = 3,
-        method: Optional[str] = "naive",
+        method: Optional[str] = "typical",
         csv_path: Optional[str] = "data_load_forecast.csv",
         set_mix_forecast: Optional[bool] = False,
         df_now: Optional[pd.DataFrame] = pd.DataFrame(),
@@ -904,10 +941,11 @@ class Forecast(object):
             will be used to generate a naive forecast, defaults to 3
         :type days_min_load_forecast: int, optional
         :param method: The method to be used to generate load forecast, the options \
+            are 'typical' for a typical household load consumption curve, \
             are 'naive' for a persistance model, 'mlforecaster' for using a custom \
             previously fitted machine learning model, 'csv' to read the forecast from \
             a CSV file and 'list' to use data directly passed at runtime as a list of \
-            values. Defaults to 'naive'.
+            values. Defaults to 'typical'.
         :type method: str, optional
         :param csv_path: The path to the CSV file used when method = 'csv', \
             defaults to "/data/data_load_forecast.csv"
@@ -977,7 +1015,37 @@ class Forecast(object):
             ):
                 return False
             df = rh.df_final.copy()[[self.var_load_new]]
-        if method == "naive":  # using a naive approach
+        if method == "typical":  # using typical statistical data from a household power consumption
+            # Loading data from history file
+            model_type = "load_clustering"
+            data_path = self.emhass_conf["data_path"] / str("data_train_" + model_type + ".pkl")
+            with open(data_path, "rb") as fid:
+                data, _ = pickle.load(fid)
+            # Generate forecast
+            forecast_date = pd.Timestamp(self.forecast_dates[0].date()) # TODO: treat the case when forecast_dates spans more than 1 date
+            data.columns = ['load']
+            forecast, used_days = Forecast.get_typical_load_forecast(data, forecast_date) # TODO: interpolate to time steps different than 30min
+            self.logger.debug(f"Using {len(used_days)} days of data to generate the forecast.")
+            # Normalize the forecast
+            forecast = forecast*self.plant_conf['maximum_power_from_grid']/9000
+            data_list = forecast.values.ravel().tolist() # TODO: need to match the current date/time >> self.forecast_dates[0]
+            # Check if the passed data has the correct length
+            if (
+                len(data_list) < len(self.forecast_dates)
+                and self.params["passed_data"]["prediction_horizon"] is None
+            ):
+                self.logger.error("Passed data from passed list is not long enough")
+                return False
+            else:
+                # Ensure correct length
+                data_list = data_list[0 : len(self.forecast_dates)]
+                # Define DataFrame
+                data_dict = {"ts": self.forecast_dates, "yhat": data_list}
+                data = pd.DataFrame.from_dict(data_dict)
+                # Define index
+                data.set_index("ts", inplace=True)
+                forecast_out = data.copy().loc[self.forecast_dates]
+        elif method == "naive":  # using a naive approach
             mask_forecast_out = (
                 df.index > days_list[-1] - self.optim_conf["delta_forecast_daily"]
             )

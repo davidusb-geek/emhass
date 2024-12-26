@@ -101,11 +101,12 @@
       "Description": "The load forecast method that will be used. The options are ‘csv’ to load a CSV file or ‘naive’ for a simple 1-day persistence model.",
       "input": "select",
       "select_options": [
+        "typical",
         "naive",
         "mlforecaster",
         "csv"
       ],
-      "default_value": "naive"
+      "default_value": "typical"
     },
     "set_total_pv_sell": {
       "friendly_name": "PV straight to grid",

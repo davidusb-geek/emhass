@@ -901,6 +901,19 @@ class TestForecast(unittest.TestCase):
         self.assertTrue((P_load_forecast.index == self.fcst.forecast_dates).all())
         self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
 
+    # Test load forecast with typical statistics method
+    def test_get_load_forecast_typical(self):
+        P_load_forecast = self.fcst.get_load_forecast(method='typical')
+        self.assertIsInstance(P_load_forecast, pd.core.series.Series)
+        self.assertIsInstance(
+            P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
+        )
+        self.assertIsInstance(
+            P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
+        )
+        self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
+        self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
+
     # Test load cost forecast dataframe output using saved csv referece file
     def test_get_load_cost_forecast(self):
         df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data)
