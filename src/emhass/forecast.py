@@ -887,18 +887,44 @@ class Forecast(object):
         return forecast_out
 
     @staticmethod
-    def get_typical_load_forecast(data, forecast_date):
+    def resample_data(data, freq, current_freq):
+        r"""
+        Resample a DataFrame with a custom frequency.
+
+        :param data: Original time series data with a DateTimeIndex.
+        :type data: pd.DataFrame
+        :param freq: Desired frequency for resampling (e.g., pd.Timedelta("10min")).
+        :type freq: pd.Timedelta
+        :return: Resampled data at the specified frequency.
+        :rtype: pd.DataFrame
         """
+        if freq > current_freq:
+            # Downsampling
+            # Use 'mean' to aggregate or choose other options ('sum', 'max', etc.)
+            resampled_data = data.resample(freq).mean()
+        elif freq < current_freq:
+            # Upsampling
+            # Use 'asfreq' to create empty slots, then interpolate
+            resampled_data = data.resample(freq).asfreq()
+            resampled_data = resampled_data.interpolate(method='time')
+        else:
+            # No resampling needed
+            resampled_data = data.copy()
+        return resampled_data
+    
+    @staticmethod
+    def get_typical_load_forecast(data, forecast_date):
+        r"""
         Forecast the load profile for the next day based on historic data.
-        
-        Parameters:
-        - data: pd.DataFrame with a DateTimeIndex containing the historic load data. Must include a 'load' column.
-        - forecast_date: pd.Timestamp for the date of the forecast.
-        - freq: frequency of the time series (e.g., '1H' for hourly).
-        
-        Returns:
-        - forecast: pd.Series with the forecasted load profile for the next day.
-        - used_days: list of days used to calculate the forecast.
+
+        :param data: A DataFrame with a DateTimeIndex containing the historic load data. 
+                    Must include a 'load' column.
+        :type data: pd.DataFrame
+        :param forecast_date: The date for which the forecast will be generated.
+        :type forecast_date: pd.Timestamp
+        :return: A Series with the forecasted load profile for the next day and a list of days used 
+                to calculate the forecast.
+        :rtype: tuple (pd.Series, list)
         """
         # Ensure the 'load' column exists
         if 'load' not in data.columns:
@@ -1021,30 +1047,28 @@ class Forecast(object):
             data_path = self.emhass_conf["data_path"] / str("data_train_" + model_type + ".pkl")
             with open(data_path, "rb") as fid:
                 data, _ = pickle.load(fid)
+            # Resample the data if needed
+            current_freq = pd.Timedelta('30min')
+            if self.freq != current_freq:
+                data = Forecast.resample_data(data, self.freq, current_freq)
             # Generate forecast
-            forecast_date = pd.Timestamp(self.forecast_dates[0].date()) # TODO: treat the case when forecast_dates spans more than 1 date
-            data.columns = ['load']
-            forecast, used_days = Forecast.get_typical_load_forecast(data, forecast_date) # TODO: interpolate to time steps different than 30min
-            self.logger.debug(f"Using {len(used_days)} days of data to generate the forecast.")
-            # Normalize the forecast
-            forecast = forecast*self.plant_conf['maximum_power_from_grid']/9000
-            data_list = forecast.values.ravel().tolist() # TODO: need to match the current date/time >> self.forecast_dates[0]
-            # Check if the passed data has the correct length
-            if (
-                len(data_list) < len(self.forecast_dates)
-                and self.params["passed_data"]["prediction_horizon"] is None
-            ):
-                self.logger.error("Passed data from passed list is not long enough")
-                return False
-            else:
-                # Ensure correct length
-                data_list = data_list[0 : len(self.forecast_dates)]
-                # Define DataFrame
-                data_dict = {"ts": self.forecast_dates, "yhat": data_list}
-                data = pd.DataFrame.from_dict(data_dict)
-                # Define index
-                data.set_index("ts", inplace=True)
-                forecast_out = data.copy().loc[self.forecast_dates]
+            data_list = []
+            dates_list = np.unique(self.forecast_dates.date).tolist()
+            forecast = pd.DataFrame()
+            for date in dates_list:
+                forecast_date = pd.Timestamp(date)
+                data.columns = ['load']
+                forecast_tmp, used_days = Forecast.get_typical_load_forecast(data, forecast_date)
+                self.logger.debug(f"Using {len(used_days)} days of data to generate the forecast.")
+                # Normalize the forecast
+                forecast_tmp = forecast_tmp*self.plant_conf['maximum_power_from_grid']/9000
+                data_list.extend(forecast_tmp.values.ravel().tolist())
+                if len(forecast) == 0:
+                    forecast = forecast_tmp
+                else:
+                    forecast = pd.concat([forecast, forecast_tmp], axis=0)
+            forecast.index = forecast.index.tz_convert(self.time_zone)
+            forecast_out = forecast.loc[forecast.index.intersection(self.forecast_dates)]
         elif method == "naive":  # using a naive approach
             mask_forecast_out = (
                 df.index > days_list[-1] - self.optim_conf["delta_forecast_daily"]
