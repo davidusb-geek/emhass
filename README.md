@@ -88,7 +88,7 @@ Installation instructions and example Home Assistant automation configurations a
 You must follow these steps to make EMHASS work properly:
 
 1) Install and run EMHASS.
-    - There are multiple methods of installing and Running EMHASS. See [Installation Method](##Installation-Methods) below to pick a method that best suits your use case.
+    - There are multiple methods of installing and Running EMHASS. See [Installation Method](#Installation-Methods) below to pick a method that best suits your use case.
 
 2) Define all the parameters in the configuration file *(`config.json`)* or configuration page *(`YOURIP:5000/configuration`)*. 
     - See the description for each parameter in the [configuration](https://emhass.readthedocs.io/en/latest/config.html) docs. 
@@ -100,10 +100,10 @@ You must follow these steps to make EMHASS work properly:
     - Or with a `curl` command like this: `curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/dayahead-optim`.
 
 5) If you’re satisfied with the optimization results then you can set the optimization and data publish task commands in an automation. 
-    - You can read more about this in the [usage](##usage) section below.
+    - You can read more about this in the [usage](#usage) section below.
 
 6) The final step is to link the deferrable loads variables to real switches on your installation. 
-    - An example code for this using automations and the shell command integration is presented below in the [usage](##usage) section.
+    - An example code for this using automations and the shell command integration is presented below in the [usage](#usage) section.
 
 A more detailed workflow is given below:
 
