@@ -1069,6 +1069,8 @@ class Forecast(object):
                     forecast = pd.concat([forecast, forecast_tmp], axis=0)
             forecast.index = forecast.index.tz_convert(self.time_zone)
             forecast_out = forecast.loc[forecast.index.intersection(self.forecast_dates)]
+            forecast_out.index.name = 'ts'
+            forecast_out = forecast_out.rename(columns={'load': 'yhat'})
         elif method == "naive":  # using a naive approach
             mask_forecast_out = (
                 df.index > days_list[-1] - self.optim_conf["delta_forecast_daily"]
