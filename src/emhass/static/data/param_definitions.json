@@ -229,6 +229,12 @@
     }
   },
   "Solar System (PV)": {
+    "set_use_pv": {
+      "friendly_name": "Enable PV system",
+      "Description": "Set to True if we should consider an solar PV system. Defaults to False",
+      "input": "boolean",
+      "default_value": false
+    },
     "pv_module_model": {
       "friendly_name": "PV module model name",
       "Description": "The PV module model. This parameter can be a list of items to enable the simulation of mixed orientation systems.",
