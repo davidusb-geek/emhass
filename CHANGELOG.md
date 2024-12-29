@@ -2,7 +2,7 @@
 
 ## 0.12.0 - 2024-12-29
 ### BREAKING CHANGE
-- The solar PV is now optional
+- The solar PV system is now optional. If you have a PV system then use the switch on the webui or set the `set_use_pv` parameter to `True`.
 ### Improvement
 - A new load power forecast method based on statistic and typical household load power consumption. This and the optional PV, will make it easier for new users to on-board EMHASS because this new default behavior does not require any data retrieval from Home Assistant or any other external source.
 - Updated documentation.
