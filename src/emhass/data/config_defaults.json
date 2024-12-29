@@ -37,7 +37,7 @@
     0
   ],
   "weather_forecast_method": "scrapper",
-  "load_forecast_method": "naive",
+  "load_forecast_method": "typical",
   "delta_forecast_daily": 1,
   "load_cost_forecast_method": "hp_hc_periods",
   "start_timesteps_of_each_deferrable_load": [
