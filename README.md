@@ -91,10 +91,7 @@ You must follow these steps to make EMHASS work properly:
     - There are multiple methods of installing and Running EMHASS. See [Installation Method](#Installation-Methods) below to pick a method that best suits your use case.
 
 2) Define all the parameters in the configuration file *(`config.json`)* or configuration page *(`YOURIP:5000/configuration`)*.
-```{note} 
-
-New in EMHASS v0.12.0: the default configuration does not need to retrieve any data from Home Assistant! After installing and running the add-on, EMHASS should start and it will be ready to launch an optimization.
-```
+    - Since EMHASS v0.12.0: the default configuration does not need to retrieve any data from Home Assistant! After installing and running the add-on, EMHASS should start and it will be ready to launch an optimization.
     - See the description for each parameter in the [configuration](https://emhass.readthedocs.io/en/latest/config.html) docs. 
     - EMHASS has a default configuration with 2 deferrable loads, no solar PV, no batteries and a basic load power forecasting method.
       - If you want to consider solar PV and more advanced load power forecast methods, you will need to define the main data entering EMHASS. This will be the Home Assistant sensor/variable `sensor.power_load_no_var_loads`, for the load power of your household excluding the power of the deferrable loads that you want to optimize, and the sensor/variable `sensor.power_photovoltaics` for the name of your Home Assistant variable containing the PV produced power (if solar PV is activated).
