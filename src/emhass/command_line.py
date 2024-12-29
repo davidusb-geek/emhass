@@ -171,12 +171,18 @@ def set_input_data_dict(
         P_PV_forecast, P_load_forecast, df_input_data_dayahead = None, None, None
     elif set_type == "dayahead-optim":
         # Get PV and load forecasts
-        df_weather = fcst.get_weather_forecast(
-            method=optim_conf["weather_forecast_method"]
-        )
-        if isinstance(df_weather, bool) and not df_weather:
-            return False
-        P_PV_forecast = fcst.get_power_from_weather(df_weather)
+        if (
+            optim_conf["set_use_pv"]
+            or optim_conf.get("weather_forecast_method", None) == "list"
+        ):
+            df_weather = fcst.get_weather_forecast(
+                method=optim_conf["weather_forecast_method"]
+            )
+            if isinstance(df_weather, bool) and not df_weather:
+                return False
+            P_PV_forecast = fcst.get_power_from_weather(df_weather)
+        else:
+            P_PV_forecast = pd.Series(0, index=fcst.forecast_dates)
         P_load_forecast = fcst.get_load_forecast(
             method=optim_conf["load_forecast_method"]
         )
@@ -258,14 +264,20 @@ def set_input_data_dict(
             return False
         df_input_data = rh.df_final.copy()
         # Get PV and load forecasts
-        df_weather = fcst.get_weather_forecast(
-            method=optim_conf["weather_forecast_method"]
-        )
-        if isinstance(df_weather, bool) and not df_weather:
-            return False
-        P_PV_forecast = fcst.get_power_from_weather(
-            df_weather, set_mix_forecast=True, df_now=df_input_data
-        )
+        if (
+            optim_conf["set_use_pv"]
+            or optim_conf.get("weather_forecast_method", None) == "list"
+        ):
+            df_weather = fcst.get_weather_forecast(
+                method=optim_conf["weather_forecast_method"]
+            )
+            if isinstance(df_weather, bool) and not df_weather:
+                return False
+            P_PV_forecast = fcst.get_power_from_weather(
+                df_weather, set_mix_forecast=True, df_now=df_input_data
+            )
+        else:
+            P_PV_forecast = pd.Series(0, index=fcst.forecast_dates)
         P_load_forecast = fcst.get_load_forecast(
             method=optim_conf["load_forecast_method"],
             set_mix_forecast=True,
