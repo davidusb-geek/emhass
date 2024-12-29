@@ -31,6 +31,7 @@ See below for a list of associations between the parameters from `config_emhass.
 | params_secrets |  lat |  Latitude | |
 | params_secrets |  lon |  Longitude | |
 | params_secrets |  alt |  Altitude | |
+| optim_conf |  set_use_pv |  set_use_pv | |
 | optim_conf |  set_use_battery |  set_use_battery | |
 | optim_conf |  num_def_loads |  number_of_deferrable_loads | |
 | optim_conf |  P_deferrable_nom |  list_nominal_power_of_deferrable_loads |  nominal_power_of_deferrable_loads | 
