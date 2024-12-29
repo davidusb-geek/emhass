@@ -75,9 +75,6 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}
-          tags: |
-            type=sha
-            type=raw,value=test
 
       # Build Docker image for pushing to registry
       - name: Build and push Docker image by digest
@@ -161,6 +158,9 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}
+          tags: |
+            type=sha
+            type=raw,value=test
       - name: Log in to the Container registry
         uses: docker/login-action@v3
         with:
