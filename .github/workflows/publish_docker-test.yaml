@@ -1,0 +1,177 @@
+#template modified from: https://docs.docker.com/build/ci/github-actions/multi-platform/ & https://docs.github.com/en/actions/use-cases-and-examples/publishing-packages/publishing-docker-images
+#builds from branch master, for testing before deploying a new release
+name: "Publish Docker test image"
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          [
+            { target_arch: amd64, os_version: debian },
+            { target_arch: armv7, os_version: debian },
+            { target_arch: armhf, os_version: raspbian },
+            { target_arch: aarch64, os_version: debian },
+          ]
+    steps:
+      # Pull git repo and build each architecture image separately (with QEMU and Buildx)
+      - name: lowercase repo
+        run: |
+          echo "IMAGE_NAME_LOWER=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build and save Docker image locally to check security of container packages
+      - name: Build Docker image and cache
+        id: cache
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: ${{ matrix.platform.buildx }}
+          build-args: |
+            TARGETARCH=${{ matrix.platform.target_arch }}
+            os_version=${{ matrix.platform.os_version }}
+          load: true
+      # Extract a list of the installed Debian packages, export as artifact for vulnerability scanning with OSV
+      - name: Export Debian package list
+        run: mkdir OSV && docker run --rm --entrypoint '/bin/cat' ${{ steps.cache.outputs.imageid }} /var/lib/dpkg/status >> ./OSV/${{ matrix.platform.target_arch }}.status
+      - name: Export Python package list
+        run: docker run --rm --entrypoint '/usr/bin/pip3' ${{ steps.cache.outputs.imageid }} freeze >> ./OSV/${{ matrix.platform.target_arch }}-requirements.txt
+      - name: Upload package list as digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform.target_arch }}-packages
+          path: ./OSV/*
+          if-no-files-found: error
+          retention-days: 1
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}
+
+      # Build Docker image for pushing to registry
+      - name: Build and push Docker image by digest
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/${{ matrix.platform.target_arch }}
+          build-args: |
+            TARGETARCH=${{ matrix.platform.target_arch }}
+            os_version=${{ matrix.platform.os_version }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }},push-by-digest=true,name-canonical=true,push=true
+      # Export the build images as artifact for the next job of merging
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.platform.target_arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Google OSV-Scanner (check known vulnerabilities for Python & Debian packages )
+  osv-scan:
+    needs:
+      - build
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          [
+            { target_arch: amd64 },
+            { target_arch: armv7 },
+            { target_arch: armhf },
+            { target_arch: aarch64 },
+          ]
+    uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
+    with:
+      download-artifact: "${{ matrix.platform.target_arch }}-packages"
+      matrix-property: "${{ matrix.platform.target_arch }}-"
+      scan-args: |-
+        --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
+        --lockfile=requirements.txt:./${{matrix.platform.target_arch }}-requirements.txt
+        --fail-on-vuln: false
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+  # Merge platforms into images into a multi-platform image
+  merge:
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+      attestations: write
+      id-token: write
+    needs:
+      - osv-scan
+      - build
+    steps:
+      - name: lowercase repo
+        run: |
+          echo "IMAGE_NAME_LOWER=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}
+          tags: |
+            type=sha
+            type=raw,value=test
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}@sha256:%s ' *)
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}:${{ steps.meta.outputs.version }}
