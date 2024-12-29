@@ -121,7 +121,7 @@ function loadConfigurationListView(param_definitions, config, list_html) {
   }
 
   //list parameters used in the section headers
-  header_input_list = ["set_use_battery", "number_of_deferrable_loads"];
+  header_input_list = ["set_use_battery", "set_use_pv", "number_of_deferrable_loads"];
 
   //get the main container and append list template html
   document.getElementById("configuration-container").innerHTML = list_html;
@@ -265,7 +265,7 @@ function buildParamContainers(
   });
 
   //check initial checkbox state, check "value" of input and match to "checked" value
-  let checkbox = document.querySelectorAll("input[type='checkbox']");
+  let checkbox = SectionContainer.querySelectorAll("input[type='checkbox']");
   checkbox.forEach(function (answer) {
     let value = answer.value === "true";
     answer.checked = value;
@@ -552,6 +552,19 @@ function headerElement(element, param_definitions, config) {
         param_container.innerHTML = "";
         buildParamContainers("Battery", param_definitions["Battery"], config, [
           "set_use_battery",
+        ]);
+        element.checked = true;
+      } else {
+        param_container.innerHTML = "";
+      }
+      break;
+
+    //if set_use_pv, add or remove PV section (inc. related params)
+    case "set_use_pv":
+      if (element.checked) {
+        param_container.innerHTML = "";
+        buildParamContainers("Solar System (PV)", param_definitions["Solar System (PV)"], config, [
+          "set_use_pv",
         ]);
         element.checked = true;
       } else {
