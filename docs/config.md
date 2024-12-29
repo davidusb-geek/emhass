@@ -40,6 +40,7 @@ The parameters in the `secrets_emhass.yaml` file are:
 
 These are the parameters needed to properly define the optimization problem.
 
+- `set_use_pv`: Set to True if we should consider an solar PV system. Defaults to False.
 - `set_use_battery`: Set to True if we should consider an energy storage device such as a Li-Ion battery. Defaults to False.
 - `delta_forecast_daily`: The number of days for forecasted data. Defaults to 1.
 - `number_of_deferrable_loads`: Define the number of deferrable loads to consider. Defaults to 2.

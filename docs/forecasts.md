@@ -8,16 +8,18 @@ EMHASS will need 4 forecasts to work properly:
 
 - Load cost forecast: the price of the energy from the grid in the next 24 hours. This is given in EUR/kWh.
 
-- PV production selling price forecast: the price at which you will sell your excess PV production in the next 24 hours. This is given in EUR/kWh.
+- PV production selling price forecast: the price at which you will sell your excess PV production in the next 24 hours. This is given in currency/kWh.
 
 Some methods are generalized to the 4 forecasts needed. For all the forecasts it is possible to pass the data either as a passed list of values or by reading from a CSV file. With these methods, it is then possible to use data from external forecast providers.
     
-Then there are the methods that are specific to each type of forecast and that proposed forecast is treated and generated internally by this EMHASS forecast class. For the weather forecast, the first method (`scrapper`) uses scrapping to the ClearOutside webpage which proposes detailed forecasts based on Lat/Lon locations. Another method (`solcast`) is using the Solcast PV production forecast service. A final method (`solar.forecast`) is using another external service: Solar.Forecast, for which just the nominal PV peak installed power should be provided. Search the forecast section on the documentation for examples of how to implement these different methods.
+Then there are the methods that are specific to each type of forecast and that proposed forecast is treated and generated internally by this EMHASS forecast class. 
+
+For the **weather forecast**, the first method (`scrapper`) uses scrapping to the ClearOutside webpage which proposes detailed forecasts based on Lat/Lon locations. Another method (`solcast`) is using the Solcast PV production forecast service. A final method (`solar.forecast`) is using another external service: Solar.Forecast, for which just the nominal PV peak installed power should be provided. Search the forecast section on the documentation for examples of how to implement these different methods.
 
 The `get_power_from_weather` method is proposed here to convert irradiance data to electrical power. The PVLib module is used to model the PV plant. A dedicated web app will help you search for your correct PV module and inverter: [https://emhass-pvlib-database.streamlit.app/](https://emhass-pvlib-database.streamlit.app/)
 
-The specific methods for the load forecast is a first method (`naive`) that uses a naive approach, also called persistence. It simply assumes that the forecast for 
-a future period will be equal to the observed values in a past period. The past period is controlled using the parameter `delta_forecast_daily`. A second method (`mlforecaster`)
+The specific methods for the **load forecast** is a first method (`typical`) that uses historic values of a typical household power consumption. This method uses simple statistic methods and load power grouped by the same day-of-the-week of the current month. The load power is scaled using the parameter `maximum_power_from_grid`. A second method (`naive`) that uses a naive approach, also called persistence. It simply assumes that the forecast for 
+a future period will be equal to the observed values in a past period. The past period is controlled using the parameter `delta_forecast_daily`. A third method (`mlforecaster`)
 uses an internal custom forecasting model using machine learning. There is a section in the documentation explaining how to use this method.
     
 ```{note} 
@@ -93,16 +95,18 @@ If you use the Solar.Forecast or Solcast methods, or explicitly pass the PV powe
 
 ## Load power forecast
 
-The default method for load forecast is a naive method, also called persistence. This is obtained using `method=naive`. This method simply assumes that the forecast for a future period will be equal to the observed values in a past period. The past period is controlled using the parameter `delta_forecast_daily` and the default value for this is 24h.
+```{note} 
+
+New in EMHASS v0.12.0: the default method for load power forecast is the `typical` statistics-based method!
+```
+
+The default method for load forecast is the `typical` method, which uses basic statistics and a year long load power data grouped by the current day-of-the-week of the current month. This provides a typical daily load power characteristic with a 30 minute resolution. The load power is scaled using the parameter `maximum_power_from_grid`. This method uses the default data with 1-year of load power consumption in file `data/data_train_load_clustering.pkl`. You can customize this data to your own household consumption by running erasing the previous file and running the script `scripts/load_clustering.py` (this will try to fetch 365 days of data from your load power sensor). However, if you have a working configuration without any problems with data retrieve from Home Assistant, then it is adviced to use the more advanced method `mlforecaster`.
+
+A second method is a naive method, also called persistence. This is obtained using `method=naive`. This method simply assumes that the forecast for a future period will be equal to the observed values in a past period. The past period is controlled using the parameter `delta_forecast_daily` and the default value for this is 24h.
 
 This is presented graphically here:
 
 ![](./images/naive_forecast.png)
-
-```{note} 
-
-New in EMHASS v0.4.0: machine learning forecast models!
-```
 
 Starting with v0.4.0, a new forecast framework is proposed within EMHASS. It provides a more efficient way to forecast the power load consumption. It is based on the `skforecast` module that uses `scikit-learn` regression models considering auto-regression lags as features. The hyperparameter optimization is proposed using Bayesian optimization from the `optuna` module. To use this change to `method=mlforecaster` in the configuration.
 
