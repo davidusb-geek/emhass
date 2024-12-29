@@ -100,7 +100,7 @@ class TestMLForecaster(unittest.TestCase):
         )
         # Open and extract saved sensor data to test against
         with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
-            self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
+            self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = pickle.load(inp)
 
     def test_fit(self):
         df_pred, df_pred_backtest = self.mlf.fit()

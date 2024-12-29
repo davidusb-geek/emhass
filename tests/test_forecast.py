@@ -76,7 +76,7 @@ class TestForecast(unittest.TestCase):
         # Obtain sensor values from saved file
         if self.get_data_from_file:
             with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
-                self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
+                self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = pickle.load(inp)
             self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(
                 self.var_list[0]
             )
@@ -429,8 +429,8 @@ class TestForecast(unittest.TestCase):
         )
         # Obtain sensor values from saved file
         if self.get_data_from_file:
-            with open((emhass_conf["data_path"] / "test_df_final.pkl"), "rb") as inp:
-                rh.df_final, days_list, var_list = pickle.load(inp)
+            with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
+                rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
             retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(self.var_list[0])
             retrieve_hass_conf["sensor_power_photovoltaics"] = str(self.var_list[1])
             retrieve_hass_conf["sensor_linear_interp"] = [
@@ -667,7 +667,7 @@ class TestForecast(unittest.TestCase):
         # Obtain sensor values from saved file
         if self.get_data_from_file:
             with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
-                rh.df_final, days_list, var_list = pickle.load(inp)
+                rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
             retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(self.var_list[0])
             retrieve_hass_conf["sensor_power_photovoltaics"] = str(self.var_list[1])
             retrieve_hass_conf["sensor_linear_interp"] = [
@@ -899,6 +899,19 @@ class TestForecast(unittest.TestCase):
         )
         self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
         self.assertTrue((P_load_forecast.index == self.fcst.forecast_dates).all())
+        self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
+
+    # Test load forecast with typical statistics method
+    def test_get_load_forecast_typical(self):
+        P_load_forecast = self.fcst.get_load_forecast(method='typical')
+        self.assertIsInstance(P_load_forecast, pd.core.series.Series)
+        self.assertIsInstance(
+            P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
+        )
+        self.assertIsInstance(
+            P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
+        )
+        self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
 
     # Test load cost forecast dataframe output using saved csv referece file

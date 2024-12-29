@@ -92,7 +92,7 @@ class TestRetrieveHass(unittest.TestCase):
         # Obtain sensor values from saved file
         if self.get_data_from_file:
             with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
-                self.rh.df_final, self.days_list, self.var_list = pickle.load(inp)
+                self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = pickle.load(inp)
         # Else obtain sensor values from HA
         else:
             self.days_list = get_days_list(
@@ -108,11 +108,30 @@ class TestRetrieveHass(unittest.TestCase):
                 minimal_response=False,
                 significant_changes_only=False,
             )
+            # Mocking retrieve of ha_config using: self.rh.get_ha_config()
+            self.rh.ha_config = {
+                'country': 'FR',
+                'currency': 'EUR',
+                'elevation': 4807,
+                'latitude': 48.83,
+                'longitude': 6.86,
+                'time_zone': 'Europe/Paris',
+                'unit_system': {
+                    'length': 'km',
+                    'accumulated_precipitation': 'mm',
+                    'area': 'm²',
+                    'mass': 'g',
+                    'pressure': 'Pa',
+                    'temperature': '°C',
+                    'volume': 'L',
+                    'wind_speed': 'm/s'
+                }
+            }
             # Check to save updated data to file
             if save_data_to_file:
                 with open(emhass_conf["data_path"] / "test_df_final.pkl", "wb") as outp:
                     pickle.dump(
-                        (self.rh.df_final, self.days_list, self.var_list),
+                        (self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config),
                         outp,
                         pickle.HIGHEST_PROTOCOL,
                     )

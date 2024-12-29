@@ -886,10 +886,73 @@ class Forecast(object):
                 forecast_out = pd.concat([forecast_out, forecast_tp], axis=0)
         return forecast_out
 
+    @staticmethod
+    def resample_data(data, freq, current_freq):
+        r"""
+        Resample a DataFrame with a custom frequency.
+
+        :param data: Original time series data with a DateTimeIndex.
+        :type data: pd.DataFrame
+        :param freq: Desired frequency for resampling (e.g., pd.Timedelta("10min")).
+        :type freq: pd.Timedelta
+        :return: Resampled data at the specified frequency.
+        :rtype: pd.DataFrame
+        """
+        if freq > current_freq:
+            # Downsampling
+            # Use 'mean' to aggregate or choose other options ('sum', 'max', etc.)
+            resampled_data = data.resample(freq).mean()
+        elif freq < current_freq:
+            # Upsampling
+            # Use 'asfreq' to create empty slots, then interpolate
+            resampled_data = data.resample(freq).asfreq()
+            resampled_data = resampled_data.interpolate(method='time')
+        else:
+            # No resampling needed
+            resampled_data = data.copy()
+        return resampled_data
+    
+    @staticmethod
+    def get_typical_load_forecast(data, forecast_date):
+        r"""
+        Forecast the load profile for the next day based on historic data.
+
+        :param data: A DataFrame with a DateTimeIndex containing the historic load data. 
+                    Must include a 'load' column.
+        :type data: pd.DataFrame
+        :param forecast_date: The date for which the forecast will be generated.
+        :type forecast_date: pd.Timestamp
+        :return: A Series with the forecasted load profile for the next day and a list of days used 
+                to calculate the forecast.
+        :rtype: tuple (pd.Series, list)
+        """
+        # Ensure the 'load' column exists
+        if 'load' not in data.columns:
+            raise ValueError("Data must have a 'load' column.")
+        # Filter historic data for the same month and day of the week
+        month = forecast_date.month
+        day_of_week = forecast_date.dayofweek
+        historic_data = data[(data.index.month == month) & (data.index.dayofweek == day_of_week)]
+        used_days = np.unique(historic_data.index.date)
+        # Align all historic data to the forecast day
+        aligned_data = []
+        for day in used_days:
+            daily_data = data[data.index.date == pd.Timestamp(day).date()]
+            aligned_daily_data = daily_data.copy()
+            aligned_daily_data.index = aligned_daily_data.index.map(
+                lambda x: x.replace(year=forecast_date.year, month=forecast_date.month, day=forecast_date.day)
+            )
+            aligned_data.append(aligned_daily_data)
+        # Combine all aligned historic data into a single DataFrame
+        combined_data = pd.concat(aligned_data)
+        # Compute the mean load for each timestamp
+        forecast = combined_data.groupby(combined_data.index).mean()
+        return forecast, used_days
+    
     def get_load_forecast(
         self,
         days_min_load_forecast: Optional[int] = 3,
-        method: Optional[str] = "naive",
+        method: Optional[str] = "typical",
         csv_path: Optional[str] = "data_load_forecast.csv",
         set_mix_forecast: Optional[bool] = False,
         df_now: Optional[pd.DataFrame] = pd.DataFrame(),
@@ -904,10 +967,11 @@ class Forecast(object):
             will be used to generate a naive forecast, defaults to 3
         :type days_min_load_forecast: int, optional
         :param method: The method to be used to generate load forecast, the options \
+            are 'typical' for a typical household load consumption curve, \
             are 'naive' for a persistance model, 'mlforecaster' for using a custom \
             previously fitted machine learning model, 'csv' to read the forecast from \
             a CSV file and 'list' to use data directly passed at runtime as a list of \
-            values. Defaults to 'naive'.
+            values. Defaults to 'typical'.
         :type method: str, optional
         :param csv_path: The path to the CSV file used when method = 'csv', \
             defaults to "/data/data_load_forecast.csv"
@@ -956,7 +1020,7 @@ class Forecast(object):
             if self.get_data_from_file:
                 filename_path = self.emhass_conf["data_path"] / "test_df_final.pkl"
                 with open(filename_path, "rb") as inp:
-                    rh.df_final, days_list, var_list = pickle.load(inp)
+                    rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
                     self.var_load = var_list[0]
                     self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = (
                         self.var_load
@@ -977,7 +1041,37 @@ class Forecast(object):
             ):
                 return False
             df = rh.df_final.copy()[[self.var_load_new]]
-        if method == "naive":  # using a naive approach
+        if method == "typical":  # using typical statistical data from a household power consumption
+            # Loading data from history file
+            model_type = "load_clustering"
+            data_path = self.emhass_conf["data_path"] / str("data_train_" + model_type + ".pkl")
+            with open(data_path, "rb") as fid:
+                data, _ = pickle.load(fid)
+            # Resample the data if needed
+            current_freq = pd.Timedelta('30min')
+            if self.freq != current_freq:
+                data = Forecast.resample_data(data, self.freq, current_freq)
+            # Generate forecast
+            data_list = []
+            dates_list = np.unique(self.forecast_dates.date).tolist()
+            forecast = pd.DataFrame()
+            for date in dates_list:
+                forecast_date = pd.Timestamp(date)
+                data.columns = ['load']
+                forecast_tmp, used_days = Forecast.get_typical_load_forecast(data, forecast_date)
+                self.logger.debug(f"Using {len(used_days)} days of data to generate the forecast.")
+                # Normalize the forecast
+                forecast_tmp = forecast_tmp*self.plant_conf['maximum_power_from_grid']/9000
+                data_list.extend(forecast_tmp.values.ravel().tolist())
+                if len(forecast) == 0:
+                    forecast = forecast_tmp
+                else:
+                    forecast = pd.concat([forecast, forecast_tmp], axis=0)
+            forecast.index = forecast.index.tz_convert(self.time_zone)
+            forecast_out = forecast.loc[forecast.index.intersection(self.forecast_dates)]
+            forecast_out.index.name = 'ts'
+            forecast_out = forecast_out.rename(columns={'load': 'yhat'})
+        elif method == "naive":  # using a naive approach
             mask_forecast_out = (
                 df.index > days_list[-1] - self.optim_conf["delta_forecast_daily"]
             )
