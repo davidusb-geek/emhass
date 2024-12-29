@@ -154,7 +154,10 @@ def set_input_data_dict(
         P_PV_forecast, P_load_forecast, df_input_data_dayahead = None, None, None
     elif set_type == "dayahead-optim":
         # Get PV and load forecasts
-        if optim_conf['set_use_pv']:
+        if (
+            optim_conf["set_use_pv"]
+            or optim_conf.get("weather_forecast_method", None) == "list"
+        ):
             df_weather = fcst.get_weather_forecast(
                 method=optim_conf["weather_forecast_method"]
             )
@@ -244,7 +247,10 @@ def set_input_data_dict(
             return False
         df_input_data = rh.df_final.copy()
         # Get PV and load forecasts
-        if optim_conf['set_use_pv']:
+        if (
+            optim_conf["set_use_pv"]
+            or optim_conf.get("weather_forecast_method", None) == "list"
+        ):
             df_weather = fcst.get_weather_forecast(
                 method=optim_conf["weather_forecast_method"]
             )
