@@ -138,6 +138,70 @@ def get_forecast_dates(
     return forecast_dates
 
 
+def update_params_with_ha_config(
+    params: str,
+    ha_config: dict,
+) -> dict:
+    """
+    Update the params with the Home Assistant configuration.
+
+    Parameters
+    ----------
+    params : str
+        The serialized params.
+    ha_config : dict
+        The Home Assistant configuration.
+
+    Returns
+    -------
+    dict
+        The updated params.
+    """
+    # Load serialized params
+    params = json.loads(params)
+    # Update params
+    currency_to_symbol = {
+        'EUR': '€',
+        'USD': '$',
+        'GBP': '£',
+        'YEN': '¥',
+        'JPY': '¥',
+        'AUD': 'A$',
+        'CAD': 'C$',
+        'CHF': 'CHF',  # Swiss Franc has no special symbol
+        'CNY': '¥',
+        'INR': '₹',
+        # Add more as needed
+    }
+    if 'currency' in ha_config.keys():
+        ha_config['currency'] = currency_to_symbol.get(ha_config['currency'], 'Unknown')
+    else:
+        ha_config['currency'] = '€'
+    if 'unit_system' not in ha_config.keys():
+        ha_config['unit_system'] = {'temperature': '°C'}
+    
+    for k in range(params["optim_conf"]["number_of_deferrable_loads"]):
+        params['passed_data']['custom_predicted_temperature_id'][k].update(
+            {"unit_of_measurement": ha_config['unit_system']['temperature']}
+        )
+    updated_passed_dict = {
+        "custom_cost_fun_id": {
+            "unit_of_measurement": ha_config['currency'],
+        },
+        "custom_unit_load_cost_id": {
+            "unit_of_measurement": f"{ha_config['currency']}/kWh",
+        },
+        "custom_unit_prod_price_id": {
+            "unit_of_measurement": f"{ha_config['currency']}/kWh",
+        },
+    }
+    for key, value in updated_passed_dict.items():
+        params["passed_data"][key]["unit_of_measurement"] = value["unit_of_measurement"]
+    # Serialize the final params
+    params = json.dumps(params, default=str)
+    return params
+
+
 def treat_runtimeparams(
     runtimeparams: str,
     params: str,
@@ -183,6 +247,10 @@ def treat_runtimeparams(
     params["optim_conf"].update(optim_conf)
     params["plant_conf"].update(plant_conf)
 
+    # Check defaults on HA retrieved config
+    default_currency_unit = '€'
+    default_temperature_unit = '°C'
+    
     # Some default data needed
     custom_deferrable_forecast_id = []
     custom_predicted_temperature_id = []
@@ -197,7 +265,7 @@ def treat_runtimeparams(
         custom_predicted_temperature_id.append(
             {
                 "entity_id": "sensor.temp_predicted{}".format(k),
-                "unit_of_measurement": "°C",
+                "unit_of_measurement": default_temperature_unit,
                 "friendly_name": "Predicted temperature {}".format(k),
             }
         )
@@ -239,7 +307,7 @@ def treat_runtimeparams(
         },
         "custom_cost_fun_id": {
             "entity_id": "sensor.total_cost_fun_value",
-            "unit_of_measurement": "",
+            "unit_of_measurement": default_currency_unit,
             "friendly_name": "Total cost function value",
         },
         "custom_optim_status_id": {
@@ -249,12 +317,12 @@ def treat_runtimeparams(
         },
         "custom_unit_load_cost_id": {
             "entity_id": "sensor.unit_load_cost",
-            "unit_of_measurement": "€/kWh",
+            "unit_of_measurement": f"{default_currency_unit}/kWh",
             "friendly_name": "Unit Load Cost",
         },
         "custom_unit_prod_price_id": {
             "entity_id": "sensor.unit_prod_price",
-            "unit_of_measurement": "€/kWh",
+            "unit_of_measurement": f"{default_currency_unit}/kWh",
             "friendly_name": "Unit Prod Price",
         },
         "custom_deferrable_forecast_id": custom_deferrable_forecast_id,

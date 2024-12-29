@@ -661,7 +661,7 @@ class Optimization:
                                     cooling_constant
                                     * (
                                         predicted_temp[I - 1]
-                                        - outdoor_temperature_forecast[I - 1]
+                                        - outdoor_temperature_forecast.iloc[I - 1]
                                     )
                                 )
                             )

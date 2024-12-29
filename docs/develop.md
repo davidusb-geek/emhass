@@ -318,6 +318,21 @@ Lastly, to support the configuration website to generate the parameter in the li
 
 ![Screenshot from 2024-09-09 16-45-32](https://github.com/user-attachments/assets/01e7984f-3332-4e25-8076-160f51a2e0c4)
 
+If you are only adding another option for a existing parameter, editing param_definitions.json file should be all you need. (allowing the user to select the option from the configuration page):
+```json
+"load_forecast_method": {
+  "friendly_name": "Load forecast method",
+  "Description": "The load forecast method that will be used. The options are ‘csv’ to load a CSV file or ‘naive’ for a simple 1-day persistence model.",
+  "input": "select",
+  "select_options": [
+    "naive",
+    "mlforecaster",
+    "csv",
+    "CALL_NEW_OPTION"
+  ],
+  "default_value": "naive"
+},
+```
 
 ## Step 3 - Pull request
 
