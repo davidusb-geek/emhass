@@ -69,7 +69,7 @@ def set_input_data_dict(
     retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params, logger)
     if type(retrieve_hass_conf) is bool:
         return False
-    
+
     # Treat runtimeparams
     params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
         runtimeparams,
@@ -81,7 +81,7 @@ def set_input_data_dict(
         logger,
         emhass_conf,
     )
-    
+
     # Define the data retrieve object
     rh = RetrieveHass(
         retrieve_hass_conf["hass_url"],
@@ -93,20 +93,22 @@ def set_input_data_dict(
         logger,
         get_data_from_file=get_data_from_file,
     )
-    
+
     # Retrieve basic configuration data from hass
     if get_data_from_file:
         with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
             _, _, _, rh.ha_config = pickle.load(inp)
     else:
-        rh.get_ha_config()
-    
+        response = rh.get_ha_config()
+        if type(response) is bool:
+            return False
+
     # Update the params dict using data from the HA configuration
     params = utils.update_params_with_ha_config(
         params,
         rh.ha_config,
     )
-    
+
     # Define the forecast and optimization objects
     fcst = Forecast(
         retrieve_hass_conf,
