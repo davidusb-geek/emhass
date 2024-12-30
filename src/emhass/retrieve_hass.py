@@ -103,8 +103,8 @@ class RetrieveHass:
             return False
 
         try:
-            self.ha_config = json.loads(response_config)
-        except ValueError:
+            self.ha_config = response_config.json()
+        except Exception:
             self.logger.error("EMHASS was unable to obtain configuration data from HA")
             return False
 
