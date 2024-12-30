@@ -90,9 +90,23 @@ class RetrieveHass:
             "Authorization": "Bearer " + self.long_lived_token,
             "content-type": "application/json",
         }
-        url = self.hass_url + "api/config"
-        response_config = get(url, headers=headers)
-        self.ha_config = response_config.json()
+        if self.hass_url == "http://supervisor/core/api":
+            url = self.hass_url + "/config"
+        else:
+            url = self.hass_url + "api/config"
+
+        try:
+            response_config = get(url, headers=headers)
+        except Exception:
+            self.logger.error("Unable to access Home Assistance instance, check URL")
+            self.logger.error("If using addon, try setting url and token to 'empty'")
+            return False
+
+        try:
+            self.ha_config = response_config.json()
+        except Exception:
+            self.logger.error("EMHASS was unable to obtain configuration data from HA")
+            return False
 
     def get_data(
         self,
