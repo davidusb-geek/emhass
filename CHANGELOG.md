@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.2 - 2025-01-01
+### Patch fix
+- Fixed Problem with calling weather-forecast-cache
+### Improvement
+- Updated readthedocs.yml, got rid of duplicated requirements.txt
+
 ## 0.12.1 - 2024-12-30
 ### Patch fix
 - Fixed error with retrieve config from HA
