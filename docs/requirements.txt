@@ -1,0 +1,6 @@
+wheel
+sphinx==7.2.6
+sphinx-rtd-theme==2.0.0
+docutils==0.18.1
+attrs==21.4.0
+myst-parser==3.0.1
