@@ -171,6 +171,7 @@ def update_params_with_ha_config(
         'CHF': 'CHF',  # Swiss Franc has no special symbol
         'CNY': '¥',
         'INR': '₹',
+        'CZK': 'Kč',
         # Add more as needed
     }
     if 'currency' in ha_config.keys():
