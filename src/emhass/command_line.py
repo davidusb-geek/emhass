@@ -446,7 +446,6 @@ def weather_forecast_cache(
         "forecast",
         logger,
         emhass_conf,
-        {},
     )
     # Make sure weather_forecast_cache is true
     if (params != None) and (params != "null"):
