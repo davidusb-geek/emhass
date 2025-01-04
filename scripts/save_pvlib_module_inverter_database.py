@@ -32,9 +32,11 @@ logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
 if __name__ == "__main__":
     save_new_files = True
+
     logger.info("Reading original outdated database from PVLib")
     cec_modules_0 = pvlib.pvsystem.retrieve_sam("CECMod")
     cec_inverters_0 = pvlib.pvsystem.retrieve_sam("cecinverter")
+
     logger.info("Reading the downloaded database from SAM")
     cec_modules = pvlib.pvsystem.retrieve_sam(
         path=str(emhass_conf["data_path"] / "CEC Modules.csv")
@@ -48,13 +50,38 @@ if __name__ == "__main__":
     cec_inverters = cec_inverters.loc[
         :, ~cec_inverters.columns.duplicated()
     ]  # Drop column duplicates
+
+    logger.info("Reading custom EMHASS database")
+    cec_modules_emhass = pvlib.pvsystem.retrieve_sam(
+        path=str(emhass_conf["data_path"] / "emhass_modules.csv")
+    )
+    cec_inverters_emhass = pvlib.pvsystem.retrieve_sam(
+        path=str(emhass_conf["data_path"] / "emhass_inverters.csv")
+    )
+
     logger.info("Updating and saving databases")
+    # Modules
     cols_to_keep_modules = [
         elem
         for elem in list(cec_modules_0.columns)
         if elem not in list(cec_modules.columns)
     ]
     cec_modules = pd.concat([cec_modules, cec_modules_0[cols_to_keep_modules]], axis=1)
+    logger.info(
+        f"Number of elements from old database copied in new database for modules = {len(cols_to_keep_modules)}"
+    )
+    cols_to_keep_modules = [
+        elem
+        for elem in list(cec_modules_emhass.columns)
+        if elem not in list(cec_modules.columns)
+    ]
+    cec_modules = pd.concat(
+        [cec_modules, cec_modules_emhass[cols_to_keep_modules]], axis=1
+    )
+    logger.info(
+        f"Number of elements from custom EMHASS database copied in new database for modules = {len(cols_to_keep_modules)}"
+    )
+    # Inverters
     cols_to_keep_inverters = [
         elem
         for elem in list(cec_inverters_0.columns)
@@ -64,10 +91,18 @@ if __name__ == "__main__":
         [cec_inverters, cec_inverters_0[cols_to_keep_inverters]], axis=1
     )
     logger.info(
-        f"Number of elements from old database copied in new database for modules = {len(cols_to_keep_modules)}"
+        f"Number of elements from old database copied in new database for inverters = {len(cols_to_keep_inverters)}"
+    )
+    cols_to_keep_inverters = [
+        elem
+        for elem in list(cec_inverters_emhass.columns)
+        if elem not in list(cec_inverters.columns)
+    ]
+    cec_inverters = pd.concat(
+        [cec_inverters, cec_inverters_emhass[cols_to_keep_inverters]], axis=1
     )
     logger.info(
-        f"Number of elements from old database copied in new database for inverters = {len(cols_to_keep_inverters)}"
+        f"Number of elements from custom EMHASS database copied in new database for inverters = {len(cols_to_keep_inverters)}"
     )
     logger.info("Modules databases")
     print(tabulate(cec_modules.head(20).iloc[:, :5], headers="keys", tablefmt="psql"))
