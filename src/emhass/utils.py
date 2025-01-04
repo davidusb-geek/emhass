@@ -172,6 +172,12 @@ def update_params_with_ha_config(
         'CNY': '¥',
         'INR': '₹',
         'CZK': 'Kč',
+        'BGN': 'лв',
+        'DKK': 'kr',
+        'HUF': 'Ft',
+        'PLN': 'zł',
+        'RON': 'Leu',
+        'SEK': 'kr',
         # Add more as needed
     }
     if 'currency' in ha_config.keys():
