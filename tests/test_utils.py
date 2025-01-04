@@ -515,6 +515,46 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(params_with_ha_config["passed_data"]["custom_cost_fun_id"]["unit_of_measurement"] == '$')
         self.assertTrue(params_with_ha_config["passed_data"]["custom_unit_load_cost_id"]["unit_of_measurement"] == '$/kWh')
         self.assertTrue(params_with_ha_config["passed_data"]["custom_unit_prod_price_id"]["unit_of_measurement"] == '$/kWh')
+        # Test with 0 deferrable loads
+        runtimeparams = {
+            'prediction_horizon': 28, 
+            'pv_power_forecast': [523, 873, 1059, 1195, 1291, 1352, 1366, 1327, 1254, 1150, 1004, 813, 589, 372, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 153, 228, 301, 363, 407, 438, 456, 458, 443, 417, 381, 332, 269, 195, 123, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 
+            'num_def_loads': 0,
+            'def_start_timestep': [0, 0], 'def_end_timestep': [0, 0], 'soc_init': 0.64, 'soc_final': 0.9, 
+            'load_cost_forecast': [0.2751, 0.2751, 0.2729, 0.2729, 0.2748, 0.2748, 0.2746, 0.2746, 0.2815, 0.2815, 0.2841, 0.2841, 0.282, 0.282, 0.288, 0.288, 0.29, 0.29, 0.2841, 0.2841, 0.2747, 0.2747, 0.2677, 0.2677, 0.2628, 0.2628, 0.2532, 0.2532], 
+            'prod_price_forecast': [0.1213, 0.1213, 0.1192, 0.1192, 0.121, 0.121, 0.1208, 0.1208, 0.1274, 0.1274, 0.1298, 0.1298, 0.1278, 0.1278, 0.1335, 0.1335, 0.1353, 0.1353, 0.1298, 0.1298, 0.1209, 0.1209, 0.1143, 0.1143, 0.1097, 0.1097, 0.1007, 0.1007], 
+            'alpha': 1, 'beta': 0, 
+            'load_power_forecast': [399, 300, 400, 600, 300, 200, 200, 200, 200, 300, 300, 200, 400, 200, 200, 400, 400, 400, 300, 300, 300, 600, 800, 500, 400, 400, 500, 500, 2400, 2300, 2400, 2400, 2300, 2400, 2400, 2400, 2300, 2400, 2400, 200, 200, 300, 300, 300, 300, 300, 300, 300]}
+        params_ = json.loads(self.params_json)
+        params_['passed_data'].update(runtimeparams)
+        runtimeparams_json = json.dumps(runtimeparams)
+        params_json = json.dumps(params_)
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
+            params_json, logger
+        )
+        set_type = "dayahead-optim"
+        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            set_type,
+            logger,
+            emhass_conf,
+        )
+        ha_config = {
+            'currency': 'USD',
+            'unit_system': {'temperature': '°F'}
+        }
+        params_with_ha_config_json = utils.update_params_with_ha_config(
+            params,
+            ha_config,
+        )
+        params_with_ha_config = json.loads(params_with_ha_config_json)
+        self.assertTrue(params_with_ha_config["passed_data"]["custom_cost_fun_id"]["unit_of_measurement"] == '$')
+        self.assertTrue(params_with_ha_config["passed_data"]["custom_unit_load_cost_id"]["unit_of_measurement"] == '$/kWh')
+        self.assertTrue(params_with_ha_config["passed_data"]["custom_unit_prod_price_id"]["unit_of_measurement"] == '$/kWh')
 
     def test_build_secrets(self):
         # Test the build_secrets defaults from get_test_params()
