@@ -20,18 +20,18 @@ jobs:
       run: python3 -m pip install --break-system-packages .[test]
     - name: pull latest SAM CEC files
       run: |
-        git clone https://github.com/NREL/SAM.git 
-        cp ./SAM/deploy/libraries/CEC\ Inverters.csv ./src/emhass/data/CEC\ Inverters.csv
-        cp ./SAM/deploy/libraries/CEC\ Modules.csv ./src/emhass/data/CEC\ Modules.csv
+        git clone https://github.com/NREL/SAM.git /tmp/SAM
+        cp /tmp/SAM/deploy/libraries/CEC\ Inverters.csv ./src/emhass/data/CEC\ Inverters.csv
+        cp /tmp/SAM/deploy/libraries/CEC\ Modules.csv ./src/emhass/data/CEC\ Modules.csv
     - name: build database via python script
       run: python3 ./scripts/save_pvlib_module_inverter_database.py
     - name: push database changes
       run: |
-        rm -r ./SAM
+        rm -r /tmp/SAM
         rm ./src/emhass/data/CEC\ Inverters.csv
         rm ./src/emhass/data/CEC\ Modules.csv
-        git config --global user.name "PVLib_Updater"
-        git config --global user.email "18461782+GeoDerp[bot]@users.noreply.github.com"
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git add ./src/emhass/data/cec_inverters.pbz2
         git add ./src/emhass/data/cec_modules.pbz2
         git commit -m "Bump inverter/module database"
