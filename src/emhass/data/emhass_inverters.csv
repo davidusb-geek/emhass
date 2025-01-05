@@ -1,0 +1,6 @@
+Name,Vac,Pso,Paco,Pdco,Vdco,C0,C1,C2,C3,Pnt,Vdcmax,Idcmax,Mppt_low,Mppt_high,CEC_Date,CEC_hybrid
+Units,V,W,W,W,V,1/W,1/V,1/V,1/V,W,V,A,V,V,,
+[0],inv_snl_ac_voltage,inv_snl_pso,inv_snl_paco,inv_snl_pdco,inv_snl_vdco,inv_snl_c0,inv_snl_c1,inv_snl_c2,inv_snl_c3,inv_snl_pnt,inv_snl_vdcmax,inv_snl_idcmax,inv_snl_mppt_low,inv_snl_mppt_hi,inv_cec_date,inv_cec_hybrid
+Sungrow SH20T, 400, 2.5, 20000, 21000.0, 600, 0.0011, 0.0105, 0.0023, 0.00055, 2.5, 1100, 40.0, 200, 1000, 01/01/2025, Y
+Sungrow SH25T, 400, 2.5, 25000, 26000.0, 600, 0.0012, 0.011, 0.0025, 0.0006, 2.5, 1100, 45.0, 200, 1000, 01/01/2025, Y
+Sungrow SH15T, 400, 2.5, 15000, 15700.0, 600, 0.001, 0.01, 0.002, 0.0005, 2.5, 1100, 30.0, 200, 1000, 01/01/2025, Y

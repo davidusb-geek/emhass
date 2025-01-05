@@ -43,7 +43,7 @@ dependencies = [
 
 [project.optional-dependencies]
 docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
-test = ["requests_mock", "pytest", "coverage", "snakeviz", "ruff"]
+test = ["requests_mock", "pytest", "coverage", "snakeviz", "ruff", "tabulate"]
 
 [tool.setuptools.packages]
 find = { where = ["src"] }
