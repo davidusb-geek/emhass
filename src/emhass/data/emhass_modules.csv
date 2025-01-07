@@ -1,3 +1,5 @@
 Name,Manufacturer,Technology,Bifacial,STC,PTC,A_c,Length,Width,N_s,I_sc_ref,V_oc_ref,I_mp_ref,V_mp_ref,alpha_sc,beta_oc,T_NOCT,a_ref,I_L_ref,I_o_ref,R_s,R_sh_ref,Adjust,gamma_pmp,BIPV,Version,Date
 Units,,,,,,m2,m,m,,A,V,A,V,A/K,V/K,C,V,A,A,Ohm,Ohm,%,%/K,,,
 [0],lib_manufacturer,cec_material,lib_is_bifacial,,,cec_area,lib_length,lib_width,cec_n_s,cec_i_sc_ref,cec_v_oc_ref,cec_i_mp_ref,cec_v_mp_ref,cec_alpha_sc,cec_beta_oc,cec_t_noct,cec_a_ref,cec_i_l_ref,cec_i_o_ref,cec_r_s,cec_r_sh_ref,cec_adjust,cec_gamma_pmp,,,
+Jinko Solar JKM475N-60HL4-V,Jinko Solar,Mono-c-Si,0,475.0,432.0,2.16,1.903,1.134,120,14.23,42.54,13.49,35.21,0.046,-0.25,45.0,1.2,14.23,1e-10,0.5,1500.0,1,-0.003,N,2021.08.01,01/03/2021
+Hanwha Q CELLS Q.PEAK L-G5 300W,Hanwha Q CELLS,Mono-c-Si,N,300.0,273.0,1.67,1.67,1.0,72,9.57,39.58,9.01,33.29,0.0006,-0.33,45.0,1.2,9.58,1e-10,0.5,1500,1,-0.38,N,2019-08,01/03/2019
