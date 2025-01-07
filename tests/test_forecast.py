@@ -342,17 +342,16 @@ class TestForecast(unittest.TestCase):
             )
         with requests_mock.mock() as m:
             for roof_id in roof_ids:
-                # Simulate responses for each rooftop ID
                 data = bz2.BZ2File(
                     str(emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2"),
                     "rb",
                 )
                 data = cPickle.load(data)
-                get_url = f"https://api.solcast.com.au/rooftop_sites/{roof_id}/forecasts?hours=24"
+                get_url = (
+                    f"https://api.solcast.com.au/rooftop_sites/{roof_id}/forecasts?hours=24"
+                )
                 m.get(get_url, json=data.json())
-            # Call the function under test
             df_weather_scrap = self.fcst.get_weather_forecast(method="solcast")
-            # Assertions
             self.assertIsInstance(df_weather_scrap, type(pd.DataFrame()))
             self.assertIsInstance(
                 df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex
@@ -362,7 +361,7 @@ class TestForecast(unittest.TestCase):
             )
             self.assertEqual(df_weather_scrap.index.tz, self.fcst.time_zone)
             self.assertTrue(
-                all(self.fcst.start_forecast < ts for ts in df_weather_scrap.index)
+                self.fcst.start_forecast < ts for ts in df_weather_scrap.index
             )
             self.assertEqual(
                 len(df_weather_scrap),
@@ -372,14 +371,13 @@ class TestForecast(unittest.TestCase):
                     / self.fcst.timeStep
                 ),
             )
-        # Restore original file if it was temporarily renamed
-        if os.path.isfile(
-            emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"
-        ):
-            os.rename(
-                emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
-                emhass_conf["data_path"] / "weather_forecast_data.pkl",
-            )
+            if os.path.isfile(
+                emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"
+            ):
+                os.rename(
+                    emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
+                    emhass_conf["data_path"] / "weather_forecast_data.pkl",
+                )
 
     # Test output weather forecast using Forecast.Solar with mock get request data
     def test_get_weather_forecast_solarforecast_method_mock(self):
