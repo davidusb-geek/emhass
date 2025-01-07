@@ -12,6 +12,7 @@ import unittest
 
 import pandas as pd
 import requests_mock
+import re
 
 from emhass import utils
 from emhass.command_line import set_input_data_dict
@@ -322,6 +323,63 @@ class TestForecast(unittest.TestCase):
                     emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
                     emhass_conf["data_path"] / "weather_forecast_data.pkl",
                 )
+
+    # Test output weather forecast using Solcast-multiroofs with mock get request data
+    def test_get_weather_forecast_solcast_multiroofs_method_mock(self):
+        self.fcst.params = {
+            "passed_data": {
+                "weather_forecast_cache": False,
+                "weather_forecast_cache_only": False,
+            }
+        }
+        self.fcst.retrieve_hass_conf["solcast_api_key"] = "123456"
+        self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "111111,222222,333333"
+        roof_ids = re.split(r"[,\s]+", self.fcst.retrieve_hass_conf["solcast_rooftop_id"].strip())
+        if os.path.isfile(emhass_conf["data_path"] / "weather_forecast_data.pkl"):
+            os.rename(
+                emhass_conf["data_path"] / "weather_forecast_data.pkl",
+                emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
+            )
+        with requests_mock.mock() as m:
+            for roof_id in roof_ids:
+                # Simulate responses for each rooftop ID
+                data = bz2.BZ2File(
+                    str(emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2"),
+                    "rb",
+                )
+                data = cPickle.load(data)
+                get_url = f"https://api.solcast.com.au/rooftop_sites/{roof_id}/forecasts?hours=24"
+                m.get(get_url, json=data.json())
+            # Call the function under test
+            df_weather_scrap = self.fcst.get_weather_forecast(method="solcast")
+            # Assertions
+            self.assertIsInstance(df_weather_scrap, type(pd.DataFrame()))
+            self.assertIsInstance(
+                df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex
+            )
+            self.assertIsInstance(
+                df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
+            )
+            self.assertEqual(df_weather_scrap.index.tz, self.fcst.time_zone)
+            self.assertTrue(
+                all(self.fcst.start_forecast < ts for ts in df_weather_scrap.index)
+            )
+            self.assertEqual(
+                len(df_weather_scrap),
+                int(
+                    self.optim_conf["delta_forecast_daily"].total_seconds()
+                    / 3600
+                    / self.fcst.timeStep
+                ),
+            )
+        # Restore original file if it was temporarily renamed
+        if os.path.isfile(
+            emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"
+        ):
+            os.rename(
+                emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
+                emhass_conf["data_path"] / "weather_forecast_data.pkl",
+            )
 
     # Test output weather forecast using Forecast.Solar with mock get request data
     def test_get_weather_forecast_solarforecast_method_mock(self):
