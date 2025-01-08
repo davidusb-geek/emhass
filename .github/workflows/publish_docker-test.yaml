@@ -4,7 +4,7 @@ name: "Publish Docker test image"
 
 on:
   push:
-    branches: [master]
+    branches: [testing]
   workflow_dispatch:
 
 env:
@@ -24,10 +24,10 @@ jobs:
       matrix:
         platform:
           [
-            { target_arch: amd64, os_version: debian },
-            { target_arch: armv7, os_version: debian },
-            { target_arch: armhf, os_version: raspbian },
-            { target_arch: aarch64, os_version: debian },
+            { target_arch: amd64, os_version: debian }
+            # { target_arch: armv7, os_version: debian },
+            # { target_arch: armhf, os_version: raspbian },
+            # { target_arch: aarch64, os_version: debian },
           ]
     steps:
       # Pull git repo and build each architecture image separately (with QEMU and Buildx)
@@ -112,9 +112,9 @@ jobs:
         platform:
           [
             { target_arch: amd64 },
-            { target_arch: armv7 },
-            { target_arch: armhf },
-            { target_arch: aarch64 },
+            # { target_arch: armv7 },
+            # { target_arch: armhf },
+            # { target_arch: aarch64 },
           ]
     uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
     with:
