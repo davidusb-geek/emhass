@@ -80,6 +80,7 @@ class RetrieveHass:
         self.emhass_conf = emhass_conf
         self.logger = logger
         self.get_data_from_file = get_data_from_file
+        self.var_list = []
 
     def get_ha_config(self):
         """
@@ -286,6 +287,7 @@ class RetrieveHass:
                 + str(self.freq)
             )
             return False
+        self.var_list = var_list
         return True
 
     def prepare_data(
@@ -336,7 +338,21 @@ class RetrieveHass:
                 "sensor.power_photovoltaics and sensor.power_load_no_var_loads should not be the same"
             )
             return False
-        if set_zero_min:  # Apply minimum values
+        # Confirm var_replace_zero & var_interp contain only sensors contained in var_list
+        if isinstance(var_replace_zero, list) and all(
+            item in var_replace_zero for item in self.var_list
+        ):
+            var_replace_zero = var_replace_zero
+        else:
+            var_replace_zero = None
+        if isinstance(var_interp, list) and all(
+            item in var_interp for item in self.var_list
+        ):
+            var_interp = var_interp
+        else:
+            var_interp = None
+        # Apply minimum values
+        if set_zero_min:
             self.df_final.clip(lower=0.0, inplace=True, axis=1)
             self.df_final.replace(to_replace=0.0, value=np.nan, inplace=True)
         new_var_replace_zero = []
