@@ -178,6 +178,13 @@ def update_params_with_ha_config(
         'PLN': 'zł',
         'RON': 'Leu',
         'SEK': 'kr',
+        'TRY': 'Lira',
+        'VEF': 'Bolivar',
+        'VND': 'Dong',
+        'THB': 'Baht',
+        'SGD': 'S$',
+        'IDR': 'Roepia',
+        'ZAR': 'Rand',
         # Add more as needed
     }
     if 'currency' in ha_config.keys():
