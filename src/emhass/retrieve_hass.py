@@ -363,6 +363,12 @@ class RetrieveHass:
                 new_string = string.replace(var_load, var_load + "_positive")
                 new_var_replace_zero.append(new_string)
         else:
+            self.logger.warning(
+                "Unable to find all the sensors in sensor_replace_zero parameter"
+            )
+            self.logger.warning(
+                "Confirm sure all sensors in sensor_replace_zero are sensor_power_photovoltaics and/or ensor_power_load_no_var_loads "
+            )
             new_var_replace_zero = None
         if var_interp is not None:
             for string in var_interp:
@@ -370,6 +376,12 @@ class RetrieveHass:
                 new_var_interp.append(new_string)
         else:
             new_var_interp = None
+            self.logger.warning(
+                "Unable to find all the sensors in sensor_linear_interp parameter"
+            )
+            self.logger.warning(
+                "Confirm all sensors in sensor_linear_interp are sensor_power_photovoltaics and/or ensor_power_load_no_var_loads "
+            )
         # Treating NaN replacement: either by zeros or by linear interpolation
         if new_var_replace_zero is not None:
             self.df_final[new_var_replace_zero] = self.df_final[
