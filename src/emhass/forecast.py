@@ -916,33 +916,35 @@ class Forecast(object):
             # Upsampling
             # Use 'asfreq' to create empty slots, then interpolate
             resampled_data = data.resample(freq).asfreq()
-            resampled_data = resampled_data.interpolate(method='time')
+            resampled_data = resampled_data.interpolate(method="time")
         else:
             # No resampling needed
             resampled_data = data.copy()
         return resampled_data
-    
+
     @staticmethod
     def get_typical_load_forecast(data, forecast_date):
         r"""
         Forecast the load profile for the next day based on historic data.
 
-        :param data: A DataFrame with a DateTimeIndex containing the historic load data. 
+        :param data: A DataFrame with a DateTimeIndex containing the historic load data.
                     Must include a 'load' column.
         :type data: pd.DataFrame
         :param forecast_date: The date for which the forecast will be generated.
         :type forecast_date: pd.Timestamp
-        :return: A Series with the forecasted load profile for the next day and a list of days used 
+        :return: A Series with the forecasted load profile for the next day and a list of days used
                 to calculate the forecast.
         :rtype: tuple (pd.Series, list)
         """
         # Ensure the 'load' column exists
-        if 'load' not in data.columns:
+        if "load" not in data.columns:
             raise ValueError("Data must have a 'load' column.")
         # Filter historic data for the same month and day of the week
         month = forecast_date.month
         day_of_week = forecast_date.dayofweek
-        historic_data = data[(data.index.month == month) & (data.index.dayofweek == day_of_week)]
+        historic_data = data[
+            (data.index.month == month) & (data.index.dayofweek == day_of_week)
+        ]
         used_days = np.unique(historic_data.index.date)
         # Align all historic data to the forecast day
         aligned_data = []
@@ -950,7 +952,11 @@ class Forecast(object):
             daily_data = data[data.index.date == pd.Timestamp(day).date()]
             aligned_daily_data = daily_data.copy()
             aligned_daily_data.index = aligned_daily_data.index.map(
-                lambda x: x.replace(year=forecast_date.year, month=forecast_date.month, day=forecast_date.day)
+                lambda x: x.replace(
+                    year=forecast_date.year,
+                    month=forecast_date.month,
+                    day=forecast_date.day,
+                )
             )
             aligned_data.append(aligned_daily_data)
         # Combine all aligned historic data into a single DataFrame
@@ -958,7 +964,7 @@ class Forecast(object):
         # Compute the mean load for each timestamp
         forecast = combined_data.groupby(combined_data.index).mean()
         return forecast, used_days
-    
+
     def get_load_forecast(
         self,
         days_min_load_forecast: Optional[int] = 3,
@@ -1051,14 +1057,18 @@ class Forecast(object):
             ):
                 return False
             df = rh.df_final.copy()[[self.var_load_new]]
-        if method == "typical":  # using typical statistical data from a household power consumption
+        if (
+            method == "typical"
+        ):  # using typical statistical data from a household power consumption
             # Loading data from history file
             model_type = "load_clustering"
-            data_path = self.emhass_conf["data_path"] / str("data_train_" + model_type + ".pkl")
+            data_path = self.emhass_conf["data_path"] / str(
+                "data_train_" + model_type + ".pkl"
+            )
             with open(data_path, "rb") as fid:
                 data, _ = pickle.load(fid)
             # Resample the data if needed
-            current_freq = pd.Timedelta('30min')
+            current_freq = pd.Timedelta("30min")
             if self.freq != current_freq:
                 data = Forecast.resample_data(data, self.freq, current_freq)
             # Generate forecast
@@ -1067,20 +1077,28 @@ class Forecast(object):
             forecast = pd.DataFrame()
             for date in dates_list:
                 forecast_date = pd.Timestamp(date)
-                data.columns = ['load']
-                forecast_tmp, used_days = Forecast.get_typical_load_forecast(data, forecast_date)
-                self.logger.debug(f"Using {len(used_days)} days of data to generate the forecast.")
+                data.columns = ["load"]
+                forecast_tmp, used_days = Forecast.get_typical_load_forecast(
+                    data, forecast_date
+                )
+                self.logger.debug(
+                    f"Using {len(used_days)} days of data to generate the forecast."
+                )
                 # Normalize the forecast
-                forecast_tmp = forecast_tmp*self.plant_conf['maximum_power_from_grid']/9000
+                forecast_tmp = (
+                    forecast_tmp * self.plant_conf["maximum_power_from_grid"] / 9000
+                )
                 data_list.extend(forecast_tmp.values.ravel().tolist())
                 if len(forecast) == 0:
                     forecast = forecast_tmp
                 else:
                     forecast = pd.concat([forecast, forecast_tmp], axis=0)
             forecast.index = forecast.index.tz_convert(self.time_zone)
-            forecast_out = forecast.loc[forecast.index.intersection(self.forecast_dates)]
-            forecast_out.index.name = 'ts'
-            forecast_out = forecast_out.rename(columns={'load': 'yhat'})
+            forecast_out = forecast.loc[
+                forecast.index.intersection(self.forecast_dates)
+            ]
+            forecast_out.index.name = "ts"
+            forecast_out = forecast_out.rename(columns={"load": "yhat"})
         elif method == "naive":  # using a naive approach
             mask_forecast_out = (
                 df.index > days_list[-1] - self.optim_conf["delta_forecast_daily"]
