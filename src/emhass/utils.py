@@ -161,29 +161,48 @@ def update_params_with_ha_config(
     params = json.loads(params)
     # Update params
     currency_to_symbol = {
-        "EUR": "€",
-        "USD": "$",
-        "GBP": "£",
-        "YEN": "¥",
-        "JPY": "¥",
-        "AUD": "A$",
-        "CAD": "C$",
-        "CHF": "CHF",  # Swiss Franc has no special symbol
-        "CNY": "¥",
-        "INR": "₹",
-        "CZK": "Kč",
+        'EUR': '€',
+        'USD': '$',
+        'GBP': '£',
+        'YEN': '¥',
+        'JPY': '¥',
+        'AUD': 'A$',
+        'CAD': 'C$',
+        'CHF': 'CHF',  # Swiss Franc has no special symbol
+        'CNY': '¥',
+        'INR': '₹',
+        'CZK': 'Kč',
+        'BGN': 'лв',
+        'DKK': 'kr',
+        'HUF': 'Ft',
+        'PLN': 'zł',
+        'RON': 'Leu',
+        'SEK': 'kr',
+        'TRY': 'Lira',
+        'VEF': 'Bolivar',
+        'VND': 'Dong',
+        'THB': 'Baht',
+        'SGD': 'S$',
+        'IDR': 'Roepia',
+        'ZAR': 'Rand',
         # Add more as needed
     }
     if "currency" in ha_config.keys():
         ha_config["currency"] = currency_to_symbol.get(ha_config["currency"], "Unknown")
     else:
-        ha_config["currency"] = "€"
-    if "unit_system" not in ha_config.keys():
-        ha_config["unit_system"] = {"temperature": "°C"}
-
-    for k in range(params["optim_conf"]["number_of_deferrable_loads"]):
-        params["passed_data"]["custom_predicted_temperature_id"][k].update(
-            {"unit_of_measurement": ha_config["unit_system"]["temperature"]}
+        ha_config['currency'] = '€'
+    if 'unit_system' not in ha_config.keys():
+        ha_config['unit_system'] = {'temperature': '°C'}
+    
+    number_of_deferrable_loads = params["optim_conf"]["number_of_deferrable_loads"]
+    if 'num_def_loads' in params['passed_data'].keys():
+        number_of_deferrable_loads = params['passed_data']['num_def_loads']
+    if 'number_of_deferrable_loads' in params['passed_data'].keys():
+        number_of_deferrable_loads = params['passed_data']['number_of_deferrable_loads']
+    
+    for k in range(number_of_deferrable_loads):
+        params['passed_data']['custom_predicted_temperature_id'][k].update(
+            {"unit_of_measurement": ha_config['unit_system']['temperature']}
         )
     updated_passed_dict = {
         "custom_cost_fun_id": {
