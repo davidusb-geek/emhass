@@ -703,7 +703,7 @@ class Optimization:
                         predicted_temps[k] = predicted_temp
 
             else:
-                if def_total_timestep[k] > 0:
+                if def_total_timestep and def_total_timestep[k] > 0:
                     constraints.update(
                         {
                             "constraint_defload{}_energy".format(k): plp.LpConstraint(
@@ -747,7 +747,7 @@ class Optimization:
                     k, def_start_timestep[k], def_end_timestep[k]
                 )
             )
-            if def_total_timestep[k] > 0:
+            if def_total_timestep and def_total_timestep[k] > 0:
                 def_start, def_end, warning = Optimization.validate_def_timewindow(
                     def_start_timestep[k],
                     def_end_timestep[k],
@@ -870,7 +870,7 @@ class Optimization:
                     }
                 )
                 # P_def_bin2 must be 1 for exactly the correct number of timesteps.
-                if def_total_timestep[k] > 0:
+                if def_total_timestep and def_total_timestep[k] > 0:
                     constraints.update(
                         {
                             "constraint_pdef{}_start5".format(k): plp.LpConstraint(
