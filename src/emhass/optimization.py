@@ -84,7 +84,7 @@ class Optimization:
         self.var_load = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
         self.var_load_new = self.var_load + "_positive"
         self.costfun = costfun
-        # self.emhass_conf = emhass_conf
+        self.emhass_conf = emhass_conf
         self.logger = logger
         self.var_load_cost = var_load_cost
         self.var_prod_price = var_prod_price
