@@ -4,7 +4,6 @@
 import bz2
 import copy
 import logging
-import pathlib
 import pickle as cPickle
 from math import ceil
 from typing import Optional, Tuple
@@ -469,7 +468,8 @@ class Optimization:
             for i in range(len(self.plant_conf["pv_inverter_model"])):
                 if type(self.plant_conf["pv_inverter_model"][i]) == str:
                     cec_inverters = bz2.BZ2File(
-                        pathlib.Path(__file__).parent / "data/cec_inverters.pbz2", "rb"
+                        self.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2",
+                        "rb",
                     )
                     cec_inverters = cPickle.load(cec_inverters)
                     inverter = cec_inverters[self.plant_conf["pv_inverter_model"][i]]
@@ -479,7 +479,7 @@ class Optimization:
         else:
             if type(self.plant_conf["pv_inverter_model"][i]) == str:
                 cec_inverters = bz2.BZ2File(
-                    pathlib.Path(__file__).parent / "data/cec_inverters.pbz2", "rb"
+                    self.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2", "rb"
                 )
                 cec_inverters = cPickle.load(cec_inverters)
                 inverter = cec_inverters[self.plant_conf["pv_inverter_model"]]
