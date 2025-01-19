@@ -711,12 +711,10 @@ class Optimization:
                                     P_deferrable[k][i] * self.timeStep for i in set_I
                                 ),
                                 sense=plp.LpConstraintEQ,
-                                rhs=int(
-                                    self.optim_conf[
-                                        "nominal_power_of_deferrable_loads"
-                                    ][k]
-                                    * (self.freq.seconds * def_total_timestep[k])
-                                ),
+                                rhs=(self.timeStep * def_total_timestep[k])
+                                * self.optim_conf["nominal_power_of_deferrable_loads"][
+                                    k
+                                ],
                             )
                         }
                     )
@@ -751,7 +749,10 @@ class Optimization:
                 def_start, def_end, warning = Optimization.validate_def_timewindow(
                     def_start_timestep[k],
                     def_end_timestep[k],
-                    ceil((self.freq.seconds * def_total_timestep[k]) / self.timeStep),
+                    ceil(
+                        (60 / ((self.freq.seconds / 60) * def_total_timestep[k]))
+                        / self.timeStep
+                    ),
                     n,
                 )
             else:
@@ -876,7 +877,16 @@ class Optimization:
                             "constraint_pdef{}_start5".format(k): plp.LpConstraint(
                                 e=plp.lpSum(P_def_bin2[k][i] for i in set_I),
                                 sense=plp.LpConstraintEQ,
-                                rhs=def_total_timestep[k] / self.timeStep,
+                                rhs=(
+                                    (
+                                        60
+                                        / (
+                                            (self.freq.seconds / 60)
+                                            * def_total_timestep[k]
+                                        )
+                                    )
+                                    / self.timeStep
+                                ),
                             )
                         }
                     )
