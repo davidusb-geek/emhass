@@ -177,7 +177,10 @@ class Optimization:
                     soc_final = soc_init
                 else:
                     soc_final = self.plant_conf["battery_target_state_of_charge"]
-        if def_total_hours is None and def_total_timestep is None:
+        # If def_total_timestep os set, bypass def_total_hours
+        if def_total_timestep is not None:
+            def_total_hours = [x or 0 for x in def_total_hours]
+        elif def_total_hours is None:
             def_total_hours = self.optim_conf["operating_hours_of_each_deferrable_load"]
         if def_start_timestep is None:
             def_start_timestep = self.optim_conf[
