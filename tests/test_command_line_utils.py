@@ -35,8 +35,7 @@ emhass_conf["config_path"] = root / "config.json"
 emhass_conf["defaults_path"] = emhass_conf["root_path"] / "data/config_defaults.json"
 emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations.csv"
 
-
-# create loggerW
+# create logger
 logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
 

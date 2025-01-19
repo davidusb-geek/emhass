@@ -9,6 +9,8 @@ import os
 import pickle
 import pickle as cPickle
 from datetime import datetime, timedelta
+import re
+from itertools import zip_longest
 from typing import Optional
 
 import numpy as np
@@ -319,86 +321,94 @@ class Forecast(object):
                     # If weather_forecast_cache, set request days as twice as long to avoid length issues (add a buffer)
                     if self.params["passed_data"].get("weather_forecast_cache", False):
                         days_solcast = min((days_solcast * 2), 336)
-                    url = (
-                        "https://api.solcast.com.au/rooftop_sites/"
-                        + self.retrieve_hass_conf["solcast_rooftop_id"]
-                        + "/forecasts?hours="
-                        + str(days_solcast)
-                    )
-                    response = get(url, headers=headers)
-                    """import bz2 # Uncomment to save a serialized data for tests
-                    import _pickle as cPickle
-                    with bz2.BZ2File("data/test_response_solcast_get_method.pbz2", "w") as f: 
-                        cPickle.dump(response, f)"""
-                    # Verify the request passed
-                    if int(response.status_code) == 200:
-                        data = response.json()
-                    elif (
-                        int(response.status_code) == 402
-                        or int(response.status_code) == 429
-                    ):
-                        self.logger.error(
-                            "Solcast error: May have exceeded your subscription limit."
-                        )
-                        return False
-                    elif (
-                        int(response.status_code) >= 400
-                        or int(response.status_code) >= 202
-                    ):
-                        self.logger.error(
-                            "Solcast error: There was a issue with the solcast request, check solcast API key and rooftop ID."
-                        )
-                        self.logger.error(
-                            "Solcast error: Check that your subscription is valid and your network can connect to Solcast."
-                        )
-                        return False
-                    data_list = []
-                    for elm in data["forecasts"]:
-                        data_list.append(
-                            elm["pv_estimate"] * 1000
-                        )  # Converting kW to W
-                    # Check if the retrieved data has the correct length
-                    if len(data_list) < len(self.forecast_dates):
-                        self.logger.error(
-                            "Not enough data retried from Solcast service, try increasing the time step or use MPC."
-                        )
-                    else:
-                        # If runtime weather_forecast_cache is true save forecast result to file as cache
-                        if self.params["passed_data"].get(
-                            "weather_forecast_cache", False
+                    # Split `roof_id` into a list (support comma or space as separator)
+                    roof_ids = re.split(r"[,\s]+", self.retrieve_hass_conf["solcast_rooftop_id"].strip())
+                    # Summary list of data
+                    total_data_list = [0] * len(self.forecast_dates)
+                    # Iteration over individual `roof_id`
+                    for roof_id in roof_ids:
+                        url = (
+                            f"https://api.solcast.com.au/rooftop_sites/{roof_id}/forecasts?hours={days_solcast}"
+                        )                  
+                        response = get(url, headers=headers)
+                        """import bz2 # Uncomment to save a serialized data for tests
+                        import _pickle as cPickle
+                        with bz2.BZ2File("data/test_response_solcast_get_method.pbz2", "w") as f: 
+                            cPickle.dump(response, f)"""
+                        # Verify the request passed
+                        if int(response.status_code) == 200:
+                            data = response.json()
+                        elif (
+                            int(response.status_code) == 402
+                            or int(response.status_code) == 429
                         ):
-                            # Add x2 forecast periods for cached results. This adds a extra delta_forecast amount of days for a buffer
-                            cached_forecast_dates = self.forecast_dates.union(
-                                pd.date_range(
-                                    self.forecast_dates[-1],
-                                    periods=(len(self.forecast_dates) + 1),
-                                    freq=self.freq,
-                                )[1:]
+                            self.logger.error(
+                                "Solcast error: May have exceeded your subscription limit."
                             )
-                            cache_data_list = data_list[0 : len(cached_forecast_dates)]
-                            cache_data_dict = {
-                                "ts": cached_forecast_dates,
-                                "yhat": cache_data_list,
-                            }
-                            data_cache = pd.DataFrame.from_dict(cache_data_dict)
-                            data_cache.set_index("ts", inplace=True)
-                            with open(w_forecast_cache_path, "wb") as file:
-                                cPickle.dump(data_cache, file)
-                            if not os.path.isfile(w_forecast_cache_path):
-                                self.logger.warning(
-                                    "Solcast forecast data could not be saved to file."
-                                )
-                            else:
-                                self.logger.info(
-                                    "Saved the Solcast results to cache, for later reference."
-                                )
-                        # Trim request results to forecast_dates
-                        data_list = data_list[0 : len(self.forecast_dates)]
-                        data_dict = {"ts": self.forecast_dates, "yhat": data_list}
-                        # Define DataFrame
-                        data = pd.DataFrame.from_dict(data_dict)
-                        # Define index
-                        data.set_index("ts", inplace=True)
+                            return False
+                        elif (
+                            int(response.status_code) >= 400
+                            or (int(response.status_code) >= 202 and int(response.status_code) <= 299)
+                        ):
+                            self.logger.error(
+                                "Solcast error: There was a issue with the solcast request, check solcast API key and rooftop ID."
+                            )
+                            self.logger.error(
+                                "Solcast error: Check that your subscription is valid and your network can connect to Solcast."
+                            )
+                            return False
+                        # Data processing for the current `roof_id`
+                        data_list = []
+                        for elm in data["forecasts"]:
+                            data_list.append(
+                                elm["pv_estimate"] * 1000
+                            )  # Converting kW to W
+                        # Check if the retrieved data has the correct length
+                        if len(data_list) < len(self.forecast_dates):
+                            self.logger.error(
+                                "Not enough data retrieved from Solcast service, try increasing the time step or use MPC."
+                            )
+                            return False
+                        # Adding the data of the current `roof_id` to the total
+                        total_data_list = [
+                            total + current for total, current in zip_longest(total_data_list, data_list, fillvalue=0)
+                        ]
+                    # If runtime weather_forecast_cache is true save forecast result to file as cache
+                    if self.params["passed_data"].get(
+                        "weather_forecast_cache", False
+                    ):
+                        # Add x2 forecast periods for cached results. This adds a extra delta_forecast amount of days for a buffer
+                        cached_forecast_dates = self.forecast_dates.union(
+                            pd.date_range(
+                                self.forecast_dates[-1],
+                                periods=(len(self.forecast_dates) + 1),
+                                freq=self.freq,
+                            )[1:]
+                        )
+                        cache_data_list = total_data_list[0 : len(cached_forecast_dates)]
+                        cache_data_dict = {
+                            "ts": cached_forecast_dates,
+                            "yhat": cache_data_list,
+                        }
+                        data_cache = pd.DataFrame.from_dict(cache_data_dict)
+                        data_cache.set_index("ts", inplace=True)
+                        with open(w_forecast_cache_path, "wb") as file:
+                            cPickle.dump(data_cache, file)
+                        if not os.path.isfile(w_forecast_cache_path):
+                            self.logger.warning(
+                                "Solcast forecast data could not be saved to file."
+                            )
+                        else:
+                            self.logger.info(
+                                "Saved the Solcast results to cache, for later reference."
+                            )
+                    # Trim request results to forecast_dates
+                    total_data_list = total_data_list[0 : len(self.forecast_dates)]
+                    data_dict = {"ts": self.forecast_dates, "yhat": total_data_list}
+                    # Define DataFrame
+                    data = pd.DataFrame.from_dict(data_dict)
+                    # Define index
+                    data.set_index("ts", inplace=True)
                 # Else, notify user to update cache
                 else:
                     self.logger.error("Unable to obtain Solcast cache file.")
@@ -906,33 +916,35 @@ class Forecast(object):
             # Upsampling
             # Use 'asfreq' to create empty slots, then interpolate
             resampled_data = data.resample(freq).asfreq()
-            resampled_data = resampled_data.interpolate(method='time')
+            resampled_data = resampled_data.interpolate(method="time")
         else:
             # No resampling needed
             resampled_data = data.copy()
         return resampled_data
-    
+
     @staticmethod
     def get_typical_load_forecast(data, forecast_date):
         r"""
         Forecast the load profile for the next day based on historic data.
 
-        :param data: A DataFrame with a DateTimeIndex containing the historic load data. 
+        :param data: A DataFrame with a DateTimeIndex containing the historic load data.
                     Must include a 'load' column.
         :type data: pd.DataFrame
         :param forecast_date: The date for which the forecast will be generated.
         :type forecast_date: pd.Timestamp
-        :return: A Series with the forecasted load profile for the next day and a list of days used 
+        :return: A Series with the forecasted load profile for the next day and a list of days used
                 to calculate the forecast.
         :rtype: tuple (pd.Series, list)
         """
         # Ensure the 'load' column exists
-        if 'load' not in data.columns:
+        if "load" not in data.columns:
             raise ValueError("Data must have a 'load' column.")
         # Filter historic data for the same month and day of the week
         month = forecast_date.month
         day_of_week = forecast_date.dayofweek
-        historic_data = data[(data.index.month == month) & (data.index.dayofweek == day_of_week)]
+        historic_data = data[
+            (data.index.month == month) & (data.index.dayofweek == day_of_week)
+        ]
         used_days = np.unique(historic_data.index.date)
         # Align all historic data to the forecast day
         aligned_data = []
@@ -940,7 +952,11 @@ class Forecast(object):
             daily_data = data[data.index.date == pd.Timestamp(day).date()]
             aligned_daily_data = daily_data.copy()
             aligned_daily_data.index = aligned_daily_data.index.map(
-                lambda x: x.replace(year=forecast_date.year, month=forecast_date.month, day=forecast_date.day)
+                lambda x: x.replace(
+                    year=forecast_date.year,
+                    month=forecast_date.month,
+                    day=forecast_date.day,
+                )
             )
             aligned_data.append(aligned_daily_data)
         # Combine all aligned historic data into a single DataFrame
@@ -948,7 +964,7 @@ class Forecast(object):
         # Compute the mean load for each timestamp
         forecast = combined_data.groupby(combined_data.index).mean()
         return forecast, used_days
-    
+
     def get_load_forecast(
         self,
         days_min_load_forecast: Optional[int] = 3,
@@ -1041,14 +1057,18 @@ class Forecast(object):
             ):
                 return False
             df = rh.df_final.copy()[[self.var_load_new]]
-        if method == "typical":  # using typical statistical data from a household power consumption
+        if (
+            method == "typical"
+        ):  # using typical statistical data from a household power consumption
             # Loading data from history file
             model_type = "load_clustering"
-            data_path = self.emhass_conf["data_path"] / str("data_train_" + model_type + ".pkl")
+            data_path = self.emhass_conf["data_path"] / str(
+                "data_train_" + model_type + ".pkl"
+            )
             with open(data_path, "rb") as fid:
                 data, _ = pickle.load(fid)
             # Resample the data if needed
-            current_freq = pd.Timedelta('30min')
+            current_freq = pd.Timedelta("30min")
             if self.freq != current_freq:
                 data = Forecast.resample_data(data, self.freq, current_freq)
             # Generate forecast
@@ -1057,20 +1077,28 @@ class Forecast(object):
             forecast = pd.DataFrame()
             for date in dates_list:
                 forecast_date = pd.Timestamp(date)
-                data.columns = ['load']
-                forecast_tmp, used_days = Forecast.get_typical_load_forecast(data, forecast_date)
-                self.logger.debug(f"Using {len(used_days)} days of data to generate the forecast.")
+                data.columns = ["load"]
+                forecast_tmp, used_days = Forecast.get_typical_load_forecast(
+                    data, forecast_date
+                )
+                self.logger.debug(
+                    f"Using {len(used_days)} days of data to generate the forecast."
+                )
                 # Normalize the forecast
-                forecast_tmp = forecast_tmp*self.plant_conf['maximum_power_from_grid']/9000
+                forecast_tmp = (
+                    forecast_tmp * self.plant_conf["maximum_power_from_grid"] / 9000
+                )
                 data_list.extend(forecast_tmp.values.ravel().tolist())
                 if len(forecast) == 0:
                     forecast = forecast_tmp
                 else:
                     forecast = pd.concat([forecast, forecast_tmp], axis=0)
             forecast.index = forecast.index.tz_convert(self.time_zone)
-            forecast_out = forecast.loc[forecast.index.intersection(self.forecast_dates)]
-            forecast_out.index.name = 'ts'
-            forecast_out = forecast_out.rename(columns={'load': 'yhat'})
+            forecast_out = forecast.loc[
+                forecast.index.intersection(self.forecast_dates)
+            ]
+            forecast_out.index.name = "ts"
+            forecast_out = forecast_out.rename(columns={"load": "yhat"})
         elif method == "naive":  # using a naive approach
             mask_forecast_out = (
                 df.index > days_list[-1] - self.optim_conf["delta_forecast_daily"]

@@ -172,22 +172,41 @@ def update_params_with_ha_config(
         'CNY': '¥',
         'INR': '₹',
         'CZK': 'Kč',
+        'BGN': 'лв',
+        'DKK': 'kr',
+        'HUF': 'Ft',
+        'PLN': 'zł',
+        'RON': 'Leu',
+        'SEK': 'kr',
+        'TRY': 'Lira',
+        'VEF': 'Bolivar',
+        'VND': 'Dong',
+        'THB': 'Baht',
+        'SGD': 'S$',
+        'IDR': 'Roepia',
+        'ZAR': 'Rand',
         # Add more as needed
     }
-    if 'currency' in ha_config.keys():
-        ha_config['currency'] = currency_to_symbol.get(ha_config['currency'], 'Unknown')
+    if "currency" in ha_config.keys():
+        ha_config["currency"] = currency_to_symbol.get(ha_config["currency"], "Unknown")
     else:
         ha_config['currency'] = '€'
     if 'unit_system' not in ha_config.keys():
         ha_config['unit_system'] = {'temperature': '°C'}
     
-    for k in range(params["optim_conf"]["number_of_deferrable_loads"]):
+    number_of_deferrable_loads = params["optim_conf"]["number_of_deferrable_loads"]
+    if 'num_def_loads' in params['passed_data'].keys():
+        number_of_deferrable_loads = params['passed_data']['num_def_loads']
+    if 'number_of_deferrable_loads' in params['passed_data'].keys():
+        number_of_deferrable_loads = params['passed_data']['number_of_deferrable_loads']
+    
+    for k in range(number_of_deferrable_loads):
         params['passed_data']['custom_predicted_temperature_id'][k].update(
             {"unit_of_measurement": ha_config['unit_system']['temperature']}
         )
     updated_passed_dict = {
         "custom_cost_fun_id": {
-            "unit_of_measurement": ha_config['currency'],
+            "unit_of_measurement": ha_config["currency"],
         },
         "custom_unit_load_cost_id": {
             "unit_of_measurement": f"{ha_config['currency']}/kWh",
@@ -249,9 +268,9 @@ def treat_runtimeparams(
     params["plant_conf"].update(plant_conf)
 
     # Check defaults on HA retrieved config
-    default_currency_unit = '€'
-    default_temperature_unit = '°C'
-    
+    default_currency_unit = "€"
+    default_temperature_unit = "°C"
+
     # Some default data needed
     custom_deferrable_forecast_id = []
     custom_predicted_temperature_id = []
@@ -462,10 +481,22 @@ def treat_runtimeparams(
             else:
                 soc_final = runtimeparams["soc_final"]
             params["passed_data"]["soc_final"] = soc_final
-
-            params["passed_data"]["operating_hours_of_each_deferrable_load"] = params[
-                "optim_conf"
-            ].get("operating_hours_of_each_deferrable_load", None)
+            if "operating_timesteps_of_each_deferrable_load" in runtimeparams.keys():
+                params["passed_data"]["operating_timesteps_of_each_deferrable_load"] = (
+                    runtimeparams["operating_timesteps_of_each_deferrable_load"]
+                )
+                params["optim_conf"]["operating_timesteps_of_each_deferrable_load"] = (
+                    runtimeparams["operating_timesteps_of_each_deferrable_load"]
+                )
+            else:
+                params["passed_data"]["operating_hours_of_each_deferrable_load"] = (
+                    params["optim_conf"].get(
+                        "operating_hours_of_each_deferrable_load", None
+                    )
+                )
+                params["optim_conf"][
+                    "operating_timesteps_of_each_deferrable_load"
+                ] = runtimeparams["operating_timesteps_of_each_deferrable_load"] = None
             params["passed_data"]["start_timesteps_of_each_deferrable_load"] = params[
                 "optim_conf"
             ].get("start_timesteps_of_each_deferrable_load", None)
