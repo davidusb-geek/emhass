@@ -4,7 +4,6 @@
 import bz2
 import copy
 import logging
-import pathlib
 import pickle as cPickle
 from math import ceil
 from typing import Optional, Tuple
@@ -85,7 +84,7 @@ class Optimization:
         self.var_load = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
         self.var_load_new = self.var_load + "_positive"
         self.costfun = costfun
-        # self.emhass_conf = emhass_conf
+        self.emhass_conf = emhass_conf
         self.logger = logger
         self.var_load_cost = var_load_cost
         self.var_prod_price = var_prod_price
@@ -177,7 +176,10 @@ class Optimization:
                     soc_final = soc_init
                 else:
                     soc_final = self.plant_conf["battery_target_state_of_charge"]
-        if def_total_hours is None and def_total_timestep is None:
+        # If def_total_timestep os set, bypass def_total_hours
+        if def_total_timestep is not None:
+            def_total_hours = [x or 0 for x in def_total_hours]
+        elif def_total_hours is None:
             def_total_hours = self.optim_conf["operating_hours_of_each_deferrable_load"]
         if def_start_timestep is None:
             def_start_timestep = self.optim_conf[
@@ -466,7 +468,8 @@ class Optimization:
             for i in range(len(self.plant_conf["pv_inverter_model"])):
                 if type(self.plant_conf["pv_inverter_model"][i]) == str:
                     cec_inverters = bz2.BZ2File(
-                        pathlib.Path(__file__).parent / "data/cec_inverters.pbz2", "rb"
+                        self.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2",
+                        "rb",
                     )
                     cec_inverters = cPickle.load(cec_inverters)
                     inverter = cec_inverters[self.plant_conf["pv_inverter_model"][i]]
@@ -476,7 +479,7 @@ class Optimization:
         else:
             if type(self.plant_conf["pv_inverter_model"][i]) == str:
                 cec_inverters = bz2.BZ2File(
-                    pathlib.Path(__file__).parent / "data/cec_inverters.pbz2", "rb"
+                    self.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2", "rb"
                 )
                 cec_inverters = cPickle.load(cec_inverters)
                 inverter = cec_inverters[self.plant_conf["pv_inverter_model"]]

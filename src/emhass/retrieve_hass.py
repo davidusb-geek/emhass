@@ -342,15 +342,15 @@ class RetrieveHass:
         if isinstance(var_replace_zero, list) and all(
             item in var_replace_zero for item in self.var_list
         ):
-            var_replace_zero = var_replace_zero
+            pass
         else:
-            var_replace_zero = None
+            var_replace_zero = []
         if isinstance(var_interp, list) and all(
             item in var_interp for item in self.var_list
         ):
-            var_interp = var_interp
+            pass
         else:
-            var_interp = None
+            var_interp = []
         # Apply minimum values
         if set_zero_min:
             self.df_final.clip(lower=0.0, inplace=True, axis=1)
