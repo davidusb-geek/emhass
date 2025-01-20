@@ -646,12 +646,12 @@ def naive_mpc_optim(
     prediction_horizon = input_data_dict["params"]["passed_data"]["prediction_horizon"]
     soc_init = input_data_dict["params"]["passed_data"]["soc_init"]
     soc_final = input_data_dict["params"]["passed_data"]["soc_final"]
-    def_total_hours = input_data_dict["params"]["optim_conf"][
-        "operating_hours_of_each_deferrable_load"
-    ]
-    def_total_timestep = input_data_dict["params"]["optim_conf"][
-        "operating_timesteps_of_each_deferrable_load"
-    ]
+    def_total_hours = input_data_dict["params"]["optim_conf"].get(
+        "operating_hours_of_each_deferrable_load", None
+    )
+    def_total_timestep = input_data_dict["params"]["optim_conf"].get(
+        "operating_timesteps_of_each_deferrable_load", None
+    )
     def_start_timestep = input_data_dict["params"]["optim_conf"][
         "start_timesteps_of_each_deferrable_load"
     ]
