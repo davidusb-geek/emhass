@@ -381,7 +381,7 @@ class Optimization:
                 * self.timeStep
                 * (
                     self.optim_conf["weight_battery_discharge"] * P_sto_pos[i]
-                    + self.optim_conf["weight_battery_charge"] * P_sto_neg[i]
+                    - self.optim_conf["weight_battery_charge"] * P_sto_neg[i]
                 )
                 for i in set_I
             )
