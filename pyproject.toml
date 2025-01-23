@@ -23,22 +23,22 @@ classifiers = [
 ]
 
 dependencies = [
-    "numpy==1.26.4",
-    "scipy==1.12.0",
-    "pandas<=2.0.3",
-    "pvlib>=0.10.2",
-    "protobuf>=3.0.0",
-    "pytz>=2021.1",
+    "numpy>=1.26.4, <2.3.0",
+    "scipy==1.13.1",
+    "pandas>=2.1.1",
+    "pvlib>=0.10.3",
+    "protobuf>=5.29.1",
+    "pytz>=2023.4",
     "requests>=2.25.1",
-    "beautifulsoup4>=4.9.3",
-    "h5py==3.12.1",
-    "pulp>=2.4",
-    "pyyaml>=5.4.1",
-    "tables<=3.9.1",
-    "skforecast==0.14.0",
-    "flask>=2.0.3",
-    "waitress>=2.1.1",
-    "plotly>=5.6.0",
+    "beautifulsoup4>=4.12.3",
+    "h5py>=3.12.1",
+    "pulp==2.8.0",
+    "pyyaml>=6.0.1",
+    "tables>=3.9.1",
+    "skforecast>=0.14.0",
+    "flask>=3.1.0",
+    "waitress>=3.0.2",
+    "plotly>=6.0.0rc0"
 ]
 
 [project.optional-dependencies]
