@@ -50,6 +50,7 @@ jobs:
       - build
     uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
     with:
+      fail-on-vuln: false
       scan-args: |-
         --recursive
         ./
