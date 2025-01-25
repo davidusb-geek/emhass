@@ -122,7 +122,6 @@ jobs:
       scan-args: |-
         --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
         --lockfile=poetry.lock:./${{matrix.platform.target_arch }}.lock
-        --fail-on-vuln: false
     permissions:
       security-events: write
       contents: read
