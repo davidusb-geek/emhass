@@ -111,7 +111,7 @@ LABEL \
 
 # build EMHASS
 RUN uv venv
-RUN uv pip install --verbose .
+RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] && uv pip install --verbose --extra-index-url https://www.piwheels.org/simple . || uv pip install --verbose .
 RUN uv lock
 ENTRYPOINT [ "uv" "run", "--link-mode=copy", "--frozen", "-m", "emhass.web_server"]
 
