@@ -57,7 +57,7 @@ RUN apt-get update \
     patchelf \
     cmake \
     meson \
-    ninja-build \
+    ninja-build
 
 # Install uv (pip alternative)
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
