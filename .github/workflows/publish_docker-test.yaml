@@ -116,7 +116,7 @@ jobs:
             { target_arch: armhf },
             { target_arch: aarch64 },
           ]
-    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml"
+    uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
     with:
       download-artifact: "${{ matrix.platform.target_arch }}-packages"
       matrix-property: "${{ matrix.platform.target_arch }}-"
