@@ -25,7 +25,7 @@ jobs:
         name: python-package-distributions
         path: dist/
   osv-scan:
-    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml"
+    uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
     needs:
     - build
     with:
