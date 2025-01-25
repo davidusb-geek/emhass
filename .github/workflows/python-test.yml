@@ -48,7 +48,7 @@ jobs:
   scan-pr:
     needs:
       - build
-    uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@v0.0.1"
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml"
     with:
       scan-args: |-
         --recursive

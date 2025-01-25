@@ -73,7 +73,7 @@ jobs:
             { target_arch: aarch64 }
           ]
     # Check Docker image debian and python packages list for known vulnerabilities
-    uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml"
     with:
       download-artifact: "${{ matrix.platform.target_arch }}-packages"
       matrix-property: "${{ matrix.platform.target_arch }}-"
