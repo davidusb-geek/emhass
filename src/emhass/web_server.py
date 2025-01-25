@@ -538,7 +538,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--no_response",
-        action="store_true",
+        type=bool,
         default=False,
         help="This is set if json response errors occur",
     )

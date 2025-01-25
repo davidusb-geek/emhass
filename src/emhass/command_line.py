@@ -1518,7 +1518,7 @@ def main():
     )
     parser.add_argument(
         "--log2file",
-        action="store_true",
+        type=bool,
         default=False,
         help="Define if we should log to a file or not",
     )
@@ -1536,7 +1536,7 @@ def main():
     )
     parser.add_argument(
         "--debug",
-        action="store_true",
+        type=bool,
         default=False,
         help="Use True for testing purposes",
     )
