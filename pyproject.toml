@@ -44,13 +44,6 @@ dependencies = [
 docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
 test = ["requests_mock", "pytest", "coverage", "snakeviz", "ruff", "tabulate"]
 
-[tool.uv]
-index-url = """
-https://www.piwheels.org/simple; sys_platform == 'linux' and platform_machine in ('armv7l', 'armv6l', 'armhf')
-https://pypi.org/simple; sys_platform == 'linux' and platform_machine in ('aarch64', 'amd64')
-"""
-extra-index-url = ["https://pypi.org/simple; sys_platform == 'linux' and platform_machine in ('armv7l', 'armv6l', 'armhf')"]
-
 [tool.uv.workspace]
 members = ["emhass"]
 

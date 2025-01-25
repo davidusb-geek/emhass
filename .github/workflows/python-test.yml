@@ -12,20 +12,8 @@ permissions:
 
 jobs:
   # Google OSV-Scanner
-  scan-pr:
-    uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@v0.0.1"
-    with:
-      scan-args: |-
-        --recursive
-        ./
-    permissions:
-      security-events: write
-      contents: read
-      actions: read
   build:
     runs-on: ${{ matrix.os }}
-    needs:
-      - scan-pr
     strategy:
       fail-fast: false
       matrix:
@@ -37,26 +25,33 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
       - name: Install uv
         uses: astral-sh/setup-uv@v5
-
       - name: Set up Python
-        run: uv python install
+        uses: actions/setup-python@v5
         with:
           python-version-file: ".python-version"
-
       - name: Special dependencies for macos
         run: |
           brew install hdf5
           uv pip install numpy==1.26.0
           uv pip install tables==3.9.1
         if: ${{ matrix.os == 'macos-latest' }}
-
       - name: Install EMHASS with test dependencies
         run: |
-          uv pip install .[test]
-
+          uv pip install .[test] && uv lock
       - name: Test with pytest
         run: |
            uv run pytest
+  scan-pr:
+    needs:
+      - build
+    uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@v0.0.1"
+    with:
+      scan-args: |-
+        --recursive
+        ./
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
