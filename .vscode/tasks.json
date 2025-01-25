@@ -3,18 +3,13 @@
     "tasks": [
         {
             "label": "EMHASS install",
-            "command": "pip3",
+            "command": "uv",
             "group": {
                 "kind": "build",
                 "isDefault": true
             },
             "args": [
-                "install",
-                "--no-deps",
-                "--force-reinstall",
-                "--break-system-packages",
-                "--editable",
-                "."
+                "pip", "install", "--force-reinstall", "--index-strategy", "unsafe-best-match", ".[test]"
             ],
             "presentation": {
                 "echo": true,
@@ -24,13 +19,13 @@
         },
         {
             "label": "EMHASS install with dependencies",
-            "command": "pip3",
+            "command": "uv",
             "group": {
                 "kind": "build",
                 "isDefault": true
             },
             "args": [
-                "install", "--break-system-packages", "--force-reinstall", "."
+                "pip", "install", "--reinstall", "--index-strategy", "unsafe-best-match", ".[test]"
             ],
             "presentation": {
                 "echo": true,

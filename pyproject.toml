@@ -21,7 +21,6 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Operating System :: OS Independent",
 ]
-
 dependencies = [
     "numpy>=1.26.4, <2.3.0",
     "scipy==1.13.1",
@@ -35,7 +34,7 @@ dependencies = [
     "pulp==2.8.0",
     "pyyaml>=6.0.1",
     "tables>=3.9.1",
-    "skforecast>=0.14.0",
+    "skforecast>=0.9.0",
     "flask>=3.1.0",
     "waitress>=3.0.2",
     "plotly>=6.0.0rc0"
@@ -44,6 +43,18 @@ dependencies = [
 [project.optional-dependencies]
 docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
 test = ["requests_mock", "pytest", "coverage", "snakeviz", "ruff", "tabulate"]
+
+[[tool.uv.index]]
+name = "piwheels-arm32"
+url = "https://www.piwheels.org/simple"
+condition = "sys_platform == 'linux' and platform_machine in ['armv7l', 'armv6l'] and platform_python_implementation == 'CPython'"
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+
+[tool.uv.workspace]
+members = ["emhass"]
 
 [tool.setuptools.packages]
 find = { where = ["src"] }
