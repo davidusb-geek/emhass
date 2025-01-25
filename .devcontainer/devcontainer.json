@@ -20,12 +20,12 @@
 
 
 	// Security issue, may be needed for Podman
-	// "runArgs": [
-	// 	"--userns=keep-id",
-	// 	"--pid=host"
-	// ],
-	// "remoteUser": "root",
-	// "containerUser": "root",
+	"runArgs": [
+		"--userns=keep-id",
+		"--pid=host"
+	],
+	"remoteUser": "root",
+	"containerUser": "root",
 
 
 	"customizations": {
@@ -46,6 +46,6 @@
 		}
 	  },
 
-	"postCreateCommand": ["uv", "pip", "install", "-r", "pyproject.toml", "--extra", "test", "--index-strategy", "first-index"]
+	"postCreateCommand": ["uv", "pip", "install", "--cache-dir", ".cache", "--verbose", ".[test]"]
 	  
 }
