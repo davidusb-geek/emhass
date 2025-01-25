@@ -62,7 +62,7 @@ jobs:
       - name: Export Debian package list
         run: mkdir OSV && docker run --rm --entrypoint '/bin/cat' ${{ steps.cache.outputs.imageid }} /var/lib/dpkg/status >> ./OSV/${{ matrix.platform.target_arch }}.status
       - name: Export Python package list
-        run: docker run --rm --entrypoint '/usr/bin/pip3' ${{ steps.cache.outputs.imageid }} freeze >> ./OSV/${{ matrix.platform.target_arch }}-requirements.txt
+        run: docker run --rm --entrypoint '/bin/cat' ${{ steps.cache.outputs.imageid }} uv.lock >> ./OSV/${{ matrix.platform.target_arch }}.lock
       - name: Upload package list as digest
         uses: actions/upload-artifact@v4
         with:
@@ -122,7 +122,7 @@ jobs:
       matrix-property: "${{ matrix.platform.target_arch }}-"
       scan-args: |-
         --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
-        --lockfile=requirements.txt:./${{matrix.platform.target_arch }}-requirements.txt
+        --lockfile=poetry.lock:./${{matrix.platform.target_arch }}.lock
         --fail-on-vuln: false
     permissions:
       security-events: write
