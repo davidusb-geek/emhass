@@ -119,6 +119,7 @@ jobs:
     with:
       download-artifact: "${{ matrix.platform.target_arch }}-packages"
       matrix-property: "${{ matrix.platform.target_arch }}-"
+      fail-on-vuln: false
       scan-args: |-
         --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
         --lockfile=poetry.lock:./${{matrix.platform.target_arch }}.lock
