@@ -38,19 +38,19 @@ RUN apt-get update \
     # coinor-cbc \
     # coinor-libcbc-dev
 
-    #     libffi-dev \
-    #     gfortran \
-    #     netcdf-bin \
-    #     libnetcdf-dev \
-    #     libglpk-dev \
-    #     glpk-utils \
-    #     libatlas3-base \
-    #     libatlas-base-dev \
-    #     libopenblas-dev \
-    #     libopenblas0-pthread \
-    #     libgfortran5 \
-    #     libsz2 \
-    #     libaec0 \
+    # libffi-dev \
+    # gfortran \
+    # netcdf-bin \
+    # libnetcdf-dev \
+    # libglpk-dev \
+    # glpk-utils \
+    # libatlas3-base \
+    # libatlas-base-dev \
+    # libopenblas-dev \
+    # libopenblas0-pthread \
+    # libgfortran5 \
+    # libsz2 \
+    # libaec0 \
 
 # Install uv (pip alternative)
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
@@ -111,11 +111,12 @@ LABEL \
 
 # build EMHASS
 RUN uv venv
-RUN uv pip install --index-strategy unsafe-best-match  .
+RUN uv pip install --verbose .
+RUN uv lock
 ENTRYPOINT [ "uv" "run", "--link-mode=copy", "--frozen", "-m", "emhass.web_server"]
 
 # for running Unittest
 #COPY tests/ /app/tests
 #RUN apt-get update &&  apt-get install python3-requests-mock -y
 #COPY data/ /app/data/
-#ENTRYPOINT ["python3","-m","unittest","discover","-s","./tests","-p","test_*.py"]
+#ENTRYPOINT ["uv","run","unittest","discover","-s","./tests","-p","test_*.py"]

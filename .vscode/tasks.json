@@ -9,7 +9,7 @@
                 "isDefault": true
             },
             "args": [
-                "pip", "install", "--force-reinstall", "--index-strategy", "unsafe-best-match", ".[test]"
+                "pip", "install", "--force-reinstall", ".[test]"
             ],
             "presentation": {
                 "echo": true,
@@ -25,7 +25,7 @@
                 "isDefault": true
             },
             "args": [
-                "pip", "install", "--reinstall", "--index-strategy", "unsafe-best-match", ".[test]"
+                "pip", "install", "--reinstall", ".[test]"
             ],
             "presentation": {
                 "echo": true,
