@@ -8,7 +8,6 @@ import os
 import pickle
 import re
 import threading
-from distutils.util import strtobool
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -539,8 +538,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--no_response",
-        type=strtobool,
-        default="False",
+        action="store_true",
+        default=False,
         help="This is set if json response errors occur",
     )
     args = parser.parse_args()
