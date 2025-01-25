@@ -49,8 +49,15 @@ RUN apt-get update \
     # libopenblas-dev \
     # libopenblas0-pthread \
     # libgfortran5 \
-    # libsz2 \
-    # libaec0 \
+
+# add build packadges (just in case wheel does not exist)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+    gcc \
+    patchelf \
+    cmake \
+    meson \
+    ninja-build \
 
 # Install uv (pip alternative)
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
@@ -113,6 +120,16 @@ LABEL \
 RUN uv venv
 RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] && uv pip install --verbose --extra-index-url https://www.piwheels.org/simple . || uv pip install --verbose .
 RUN uv lock
+
+# remove build only packages
+RUN apt-get purge -y --auto-remove \
+    gcc \
+    patchelf \
+    cmake \
+    meson \
+    ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
 ENTRYPOINT [ "uv" "run", "--link-mode=copy", "--frozen", "-m", "emhass.web_server"]
 
 # for running Unittest
