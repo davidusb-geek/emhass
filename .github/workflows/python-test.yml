@@ -39,7 +39,7 @@ jobs:
         if: ${{ matrix.os == 'macos-latest' }}
       - name: Install EMHASS with test dependencies
         run: |
-          uv pip install .[test] && uv lock
+          uv venv && uv pip install .[test] && uv lock
       - name: Test with pytest
         run: |
            uv run pytest
