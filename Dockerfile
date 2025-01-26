@@ -117,7 +117,7 @@ LABEL \
     org.opencontainers.image.description="EMHASS python package and requirements, in Home Assistant Debian container."
 
 # build EMHASS
-RUN uv venv
+RUN uv venv && . .venv/bin/activate
 RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] && uv pip install --verbose --extra-index-url https://www.piwheels.org/simple . || uv pip install --verbose .
 RUN uv lock
 
