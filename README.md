@@ -528,6 +528,7 @@ Here is the list of the other additional dictionary keys that can be passed at r
 - `nominal_power_of_deferrable_loads` for the nominal power for each deferrable load in Watts.
 
 - `operating_hours_of_each_deferrable_load` for the total number of hours that each deferrable load should operate.
+  - Alteratively, you can pass `operating_timesteps_of_each_deferrable_load` to set the total number of timesteps for each deferrable load. *(better parameter to use for setting under 1 hr)* 
 
 - `start_timesteps_of_each_deferrable_load` for the timestep from which each deferrable load is allowed to operate (if you don't want the deferrable load to use the whole optimization timewindow).
 
