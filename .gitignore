@@ -56,6 +56,7 @@ data/entities/*.json
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
+uv.lock
 
 # Unit test / coverage reports
 htmlcov/
