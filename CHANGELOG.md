@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.3 - 2025-01-26
+### Improvement
+- PVLib DBs append custom EMHASS modules and inverters. Thanks to @GeoDerp
+- Added a `def_total_timestep` parameter (runtime only for now) that can be used instead of `def_total_hours` for passing timestep number instead of hour number. Thanks to @GeoDerp
+- Updated list of currencies in utils.py. Thanks to @BDVGitHub
+- Multiple roof_id support. Thanks to @radim2tej
+### Fix
+- Fix inconsistencies with Modules and Inverters from PVLib (thanks to help from @RafAustralia)
+- Fix issue with NAN sensors causing crash errors if incorrect (error handling) @purcell-lab
+- Fix Database path on optimization file (Thanks to @paulhomes for finding this issue)
+- Fixed weight_battery_charge sign problem. Thanks to @radim2tej
+- Fixed bug with out of index in list when retrieving config params from HA
+
 ## 0.12.2 - 2025-01-01
 ### Patch fix
 - Fixed Problem with calling weather-forecast-cache
