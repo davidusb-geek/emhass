@@ -24,7 +24,7 @@ jobs:
       matrix:
         platform:
           [
-            { target_arch: amd64, os_version: debian }
+            { target_arch: amd64, os_version: debian },
             { target_arch: armv7, os_version: debian },
             { target_arch: armhf, os_version: raspbian },
             { target_arch: aarch64, os_version: debian },
