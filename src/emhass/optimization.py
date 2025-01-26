@@ -4,7 +4,6 @@
 import bz2
 import copy
 import logging
-import pathlib
 import pickle as cPickle
 from math import ceil
 from typing import Optional, Tuple
@@ -85,7 +84,7 @@ class Optimization:
         self.var_load = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
         self.var_load_new = self.var_load + "_positive"
         self.costfun = costfun
-        # self.emhass_conf = emhass_conf
+        self.emhass_conf = emhass_conf
         self.logger = logger
         self.var_load_cost = var_load_cost
         self.var_prod_price = var_prod_price
@@ -120,6 +119,7 @@ class Optimization:
         soc_init: Optional[float] = None,
         soc_final: Optional[float] = None,
         def_total_hours: Optional[list] = None,
+        def_total_timestep: Optional[list] = None,
         def_start_timestep: Optional[list] = None,
         def_end_timestep: Optional[list] = None,
         debug: Optional[bool] = False,
@@ -152,6 +152,9 @@ class Optimization:
         :param def_total_hours: The functioning hours for this iteration for each deferrable load. \
             (For continuous deferrable loads: functioning hours at nominal power)
         :type def_total_hours: list
+        :param def_total_timestep: The functioning timesteps for this iteration for each deferrable load. \
+            (For continuous deferrable loads: functioning timesteps at nominal power)
+        :type def_total_timestep: list
         :param def_start_timestep: The timestep as from which each deferrable load is allowed to operate.
         :type def_start_timestep: list
         :param def_end_timestep: The timestep before which each deferrable load should operate.
@@ -173,8 +176,13 @@ class Optimization:
                     soc_final = soc_init
                 else:
                     soc_final = self.plant_conf["battery_target_state_of_charge"]
-        if def_total_hours is None:
+
+        # If def_total_timestep os set, bypass def_total_hours
+        if def_total_timestep is not None:
+            def_total_hours = [0 if x != 0 else x for x in def_total_hours]
+        elif def_total_hours is None:
             def_total_hours = self.optim_conf["operating_hours_of_each_deferrable_load"]
+
         if def_start_timestep is None:
             def_start_timestep = self.optim_conf[
                 "start_timesteps_of_each_deferrable_load"
@@ -381,7 +389,7 @@ class Optimization:
                 * self.timeStep
                 * (
                     self.optim_conf["weight_battery_discharge"] * P_sto_pos[i]
-                    + self.optim_conf["weight_battery_charge"] * P_sto_neg[i]
+                    - self.optim_conf["weight_battery_charge"] * P_sto_neg[i]
                 )
                 for i in set_I
             )
@@ -462,7 +470,8 @@ class Optimization:
             for i in range(len(self.plant_conf["pv_inverter_model"])):
                 if type(self.plant_conf["pv_inverter_model"][i]) == str:
                     cec_inverters = bz2.BZ2File(
-                        pathlib.Path(__file__).parent / "data/cec_inverters.pbz2", "rb"
+                        self.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2",
+                        "rb",
                     )
                     cec_inverters = cPickle.load(cec_inverters)
                     inverter = cec_inverters[self.plant_conf["pv_inverter_model"][i]]
@@ -472,7 +481,7 @@ class Optimization:
         else:
             if type(self.plant_conf["pv_inverter_model"][i]) == str:
                 cec_inverters = bz2.BZ2File(
-                    pathlib.Path(__file__).parent / "data/cec_inverters.pbz2", "rb"
+                    self.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2", "rb"
                 )
                 cec_inverters = cPickle.load(cec_inverters)
                 inverter = cec_inverters[self.plant_conf["pv_inverter_model"]]
@@ -699,8 +708,7 @@ class Optimization:
                         predicted_temps[k] = predicted_temp
 
             else:
-                if def_total_hours[k] > 0:
-                    # Total time of deferrable load
+                if def_total_timestep and def_total_timestep[k] > 0:
                     constraints.update(
                         {
                             "constraint_defload{}_energy".format(k): plp.LpConstraint(
@@ -708,13 +716,33 @@ class Optimization:
                                     P_deferrable[k][i] * self.timeStep for i in set_I
                                 ),
                                 sense=plp.LpConstraintEQ,
-                                rhs=def_total_hours[k]
+                                rhs=(self.timeStep * def_total_timestep[k])
                                 * self.optim_conf["nominal_power_of_deferrable_loads"][
                                     k
                                 ],
                             )
                         }
                     )
+                else:
+                    if def_total_hours[k] > 0:
+                        # Total time of deferrable load
+                        constraints.update(
+                            {
+                                "constraint_defload{}_energy".format(
+                                    k
+                                ): plp.LpConstraint(
+                                    e=plp.lpSum(
+                                        P_deferrable[k][i] * self.timeStep
+                                        for i in set_I
+                                    ),
+                                    sense=plp.LpConstraintEQ,
+                                    rhs=def_total_hours[k]
+                                    * self.optim_conf[
+                                        "nominal_power_of_deferrable_loads"
+                                    ][k],
+                                )
+                            }
+                        )
 
             # Ensure deferrable loads consume energy between def_start_timestep & def_end_timestep
             self.logger.debug(
@@ -722,12 +750,23 @@ class Optimization:
                     k, def_start_timestep[k], def_end_timestep[k]
                 )
             )
-            def_start, def_end, warning = Optimization.validate_def_timewindow(
-                def_start_timestep[k],
-                def_end_timestep[k],
-                ceil(def_total_hours[k] / self.timeStep),
-                n,
-            )
+            if def_total_timestep and def_total_timestep[k] > 0:
+                def_start, def_end, warning = Optimization.validate_def_timewindow(
+                    def_start_timestep[k],
+                    def_end_timestep[k],
+                    ceil(
+                        (60 / ((self.freq.seconds / 60) * def_total_timestep[k]))
+                        / self.timeStep
+                    ),
+                    n,
+                )
+            else:
+                def_start, def_end, warning = Optimization.validate_def_timewindow(
+                    def_start_timestep[k],
+                    def_end_timestep[k],
+                    ceil(def_total_hours[k] / self.timeStep),
+                    n,
+                )
             if warning is not None:
                 self.logger.warning("Deferrable load {} : {}".format(k, warning))
             self.logger.debug(
@@ -837,15 +876,35 @@ class Optimization:
                     }
                 )
                 # P_def_bin2 must be 1 for exactly the correct number of timesteps.
-                constraints.update(
-                    {
-                        "constraint_pdef{}_start5".format(k): plp.LpConstraint(
-                            e=plp.lpSum(P_def_bin2[k][i] for i in set_I),
-                            sense=plp.LpConstraintEQ,
-                            rhs=def_total_hours[k] / self.timeStep,
-                        )
-                    }
-                )
+                if def_total_timestep and def_total_timestep[k] > 0:
+                    constraints.update(
+                        {
+                            "constraint_pdef{}_start5".format(k): plp.LpConstraint(
+                                e=plp.lpSum(P_def_bin2[k][i] for i in set_I),
+                                sense=plp.LpConstraintEQ,
+                                rhs=(
+                                    (
+                                        60
+                                        / (
+                                            (self.freq.seconds / 60)
+                                            * def_total_timestep[k]
+                                        )
+                                    )
+                                    / self.timeStep
+                                ),
+                            )
+                        }
+                    )
+                else:
+                    constraints.update(
+                        {
+                            "constraint_pdef{}_start5".format(k): plp.LpConstraint(
+                                e=plp.lpSum(P_def_bin2[k][i] for i in set_I),
+                                sense=plp.LpConstraintEQ,
+                                rhs=def_total_hours[k] / self.timeStep,
+                            )
+                        }
+                    )
 
             # Treat deferrable load as a semi-continuous variable
             if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
@@ -1336,6 +1395,7 @@ class Optimization:
         soc_init: Optional[float] = None,
         soc_final: Optional[float] = None,
         def_total_hours: Optional[list] = None,
+        def_total_timestep: Optional[list] = None,
         def_start_timestep: Optional[list] = None,
         def_end_timestep: Optional[list] = None,
     ) -> pd.DataFrame:
@@ -1362,6 +1422,9 @@ class Optimization:
         :param soc_final: The final battery SOC for the optimization. This parameter \
             is optional, if not given soc_init = soc_final = soc_target from the configuration file.
         :type soc_final: 
+        :param def_total_timestep: The functioning timesteps for this iteration for each deferrable load. \
+            (For continuous deferrable loads: functioning timesteps at nominal power)
+        :type def_total_timestep: list
         :param def_total_hours: The functioning hours for this iteration for each deferrable load. \
             (For continuous deferrable loads: functioning hours at nominal power)
         :type def_total_hours: list
@@ -1395,6 +1458,7 @@ class Optimization:
             soc_init=soc_init,
             soc_final=soc_final,
             def_total_hours=def_total_hours,
+            def_total_timestep=def_total_timestep,
             def_start_timestep=def_start_timestep,
             def_end_timestep=def_end_timestep,
         )

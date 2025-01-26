@@ -7,15 +7,12 @@ import pickle
 
 import pandas as pd
 import numpy as np
-import plotly.express as px
 import plotly.io as pio
 import plotly.graph_objects as go
 
 pio.renderers.default = "browser"
 pd.options.plotting.backend = "plotly"
 
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
 
 # from skopt.space import Categorical, Real, Integer
 # from tslearn.clustering import TimeSeriesKMeans

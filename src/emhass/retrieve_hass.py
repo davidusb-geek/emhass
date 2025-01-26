@@ -80,6 +80,7 @@ class RetrieveHass:
         self.emhass_conf = emhass_conf
         self.logger = logger
         self.get_data_from_file = get_data_from_file
+        self.var_list = []
 
     def get_ha_config(self):
         """
@@ -286,6 +287,7 @@ class RetrieveHass:
                 + str(self.freq)
             )
             return False
+        self.var_list = var_list
         return True
 
     def prepare_data(
@@ -336,7 +338,21 @@ class RetrieveHass:
                 "sensor.power_photovoltaics and sensor.power_load_no_var_loads should not be the same"
             )
             return False
-        if set_zero_min:  # Apply minimum values
+        # Confirm var_replace_zero & var_interp contain only sensors contained in var_list
+        if isinstance(var_replace_zero, list) and all(
+            item in var_replace_zero for item in self.var_list
+        ):
+            pass
+        else:
+            var_replace_zero = []
+        if isinstance(var_interp, list) and all(
+            item in var_interp for item in self.var_list
+        ):
+            pass
+        else:
+            var_interp = []
+        # Apply minimum values
+        if set_zero_min:
             self.df_final.clip(lower=0.0, inplace=True, axis=1)
             self.df_final.replace(to_replace=0.0, value=np.nan, inplace=True)
         new_var_replace_zero = []
@@ -347,6 +363,12 @@ class RetrieveHass:
                 new_string = string.replace(var_load, var_load + "_positive")
                 new_var_replace_zero.append(new_string)
         else:
+            self.logger.warning(
+                "Unable to find all the sensors in sensor_replace_zero parameter"
+            )
+            self.logger.warning(
+                "Confirm sure all sensors in sensor_replace_zero are sensor_power_photovoltaics and/or ensor_power_load_no_var_loads "
+            )
             new_var_replace_zero = None
         if var_interp is not None:
             for string in var_interp:
@@ -354,6 +376,12 @@ class RetrieveHass:
                 new_var_interp.append(new_string)
         else:
             new_var_interp = None
+            self.logger.warning(
+                "Unable to find all the sensors in sensor_linear_interp parameter"
+            )
+            self.logger.warning(
+                "Confirm all sensors in sensor_linear_interp are sensor_power_photovoltaics and/or ensor_power_load_no_var_loads "
+            )
         # Treating NaN replacement: either by zeros or by linear interpolation
         if new_var_replace_zero is not None:
             self.df_final[new_var_replace_zero] = self.df_final[

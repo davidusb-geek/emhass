@@ -8,11 +8,11 @@ import json
 import os
 import pathlib
 import pickle
+import re
 import unittest
 
 import pandas as pd
 import requests_mock
-import re
 
 from emhass import utils
 from emhass.command_line import set_input_data_dict
@@ -77,7 +77,9 @@ class TestForecast(unittest.TestCase):
         # Obtain sensor values from saved file
         if self.get_data_from_file:
             with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
-                self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = pickle.load(inp)
+                self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = (
+                    pickle.load(inp)
+                )
             self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(
                 self.var_list[0]
             )
@@ -334,7 +336,9 @@ class TestForecast(unittest.TestCase):
         }
         self.fcst.retrieve_hass_conf["solcast_api_key"] = "123456"
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "111111,222222,333333"
-        roof_ids = re.split(r"[,\s]+", self.fcst.retrieve_hass_conf["solcast_rooftop_id"].strip())
+        roof_ids = re.split(
+            r"[,\s]+", self.fcst.retrieve_hass_conf["solcast_rooftop_id"].strip()
+        )
         if os.path.isfile(emhass_conf["data_path"] / "weather_forecast_data.pkl"):
             os.rename(
                 emhass_conf["data_path"] / "weather_forecast_data.pkl",
@@ -343,13 +347,14 @@ class TestForecast(unittest.TestCase):
         with requests_mock.mock() as m:
             for roof_id in roof_ids:
                 data = bz2.BZ2File(
-                    str(emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2"),
+                    str(
+                        emhass_conf["data_path"]
+                        / "test_response_solcast_get_method.pbz2"
+                    ),
                     "rb",
                 )
                 data = cPickle.load(data)
-                get_url = (
-                    f"https://api.solcast.com.au/rooftop_sites/{roof_id}/forecasts?hours=24"
-                )
+                get_url = f"https://api.solcast.com.au/rooftop_sites/{roof_id}/forecasts?hours=24"
                 m.get(get_url, json=data.json())
             df_weather_scrap = self.fcst.get_weather_forecast(method="solcast")
             self.assertIsInstance(df_weather_scrap, type(pd.DataFrame()))
@@ -959,7 +964,7 @@ class TestForecast(unittest.TestCase):
 
     # Test load forecast with typical statistics method
     def test_get_load_forecast_typical(self):
-        P_load_forecast = self.fcst.get_load_forecast(method='typical')
+        P_load_forecast = self.fcst.get_load_forecast(method="typical")
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
         self.assertIsInstance(
             P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex

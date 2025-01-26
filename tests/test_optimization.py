@@ -73,7 +73,9 @@ class TestOptimization(unittest.TestCase):
         # Obtain sensor values from saved file
         if get_data_from_file:
             with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
-                self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = pickle.load(inp)
+                self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = (
+                    pickle.load(inp)
+                )
             self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(
                 self.var_list[0]
             )
@@ -512,6 +514,7 @@ class TestOptimization(unittest.TestCase):
             soc_init=soc_init,
             soc_final=soc_final,
             def_total_hours=def_total_hours,
+            def_total_timestep=None,
             def_start_timestep=def_start_timestep,
             def_end_timestep=def_end_timestep,
         )
@@ -543,6 +546,7 @@ class TestOptimization(unittest.TestCase):
             soc_init=soc_init,
             soc_final=soc_final,
             def_total_hours=def_total_hours,
+            def_total_timestep=None,
             def_start_timestep=def_start_timestep,
             def_end_timestep=def_end_timestep,
         )
@@ -651,6 +655,7 @@ class TestOptimization(unittest.TestCase):
             self.P_load_forecast,
             prediction_horizon,
             def_total_hours=def_total_hours,
+            def_total_timestep=None,
             def_start_timestep=def_start_timestep,
             def_end_timestep=def_end_timestep,
         )
