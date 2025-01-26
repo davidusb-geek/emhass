@@ -122,7 +122,7 @@ RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] && uv pip ins
 RUN uv lock
 
 # remove build only packages
-RUN apt-get purge -y --auto-remove \
+RUN apt-get remove --purge -y --auto-remove \
     gcc \
     patchelf \
     cmake \
