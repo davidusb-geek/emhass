@@ -131,7 +131,7 @@ RUN apt-get remove --purge -y --auto-remove \
     ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
-ENTRYPOINT ["gunicorn", "emhass.web_server:create_app"]
+ENTRYPOINT [ "uv", "run", "gunicorn", "emhass.web_server:create_app()" ]
 # old
 # ENTRYPOINT [ "uv", "run", "--link-mode=copy", "--allow-insecure-host=localhost:5000", "--frozen", "-m", "emhass.web_server"]
 
