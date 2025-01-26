@@ -11,7 +11,6 @@ import pickle
 import re
 import time
 from datetime import datetime, timezone
-from distutils.util import strtobool
 from importlib.metadata import version
 from typing import Optional, Tuple
 
@@ -646,9 +645,12 @@ def naive_mpc_optim(
     prediction_horizon = input_data_dict["params"]["passed_data"]["prediction_horizon"]
     soc_init = input_data_dict["params"]["passed_data"]["soc_init"]
     soc_final = input_data_dict["params"]["passed_data"]["soc_final"]
-    def_total_hours = input_data_dict["params"]["optim_conf"][
-        "operating_hours_of_each_deferrable_load"
-    ]
+    def_total_hours = input_data_dict["params"]["optim_conf"].get(
+        "operating_hours_of_each_deferrable_load", None
+    )
+    def_total_timestep = input_data_dict["params"]["optim_conf"].get(
+        "operating_timesteps_of_each_deferrable_load", None
+    )
     def_start_timestep = input_data_dict["params"]["optim_conf"][
         "start_timesteps_of_each_deferrable_load"
     ]
@@ -663,6 +665,7 @@ def naive_mpc_optim(
         soc_init,
         soc_final,
         def_total_hours,
+        def_total_timestep,
         def_start_timestep,
         def_end_timestep,
     )
@@ -1515,8 +1518,8 @@ def main():
     )
     parser.add_argument(
         "--log2file",
-        type=strtobool,
-        default="False",
+        type=bool,
+        default=False,
         help="Define if we should log to a file or not",
     )
     parser.add_argument(
@@ -1532,7 +1535,10 @@ def main():
         help="Pass runtime optimization parameters as dictionnary",
     )
     parser.add_argument(
-        "--debug", type=strtobool, default="False", help="Use True for testing purposes"
+        "--debug",
+        type=bool,
+        default=False,
+        help="Use True for testing purposes",
     )
     args = parser.parse_args()
 

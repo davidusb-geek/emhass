@@ -16,69 +16,66 @@ ARG TARGETARCH
 ENV TARGETARCH=${TARGETARCH:?}
 
 WORKDIR /app
-COPY requirements.txt /app/
+COPY pyproject.toml /app/
+COPY .python-version /app/
+COPY gunicorn.conf.py /app/
 
-# apt package install
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-    libffi-dev \
-    python3.11 \
-    python3-pip \
-    python3.11-dev \
-    git \
+    # Numpy
+    libgfortran5 \
+    libopenblas0-pthread \
+    libopenblas-dev \
+    libatlas3-base \
+    libatlas-base-dev \
+    # h5py / tables
+    libsz2 \
+    libaec0 \
+    libhdf5-hl-100 \
+    libhdf5-103-1 \
+    libhdf5-dev \
+    libhdf5-serial-dev
+    # # cbc
+    # coinor-cbc \
+    # coinor-libcbc-dev
+
+    # libffi-dev \
+    # gfortran \
+    # netcdf-bin \
+    # libnetcdf-dev \
+    # libglpk-dev \
+    # glpk-utils \
+    # libatlas3-base \
+    # libatlas-base-dev \
+    # libopenblas-dev \
+    # libopenblas0-pthread \
+    # libgfortran5 \
+
+# add build packadges (just in case wheel does not exist)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
     gcc \
     patchelf \
     cmake \
     meson \
-    ninja-build \
-    build-essential \
-    libhdf5-dev \
-    libhdf5-serial-dev \
-    pkg-config \
-    gfortran \
-    netcdf-bin \
-    libnetcdf-dev \
-    coinor-cbc \
-    coinor-libcbc-dev \
-    libglpk-dev \
-    glpk-utils \
-    libatlas3-base \
-    libatlas-base-dev \
-    libopenblas-dev \
-    libopenblas0-pthread \
-    libgfortran5 \
-    libsz2 \
-    libaec0 \
-    libhdf5-hl-100 \
-    libhdf5-103-1
+    ninja-build
+
+# Install uv (pip alternative)
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
+# Install python (version based on .python-version)
+RUN uv python install
+
 # specify hdf5
 RUN ln -s /usr/include/hdf5/serial /usr/include/hdf5/include && export HDF5_DIR=/usr/include/hdf5
 
 # note, its a good idea to remove the "llvm-dev" package and "LLVM_CONFIG=/usr/bin/llvm-config pip3 install 'llvmlite>=0.43'" once the llvmlite package has been fixed in piwheels
-RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] && apt-get update && apt-get install -y --no-install-recommends llvm-dev && LLVM_CONFIG=/usr/bin/llvm-config pip3 install --no-cache-dir --break-system-packages 'llvmlite>=0.43' ||  echo "skipping llvm-dev install"
-
-# install packages from pip, use piwheels if arm 32bit
-RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] && pip3 install --index-url=https://www.piwheels.org/simple --no-cache-dir --break-system-packages -r requirements.txt ||  pip3 install --no-cache-dir --break-system-packages -r requirements.txt
+RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] && apt-get update && apt-get install -y --no-install-recommends llvm-dev && LLVM_CONFIG=/usr/bin/llvm-config uv pip install --break-system-packages --no-cache-dir --system 'llvmlite>=0.43' ||  echo "skipping llvm-dev install"
 
 # try, symlink apt cbc, to pulp cbc, in python directory (for 32bit)
 RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7"  ]] &&  ln -sf /usr/bin/cbc /usr/local/lib/python3.11/dist-packages/pulp/solverdir/cbc/linux/32/cbc || echo "cbc symlink didnt work/not required"
 
 # if armv7, try install libatomic1 to fix scipy issue
 RUN [[ "${TARGETARCH}" == "armv7" ]] && apt-get update && apt-get install libatomic1 || echo "libatomic1 cant be installed"
-
-# remove build only packages
-RUN apt-get purge -y --auto-remove \
-    gcc \
-    patchelf \
-    cmake \
-    meson \
-    ninja-build \
-    build-essential \
-    pkg-config \
-    gfortran \
-    netcdf-bin \
-    libnetcdf-dev \
-    && rm -rf /var/lib/apt/lists/*
 
 # make sure data directory exists
 RUN mkdir -p /app/data/
@@ -121,11 +118,25 @@ LABEL \
     org.opencontainers.image.description="EMHASS python package and requirements, in Home Assistant Debian container."
 
 # build EMHASS
-RUN pip3 install --no-cache-dir --break-system-packages --no-deps --force-reinstall  .
-ENTRYPOINT [ "python3", "-m", "emhass.web_server"]
+RUN uv venv && . .venv/bin/activate
+RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] && uv pip install --verbose --extra-index-url https://www.piwheels.org/simple . || uv pip install --verbose .
+RUN uv lock
+
+# remove build only packages
+RUN apt-get remove --purge -y --auto-remove \
+    gcc \
+    patchelf \
+    cmake \
+    meson \
+    ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+ENTRYPOINT [ "uv", "run", "gunicorn", "emhass.web_server:create_app()" ]
+# old
+# ENTRYPOINT [ "uv", "run", "--link-mode=copy", "--allow-insecure-host=localhost:5000", "--frozen", "-m", "emhass.web_server"]
 
 # for running Unittest
 #COPY tests/ /app/tests
 #RUN apt-get update &&  apt-get install python3-requests-mock -y
 #COPY data/ /app/data/
-#ENTRYPOINT ["python3","-m","unittest","discover","-s","./tests","-p","test_*.py"]
+#ENTRYPOINT ["uv","run","unittest","discover","-s","./tests","-p","test_*.py"]
