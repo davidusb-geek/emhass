@@ -117,7 +117,7 @@ LABEL \
     org.opencontainers.image.description="EMHASS python package and requirements, in Home Assistant Debian container."
 
 # build EMHASS
-RUN uv venv
+RUN uv venv && . .venv/bin/activate
 RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] && uv pip install --verbose --extra-index-url https://www.piwheels.org/simple . || uv pip install --verbose .
 RUN uv lock
 
@@ -130,7 +130,7 @@ RUN apt-get purge -y --auto-remove \
     ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
-ENTRYPOINT ["uv", "run", "--link-mode=copy", "--frozen", "-m", "emhass.web_server"]
+ENTRYPOINT [ "uv", "run", "--link-mode=copy", "--allow-insecure-host=localhost:5000", "--frozen", "-m", "emhass.web_server"]
 
 # for running Unittest
 #COPY tests/ /app/tests
