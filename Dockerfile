@@ -18,6 +18,7 @@ ENV TARGETARCH=${TARGETARCH:?}
 WORKDIR /app
 COPY pyproject.toml /app/
 COPY .python-version /app/
+COPY gunicorn.conf.py /app/
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -130,7 +131,9 @@ RUN apt-get remove --purge -y --auto-remove \
     ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
-ENTRYPOINT [ "uv", "run", "--link-mode=copy", "--allow-insecure-host=localhost:5000", "--frozen", "-m", "emhass.web_server"]
+ENTRYPOINT ["gunicorn", "emhass.web_server:create_app"]
+# old
+# ENTRYPOINT [ "uv", "run", "--link-mode=copy", "--allow-insecure-host=localhost:5000", "--frozen", "-m", "emhass.web_server"]
 
 # for running Unittest
 #COPY tests/ /app/tests
