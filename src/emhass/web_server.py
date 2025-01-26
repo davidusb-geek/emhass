@@ -10,6 +10,7 @@ import re
 import threading
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Optional
 
 import yaml
 from flask import Flask, make_response, request
@@ -45,6 +46,21 @@ from emhass.utils import (
 # Define the Flask instance
 app = Flask(__name__)
 emhass_conf = {}
+entity_path = Path
+params_secrets = {}
+continual_publish_thread = []
+injection_dict = {}
+
+
+def create_app(settings_override=None):
+    """
+    Create a Flask application.
+    :param settings_override: Override settings
+    :return: Flask app
+    """
+    global app
+    main()
+    return app
 
 
 def checkFileLog(refString=None) -> bool:
@@ -152,6 +168,10 @@ def configuration():
 
     """
     app.logger.info("serving configuration.html...")
+    # get params
+    if (emhass_conf["data_path"] / "params.pkl").exists():
+        with open(str(emhass_conf["data_path"] / "params.pkl"), "rb") as fid:
+            emhass_conf["config_path"], params = pickle.load(fid)
     # Load HTML template
     file_loader = PackageLoader("emhass", "templates")
     env = Environment(loader=file_loader)
@@ -327,7 +347,7 @@ def parameter_set():
         with open(str(emhass_conf["data_path"] / "params.pkl"), "wb") as fid:
             pickle.dump(
                 (
-                    config_path,
+                    emhass_conf["config_path"],
                     build_params(emhass_conf, params_secrets, config, app.logger),
                 ),
                 fid,
@@ -348,6 +368,9 @@ def action_call(action_name):
     :type action_name: String
 
     """
+    global continual_publish_thread
+    global injection_dict
+
     # Setting up parameters
     # Params
     ActionStr = " >> Obtaining params: "
@@ -523,31 +546,17 @@ def action_call(action_name):
         return make_response(msg, 400)
 
 
-if __name__ == "__main__":
-    # Parsing arguments
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--url",
-        type=str,
-        help="The URL to your Home Assistant instance, ex the external_url in your hass configuration",
-    )
-    parser.add_argument(
-        "--key",
-        type=str,
-        help="Your access key. If using EMHASS in standalone this should be a Long-Lived Access Token",
-    )
-    parser.add_argument(
-        "--no_response",
-        type=bool,
-        default=False,
-        help="This is set if json response errors occur",
-    )
-    args = parser.parse_args()
-
+def main(
+    args: Optional[dict] = None,
+):
+    global continual_publish_thread
+    global emhass_conf
+    global entity_path
+    global injection_dict
     # Pre formatted config parameters
     config = {}
     # Secrets
-    params_secrets = {}
+    global params_secrets
     # Built parameters (formatted config + secrets)
     params = None
 
@@ -600,11 +609,16 @@ if __name__ == "__main__":
         app.logger.setLevel(logging.DEBUG)
 
     ## Secrets
+    # Argument
     argument = {}
-    if args.url:
-        argument["url"] = args.url
-    if args.key:
-        argument["key"] = args.key
+    no_response = False
+    if args is not None:
+        if args.get("url", None):
+            argument["url"] = args["url"]
+        if args.get("key", None):
+            argument["key"] = args["key"]
+        if args.get("no_response", None):
+            no_response = args["no_response"]
     # Combine secrets from ENV, Arguments/ARG, Secrets file (secrets_emhass.yaml), options (options.json from addon configuration file) and/or Home Assistant Standalone API (if exist)
     emhass_conf, secrets = build_secrets(
         emhass_conf,
@@ -612,7 +626,7 @@ if __name__ == "__main__":
         argument,
         options_path,
         os.getenv("SECRETS_PATH", default="/app/secrets_emhass.yaml"),
-        bool(args.no_response),
+        bool(no_response),
     )
     params_secrets.update(secrets)
 
@@ -705,4 +719,33 @@ if __name__ == "__main__":
         app.logger.info("Using core emhass version: " + version("emhass"))
     except PackageNotFoundError:
         app.logger.info("Using development emhass version")
+
+    return server_ip, port
+
+
+if __name__ == "__main__":
+    # Parsing arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--url",
+        type=str,
+        help="The URL to your Home Assistant instance, ex the external_url in your hass configuration",
+    )
+    parser.add_argument(
+        "--key",
+        type=str,
+        help="Your access key. If using EMHASS in standalone this should be a Long-Lived Access Token",
+    )
+    parser.add_argument(
+        "--no_response",
+        type=bool,
+        default=False,
+        help="This is set if json response errors occur",
+    )
+    args = parser.parse_args()
+
+    server_ip, port = main(vars(args))
+    os.environ["IP"] = str(server_ip)
+    os.environ["PORT"] = str(port)
+
     serve(app, host=server_ip, port=port, threads=8)
