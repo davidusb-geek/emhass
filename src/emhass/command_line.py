@@ -11,7 +11,6 @@ import pickle
 import re
 import time
 from datetime import datetime, timezone
-from distutils.util import strtobool
 from importlib.metadata import version
 from typing import Optional, Tuple
 
@@ -1519,8 +1518,8 @@ def main():
     )
     parser.add_argument(
         "--log2file",
-        type=strtobool,
-        default="False",
+        type=bool,
+        default=False,
         help="Define if we should log to a file or not",
     )
     parser.add_argument(
@@ -1536,7 +1535,10 @@ def main():
         help="Pass runtime optimization parameters as dictionnary",
     )
     parser.add_argument(
-        "--debug", type=strtobool, default="False", help="Use True for testing purposes"
+        "--debug",
+        type=bool,
+        default=False,
+        help="Use True for testing purposes",
     )
     args = parser.parse_args()
 

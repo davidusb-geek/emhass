@@ -9,7 +9,7 @@ import unittest
 
 import numpy as np
 import pandas as pd
-from skforecast.recursive import ForecasterRecursive
+from skforecast.ForecasterAutoreg import ForecasterAutoreg
 
 from emhass import utils
 from emhass.command_line import set_input_data_dict
@@ -100,16 +100,18 @@ class TestMLForecaster(unittest.TestCase):
         )
         # Open and extract saved sensor data to test against
         with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
-            self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = pickle.load(inp)
+            self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = (
+                pickle.load(inp)
+            )
 
     def test_fit(self):
         df_pred, df_pred_backtest = self.mlf.fit()
-        self.assertIsInstance(self.mlf.forecaster, ForecasterRecursive)
+        self.assertIsInstance(self.mlf.forecaster, ForecasterAutoreg)
         self.assertIsInstance(df_pred, pd.DataFrame)
         self.assertTrue(df_pred_backtest == None)
         # Refit with backtest evaluation
         df_pred, df_pred_backtest = self.mlf.fit(perform_backtest=True)
-        self.assertIsInstance(self.mlf.forecaster, ForecasterRecursive)
+        self.assertIsInstance(self.mlf.forecaster, ForecasterAutoreg)
         self.assertIsInstance(df_pred, pd.DataFrame)
         self.assertIsInstance(df_pred_backtest, pd.DataFrame)
 

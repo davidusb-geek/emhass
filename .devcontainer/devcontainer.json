@@ -9,10 +9,8 @@
 	},
 	"features": {
 		"ghcr.io/devcontainers/features/common-utils:2": {
-			"installZsh": "true",
-			"configureZshAsDefaultShell": "true",
-			"installOhMyZsh": "false",
-			"installOhMyZshConfig": "false"
+			"installBash": "true",
+			"configureBashAsDefaultShell": "true"
 		}
 		// "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
 	},
@@ -46,6 +44,6 @@
 		}
 	  },
 
-	"postCreateCommand": ["pip3", "install", "--break-system-packages" , ".[test]"]
+	"postCreateCommand": ["uv", "pip", "install", "--cache-dir", ".cache", "--verbose", ".[test]"]
 	  
 }
