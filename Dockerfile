@@ -130,7 +130,7 @@ RUN apt-get purge -y --auto-remove \
     ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
-ENTRYPOINT [ "uv" "run", "--link-mode=copy", "--frozen", "-m", "emhass.web_server"]
+ENTRYPOINT [ "uv", "run", "--link-mode=copy", "--frozen", "-m", "emhass.web_server"]
 
 # for running Unittest
 #COPY tests/ /app/tests
