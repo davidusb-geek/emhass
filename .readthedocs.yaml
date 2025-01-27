@@ -24,5 +24,11 @@ formats:
 # Optionally set the requirements required to build your docs
 python:
   install:
-    - requirements: docs/requirements.txt
-    - requirements: requirements.txt
+    - method: pip
+      path: .
+      extra_requirements:
+        - docs
+#python:
+#  install:
+#    - requirements: docs/requirements.txt
+#    - requirements: requirements.txt
