@@ -45,6 +45,7 @@ from emhass.utils import (
 
 # Define the Flask instance
 app = Flask(__name__)
+
 emhass_conf = {}
 entity_path = Path
 params_secrets = {}
@@ -59,6 +60,9 @@ def create_app(settings_override=None):
     :return: Flask app
     """
     global app
+    gunicorn_logger = logging.getLogger("gunicorn.error")
+    app.logger.handlers = gunicorn_logger.handlers
+    app.logger.setLevel(logging.INFO)
     main()
     return app
 
@@ -553,6 +557,7 @@ def main(
     global emhass_conf
     global entity_path
     global injection_dict
+    global app
     # Pre formatted config parameters
     config = {}
     # Secrets
