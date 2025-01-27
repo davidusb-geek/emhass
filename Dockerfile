@@ -34,10 +34,10 @@ RUN apt-get update \
     libhdf5-hl-100 \
     libhdf5-103-1 \
     libhdf5-dev \
-    libhdf5-serial-dev
+    libhdf5-serial-dev \
     # # cbc
-    # coinor-cbc \
-    # coinor-libcbc-dev
+    coinor-cbc \
+    coinor-libcbc-dev
 
     # libffi-dev \
     # gfortran \
