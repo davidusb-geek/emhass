@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.4 - 2025-01-27
+### Patch fix
+- Fixed bugs on gunicorn logger and missing CBC modules
+
 ## 0.12.3 - 2025-01-26
 ### Improvement
 - PVLib DBs append custom EMHASS modules and inverters. Thanks to @GeoDerp
