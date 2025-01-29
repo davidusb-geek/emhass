@@ -71,7 +71,7 @@ RUN uv venv && . .venv/bin/activate
 RUN ln -s /usr/include/hdf5/serial /usr/include/hdf5/include && export HDF5_DIR=/usr/include/hdf5
 
 # note, its a good idea to remove the "llvm-dev" package and "LLVM_CONFIG=/usr/bin/llvm-config pip3 install 'llvmlite>=0.43'" once the llvmlite package has been fixed in piwheels
-RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] && apt-get update && apt-get install -y --no-install-recommends llvm-dev && export LLVM_CONFIG=/usr/bin/llvm-config && uv pip install 'llvmlite==0.43.0' ||  echo "skipping llvm-dev install"
+RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] && apt-get update && apt-get install -y --no-install-recommends llvm-dev && export LLVM_CONFIG=/lib/llvm-14/bin/llvm-config && uv pip install 'llvmlite==0.43.0' ||  echo "skipping llvm-dev install"
 
 # try, symlink apt cbc, to pulp cbc, in python directory (for 32bit)
 RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7"  ]] &&  ln -sf /usr/bin/cbc /usr/local/lib/python3.11/dist-packages/pulp/solverdir/cbc/linux/32/cbc || echo "cbc symlink didnt work/not required"
