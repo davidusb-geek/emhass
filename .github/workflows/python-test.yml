@@ -30,7 +30,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version-file: "pyproject.toml"
+          python-version-file: ".python-version"
       - name: Set up Python venv
         run: uv venv
       - name: Special dependencies for macos
@@ -42,6 +42,10 @@ jobs:
       - name: Install EMHASS with test dependencies
         run: |
           uv pip install .[test] && uv lock
+      - name: ruf check formatting
+        uses: astral-sh/ruff-action@v3
+        - run: ruff check --fix
+        - run: ruff format
       - name: Test with pytest
         run: |
            uv run pytest
