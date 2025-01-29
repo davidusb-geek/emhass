@@ -64,6 +64,8 @@ RUN apt-get update \
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
 # Install python (version based on .python-version)
 RUN uv python install
+# Set up venv
+RUN uv venv && . .venv/bin/activate
 
 # specify hdf5
 RUN ln -s /usr/include/hdf5/serial /usr/include/hdf5/include && export HDF5_DIR=/usr/include/hdf5
@@ -118,7 +120,6 @@ LABEL \
     org.opencontainers.image.description="EMHASS python package and requirements, in Home Assistant Debian container."
 
 # build EMHASS
-RUN uv venv && . .venv/bin/activate
 RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] && uv pip install --verbose --extra-index-url https://www.piwheels.org/simple . || uv pip install --verbose .
 RUN uv lock
 
