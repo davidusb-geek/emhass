@@ -11,6 +11,7 @@ secrets_emhass.yaml
 .vscode/launch.json
 .vscode/settings.json
 .vscode/tasks.json
+.devcontainer/devcontainer.json
 *.pkl
 **/app
 
