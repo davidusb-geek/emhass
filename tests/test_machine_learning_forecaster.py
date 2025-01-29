@@ -9,7 +9,7 @@ import unittest
 
 import numpy as np
 import pandas as pd
-from skforecast.ForecasterAutoreg import ForecasterAutoreg
+from skforecast.recursive import ForecasterRecursive
 
 from emhass import utils
 from emhass.command_line import set_input_data_dict
@@ -106,12 +106,12 @@ class TestMLForecaster(unittest.TestCase):
 
     def test_fit(self):
         df_pred, df_pred_backtest = self.mlf.fit()
-        self.assertIsInstance(self.mlf.forecaster, ForecasterAutoreg)
+        self.assertIsInstance(self.mlf.forecaster, ForecasterRecursive)
         self.assertIsInstance(df_pred, pd.DataFrame)
         self.assertTrue(df_pred_backtest == None)
         # Refit with backtest evaluation
         df_pred, df_pred_backtest = self.mlf.fit(perform_backtest=True)
-        self.assertIsInstance(self.mlf.forecaster, ForecasterAutoreg)
+        self.assertIsInstance(self.mlf.forecaster, ForecasterRecursive)
         self.assertIsInstance(df_pred, pd.DataFrame)
         self.assertIsInstance(df_pred_backtest, pd.DataFrame)
 

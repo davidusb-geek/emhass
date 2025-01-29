@@ -27,6 +27,25 @@
       },
     },
     {
+      "name": "EMHASS Production",
+      "type": "debugpy",
+      "request": "launch",
+      "console": "integratedTerminal",
+      "module": "gunicorn",
+      "purpose": [
+        "debug-in-terminal"
+      ],
+      "args": ["emhass.web_server:create_app()"],
+      "justMyCode": true,
+      "env": {
+        //"LEGACY_CONFIG_PATH": "/workspaces/emhass/tests/config_emhass.yaml",
+        "CONFIG_PATH": "/workspaces/emhass/config.json",
+        "SECRETS_PATH": "/workspaces/emhass/secrets_emhass.yaml",
+        "DATA_PATH": "/workspaces/emhass/data/",
+        "LOGGING_LEVEL": "DEBUG" 
+      },
+    },
+    {
       "name": "EMHASS with options.json",
       "type": "debugpy",
       "request": "launch",
