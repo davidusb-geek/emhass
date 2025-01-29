@@ -44,8 +44,6 @@ jobs:
           uv pip install .[test] && uv lock
       - name: ruf check formatting
         uses: astral-sh/ruff-action@v3
-        - run: ruff check --fix
-        - run: ruff format
       - name: Test with pytest
         run: |
            uv run pytest
