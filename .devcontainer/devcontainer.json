@@ -18,12 +18,12 @@
 
 
 	// Security issue, may be needed for Podman
-	// "runArgs": [
-	// 	"--userns=keep-id",
-	// 	"--pid=host"
-	// ],
-	// "remoteUser": "root",
-	// "containerUser": "root",
+	"runArgs": [
+		"--userns=keep-id",
+		"--pid=host"
+	],
+	"remoteUser": "root",
+	"containerUser": "root",
 
 
 	"customizations": {
