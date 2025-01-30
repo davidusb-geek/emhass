@@ -52,32 +52,21 @@ RUN apt-get update \
     # libgfortran5 \
 
 # add build packadges (just in case wheel does not exist)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-    gcc \
-    patchelf \
-    cmake \
-    meson \
-    ninja-build
+# RUN apt-get update \
+#     && apt-get install -y --no-install-recommends \
+#     gcc \
+#     patchelf \
+#     cmake \
+#     meson \
+#     ninja-build
 
 # Install uv (pip alternative)
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
 # Install python (version based on .python-version)
 RUN uv python install
-# Set up venv
-RUN uv venv && . .venv/bin/activate
 
 # specify hdf5
 RUN ln -s /usr/include/hdf5/serial /usr/include/hdf5/include && export HDF5_DIR=/usr/include/hdf5
-
-# note, its a good idea to remove the "llvm-dev" package and "LLVM_CONFIG=/usr/bin/llvm-config pip3 install 'llvmlite>=0.43'" once the llvmlite package has been fixed in piwheels
-RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] && apt-get update && apt-get install -y --no-install-recommends llvm-dev && LLVM_CONFIG=/lib/llvm-14/bin/llvm-config uv pip install 'llvmlite==0.43.0' ||  echo "skipping llvm-dev install"
-
-# try, symlink apt cbc, to pulp cbc, in python directory (for 32bit)
-RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7"  ]] &&  ln -sf /usr/bin/cbc /usr/local/lib/python3.11/dist-packages/pulp/solverdir/cbc/linux/32/cbc || echo "cbc symlink didnt work/not required"
-
-# if armv7, try install libatomic1 to fix scipy issue
-RUN [[ "${TARGETARCH}" == "armv7" ]] && apt-get update && apt-get install libatomic1 || echo "libatomic1 cant be installed"
 
 # make sure data directory exists
 RUN mkdir -p /app/data/
@@ -119,25 +108,30 @@ LABEL \
     org.opencontainers.image.source="https://github.com/davidusb-geek/emhass" \
     org.opencontainers.image.description="EMHASS python package and requirements, in Home Assistant Debian container."
 
-# build EMHASS
-RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7" ]] && uv pip install --verbose --extra-index-url https://www.piwheels.org/simple . || uv pip install --verbose .
+# Set up venv
+RUN uv venv && . .venv/bin/activate
+
+# install packadges and build EMHASS
+RUN uv pip install --verbose .
 RUN uv lock
 
 # remove build only packages
-RUN apt-get remove --purge -y --auto-remove \
-    gcc \
-    patchelf \
-    cmake \
-    meson \
-    ninja-build \
-    && rm -rf /var/lib/apt/lists/*
+# RUN apt-get remove --purge -y --auto-remove \
+#     gcc \
+#     patchelf \
+#     cmake \
+#     meson \
+#     ninja-build \
+#     && rm -rf /var/lib/apt/lists/*
 
 ENTRYPOINT [ "uv", "run", "gunicorn", "emhass.web_server:create_app()" ]
-# old
-# ENTRYPOINT [ "uv", "run", "--link-mode=copy", "--allow-insecure-host=localhost:5000", "--frozen", "-m", "emhass.web_server"]
 
 # for running Unittest
 #COPY tests/ /app/tests
 #RUN apt-get update &&  apt-get install python3-requests-mock -y
 #COPY data/ /app/data/
 #ENTRYPOINT ["uv","run","unittest","discover","-s","./tests","-p","test_*.py"]
+
+# Example of 32 bit specific 
+# try, symlink apt cbc, to pulp cbc, in python directory (for 32bit)
+#RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7"  ]] &&  ln -sf /usr/bin/cbc /usr/local/lib/python3.11/dist-packages/pulp/solverdir/cbc/linux/32/cbc || echo "cbc symlink didnt work/not required"
