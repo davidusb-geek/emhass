@@ -109,8 +109,6 @@ jobs:
         platform:
           [
             { target_arch: amd64 },
-            { target_arch: armv7 },
-            { target_arch: armhf },
             { target_arch: aarch64 },
           ]
     uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
