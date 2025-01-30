@@ -71,7 +71,7 @@ class RetrieveHass:
         self.long_lived_token = long_lived_token
         self.freq = freq
         self.time_zone = time_zone
-        if (params == None) or (params == "null"):
+        if (params is None) or (params == "null"):
             self.params = {}
         elif type(params) is dict:
             self.params = params
@@ -654,7 +654,7 @@ class RetrieveHass:
                     }
 
                     # Find lowest frequency to set for continual loop freq
-                    if metadata.get("lowest_time_step", None) == None or metadata[
+                    if metadata.get("lowest_time_step", None) is None or metadata[
                         "lowest_time_step"
                     ] > int(self.freq.seconds / 60):
                         metadata["lowest_time_step"] = int(self.freq.seconds / 60)
