@@ -14,9 +14,6 @@ import pickle
 import pandas as pd
 import plotly.io as pio
 
-pio.renderers.default = "browser"
-pd.options.plotting.backend = "plotly"
-
 from emhass.forecast import Forecast
 from emhass.optimization import Optimization
 from emhass.retrieve_hass import RetrieveHass
@@ -29,6 +26,9 @@ from emhass.utils import (
     get_root,
     get_yaml_parse,
 )
+
+pio.renderers.default = "browser"
+pd.options.plotting.backend = "plotly"
 
 # the root folder
 root = pathlib.Path(str(get_root(__file__, num_parent=2)))

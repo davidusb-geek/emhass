@@ -256,7 +256,7 @@ def treat_runtimeparams(
 
     """
     # Check if passed params is a dict
-    if (params != None) and (params != "null"):
+    if (params is not None) and (params != "null"):
         if type(params) is str:
             params = json.loads(params)
     else:
@@ -1242,7 +1242,7 @@ def build_secrets(
 
             # If data path specified by options.json, overwrite emhass_conf['data_path']
             if (
-                options.get("data_path", None) != None
+                options.get("data_path", None) is not None
                 and pathlib.Path(options["data_path"]).exists()
             ):
                 emhass_conf["data_path"] = pathlib.Path(options["data_path"])

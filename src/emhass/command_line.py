@@ -58,7 +58,7 @@ def set_input_data_dict(
     logger.info("Setting up needed data")
 
     # check if passed params is a dict
-    if (params != None) and (params != "null"):
+    if (params is not None) and (params != "null"):
         if type(params) is str:
             params = json.loads(params)
     else:
@@ -447,7 +447,7 @@ def weather_forecast_cache(
         emhass_conf,
     )
     # Make sure weather_forecast_cache is true
-    if (params != None) and (params != "null"):
+    if (params is not None) and (params != "null"):
         params = json.loads(params)
     else:
         params = {}
@@ -1386,7 +1386,7 @@ def continual_publish(
                 with open(entity_path / "metadata.json", "r") as file:
                     metadata = json.load(file)
                     # Check if freq should be shorter
-                    if not metadata.get("lowest_time_step", None) == None:
+                    if metadata.get("lowest_time_step", None) is not None:
                         freq = pd.to_timedelta(metadata["lowest_time_step"], "minutes")
         pass
     # This function should never return

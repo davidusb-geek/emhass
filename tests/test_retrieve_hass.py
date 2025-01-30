@@ -162,10 +162,10 @@ class TestRetrieveHass(unittest.TestCase):
                 params.update(utils.build_params(emhass_conf, {}, defaults, logger))
         _, optim_conf, _ = get_yaml_parse(params, logger)
         # Just check forecast methods
-        self.assertFalse(optim_conf.get("weather_forecast_method") == None)
-        self.assertFalse(optim_conf.get("load_forecast_method") == None)
-        self.assertFalse(optim_conf.get("load_cost_forecast_method") == None)
-        self.assertFalse(optim_conf.get("production_price_forecast_method") == None)
+        self.assertFalse(optim_conf.get("weather_forecast_method") is None)
+        self.assertFalse(optim_conf.get("load_forecast_method") is None)
+        self.assertFalse(optim_conf.get("load_cost_forecast_method") is None)
+        self.assertFalse(optim_conf.get("production_price_forecast_method") is None)
 
     # Assume get_data to HA fails
     def test_get_data_failed(self):

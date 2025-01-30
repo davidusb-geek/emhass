@@ -9,12 +9,12 @@ import time
 import numpy as np
 import pandas as pd
 import plotly.io as pio
-
-pio.renderers.default = "browser"
-pd.options.plotting.backend = "plotly"
-
+from skforecast.model_selection import (
+    TimeSeriesFold,
+    backtesting_forecaster,
+    bayesian_search_forecaster,
+)
 from skforecast.recursive import ForecasterRecursive
-from skforecast.model_selection import bayesian_search_forecaster, backtesting_forecaster, TimeSeriesFold
 from skforecast.utils import load_forecaster, save_forecaster
 from sklearn.linear_model import ElasticNet, LinearRegression
 from sklearn.metrics import r2_score
@@ -30,6 +30,9 @@ from emhass.utils import (
     get_root,
     get_yaml_parse,
 )
+
+pio.renderers.default = "browser"
+pd.options.plotting.backend = "plotly"
 
 # from skopt.space import Categorical, Real, Integer
 
@@ -216,36 +219,32 @@ if __name__ == "__main__":
         search_space = {
             "n_neighbors": trial.suggest_int("n_neighbors", 2, 20),
             "leaf_size": trial.suggest_int("leaf_size", 20, 40),
-            "weights": trial.suggest_categorical(
-                "weights", ["uniform", "distance"]
-            ),
-            "lags": trial.suggest_categorical(
-                "lags", [6, 12, 24, 36, 48, 60, 72]
-            ),
+            "weights": trial.suggest_categorical("weights", ["uniform", "distance"]),
+            "lags": trial.suggest_categorical("lags", [6, 12, 24, 36, 48, 60, 72]),
         }
         return search_space
 
     logger.info("Backtesting and bayesian hyperparameter optimization")
     start_time = time.time()
     cv = TimeSeriesFold(
-        steps                 = num_lags,
-        initial_train_size    = len(data_exo.loc[:date_train]),
-        fixed_train_size      = True,
-        gap                   = 0,
-        skip_folds            = None,
-        allow_incomplete_fold = True,
-        refit                 = True
+        steps=num_lags,
+        initial_train_size=len(data_exo.loc[:date_train]),
+        fixed_train_size=True,
+        gap=0,
+        skip_folds=None,
+        allow_incomplete_fold=True,
+        refit=True,
     )
     results, optimize_results_object = bayesian_search_forecaster(
-        forecaster         = forecaster,
-        y                  = data_train[var_model],
-        exog               = data_train.drop(var_model, axis=1),
-        cv                 = cv,
-        search_space       = search_space,
-        metric             = neg_r2_score,
-        n_trials           = 10,
-        random_state       = 123,
-        return_best        = True
+        forecaster=forecaster,
+        y=data_train[var_model],
+        exog=data_train.drop(var_model, axis=1),
+        cv=cv,
+        search_space=search_space,
+        metric=neg_r2_score,
+        n_trials=10,
+        random_state=123,
+        return_best=True,
     )
     logger.info(f"Elapsed time: {time.time() - start_time}")
     logger.info(results)
