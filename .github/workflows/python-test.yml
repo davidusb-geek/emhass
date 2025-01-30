@@ -42,7 +42,7 @@ jobs:
       - name: Install EMHASS with test dependencies
         run: |
           uv pip install .[test] && uv lock
-      - name: ruf check formatting
+      - name: ruf check --output-format=github 
         uses: astral-sh/ruff-action@v3
       - name: Test with pytest
         run: |
