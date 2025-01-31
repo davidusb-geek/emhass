@@ -120,7 +120,7 @@ RUN uv lock
 
 # remove build only packages
 RUN apt-get remove --purge -y --auto-remove \
-    python3-setuptools
+    python3-setuptools \
     gcc \
     patchelf \
     cmake \
