@@ -52,13 +52,14 @@ RUN apt-get update \
     # libgfortran5 \
 
 # add build packadges (just in case wheel does not exist)
-# RUN apt-get update \
-#     && apt-get install -y --no-install-recommends \
-#     gcc \
-#     patchelf \
-#     cmake \
-#     meson \
-#     ninja-build
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+    python3-setuptools \
+    gcc \
+    patchelf \
+    cmake \
+    meson \
+    ninja-build
 
 # Install uv (pip alternative)
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
@@ -118,13 +119,14 @@ RUN uv pip install --verbose .
 RUN uv lock
 
 # remove build only packages
-# RUN apt-get remove --purge -y --auto-remove \
-#     gcc \
-#     patchelf \
-#     cmake \
-#     meson \
-#     ninja-build \
-#     && rm -rf /var/lib/apt/lists/*
+RUN apt-get remove --purge -y --auto-remove \
+    python3-setuptools
+    gcc \
+    patchelf \
+    cmake \
+    meson \
+    ninja-build \
+    && rm -rf /var/lib/apt/lists/*
 
 ENTRYPOINT [ "uv", "run", "gunicorn", "emhass.web_server:create_app()" ]
 
