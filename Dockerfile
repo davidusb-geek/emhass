@@ -111,6 +111,8 @@ LABEL \
 # Set up venv
 RUN uv venv && . .venv/bin/activate
 
+RUN [[ "${TARGETARCH}" == "aarch64" ]] && uv pip install --verbose ndindex | echo "skipping ndindex"
+
 # install packadges and build EMHASS
 RUN uv pip install --verbose .
 RUN uv lock
