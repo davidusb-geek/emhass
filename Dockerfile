@@ -112,7 +112,7 @@ LABEL \
 # Set up venv
 RUN uv venv && . .venv/bin/activate
 
-RUN [[ "${TARGETARCH}" == "aarch64" ]] &&& uv pip install --verbose ndindex || echo "libatomic1 cant be installed"
+RUN [[ "${TARGETARCH}" == "aarch64" ]] && uv pip install --verbose ndindex || echo "libatomic1 cant be installed"
 
 
 # install packadges and build EMHASS
