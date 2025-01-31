@@ -115,7 +115,7 @@ RUN uv venv && . .venv/bin/activate
 RUN uv pip install --verbose .
 RUN uv lock
 
-remove build only packages
+# remove build only packages
 RUN apt-get remove --purge -y --auto-remove \
     gcc \
     patchelf \
