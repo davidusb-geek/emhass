@@ -475,11 +475,23 @@ def treat_runtimeparams(
                 soc_init = params["plant_conf"]["battery_target_state_of_charge"]
             else:
                 soc_init = runtimeparams["soc_init"]
+            if soc_init < params["plant_conf"]["battery_minimum_state_of_charge"]:
+                logger.warning(f"Passed soc_init={soc_init} is lower than soc_min={params["plant_conf"]["battery_minimum_state_of_charge"]}, setting soc_init=soc_min")
+                soc_init = params["plant_conf"]["battery_minimum_state_of_charge"]
+            if soc_init > params["plant_conf"]["battery_maximum_state_of_charge"]:
+                logger.warning(f"Passed soc_init={soc_init} is greater than soc_max={params["plant_conf"]["battery_maximum_state_of_charge"]}, setting soc_init=soc_max")
+                soc_init = params["plant_conf"]["battery_maximum_state_of_charge"]
             params["passed_data"]["soc_init"] = soc_init
             if "soc_final" not in runtimeparams.keys():
                 soc_final = params["plant_conf"]["battery_target_state_of_charge"]
             else:
                 soc_final = runtimeparams["soc_final"]
+            if soc_final < params["plant_conf"]["battery_minimum_state_of_charge"]:
+                logger.warning(f"Passed soc_final={soc_final} is lower than soc_min={params["plant_conf"]["battery_minimum_state_of_charge"]}, setting soc_final=soc_min")
+                soc_final = params["plant_conf"]["battery_minimum_state_of_charge"]
+            if soc_final > params["plant_conf"]["battery_maximum_state_of_charge"]:
+                logger.warning(f"Passed soc_final={soc_final} is greater than soc_max={params["plant_conf"]["battery_maximum_state_of_charge"]}, setting soc_final=soc_max")
+                soc_final = params["plant_conf"]["battery_maximum_state_of_charge"]
             params["passed_data"]["soc_final"] = soc_final
             if "operating_timesteps_of_each_deferrable_load" in runtimeparams.keys():
                 params["passed_data"]["operating_timesteps_of_each_deferrable_load"] = (
