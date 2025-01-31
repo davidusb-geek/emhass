@@ -13,5 +13,9 @@
     "python.defaultInterpreterPath": ".venv/bin/python",
     "cSpell.words": [
         "automations"
-    ]
+    ],
+    "sonarlint.connectedMode.project": {
+        "connectionId": "geoderp-emhass",
+        "projectKey": "GeoDerp_emhass"
+    }
 }
