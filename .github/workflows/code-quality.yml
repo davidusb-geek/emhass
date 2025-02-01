@@ -31,7 +31,7 @@ jobs:
           python-version-file: ".python-version"
 
       - name: Install the project
-        run: uv sync --all-extras test
+        run: uv sync --reinstall --extra test
 
       - name: Run Ruff
         run: ruff check --output-format=github .
