@@ -25,9 +25,9 @@ jobs:
       run: |
         uv venv
         uv pip install .[test]
-        coverage run -m --source=emhass unittest
-        coverage report
-        coverage xml
+        uv run coverage run -m --source=emhass unittest
+        uv run coverage report
+        uv run coverage xml
     - name: Upload coverage reports to Codecov
       run: |
         # Replace `linux` below with the appropriate OS
