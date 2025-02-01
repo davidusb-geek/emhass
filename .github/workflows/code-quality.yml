@@ -33,8 +33,11 @@ jobs:
       - name: Install the project
         run: uv sync --reinstall --extra test
 
+      - name: Install ruff
+        run: uv tool install ruff
+
       - name: Run Ruff
-        run: ruff check --output-format=github .
+        run: uvx ruff check --output-format=github .
      
       # - name: Type Check with Mypy
       #   shell: bash
