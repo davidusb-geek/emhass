@@ -9,6 +9,11 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
     strategy:
       matrix:
         os: [ubuntu-latest]
@@ -30,14 +35,6 @@ jobs:
 
       - name: Run Ruff
         run: ruff check --output-format=github .
-      
-      - name: OSV scan
-        uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
-        with:
-          fail-on-vuln: false
-          scan-args: |-
-            --recursive
-            ./
      
       # - name: Type Check with Mypy
       #   shell: bash
@@ -48,3 +45,16 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@v4
         env: 
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  scan-pr:
+    needs:
+      - build
+    uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
+    with:
+      fail-on-vuln: false
+      scan-args: |-
+        --recursive
+        ./
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
