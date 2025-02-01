@@ -16,10 +16,11 @@ import plotly.express as px
 import plotly.io as pio
 import plotly.subplots as sp
 
+from emhass.utils import get_logger, get_root
+
 pio.renderers.default = "browser"
 pd.options.plotting.backend = "plotly"
 
-from emhass.utils import get_logger, get_root
 
 if __name__ == "__main__":
     # the root folder

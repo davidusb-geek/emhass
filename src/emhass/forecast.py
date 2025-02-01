@@ -8,8 +8,8 @@ import logging
 import os
 import pickle
 import pickle as cPickle
-from datetime import datetime, timedelta
 import re
+from datetime import datetime, timedelta
 from itertools import zip_longest
 from typing import Optional
 
@@ -156,7 +156,7 @@ class Forecast(object):
         self.get_data_from_file = get_data_from_file
         self.var_load_cost = "unit_load_cost"
         self.var_prod_price = "unit_prod_price"
-        if (params == None) or (params == "null"):
+        if (params is None) or (params == "null"):
             self.params = {}
         elif type(params) is dict:
             self.params = params
@@ -322,14 +322,14 @@ class Forecast(object):
                     if self.params["passed_data"].get("weather_forecast_cache", False):
                         days_solcast = min((days_solcast * 2), 336)
                     # Split `roof_id` into a list (support comma or space as separator)
-                    roof_ids = re.split(r"[,\s]+", self.retrieve_hass_conf["solcast_rooftop_id"].strip())
+                    roof_ids = re.split(
+                        r"[,\s]+", self.retrieve_hass_conf["solcast_rooftop_id"].strip()
+                    )
                     # Summary list of data
                     total_data_list = [0] * len(self.forecast_dates)
                     # Iteration over individual `roof_id`
                     for roof_id in roof_ids:
-                        url = (
-                            f"https://api.solcast.com.au/rooftop_sites/{roof_id}/forecasts?hours={days_solcast}"
-                        )                  
+                        url = f"https://api.solcast.com.au/rooftop_sites/{roof_id}/forecasts?hours={days_solcast}"
                         response = get(url, headers=headers)
                         """import bz2 # Uncomment to save a serialized data for tests
                         import _pickle as cPickle
@@ -346,9 +346,9 @@ class Forecast(object):
                                 "Solcast error: May have exceeded your subscription limit."
                             )
                             return False
-                        elif (
-                            int(response.status_code) >= 400
-                            or (int(response.status_code) >= 202 and int(response.status_code) <= 299)
+                        elif int(response.status_code) >= 400 or (
+                            int(response.status_code) >= 202
+                            and int(response.status_code) <= 299
                         ):
                             self.logger.error(
                                 "Solcast error: There was a issue with the solcast request, check solcast API key and rooftop ID."
@@ -371,12 +371,13 @@ class Forecast(object):
                             return False
                         # Adding the data of the current `roof_id` to the total
                         total_data_list = [
-                            total + current for total, current in zip_longest(total_data_list, data_list, fillvalue=0)
+                            total + current
+                            for total, current in zip_longest(
+                                total_data_list, data_list, fillvalue=0
+                            )
                         ]
                     # If runtime weather_forecast_cache is true save forecast result to file as cache
-                    if self.params["passed_data"].get(
-                        "weather_forecast_cache", False
-                    ):
+                    if self.params["passed_data"].get("weather_forecast_cache", False):
                         # Add x2 forecast periods for cached results. This adds a extra delta_forecast amount of days for a buffer
                         cached_forecast_dates = self.forecast_dates.union(
                             pd.date_range(
@@ -385,7 +386,9 @@ class Forecast(object):
                                 freq=self.freq,
                             )[1:]
                         )
-                        cache_data_list = total_data_list[0 : len(cached_forecast_dates)]
+                        cache_data_list = total_data_list[
+                            0 : len(cached_forecast_dates)
+                        ]
                         cache_data_dict = {
                             "ts": cached_forecast_dates,
                             "yhat": cache_data_list,
@@ -519,8 +522,8 @@ class Forecast(object):
                 mask_down_data_df = (
                     data_tmp.copy(deep=True).fillna(method="bfill").isnull()
                 )
-                data_tmp.loc[data_tmp.index[mask_up_data_df["yhat"] == True], :] = 0.0
-                data_tmp.loc[data_tmp.index[mask_down_data_df["yhat"] == True], :] = 0.0
+                data_tmp.loc[mask_up_data_df["yhat"], :] = 0.0
+                data_tmp.loc[mask_down_data_df["yhat"], :] = 0.0
                 data_tmp.interpolate(inplace=True, limit=1)
                 data_tmp = data_tmp.fillna(0.0)
                 if len(data) == 0:
@@ -680,7 +683,7 @@ class Forecast(object):
                     self.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2", "rb"
                 )
                 cec_inverters = cPickle.load(cec_inverters)
-                if type(self.plant_conf["pv_module_model"]) == list:
+                if isinstance(self.plant_conf["pv_module_model"], list):
                     P_PV_forecast = pd.Series(0, index=df_weather.index)
                     for i in range(len(self.plant_conf["pv_module_model"])):
                         # Selecting correct module and inverter

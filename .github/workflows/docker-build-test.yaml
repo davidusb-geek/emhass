@@ -22,8 +22,6 @@ jobs:
         platform:
           [
             { target_arch: amd64, os_version: debian },
-            { target_arch: armv7, os_version: debian },
-            { target_arch: armhf, os_version: raspbian },
             { target_arch: aarch64, os_version: debian },
           ]
     steps:
@@ -68,8 +66,6 @@ jobs:
         platform:
           [
             { target_arch: amd64 },
-            { target_arch: armv7 },
-            { target_arch: armhf },
             { target_arch: aarch64 }
           ]
     # Check Docker image debian and python packages list for known vulnerabilities

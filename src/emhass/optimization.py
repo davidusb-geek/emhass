@@ -220,7 +220,9 @@ class Optimization:
         P_deferrable = []
         P_def_bin1 = []
         for k in range(self.optim_conf["number_of_deferrable_loads"]):
-            if type(self.optim_conf["nominal_power_of_deferrable_loads"][k]) == list:
+            if isinstance(
+                self.optim_conf["nominal_power_of_deferrable_loads"][k], list
+            ):
                 upBound = np.max(
                     self.optim_conf["nominal_power_of_deferrable_loads"][k]
                 )
@@ -465,10 +467,10 @@ class Optimization:
                 }
 
         # Constraint for hybrid inverter and curtailment cases
-        if type(self.plant_conf["pv_module_model"]) == list:
+        if isinstance(self.plant_conf["pv_module_model"], list):
             P_nom_inverter = 0.0
             for i in range(len(self.plant_conf["pv_inverter_model"])):
-                if type(self.plant_conf["pv_inverter_model"][i]) == str:
+                if isinstance(self.plant_conf["pv_inverter_model"][i], str):
                     cec_inverters = bz2.BZ2File(
                         self.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2",
                         "rb",
@@ -479,7 +481,7 @@ class Optimization:
                 else:
                     P_nom_inverter += self.plant_conf["pv_inverter_model"][i]
         else:
-            if type(self.plant_conf["pv_inverter_model"][i]) == str:
+            if isinstance(self.plant_conf["pv_inverter_model"][i], str):
                 cec_inverters = bz2.BZ2File(
                     self.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2", "rb"
                 )
@@ -578,7 +580,9 @@ class Optimization:
         # Treat deferrable loads constraints
         predicted_temps = {}
         for k in range(self.optim_conf["number_of_deferrable_loads"]):
-            if type(self.optim_conf["nominal_power_of_deferrable_loads"][k]) == list:
+            if isinstance(
+                self.optim_conf["nominal_power_of_deferrable_loads"][k], list
+            ):
                 # Constraint for sequence of deferrable
                 # WARNING: This is experimental, formulation seems correct but feasibility problems.
                 # Probably uncomptabile with other constraints
@@ -651,13 +655,13 @@ class Optimization:
                         desired_temperatures = hc["desired_temperatures"]
                         sense = hc.get("sense", "heat")
                         predicted_temp = [start_temperature]
-                        for I in set_I:
-                            if I == 0:
+                        for Id in set_I:
+                            if Id == 0:
                                 continue
                             predicted_temp.append(
-                                predicted_temp[I - 1]
+                                predicted_temp[Id - 1]
                                 + (
-                                    P_deferrable[k][I - 1]
+                                    P_deferrable[k][Id - 1]
                                     * (
                                         heating_rate
                                         * self.timeStep
@@ -669,40 +673,40 @@ class Optimization:
                                 - (
                                     cooling_constant
                                     * (
-                                        predicted_temp[I - 1]
-                                        - outdoor_temperature_forecast.iloc[I - 1]
+                                        predicted_temp[Id - 1]
+                                        - outdoor_temperature_forecast.iloc[Id - 1]
                                     )
                                 )
                             )
                             if (
-                                len(desired_temperatures) > I
-                                and desired_temperatures[I]
+                                len(desired_temperatures) > Id
+                                and desired_temperatures[Id]
                             ):
                                 constraints.update(
                                     {
                                         "constraint_defload{}_temperature_{}".format(
-                                            k, I
+                                            k, Id
                                         ): plp.LpConstraint(
-                                            e=predicted_temp[I],
+                                            e=predicted_temp[Id],
                                             sense=plp.LpConstraintGE
                                             if sense == "heat"
                                             else plp.LpConstraintLE,
-                                            rhs=desired_temperatures[I],
+                                            rhs=desired_temperatures[Id],
                                         )
                                     }
                                 )
                         constraints.update(
                             {
                                 "constraint_defload{}_overshoot_temp_{}".format(
-                                    k, I
+                                    k, Id
                                 ): plp.LpConstraint(
-                                    e=predicted_temp[I],
+                                    e=predicted_temp[Id],
                                     sense=plp.LpConstraintLE
                                     if sense == "heat"
                                     else plp.LpConstraintGE,
                                     rhs=overshoot_temperature,
                                 )
-                                for I in set_I
+                                for Id in set_I
                             }
                         )
                         predicted_temps[k] = predicted_temp
