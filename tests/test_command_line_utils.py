@@ -84,7 +84,7 @@ class TestCommandLineUtils(unittest.TestCase):
             get_data_from_file=True,
         )
         self.assertIsInstance(input_data_dict, dict)
-        self.assertTrue(input_data_dict["df_input_data"] == None)
+        self.assertTrue(input_data_dict["df_input_data"] is None)
         self.assertIsInstance(input_data_dict["df_input_data_dayahead"], pd.DataFrame)
         self.assertTrue(
             input_data_dict["df_input_data_dayahead"].index.freq is not None
@@ -116,10 +116,10 @@ class TestCommandLineUtils(unittest.TestCase):
             logger,
             get_data_from_file=True,
         )
-        self.assertTrue(input_data_dict["df_input_data"] == None)
-        self.assertTrue(input_data_dict["df_input_data_dayahead"] == None)
-        self.assertTrue(input_data_dict["P_PV_forecast"] == None)
-        self.assertTrue(input_data_dict["P_load_forecast"] == None)
+        self.assertTrue(input_data_dict["df_input_data"] is None)
+        self.assertTrue(input_data_dict["df_input_data_dayahead"] is None)
+        self.assertTrue(input_data_dict["P_PV_forecast"] is None)
+        self.assertTrue(input_data_dict["P_load_forecast"] is None)
         # Test naive mpc
         action = "naive-mpc-optim"
         input_data_dict = set_input_data_dict(
@@ -503,7 +503,7 @@ class TestCommandLineUtils(unittest.TestCase):
             == "KNeighborsRegressor"
         )
         self.assertTrue(
-            input_data_dict["params"]["passed_data"]["perform_backtest"] == False
+            input_data_dict["params"]["passed_data"]["perform_backtest"] is False
         )
         # Check that the default params are loaded
         input_data_dict = set_input_data_dict(
@@ -528,7 +528,7 @@ class TestCommandLineUtils(unittest.TestCase):
             input_data_dict, logger, debug=True
         )
         self.assertIsInstance(df_fit_pred, pd.DataFrame)
-        self.assertTrue(df_fit_pred_backtest == None)
+        self.assertTrue(df_fit_pred_backtest is None)
         # Test ijection_dict for fit method on webui
         injection_dict = utils.get_injection_dict_forecast_model_fit(df_fit_pred, mlf)
         self.assertIsInstance(injection_dict, dict)
@@ -557,7 +557,7 @@ class TestCommandLineUtils(unittest.TestCase):
             input_data_dict, logger, debug=True, mlf=mlf
         )
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
-        self.assertTrue(mlf.is_tuned == True)
+        self.assertTrue(mlf.is_tuned is True)
         # Test injection_dict for tune method on webui
         injection_dict = utils.get_injection_dict_forecast_model_tune(df_fit_pred, mlf)
         self.assertIsInstance(injection_dict, dict)
@@ -768,7 +768,7 @@ class TestCommandLineUtils(unittest.TestCase):
         ):
             df_fit_pred, df_fit_pred_backtest, mlf = main()
         self.assertIsInstance(df_fit_pred, pd.DataFrame)
-        self.assertTrue(df_fit_pred_backtest == None)
+        self.assertTrue(df_fit_pred_backtest is None)
 
     # CLI test forecast model predict action
     def test_main_forecast_model_predict(self):
@@ -840,7 +840,7 @@ class TestCommandLineUtils(unittest.TestCase):
         ):
             df_pred_optim, mlf = main()
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
-        self.assertTrue(mlf.is_tuned == True)
+        self.assertTrue(mlf.is_tuned is True)
 
     # CLI test regressor model fit action
     def test_main_regressor_model_fit(self):
@@ -873,7 +873,7 @@ class TestCommandLineUtils(unittest.TestCase):
                 "True",
             ],
         ):
-            mlr = main()
+            main()
 
     # CLI test regressor model predict action
     def test_main_regressor_model_predict(self):

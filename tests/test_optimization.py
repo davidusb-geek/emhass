@@ -450,7 +450,7 @@ class TestOptimization(unittest.TestCase):
         solver_list = pl.listSolvers(onlyAvailable=True)
         for solver in solver_list:
             self.optim_conf["lp_solver"] = solver
-            if os.getenv("lp_solver_path", default=None) == None:
+            if os.getenv("lp_solver_path", default=None) is None:
                 self.optim_conf["lp_solver_path"] = os.getenv(
                     "lp_solver_path", default=None
                 )

@@ -9,7 +9,7 @@ name = "emhass"
 version = "0.12.4"
 description = "An Energy Management System for Home Assistant"
 readme = "README.md"
-requires-python = ">=3.10, <3.12"
+requires-python = ">=3.10, <3.13"
 authors = [{ name = "David HERNANDEZ", email = "davidusb@gmail.com" }]
 license = { text = "MIT" }
 keywords = ["energy", "management", "optimization", "hass"]
@@ -23,53 +23,51 @@ classifiers = [
 ]
 dependencies = [
     "numpy>=2.0.0, <2.3.0",
-    "scipy>=1.14.0",
-    "pandas>=2.1.1",
-    "pvlib>=0.10.3",
-    "protobuf>=5.29.1",
-    "pytz>=2023.4",
-    "requests>=2.25.1",
+    "scipy>=1.15.0",
+    "pandas>=2.2.0",
+    "pvlib>=0.11.0",
+    "protobuf>=5.29.3",
+    "pytz>=2024.2",
+    "requests>=2.32.2",
     "beautifulsoup4>=4.12.3",
     "h5py>=3.12.1",
     "pulp>=2.8.0",
-    "pyyaml>=6.0.1",
-    "tables>=3.9.1",
-    "skforecast>=0.9.0",
+    "pyyaml>=6.0.2",
+    "tables>=3.10.0",
+    "skforecast>=0.14.0",
     "flask>=3.1.0",
     "waitress>=3.0.2",
-    "plotly>=6.0.0rc0",
+    "plotly>=6.0.0",
     "gunicorn>=23.0.0",
 ]
 
 [project.optional-dependencies]
 docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
-test = ["requests_mock", "pytest", "coverage", "snakeviz", "ruff", "tabulate"]
+# can add "mypy"
+test = ["requests_mock", "pytest", "coverage", "snakeviz", "ruff", "tabulate", "hatchling"]
 
 [tool.uv.workspace]
 members = ["emhass"]
 
-[tool.setuptools.packages]
-find = { where = ["src"] }
-
-[tool.setuptools.package-data]
-emhass = [
-    "templates/index.html",
-    "templates/template.html",
-    "templates/configuration.html",
-    "static/advanced.html",
-    "static/basic.html",
-    "static/script.js",
-    "static/configuration_script.js",
-    "static/style.css",
-    "static/configuration_list.html",
-    "static/img/emhass_icon.png",
-    "static/img/emhass_logo_short.svg",
-    "static/img/feather-sprite.svg",
-    "static/data/param_definitions.json",
-    "data/cec_modules.pbz2",
-    "data/cec_inverters.pbz2",
-    "data/associations.csv",
-    "data/config_defaults.json",
+[tool.hatch.build.targets.sdist]
+include = [
+    "/emhass/templates/index.html",
+    "/emhass/templates/template.html",
+    "/emhass/templates/configuration.html",
+    "/emhass/static/advanced.html",
+    "/emhass/static/basic.html",
+    "/emhass/static/script.js",
+    "/emhass/static/configuration_script.js",
+    "/emhass/static/style.css",
+    "/emhass/static/configuration_list.html",
+    "/emhass/static/img/emhass_icon.png",
+    "/emhass/static/img/emhass_logo_short.svg",
+    "/emhass/static/img/feather-sprite.svg",
+    "/emhass/static/data/param_definitions.json",
+    "/emhass/data/cec_modules.pbz2",
+    "/emhass/data/cec_inverters.pbz2",
+    "/emhass/data/associations.csv",
+    "/emhass/data/config_defaults.json",
 ]
 
 [project.scripts]
@@ -77,3 +75,7 @@ emhass = "emhass.command_line:main"
 
 [project.urls]
 Homepage = "https://github.com/davidusb-geek/emhass"
+
+#strict is strict
+#[tool.mypy]
+#strict =  true

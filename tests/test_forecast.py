@@ -197,7 +197,7 @@ class TestForecast(unittest.TestCase):
         self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.df_weather_csv), len(P_PV_forecast))
         df_weather_none = self.fcst.get_weather_forecast(method="none")
-        self.assertTrue(df_weather_none == None)
+        self.assertTrue(df_weather_none is None)
 
     # Test output weather forecast using scrapper with mock get request data
     def test_get_weather_forecast_scrapper_method_mock(self):
