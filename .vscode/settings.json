@@ -15,8 +15,8 @@
         "automations"
     ],
     "sonarlint.connectedMode.project": {
-        "connectionId": "geoderp-emhass",
-        "projectKey": "GeoDerp_emhass"
+        "connectionId": "emhass",
+        "projectKey": "davidusb-geek_emhass",
     },
     "sonarlint.disableTelemetry": true,
     "sonarlint.focusOnNewCode": true,
