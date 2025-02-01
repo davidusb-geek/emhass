@@ -30,7 +30,13 @@
 		// Configure properties specific to VS Code.
 		"vscode": {
 		  // Add the IDs of extensions you want installed when the container is created.
-		  "extensions": ["ms-python.debugpy", "ms-python.python","charliermarsh.ruff","SonarSource.sonarlint-vscode"],
+		  // can add "ms-python.mypy-type-checker"
+		  "extensions": [
+			"ms-python.debugpy",
+			"ms-python.python",
+			"charliermarsh.ruff",
+			"SonarSource.sonarlint-vscode"
+		],
 		  "settings": {
 			"[python]": {
 			  "editor.formatOnSave": true,
@@ -38,9 +44,7 @@
 				"source.fixAll": "explicit",
 				"source.organizeImports": "explicit"
 			  },
-			  "editor.defaultFormatter": "charliermarsh.ruff",
-			  "sonarlint.disableTelemetry": true,
-			  "sonarlint.focusOnNewCode": true
+			  "editor.defaultFormatter": "charliermarsh.ruff"
 			}
 		  }
 		}

@@ -17,5 +17,10 @@
     "sonarlint.connectedMode.project": {
         "connectionId": "geoderp-emhass",
         "projectKey": "GeoDerp_emhass"
-    }
+    },
+    "sonarlint.disableTelemetry": true,
+    "sonarlint.focusOnNewCode": true,
+    "sonarlint.analyzerProperties": {},
+    "mypy-type-checker.reportingScope": "workspace",
+    "editor.defaultFormatter": "charliermarsh.ruff"
 }

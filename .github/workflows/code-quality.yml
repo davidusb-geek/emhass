@@ -1,0 +1,50 @@
+name: "Code Quality Scan"
+# Use tools such as mypy ruf and sonarcloud to check for code quality & code security
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    env:
+      OS: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@master
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Install the project
+        run: uv sync --all-extras --test
+
+      - name: Run Ruff
+        run: ruff check --output-format=github .
+      
+      - name: OSV scan
+        uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
+        with:
+          fail-on-vuln: false
+          scan-args: |-
+            --recursive
+            ./
+     
+      # - name: Type Check with Mypy
+      #   shell: bash
+      #   run: |
+      #     uv run mypy ./src/
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v4
+        env: 
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

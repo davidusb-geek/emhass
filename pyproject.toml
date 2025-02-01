@@ -43,6 +43,7 @@ dependencies = [
 
 [project.optional-dependencies]
 docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
+# can add "mypy"
 test = ["requests_mock", "pytest", "coverage", "snakeviz", "ruff", "tabulate", "hatchling"]
 
 [tool.uv.workspace]
@@ -74,3 +75,7 @@ emhass = "emhass.command_line:main"
 
 [project.urls]
 Homepage = "https://github.com/davidusb-geek/emhass"
+
+#strict is strict
+#[tool.mypy]
+#strict =  true
