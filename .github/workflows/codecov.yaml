@@ -24,7 +24,7 @@ jobs:
     - name: Generate Report
       run: |
         uv venv
-        uv pip install .[test]
+        uv sync --reinstall --extra test
         uv run coverage run -m --source=emhass unittest
         uv run coverage report
         uv run coverage xml
