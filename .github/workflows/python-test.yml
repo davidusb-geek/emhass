@@ -17,12 +17,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12"]
         os: [ubuntu-latest, macos-latest, windows-latest]
     env:
       OS: ${{ matrix.os }}
-      PYTHON: ${{ matrix.python-version }}
-
+      
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -41,10 +39,10 @@ jobs:
         if: ${{ matrix.os == 'macos-latest' }}
       - name: Install EMHASS with test dependencies
         run: |
-          uv pip install .[test] && uv lock
+          uv sync --reinstall --extra test
       - name: Test with pytest
         run: |
-           uv run pytest
+          uv run pytest
   scan-pr:
     needs:
       - build

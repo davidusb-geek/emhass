@@ -54,11 +54,9 @@ RUN apt-get update \
 # add build packadges (just in case wheel does not exist)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-    python3-setuptools \
     gcc \
     patchelf \
     cmake \
-    meson \
     ninja-build
 
 # Install uv (pip alternative)
@@ -121,11 +119,9 @@ RUN uv lock
 
 # remove build only packages
 RUN apt-get remove --purge -y --auto-remove \
-    python3-setuptools \
     gcc \
     patchelf \
     cmake \
-    meson \
     ninja-build \
     && rm -rf /var/lib/apt/lists/*
 

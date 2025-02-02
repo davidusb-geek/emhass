@@ -35,7 +35,8 @@
 			"ms-python.debugpy",
 			"ms-python.python",
 			"charliermarsh.ruff",
-			"SonarSource.sonarlint-vscode"
+			"SonarSource.sonarlint-vscode",
+			"redhat.vscode-yaml"
 		],
 		  "settings": {
 			"[python]": {
