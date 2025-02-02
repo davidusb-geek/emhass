@@ -462,18 +462,6 @@ class TestCommandLineUtils(unittest.TestCase):
         )
         params_with_ha_config = json.loads(params_with_ha_config_json)
         self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_predicted_temperature_id"][0][
-                "unit_of_measurement"
-            ]
-            == "°F"
-        )
-        self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_predicted_temperature_id"][1][
-                "unit_of_measurement"
-            ]
-            == "°F"
-        )
-        self.assertTrue(
             params_with_ha_config["passed_data"]["custom_cost_fun_id"][
                 "unit_of_measurement"
             ]
@@ -716,24 +704,12 @@ class TestCommandLineUtils(unittest.TestCase):
             logger,
             emhass_conf,
         )
-        ha_config = {"currency": "USD", "unit_system": {"temperature": "°F"}}
+        ha_config = {"currency": "USD"}
         params_with_ha_config_json = utils.update_params_with_ha_config(
             params,
             ha_config,
         )
         params_with_ha_config = json.loads(params_with_ha_config_json)
-        self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_predicted_temperature_id"][0][
-                "unit_of_measurement"
-            ]
-            == "°F"
-        )
-        self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_predicted_temperature_id"][1][
-                "unit_of_measurement"
-            ]
-            == "°F"
-        )
         self.assertTrue(
             params_with_ha_config["passed_data"]["custom_cost_fun_id"][
                 "unit_of_measurement"
@@ -969,7 +945,7 @@ class TestCommandLineUtils(unittest.TestCase):
             logger,
             emhass_conf,
         )
-        ha_config = {"currency": "USD", "unit_system": {"temperature": "°F"}}
+        ha_config = {"currency": "USD"}
         params_with_ha_config_json = utils.update_params_with_ha_config(
             params,
             ha_config,
