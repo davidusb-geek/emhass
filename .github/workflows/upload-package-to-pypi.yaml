@@ -18,7 +18,7 @@ jobs:
       with:
         python-version-file: ".python-version"
     - name: Build a binary wheel and a source tarball
-      run: uv build
+      run:  uv build
     - name: Store the distribution packages
       uses: actions/upload-artifact@v4
       with:
