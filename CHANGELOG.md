@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.5 - 2025-02-02
+### Improvement
+- Implemented new package manager uv resulting in faster builds. Thanks to @GeoDerp
+- Implemented SonarQube automatic code review. Thanks to @GeoDerp
+- Better management of SOC min/max to solve issue: MPC optim status infeasible when SOC lower than min SOC
+### Fix
+- Reverted back skforecast to latest version
+- Fixed issue with list index out of range. Thanks to @meks007 for identifying and reporting this
+
 ## 0.12.4 - 2025-01-27
 ### Patch fix
 - Fixed bugs on gunicorn logger and missing CBC modules
