@@ -32,7 +32,6 @@
 
 div {
   border-radius: 7px;
-  box-align: start !important;
   align-items: start;
   text-align: left;
 }
