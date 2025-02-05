@@ -119,6 +119,7 @@ if __name__ == "__main__":
     df_input_data = fcst.get_prod_price_forecast(df_input_data)
 
     template = "presentation"
+    y_axis_title = "Power (W)"
 
     # Let's plot the input data
     fig_inputs1 = df_input_data[
@@ -128,7 +129,7 @@ if __name__ == "__main__":
         ]
     ].plot()
     fig_inputs1.layout.template = template
-    fig_inputs1.update_yaxes(title_text="Powers (W)")
+    fig_inputs1.update_yaxes(title_text=y_axis_title)
     fig_inputs1.update_xaxes(title_text="Time")
     fig_inputs1.show()
     if save_figures:
@@ -152,7 +153,7 @@ if __name__ == "__main__":
 
     fig_inputs_dah = df_input_data_dayahead.plot()
     fig_inputs_dah.layout.template = template
-    fig_inputs_dah.update_yaxes(title_text="Powers (W)")
+    fig_inputs_dah.update_yaxes(title_text=y_axis_title)
     fig_inputs_dah.update_xaxes(title_text="Time")
     fig_inputs_dah.show()
     if save_figures:
@@ -166,7 +167,7 @@ if __name__ == "__main__":
     opt_res = opt.perform_perfect_forecast_optim(df_input_data, days_list)
     fig_res = opt_res[["P_deferrable0", "P_deferrable1", "P_grid"]].plot()
     fig_res.layout.template = template
-    fig_res.update_yaxes(title_text="Powers (W)")
+    fig_res.update_yaxes(title_text=y_axis_title)
     fig_res.update_xaxes(title_text="Time")
     fig_res.show()
     if save_figures:
@@ -190,7 +191,7 @@ if __name__ == "__main__":
     )
     fig_res_dah = opt_res_dah[["P_deferrable0", "P_deferrable1", "P_grid"]].plot()
     fig_res_dah.layout.template = template
-    fig_res_dah.update_yaxes(title_text="Powers (W)")
+    fig_res_dah.update_yaxes(title_text=y_axis_title)
     fig_res_dah.update_xaxes(title_text="Time")
     fig_res_dah.show()
     if save_figures:
@@ -220,7 +221,7 @@ if __name__ == "__main__":
     )
     fig_res_dah = opt_res_dah[["P_deferrable0", "P_deferrable1", "P_grid"]].plot()
     fig_res_dah.layout.template = template
-    fig_res_dah.update_yaxes(title_text="Powers (W)")
+    fig_res_dah.update_yaxes(title_text=y_axis_title)
     fig_res_dah.update_xaxes(title_text="Time")
     fig_res_dah.show()
     if save_figures:
@@ -253,7 +254,7 @@ if __name__ == "__main__":
         ["P_deferrable0", "P_deferrable1", "P_grid", "P_batt"]
     ].plot()
     fig_res_dah.layout.template = template
-    fig_res_dah.update_yaxes(title_text="Powers (W)")
+    fig_res_dah.update_yaxes(title_text=y_axis_title)
     fig_res_dah.update_xaxes(title_text="Time")
     fig_res_dah.show()
     if save_figures:
