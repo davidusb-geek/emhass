@@ -1618,7 +1618,7 @@ def main():
     config = {}
     # Check if passed config file is yaml of json, build config accordingly
     if config_path.exists():
-        config_file_ending = re.findall("(?<=\.).*$", str(config_path))
+        config_file_ending = re.findall(r"(?<=\.).*$", str(config_path))
         if len(config_file_ending) > 0:
             match config_file_ending[0]:
                 case "json":
