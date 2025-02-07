@@ -31,16 +31,16 @@
   <a hstyle="text-decoration:none" ref="https://github.com/davidusb-geek/emhass/actions/workflows/codeql.yml" >
     <img src="https://github.com/davidusb-geek/emhass/actions/workflows/codeql.yml/badge.svg?branch=master&event=schedule"/>
   </a>
-  <a style="text-decoration:none" href=https://sonarcloud.io/summary/new_code?id=davidusb-geek_emhass">
+  <a style="text-decoration:none" href="https://sonarcloud.io/summary/new_code?id=davidusb-geek_emhass">
     <img alt="SonarQube security rating" src="https://sonarcloud.io/api/project_badges/measure?project=davidusb-geek_emhass&metric=security_rating">
   </a>
-  <a style="text-decoration:none" href=https://sonarcloud.io/summary/new_code?id=davidusb-geek_emhass">
+  <a style="text-decoration:none" href="https://sonarcloud.io/summary/new_code?id=davidusb-geek_emhass">
     <img alt="SonarQube security Vulnerabilities" src="https://sonarcloud.io/api/project_badges/measure?project=davidusb-geek_emhass&metric=vulnerabilities">
   </a>
-  <a style="text-decoration:none" href=https://sonarcloud.io/summary/new_code?id=davidusb-geek_emhass">
+  <a style="text-decoration:none" href="https://sonarcloud.io/summary/new_code?id=davidusb-geek_emhass">
     <img alt="SonarQube reliability" src="https://sonarcloud.io/api/project_badges/measure?project=davidusb-geek_emhass&metric=reliability_rating">
   </a>
-  <a style="text-decoration:none" href=https://sonarcloud.io/summary/new_code?id=davidusb-geek_emhass">
+  <a style="text-decoration:none" href="https://sonarcloud.io/summary/new_code?id=davidusb-geek_emhass">
     <img alt="SonarQube bugs" src="https://sonarcloud.io/api/project_badges/measure?project=davidusb-geek_emhass&metric=bugs">
   </a>
   
