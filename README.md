@@ -13,9 +13,6 @@
   <a style="text-decoration:none" href="https://github.com/davidusb-geek/emhass/actions">
     <img alt="EMHASS GitHub Workflow Status" src="https://github.com/davidusb-geek/emhass/actions/workflows/publish_docker.yaml/badge.svg?event=release">
   </a>
-  <a hstyle="text-decoration:none" ref="https://codecov.io/github/davidusb-geek/emhass" >
-    <img src="https://codecov.io/github/davidusb-geek/emhass/branch/master/graph/badge.svg?token=BW7KSCHN90"/>
-  </a>
   <a style="text-decoration:none" href="https://github.com/davidusb-geek/emhass/blob/master/LICENSE">
     <img alt="GitHub" src="https://img.shields.io/github/license/davidusb-geek/emhass">
   </a>
@@ -28,6 +25,25 @@
   <a style="text-decoration:none" href="https://emhass.readthedocs.io/en/latest/">
     <img alt="Read the Docs" src="https://img.shields.io/readthedocs/emhass">
   </a>
+    <a hstyle="text-decoration:none" ref="https://codecov.io/github/davidusb-geek/emhass" >
+    <img src="https://codecov.io/github/davidusb-geek/emhass/branch/master/graph/badge.svg?token=BW7KSCHN90"/>
+  </a>
+  <a hstyle="text-decoration:none" ref="https://github.com/davidusb-geek/emhass/actions/workflows/codeql.yml" >
+    <img src="https://github.com/davidusb-geek/emhass/actions/workflows/codeql.yml/badge.svg?branch=master&event=schedule"/>
+  </a>
+  <a style="text-decoration:none" href=https://sonarcloud.io/summary/new_code?id=davidusb-geek_emhass">
+    <img alt="SonarQube security rating" src="https://sonarcloud.io/api/project_badges/measure?project=davidusb-geek_emhass&metric=security_rating">
+  </a>
+  <a style="text-decoration:none" href=https://sonarcloud.io/summary/new_code?id=davidusb-geek_emhass">
+    <img alt="SonarQube security Vulnerabilities" src="https://sonarcloud.io/api/project_badges/measure?project=davidusb-geek_emhass&metric=vulnerabilities">
+  </a>
+  <a style="text-decoration:none" href=https://sonarcloud.io/summary/new_code?id=davidusb-geek_emhass">
+    <img alt="SonarQube reliability" src="https://sonarcloud.io/api/project_badges/measure?project=davidusb-geek_emhass&metric=reliability_rating">
+  </a>
+  <a style="text-decoration:none" href=https://sonarcloud.io/summary/new_code?id=davidusb-geek_emhass">
+    <img alt="SonarQube bugs" src="https://sonarcloud.io/api/project_badges/measure?project=davidusb-geek_emhass&metric=bugs">
+  </a>
+  
 </p>
 
 <div align="center">
@@ -592,7 +608,7 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 
 ```
 *Example with :`operating_hours_of_each_deferrable_load`, `start_timesteps_of_each_deferrable_load`, `end_timesteps_of_each_deferrable_load`.*
 ```bash
-curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,'operating_hours_of_each_deferrable_load':[1,3],'start_timesteps_of_each_deferrable_load':[0,3],'end_timesteps_of_each_deferrable_load':[0,6]}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"operating_hours_of_each_deferrable_load":[1,3],"start_timesteps_of_each_deferrable_load":[0,3],"end_timesteps_of_each_deferrable_load":[0,6]}' http://localhost:5000/action/naive-mpc-optim
 ```
 
 ## A machine learning forecaster

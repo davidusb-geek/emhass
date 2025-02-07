@@ -16,7 +16,7 @@ jobs:
     steps:
     - uses: actions/checkout@master
     - name: Install uv
-        uses: astral-sh/setup-uv@v5
+      uses: astral-sh/setup-uv@v5
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -24,10 +24,10 @@ jobs:
     - name: Generate Report
       run: |
         uv venv
-        uv pip install .[test]
-        coverage run -m --source=emhass unittest
-        coverage report
-        coverage xml
+        uv sync --reinstall --extra test
+        uv run coverage run -m --source=emhass unittest
+        uv run coverage report
+        uv run coverage xml
     - name: Upload coverage reports to Codecov
       run: |
         # Replace `linux` below with the appropriate OS

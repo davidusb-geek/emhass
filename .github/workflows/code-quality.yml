@@ -5,10 +5,17 @@ on:
   push:
     branches: [master]
   pull_request:
-    branches: [master]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
     strategy:
       matrix:
         os: [ubuntu-latest]
@@ -16,35 +23,45 @@ jobs:
       OS: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@master
-      
+        with:
+          fetch-depth: 0
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version-file: ".python-version"
 
       - name: Install the project
-        run: uv sync --all-extras --test
+        run: uv sync --reinstall --extra test
+
+      - name: Install ruff
+        run: uv tool install ruff
 
       - name: Run Ruff
-        run: ruff check --output-format=github .
-      
-      - name: OSV scan
-        uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
-        with:
-          fail-on-vuln: false
-          scan-args: |-
-            --recursive
-            ./
-     
+        run: uvx ruff check --output-format=github .
+
       # - name: Type Check with Mypy
       #   shell: bash
       #   run: |
       #     uv run mypy ./src/
 
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v4
-        env: 
+        uses: SonarSource/sonarqube-scan-action@v4.2.1
+        env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  scan-pr:
+    needs:
+      - build
+    uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
+    with:
+      fail-on-vuln: false
+      scan-args: |-
+        --recursive
+        ./
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
