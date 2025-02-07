@@ -151,6 +151,7 @@ async function formAction(action, page) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        'Transfer-Encoding': 'chunked'
       },
       body: JSON.stringify(data), //note that post can only send data via strings
     });
