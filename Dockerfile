@@ -87,6 +87,7 @@ COPY src/emhass/data/ /app/src/emhass/data/
 
 # pre generated optimization results 
 COPY data/opt_res_latest.csv /app/data/
+COPY data/data_load_cost_forecast.csv /app/data/
 COPY README.md /app/
 COPY pyproject.toml /app/
 
