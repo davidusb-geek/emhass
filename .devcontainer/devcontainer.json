@@ -8,9 +8,8 @@
 		"args": { "TARGETARCH": "amd64"}
 	},
 	"features": {
-		"ghcr.io/devcontainers/features/common-utils:2": {
-			// "installBash": "true",
-			// "configureBashAsDefaultShell": "true"
+			"ghcr.io/devcontainers/features/common-utils:2": {
+			"configureZshAsDefaultShell": "true"
 		}
 		// "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
 	},
