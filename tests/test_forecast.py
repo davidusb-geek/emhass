@@ -974,6 +974,23 @@ class TestForecast(unittest.TestCase):
         )
         self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
+        # Relaunch this test but changing the timestep to 1h
+        params = self.fcst.params
+        params['retrieve_hass_conf']['optimization_time_step'] = 60
+        self.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta('1h')
+        fcst = Forecast(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            params,
+            emhass_conf,
+            logger,
+            get_data_from_file=self.get_data_from_file,
+        )
+        self.assertTrue(len(fcst.forecast_dates) == 24)
+        P_load_forecast = fcst.get_load_forecast(method="typical")
+        self.assertIsInstance(P_load_forecast, pd.core.series.Series)
+        self.assertTrue(len(P_load_forecast) == len(fcst.forecast_dates))
 
     # Test load cost forecast dataframe output using saved csv referece file
     def test_get_load_cost_forecast(self):
