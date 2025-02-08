@@ -57,12 +57,15 @@ Now we also need to define the other needed input, the `outdoor_temperature_fore
 Here is an example modified from a working example provided by @werdnum to pass all the needed data at runtime.
 This example is given for the following configuration: just one deferrable load (a thermal load), no PV, no battery, an MPC application, and pre-defined heating intervals times. 
 
-```
+```yaml
 rest_command:
   emhass_forecast:
     url: http://localhost:5000/action/naive-mpc-optim
     method: post
     timeout: 300
+    headers:
+      content-type: application/json
+      Transfer-Encoding: chunked
     payload: >
       {% macro time_to_timestep(time) -%}
         {{ (((today_at(time) - now()) / timedelta(minutes=30)) | round(0, 'ceiling')) % 48 }}
