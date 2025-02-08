@@ -383,12 +383,10 @@ function buildParamElement(
       break;
   }
 
-  value = placeholder
   //check default values saved in param definitions
   //definitions default value is used if none is found in the configs, or an array element has been added in the ui (deferrable load number increase or plus button pressed)
-  value = parameter_definition_object["default_value"];
   //check if a param value is saved in the config file (if so overwrite definition default)
-  value = checkConfigParam(value, config, parameter_definition_name);
+  let value = checkConfigParam(placeholder, config, parameter_definition_name);
 
   //generate and return param input html,
   //check if param value is not an object, if so assume its a single value.
@@ -526,10 +524,8 @@ function checkRequirements(
     if (!param_element.classList.contains("requirement-disable")) {
       param_element.classList.add("requirement-disable");
     }
-  } else {
-    if (param_element.classList.contains("requirement-disable")) {
+  } else if (param_element.classList.contains("requirement-disable")) {
       param_element.classList.remove("requirement-disable");
-    }
   }
 }
 
