@@ -19,11 +19,11 @@
 //on page reload
 window.onload = async function () {
   ///fetch configuration parameters from definitions json file
-  param_definitions = await getParamDefinitions();
+  let param_definitions = await getParamDefinitions();
   //obtain configuration from emhass (pull)
-  config = await obtainConfig();
+  let config = await obtainConfig();
   //obtain configuration_list.html html as a template to dynamically to render parameters in a list view (parameters as input items)
-  list_html = await getListHTML();
+  let list_html = await getListHTML();
   //load list parameter page (default)
   loadConfigurationListView(param_definitions, config, list_html);
 
@@ -70,14 +70,14 @@ async function obtainConfig() {
   const response = await fetch(`get-config`, {
     method: "GET",
   });
-  response_status = await response.status; //return status
+  let  response_status = response.status; //return status
   //if request failed
   if (response_status !== 200 && response_status !== 201) {
     showChangeStatus(response_status, await response.json());
     return {};
   }
   //else extract json rom data
-  blob = await response.blob(); //get data blob
+  let blob = await response.blob(); //get data blob
   config = await new Response(blob).json(); //obtain json from blob
   showChangeStatus(response_status, {});
   return config;
@@ -90,13 +90,13 @@ async function ObtainDefaultConfig() {
     method: "GET",
   });
   //if request failed
-  response_status = await response.status; //return status
+  let response_status = response.status; //return status
   if (response_status !== 200 && response_status !== 201) {
     showChangeStatus(response_status, await response.json());
     return {};
   }
   //else extract json rom data
-  blob = await response.blob(); //get data blob
+  let blob = await response.blob(); //get data blob
   config = await new Response(blob).json(); //obtain json from blob
   showChangeStatus(response_status, {});
   return config;
@@ -109,9 +109,9 @@ async function getListHTML() {
     errorAlert("Unable to obtain configuration_list.html file");
     return {};
   }
-  blob = await response.blob(); //get data blob
-  htmlTemplateData = await new Response(blob).text(); //obtain html from blob
-  return await htmlTemplateData;
+  let blob = await response.blob(); //get data blob
+  let htmlTemplateData = await new Response(blob).text(); //obtain html from blob
+  return htmlTemplateData;
 }
 
 //load list configuration view
@@ -121,13 +121,13 @@ function loadConfigurationListView(param_definitions, config, list_html) {
   }
 
   //list parameters used in the section headers
-  header_input_list = ["set_use_battery", "set_use_pv", "number_of_deferrable_loads"];
+  let header_input_list = ["set_use_battery", "set_use_pv", "number_of_deferrable_loads"];
 
   //get the main container and append list template html
   document.getElementById("configuration-container").innerHTML = list_html;
 
   //loop though configuration sections ('Local','System','Tariff','Solar System (PV)') in definitions file
-  for (var section in param_definitions) {
+  for (let section in param_definitions) {
     // build each section by adding parameters with their corresponding input elements
     buildParamContainers(
       section,
@@ -138,12 +138,12 @@ function loadConfigurationListView(param_definitions, config, list_html) {
 
     //after sections have been built, add event listeners for section header inputs
     //loop though headers
-    for (header_input_param of header_input_list) {
+    for (let header_input_param of header_input_list) {
       if (param_definitions[section].hasOwnProperty(header_input_param)) {
         //grab default from definitions file
-        value = param_definitions[section][header_input_param]["default_value"];
+        let value = param_definitions[section][header_input_param]["default_value"];
         //find input element (using the parameter name as the input element ID)
-        header_input_element = document.getElementById(header_input_param);
+        let header_input_element = document.getElementById(header_input_param);
         if (header_input_element !== null) {
           //add event listener to element (trigger on input change)
           header_input_element.addEventListener("input", (e) =>
@@ -174,9 +174,9 @@ function buildParamContainers(
   header_input_list
 ) {
   //get the section container element
-  SectionContainer = document.getElementById(section);
+  let SectionContainer = document.getElementById(section);
   //get the body container inside the section (where the parameters will be appended)
-  SectionParamElement = SectionContainer.getElementsByClassName("section-body");
+  let SectionParamElement = SectionContainer.getElementsByClassName("section-body");
   if (SectionContainer == null || SectionParamElement.length == 0) {
     console.error("Unable to find Section container or Section Body");
     return 0;
@@ -217,7 +217,7 @@ function buildParamContainers(
     }
 
     //if parameter type == array.* and not in "Deferrable Loads" section, append plus and minus buttons in param div
-    array_buttons = "";
+    let array_buttons = "";
     if (
       parameter_definition_object["input"].search("array.") > -1 &&
       section != "Deferrable Loads"
@@ -305,7 +305,7 @@ function buildParamContainers(
       }
 
       //obtain required param inputs, add event listeners
-      requirement_inputs =
+      let requirement_inputs =
         requirement_element.getElementsByClassName("param_input");
       //grab required value
       const requirement_value = Object.values(
@@ -334,10 +334,11 @@ function buildParamElement(
   parameter_definition_name,
   config
 ) {
-  var type = "";
-  var inputs = "";
-  var type_specific_html = "";
-  var type_specific_html_end = "";
+  let type = "";
+  let inputs = "";
+  let type_specific_html = "";
+  let type_specific_html_end = "";
+  let placeholder = ""
 
   //switch statement to adjust generated html according to the parameter data type (definitions in definitions file)
   switch (parameter_definition_object["input"]) {
@@ -382,6 +383,7 @@ function buildParamElement(
       break;
   }
 
+  value = placeholder
   //check default values saved in param definitions
   //definitions default value is used if none is found in the configs, or an array element has been added in the ui (deferrable load number increase or plus button pressed)
   value = parameter_definition_object["default_value"];
@@ -395,7 +397,7 @@ function buildParamElement(
     if (parameter_definition_object["input"] == "select") {
       let inputs = `<select class="param_input">`;
       for (const options of parameter_definition_object["select_options"]) {
-        selected = ""
+        let selected = ""
         //if item in select is the same as the config value, then append "selected" tag
         if (options==value) {selected = `selected="selected"`}
         inputs += `<option ${selected}>${options}</option>`;
@@ -416,8 +418,8 @@ function buildParamElement(
   else {
     //for items such as load_peak_hour_periods (object of objects with arrays)
     if (typeof Object.values(value)[0] === "object") {
-      for (param of Object.values(value)) {
-        for (items of Object.values(param)) {
+      for (let param of Object.values(value)) {
+        for (let items of Object.values(param)) {
           inputs += `<input class="param_input" type="${type}" placeholder=${Object.values(items)[0]} value=${
             Object.values(items)[0]
           }>`;
@@ -429,7 +431,7 @@ function buildParamElement(
     // array of values
     else {
       let inputs = "";
-      for (param of value) {
+      for (let param of value) {
         inputs += `
           ${type_specific_html}
           <input class="param_input" type="${type}" placeholder=${parameter_definition_object["default_value"]} value=${param}>
@@ -448,14 +450,14 @@ function plusElements(
   section,
   config
 ) {
-  param_element = document.getElementById(parameter_definition_name);
+  let param_element = document.getElementById(parameter_definition_name);
   if (param_element == null) {
     console.log(
       "Unable to find " + parameter_definition_name + " param div container"
     );
     return 1;
   }
-  param_input_container =
+  let param_input_container =
     param_element.getElementsByClassName("param-input")[0];
   // Add a copy of the param element
   param_input_container.innerHTML += buildParamElement(
@@ -467,14 +469,15 @@ function plusElements(
 
 //Remove param inputs in param div container (minimum 1)
 function minusElements(param) {
-  param_element = document.getElementById(param);
+  let param_element = document.getElementById(param);
+  let param_input
   if (param_element == null) {
     console.log(
       "Unable to find " + parameter_definition_name + " param div container"
     );
     return 1;
   }
-  param_input_list = param_element.getElementsByTagName("input");
+  let param_input_list = param_element.getElementsByTagName("input");
   if (param_input_list.length == 0) {
     console.log(
       "Unable to find " + parameter_definition_name + " param input/s"
@@ -493,7 +496,7 @@ function minusElements(param) {
   //if param is "load_peak_hour_periods", remove both start and end param inputs as well as the line brake tag separating the inputs
   if (param == "load_peak_hour_periods") {
     if (param_input_list.length > 2) {
-      brs = document.getElementById(param).getElementsByTagName("br");
+      let brs = document.getElementById(param).getElementsByTagName("br");
       param_input_list[param_input_list.length - 1].remove();
       param_input_list[param_input_list.length - 1].remove();
       brs[brs.length - 1].remove();
@@ -511,6 +514,7 @@ function checkRequirements(
   param_element,
   requirement_value
 ) {
+  let requirement_element_value
   //get current value of required element
   if (requirement_element.type == "checkbox") {
     requirement_element_value = requirement_element.checked;
@@ -532,12 +536,14 @@ function checkRequirements(
 //on header input change, execute accordingly
 function headerElement(element, param_definitions, config) {
   //obtain section body element
-  section_card = element.closest(".section-card");
+  let section_card = element.closest(".section-card");
+  let param_list 
+  let difference
   if (section_card == null) {
     console.log("Unable to obtain section-card");
     return 1;
   }
-  param_container = section_card.getElementsByClassName("section-body");
+  let param_container = section_card.getElementsByClassName("section-body");
   if (param_container.length > 0) {
     param_container = section_card.getElementsByClassName("section-body")[0];
   } else {
@@ -621,12 +627,14 @@ function checkConfigParam(value, config, parameter_definition_name) {
 //send all parameter input values to EMHASS, to save to config.json and param.pkl
 async function saveConfiguration(param_definitions) {
   //start wth none
-  config = {};
+  let config = {};
+  let param_inputs
+  let param_element
 
   //if section-cards (config sections/list) exists
-  config_card = document.getElementsByClassName("section-card");
+  let config_card = document.getElementsByClassName("section-card");
   //check if page is in list or box view
-  config_box_element = document.getElementById("config-box");
+  let config_box_element = document.getElementById("config-box");
 
   //if true, in list view
   if (Boolean(config_card.length)) {
@@ -636,7 +644,7 @@ async function saveConfiguration(param_definitions) {
       param_definitions
     )) {
       //loop through parameters
-      for (var [
+      for (let [
         parameter_definition_name,
         parameter_definition_object,
       ] of Object.entries(section_object)) {
@@ -650,7 +658,6 @@ async function saveConfiguration(param_definitions) {
               parameter_definition_name +
               " param div container element, skipping this param"
           );
-          continue;
         }
         //extract input/s and their value/s from param container div
         else {
@@ -662,7 +669,7 @@ async function saveConfiguration(param_definitions) {
           }
 
           // loop though param_inputs, extract the element/s values
-          for (var input of param_inputs) {
+          for (let input of param_inputs) {
             switch (input.type) {
               case "number":
                 param_values.push(parseFloat(input.value));
@@ -750,20 +757,20 @@ async function ToggleView(param_definitions, list_html, default_reset) {
   config = {};
 
   //find out if list or box view is active
-  configuration_container = document.getElementById("configuration-container");
+  let configuration_container = document.getElementById("configuration-container");
   if (configuration_container == null) {
     errorAlert("Unable to find Configuration Container element");
   }
   //get yaml button
-  yaml_button = document.getElementById("yaml");
+  let yaml_button = document.getElementById("yaml");
   if (yaml_button == null) {
     console.log("Unable to obtain yaml button");
   }
 
   // if section-cards (config sections/list) exists
-  config_card = configuration_container.getElementsByClassName("section-card");
+  let config_card = configuration_container.getElementsByClassName("section-card");
   //selected view (0 = box)
-  selected_view = Boolean(config_card.length);
+  let selected_view = Boolean(config_card.length);
 
   //if default_reset is passed do not switch views, instead reinitialize view with default config as values
   if (default_reset) {
@@ -801,7 +808,7 @@ async function ToggleView(param_definitions, list_html, default_reset) {
 //load box (json textarea) view
 async function loadConfigurationBoxPage(config) {
   //get configuration container element
-  configuration_container = document.getElementById("configuration-container");
+  let configuration_container = document.getElementById("configuration-container");
   if (configuration_container == null) {
     errorAlert("Unable to find Configuration Container element");
   }
@@ -819,7 +826,7 @@ async function loadConfigurationBoxPage(config) {
 
 //function in control of status icons and alert box from a fetch request
 async function showChangeStatus(status, logJson) {
-  var loading = document.getElementById("loader"); //element showing statuses
+  let loading = document.getElementById("loader"); //element showing statuses
   if (loading === null) {
     console.log("unable to find loader element");
     return 1;
@@ -860,7 +867,7 @@ async function errorAlert(text) {
 //convert yaml box into json box
 async function yamlToJson() {
   //get box element
-  config_box_element = document.getElementById("config-box");
+  let config_box_element = document.getElementById("config-box");
   if (config_box_element == null) {
     errorAlert("Unable to obtain config box");
   } else {
@@ -871,10 +878,10 @@ async function yamlToJson() {
       },
       body: config_box_element.value,
     });
-    response_status = await response.status; //return status
+    let response_status = response.status; //return status
     if (response_status == 201) {
       showChangeStatus(response_status, {});
-      blob = await response.blob(); //get data blob
+      let blob = await response.blob(); //get data blob
       config = await new Response(blob).json(); //obtain json from blob
       config_box_element.value = JSON.stringify(config, null, 2);
     } else {
