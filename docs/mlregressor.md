@@ -53,7 +53,9 @@ A Home Assistant `rest_command` can look like this:
 fit_heating_hours:
   url: http://127.0.0.1:5000/action/regressor-model-fit
   method: POST
-  content_type: "application/json"
+  headers:
+    content-type: application/json
+    Transfer-Encoding: chunked
   payload: >-
     {
     "csv_file": "heating_prediction.csv",
@@ -118,7 +120,9 @@ A Home Assistant `rest_command` can look like this:
 predict_heating_hours:
   url: http://localhost:5001/action/regressor-model-predict
   method: POST
-  content_type: "application/json"
+  headers:
+    content-type: application/json
+    Transfer-Encoding: chunked
   payload: >-
    {
     "mlr_predict_entity_id": "sensor.predicted_hours",
