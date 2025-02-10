@@ -24,6 +24,9 @@ from emhass.machine_learning_regressor import MLRegressor
 from emhass.optimization import Optimization
 from emhass.retrieve_hass import RetrieveHass
 
+default_csv_filename = "opt_res_latest.csv"
+default_pkl_suffix = "_mlf.pkl"
+default_metadata_json = "metadata.json"
 
 def set_input_data_dict(
     emhass_conf: dict,
@@ -94,8 +97,9 @@ def set_input_data_dict(
     )
 
     # Retrieve basic configuration data from hass
+    test_df_literal = "test_df_final.pkl"
     if get_data_from_file:
-        with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
+        with open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
             _, _, _, rh.ha_config = pickle.load(inp)
     else:
         response = rh.get_ha_config()
@@ -133,7 +137,7 @@ def set_input_data_dict(
     if set_type == "perfect-optim":
         # Retrieve data from hass
         if get_data_from_file:
-            with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
+            with open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
                 rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
             retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
             retrieve_hass_conf["sensor_power_photovoltaics"] = str(var_list[1])
@@ -231,7 +235,7 @@ def set_input_data_dict(
     elif set_type == "naive-mpc-optim":
         # Retrieve data from hass
         if get_data_from_file:
-            with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
+            with open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
                 rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
             retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
             retrieve_hass_conf["sensor_power_photovoltaics"] = str(var_list[1])
@@ -375,7 +379,6 @@ def set_input_data_dict(
                     + str(emhass_conf["data_path"])
                 )
                 return False
-                # raise ValueError("The CSV file " + csv_file + " was not found.")
             required_columns = []
             required_columns.extend(features)
             required_columns.append(target)
@@ -508,7 +511,7 @@ def perfect_forecast_optim(
     if save_data_to_file:
         filename = "opt_res_perfect_optim_" + input_data_dict["costfun"] + ".csv"
     else:  # Just save the latest optimization results
-        filename = "opt_res_latest.csv"
+        filename = default_csv_filename
     if not debug:
         opt_res.to_csv(
             input_data_dict["emhass_conf"]["data_path"] / filename,
@@ -580,7 +583,7 @@ def dayahead_forecast_optim(
         )
         filename = "opt_res_dayahead_" + today.strftime("%Y_%m_%d") + ".csv"
     else:  # Just save the latest optimization results
-        filename = "opt_res_latest.csv"
+        filename = default_csv_filename
     if not debug:
         opt_res_dayahead.to_csv(
             input_data_dict["emhass_conf"]["data_path"] / filename,
@@ -676,7 +679,7 @@ def naive_mpc_optim(
         )
         filename = "opt_res_naive_mpc_" + today.strftime("%Y_%m_%d") + ".csv"
     else:  # Just save the latest optimization results
-        filename = "opt_res_latest.csv"
+        filename = default_csv_filename
     if not debug:
         opt_res_naive_mpc.to_csv(
             input_data_dict["emhass_conf"]["data_path"] / filename,
@@ -735,7 +738,7 @@ def forecast_model_fit(
     )
     # Save model
     if not debug:
-        filename = model_type + "_mlf.pkl"
+        filename = model_type + default_pkl_suffix
         filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
         with open(filename_path, "wb") as outp:
             pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
@@ -771,7 +774,7 @@ def forecast_model_predict(
     """
     # Load model
     model_type = input_data_dict["params"]["passed_data"]["model_type"]
-    filename = model_type + "_mlf.pkl"
+    filename = model_type + default_pkl_suffix
     filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
     if not debug:
         if filename_path.is_file():
@@ -858,7 +861,7 @@ def forecast_model_tune(
     """
     # Load model
     model_type = input_data_dict["params"]["passed_data"]["model_type"]
-    filename = model_type + "_mlf.pkl"
+    filename = model_type + default_pkl_suffix
     filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
     if not debug:
         if filename_path.is_file():
@@ -873,7 +876,7 @@ def forecast_model_tune(
     df_pred_optim = mlf.tune(debug=debug)
     # Save model
     if not debug:
-        filename = model_type + "_mlf.pkl"
+        filename = model_type + default_pkl_suffix
         filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
         with open(filename_path, "wb") as outp:
             pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
@@ -1058,7 +1061,7 @@ def publish_data(
                 for entity in entity_path_contents:
                     # If publish_prefix is "all" publish all saved entities to Home Assistant
                     # If publish_prefix matches the prefix from saved entities, publish to Home Assistant
-                    if entity != "metadata.json" and (
+                    if entity != default_metadata_json and (
                         publish_prefix in entity or publish_prefix == "all"
                     ):
                         entity_data = publish_json(
@@ -1082,9 +1085,9 @@ def publish_data(
         else:
             logger.warning("No saved entity json files in path:" + str(entity_path))
             logger.warning("Falling back to opt_res_latest")
-        filename = "opt_res_latest.csv"
+        filename = default_csv_filename
     else:
-        filename = "opt_res_latest.csv"
+        filename = default_csv_filename
     if opt_res_latest is None:
         if not os.path.isfile(input_data_dict["emhass_conf"]["data_path"] / filename):
             logger.error("File not found error, run an optimization task first.")
@@ -1372,7 +1375,7 @@ def continual_publish(
         if os.path.exists(entity_path) and len(os.listdir(entity_path)) > 0:
             entity_path_contents = os.listdir(entity_path)
             for entity in entity_path_contents:
-                if entity != "metadata.json":
+                if entity != default_metadata_json:
                     # Call publish_json with entity file, build entity, and publish
                     publish_json(
                         entity,
@@ -1382,8 +1385,8 @@ def continual_publish(
                         "continual_publish",
                     )
             # Retrieve entity metadata from file
-            if os.path.isfile(entity_path / "metadata.json"):
-                with open(entity_path / "metadata.json", "r") as file:
+            if os.path.isfile(entity_path / default_metadata_json):
+                with open(entity_path / default_metadata_json, "r") as file:
                     metadata = json.load(file)
                     # Check if freq should be shorter
                     if metadata.get("lowest_time_step", None) is not None:
@@ -1416,8 +1419,8 @@ def publish_json(
 
     """
     # Retrieve entity metadata from file
-    if os.path.isfile(entity_path / "metadata.json"):
-        with open(entity_path / "metadata.json", "r") as file:
+    if os.path.isfile(entity_path / default_metadata_json):
+        with open(entity_path / default_metadata_json, "r") as file:
             metadata = json.load(file)
     else:
         logger.error("unable to located metadata.json in:" + entity_path)

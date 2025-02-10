@@ -58,8 +58,9 @@ if __name__ == "__main__":
     cec_inverters_emhass = pvlib.pvsystem.retrieve_sam(
         path=str(emhass_conf["data_path"] / "emhass_inverters.csv")
     )
-    logger.info("=================")
-    logger.info("=================")
+    strait_str = "================="
+    logger.info(strait_str)
+    logger.info(strait_str)
 
     logger.info("Updating and saving databases")
 
@@ -91,8 +92,8 @@ if __name__ == "__main__":
             tablefmt="psql",
         )
     )
-    logger.info("=================")
-    logger.info("=================")
+    logger.info(strait_str)
+    logger.info(strait_str)
 
     # Inverters
     cols_to_keep_inverters = [
@@ -124,8 +125,8 @@ if __name__ == "__main__":
             tablefmt="psql",
         )
     )
-    logger.info("=================")
-    logger.info("=================")
+    logger.info(strait_str)
+    logger.info(strait_str)
     logger.info("Modules databases")
     print(tabulate(cec_modules.head(20).iloc[:, :5], headers="keys", tablefmt="psql"))
     logger.info("Inverters databases")
