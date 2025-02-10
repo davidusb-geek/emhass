@@ -85,9 +85,14 @@ COPY src/emhass/static/img/ /app/src/emhass/static/img/
 # emhass extra packadge data 
 COPY src/emhass/data/ /app/src/emhass/data/
 
+# Ensure persistent directory exists and create a symlink
+RUN mkdir -p /data/appdata && ln -s /data/appdata /app/data
+
 # pre generated optimization results 
 COPY data/opt_res_latest.csv /app/data/
 COPY data/data_load_cost_forecast.csv /app/data/
+COPY data/data_train_load_forecast.pkl /app/data/
+COPY data/data_train_load_clustering.pkl /app/data/
 COPY README.md /app/
 COPY pyproject.toml /app/
 
