@@ -65,7 +65,6 @@ rest_command:
     timeout: 300
     headers:
       content-type: application/json
-      Transfer-Encoding: chunked
     payload: >
       {% macro time_to_timestep(time) -%}
         {{ (((today_at(time) - now()) / timedelta(minutes=30)) | round(0, 'ceiling')) % 48 }}

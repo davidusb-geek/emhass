@@ -55,7 +55,6 @@ fit_heating_hours:
   method: POST
   headers:
     content-type: application/json
-    Transfer-Encoding: chunked
   payload: >-
     {
     "csv_file": "heating_prediction.csv",
@@ -122,7 +121,6 @@ predict_heating_hours:
   method: POST
   headers:
     content-type: application/json
-    Transfer-Encoding: chunked
   payload: >-
    {
     "mlr_predict_entity_id": "sensor.predicted_hours",
