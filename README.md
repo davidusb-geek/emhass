@@ -160,7 +160,7 @@ cd emhass
 # may need to set architecture tag (docker build --build-arg TARGETARCH=amd64 -t emhass-local .)
 docker build -t emhass-local . 
 # run built Docker image, mounting config.json and secrets_emhass.yaml from host
-docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v ./config.json:/share/config.json -v ./secrets_emhass.yaml:/app/secrets_emhass.yaml emhass-local
+docker run --rm -it -p 5000:5000 --name emhass-container -v ./config.json:/share/config.json -v ./secrets_emhass.yaml:/app/secrets_emhass.yaml emhass-local
 ```
 
 Before running the docker container, make sure you have a designated folder for emhass on your host device and a `secrets_emhass.yaml` file. You can get a example of the secrets file from [`secrets_emhass(example).yaml`](https://github.com/davidusb-geek/emhass/blob/master/secrets_emhass(example).yaml) file on this repository.
