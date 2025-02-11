@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.6 - 2025-02-09
+### Improvement
+- Improved warning message in case of wrong URL setting
+- Improved testing on typical load forecast method with different time steps
+### Fix
+- Solved missing file problem: data_load_cost_forecast.csv
+- Fixed warning issue on `findall` method
+
 ## 0.12.5 - 2025-02-02
 ### Improvement
 - Implemented new package manager uv resulting in faster builds. Thanks to @GeoDerp
