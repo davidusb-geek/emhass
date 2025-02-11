@@ -127,7 +127,7 @@ RUN apt-get remove --purge -y --auto-remove \
     ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
-ENTRYPOINT [ "uv", "run", "gunicorn", "emhass.web_server:'create_app()'" ]
+ENTRYPOINT [ "uv", "run", "--frozen", "gunicorn", "emhass.web_server:create_app()" ]
 
 # for running Unittest
 #COPY tests/ /app/tests
