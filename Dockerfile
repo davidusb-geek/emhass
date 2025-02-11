@@ -87,7 +87,6 @@ COPY src/emhass/data/ /app/src/emhass/data/
 
 # pre generated optimization results 
 COPY data/opt_res_latest.csv /data/
-COPY data/data_load_cost_forecast.csv /data/
 COPY data/data_train_load_forecast.pkl /data/
 COPY data/data_train_load_clustering.pkl /data/
 COPY README.md /app/
@@ -128,7 +127,7 @@ RUN apt-get remove --purge -y --auto-remove \
     ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
-ENTRYPOINT [ "uv", "run", "gunicorn", "emhass.web_server:create_app()" ]
+ENTRYPOINT [ "uv", "run", "gunicorn", "emhass.web_server:'create_app()'" ]
 
 # for running Unittest
 #COPY tests/ /app/tests
