@@ -68,7 +68,7 @@ RUN uv python install
 RUN ln -s /usr/include/hdf5/serial /usr/include/hdf5/include && export HDF5_DIR=/usr/include/hdf5
 
 # make sure data directory exists
-RUN mkdir -p /app/data/
+RUN mkdir -p /data/
 
 # make sure emhass share directory exists
 RUN mkdir -p /share/emhass/
@@ -86,8 +86,10 @@ COPY src/emhass/static/img/ /app/src/emhass/static/img/
 COPY src/emhass/data/ /app/src/emhass/data/
 
 # pre generated optimization results 
-COPY data/opt_res_latest.csv /app/data/
-COPY data/data_load_cost_forecast.csv /app/data/
+COPY data/opt_res_latest.csv /data/
+COPY data/data_load_cost_forecast.csv /data/
+COPY data/data_train_load_forecast.pkl /data/
+COPY data/data_train_load_clustering.pkl /data/
 COPY README.md /app/
 COPY pyproject.toml /app/
 
