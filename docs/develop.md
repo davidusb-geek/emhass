@@ -159,12 +159,12 @@ docker run -it -p 5000:5000 --name emhass-test -v ./secrets_emhass.yaml:/app/sec
 #### Sync with local data folder 
 For those who wish to mount/sync the local `data` folder with the data folder from inside the docker container, volume mount the data folder with `-v` .
 ```bash
-docker run ... -v ./data/:/app/data ...
+docker run ... -v ./data/:/data/ ...
 ```
 
 You can also mount data files (ex .csv)  separately
 ```bash
-docker run... -v ./data/heating_prediction.csv:/app/data/ ...
+docker run... -v ./data/heating_prediction.csv:/data/ ...
 ```
 
 #### Issue with TARGETARCH
@@ -248,7 +248,7 @@ git checkout $branch
 ```bash
 # testing with option.json (replace -v options.json with secrets_emhass.yaml to test both secret files)
 docker build -t emhass/test .
-docker run --rm -it -p 5000:5000 --name emhass-test -v $(pwd)/data/heating_prediction.csv:/app/data/heating_prediction.csv -v $(pwd)/options.json:/app/options.json emhass/test
+docker run --rm -it -p 5000:5000 --name emhass-test -v $(pwd)/data/heating_prediction.csv:/data/heating_prediction.csv -v $(pwd)/options.json:/app/options.json emhass/test
 ```
 ```bash
 # run actions one-by-one, on a separate terminal
@@ -265,7 +265,7 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 
 ```bash
 # testing unittest (add extra necessary files via volume mount)
-docker run --rm -it -p 5000:5000 --name emhass-test -v $(pwd)/tests/:/app/tests/ -v $(pwd)/data/:/app/data/ -v $(pwd)/"secrets_emhass(example).yaml":/app/"secrets_emhass(example).yaml" -v $(pwd)/options.json:/app/options.json -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/test
+docker run --rm -it -p 5000:5000 --name emhass-test -v $(pwd)/tests/:/app/tests/ -v $(pwd)/data/:/data/ -v $(pwd)/"secrets_emhass(example).yaml":/app/"secrets_emhass(example).yaml" -v $(pwd)/options.json:/app/options.json -v $(pwd)/config_emhass.yaml:/app/config_emhass.yaml -v $(pwd)/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass/test
 ```
 ```bash
 # run unittest's on separate terminal after installing requests-mock

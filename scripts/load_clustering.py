@@ -23,9 +23,6 @@ from emhass.utils import (
 pio.renderers.default = "browser"
 pd.options.plotting.backend = "plotly"
 
-# from skopt.space import Categorical, Real, Integer
-# from tslearn.clustering import TimeSeriesKMeans
-
 # the root folder
 root = pathlib.Path(str(get_root(__file__, num_parent=2)))
 emhass_conf = {}
@@ -192,85 +189,3 @@ if __name__ == "__main__":
     # Call the forecasting method
     data.columns = ["load"]
     forecast, used_days = load_forecast(data, forecast_date, freq, template)
-
-    # data_lag = pd.concat([data, data.shift()], axis=1)
-    # data_lag.columns = ["power_load y(t)", "power_load y(t+1)"]
-    # data_lag = data_lag.dropna()
-
-    # fig2 = data_lag.plot.scatter(
-    #     x="power_load y(t)", y="power_load y(t+1)", c="DarkBlue"
-    # )
-    # fig2.layout.template = template
-    # fig2.show()
-
-    # Elbow method to check how many clusters
-    # distortions = []
-    # K = range(1,12)
-
-    # for cluster_size in K:
-    #     kmeans = KMeans(n_clusters=cluster_size, init='k-means++')
-    #     kmeans = kmeans.fit(data_lag)
-    #     distortions.append(kmeans.inertia_)
-
-    # df = pd.DataFrame({'Clusters': K, 'Distortions': distortions})
-    # fig = (px.line(df, x='Clusters', y='Distortions', template=template)).update_traces(mode='lines+markers')
-    # fig.show()
-
-    # The silouhette method
-    # silhouette_scores = []
-    # K = range(2, 12)
-
-    # for cluster_size in K:
-    #     kmeans = KMeans(n_clusters=cluster_size, init="k-means++", random_state=200)
-    #     labels = kmeans.fit(data_lag).labels_
-    #     silhouette_score_tmp = silhouette_score(
-    #         data_lag, labels, metric="euclidean", sample_size=1000, random_state=200
-    #     )
-    #     silhouette_scores.append(silhouette_score_tmp)
-
-    # df = pd.DataFrame({"Clusters": K, "Silhouette Score": silhouette_scores})
-    # fig = (
-    #     px.line(df, x="Clusters", y="Silhouette Score", template=template)
-    # ).update_traces(mode="lines+markers")
-    # fig.show()
-
-    # The clustering
-    # kmeans = KMeans(n_clusters=6, init="k-means++")
-    # kmeans = kmeans.fit(data_lag)
-    # data_lag["cluster_group"] = kmeans.labels_
-
-    # fig = px.scatter(
-    #     data_lag,
-    #     x="power_load y(t)",
-    #     y="power_load y(t+1)",
-    #     color="cluster_group",
-    #     template=template,
-    # )
-    # fig.show()
-
-    # km = TimeSeriesKMeans(n_clusters=6, verbose=True, random_state=200)
-    # y_pred = km.fit_predict(data_lag)
-    # data_lag["cluster_group_tslearn_euclidean"] = y_pred
-
-    # fig = px.scatter(
-    #     data_lag,
-    #     x="power_load y(t)",
-    #     y="power_load y(t+1)",
-    #     color="cluster_group_tslearn_euclidean",
-    #     template=template,
-    # )
-    # fig.show()
-
-    # dba_km = TimeSeriesKMeans(n_clusters=6, n_init=2, metric="dtw", verbose=True, max_iter_barycenter=10, random_state=200)
-    # y_pred = dba_km.fit_predict(data_lag)
-    # data_lag['cluster_group_tslearn_dba'] = y_pred
-
-    # fig = px.scatter(data_lag, x='power_load y(t)', y='power_load y(t+1)', color='cluster_group_tslearn_dba', template=template)
-    # fig.show()
-
-    # sdtw_km = TimeSeriesKMeans(n_clusters=6, metric="softdtw", metric_params={"gamma": .01}, verbose=True, random_state=200)
-    # y_pred = sdtw_km.fit_predict(data_lag)
-    # data_lag['cluster_group_tslearn_sdtw'] = y_pred
-
-    # fig = px.scatter(data_lag, x='power_load y(t)', y='power_load y(t+1)', color='cluster_group_tslearn_sdtw', template=template)
-    # fig.show()
