@@ -457,9 +457,9 @@ For users that wish to run multiple different optimizations, you can set the run
 
 ```bash
 # RUN dayahead, with optimization_time_step=30 (default), prefix=dh_ 
-curl -i -H 'Content-Type:application/json' -H "Transfer-Encoding: chunked" -X POST -d '{"publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
 # RUN MPC, with optimization_time_step=5, prefix=mpc_
-curl -i -H 'Content-Type:application/json' -H "Transfer-Encoding: chunked" -X POST -d '{'optimization_time_step':5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{'optimization_time_step':5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
 ```
 This will tell continual_publish to loop every 5 minutes based on the optimization_time_step passed in MPC. All entities from the output of dayahead "dh_" and MPC "mpc_" will be published every 5 minutes.
 
@@ -472,10 +472,10 @@ This will tell continual_publish to loop every 5 minutes based on the optimizati
 You can choose to save one optimization for continual_publish and bypass another optimization by setting `'continual_publish':false` runtime parameter:
 ```bash
 # RUN dayahead, with optimization_time_step=30 (default), prefix=dh_, included into continual_publish
-curl -i -H 'Content-Type:application/json' -H "Transfer-Encoding: chunked" -X POST -d '{"publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{"publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
 
 # RUN MPC, with optimization_time_step=5, prefix=mpc_, Manually publish, excluded from continual_publish loop
-curl -i -H 'Content-Type:application/json' -H "Transfer-Encoding: chunked" -X POST -d '{'continual_publish':false,'optimization_time_step':5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{'continual_publish':false,'optimization_time_step':5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
 # Publish MPC output
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
 ```
@@ -494,7 +494,7 @@ POST action :
 # RUN dayahead, with optimization_time_step=30 (default), prefix=dh_, save entity
 curl -i -H 'Content-Type:application/json' -X POST -d '{"entity_save": true, "publish_prefix":"dh_"}' http://localhost:5000/action/dayahead-optim
 # RUN MPC, with optimization_time_step=5, prefix=mpc_, save entity
-curl -i -H 'Content-Type:application/json' -H "Transfer-Encoding: chunked" -X POST -d '{"entity_save": true", 'optimization_time_step':5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{"entity_save": true", 'optimization_time_step':5,"publish_prefix":"mpc_"}' http://localhost:5000/action/naive-mpc-optim
 ```
 You can then reference these .json saved entities via their `publish_prefix`. Include the same `publish_prefix` in the `publish_data` action:
 ```bash
@@ -516,7 +516,7 @@ It is possible to provide EMHASS with your own forecast data. For this just add 
 
 For example, if using the add-on or the standalone docker installation you can pass this data as a list of values to the data dictionary during the `curl` POST:
 ```bash
-curl -i -H 'Content-Type:application/json' -H "Transfer-Encoding: chunked" -X POST -d '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}' http://localhost:5000/action/dayahead-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}' http://localhost:5000/action/dayahead-optim
 ```
 Or if using the legacy method using a Python virtual environment:
 ```bash
@@ -604,11 +604,11 @@ When applying this controller, the following `runtimeparams` should be defined:
 A correct call for an MPC optimization should look like this:
 
 ```bash
-curl -i -H 'Content-Type:application/json' -H "Transfer-Encoding: chunked" -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6}' http://192.168.3.159:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6}' http://192.168.3.159:5000/action/naive-mpc-optim
 ```
 *Example with :`operating_hours_of_each_deferrable_load`, `start_timesteps_of_each_deferrable_load`, `end_timesteps_of_each_deferrable_load`.*
 ```bash
-curl -i -H 'Content-Type:application/json' -H "Transfer-Encoding: chunked" -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"operating_hours_of_each_deferrable_load":[1,3],"start_timesteps_of_each_deferrable_load":[0,3],"end_timesteps_of_each_deferrable_load":[0,6]}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"operating_hours_of_each_deferrable_load":[1,3],"start_timesteps_of_each_deferrable_load":[0,3],"end_timesteps_of_each_deferrable_load":[0,6]}' http://localhost:5000/action/naive-mpc-optim
 ```
 
 ## A machine learning forecaster
