@@ -566,7 +566,7 @@ def main(
     params = None
 
     # Find env's, not not set defaults
-    DATA_PATH = os.getenv("DATA_PATH", default="/app/data/")
+    DATA_PATH = os.getenv("DATA_PATH", default="/data/")
     ROOT_PATH = os.getenv("ROOT_PATH", default=str(Path(__file__).parent))
     CONFIG_PATH = os.getenv("CONFIG_PATH", default="/share/config.json")
     OPTIONS_PATH = os.getenv("OPTIONS_PATH", default="/data/options.json")
@@ -640,8 +640,8 @@ def main(
     # Check if data path exists
     if not os.path.isdir(emhass_conf["data_path"]):
         app.logger.warning("Unable to find data_path: " + str(emhass_conf["data_path"]))
-        if os.path.isdir(Path("/app/data/")):
-            emhass_conf["data_path"] = Path("/app/data/")
+        if os.path.isdir(Path("/data/")):
+            emhass_conf["data_path"] = Path("/data/")
         else:
             Path(root_path / "data/").mkdir(parents=True, exist_ok=True)
             emhass_conf["data_path"] = root_path / "data/"

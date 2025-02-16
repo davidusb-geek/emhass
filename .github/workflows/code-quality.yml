@@ -43,15 +43,17 @@ jobs:
       - name: Run Ruff
         run: uvx ruff check --output-format=github .
 
+      # Removed due to too many recommendations.
       # - name: Type Check with Mypy
       #   shell: bash
       #   run: |
       #     uv run mypy ./src/
 
-      - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v4.2.1
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      # Removed due to superfluous
+      # - name: SonarQube Scan
+      #   uses: SonarSource/sonarqube-scan-action@v4.2.1
+      #   env:
+      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
   scan-pr:
     needs:
       - build
