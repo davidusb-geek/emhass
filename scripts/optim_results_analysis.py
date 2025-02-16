@@ -135,6 +135,7 @@ if __name__ == "__main__":
     template = "presentation"
 
     # Let's plot the input data
+    y_axis_title = "Power (W)"
     fig_inputs1 = df_input_data[
         [
             retrieve_hass_conf["sensor_power_photovoltaics"],
@@ -142,7 +143,7 @@ if __name__ == "__main__":
         ]
     ].plot()
     fig_inputs1.layout.template = template
-    fig_inputs1.update_yaxes(title_text="Powers (W)")
+    fig_inputs1.update_yaxes(title_text=y_axis_title)
     fig_inputs1.update_xaxes(title_text="Time")
     if show_figures:
         fig_inputs1.show()
@@ -155,7 +156,7 @@ if __name__ == "__main__":
 
     fig_inputs_dah = df_input_data_dayahead.plot()
     fig_inputs_dah.layout.template = template
-    fig_inputs_dah.update_yaxes(title_text="Powers (W)")
+    fig_inputs_dah.update_yaxes(title_text=y_axis_title)
     fig_inputs_dah.update_xaxes(title_text="Time")
     if show_figures:
         fig_inputs_dah.show()
@@ -192,7 +193,7 @@ if __name__ == "__main__":
         ]
     ].plot()  # 'P_def_start_0', 'P_def_start_1', 'P_def_bin2_0', 'P_def_bin2_1'
     fig_res_dah.layout.template = template
-    fig_res_dah.update_yaxes(title_text="Powers (W)")
+    fig_res_dah.update_yaxes(title_text=y_axis_title)
     fig_res_dah.update_xaxes(title_text="Time")
     # if show_figures:
     fig_res_dah.show()

@@ -7,7 +7,7 @@
 
 //on page reload get saved data
 window.onload = async function () {
-  pageSelected = await loadBasicOrAdvanced();
+  await loadBasicOrAdvanced();
 
   //add listener for basic and advanced html switch
   document
@@ -58,7 +58,8 @@ function loadButtons(page) {
 async function loadBasicOrAdvanced(RequestedPage) {
   let basicFile = "basic.html";
   let advencedFile = "advanced.html";
-  var formContainer = document.getElementById("TabSelection"); //container element to house basic or advanced data
+  let formContainer = document.getElementById("TabSelection"); //container element to house basic or advanced data
+  let htmlData
   //first check any function  arg
   if (arguments.length == 1) {
     switch (RequestedPage) {
@@ -94,7 +95,7 @@ async function loadBasicOrAdvanced(RequestedPage) {
       localStorage.getItem("TabSelection") === "advanced"
     ) {
       //if advance
-      htmlData = await getHTMLData(advencedFile);
+      let htmlData = await getHTMLData(advencedFile);
       formContainer.innerHTML = htmlData;
       loadButtons("advanced");
       getSavedData();
@@ -117,7 +118,7 @@ async function loadBasicOrAdvanced(RequestedPage) {
 
 //on button press, check current displayed page data and switch
 function SwitchBasicOrAdvanced() {
-  var formContainerChildID =
+  let formContainerChildID =
     document.getElementById("TabSelection").firstElementChild.id;
   if (formContainerChildID === "basic") {
     loadBasicOrAdvanced("advanced");
@@ -129,18 +130,19 @@ function SwitchBasicOrAdvanced() {
 //get html data from basic.html or advanced.html
 async function getHTMLData(htmlFile) {
   const response = await fetch(`static/` + htmlFile);
-  blob = await response.blob(); //get data blob
-  htmlTemplateData = await new Response(blob).text(); //obtain html from blob
-  return await htmlTemplateData;
+  let blob = await response.blob(); //get data blob
+  let htmlTemplateData = await new Response(blob).text(); //obtain html from blob
+  return htmlTemplateData;
 }
 
 //function pushing data via post, triggered by button action
 async function formAction(action, page) {
+  let data = {}
   if (page !== "basic") {
     //dont try to get input data in basic mode
-    var data = inputToJson(page);
+    data = inputToJson();
   } else {
-    var data = {};
+    data = {};
   } //send no data
 
   if (data !== 0) {
@@ -151,6 +153,7 @@ async function formAction(action, page) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        'Transfer-Encoding': 'chunked'
       },
       body: JSON.stringify(data), //note that post can only send data via strings
     });
@@ -173,7 +176,7 @@ async function formAction(action, page) {
 
 //function in control of status icons of post above
 async function showChangeStatus(status, logJson) {
-  var loading = document.getElementById("loader"); //element showing statuses
+  let loading = document.getElementById("loader"); //element showing statuses
   if (status === "remove") {
     //remove all
     loading.innerHTML = "";
@@ -204,16 +207,16 @@ async function showChangeStatus(status, logJson) {
 async function getTemplate() {
   //fetch data from webserver.py
   let htmlTemplateData = "";
-  response = await fetch(`template`, {
+  let response = await fetch(`template`, {
     method: "GET",
   });
-  blob = await response.blob(); //get data blob
+  let blob = await response.blob(); //get data blob
   htmlTemplateData = await new Response(blob).text(); //obtain html from blob
-  templateDiv = document.getElementById("template"); //get template container element to override
+  let templateDiv = document.getElementById("template"); //get template container element to override
   templateDiv.innerHTML = htmlTemplateData; //override container inner html with new data
-  var scripts = Array.from(templateDiv.getElementsByTagName("script")); //replace script tags manually
+  let scripts = Array.from(templateDiv.getElementsByTagName("script")); //replace script tags manually
   for (const script of scripts) {
-    var TempScript = document.createElement("script");
+    let TempScript = document.createElement("script");
     TempScript.innerHTML = script.innerHTML;
     script.parentElement.appendChild(TempScript);
   }
@@ -228,7 +231,6 @@ function testStorage() {
   } catch (error) {
     return false;
   }
-  return false;
 }
 
 //function gets saved data (if any)
@@ -237,7 +239,7 @@ function getSavedData() {
   if (testStorage()) {
     //if local storage exists and works
     let selectElement = document.getElementById("input-select"); // select button element
-    var input_container = document.getElementById("input-container"); // container div containing all dynamic input elements (Box/List)
+    let input_container = document.getElementById("input-container"); // container div containing all dynamic input elements (Box/List)
     if (
       localStorage.getItem("input_container_content") &&
       localStorage.getItem("input_container_content") !== "{}"
@@ -251,12 +253,11 @@ function getSavedData() {
       }
       if (selectElement.value == "List") {
         //if List is selected, show saved json data into box
-        storedJson = JSON.parse(
+        let storedJson = JSON.parse(
           localStorage.getItem("input_container_content")
         );
         if (Object.keys(storedJson).length > 0) {
           input_container.innerHTML = "";
-          i = 1;
           for (const ikey in storedJson) {
             input_container.appendChild(
               createInputListDiv(ikey, JSON.stringify(storedJson[ikey]))
@@ -270,7 +271,7 @@ function getSavedData() {
 
 //using localStorage, store json data from input-list(List)/text-area(from input-box) elements for saved state save on page refresh (will save state on successful post)
 function saveStorage() {
-  var data = JSON.stringify(inputToJson());
+  let data = JSON.stringify(inputToJson());
   if (testStorage() && data != "{}") {
     //don't bother saving if empty and/or storage don't exist
     localStorage.setItem("input_container_content", data);
@@ -279,12 +280,12 @@ function saveStorage() {
 
 //function gets values from input-list/text-area(from input-box) elements and return json dict object
 function inputToJson() {
-  var input_container = document.getElementById("input-container"); //container
+  let input_container = document.getElementById("input-container"); //container
   let inputListArr = document.getElementsByClassName("input-list"); //list
   let inputTextArea = document.getElementById("text-area"); //box
   let input_container_child = null;
   input_container_child = input_container.firstElementChild; //work out which element is first inside container div
-  var jsonReturnData = {};
+  let jsonReturnData = {};
 
   if (input_container_child == null) {
     //if no elements in container then return empty
@@ -300,7 +301,7 @@ function inputToJson() {
     let jsonTempData = "{";
     for (let i = 0; i < inputListArr.length; i++) {
       let key = inputListArr[i].getElementsByClassName("input-key")[0].value;
-      var value =
+      let value =
         inputListArr[i].getElementsByClassName("input-value")[0].value;
       //curate a string with list elements to parse into json later
       if (key !== "") {
@@ -365,7 +366,7 @@ function createInputListDiv(ikey, ivalue) {
 
 //function assigned to control (add and remove) input (Box and List) elements
 function dictInputs(action) {
-  var input_container = document.getElementById("input-container"); // container div containing all dynamic input elements
+  let input_container = document.getElementById("input-container"); // container div containing all dynamic input elements
   let selectElement = document.getElementById("input-select"); // select button
   let input_container_child = null;
   let input_container_child_name = null;
@@ -424,7 +425,7 @@ async function ClearInputData(id) {
 //clear input elements
 async function ClearInputElements() {
   let selectElement = document.getElementById("input-select");
-  var input_container = document.getElementById("input-container");
+  let input_container = document.getElementById("input-container");
   if (selectElement.value == "Box") {
     document.getElementById("text-area").value = "{}";
   }
