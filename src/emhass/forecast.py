@@ -236,30 +236,19 @@ class Forecast(object):
             openmeteo = openmeteo_requests.Client(session = retry_session)
 
             # Getting response
-            if isinstance(self.plant_conf["pv_module_model"], list):
-                # for i in range(len(self.plant_conf["pv_module_model"])):
-                    # tilt = self.plant_conf["surface_tilt"][i]
-                    # azimuth = self.plant_conf["surface_azimuth"][i]
-                    # TODO...
-                tilt = self.plant_conf["surface_tilt"][0]
-                azimuth = self.plant_conf["surface_azimuth"][0]
-            else:
-                tilt = self.plant_conf["surface_tilt"]
-                azimuth = self.plant_conf["surface_azimuth"]
             url = "https://api.open-meteo.com/v1/forecast"
             params = {
                 "latitude": round(self.lat, 2),
                 "longitude": round(self.lon, 2),
+                "timezone": self.params["retrieve_hass_conf"]["time_zone"],
                 "hourly": ["temperature_2m", "relative_humidity_2m", "precipitation", "rain", "cloud_cover", "wind_speed_10m", "shortwave_radiation_instant", "diffuse_radiation_instant", "direct_normal_irradiance_instant"],
-                "tilt": tilt,
-                "azimuth": azimuth
             }
             responses = openmeteo.weather_api(url, params=params)
             response = responses[0]
-            print(f"Coordinates {response.Latitude()}°N {response.Longitude()}°E")
-            print(f"Elevation {response.Elevation()} m asl")
-            print(f"Timezone {response.Timezone()} {response.TimezoneAbbreviation()}")
-            print(f"Timezone difference to GMT+0 {response.UtcOffsetSeconds()} s")
+            """import bz2 # Uncomment to save a serialized data for tests
+            import _pickle as cPickle
+            with bz2.BZ2File("data/test_response_openmeteo_get_method.pbz2", "w") as f: 
+                cPickle.dump(response, f)"""
 
             # Process hourly data. The order of variables needs to be the same as requested.
             hourly = response.Hourly()
@@ -290,76 +279,38 @@ class Forecast(object):
             hourly_data["dhi"] = hourly_diffuse_radiation_instant
             hourly_data["dni"] = hourly_direct_normal_irradiance_instant
 
-            hourly_dataframe = pd.DataFrame(data = hourly_data)
+            data = pd.DataFrame(data = hourly_data)
+            data.set_index('date', inplace=True)
+            data.tz_convert(self.time_zone)
 
-            freq_scrap = pd.to_timedelta(
+            freq_api = pd.to_timedelta(
                 60, "minutes"
             )  # The scrapping time step is 60min on clearoutside
             forecast_dates_scrap = (
                 pd.date_range(
                     start=self.start_forecast,
-                    end=self.end_forecast - freq_scrap,
-                    freq=freq_scrap,
+                    end=self.end_forecast - freq_api,
+                    freq=freq_api,
                     tz=self.time_zone,
                 )
                 .tz_convert("utc")
-                .round(freq_scrap, ambiguous="infer", nonexistent="shift_forward")
+                .round(freq_api, ambiguous="infer", nonexistent="shift_forward")
                 .tz_convert(self.time_zone)
             )
 
-            hourly_dataframe.set_index(forecast_dates_scrap, inplace=True)
+            data = data.loc[
+                data.index.intersection(forecast_dates_scrap)
+            ]
+            data.set_index(forecast_dates_scrap, inplace=True)
 
-            # Using the clearoutside webpage
-            # response = get(
-            #     "https://clearoutside.com/forecast/"
-            #     + str(round(self.lat, 2))
-            #     + "/"
-            #     + str(round(self.lon, 2))
-            #     + "?desktop=true"
-            # )
-            # """import bz2 # Uncomment to save a serialized data for tests
-            # import _pickle as cPickle
-            # with bz2.BZ2File("data/test_response_scrapper_get_method.pbz2", "w") as f: 
-            #     cPickle.dump(response.content, f)"""
-            # soup = BeautifulSoup(response.content, "html.parser")
-            # table = soup.find_all(id="day_0")[0]
-            # list_names = table.find_all(class_="fc_detail_label")
-            # list_tables = table.find_all("ul")[1:]
-            # selected_cols = [0, 1, 2, 3, 10, 12, 15]  # Selected variables
-            # col_names = [list_names[i].get_text() for i in selected_cols]
-            # list_tables = [list_tables[i] for i in selected_cols]
-            # # Building the raw DF container
-            # raw_data = pd.DataFrame(
-            #     index=range(len(forecast_dates_scrap)), columns=col_names, dtype=float
-            # )
-            # for count_col, col in enumerate(col_names):
-            #     list_rows = list_tables[count_col].find_all("li")
-            #     for count_row, row in enumerate(list_rows):
-            #         raw_data.loc[count_row, col] = float(row.get_text())
-            # # Treating index
-            # raw_data.set_index(forecast_dates_scrap, inplace=True)
-            # raw_data = raw_data[~raw_data.index.duplicated(keep="first")]
-            # raw_data = raw_data.reindex(self.forecast_dates)
-            # raw_data.interpolate(
-            #     method="linear",
-            #     axis=0,
-            #     limit=None,
-            #     limit_direction="both",
-            #     inplace=True,
-            # )
-            # Converting the cloud cover into Global Horizontal Irradiance with a PVLib method
-            # ghi_est = self.cloud_cover_to_irradiance(
-            #     raw_data["Total Clouds (% Sky Obscured)"]
-            # )
-            # data = ghi_est
-            # data["temp_air"] = raw_data["Temperature (°C)"]
-            # data["wind_speed"] = (
-            #     raw_data["Wind Speed/Direction (mph)"] * 1.60934
-            # )  # conversion to km/h
-            # data["relative_humidity"] = raw_data["Relative Humidity (%)"]
-            # data["precipitable_water"] = pvlib.atmosphere.gueymard94_pw(
-            #     data["temp_air"], data["relative_humidity"]
-            # )
+            data = data.reindex(self.forecast_dates)
+            data.interpolate(
+                method="linear",
+                axis=0,
+                limit=None,
+                limit_direction="both",
+                inplace=True,
+            )
 
         elif method == "solcast":  # using Solcast API
             # Check if weather_forecast_cache is true or if forecast_data file does not exist
