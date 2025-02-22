@@ -1043,14 +1043,6 @@ def publish_data(
             hour=0, minute=0, second=0, microsecond=0
         )
         filename = "opt_res_dayahead_" + today.strftime("%Y_%m_%d") + ".csv"
-    # Check if user wants to publish if status is "Infeasible"
-    elif (
-        "optim_status" in opt_res_latest
-        and (opt_res_latest["optim_status"].eq("Infeasible")).any()
-        and not params["retrieve_hass_conf"].get("infeasible_publish", True)
-    ):
-        logger.error("last optmisation results where Infeasible, wont publish.")
-        return False
     # If publish_prefix is passed, check if there is saved entities in data_path/entities with prefix, publish to results
     elif params["passed_data"].get("publish_prefix", "") != "" and not dont_post:
         opt_res_list = []
@@ -1110,6 +1102,14 @@ def publish_data(
             opt_res_latest.index.freq = input_data_dict["retrieve_hass_conf"][
                 "optimization_time_step"
             ]
+    # Check if user wants to publish if status is "Infeasible"
+    if (
+        "optim_status" in opt_res_latest
+        and (opt_res_latest["optim_status"].eq("Infeasible")).any()
+        and not params["retrieve_hass_conf"].get("infeasible_publish", True)
+    ):
+        logger.error("last optmisation results where Infeasible, wont publish.")
+        return False
     # Estimate the current index
     now_precise = datetime.now(
         input_data_dict["retrieve_hass_conf"]["time_zone"]
@@ -1724,6 +1724,8 @@ def main():
         )
         opt_res = None
     elif args.action == "publish-data":
+        if args.debug:
+            input_data_dict["retrieve_hass_conf"]["infeasible_publish"] = True
         opt_res = publish_data(input_data_dict, logger)
     else:
         logger.error("The passed action argument is not valid")
