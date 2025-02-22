@@ -23,7 +23,8 @@ We will need to define these parameters to retrieve data from Home Assistant. Th
 	- 'sensor.power_photovoltaics'
 	- 'sensor.power_load_no_var_loads'
 - `method_ts_round`: Set the method for timestamp rounding, options are: first, last and nearest.
-- `continual_publish`: set to True to save entities to .json after an optimization run. Then automatically republish the saved entities *(with updated current state value)* every `optimization_time_step` minutes. *entity data saved to data_path/entities.*
+- `continual_publish`: Set to True to save entities to .json after an optimization run. Then automatically republish the saved entities *(with updated current state value)* every `optimization_time_step` minutes. *entity data saved to data_path/entities.*
+- `infeasible_publish`: Set to True to publish optimization results even when the optimization status is infeasible
 
 A second part of this section is given by some privacy-sensitive parameters that should be included in a `secrets_emhass.yaml` file alongside the `config_emhass.yaml` file.
 

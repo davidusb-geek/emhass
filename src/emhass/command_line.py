@@ -28,6 +28,7 @@ default_csv_filename = "opt_res_latest.csv"
 default_pkl_suffix = "_mlf.pkl"
 default_metadata_json = "metadata.json"
 
+
 def set_input_data_dict(
     emhass_conf: dict,
     costfun: str,
@@ -1042,6 +1043,14 @@ def publish_data(
             hour=0, minute=0, second=0, microsecond=0
         )
         filename = "opt_res_dayahead_" + today.strftime("%Y_%m_%d") + ".csv"
+    # Check if user wants to publish if status is "Infeasible"
+    elif (
+        "optim_status" in opt_res_latest
+        and (opt_res_latest["optim_status"].eq("Infeasible")).any()
+        and not params["retrieve_hass_conf"].get("infeasible_publish", True)
+    ):
+        logger.error("last optmisation results where Infeasible, wont publish.")
+        return False
     # If publish_prefix is passed, check if there is saved entities in data_path/entities with prefix, publish to results
     elif params["passed_data"].get("publish_prefix", "") != "" and not dont_post:
         opt_res_list = []
