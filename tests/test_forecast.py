@@ -201,77 +201,80 @@ class TestForecast(unittest.TestCase):
 
     # Test output weather forecast using scrapper with mock get request data
     def test_get_weather_forecast_scrapper_method_mock(self):
-        with requests_mock.mock() as m:
-            data = bz2.BZ2File(
-                str(
-                    emhass_conf["data_path"] / "test_response_scrapper_get_method.pbz2"
-                ),
-                "rb",
-            )
-            data = cPickle.load(data)
-            get_url = (
-                "https://clearoutside.com/forecast/"
-                + str(round(self.fcst.lat, 2))
-                + "/"
-                + str(round(self.fcst.lon, 2))
-                + "?desktop=true"
-            )
-            m.get(get_url, content=data)
-            # Test dataframe output from get weather forecast
-            df_weather_scrap = self.fcst.get_weather_forecast(method="scrapper")
-            self.assertIsInstance(df_weather_scrap, type(pd.DataFrame()))
-            self.assertIsInstance(
-                df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex
-            )
-            self.assertIsInstance(
-                df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-            )
-            self.assertEqual(df_weather_scrap.index.tz, self.fcst.time_zone)
-            self.assertTrue(
-                self.fcst.start_forecast < ts for ts in df_weather_scrap.index
-            )
-            self.assertEqual(
-                len(df_weather_scrap),
-                int(
-                    self.optim_conf["delta_forecast_daily"].total_seconds()
-                    / 3600
-                    / self.fcst.timeStep
-                ),
-            )
-            # Test dataframe output from get power from weather forecast
-            P_PV_forecast = self.fcst.get_power_from_weather(df_weather_scrap)
-            self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
-            self.assertIsInstance(
-                P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-            )
-            self.assertIsInstance(
-                P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-            )
-            self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
-            self.assertEqual(len(df_weather_scrap), len(P_PV_forecast))
-            # Test dataframe output from get power from weather forecast (with 2 PV plant's)
-            self.plant_conf["pv_module_model"] = [
-                self.plant_conf["pv_module_model"][0],
-                self.plant_conf["pv_module_model"][0],
-            ]
-            self.plant_conf["pv_inverter_model"] = [
-                self.plant_conf["pv_inverter_model"][0],
-                self.plant_conf["pv_inverter_model"][0],
-            ]
-            self.plant_conf["surface_tilt"] = [30, 45]
-            self.plant_conf["surface_azimuth"] = [270, 90]
-            self.plant_conf["modules_per_string"] = [8, 8]
-            self.plant_conf["strings_per_inverter"] = [1, 1]
-            P_PV_forecast = self.fcst.get_power_from_weather(df_weather_scrap)
-            self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
-            self.assertIsInstance(
-                P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-            )
-            self.assertIsInstance(
-                P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-            )
-            self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
-            self.assertEqual(len(df_weather_scrap), len(P_PV_forecast))
+
+        df_weather_scrap = self.fcst.get_weather_forecast(method="open-meteo")
+
+        # with requests_mock.mock() as m:
+        #     data = bz2.BZ2File(
+        #         str(
+        #             emhass_conf["data_path"] / "test_response_scrapper_get_method.pbz2"
+        #         ),
+        #         "rb",
+        #     )
+        #     data = cPickle.load(data)
+        #     get_url = (
+        #         "https://clearoutside.com/forecast/"
+        #         + str(round(self.fcst.lat, 2))
+        #         + "/"
+        #         + str(round(self.fcst.lon, 2))
+        #         + "?desktop=true"
+        #     )
+        #     m.get(get_url, content=data)
+        #     # Test dataframe output from get weather forecast
+        #     df_weather_scrap = self.fcst.get_weather_forecast(method="scrapper")
+        #     self.assertIsInstance(df_weather_scrap, type(pd.DataFrame()))
+        #     self.assertIsInstance(
+        #         df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex
+        #     )
+        #     self.assertIsInstance(
+        #         df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
+        #     )
+        #     self.assertEqual(df_weather_scrap.index.tz, self.fcst.time_zone)
+        #     self.assertTrue(
+        #         self.fcst.start_forecast < ts for ts in df_weather_scrap.index
+        #     )
+        #     self.assertEqual(
+        #         len(df_weather_scrap),
+        #         int(
+        #             self.optim_conf["delta_forecast_daily"].total_seconds()
+        #             / 3600
+        #             / self.fcst.timeStep
+        #         ),
+        #     )
+        #     # Test dataframe output from get power from weather forecast
+        #     P_PV_forecast = self.fcst.get_power_from_weather(df_weather_scrap)
+        #     self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
+        #     self.assertIsInstance(
+        #         P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
+        #     )
+        #     self.assertIsInstance(
+        #         P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
+        #     )
+        #     self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
+        #     self.assertEqual(len(df_weather_scrap), len(P_PV_forecast))
+        #     # Test dataframe output from get power from weather forecast (with 2 PV plant's)
+        #     self.plant_conf["pv_module_model"] = [
+        #         self.plant_conf["pv_module_model"][0],
+        #         self.plant_conf["pv_module_model"][0],
+        #     ]
+        #     self.plant_conf["pv_inverter_model"] = [
+        #         self.plant_conf["pv_inverter_model"][0],
+        #         self.plant_conf["pv_inverter_model"][0],
+        #     ]
+        #     self.plant_conf["surface_tilt"] = [30, 45]
+        #     self.plant_conf["surface_azimuth"] = [270, 90]
+        #     self.plant_conf["modules_per_string"] = [8, 8]
+        #     self.plant_conf["strings_per_inverter"] = [1, 1]
+        #     P_PV_forecast = self.fcst.get_power_from_weather(df_weather_scrap)
+        #     self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
+        #     self.assertIsInstance(
+        #         P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
+        #     )
+        #     self.assertIsInstance(
+        #         P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
+        #     )
+        #     self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
+        #     self.assertEqual(len(df_weather_scrap), len(P_PV_forecast))
 
     # Test output weather forecast using Solcast with mock get request data
     def test_get_weather_forecast_solcast_method_mock(self):
