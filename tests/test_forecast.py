@@ -199,8 +199,8 @@ class TestForecast(unittest.TestCase):
         df_weather_none = self.fcst.get_weather_forecast(method="none")
         self.assertTrue(df_weather_none is None)
 
-    # Test output weather forecast using scrapper with mock get request data
-    def test_get_weather_forecast_scrapper_method_mock(self):
+    # Test output weather forecast using openmeteo with mock get request data
+    def test_get_weather_forecast_openmeteo_method_mock(self):
 
         with requests_mock.mock() as m:
             data = bz2.BZ2File(
