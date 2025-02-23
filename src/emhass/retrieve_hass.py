@@ -414,6 +414,7 @@ class RetrieveHass:
         data_df: pd.DataFrame,
         idx: int,
         entity_id: str,
+        device_class: str,
         unit_of_measurement: str,
         friendly_name: str,
         list_name: str,
@@ -432,6 +433,7 @@ class RetrieveHass:
         data = {
             "state": "{:.2f}".format(state),
             "attributes": {
+                "device_class": device_class,
                 "unit_of_measurement": unit_of_measurement,
                 "friendly_name": friendly_name,
                 list_name: forecast_list,
@@ -444,6 +446,7 @@ class RetrieveHass:
         data_df: pd.DataFrame,
         idx: int,
         entity_id: str,
+        device_class: str,
         unit_of_measurement: str,
         friendly_name: str,
         type_var: str,
@@ -464,6 +467,8 @@ class RetrieveHass:
         :type idx: int
         :param entity_id: The unique entity_id of the sensor in hass.
         :type entity_id: str
+        :param device_class: The HASS device class for the sensor.
+        :type device_class: str
         :param unit_of_measurement: The units of the sensor.
         :type unit_of_measurement: str
         :param friendly_name: The friendly name that will be used in the hass frontend.
@@ -511,6 +516,7 @@ class RetrieveHass:
                 data_df,
                 idx,
                 entity_id,
+                device_class,
                 unit_of_measurement,
                 friendly_name,
                 "forecasts",
@@ -521,6 +527,7 @@ class RetrieveHass:
                 data_df,
                 idx,
                 entity_id,
+                device_class,
                 unit_of_measurement,
                 friendly_name,
                 "deferrables_schedule",
@@ -531,6 +538,7 @@ class RetrieveHass:
                 data_df,
                 idx,
                 entity_id,
+                device_class,
                 unit_of_measurement,
                 friendly_name,
                 "predicted_temperatures",
@@ -541,6 +549,7 @@ class RetrieveHass:
                 data_df,
                 idx,
                 entity_id,
+                device_class,
                 unit_of_measurement,
                 friendly_name,
                 "battery_scheduled_power",
@@ -551,6 +560,7 @@ class RetrieveHass:
                 data_df,
                 idx,
                 entity_id,
+                device_class,
                 unit_of_measurement,
                 friendly_name,
                 "battery_scheduled_soc",
@@ -561,6 +571,7 @@ class RetrieveHass:
                 data_df,
                 idx,
                 entity_id,
+                device_class,
                 unit_of_measurement,
                 friendly_name,
                 "unit_load_cost_forecasts",
@@ -571,6 +582,7 @@ class RetrieveHass:
                 data_df,
                 idx,
                 entity_id,
+                device_class,
                 unit_of_measurement,
                 friendly_name,
                 "unit_prod_price_forecasts",
@@ -581,6 +593,7 @@ class RetrieveHass:
                 data_df,
                 idx,
                 entity_id,
+                device_class,
                 unit_of_measurement,
                 friendly_name,
                 "scheduled_forecast",
@@ -606,6 +619,7 @@ class RetrieveHass:
             data = {
                 "state": "{:.2f}".format(state),
                 "attributes": {
+                    "device_class": device_class,
                     "unit_of_measurement": unit_of_measurement,
                     "friendly_name": friendly_name,
                 },
@@ -657,6 +671,7 @@ class RetrieveHass:
                     # Save entity metadata, key = entity_id
                     metadata[entity_id] = {
                         "name": data_df.name,
+                        "device_class": device_class,
                         "unit_of_measurement": unit_of_measurement,
                         "friendly_name": friendly_name,
                         "type_var": type_var,
