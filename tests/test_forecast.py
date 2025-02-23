@@ -202,8 +202,6 @@ class TestForecast(unittest.TestCase):
     # Test output weather forecast using scrapper with mock get request data
     def test_get_weather_forecast_scrapper_method_mock(self):
 
-        # df_weather_scrap = self.fcst.get_weather_forecast(method="open-meteo")
-
         with requests_mock.mock() as m:
             data = bz2.BZ2File(
                 str(
@@ -212,16 +210,24 @@ class TestForecast(unittest.TestCase):
                 "rb",
             )
             data = cPickle.load(data)
-            get_url = "https://api.open-meteo.com/v1/forecast"
             lat = self.retrieve_hass_conf["Latitude"]
             lon = self.retrieve_hass_conf["Longitude"]
-            params = {
-                "latitude": round(lat, 2),
-                "longitude": round(lon, 2),
-                "timezone": self.params["retrieve_hass_conf"]["time_zone"],
-                "hourly": ["temperature_2m", "relative_humidity_2m", "precipitation", "rain", "cloud_cover", "wind_speed_10m", "shortwave_radiation_instant", "diffuse_radiation_instant", "direct_normal_irradiance_instant"],
-            }
-            m.get(get_url, content=data)
+            get_url = (
+                "https://api.open-meteo.com/v1/forecast?"
+                + "latitude=" + str(round(lat, 2))
+                + "&longitude=" + str(round(lon, 2))
+                + "&minutely_15="
+                + "temperature_2m,"
+                + "relative_humidity_2m,"
+                + "rain,"
+                + "cloud_cover,"
+                + "wind_speed_10m,"
+                + "shortwave_radiation_instant,"
+                + "diffuse_radiation_instant,"
+                + "direct_normal_irradiance_instant"
+            )
+            get_url = "https://api.open-meteo.com/v1/forecast"
+            m.get(get_url, json=data.json())
             # Test dataframe output from get weather forecast
             df_weather_openmeteo = self.fcst.get_weather_forecast(method="open-meteo")
             self.assertIsInstance(df_weather_openmeteo, type(pd.DataFrame()))

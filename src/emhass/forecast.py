@@ -15,11 +15,6 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-import openmeteo_requests
-import requests_cache
-from retry_requests import retry
-import pvlib
-from bs4 import BeautifulSoup
 from pvlib.irradiance import disc
 from pvlib.location import Location
 from pvlib.modelchain import ModelChain
@@ -208,6 +203,7 @@ class Forecast(object):
         self,
         method: Optional[str] = "open-meteo",
         csv_path: Optional[str] = "data_weather_forecast.csv",
+        use_legacy_pvlib: Optional[bool] = False,
     ) -> pd.DataFrame:
         r"""
         Get and generate weather forecast data.
@@ -230,80 +226,46 @@ class Forecast(object):
         )
         if method == "open-meteo" or method == "scrapper": # The scrapper option is being left here for backward compatibility
 
-            # Setup the Open-Meteo API client with cache and retry on error
-            cache_session = requests_cache.CachedSession('.cache', expire_after = 3600)
-            retry_session = retry(cache_session, retries = 5, backoff_factor = 0.2)
-            openmeteo = openmeteo_requests.Client(session = retry_session)
-
-            # Getting response
-            url = "https://api.open-meteo.com/v1/forecast"
-            params = {
-                "latitude": round(self.lat, 2),
-                "longitude": round(self.lon, 2),
-                "timezone": self.params["retrieve_hass_conf"]["time_zone"],
-                "hourly": ["temperature_2m", "relative_humidity_2m", "precipitation", "rain", "cloud_cover", "wind_speed_10m", "shortwave_radiation_instant", "diffuse_radiation_instant", "direct_normal_irradiance_instant"],
-            }
-            responses = openmeteo.weather_api(url, params=params)
-            response = responses[0]
+            headers = {"Accept": "application/json"}
+            url = (
+                "https://api.open-meteo.com/v1/forecast?"
+                + "latitude=" + str(round(self.lat, 2))
+                + "&longitude=" + str(round(self.lon, 2))
+                + "&minutely_15="
+                + "temperature_2m,"
+                + "relative_humidity_2m,"
+                + "rain,"
+                + "cloud_cover,"
+                + "wind_speed_10m,"
+                + "shortwave_radiation_instant,"
+                + "diffuse_radiation_instant,"
+                + "direct_normal_irradiance_instant"
+            )
+            response = get(url, headers=headers)
             """import bz2 # Uncomment to save a serialized data for tests
             import _pickle as cPickle
             with bz2.BZ2File("data/test_response_openmeteo_get_method.pbz2", "w") as f: 
                 cPickle.dump(response, f)"""
 
-            # Process hourly data. The order of variables needs to be the same as requested.
-            hourly = response.Hourly()
-            hourly_temperature_2m = hourly.Variables(0).ValuesAsNumpy()
-            hourly_relative_humidity_2m = hourly.Variables(1).ValuesAsNumpy()
-            hourly_precipitation = hourly.Variables(2).ValuesAsNumpy()
-            hourly_rain = hourly.Variables(3).ValuesAsNumpy()
-            hourly_cloud_cover = hourly.Variables(4).ValuesAsNumpy()
-            hourly_wind_speed_10m = hourly.Variables(5).ValuesAsNumpy()
-            hourly_shortwave_radiation_instant = hourly.Variables(6).ValuesAsNumpy()
-            hourly_diffuse_radiation_instant = hourly.Variables(7).ValuesAsNumpy()
-            hourly_direct_normal_irradiance_instant = hourly.Variables(8).ValuesAsNumpy()
+            data_raw = response.json()
+            data_15min = pd.DataFrame.from_dict(data_raw['minutely_15'])
+            data_15min['time'] = pd.to_datetime(data_15min['time'])
+            data_15min.set_index('time', inplace=True)
+            data_15min = set_df_index_freq(data_15min)
+            data_15min.index = data_15min.index.tz_localize(self.time_zone)
 
-            hourly_data = {"date": pd.date_range(
-                start = pd.to_datetime(hourly.Time(), unit = "s", utc = True),
-                end = pd.to_datetime(hourly.TimeEnd(), unit = "s", utc = True),
-                freq = pd.Timedelta(seconds = hourly.Interval()),
-                inclusive = "left"
-            )}
-
-            hourly_data["temp_air"] = hourly_temperature_2m
-            hourly_data["relative_humidity"] = hourly_relative_humidity_2m
-            hourly_data["precipitable_water"] = hourly_precipitation
-            hourly_data["rain"] = hourly_rain
-            hourly_data["cloud_cover"] = hourly_cloud_cover
-            hourly_data["wind_speed"] = hourly_wind_speed_10m
-            hourly_data["ghi"] = hourly_shortwave_radiation_instant
-            hourly_data["dhi"] = hourly_diffuse_radiation_instant
-            hourly_data["dni"] = hourly_direct_normal_irradiance_instant
-
-            data = pd.DataFrame(data = hourly_data)
-            data.set_index('date', inplace=True)
-            data.tz_convert(self.time_zone)
-
-            freq_api = pd.to_timedelta(
-                60, "minutes"
-            )  # The scrapping time step is 60min on clearoutside
-            forecast_dates_scrap = (
-                pd.date_range(
-                    start=self.start_forecast,
-                    end=self.end_forecast - freq_api,
-                    freq=freq_api,
-                    tz=self.time_zone,
-                )
-                .tz_convert("utc")
-                .round(freq_api, ambiguous="infer", nonexistent="shift_forward")
-                .tz_convert(self.time_zone)
-            )
-
-            data = data.loc[
-                data.index.intersection(forecast_dates_scrap)
-            ]
-            data.set_index(forecast_dates_scrap, inplace=True)
-
-            data = data.reindex(self.forecast_dates)
+            data_15min = data_15min.rename(columns={
+                "temperature_2m": "temp_air", 
+                "relative_humidity_2m": "relative_humidity",
+                "rain": "precipitable_water",
+                "cloud_cover": "cloud_cover",
+                "wind_speed_10m": "wind_speed",
+                "shortwave_radiation_instant": "ghi",
+                "diffuse_radiation_instant": "dhi",
+                "direct_normal_irradiance_instant": "dni"
+                })
+            
+            data = data_15min.reindex(self.forecast_dates)
             data.interpolate(
                 method="linear",
                 axis=0,
@@ -311,6 +273,16 @@ class Forecast(object):
                 limit_direction="both",
                 inplace=True,
             )
+
+            if use_legacy_pvlib:
+                # Converting the cloud cover into Global Horizontal Irradiance with a PVLib method
+                data = data.drop(columns=['ghi', 'dhi', 'dni'])
+                ghi_est = self.cloud_cover_to_irradiance(
+                    data["cloud_cover"]
+                )
+                data['ghi'] = ghi_est['ghi']
+                data['dni'] = ghi_est['dni']
+                data['dhi'] = ghi_est['dhi']
 
         elif method == "solcast":  # using Solcast API
             # Check if weather_forecast_cache is true or if forecast_data file does not exist

@@ -45,9 +45,6 @@ dependencies = [
     "waitress>=3.0.2",
     "plotly>=6.0.0",
     "gunicorn>=23.0.0",
-    "openmeteo-requests>=1.3.0",
-    "requests-cache>=1.2.1",
-    "retry-requests>=2.0.0",
 ]
 
 [project.optional-dependencies]
