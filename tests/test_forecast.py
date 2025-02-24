@@ -825,11 +825,12 @@ class TestForecast(unittest.TestCase):
         self.plant_conf["surface_azimuth"] = [270, 90]
         self.plant_conf["modules_per_string"] = [8, 8]
         self.plant_conf["strings_per_inverter"] = [1, 1]
+        params = json.dumps({"passed_data": {"weather_forecast_cache": False}})
         self.fcst = Forecast(
             self.retrieve_hass_conf,
             self.optim_conf,
             self.plant_conf,
-            None,
+            params,
             emhass_conf,
             logger,
             get_data_from_file=self.get_data_from_file,
