@@ -293,6 +293,9 @@ class Forecast(object):
                 data.index = index_tz
                 data = set_df_index_freq(data)
 
+                # Convert mm to cm and clip the minimum value to 0.1 cm as expected by PVLib
+                data['precipitable_water'] = (data['precipitable_water'] / 10).clip(lower=0.1)
+
                 if use_legacy_pvlib:
                     # Converting the cloud cover into Global Horizontal Irradiance with a PVLib method
                     data = data.drop(columns=["ghi", "dhi", "dni"])
