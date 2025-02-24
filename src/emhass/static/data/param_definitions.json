@@ -137,12 +137,12 @@
       "Description": "This will define the weather forecast method that will be used. options are 'scrapper' (ClearOutside), 'Solcast', 'solar.forecast' (forecast.solar) and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts.",
       "input": "select",
       "select_options": [
-        "scrapper",
+        "open-meteo",
         "solcast",
         "solar.forecast",
         "csv"
       ],
-      "default_value": "scrapper"
+      "default_value": "open-meteo"
     },
     "maximum_power_from_grid": {
       "friendly_name": "Max power from grid",
