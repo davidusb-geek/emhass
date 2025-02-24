@@ -31,12 +31,12 @@ jobs:
           python-version-file: ".python-version"
       - name: Set up Python venv
         run: uv venv
-      - name: Special dependencies for macos
-        run: |
-          brew install hdf5
-          uv pip install numpy==2.0.0
-          uv pip install tables==3.10.2
-        if: ${{ matrix.os == 'macos-latest' }}
+      #- name: Special dependencies for macos
+      #  run: |
+      #    brew install hdf5
+      #    uv pip install numpy==2.0.0
+      #    uv pip install tables==3.10.2
+      #  if: ${{ matrix.os == 'macos-latest' }}
       - name: Install EMHASS with test dependencies
         run: |
           uv sync --reinstall --extra test
