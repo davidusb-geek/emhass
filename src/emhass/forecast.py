@@ -12,6 +12,7 @@ import re
 from datetime import datetime, timedelta
 from itertools import zip_longest
 from typing import Optional
+from urllib.parse import quote
 
 import numpy as np
 import pandas as pd
@@ -251,6 +252,7 @@ class Forecast(object):
                     + "shortwave_radiation_instant,"
                     + "diffuse_radiation_instant,"
                     + "direct_normal_irradiance_instant"
+                    + "&timezone=" + quote(str(self.time_zone), safe="")
                 )
                 response = get(url, headers=headers)
                 """import bz2 # Uncomment to save a serialized data for tests
@@ -262,7 +264,6 @@ class Forecast(object):
                 data_15min = pd.DataFrame.from_dict(data_raw["minutely_15"])
                 data_15min["time"] = pd.to_datetime(data_15min["time"])
                 data_15min.set_index("time", inplace=True)
-                data_15min = set_df_index_freq(data_15min)
                 data_15min.index = data_15min.index.tz_localize(self.time_zone)
 
                 data_15min = data_15min.rename(
@@ -286,6 +287,11 @@ class Forecast(object):
                     limit_direction="both",
                     inplace=True,
                 )
+                data = set_df_index_freq(data)
+                index_utc = data.index.tz_convert("utc")
+                index_tz = index_utc.round(freq = data.index.freq, ambiguous="infer", nonexistent="shift_forward").tz_convert(self.time_zone)
+                data.index = index_tz
+                data = set_df_index_freq(data)
 
                 if use_legacy_pvlib:
                     # Converting the cloud cover into Global Horizontal Irradiance with a PVLib method

@@ -249,6 +249,19 @@ class TestForecast(unittest.TestCase):
                     / self.fcst.timeStep
                 ),
             )
+            # Test the legacy code using PVLib module methods
+            df_weather_openmeteo = self.fcst.get_weather_forecast(method="open-meteo", use_legacy_pvlib=False)
+            self.assertIsInstance(df_weather_openmeteo, type(pd.DataFrame()))
+            self.assertIsInstance(
+                df_weather_openmeteo.index, pd.core.indexes.datetimes.DatetimeIndex
+            )
+            self.assertIsInstance(
+                df_weather_openmeteo.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
+            )
+            self.assertEqual(df_weather_openmeteo.index.tz, self.fcst.time_zone)
+            self.assertTrue("ghi" in list(df_weather_openmeteo.columns))
+            self.assertTrue("dhi" in list(df_weather_openmeteo.columns))
+            self.assertTrue("dni" in list(df_weather_openmeteo.columns))
             # Test dataframe output from get power from weather forecast
             P_PV_forecast = self.fcst.get_power_from_weather(df_weather_openmeteo)
             self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
