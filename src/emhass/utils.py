@@ -613,7 +613,7 @@ def treat_runtimeparams(
             model_type = runtimeparams["model_type"]
         params["passed_data"]["model_type"] = model_type
         if "var_model" not in runtimeparams.keys():
-            var_model = "sensor.power_load_no_var_loads"
+            var_model = params["retrieve_hass_conf"]["sensor_power_load_no_var_loads"]
         else:
             var_model = runtimeparams["var_model"]
         params["passed_data"]["var_model"] = var_model
