@@ -1,6 +1,0 @@
-wheel>=0.45.0
-sphinx==8.1.1
-sphinx-rtd-theme==3.0.2
-docutils==0.21.1
-attrs==24.3.0
-myst-parser==4.0.0

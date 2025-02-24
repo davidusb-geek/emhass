@@ -199,47 +199,71 @@ class TestForecast(unittest.TestCase):
         df_weather_none = self.fcst.get_weather_forecast(method="none")
         self.assertTrue(df_weather_none is None)
 
-    # Test output weather forecast using scrapper with mock get request data
-    def test_get_weather_forecast_scrapper_method_mock(self):
+    # Test output weather forecast using openmeteo with mock get request data
+    def test_get_weather_forecast_openmeteo_method_mock(self):
+
         with requests_mock.mock() as m:
             data = bz2.BZ2File(
                 str(
-                    emhass_conf["data_path"] / "test_response_scrapper_get_method.pbz2"
+                    emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2"
                 ),
                 "rb",
             )
             data = cPickle.load(data)
+            lat = self.retrieve_hass_conf["Latitude"]
+            lon = self.retrieve_hass_conf["Longitude"]
             get_url = (
-                "https://clearoutside.com/forecast/"
-                + str(round(self.fcst.lat, 2))
-                + "/"
-                + str(round(self.fcst.lon, 2))
-                + "?desktop=true"
+                "https://api.open-meteo.com/v1/forecast?"
+                + "latitude=" + str(round(lat, 2))
+                + "&longitude=" + str(round(lon, 2))
+                + "&minutely_15="
+                + "temperature_2m,"
+                + "relative_humidity_2m,"
+                + "rain,"
+                + "cloud_cover,"
+                + "wind_speed_10m,"
+                + "shortwave_radiation_instant,"
+                + "diffuse_radiation_instant,"
+                + "direct_normal_irradiance_instant"
             )
-            m.get(get_url, content=data)
+            get_url = "https://api.open-meteo.com/v1/forecast"
+            m.get(get_url, json=data.json())
             # Test dataframe output from get weather forecast
-            df_weather_scrap = self.fcst.get_weather_forecast(method="scrapper")
-            self.assertIsInstance(df_weather_scrap, type(pd.DataFrame()))
+            df_weather_openmeteo = self.fcst.get_weather_forecast(method="open-meteo")
+            self.assertIsInstance(df_weather_openmeteo, type(pd.DataFrame()))
             self.assertIsInstance(
-                df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex
+                df_weather_openmeteo.index, pd.core.indexes.datetimes.DatetimeIndex
             )
             self.assertIsInstance(
-                df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
+                df_weather_openmeteo.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
             )
-            self.assertEqual(df_weather_scrap.index.tz, self.fcst.time_zone)
+            self.assertEqual(df_weather_openmeteo.index.tz, self.fcst.time_zone)
             self.assertTrue(
-                self.fcst.start_forecast < ts for ts in df_weather_scrap.index
+                self.fcst.start_forecast < ts for ts in df_weather_openmeteo.index
             )
             self.assertEqual(
-                len(df_weather_scrap),
+                len(df_weather_openmeteo),
                 int(
                     self.optim_conf["delta_forecast_daily"].total_seconds()
                     / 3600
                     / self.fcst.timeStep
                 ),
             )
+            # Test the legacy code using PVLib module methods
+            df_weather_openmeteo = self.fcst.get_weather_forecast(method="open-meteo", use_legacy_pvlib=False)
+            self.assertIsInstance(df_weather_openmeteo, type(pd.DataFrame()))
+            self.assertIsInstance(
+                df_weather_openmeteo.index, pd.core.indexes.datetimes.DatetimeIndex
+            )
+            self.assertIsInstance(
+                df_weather_openmeteo.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
+            )
+            self.assertEqual(df_weather_openmeteo.index.tz, self.fcst.time_zone)
+            self.assertTrue("ghi" in list(df_weather_openmeteo.columns))
+            self.assertTrue("dhi" in list(df_weather_openmeteo.columns))
+            self.assertTrue("dni" in list(df_weather_openmeteo.columns))
             # Test dataframe output from get power from weather forecast
-            P_PV_forecast = self.fcst.get_power_from_weather(df_weather_scrap)
+            P_PV_forecast = self.fcst.get_power_from_weather(df_weather_openmeteo)
             self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
             self.assertIsInstance(
                 P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
@@ -248,7 +272,7 @@ class TestForecast(unittest.TestCase):
                 P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
             )
             self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
-            self.assertEqual(len(df_weather_scrap), len(P_PV_forecast))
+            self.assertEqual(len(df_weather_openmeteo), len(P_PV_forecast))
             # Test dataframe output from get power from weather forecast (with 2 PV plant's)
             self.plant_conf["pv_module_model"] = [
                 self.plant_conf["pv_module_model"][0],
@@ -262,7 +286,7 @@ class TestForecast(unittest.TestCase):
             self.plant_conf["surface_azimuth"] = [270, 90]
             self.plant_conf["modules_per_string"] = [8, 8]
             self.plant_conf["strings_per_inverter"] = [1, 1]
-            P_PV_forecast = self.fcst.get_power_from_weather(df_weather_scrap)
+            P_PV_forecast = self.fcst.get_power_from_weather(df_weather_openmeteo)
             self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
             self.assertIsInstance(
                 P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
@@ -271,7 +295,7 @@ class TestForecast(unittest.TestCase):
                 P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
             )
             self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
-            self.assertEqual(len(df_weather_scrap), len(P_PV_forecast))
+            self.assertEqual(len(df_weather_openmeteo), len(P_PV_forecast))
 
     # Test output weather forecast using Solcast with mock get request data
     def test_get_weather_forecast_solcast_method_mock(self):
@@ -814,11 +838,12 @@ class TestForecast(unittest.TestCase):
         self.plant_conf["surface_azimuth"] = [270, 90]
         self.plant_conf["modules_per_string"] = [8, 8]
         self.plant_conf["strings_per_inverter"] = [1, 1]
+        params = json.dumps({"passed_data": {"weather_forecast_cache": False}})
         self.fcst = Forecast(
             self.retrieve_hass_conf,
             self.optim_conf,
             self.plant_conf,
-            None,
+            params,
             emhass_conf,
             logger,
             get_data_from_file=self.get_data_from_file,

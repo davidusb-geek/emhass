@@ -3,9 +3,9 @@ name: "Test Building Docker Image"
 
 on:
   push:
-    branches: [master]
+    branches: [master,testing]
   pull_request:
-    branches: [master]
+    branches: [master,testing]
   workflow_dispatch:
 
 permissions:
