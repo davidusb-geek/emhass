@@ -108,10 +108,11 @@ if __name__ == "__main__":
 
         data = copy.deepcopy(rh.df_final)
 
+    y_axis_title = "Power (W)"
     logger.info(data.describe())
     fig = data.plot()
     fig.layout.template = template
-    fig.update_yaxes(title_text="Power (W)")
+    fig.update_yaxes(title_text=y_axis_title)
     fig.update_xaxes(title_text="Time")
     fig.show()
     fig.write_image(
@@ -169,7 +170,7 @@ if __name__ == "__main__":
     df["pred"] = predictions
     fig = df.plot()
     fig.layout.template = template
-    fig.update_yaxes(title_text="Power (W)")
+    fig.update_yaxes(title_text=y_axis_title)
     fig.update_xaxes(title_text="Time")
     fig.update_xaxes(range=[date_train + pd.Timedelta("10days"), data_exo.index[-1]])
     fig.show()
@@ -200,7 +201,7 @@ if __name__ == "__main__":
     df["pred"] = predictions_backtest
     fig = df.plot()
     fig.layout.template = template
-    fig.update_yaxes(title_text="Power (W)")
+    fig.update_yaxes(title_text=y_axis_title)
     fig.update_xaxes(title_text="Time")
     fig.show()
     fig.write_image(
@@ -273,7 +274,7 @@ if __name__ == "__main__":
     df["pred_optim"] = predictions_loaded
     fig = df.plot()
     fig.layout.template = template
-    fig.update_yaxes(title_text="Power (W)")
+    fig.update_yaxes(title_text=y_axis_title)
     fig.update_xaxes(title_text="Time")
     fig.update_xaxes(range=[date_train + pd.Timedelta("10days"), data_exo.index[-1]])
     fig.show()
@@ -326,7 +327,7 @@ if __name__ == "__main__":
 
     # Let's perform a naive load forecast for comparison
     retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(
-        emhass_conf, use_secrets=True
+        params, logger
     )
     fcst = Forecast(
         retrieve_hass_conf, optim_conf, plant_conf, params, emhass_conf, logger
@@ -365,7 +366,7 @@ if __name__ == "__main__":
     df["pred_prod"] = predictions_prod
     fig = df.plot()
     fig.layout.template = template
-    fig.update_yaxes(title_text="Power (W)")
+    fig.update_yaxes(title_text=y_axis_title)
     fig.update_xaxes(title_text="Time")
     fig.show()
     fig.write_image(

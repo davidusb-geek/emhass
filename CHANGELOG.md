@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.12.7 - 2025-02-16
+### Improvement
+- A first batch of improvements (code reliability) proposed by SonarQube
+### Fix
+- Added missing files to Dockerfile
+- Changes to the Dockerfile to make `/app/data` folder persistent. Thanks to @scruysberghs
+- Fixing errors with missing sensor `power_load_no_var_loads`. Thanks to @scruysberghs
+- Improved documentation and fixed automated testing for code quality. Thanks to @GeoDerp
+
+## 0.12.6 - 2025-02-09
+### Improvement
+- Improved warning message in case of wrong URL setting
+- Improved testing on typical load forecast method with different time steps
+### Fix
+- Solved missing file problem: data_load_cost_forecast.csv
+- Fixed warning issue on `findall` method
+
 ## 0.12.5 - 2025-02-02
 ### Improvement
 - Implemented new package manager uv resulting in faster builds. Thanks to @GeoDerp

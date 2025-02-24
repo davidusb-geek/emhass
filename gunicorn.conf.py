@@ -8,3 +8,4 @@ threads = int(os.getenv("PYTHON_MAX_THREADS", 8))
 reload = (os.getenv("WEB_RELOAD", "true").lower()) == "true"
 
 timeout = int(os.getenv("WEB_TIMEOUT", 240))
+graceful_timeout = 60
