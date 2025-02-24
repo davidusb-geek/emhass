@@ -14,7 +14,7 @@ Some methods are generalized to the 4 forecasts needed. For all the forecasts it
     
 Then there are the methods that are specific to each type of forecast and that proposed forecast is treated and generated internally by this EMHASS forecast class. 
 
-For the **weather forecast**, the first method (`scrapper`) uses scrapping to the ClearOutside webpage which proposes detailed forecasts based on Lat/Lon locations. Another method (`solcast`) is using the Solcast PV production forecast service. A final method (`solar.forecast`) is using another external service: Solar.Forecast, for which just the nominal PV peak installed power should be provided. Search the forecast section on the documentation for examples of how to implement these different methods.
+For the **weather forecast**, the first method (`open-meteo`) uses Open-Meteo weather forecast API, which proposes detailed forecasts based on Lat/Lon locations. Another method (`solcast`) is using the Solcast PV production forecast service. A final method (`solar.forecast`) is using another external service: Solar.Forecast, for which just the nominal PV peak installed power should be provided. Search the forecast section on the documentation for examples of how to implement these different methods.
 
 The `get_power_from_weather` method is proposed here to convert irradiance data to electrical power. The PVLib module is used to model the PV plant. A dedicated web app will help you search for your correct PV module and inverter: [https://emhass-pvlib-database.streamlit.app/](https://emhass-pvlib-database.streamlit.app/)
 
@@ -31,9 +31,9 @@ For the PV production selling price and Load cost forecasts the privileged metho
 
 ## PV power production forecast
 
-#### scrapper 
+#### open-meteo 
 
-The default method for PV power forecast is the scrapping of weather forecast data from the [https://clearoutside.com/](https://clearoutside.com/) website. This is obtained using `method=scrapper`. This site proposes detailed forecasts based on Lat/Lon locations. This method seems quite stable but as with any scrape method, it will fail if any changes are made to the webpage API. The weather forecast data is then converted into PV power production using the `list_pv_module_model` and `list_pv_inverter_model` parameters defined in the configuration.
+The default method for PV power forecast is the weather forecast API proposed by [Open-Meteo](https://open-meteo.com/). For more detail see the [Open-Meteo API documentation](https://open-meteo.com/en/docs). This is obtained using `method=open-meteo`. This site proposes detailed forecasts based on Lat/Lon locations. The weather forecast data is then converted into PV power production using the `list_pv_module_model` and `list_pv_inverter_model` parameters defined in the configuration.
 
 #### solcast 
 
