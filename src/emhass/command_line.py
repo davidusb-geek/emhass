@@ -1477,7 +1477,7 @@ def publish_json(
         data_df=entity_data[metadata[entity_id]["name"]],
         idx=idx_closest,
         entity_id=entity_id,
-        device_class=metadata[entity_id]["device_class"],
+        device_class=dict.get(metadata[entity_id],"device_class"),
         unit_of_measurement=metadata[entity_id]["unit_of_measurement"],
         friendly_name=metadata[entity_id]["friendly_name"],
         type_var=metadata[entity_id].get("type_var", ""),
