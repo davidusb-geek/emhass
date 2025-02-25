@@ -603,6 +603,7 @@ class RetrieveHass:
             data = {
                 "state": state,
                 "attributes": {
+                    "device_class": device_class,
                     "unit_of_measurement": unit_of_measurement,
                     "friendly_name": friendly_name,
                 },
@@ -611,6 +612,7 @@ class RetrieveHass:
             data = {
                 "state": state,
                 "attributes": {
+                    "device_class": device_class,
                     "unit_of_measurement": unit_of_measurement,
                     "friendly_name": friendly_name,
                 },

@@ -798,6 +798,9 @@ def forecast_model_predict(
     model_predict_entity_id = input_data_dict["params"]["passed_data"][
         "model_predict_entity_id"
     ]
+    model_predict_device_class = input_data_dict["params"]["passed_data"][
+        "model_predict_device_class"
+    ]
     model_predict_unit_of_measurement = input_data_dict["params"]["passed_data"][
         "model_predict_unit_of_measurement"
     ]
@@ -831,7 +834,7 @@ def forecast_model_predict(
             predictions,
             idx_closest,
             model_predict_entity_id,
-            "",
+            model_predict_device_class,
             model_predict_unit_of_measurement,
             model_predict_friendly_name,
             type_var="mlforecaster",
@@ -985,8 +988,11 @@ def regressor_model_predict(
     mlr_predict_entity_id = input_data_dict["params"]["passed_data"].get(
         "mlr_predict_entity_id", "sensor.mlr_predict"
     )
+    mlr_predict_device_class = input_data_dict["params"]["passed_data"].get(
+        "mlr_predict_device_class", "power"
+    )
     mlr_predict_unit_of_measurement = input_data_dict["params"]["passed_data"].get(
-        "mlr_predict_unit_of_measurement", "h"
+        "mlr_predict_unit_of_measurement", "W"
     )
     mlr_predict_friendly_name = input_data_dict["params"]["passed_data"].get(
         "mlr_predict_friendly_name", "mlr predictor"
@@ -998,7 +1004,7 @@ def regressor_model_predict(
             prediction,
             idx,
             mlr_predict_entity_id,
-            "",
+            mlr_predict_device_class,
             mlr_predict_unit_of_measurement,
             mlr_predict_friendly_name,
             type_var="mlregressor",
