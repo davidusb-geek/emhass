@@ -229,6 +229,10 @@ class Forecast(object):
         )
 
         self.logger.info("Retrieving weather forecast data using method = " + method)
+        if method == "scrapper":
+            self.logger.warning(
+                "The scrapper method has been deprecated and the keyword is accepted just for backward compatibility, please change the PV forecast method to open-meteo"
+            )
         self.weather_forecast_method = (
             method  # Saving this attribute for later use to identify csv method usage
         )
