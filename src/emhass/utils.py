@@ -266,6 +266,7 @@ def treat_runtimeparams(
         custom_deferrable_forecast_id.append(
             {
                 "entity_id": "sensor.p_deferrable{}".format(k),
+                "device_class": "power",
                 "unit_of_measurement": "W",
                 "friendly_name": "Deferrable Load {}".format(k),
             }
@@ -273,6 +274,7 @@ def treat_runtimeparams(
         custom_predicted_temperature_id.append(
             {
                 "entity_id": "sensor.temp_predicted{}".format(k),
+                "device_class": "temperature",
                 "unit_of_measurement": default_temperature_unit,
                 "friendly_name": "Predicted temperature {}".format(k),
             }
@@ -280,56 +282,67 @@ def treat_runtimeparams(
     default_passed_dict = {
         "custom_pv_forecast_id": {
             "entity_id": "sensor.p_pv_forecast",
+            "device_class": "power",
             "unit_of_measurement": "W",
             "friendly_name": "PV Power Forecast",
         },
         "custom_load_forecast_id": {
             "entity_id": "sensor.p_load_forecast",
+            "device_class": "power",
             "unit_of_measurement": "W",
             "friendly_name": "Load Power Forecast",
         },
         "custom_pv_curtailment_id": {
             "entity_id": "sensor.p_pv_curtailment",
+            "device_class": "power",
             "unit_of_measurement": "W",
             "friendly_name": "PV Power Curtailment",
         },
         "custom_hybrid_inverter_id": {
             "entity_id": "sensor.p_hybrid_inverter",
+            "device_class": "power",
             "unit_of_measurement": "W",
             "friendly_name": "PV Hybrid Inverter",
         },
         "custom_batt_forecast_id": {
             "entity_id": "sensor.p_batt_forecast",
+            "device_class": "power",
             "unit_of_measurement": "W",
             "friendly_name": "Battery Power Forecast",
         },
         "custom_batt_soc_forecast_id": {
             "entity_id": "sensor.soc_batt_forecast",
+            "device_class": "battery",
             "unit_of_measurement": "%",
             "friendly_name": "Battery SOC Forecast",
         },
         "custom_grid_forecast_id": {
             "entity_id": "sensor.p_grid_forecast",
+            "device_class": "power",
             "unit_of_measurement": "W",
             "friendly_name": "Grid Power Forecast",
         },
         "custom_cost_fun_id": {
             "entity_id": "sensor.total_cost_fun_value",
+            "device_class": "monetary",
             "unit_of_measurement": default_currency_unit,
             "friendly_name": "Total cost function value",
         },
         "custom_optim_status_id": {
             "entity_id": "sensor.optim_status",
+            "device_class": "",
             "unit_of_measurement": "",
             "friendly_name": "EMHASS optimization status",
         },
         "custom_unit_load_cost_id": {
             "entity_id": "sensor.unit_load_cost",
+            "device_class": "monetary",
             "unit_of_measurement": f"{default_currency_unit}/kWh",
             "friendly_name": "Unit Load Cost",
         },
         "custom_unit_prod_price_id": {
             "entity_id": "sensor.unit_prod_price",
+            "device_class": "monetary",
             "unit_of_measurement": f"{default_currency_unit}/kWh",
             "friendly_name": "Unit Prod Price",
         },
@@ -656,6 +669,15 @@ def treat_runtimeparams(
         else:
             model_predict_entity_id = runtimeparams["model_predict_entity_id"]
         params["passed_data"]["model_predict_entity_id"] = model_predict_entity_id
+        if "model_predict_device_class" not in runtimeparams.keys():
+            model_predict_device_class = "power"
+        else:
+            model_predict_device_class = runtimeparams[
+                "model_predict_device_class"
+            ]
+        params["passed_data"]["model_predict_device_class"] = (
+            model_predict_device_class
+        )
         if "model_predict_unit_of_measurement" not in runtimeparams.keys():
             model_predict_unit_of_measurement = "W"
         else:
@@ -677,6 +699,15 @@ def treat_runtimeparams(
         else:
             mlr_predict_entity_id = runtimeparams["mlr_predict_entity_id"]
         params["passed_data"]["mlr_predict_entity_id"] = mlr_predict_entity_id
+        if "mlr_predict_device_class" not in runtimeparams.keys():
+            mlr_predict_device_class = "power"
+        else:
+            mlr_predict_device_class = runtimeparams[
+                "mlr_predict_device_class"
+            ]
+        params["passed_data"]["mlr_predict_device_class"] = (
+            mlr_predict_device_class
+        )
         if "mlr_predict_unit_of_measurement" not in runtimeparams.keys():
             mlr_predict_unit_of_measurement = None
         else:
