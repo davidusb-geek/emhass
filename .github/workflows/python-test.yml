@@ -37,6 +37,8 @@ jobs:
         run: |
           source .venv/bin/activate
           brew install hdf5
+          brew install glpk
+          brew install cbc
           uv pip install numpy==2.0.0
           uv pip install tables==3.10.2
           uv pip install pulp==3.0.2
