@@ -252,7 +252,8 @@ class Forecast(object):
                     + "shortwave_radiation_instant,"
                     + "diffuse_radiation_instant,"
                     + "direct_normal_irradiance_instant"
-                    + "&timezone=" + quote(str(self.time_zone), safe="")
+                    + "&timezone="
+                    + quote(str(self.time_zone), safe="")
                 )
                 response = get(url, headers=headers)
                 """import bz2 # Uncomment to save a serialized data for tests
@@ -289,12 +290,16 @@ class Forecast(object):
                 )
                 data = set_df_index_freq(data)
                 index_utc = data.index.tz_convert("utc")
-                index_tz = index_utc.round(freq = data.index.freq, ambiguous="infer", nonexistent="shift_forward").tz_convert(self.time_zone)
+                index_tz = index_utc.round(
+                    freq=data.index.freq, ambiguous="infer", nonexistent="shift_forward"
+                ).tz_convert(self.time_zone)
                 data.index = index_tz
                 data = set_df_index_freq(data)
 
                 # Convert mm to cm and clip the minimum value to 0.1 cm as expected by PVLib
-                data['precipitable_water'] = (data['precipitable_water'] / 10).clip(lower=0.1)
+                data["precipitable_water"] = (data["precipitable_water"] / 10).clip(
+                    lower=0.1
+                )
 
                 if use_legacy_pvlib:
                     # Converting the cloud cover into Global Horizontal Irradiance with a PVLib method
@@ -308,12 +313,16 @@ class Forecast(object):
                 if self.params["passed_data"].get("weather_forecast_cache", False):
                     data = self.set_cached_forecast_data(w_forecast_cache_path, data)
             # Else, open stored weather_forecast_data.pkl file for previous forecast data (cached data)
+            # Trim data to match the current required dates
             else:
                 data = self.get_cached_forecast_data(w_forecast_cache_path)
 
         elif method == "solcast":  # using Solcast API
             # Check if weather_forecast_cache is true or if forecast_data file does not exist
-            if not os.path.isfile(w_forecast_cache_path):
+            if os.path.isfile(w_forecast_cache_path):
+                data = self.get_cached_forecast_data(w_forecast_cache_path)
+            # open stored weather_forecast_data.pkl file for previous forecast data (cached data)
+            else:
                 # Check if weather_forecast_cache_only is true, if so produce error for not finding cache file
                 if self.params["passed_data"].get("weather_forecast_cache_only", False):
                     self.logger.error("Unable to obtain Solcast cache file.")
@@ -408,82 +417,88 @@ class Forecast(object):
                     # Define index
                     data.set_index("ts", inplace=True)
                     # If runtime weather_forecast_cache is true save forecast result to file as cache
+                    # Trim data to match the current required dates
                     if self.params["passed_data"].get("weather_forecast_cache", False):
                         data = self.set_cached_forecast_data(
                             w_forecast_cache_path, data
                         )
 
-            # Else, open stored weather_forecast_data.pkl file for previous forecast data (cached data)
-            else:
-                data = self.get_cached_forecast_data(w_forecast_cache_path)
-
         elif method == "solar.forecast":  # using the solar.forecast API
             # Retrieve data from the solar.forecast API
-            if "solar_forecast_kwp" not in self.retrieve_hass_conf:
-                self.logger.warning(
-                    "The solar_forecast_kwp parameter was not defined, using dummy values for testing"
-                )
-                self.retrieve_hass_conf["solar_forecast_kwp"] = 5
-            if self.retrieve_hass_conf["solar_forecast_kwp"] == 0:
-                self.logger.warning(
-                    "The solar_forecast_kwp parameter is set to zero, setting to default 5"
-                )
-                self.retrieve_hass_conf["solar_forecast_kwp"] = 5
-            if self.optim_conf["delta_forecast_daily"].days > 1:
-                self.logger.warning(
-                    "The free public tier for solar.forecast only provides one day forecasts"
-                )
-                self.logger.warning(
-                    "Continuing with just the first day of data, the other days are filled with 0.0."
-                )
-                self.logger.warning(
-                    "Use the other available methods for delta_forecast_daily > 1"
-                )
-            headers = {"Accept": "application/json"}
-            data = pd.DataFrame()
-            for i in range(len(self.plant_conf["pv_module_model"])):
-                url = (
-                    "https://api.forecast.solar/estimate/"
-                    + str(round(self.lat, 2))
-                    + "/"
-                    + str(round(self.lon, 2))
-                    + "/"
-                    + str(self.plant_conf["surface_tilt"][i])
-                    + "/"
-                    + str(self.plant_conf["surface_azimuth"][i] - 180)
-                    + "/"
-                    + str(self.retrieve_hass_conf["solar_forecast_kwp"])
-                )
-                response = get(url, headers=headers)
-                """import bz2 # Uncomment to save a serialized data for tests
-                import _pickle as cPickle
-                with bz2.BZ2File("data/test_response_solarforecast_get_method.pbz2", "w") as f: 
-                    cPickle.dump(response.json(), f)"""
-                data_raw = response.json()
-                data_dict = {
-                    "ts": list(data_raw["result"]["watts"].keys()),
-                    "yhat": list(data_raw["result"]["watts"].values()),
-                }
-                # Form the final DataFrame
-                data_tmp = pd.DataFrame.from_dict(data_dict)
-                data_tmp.set_index("ts", inplace=True)
-                data_tmp.index = pd.to_datetime(data_tmp.index)
-                data_tmp = data_tmp.tz_localize(self.forecast_dates.tz)
-                data_tmp = data_tmp.reindex(index=self.forecast_dates)
-                mask_up_data_df = (
-                    data_tmp.copy(deep=True).fillna(method="ffill").isnull()
-                )
-                mask_down_data_df = (
-                    data_tmp.copy(deep=True).fillna(method="bfill").isnull()
-                )
-                data_tmp.loc[mask_up_data_df["yhat"], :] = 0.0
-                data_tmp.loc[mask_down_data_df["yhat"], :] = 0.0
-                data_tmp.interpolate(inplace=True, limit=1)
-                data_tmp = data_tmp.fillna(0.0)
-                if len(data) == 0:
-                    data = copy.deepcopy(data_tmp)
-                else:
-                    data = data + data_tmp
+            if os.path.isfile(w_forecast_cache_path):
+                data = self.get_cached_forecast_data(w_forecast_cache_path)
+            else:
+                if "solar_forecast_kwp" not in self.retrieve_hass_conf:
+                    self.logger.warning(
+                        "The solar_forecast_kwp parameter was not defined, using dummy values for testing"
+                    )
+                    self.retrieve_hass_conf["solar_forecast_kwp"] = 5
+                if self.retrieve_hass_conf["solar_forecast_kwp"] == 0:
+                    self.logger.warning(
+                        "The solar_forecast_kwp parameter is set to zero, setting to default 5"
+                    )
+                    self.retrieve_hass_conf["solar_forecast_kwp"] = 5
+                if self.optim_conf["delta_forecast_daily"].days > 1:
+                    self.logger.warning(
+                        "The free public tier for solar.forecast only provides one day forecasts"
+                    )
+                    self.logger.warning(
+                        "Continuing with just the first day of data, the other days are filled with 0.0."
+                    )
+                    self.logger.warning(
+                        "Use the other available methods for delta_forecast_daily > 1"
+                    )
+                headers = {"Accept": "application/json"}
+                data = pd.DataFrame()
+                for i in range(len(self.plant_conf["pv_module_model"])):
+                    url = (
+                        "https://api.forecast.solar/estimate/"
+                        + str(round(self.lat, 2))
+                        + "/"
+                        + str(round(self.lon, 2))
+                        + "/"
+                        + str(self.plant_conf["surface_tilt"][i])
+                        + "/"
+                        + str(self.plant_conf["surface_azimuth"][i] - 180)
+                        + "/"
+                        + str(self.retrieve_hass_conf["solar_forecast_kwp"])
+                    )
+                    response = get(url, headers=headers)
+                    """import bz2 # Uncomment to save a serialized data for tests
+                    import _pickle as cPickle
+                    with bz2.BZ2File("data/test_response_solarforecast_get_method.pbz2", "w") as f: 
+                        cPickle.dump(response.json(), f)"""
+                    data_raw = response.json()
+                    data_dict = {
+                        "ts": list(data_raw["result"]["watts"].keys()),
+                        "yhat": list(data_raw["result"]["watts"].values()),
+                    }
+                    # Form the final DataFrame
+                    data_tmp = pd.DataFrame.from_dict(data_dict)
+                    data_tmp.set_index("ts", inplace=True)
+                    data_tmp.index = pd.to_datetime(data_tmp.index)
+                    data_tmp = data_tmp.tz_localize(self.forecast_dates.tz)
+                    data_tmp = data_tmp.reindex(index=self.forecast_dates)
+                    mask_up_data_df = (
+                        data_tmp.copy(deep=True).fillna(method="ffill").isnull()
+                    )
+                    mask_down_data_df = (
+                        data_tmp.copy(deep=True).fillna(method="bfill").isnull()
+                    )
+                    data_tmp.loc[mask_up_data_df["yhat"], :] = 0.0
+                    data_tmp.loc[mask_down_data_df["yhat"], :] = 0.0
+                    data_tmp.interpolate(inplace=True, limit=1)
+                    data_tmp = data_tmp.fillna(0.0)
+                    if len(data) == 0:
+                        data = copy.deepcopy(data_tmp)
+                    else:
+                        data = data + data_tmp
+                    # If runtime weather_forecast_cache is true save forecast result to file as cache.
+                    # Trim data to match the current required dates
+                    if self.params["passed_data"].get("weather_forecast_cache", False):
+                        data = self.set_cached_forecast_data(
+                            w_forecast_cache_path, data
+                        )
         elif method == "csv":  # reading from a csv file
             weather_csv_file_path = csv_path
             # Loading the csv file, we will consider that this is the PV power in W
