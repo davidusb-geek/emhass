@@ -455,6 +455,7 @@ class TestCommandLineUtils(unittest.TestCase):
             opt_res["optim_status"],
             idx_closest,
             custom_cost_fun_id["entity_id"],
+            "",
             custom_cost_fun_id["unit_of_measurement"],
             custom_cost_fun_id["friendly_name"],
             type_var="optim_status",

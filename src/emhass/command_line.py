@@ -798,6 +798,9 @@ def forecast_model_predict(
     model_predict_entity_id = input_data_dict["params"]["passed_data"][
         "model_predict_entity_id"
     ]
+    model_predict_device_class = input_data_dict["params"]["passed_data"][
+        "model_predict_device_class"
+    ]
     model_predict_unit_of_measurement = input_data_dict["params"]["passed_data"][
         "model_predict_unit_of_measurement"
     ]
@@ -831,6 +834,7 @@ def forecast_model_predict(
             predictions,
             idx_closest,
             model_predict_entity_id,
+            model_predict_device_class,
             model_predict_unit_of_measurement,
             model_predict_friendly_name,
             type_var="mlforecaster",
@@ -984,8 +988,11 @@ def regressor_model_predict(
     mlr_predict_entity_id = input_data_dict["params"]["passed_data"].get(
         "mlr_predict_entity_id", "sensor.mlr_predict"
     )
+    mlr_predict_device_class = input_data_dict["params"]["passed_data"].get(
+        "mlr_predict_device_class", "power"
+    )
     mlr_predict_unit_of_measurement = input_data_dict["params"]["passed_data"].get(
-        "mlr_predict_unit_of_measurement", "h"
+        "mlr_predict_unit_of_measurement", "W"
     )
     mlr_predict_friendly_name = input_data_dict["params"]["passed_data"].get(
         "mlr_predict_friendly_name", "mlr predictor"
@@ -997,6 +1004,7 @@ def regressor_model_predict(
             prediction,
             idx,
             mlr_predict_entity_id,
+            mlr_predict_device_class,
             mlr_predict_unit_of_measurement,
             mlr_predict_friendly_name,
             type_var="mlregressor",
@@ -1125,6 +1133,7 @@ def publish_data(
         opt_res_latest["P_PV"],
         idx_closest,
         custom_pv_forecast_id["entity_id"],
+        "power",
         custom_pv_forecast_id["unit_of_measurement"],
         custom_pv_forecast_id["friendly_name"],
         type_var="power",
@@ -1138,6 +1147,7 @@ def publish_data(
         opt_res_latest["P_Load"],
         idx_closest,
         custom_load_forecast_id["entity_id"],
+        "power",
         custom_load_forecast_id["unit_of_measurement"],
         custom_load_forecast_id["friendly_name"],
         type_var="power",
@@ -1153,6 +1163,7 @@ def publish_data(
             opt_res_latest["P_PV_curtailment"],
             idx_closest,
             custom_pv_curtailment_id["entity_id"],
+            "power",
             custom_pv_curtailment_id["unit_of_measurement"],
             custom_pv_curtailment_id["friendly_name"],
             type_var="power",
@@ -1168,6 +1179,7 @@ def publish_data(
             opt_res_latest["P_hybrid_inverter"],
             idx_closest,
             custom_hybrid_inverter_id["entity_id"],
+            "power",
             custom_hybrid_inverter_id["unit_of_measurement"],
             custom_hybrid_inverter_id["friendly_name"],
             type_var="power",
@@ -1191,6 +1203,7 @@ def publish_data(
                 opt_res_latest["P_deferrable{}".format(k)],
                 idx_closest,
                 custom_deferrable_forecast_id[k]["entity_id"],
+                "power",
                 custom_deferrable_forecast_id[k]["unit_of_measurement"],
                 custom_deferrable_forecast_id[k]["friendly_name"],
                 type_var="deferrable",
@@ -1213,6 +1226,7 @@ def publish_data(
                     opt_res_latest["predicted_temp_heater{}".format(k)],
                     idx_closest,
                     custom_predicted_temperature_id[k]["entity_id"],
+                    "temperature",
                     custom_predicted_temperature_id[k]["unit_of_measurement"],
                     custom_predicted_temperature_id[k]["friendly_name"],
                     type_var="temperature",
@@ -1233,6 +1247,7 @@ def publish_data(
                 opt_res_latest["P_batt"],
                 idx_closest,
                 custom_batt_forecast_id["entity_id"],
+                "power",
                 custom_batt_forecast_id["unit_of_measurement"],
                 custom_batt_forecast_id["friendly_name"],
                 type_var="batt",
@@ -1248,6 +1263,7 @@ def publish_data(
                 opt_res_latest["SOC_opt"] * 100,
                 idx_closest,
                 custom_batt_soc_forecast_id["entity_id"],
+                "battery",
                 custom_batt_soc_forecast_id["unit_of_measurement"],
                 custom_batt_soc_forecast_id["friendly_name"],
                 type_var="SOC",
@@ -1262,6 +1278,7 @@ def publish_data(
         opt_res_latest["P_grid"],
         idx_closest,
         custom_grid_forecast_id["entity_id"],
+        "power",
         custom_grid_forecast_id["unit_of_measurement"],
         custom_grid_forecast_id["friendly_name"],
         type_var="power",
@@ -1277,6 +1294,7 @@ def publish_data(
         opt_res_latest[col_cost_fun],
         idx_closest,
         custom_cost_fun_id["entity_id"],
+        "monetary",
         custom_cost_fun_id["unit_of_measurement"],
         custom_cost_fun_id["friendly_name"],
         type_var="cost_fun",
@@ -1297,6 +1315,7 @@ def publish_data(
             opt_res_latest["optim_status"],
             idx_closest,
             custom_cost_fun_id["entity_id"],
+            "",
             custom_cost_fun_id["unit_of_measurement"],
             custom_cost_fun_id["friendly_name"],
             type_var="optim_status",
@@ -1311,6 +1330,7 @@ def publish_data(
         opt_res_latest["unit_load_cost"],
         idx_closest,
         custom_unit_load_cost_id["entity_id"],
+        "monetary",
         custom_unit_load_cost_id["unit_of_measurement"],
         custom_unit_load_cost_id["friendly_name"],
         type_var="unit_load_cost",
@@ -1325,6 +1345,7 @@ def publish_data(
         opt_res_latest["unit_prod_price"],
         idx_closest,
         custom_unit_prod_price_id["entity_id"],
+        "monetary",
         custom_unit_prod_price_id["unit_of_measurement"],
         custom_unit_prod_price_id["friendly_name"],
         type_var="unit_prod_price",
@@ -1462,6 +1483,7 @@ def publish_json(
         data_df=entity_data[metadata[entity_id]["name"]],
         idx=idx_closest,
         entity_id=entity_id,
+        device_class=dict.get(metadata[entity_id],"device_class"),
         unit_of_measurement=metadata[entity_id]["unit_of_measurement"],
         friendly_name=metadata[entity_id]["friendly_name"],
         type_var=metadata[entity_id].get("type_var", ""),
