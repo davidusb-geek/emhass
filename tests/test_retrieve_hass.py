@@ -282,6 +282,7 @@ class TestRetrieveHass(unittest.TestCase):
             self.df_raw[self.df_raw.columns[0]],
             25,
             "sensor.p_pv_forecast",
+            "power",
             "Unit",
             "Variable",
             type_var="power",
@@ -303,7 +304,13 @@ class TestRetrieveHass(unittest.TestCase):
         df["P_batt"] = 1000.0
         df["SOC_opt"] = 0.5
         response, data = self.rh.post_data(
-            df["P_PV"], 25, "sensor.p_pv_forecast", "W", "PV Forecast", type_var="power"
+            df["P_PV"], 
+            25, 
+            "sensor.p_pv_forecast", 
+            "power",
+            "W", 
+            "PV Forecast", 
+            type_var="power"
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(
@@ -316,6 +323,7 @@ class TestRetrieveHass(unittest.TestCase):
             df["P_batt"],
             25,
             "sensor.p_batt_forecast",
+            "power",
             "W",
             "Battery Power Forecast",
             type_var="batt",
@@ -327,6 +335,7 @@ class TestRetrieveHass(unittest.TestCase):
             df["SOC_opt"],
             25,
             "sensor.SOC_forecast",
+            "battery",
             "%",
             "Battery SOC Forecast",
             type_var="SOC",
