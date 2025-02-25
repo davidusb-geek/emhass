@@ -37,7 +37,7 @@ jobs:
           brew install hdf5
           uv pip install numpy==2.0.0
           uv pip install tables==3.10.2
-          uv pip install pulp==3.2.0
+          uv pip install pulp==3.0.2
           uv run pulptest
         if: ${{ matrix.os == 'macos-latest' }}
       - name: Install EMHASS with test dependencies
