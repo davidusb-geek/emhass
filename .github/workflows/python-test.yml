@@ -30,19 +30,22 @@ jobs:
         with:
           python-version-file: ".python-version"
       - name: Set up Python venv
-        run: uv venv
+        run: uv venv && source .venv/bin/activate
       - name: Special dependencies for macos
         run: |
+          source .venv/bin/activate
           brew install hdf5
           uv pip install numpy==2.0.0
           uv pip install tables==3.10.2
+          uv pip install pulp==3.2.0
+          uv run pulptest
         if: ${{ matrix.os == 'macos-latest' }}
       - name: Install EMHASS with test dependencies
         run: |
-          uv sync --reinstall --extra test
+          source .venv/bin/activate && uv sync --reinstall --extra test
       - name: Test with pytest
         run: |
-          uv run pytest
+          source .venv/bin/activate uv run pytest
   scan-pr:
     needs:
       - build
