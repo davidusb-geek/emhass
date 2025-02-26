@@ -239,6 +239,7 @@ def set_input_data_dict(
             or (optim_conf.get("load_forecast_method", None) == "list"
                 and not(optim_conf["set_use_pv"]))
         ):
+            days_list = None
             set_mix_forecast = False
             df_input_data = None
         else:
