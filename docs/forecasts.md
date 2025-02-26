@@ -14,7 +14,7 @@ Some methods are generalized to the 4 forecasts needed. For all the forecasts it
     
 Then there are the methods that are specific to each type of forecast and that proposed forecast is treated and generated internally by this EMHASS forecast class. 
 
-For the **weather forecast**, the first method (`scrapper`) uses scrapping to the ClearOutside webpage which proposes detailed forecasts based on Lat/Lon locations. Another method (`solcast`) is using the Solcast PV production forecast service. A final method (`solar.forecast`) is using another external service: Solar.Forecast, for which just the nominal PV peak installed power should be provided. Search the forecast section on the documentation for examples of how to implement these different methods.
+For the **weather forecast**, the first method (`open-meteo`) uses Open-Meteo weather forecast API, which proposes detailed forecasts based on Lat/Lon locations. Another method (`solcast`) is using the Solcast PV production forecast service. A final method (`solar.forecast`) is using another external service: Solar.Forecast, for which just the nominal PV peak installed power should be provided. Search the forecast section on the documentation for examples of how to implement these different methods.
 
 The `get_power_from_weather` method is proposed here to convert irradiance data to electrical power. The PVLib module is used to model the PV plant. A dedicated web app will help you search for your correct PV module and inverter: [https://emhass-pvlib-database.streamlit.app/](https://emhass-pvlib-database.streamlit.app/)
 
@@ -31,9 +31,9 @@ For the PV production selling price and Load cost forecasts the privileged metho
 
 ## PV power production forecast
 
-#### scrapper 
+#### open-meteo 
 
-The default method for PV power forecast is the scrapping of weather forecast data from the [https://clearoutside.com/](https://clearoutside.com/) website. This is obtained using `method=scrapper`. This site proposes detailed forecasts based on Lat/Lon locations. This method seems quite stable but as with any scrape method, it will fail if any changes are made to the webpage API. The weather forecast data is then converted into PV power production using the `list_pv_module_model` and `list_pv_inverter_model` parameters defined in the configuration.
+The default method for PV power forecast is the weather forecast API proposed by [Open-Meteo](https://open-meteo.com/). For more detail see the [Open-Meteo API documentation](https://open-meteo.com/en/docs). This is obtained using `method=open-meteo`. This site proposes detailed forecasts based on Lat/Lon locations. The weather forecast data is then converted into PV power production using the `list_pv_module_model` and `list_pv_inverter_model` parameters defined in the configuration.
 
 #### solcast 
 
@@ -50,35 +50,6 @@ curl -i -H "Content-Type:application/json" -X POST -d '{"solcast_rooftop_id":"<y
 ```
 </br>
 
-##### Caching Solcast
-For those who use the free plan and wish to use Solcast with MPC, you may like to cache the output of a Solcast weather forecast request, then reference it in your automated MPC actions:
-
-```bash
-# Run weather forecast and cache results (Recommended to run this 1-10 times a day, throughout the day)
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/weather-forecast-cache
-
-# Then run your regular MPC call (E.g. every 5 minutes)
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/naive-mpc-optim
-```
-EMHASS will see the saved Solcast cache and use its data over pulling from Solcast.
-
-`weather_forecast_cache` can also be provided in an optimization to save the forecast results to cache:
-```bash
-# Example of running day-ahead and optimization storing the retrieved Solcast data to cache
-curl -i -H 'Content-Type:application/json' -X POST -d '{"weather_forecast_cache":true}' http://localhost:5000/action/dayahead-optim
-```
-
-By default, if EMHASS finds a problem with the Solcast cache file, the cache will be automatically deleted. Due to the missing cache, the next optimization will run and pull data from Solcast.
-If you wish to make sure that a certain optimization will only use the cached data, (otherwise present an error) the runtime parameter `weather_forecast_cache_only` can be used:
-```bash
-# Run the weather forecast action 1-10 times a day 
-curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/weather-forecast-cache
-
-# Then run your regular MPC call (E.g. every 5 minutes) and make sure it only uses the Solcast cache. (do not pull from Solcast)
-curl -i -H 'Content-Type:application/json' -X POST -d '{"weather_forecast_cache_only":true}' http://localhost:5000/action/naive-mpc-optim
-```
-
-
 #### solar.forecast 
 
 A third method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the PV peak installed power in kW) that should be passed at runtime. This will be using the free public Solar.Forecast account with 12 API requests per hour, per IP, and 1h data resolution. As with Solcast, there are paid account services that may result in better forecasts.
@@ -91,6 +62,36 @@ curl -i -H "Content-Type:application/json" -X POST -d '{"solar_forecast_kwp":5}'
 ```{note} 
 
 If you use the Solar.Forecast or Solcast methods, or explicitly pass the PV power forecast values (see below), the list_pv_module_model and list_pv_inverter_model parameters defined in the configuration will be ignored.
+```
+
+##### Caching PV Forecast
+For the MPC users, running optimizations regularly; You may wish to cache your PV forecast results, to reuse throughout the day.
+Partially for those who use the free plan of Solcast, Caching can help reduce the amount of calls bellow 10 a day.
+Caching Forecast data will also speed up the forecast process, bypassing the need to call to the external forecast API each MPC run. 
+
+```bash
+# Run weather forecast and cache results (Recommended to run this 1-10 times a day, throughout the day)
+curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/weather-forecast-cache
+
+# Then run your regular MPC call (E.g. every 5 minutes)
+curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/naive-mpc-optim
+```
+EMHASS will see the saved cache file and use its data over pulling new data from the API.
+
+`weather_forecast_cache` can also be provided as a runtime parameter, in an optimization, to save the forecast results to cache:
+```bash
+# Example of running day-ahead and optimization storing the retrieved Solcast data to cache
+curl -i -H 'Content-Type:application/json' -X POST -d '{"weather_forecast_cache":true}' http://localhost:5000/action/dayahead-optim
+```
+
+By default, if EMHASS finds a problem with the cache file, the cache will be automatically deleted. Due to the missing cache, the next optimization will run and pull data from the External API.
+For Solcast only, If you wish to make sure that a certain optimization will only use the cached data, (otherwise present an error) the runtime parameter `weather_forecast_cache_only` can be used:
+```bash
+# Run the weather forecast action 1-10 times a day 
+curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/weather-forecast-cache
+
+# Then run your regular MPC call (E.g. every 5 minutes) and make sure it only uses the Solcast cache. (do not pull from Solcast)
+curl -i -H 'Content-Type:application/json' -X POST -d '{"weather_forecast_cache_only":true}' http://localhost:5000/action/naive-mpc-optim
 ```
 
 ## Load power forecast
