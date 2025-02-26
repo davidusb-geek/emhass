@@ -1,5 +1,14 @@
 # Changelog
 
+# Unreleased
+### Improvement
+- Added a new method for weather forecast: open-meteo. This offers a very nice API to obtain weather forecasts. We are dropping the old scrapper method, if you were using the scapper method you just need to change the Weather forecast method to open-meteo
+- Added support to `device_class` definition when posting sensors to HA. Thanks to @paulhomes for this contribution
+- Improved github workflow Python testing
+- Updated documentation
+### Fix
+- Fixed TZ shift issue when using the typical load power forecaster
+
 ## 0.12.7 - 2025-02-16
 ### Improvement
 - A first batch of improvements (code reliability) proposed by SonarQube

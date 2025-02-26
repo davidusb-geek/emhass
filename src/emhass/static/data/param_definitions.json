@@ -134,7 +134,7 @@
     },
     "weather_forecast_method": {
       "friendly_name": "Weather forecast method",
-      "Description": "This will define the weather forecast method that will be used. options are 'scrapper' (ClearOutside), 'Solcast', 'solar.forecast' (forecast.solar) and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts.",
+      "Description": "This will define the weather forecast method that will be used. options are 'open-meteo', 'Solcast', 'solar.forecast' (forecast.solar) and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts.",
       "input": "select",
       "select_options": [
         "open-meteo",
