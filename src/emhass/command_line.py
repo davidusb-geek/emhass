@@ -233,41 +233,64 @@ def set_input_data_dict(
         # What we don't need for this type of action
         df_input_data, days_list = None, None
     elif set_type == "naive-mpc-optim":
-        # Retrieve data from hass
-        if get_data_from_file:
-            with open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
-                rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
-            retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
-            retrieve_hass_conf["sensor_power_photovoltaics"] = str(var_list[1])
-            retrieve_hass_conf["sensor_linear_interp"] = [
-                retrieve_hass_conf["sensor_power_photovoltaics"],
-                retrieve_hass_conf["sensor_power_load_no_var_loads"],
-            ]
-            retrieve_hass_conf["sensor_replace_zero"] = [
-                retrieve_hass_conf["sensor_power_photovoltaics"]
-            ]
+        if (
+            (optim_conf.get("load_forecast_method", None) == "list"
+                and optim_conf.get("weather_forecast_method", None) == "list")
+            or (optim_conf.get("load_forecast_method", None) == "list"
+                and not(optim_conf["set_use_pv"]))
+        ):
+            days_list = None
+            set_mix_forecast = False
+            df_input_data = None
         else:
-            days_list = utils.get_days_list(1)
-            var_list = [
+            # Retrieve data from hass
+            if get_data_from_file:
+                with open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
+                    rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
+                if optim_conf["set_use_pv"]:
+                    retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
+                    retrieve_hass_conf["sensor_power_photovoltaics"] = str(var_list[1])
+                    retrieve_hass_conf["sensor_linear_interp"] = [
+                        retrieve_hass_conf["sensor_power_photovoltaics"],
+                        retrieve_hass_conf["sensor_power_load_no_var_loads"],
+                    ]
+                    retrieve_hass_conf["sensor_replace_zero"] = [
+                        retrieve_hass_conf["sensor_power_photovoltaics"]
+                    ]
+                else:
+                    retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
+                    retrieve_hass_conf["sensor_linear_interp"] = [
+                        retrieve_hass_conf["sensor_power_load_no_var_loads"],
+                    ]
+                    retrieve_hass_conf["sensor_replace_zero"] = []
+            else:
+                days_list = utils.get_days_list(1)
+                if optim_conf["set_use_pv"]:
+                    var_list = [
+                        retrieve_hass_conf["sensor_power_load_no_var_loads"],
+                        retrieve_hass_conf["sensor_power_photovoltaics"],
+                    ]
+                else:
+                    var_list = [
+                        retrieve_hass_conf["sensor_power_load_no_var_loads"],
+                    ]
+                if not rh.get_data(
+                    days_list,
+                    var_list,
+                    minimal_response=False,
+                    significant_changes_only=False,
+                ):
+                    return False
+            if not rh.prepare_data(
                 retrieve_hass_conf["sensor_power_load_no_var_loads"],
-                retrieve_hass_conf["sensor_power_photovoltaics"],
-            ]
-            if not rh.get_data(
-                days_list,
-                var_list,
-                minimal_response=False,
-                significant_changes_only=False,
+                load_negative=retrieve_hass_conf["load_negative"],
+                set_zero_min=retrieve_hass_conf["set_zero_min"],
+                var_replace_zero=retrieve_hass_conf["sensor_replace_zero"],
+                var_interp=retrieve_hass_conf["sensor_linear_interp"],
             ):
                 return False
-        if not rh.prepare_data(
-            retrieve_hass_conf["sensor_power_load_no_var_loads"],
-            load_negative=retrieve_hass_conf["load_negative"],
-            set_zero_min=retrieve_hass_conf["set_zero_min"],
-            var_replace_zero=retrieve_hass_conf["sensor_replace_zero"],
-            var_interp=retrieve_hass_conf["sensor_linear_interp"],
-        ):
-            return False
-        df_input_data = rh.df_final.copy()
+            set_mix_forecast = True
+            df_input_data = rh.df_final.copy()
         # Get PV and load forecasts
         if (
             optim_conf["set_use_pv"]
@@ -279,13 +302,13 @@ def set_input_data_dict(
             if isinstance(df_weather, bool) and not df_weather:
                 return False
             P_PV_forecast = fcst.get_power_from_weather(
-                df_weather, set_mix_forecast=True, df_now=df_input_data
+                df_weather, set_mix_forecast=set_mix_forecast, df_now=df_input_data
             )
         else:
             P_PV_forecast = pd.Series(0, index=fcst.forecast_dates)
         P_load_forecast = fcst.get_load_forecast(
             method=optim_conf["load_forecast_method"],
-            set_mix_forecast=True,
+            set_mix_forecast=set_mix_forecast,
             df_now=df_input_data,
         )
         if isinstance(P_load_forecast, bool) and not P_load_forecast:
