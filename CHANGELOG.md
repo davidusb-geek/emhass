@@ -1,6 +1,6 @@
 # Changelog
 
-# Unreleased
+## 0.12.8 - 2025-02-27
 ### Improvement
 - Added a new method for weather forecast: open-meteo. This offers a very nice API to obtain weather forecasts. We are dropping the old scrapper method, if you were using the scapper method you just need to change the Weather forecast method to open-meteo
 - Added support to `device_class` definition when posting sensors to HA. Thanks to @paulhomes for this contribution
