@@ -67,12 +67,17 @@ class TestRetrieveHass(unittest.TestCase):
         # Force config params for testing
         retrieve_hass_conf["optimization_time_step"] = pd.to_timedelta(30, "minutes")
         retrieve_hass_conf["sensor_power_photovoltaics"] = "sensor.power_photovoltaics"
+        retrieve_hass_conf["sensor_power_photovoltaics_forecast"] = "sensor.p_pv_forecast"
         retrieve_hass_conf["sensor_power_load_no_var_loads"] = (
             "sensor.power_load_no_var_loads"
         )
-        retrieve_hass_conf["sensor_replace_zero"] = ["sensor.power_photovoltaics"]
+        retrieve_hass_conf["sensor_replace_zero"] = [
+            "sensor.power_photovoltaics",
+            "sensor.p_pv_forecast",
+        ]
         retrieve_hass_conf["sensor_linear_interp"] = [
             "sensor.power_photovoltaics",
+            "sensor.p_pv_forecast",
             "sensor.power_load_no_var_loads",
         ]
         retrieve_hass_conf["set_zero_min"] = True
@@ -103,6 +108,7 @@ class TestRetrieveHass(unittest.TestCase):
             self.var_list = [
                 self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
                 self.retrieve_hass_conf["sensor_power_photovoltaics"],
+                self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
             ]
             self.rh.get_data(
                 self.days_list,
