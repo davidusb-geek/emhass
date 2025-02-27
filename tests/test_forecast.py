@@ -526,10 +526,12 @@ class TestForecast(unittest.TestCase):
             retrieve_hass_conf["sensor_power_photovoltaics"] = str(self.var_list[1])
             retrieve_hass_conf["sensor_linear_interp"] = [
                 retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
                 retrieve_hass_conf["sensor_power_load_no_var_loads"],
             ]
             retrieve_hass_conf["sensor_replace_zero"] = [
-                retrieve_hass_conf["sensor_power_photovoltaics"]
+                retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
             ]
         # Else obtain sensor values from HA
         else:
@@ -539,6 +541,7 @@ class TestForecast(unittest.TestCase):
             var_list = [
                 retrieve_hass_conf["sensor_power_load_no_var_loads"],
                 retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
             ]
             rh.get_data(
                 days_list,
@@ -763,10 +766,12 @@ class TestForecast(unittest.TestCase):
             retrieve_hass_conf["sensor_power_photovoltaics"] = str(self.var_list[1])
             retrieve_hass_conf["sensor_linear_interp"] = [
                 retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
                 retrieve_hass_conf["sensor_power_load_no_var_loads"],
             ]
             retrieve_hass_conf["sensor_replace_zero"] = [
-                retrieve_hass_conf["sensor_power_photovoltaics"]
+                retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
             ]
         # Else obtain sensor values from HA
         else:
@@ -776,6 +781,7 @@ class TestForecast(unittest.TestCase):
             var_list = [
                 retrieve_hass_conf["sensor_power_load_no_var_loads"],
                 retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
             ]
             rh.get_data(
                 days_list,
