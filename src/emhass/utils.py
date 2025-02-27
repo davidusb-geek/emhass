@@ -8,7 +8,7 @@ import logging
 import os
 import pathlib
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 import numpy as np
 import pandas as pd
@@ -1689,6 +1689,53 @@ def get_days_list(days_to_retrieve: int) -> pd.date_range:
     d = (today - timedelta(days=days_to_retrieve)).isoformat()
     days_list = pd.date_range(start=d, end=today.isoformat(), freq="D")
     return days_list
+
+
+def add_date_features(
+    data: pd.DataFrame, timestamp: Optional[str] = None, date_features: Optional[List[str]] = None
+) -> pd.DataFrame:
+    """Add date-related features from a DateTimeIndex or a timestamp column.
+
+    :param data: The input DataFrame.
+    :type data: pd.DataFrame
+    :param timestamp: The column containing the timestamp (optional if DataFrame has a DateTimeIndex).
+    :type timestamp: Optional[str]
+    :param date_features: List of date features to extract (default: all).
+    :type date_features: Optional[List[str]]
+    :return: The DataFrame with added date features.
+    :rtype: pd.DataFrame
+    """
+    
+    df = copy.deepcopy(data)  # Avoid modifying the original DataFrame
+    
+    # If no specific features are requested, extract all by default
+    default_features = ["year", "month", "day_of_week", "day_of_year", "day", "hour"]
+    date_features = date_features or default_features
+
+    # Determine whether to use index or a timestamp column
+    if timestamp:
+        df[timestamp] = pd.to_datetime(df[timestamp])
+        source = df[timestamp]
+    else:
+        if not isinstance(df.index, pd.DatetimeIndex):
+            raise ValueError("DataFrame must have a DateTimeIndex or a valid timestamp column.")
+        source = df.index
+
+    # Extract date features
+    if "year" in date_features:
+        df["year"] = source.year
+    if "month" in date_features:
+        df["month"] = source.month
+    if "day_of_week" in date_features:
+        df["day_of_week"] = source.dayofweek
+    if "day_of_year" in date_features:
+        df["day_of_year"] = source.dayofyear
+    if "day" in date_features:
+        df["day"] = source.day
+    if "hour" in date_features:
+        df["hour"] = source.hour
+
+    return df
 
 
 def set_df_index_freq(df: pd.DataFrame) -> pd.DataFrame:

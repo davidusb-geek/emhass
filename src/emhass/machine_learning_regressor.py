@@ -20,6 +20,8 @@ from sklearn.model_selection import GridSearchCV, train_test_split
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+from emhass import utils
+
 if TYPE_CHECKING:
     import logging
 
@@ -123,35 +125,6 @@ class MLRegressor:
         self.model = None
         self.grid_search = None
 
-    @staticmethod
-    def add_date_features(
-        data: pd.DataFrame, date_features: list, timestamp: str
-    ) -> pd.DataFrame:
-        """Add date features from the input DataFrame timestamp.
-
-        :param data: The input DataFrame
-        :type data: pd.DataFrame
-        :param timestamp: The column containing the timestamp
-        :type timestamp: str
-        :return: The DataFrame with the added features
-        :rtype: pd.DataFrame
-        """
-        df = copy.deepcopy(data)  # noqa: PD901
-        df[timestamp] = pd.to_datetime(df["timestamp"])
-        if "year" in date_features:
-            df["year"] = [i.year for i in df["timestamp"]]
-        if "month" in date_features:
-            df["month"] = [i.month for i in df["timestamp"]]
-        if "day_of_week" in date_features:
-            df["day_of_week"] = [i.dayofweek for i in df["timestamp"]]
-        if "day_of_year" in date_features:
-            df["day_of_year"] = [i.dayofyear for i in df["timestamp"]]
-        if "day" in date_features:
-            df["day"] = [i.day for i in df["timestamp"]]
-        if "hour" in date_features:
-            df["hour"] = [i.day for i in df["timestamp"]]
-        return df
-
     def get_regression_model(self: MLRegressor) -> tuple[str, str]:
         r"""
         Get the base model and parameter grid for the specified regression model.
@@ -211,10 +184,10 @@ class MLRegressor:
         self.data_exo = self.data_exo.reset_index(drop=True)
         if date_features is not None:
             if self.timestamp is not None:
-                self.data_exo = MLRegressor.add_date_features(
+                self.data_exo = utils.add_date_features(
                     self.data_exo,
-                    date_features,
-                    self.timestamp,
+                    timestamp=self.timestamp,
+                    date_features=date_features
                 )
             else:
                 self.logger.error(
