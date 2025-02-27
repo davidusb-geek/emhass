@@ -84,7 +84,7 @@ class TestCommandLineUtils(unittest.TestCase):
         )
         self.assertTrue(
             params["retrieve_hass_conf"]["sensor_replace_zero"]
-            == ["sensor.power_photovoltaics"]
+            == ["sensor.power_photovoltaics", "sensor.p_pv_forecast"]
         )
         # Test with config.json
         config = utils.build_config(

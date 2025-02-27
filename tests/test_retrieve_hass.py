@@ -306,11 +306,11 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertTrue(data["attributes"]["friendly_name"] == "Variable")
         # Lets test publishing a forecast with more added attributes
         df = copy.deepcopy(self.df_raw.iloc[0:30])
-        df.columns = ["P_PV", "P_Load"]
+        df.columns = ["P_Load", "P_PV", "P_PV_forecast"]
         df["P_batt"] = 1000.0
         df["SOC_opt"] = 0.5
         response, data = self.rh.post_data(
-            df["P_PV"], 
+            df["P_PV_forecast"], 
             25, 
             "sensor.p_pv_forecast", 
             "power",
