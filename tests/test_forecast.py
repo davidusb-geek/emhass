@@ -86,12 +86,17 @@ class TestForecast(unittest.TestCase):
             self.retrieve_hass_conf["sensor_power_photovoltaics"] = str(
                 self.var_list[1]
             )
+            self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"] = str(
+                self.var_list[2]
+            )
             self.retrieve_hass_conf["sensor_linear_interp"] = [
                 retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
                 retrieve_hass_conf["sensor_power_load_no_var_loads"],
             ]
             self.retrieve_hass_conf["sensor_replace_zero"] = [
-                retrieve_hass_conf["sensor_power_photovoltaics"]
+                retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
             ]
         # Else obtain sensor values from HA
         else:
@@ -101,6 +106,7 @@ class TestForecast(unittest.TestCase):
             self.var_list = [
                 self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
                 self.retrieve_hass_conf["sensor_power_photovoltaics"],
+                self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
             ]
             self.rh.get_data(
                 self.days_list,

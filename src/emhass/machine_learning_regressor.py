@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import time
 import warnings
 from typing import TYPE_CHECKING

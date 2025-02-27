@@ -12,10 +12,16 @@
       "default_value": "profit"
     },
     "sensor_power_photovoltaics": {
-      "friendly_name": "Sensor power sensor",
+      "friendly_name": "Sensor power photovoltaic",
       "Description": "This is the name of the photovoltaic power-produced sensor in Watts from Home Assistant. For example: ‘sensor.power_photovoltaics’.",
       "input": "string",
       "default_value": "sensor.power_photovoltaics"
+    },
+    "sensor_power_photovoltaics_forecast": {
+      "friendly_name": "Sensor power photovoltaic forecast",
+      "Description": "This is the name of the photovoltaic forecast sensor in Watts from Home Assistant. For example: ‘sensor.p_pv_forecast’.",
+      "input": "string",
+      "default_value": "sensor.p_pv_forecast"
     },
     "sensor_power_load_no_var_loads": {
       "friendly_name": "Sensor power loads with no variable loads",
