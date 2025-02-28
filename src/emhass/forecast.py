@@ -16,6 +16,7 @@ from urllib.parse import quote
 
 import numpy as np
 import pandas as pd
+from pvlib.solarposition import get_solarposition
 from pvlib.irradiance import disc
 from pvlib.location import Location
 from pvlib.modelchain import ModelChain
@@ -23,9 +24,14 @@ from pvlib.pvsystem import PVSystem
 from pvlib.temperature import TEMPERATURE_MODEL_PARAMETERS
 from requests import get
 
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
+
 from emhass.machine_learning_forecaster import MLForecaster
+from emhass.machine_learning_regressor import MLRegressor
 from emhass.retrieve_hass import RetrieveHass
-from emhass.utils import get_days_list, set_df_index_freq
+from emhass.utils import get_days_list, set_df_index_freq, add_date_features
 
 
 class Forecast(object):
@@ -710,6 +716,73 @@ class Forecast(object):
             )
         return P_PV_forecast
 
+    @staticmethod
+    def compute_solar_angles(
+        df: pd.DataFrame, latitude: float, longitude: float
+    ) -> pd.DataFrame:
+        """
+        Compute solar angles (elevation, azimuth) based on timestamps and location.
+        
+        :param df: DataFrame with a DateTime index.
+        :param latitude: Latitude of the PV system.
+        :param longitude: Longitude of the PV system.
+        :return: DataFrame with added solar elevation and azimuth.
+        """
+        df = df.copy()
+        solpos = get_solarposition(df.index, latitude, longitude)
+        df["solar_elevation"] = solpos["elevation"]
+        df["solar_azimuth"] = solpos["azimuth"]
+        return df
+
+    def adjust_pv_forecast(
+            self, P_PV: pd.DataFrame, P_PV_forecast: pd.DataFrame, 
+            P_PV_forecast_new: pd.DataFrame, n_splits: int = 5, 
+            regression_model: str = "LassoRegression"
+    ) -> pd.DataFrame:
+        """
+        Adjust future PV forecast based on historical actual and forecasted PV production,
+        using Linear Regression with additional solar and date features.
+
+        :param P_PV: DataFrame with historical actual PV production (timestamps as index).
+        :param P_PV_forecast: DataFrame with historical PV forecast values (timestamps as index).
+        :param P_PV_forecast_new: DataFrame with new PV forecast values to adjust (timestamps as index).
+        :param n_splits: Number of time-based splits for cross-validation.
+        :return: DataFrame with adjusted PV forecast.
+        """
+        # Ensure data is aligned
+        df = pd.concat([P_PV.rename("actual"), P_PV_forecast.rename("forecast")], axis=1).dropna()
+        # Add more features
+        df = add_date_features(df)
+        df = Forecast.compute_solar_angles(df, self.lat, self.lon)
+        # Features (X) and target (y)
+        X = df.drop(columns=["actual"])  # Predictors
+        y = df["actual"]  # Target: actual PV production
+        # Get regression model and hyperparameter grid
+        mlr = MLRegressor(
+            df,
+            "adjusted_pv_forecast",
+            regression_model,
+            list(X.columns),
+            list(y.name),
+            None,
+            self.logger,
+        )
+        base_model, param_grid = mlr.get_regression_model()
+        model = make_pipeline(StandardScaler(), base_model)
+        # Time-series split
+        tscv = TimeSeriesSplit(n_splits=n_splits)
+        grid_search = GridSearchCV(model, param_grid, cv=tscv, scoring="neg_mean_squared_error", verbose=0)
+        # Train model
+        grid_search.fit(X, y)
+        best_model = grid_search.best_estimator_
+        # Prepare new forecast data
+        P_PV_forecast_new = P_PV_forecast_new.rename("forecast")
+        P_PV_forecast_new = P_PV_forecast_new.to_frame()
+        P_PV_forecast_new = add_date_features(P_PV_forecast_new)
+        P_PV_forecast_new = Forecast.compute_solar_angles(P_PV_forecast_new, self.lat, self.lon)
+        P_PV_forecast_new["adjusted_forecast"] = best_model.predict(P_PV_forecast_new)
+        return P_PV_forecast_new[["adjusted_forecast"]]
+
     def get_forecast_days_csv(self, timedelta_days: Optional[int] = 1) -> pd.date_range:
         r"""
         Get the date range vector of forecast dates that will be used when loading a CSV file.
@@ -1037,13 +1110,14 @@ class Forecast(object):
             method == "typical"
         ):  # using typical statistical data from a household power consumption
             # Loading data from history file
-            model_type = "load_clustering"
+            model_type = "long_train_data"
             data_path = self.emhass_conf["data_path"] / str(
-                "data_train_" + model_type + ".pkl"
+                model_type + ".pkl"
             )
             with open(data_path, "rb") as fid:
-                data, _ = pickle.load(fid)
+                data, _, _, _ = pickle.load(fid)
             # Resample the data if needed
+            data = data[[self.var_load]]
             current_freq = pd.Timedelta("30min")
             if self.freq != current_freq:
                 data = Forecast.resample_data(data, self.freq, current_freq)

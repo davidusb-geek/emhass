@@ -36,11 +36,11 @@ REGRESSION_METHODS = {
     },
     "RidgeRegression": {
         "model": Ridge(),
-        "param_grid": {"ridge__alpha": [0.1, 1.0, 10.0]},
+        "param_grid": {"ridge__alpha": [1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100]},
     },
     "LassoRegression": {
         "model": Lasso(),
-        "param_grid": {"lasso__alpha": [0.1, 1.0, 10.0]},
+        "param_grid": {"lasso__alpha": [1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100]},
     },
     "RandomForestRegression": {
         "model": RandomForestRegressor(),

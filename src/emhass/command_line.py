@@ -361,10 +361,10 @@ def set_input_data_dict(
         var_model = params["passed_data"]["var_model"]
         if get_data_from_file:
             days_list = None
-            filename = "data_train_" + model_type + ".pkl"
+            filename = model_type + ".pkl"
             filename_path = emhass_conf["data_path"] / filename
             with open(filename_path, "rb") as inp:
-                df_input_data, _ = pickle.load(inp)
+                df_input_data, _, _, _ = pickle.load(inp)
             df_input_data = df_input_data[
                 df_input_data.index[-1] - pd.offsets.Day(days_to_retrieve) :
             ]
