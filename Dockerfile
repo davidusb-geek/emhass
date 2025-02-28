@@ -87,8 +87,7 @@ COPY src/emhass/data/ /app/src/emhass/data/
 
 # pre generated optimization results 
 COPY data/opt_res_latest.csv /data/
-COPY data/data_train_load_forecast.pkl /data/
-COPY data/data_train_load_clustering.pkl /data/
+COPY data/long_train_data.pkl /data/
 COPY README.md /app/
 COPY pyproject.toml /app/
 
