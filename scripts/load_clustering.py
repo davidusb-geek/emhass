@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import copy
 import pathlib
 import pickle
 
@@ -10,14 +9,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
 
-from emhass.retrieve_hass import RetrieveHass
 from emhass.utils import (
-    build_params,
-    build_secrets,
-    get_days_list,
     get_logger,
     get_root,
-    get_yaml_parse,
 )
 
 pio.renderers.default = "browser"
@@ -127,52 +121,21 @@ def load_forecast(data, forecast_date, freq, template):
 
 
 if __name__ == "__main__":
-    days_to_retrieve = 365
-    model_type = "load_clustering"
-    var_model = "sensor.power_load_positive"
 
-    # Build params with no config and default secrets
-    data_path = emhass_conf["data_path"] / str("data_train_" + model_type + ".pkl")
+    model_type = "long_train_data"
+    data_path = emhass_conf["data_path"] / str(model_type + ".pkl")
     template = "presentation"
 
     if data_path.is_file():
         logger.info("Loading a previous data file")
-        _, secrets = build_secrets(emhass_conf, logger, no_response=True)
-        params = build_params(emhass_conf, secrets, {}, logger)
         with open(data_path, "rb") as fid:
             data, var_model = pickle.load(fid)
     else:
-        logger.info(
-            "Using EMHASS methods to retrieve the new forecast model train data"
-        )
-        secrets_path = root / "secrets_emhass.yaml"
-        emhass_conf, secrets = build_secrets(
-            emhass_conf, logger, secrets_path=secrets_path
-        )
-        params = build_params(emhass_conf, secrets, {}, logger)
-        retrieve_hass_conf, _, _ = get_yaml_parse(params, logger)
-        retrieve_hass_conf["optimization_time_step"] = pd.to_timedelta(30, "minutes")
+        error_msg = f"Data file {model_type}.pkl does not exist. Use the test_retrieve_hass.py to save a data file."    
+        logger.error(error_msg)
+        raise ValueError(error_msg)
 
-        rh = RetrieveHass(
-            retrieve_hass_conf["hass_url"],
-            retrieve_hass_conf["long_lived_token"],
-            retrieve_hass_conf["optimization_time_step"],
-            retrieve_hass_conf["time_zone"],
-            params,
-            emhass_conf,
-            logger,
-            get_data_from_file=False,
-        )
-
-        days_list = get_days_list(days_to_retrieve)
-        var_list = [var_model]
-        rh.get_data(days_list, var_list)
-
-        with open(data_path, "wb") as fid:
-            pickle.dump((rh.df_final, var_model), fid, pickle.HIGHEST_PROTOCOL)
-
-        data = copy.deepcopy(rh.df_final)
-
+    data = data[['sensor.power_load_no_var_loads']]
     logger.info(data.describe())
 
     # Plot the input data
