@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+from __future__ import annotations
 import ast
 import copy
 import csv
@@ -8,7 +9,7 @@ import logging
 import os
 import pathlib
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -17,7 +18,8 @@ import pytz
 import yaml
 from requests import get
 
-from emhass.machine_learning_forecaster import MLForecaster
+if TYPE_CHECKING:
+    from emhass.machine_learning_forecaster import MLForecaster
 
 pd.options.plotting.backend = "plotly"
 
@@ -413,7 +415,7 @@ def treat_runtimeparams(
                 )
             )
             params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(
-                days=optim_conf["delta_forecast_daily"]
+                days = delta_forecast
             )
         else:
             delta_forecast = int(params["optim_conf"]["delta_forecast_daily"].days)
@@ -978,7 +980,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: Optional[int] = 1366) -> dic
 
 
 def get_injection_dict_forecast_model_fit(
-    df_fit_pred: pd.DataFrame, mlf: MLForecaster
+    df_fit_pred: pd.DataFrame, mlf: "MLForecaster"
 ) -> dict:
     """
     Build a dictionary with graphs and tables for the webui for special MLF fit case.
@@ -1009,7 +1011,7 @@ def get_injection_dict_forecast_model_fit(
 
 
 def get_injection_dict_forecast_model_tune(
-    df_pred_optim: pd.DataFrame, mlf: MLForecaster
+    df_pred_optim: pd.DataFrame, mlf: "MLForecaster"
 ) -> dict:
     """
     Build a dictionary with graphs and tables for the webui for special MLF tune case.
