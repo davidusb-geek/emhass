@@ -291,7 +291,7 @@ class TestRetrieveHass(unittest.TestCase):
     def test_publish_data(self):
         response, data = self.rh.post_data(
             self.df_raw[self.df_raw.columns[0]],
-            25,
+            10,
             "sensor.p_pv_forecast",
             "power",
             "Unit",
@@ -301,9 +301,9 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(
             data["state"]
-            == str(
+            == "{:.2f}".format(
                 np.round(
-                    self.df_raw.loc[self.df_raw.index[25], self.df_raw.columns[0]], 2
+                    self.df_raw.loc[self.df_raw.index[10], self.df_raw.columns[0]], 2
                 )
             )
         )
@@ -316,7 +316,7 @@ class TestRetrieveHass(unittest.TestCase):
         df["SOC_opt"] = 0.5
         response, data = self.rh.post_data(
             df["P_PV_forecast"], 
-            25, 
+            10, 
             "sensor.p_pv_forecast", 
             "power",
             "W", 
@@ -325,7 +325,7 @@ class TestRetrieveHass(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(
-            data["state"] == str(np.round(df.loc[df.index[25], df.columns[0]], 2))
+            data["state"] == "{:.2f}".format(np.round(df.loc[df.index[10], df.columns[2]], 2))
         )
         self.assertTrue(data["attributes"]["unit_of_measurement"] == "W")
         self.assertTrue(data["attributes"]["friendly_name"] == "PV Forecast")
