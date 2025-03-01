@@ -473,7 +473,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = TestCommandLineUtils.get_test_params()
         runtimeparams = {
             "historic_days_to_retrieve": 20,
-            "model_type": "load_forecast",
+            "model_type": "long_train_data",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
@@ -497,7 +497,7 @@ class TestCommandLineUtils(unittest.TestCase):
             get_data_from_file=True,
         )
         self.assertTrue(
-            input_data_dict["params"]["passed_data"]["model_type"] == "load_forecast"
+            input_data_dict["params"]["passed_data"]["model_type"] == "long_train_data"
         )
         self.assertTrue(
             input_data_dict["params"]["passed_data"]["sklearn_model"]
@@ -517,7 +517,7 @@ class TestCommandLineUtils(unittest.TestCase):
             get_data_from_file=True,
         )
         self.assertTrue(
-            input_data_dict["params"]["passed_data"]["model_type"] == "load_forecast"
+            input_data_dict["params"]["passed_data"]["model_type"] == "long_train_data"
         )
         self.assertTrue(
             input_data_dict["params"]["passed_data"]["sklearn_model"]
@@ -740,7 +740,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
             "historic_days_to_retrieve": 20,
-            "model_type": "load_forecast",
+            "model_type": "long_train_data",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
@@ -776,7 +776,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
             "historic_days_to_retrieve": 20,
-            "model_type": "load_forecast",
+            "model_type": "long_train_data",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
@@ -812,7 +812,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
             "historic_days_to_retrieve": 20,
-            "model_type": "load_forecast",
+            "model_type": "long_train_data",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,

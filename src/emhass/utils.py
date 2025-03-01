@@ -621,7 +621,7 @@ def treat_runtimeparams(
                     "retrieve_hass_conf"
                 ]["historic_days_to_retrieve"]
         if "model_type" not in runtimeparams.keys():
-            model_type = "load_forecast"
+            model_type = "long_train_data"
         else:
             model_type = runtimeparams["model_type"]
         params["passed_data"]["model_type"] = model_type
