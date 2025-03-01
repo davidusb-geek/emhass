@@ -20,22 +20,13 @@ from sklearn.linear_model import ElasticNet, LinearRegression
 from sklearn.metrics import r2_score
 from sklearn.neighbors import KNeighborsRegressor
 
-from emhass.forecast import Forecast
-from emhass.retrieve_hass import RetrieveHass
 from emhass.utils import (
-    build_params,
-    build_secrets,
-    get_days_list,
     get_logger,
     get_root,
-    get_yaml_parse,
 )
 
 pio.renderers.default = "browser"
 pd.options.plotting.backend = "plotly"
-
-# from skopt.space import Categorical, Real, Integer
-
 
 # the root folder
 root = pathlib.Path(str(get_root(__file__, num_parent=2)))
@@ -67,46 +58,23 @@ def neg_r2_score(y_true, y_pred):
 
 
 if __name__ == "__main__":
-    days_to_retrieve = 240
-    model_type = "load_forecast"
-    var_model = "sensor.power_load_no_var_loads"
+
+    model_type = "long_train_data"
     sklearn_model = "KNeighborsRegressor"
     num_lags = 48
-
-    # Build params with no config and default secrets
-    data_path = emhass_conf["data_path"] / str("data_train_" + model_type + ".pkl")
-    _, secrets = build_secrets(emhass_conf, logger, no_response=True)
-    params = build_params(emhass_conf, secrets, {}, logger)
     template = "presentation"
+    data_path = emhass_conf["data_path"] / str(model_type + ".pkl")
 
     if data_path.is_file():
         logger.info("Loading a previous data file")
         with open(data_path, "rb") as fid:
             data, var_model = pickle.load(fid)
     else:
-        logger.info(
-            "Using EMHASS methods to retrieve the new forecast model train data"
-        )
-        retrieve_hass_conf, _, _ = get_yaml_parse(params, logger)
-        rh = RetrieveHass(
-            retrieve_hass_conf["hass_url"],
-            retrieve_hass_conf["long_lived_token"],
-            retrieve_hass_conf["optimization_time_step"],
-            retrieve_hass_conf["time_zone"],
-            params,
-            emhass_conf,
-            logger,
-            get_data_from_file=False,
-        )
+        error_msg = f"Data file {model_type}.pkl does not exist. Use the test_retrieve_hass.py to save a data file."    
+        logger.error(error_msg)
+        raise ValueError(error_msg)
 
-        days_list = get_days_list(days_to_retrieve)
-        var_list = [var_model]
-        rh.get_data(days_list, var_list)
-
-        with open(data_path, "wb") as fid:
-            pickle.dump((rh.df_final, var_model), fid, pickle.HIGHEST_PROTOCOL)
-
-        data = copy.deepcopy(rh.df_final)
+    data = data[['sensor.power_load_no_var_loads']]
 
     y_axis_title = "Power (W)"
     logger.info(data.describe())
@@ -324,53 +292,3 @@ if __name__ == "__main__":
 
     logger.info("Number of optimal lags obtained: " + str(lags_opt))
     logger.info("Prediction in production using last_window")
-
-    # Let's perform a naive load forecast for comparison
-    retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(
-        params, logger
-    )
-    fcst = Forecast(
-        retrieve_hass_conf, optim_conf, plant_conf, params, emhass_conf, logger
-    )
-    P_load_forecast = fcst.get_load_forecast(method="naive")
-
-    # Then retrieve some data and perform a prediction mocking a production env
-    rh = RetrieveHass(
-        retrieve_hass_conf["hass_url"],
-        retrieve_hass_conf["long_lived_token"],
-        retrieve_hass_conf["optimization_time_step"],
-        retrieve_hass_conf["time_zone"],
-        params,
-        emhass_conf,
-        logger,
-        get_data_from_file=False,
-    )
-
-    days_list = get_days_list(days_needed)
-    var_model = retrieve_hass_conf["sensor_power_load_no_var_loads"]
-    var_list = [var_model]
-    rh.get_data(days_list, var_list)
-    data_last_window = copy.deepcopy(rh.df_final)
-
-    data_last_window = add_date_features(data_last_window)
-    data_last_window = data_last_window.interpolate(method="linear", axis=0, limit=None)
-
-    predictions_prod = forecaster.predict(
-        steps=lags_opt,
-        last_window=data_last_window[var_model],
-        exog=data_last_window.drop(var_model, axis=1),
-    )
-
-    df = pd.DataFrame(index=P_load_forecast.index, columns=["pred_naive", "pred_prod"])
-    df["pred_naive"] = P_load_forecast
-    df["pred_prod"] = predictions_prod
-    fig = df.plot()
-    fig.layout.template = template
-    fig.update_yaxes(title_text=y_axis_title)
-    fig.update_xaxes(title_text="Time")
-    fig.show()
-    fig.write_image(
-        emhass_conf["docs_path"] / "images/load_forecast_production.svg",
-        width=1080,
-        height=0.8 * 1080,
-    )
