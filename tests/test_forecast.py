@@ -233,6 +233,8 @@ class TestForecast(unittest.TestCase):
             P_PV_train_test,
             P_PV_forecast_train_test,
             P_PV_forecast_validation,
+            n_splits = 5,
+            regression_model = "LassoRegression"
         )
         self.assertEqual(len(P_PV_forecast_adjusted), len(P_PV_forecast_validation))
         self.assertFalse(P_PV_forecast_adjusted.isna().any().any(), "Adjusted forecast contains NaN values")
