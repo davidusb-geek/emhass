@@ -14,6 +14,7 @@ secrets_emhass.yaml
 .devcontainer/devcontainer.json
 *.pkl
 **/app
+.cache.sqlite
 
 
 # Byte-compiled / optimized / DLL files
