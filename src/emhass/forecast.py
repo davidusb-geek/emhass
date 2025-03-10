@@ -846,8 +846,9 @@ class Forecast(object):
                             index=fcst_index,
                         )
                 else:
+                    df_csv_filtered_date = df_csv.loc[df_csv.index.strftime('%Y-%m-%d') == fcst_index[0].date().strftime('%Y-%m-%d')]
                     forecast_out = pd.DataFrame(
-                        df_csv.between_time(first_hour, last_hour).values,
+                        df_csv_filtered_date.between_time(first_hour, last_hour).values,
                         index=fcst_index,
                     )
             else:
@@ -865,8 +866,9 @@ class Forecast(object):
                             index=fcst_index,
                         )
                 else:
-                    forecast_tp = pd.DataFrame(
-                        df_csv.between_time(first_hour, last_hour).values,
+                    df_csv_filtered_date = df_csv.loc[df_csv.index.strftime('%Y-%m-%d') == fcst_index[0].date().strftime('%Y-%m-%d')]
+                    forecast_out = pd.DataFrame(
+                        df_csv_filtered_date.between_time(first_hour, last_hour).values,
                         index=fcst_index,
                     )
                 forecast_out = pd.concat([forecast_out, forecast_tp], axis=0)
