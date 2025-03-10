@@ -801,9 +801,15 @@ class Forecast(object):
                 csv_path = self.emhass_conf["data_path"] / csv_path
             load_csv_file_path = csv_path
             df_csv = pd.read_csv(load_csv_file_path, header=None, names=["ts", "yhat"])
-            df_csv.index = forecast_dates_csv
-            df_csv.drop(["ts"], axis=1, inplace=True)
-            df_csv = set_df_index_freq(df_csv)
+
+            first_col = df_csv.iloc[:, 0]
+            if pd.to_datetime(first_col, errors="coerce").notna().all():
+                # If the entire column can be converted to datetime, set it as index
+                df_csv = pd.read_csv(load_csv_file_path, index_col=0, parse_dates=[0])
+            else:
+                df_csv.index = forecast_dates_csv
+                df_csv.drop(["ts"], axis=1, inplace=True)
+                df_csv = set_df_index_freq(df_csv)
             days_list = df_final.index.day.unique().tolist()
         forecast_out = pd.DataFrame()
         for day in days_list:
