@@ -803,9 +803,11 @@ class Forecast(object):
             df_csv = pd.read_csv(load_csv_file_path, header=None, names=["ts", "yhat"])
 
             first_col = df_csv.iloc[:, 0]
+            # If the entire column can be converted to datetime, set it as index
             if pd.to_datetime(first_col, errors="coerce").notna().all():
-                # If the entire column can be converted to datetime, set it as index
-                df_csv = pd.read_csv(load_csv_file_path, index_col=0, parse_dates=[0])
+                df_csv["ts"] = pd.to_datetime(df_csv["ts"], utc=True)
+                # Set the timestamp column as the index
+                df_csv.set_index("ts", inplace=True)
             else:
                 df_csv.index = forecast_dates_csv
                 df_csv.drop(["ts"], axis=1, inplace=True)
