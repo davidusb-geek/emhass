@@ -16,21 +16,23 @@
   </div>
 </div>; */
 
+var param_definitions; //global
+
 //on page reload
 window.onload = async function () {
   ///fetch configuration parameters from definitions json file
-  let param_definitions = await getParamDefinitions();
+  param_definitions = await getParamDefinitions();
   //obtain configuration from emhass (pull)
   let config = await obtainConfig();
   //obtain configuration_list.html html as a template to dynamically to render parameters in a list view (parameters as input items)
   let list_html = await getListHTML();
   //load list parameter page (default)
-  loadConfigurationListView(param_definitions, config, list_html);
+  loadConfigurationListView(config, list_html);
 
   //add event listener to save button
   document
     .getElementById("save")
-    .addEventListener("click", () => saveConfiguration(param_definitions));
+    .addEventListener("click", () => saveConfiguration());
 
   //add event listener to yaml button (convert yaml to json in box view)
   document.getElementById("yaml").addEventListener("click", () => yamlToJson());
@@ -41,14 +43,14 @@ window.onload = async function () {
   document
     .getElementById("defaults")
     .addEventListener("click", () =>
-      ToggleView(param_definitions, list_html, true)
+      ToggleView(list_html, true)
     );
 
   //add event listener to json-toggle button (toggle between json box and list view)
   document
     .getElementById("json-toggle")
     .addEventListener("click", () =>
-      ToggleView(param_definitions, list_html, false)
+      ToggleView(list_html, false)
     );
 };
 
@@ -60,7 +62,7 @@ async function getParamDefinitions() {
     errorAlert("Unable to obtain definitions file");
     return {};
   }
-  const param_definitions = await response.json();
+  let param_definitions = await response.json();
   return await param_definitions;
 }
 
@@ -70,7 +72,7 @@ async function obtainConfig() {
   const response = await fetch(`get-config`, {
     method: "GET",
   });
-  let  response_status = response.status; //return status
+  let response_status = response.status; //return status
   //if request failed
   if (response_status !== 200 && response_status !== 201) {
     showChangeStatus(response_status, await response.json());
@@ -115,7 +117,7 @@ async function getListHTML() {
 }
 
 //load list configuration view
-function loadConfigurationListView(param_definitions, config, list_html) {
+function loadConfigurationListView(config, list_html) {
   if (list_html == null || config == null || param_definitions == null) {
     return 1;
   }
@@ -196,7 +198,7 @@ function buildParamContainers(
     ) {
       console.log(
         parameter_definition_name +
-          " is missing some required values in the definitions file"
+        " is missing some required values in the definitions file"
       );
       continue;
     }
@@ -206,7 +208,7 @@ function buildParamContainers(
     ) {
       console.log(
         parameter_definition_name +
-          " is missing select_options values in the definitions file"
+        " is missing select_options values in the definitions file"
       );
       continue;
     }
@@ -233,16 +235,15 @@ function buildParamContainers(
     //buildParamElement() builds the parameter input/s and returns html to append in param-input
     SectionParamElement[0].innerHTML += `
           <div class="param" id="${parameter_definition_name}">
-             <h5>${
-               parameter_definition_object["friendly_name"]
-             }:</h5> <i>${parameter_definition_name}</i> </br>
+             <h5>${parameter_definition_object["friendly_name"]
+      }:</h5> <i>${parameter_definition_name}</i> </br>
               ${array_buttons}
              <div class="param-input"> 
                   ${buildParamElement(
-                    parameter_definition_object,
-                    parameter_definition_name,
-                    config
-                  )}
+        parameter_definition_object,
+        parameter_definition_name,
+        config
+      )}
              </div>
               <p>${parameter_definition_object["Description"]}</p>
           </div>
@@ -253,9 +254,7 @@ function buildParamContainers(
   //create add button (array plus) event listeners
   let plus = SectionContainer.querySelectorAll(".input-plus");
   plus.forEach(function (answer) {
-    answer.addEventListener("click", () =>
-      plusElements(answer.classList[1], param_definitions, section, {})
-    );
+    answer.addEventListener("click", () => plusElements(answer.classList[1], param_definitions, section, {}));
   });
 
   //create subtract button (array minus) event listeners
@@ -287,8 +286,8 @@ function buildParamContainers(
       if (requirement_element == null) {
         console.debug(
           "unable to find " +
-            Object.keys(parameter_definition_object["requires"])[0] +
-            " param div container element"
+          Object.keys(parameter_definition_object["requires"])[0] +
+          " param div container element"
         );
         continue;
       }
@@ -298,8 +297,8 @@ function buildParamContainers(
       if (param_element == null) {
         console.debug(
           "unable to find " +
-            parameter_definition_name +
-            " param div container element"
+          parameter_definition_name +
+          " param div container element"
         );
         continue;
       }
@@ -397,7 +396,7 @@ function buildParamElement(
       for (const options of parameter_definition_object["select_options"]) {
         let selected = ""
         //if item in select is the same as the config value, then append "selected" tag
-        if (options==value) {selected = `selected="selected"`}
+        if (options == value) { selected = `selected="selected"` }
         inputs += `<option ${selected}>${options}</option>`;
       }
       inputs += `</select>`;
@@ -418,9 +417,8 @@ function buildParamElement(
     if (typeof Object.values(value)[0] === "object") {
       for (let param of Object.values(value)) {
         for (let items of Object.values(param)) {
-          inputs += `<input class="param_input" type="${type}" placeholder=${Object.values(items)[0]} value=${
-            Object.values(items)[0]
-          }>`;
+          inputs += `<input class="param_input" type="${type}" placeholder=${Object.values(items)[0]} value=${Object.values(items)[0]
+            }>`;
         }
         inputs += `</br>`;
       }
@@ -525,7 +523,7 @@ function checkRequirements(
       param_element.classList.add("requirement-disable");
     }
   } else if (param_element.classList.contains("requirement-disable")) {
-      param_element.classList.remove("requirement-disable");
+    param_element.classList.remove("requirement-disable");
   }
 }
 
@@ -533,7 +531,7 @@ function checkRequirements(
 function headerElement(element, param_definitions, config) {
   //obtain section body element
   let section_card = element.closest(".section-card");
-  let param_list 
+  let param_list
   let difference
   if (section_card == null) {
     console.log("Unable to obtain section-card");
@@ -621,7 +619,7 @@ function checkConfigParam(value, config, parameter_definition_name) {
 }
 
 //send all parameter input values to EMHASS, to save to config.json and param.pkl
-async function saveConfiguration(param_definitions) {
+async function saveConfiguration() {
   //start wth none
   let config = {};
   let param_inputs
@@ -651,8 +649,8 @@ async function saveConfiguration(param_definitions) {
         if (param_element == null) {
           console.debug(
             "unable to find " +
-              parameter_definition_name +
-              " param div container element, skipping this param"
+            parameter_definition_name +
+            " param div container element, skipping this param"
           );
         }
         //extract input/s and their value/s from param container div
@@ -694,7 +692,7 @@ async function saveConfiguration(param_definitions) {
             for (let i = 0; i < param_values.length; i++) {
               config[parameter_definition_name][
                 "period_hp_" +
-                  (Object.keys(config[parameter_definition_name]).length + 1)
+                (Object.keys(config[parameter_definition_name]).length + 1)
               ] = [{ start: param_values[i] }, { end: param_values[++i] }];
             }
             continue;
@@ -748,7 +746,7 @@ async function saveConfiguration(param_definitions) {
 }
 
 //Toggle between box (json) and list view
-async function ToggleView(param_definitions, list_html, default_reset) {
+async function ToggleView(list_html, default_reset) {
   let selected = "";
   config = {};
 
@@ -790,7 +788,7 @@ async function ToggleView(param_definitions, list_html, default_reset) {
   switch (selected) {
     case "box":
       //load list
-      loadConfigurationListView(param_definitions, config, list_html);
+      loadConfigurationListView(config, list_html);
       yaml_button.style.display = "none";
       break;
     case "list":
