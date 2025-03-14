@@ -874,9 +874,17 @@ class Forecast(object):
                 csv_path = self.emhass_conf["data_path"] / csv_path
             load_csv_file_path = csv_path
             df_csv = pd.read_csv(load_csv_file_path, header=None, names=["ts", "yhat"])
-            df_csv.index = forecast_dates_csv
-            df_csv.drop(["ts"], axis=1, inplace=True)
-            df_csv = set_df_index_freq(df_csv)
+
+            first_col = df_csv.iloc[:, 0]
+            # If the entire column can be converted to datetime, set it as index
+            if pd.to_datetime(first_col, errors="coerce").notna().all():
+                df_csv["ts"] = pd.to_datetime(df_csv["ts"], utc=True)
+                # Set the timestamp column as the index
+                df_csv.set_index("ts", inplace=True)
+            else:
+                df_csv.index = forecast_dates_csv
+                df_csv.drop(["ts"], axis=1, inplace=True)
+                df_csv = set_df_index_freq(df_csv)
             days_list = df_final.index.day.unique().tolist()
         forecast_out = pd.DataFrame()
         for day in days_list:
@@ -919,8 +927,9 @@ class Forecast(object):
                             index=fcst_index,
                         )
                 else:
+                    df_csv_filtered_date = df_csv.loc[df_csv.index.strftime('%Y-%m-%d') == fcst_index[0].date().strftime('%Y-%m-%d')]
                     forecast_out = pd.DataFrame(
-                        df_csv.between_time(first_hour, last_hour).values,
+                        df_csv_filtered_date.between_time(first_hour, last_hour).values,
                         index=fcst_index,
                     )
             else:
@@ -938,8 +947,10 @@ class Forecast(object):
                             index=fcst_index,
                         )
                 else:
+                    df_csv_filtered_date = df_csv.loc[
+                        df_csv.index.strftime('%Y-%m-%d') == fcst_index[0].date().strftime('%Y-%m-%d')]
                     forecast_tp = pd.DataFrame(
-                        df_csv.between_time(first_hour, last_hour).values,
+                        df_csv_filtered_date.between_time(first_hour, last_hour).values,
                         index=fcst_index,
                     )
                 forecast_out = pd.concat([forecast_out, forecast_tp], axis=0)
