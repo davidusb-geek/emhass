@@ -202,8 +202,14 @@ A graphic representation might be better right? :wink:
 - Detailed PV forecast adjusted to local weather conditions using machine learning
 - Support V2x natively
 - Improved on-board experience
-- Code quamity, security, maintainability, etc.
+- Code quality, security, maintainability, etc.
 
 ---
 
 # Thank you!
+
+And thanks to all our contributors :tada:
+
+<a href="https://github.com/davidusb-geek/emhass/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=davidusb-geek/emhass" />
+</a>
