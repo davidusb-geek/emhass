@@ -17,9 +17,11 @@
   "weight_battery_discharge": 1.0,
   "weight_battery_charge": 1.0,
   "sensor_power_photovoltaics": "sensor.power_photovoltaics",
+  "sensor_power_photovoltaics_forecast": "sensor.p_pv_forecast",
   "sensor_power_load_no_var_loads": "sensor.power_load_no_var_loads",
   "sensor_replace_zero": [
-    "sensor.power_photovoltaics" 
+    "sensor.power_photovoltaics",
+    "sensor.p_pv_forecast"
   ],
   "sensor_linear_interp": [
     "sensor.power_photovoltaics",

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import copy
 import logging
 import time
 import warnings
@@ -18,6 +17,8 @@ from skforecast.recursive import ForecasterRecursive
 from sklearn.linear_model import ElasticNet, LinearRegression
 from sklearn.metrics import r2_score
 from sklearn.neighbors import KNeighborsRegressor
+
+from emhass import utils
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -85,24 +86,6 @@ class MLForecaster:
         self.data = self.data[~self.data.index.duplicated(keep="first")]
 
     @staticmethod
-    def add_date_features(data: pd.DataFrame) -> pd.DataFrame:
-        """Add date features from the input DataFrame timestamp
-
-        :param data: The input DataFrame
-        :type data: pd.DataFrame
-        :return: The DataFrame with the added features
-        :rtype: pd.DataFrame
-        """
-        df = copy.deepcopy(data)
-        df["year"] = [i.year for i in df.index]
-        df["month"] = [i.month for i in df.index]
-        df["day_of_week"] = [i.dayofweek for i in df.index]
-        df["day_of_year"] = [i.dayofyear for i in df.index]
-        df["day"] = [i.day for i in df.index]
-        df["hour"] = [i.hour for i in df.index]
-        return df
-
-    @staticmethod
     def neg_r2_score(y_true, y_pred):
         """The negative of the r2 score."""
         return -r2_score(y_true, y_pred)
@@ -116,7 +99,7 @@ class MLForecaster:
             freq=data_last_window.index.freq,
         )
         exog = pd.DataFrame({var_name: [np.nan] * periods}, index=forecast_dates)
-        exog = MLForecaster.add_date_features(exog)
+        exog = utils.add_date_features(exog)
         return exog
 
     def fit(
@@ -138,7 +121,7 @@ class MLForecaster:
         self.logger.info("Performing a forecast model fit for " + self.model_type)
         # Preparing the data: adding exogenous features
         self.data_exo = pd.DataFrame(index=self.data.index)
-        self.data_exo = MLForecaster.add_date_features(self.data_exo)
+        self.data_exo = utils.add_date_features(self.data_exo)
         self.data_exo[self.var_model] = self.data[self.var_model]
         self.data_exo = self.data_exo.interpolate(method="linear", axis=0, limit=None)
         # train/test split
