@@ -70,7 +70,7 @@ def retrieve_home_assistant_data(set_type, get_data_from_file, retrieve_hass_con
         var_interp=retrieve_hass_conf["sensor_linear_interp"],
     ):
         return False, None
-    return True, rh.df_final.copy()
+    return True, rh.df_final.copy(), days_list
 
 def set_input_data_dict(
     emhass_conf: dict,
@@ -180,7 +180,7 @@ def set_input_data_dict(
     # Perform setup based on type of action
     if set_type == "perfect-optim":
         # Retrieve data from hass
-        success, df_input_data = retrieve_home_assistant_data(
+        success, df_input_data, days_list = retrieve_home_assistant_data(
             set_type, get_data_from_file, retrieve_hass_conf, optim_conf, rh, utils, emhass_conf, test_df_literal
         )
         if not success:
@@ -257,7 +257,7 @@ def set_input_data_dict(
             df_input_data = None
         else:
             # Retrieve data from hass
-            success, df_input_data = retrieve_home_assistant_data(
+            success, df_input_data, days_list = retrieve_home_assistant_data(
                 set_type, get_data_from_file, retrieve_hass_conf, optim_conf, rh, utils, emhass_conf, test_df_literal
             )
             if not success:
