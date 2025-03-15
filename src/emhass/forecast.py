@@ -884,17 +884,20 @@ class Forecast(object):
             else:
                 df_csv.index = forecast_dates_csv
                 df_csv.drop(["ts"], axis=1, inplace=True)
-                df_csv = set_df_index_freq(df_csv)
-            days_list = df_final.index.day.unique().tolist()
+            df_csv = set_df_index_freq(df_csv)
+            if list_and_perfect:
+                days_list = df_final.index.day.unique().tolist()
+            else:
+                days_list = df_csv.index.day.unique().tolist()
         forecast_out = pd.DataFrame()
         for day in days_list:
             if csv_path is None:
+                df_tmp = copy.deepcopy(df_final)
+            else:
                 if list_and_perfect:
                     df_tmp = copy.deepcopy(df_final)
                 else:
                     df_tmp = copy.deepcopy(df_csv)
-            else:
-                df_tmp = copy.deepcopy(df_final)
             first_elm_index = [i for i, x in enumerate(df_tmp.index.day == day) if x][0]
             last_elm_index = [i for i, x in enumerate(df_tmp.index.day == day) if x][-1]
             fcst_index = pd.date_range(
@@ -903,14 +906,14 @@ class Forecast(object):
                 freq=df_tmp.index.freq,
             )
             first_hour = (
-                str(df_tmp.index[first_elm_index].hour)
+                f"{df_tmp.index[first_elm_index].hour:02d}"
                 + ":"
-                + str(df_tmp.index[first_elm_index].minute)
+                + f"{df_tmp.index[first_elm_index].minute:02d}"
             )
             last_hour = (
-                str(df_tmp.index[last_elm_index].hour)
+                f"{df_tmp.index[last_elm_index].hour:02d}"
                 + ":"
-                + str(df_tmp.index[last_elm_index].minute)
+                + f"{df_tmp.index[last_elm_index].minute:02d}"
             )
             if len(forecast_out) == 0:
                 if csv_path is None:
@@ -1311,7 +1314,10 @@ class Forecast(object):
             forecast_out = self.get_forecast_out_from_csv_or_list(
                 df_final, forecast_dates_csv, csv_path
             )
-            df_final[self.var_load_cost] = forecast_out
+            # Ensure correct length
+            forecast_out = forecast_out[0 : len(self.forecast_dates)]
+            df_final = df_final[0 : len(self.forecast_dates)]
+            df_final.loc[:,self.var_load_cost] = forecast_out.values
         elif method == "list":  # reading a list of values
             # Loading data from passed list
             data_list = self.params["passed_data"]["load_cost_forecast"]
@@ -1335,7 +1341,7 @@ class Forecast(object):
                     list_and_perfect=list_and_perfect,
                 )
                 # Fill the final DF
-                df_final[self.var_load_cost] = forecast_out
+                df_final.loc[:,self.var_load_cost] = forecast_out.values
         else:
             self.logger.error("Passed method is not valid")
             return False
