@@ -28,7 +28,7 @@ default_csv_filename = "opt_res_latest.csv"
 default_pkl_suffix = "_mlf.pkl"
 default_metadata_json = "metadata.json"
 
-def retrieve_home_assistant_data(set_type, get_data_from_file, retrieve_hass_conf, optim_conf, rh, utils, emhass_conf, test_df_literal):
+def retrieve_home_assistant_data(set_type, get_data_from_file, retrieve_hass_conf, optim_conf, rh, emhass_conf, test_df_literal):
     """Retrieve data from Home Assistant or file and prepare it for optimization."""
     # Determine days_list based on set_type
     if set_type == "perfect-optim":
@@ -42,7 +42,7 @@ def retrieve_home_assistant_data(set_type, get_data_from_file, retrieve_hass_con
             rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
         # Assign variables based on set_type
         retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
-        if optim_conf.get("set_use_pv", True):  # PV is relevant for MPC
+        if optim_conf.get("set_use_pv", True):
             retrieve_hass_conf["sensor_power_photovoltaics"] = str(var_list[1])
             retrieve_hass_conf["sensor_linear_interp"] = [
                 retrieve_hass_conf["sensor_power_photovoltaics"],
@@ -61,15 +61,14 @@ def retrieve_home_assistant_data(set_type, get_data_from_file, retrieve_hass_con
         if optim_conf.get("set_use_pv", True):
             var_list.append(retrieve_hass_conf["sensor_power_photovoltaics"])
         if not rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False):
-            return False, None
-    if not rh.prepare_data(
+            return False, None, days_list
+    rh.prepare_data(
         retrieve_hass_conf["sensor_power_load_no_var_loads"],
         load_negative=retrieve_hass_conf["load_negative"],
         set_zero_min=retrieve_hass_conf["set_zero_min"],
         var_replace_zero=retrieve_hass_conf["sensor_replace_zero"],
         var_interp=retrieve_hass_conf["sensor_linear_interp"],
-    ):
-        return False, None
+    )
     return True, rh.df_final.copy(), days_list
 
 def set_input_data_dict(
@@ -181,7 +180,7 @@ def set_input_data_dict(
     if set_type == "perfect-optim":
         # Retrieve data from hass
         success, df_input_data, days_list = retrieve_home_assistant_data(
-            set_type, get_data_from_file, retrieve_hass_conf, optim_conf, rh, utils, emhass_conf, test_df_literal
+            set_type, get_data_from_file, retrieve_hass_conf, optim_conf, rh, emhass_conf, test_df_literal
         )
         if not success:
             return False
@@ -258,7 +257,7 @@ def set_input_data_dict(
         else:
             # Retrieve data from hass
             success, df_input_data, days_list = retrieve_home_assistant_data(
-                set_type, get_data_from_file, retrieve_hass_conf, optim_conf, rh, utils, emhass_conf, test_df_literal
+                set_type, get_data_from_file, retrieve_hass_conf, optim_conf, rh, emhass_conf, test_df_literal
             )
             if not success:
                 return False
