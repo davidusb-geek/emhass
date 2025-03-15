@@ -58,6 +58,7 @@ class TestCommandLineUtils(unittest.TestCase):
 
     def setUp(self):
         params = TestCommandLineUtils.get_test_params()
+        params['optim_conf']['set_use_pv'] = True
         # Add runtime parameters for forecast lists
         runtimeparams = {
             "pv_power_forecast": [i + 1 for i in range(48)],
