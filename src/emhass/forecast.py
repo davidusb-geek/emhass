@@ -866,6 +866,7 @@ class Forecast(object):
             df_csv.drop(["ts"], axis=1, inplace=True)
             df_csv = set_df_index_freq(df_csv)
             if list_and_perfect:
+                df_final = set_df_index_freq(df_final)
                 days_list = df_final.index.day.unique().tolist()
             else:
                 days_list = df_csv.index.day.unique().tolist()
@@ -918,8 +919,10 @@ class Forecast(object):
             if len(forecast_out) == 0:
                 if csv_path is None:
                     if list_and_perfect:
+                        values_array = df_csv.between_time(first_hour, last_hour).values
+                        fcst_index = fcst_index[0:len(values_array)] # Fix for different lengths
                         forecast_out = pd.DataFrame(
-                            df_csv.between_time(first_hour, last_hour).values,
+                            values_array,
                             index=fcst_index,
                         )
                     else:
@@ -930,7 +933,8 @@ class Forecast(object):
                             index=fcst_index,
                         )
                 else:
-                    df_csv_filtered_date = df_csv.loc[df_csv.index.strftime('%Y-%m-%d') == fcst_index[0].date().strftime('%Y-%m-%d')]
+                    df_csv_filtered_date = df_csv.loc[
+                        df_csv.index.strftime('%Y-%m-%d') == fcst_index[0].date().strftime('%Y-%m-%d')]
                     forecast_out = pd.DataFrame(
                         df_csv_filtered_date.between_time(first_hour, last_hour).values,
                         index=fcst_index,
@@ -938,8 +942,10 @@ class Forecast(object):
             else:
                 if csv_path is None:
                     if list_and_perfect:
+                        values_array = df_csv.between_time(first_hour, last_hour).values
+                        fcst_index = fcst_index[0:len(values_array)] # Fix for different lengths
                         forecast_tp = pd.DataFrame(
-                            df_csv.between_time(first_hour, last_hour).values,
+                            values_array,
                             index=fcst_index,
                         )
                     else:
@@ -1340,7 +1346,9 @@ class Forecast(object):
                     data_list=data_list,
                     list_and_perfect=list_and_perfect,
                 )
-                # Fill the final DF
+                # Ensure correct length
+                forecast_out = forecast_out[0 : len(self.forecast_dates)]
+                df_final = df_final[0 : len(self.forecast_dates)]
                 df_final.loc[:,self.var_load_cost] = forecast_out.values
         else:
             self.logger.error("Passed method is not valid")
@@ -1384,7 +1392,10 @@ class Forecast(object):
             forecast_out = self.get_forecast_out_from_csv_or_list(
                 df_final, forecast_dates_csv, csv_path
             )
-            df_final[self.var_prod_price] = forecast_out
+            # Ensure correct length
+            forecast_out = forecast_out[0 : len(self.forecast_dates)]
+            df_final = df_final[0 : len(self.forecast_dates)]
+            df_final.loc[:,self.var_prod_price] = forecast_out.values
         elif method == "list":  # reading a list of values
             # Loading data from passed list
             data_list = self.params["passed_data"]["prod_price_forecast"]
@@ -1407,8 +1418,10 @@ class Forecast(object):
                     data_list=data_list,
                     list_and_perfect=list_and_perfect,
                 )
-                # Fill the final DF
-                df_final[self.var_prod_price] = forecast_out
+                # Ensure correct length
+                forecast_out = forecast_out[0 : len(self.forecast_dates)]
+                df_final = df_final[0 : len(self.forecast_dates)]
+                df_final.loc[:,self.var_prod_price] = forecast_out.values
         else:
             self.logger.error("Passed method is not valid")
             return False
