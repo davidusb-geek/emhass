@@ -808,6 +808,7 @@ class Forecast(object):
                 df_csv["ts"] = pd.to_datetime(df_csv["ts"], utc=True)
                 # Set the timestamp column as the index
                 df_csv.set_index("ts", inplace=True)
+                df_csv.index = df_csv.index.tz_convert(self.time_zone)
             else:
                 df_csv.index = forecast_dates_csv
                 df_csv.drop(["ts"], axis=1, inplace=True)
