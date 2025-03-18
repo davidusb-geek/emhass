@@ -709,6 +709,7 @@ class Forecast(object):
                 self.params["passed_data"]["beta"],
                 self.var_PV,
             )
+        P_PV_forecast[P_PV_forecast < 0] = 0  # replace any negative PV values with zero
         self.logger.debug("get_power_from_weather returning:\n%s", P_PV_forecast.to_string())
         return P_PV_forecast
 
