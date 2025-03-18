@@ -37,7 +37,13 @@
     },
     "continual_publish": {
       "friendly_name": "Continually publish optimization results",
-      "Description": "set to True to save entities to .json after an optimization run. Then automatically republish the saved entities (with updated current state value) every freq minutes. entity data saved to data_path/entities.",
+      "Description": "Set to True to save entities to .json after an optimization run. Then automatically republish the saved entities (with updated current state value) every freq minutes. entity data saved to data_path/entities.",
+      "input": "boolean",
+      "default_value": false
+    },
+    "infeasible_publish": {
+      "friendly_name": "Publish optimization results when infeasible",
+      "Description": "Set to True to publish optimization results even when the optimization status is infeasible",
       "input": "boolean",
       "default_value": false
     },
