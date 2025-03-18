@@ -537,6 +537,7 @@ class Forecast(object):
         else:
             self.logger.error("Method %r is not valid", method)
             data = None
+        self.logger.debug("get_weather_forecast returning:\n%s", data.to_string())
         return data
 
     def cloud_cover_to_irradiance(
@@ -708,6 +709,7 @@ class Forecast(object):
                 self.params["passed_data"]["beta"],
                 self.var_PV,
             )
+        self.logger.debug("get_power_from_weather returning:\n%s", P_PV_forecast.to_string())
         return P_PV_forecast
 
     def get_forecast_days_csv(self, timedelta_days: Optional[int] = 1) -> pd.date_range:
