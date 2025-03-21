@@ -496,16 +496,14 @@ def perfect_forecast_optim(
     df_input_data = input_data_dict["fcst"].get_load_cost_forecast(
         input_data_dict["df_input_data"],
         method=input_data_dict["fcst"].optim_conf["load_cost_forecast_method"],
-        list_and_perfect = True,
-        days_list = input_data_dict["days_list"]
+        list_and_perfect = True
     )
     if isinstance(df_input_data, bool) and not df_input_data:
         return False
     df_input_data = input_data_dict["fcst"].get_prod_price_forecast(
         df_input_data,
         method=input_data_dict["fcst"].optim_conf["production_price_forecast_method"],
-        list_and_perfect = True,
-        days_list = input_data_dict["days_list"]
+        list_and_perfect = True
     )
     if isinstance(df_input_data, bool) and not df_input_data:
         return False
