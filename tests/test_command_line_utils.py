@@ -41,7 +41,7 @@ logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
 class TestCommandLineUtils(unittest.TestCase):
     @staticmethod
-    def get_test_params():
+    def get_test_params(set_use_pv=False):
         # Build params with default config and secrets
         if emhass_conf["defaults_path"].exists():
             config = utils.build_config(
@@ -49,6 +49,8 @@ class TestCommandLineUtils(unittest.TestCase):
             )
             _, secrets = utils.build_secrets(emhass_conf, logger, no_response=True)
             params = utils.build_params(emhass_conf, secrets, config, logger)
+            if set_use_pv:
+                params['optim_conf']['set_use_pv'] = True
         else:
             raise Exception(
                 "config_defaults. does not exist in path: "
@@ -57,7 +59,7 @@ class TestCommandLineUtils(unittest.TestCase):
         return params
 
     def setUp(self):
-        params = TestCommandLineUtils.get_test_params()
+        params = TestCommandLineUtils.get_test_params(set_use_pv=True)
         # Add runtime parameters for forecast lists
         runtimeparams = {
             "pv_power_forecast": [i + 1 for i in range(48)],
@@ -473,7 +475,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = TestCommandLineUtils.get_test_params()
         runtimeparams = {
             "historic_days_to_retrieve": 20,
-            "model_type": "load_forecast",
+            "model_type": "long_train_data",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
@@ -497,7 +499,7 @@ class TestCommandLineUtils(unittest.TestCase):
             get_data_from_file=True,
         )
         self.assertTrue(
-            input_data_dict["params"]["passed_data"]["model_type"] == "load_forecast"
+            input_data_dict["params"]["passed_data"]["model_type"] == "long_train_data"
         )
         self.assertTrue(
             input_data_dict["params"]["passed_data"]["sklearn_model"]
@@ -517,7 +519,7 @@ class TestCommandLineUtils(unittest.TestCase):
             get_data_from_file=True,
         )
         self.assertTrue(
-            input_data_dict["params"]["passed_data"]["model_type"] == "load_forecast"
+            input_data_dict["params"]["passed_data"]["model_type"] == "long_train_data"
         )
         self.assertTrue(
             input_data_dict["params"]["passed_data"]["sklearn_model"]
@@ -573,7 +575,7 @@ class TestCommandLineUtils(unittest.TestCase):
             "csv_file": "heating_prediction.csv",
             "features": ["degreeday", "solar"],
             "target": "hour",
-            "regression_model": "AdaBoostRegression",
+            "regression_model": "LassoRegression",
             "model_type": "heating_hours_degreeday",
             "timestamp": "timestamp",
             "date_features": ["month", "day_of_week"],
@@ -599,7 +601,7 @@ class TestCommandLineUtils(unittest.TestCase):
         )
         self.assertTrue(
             input_data_dict["params"]["passed_data"]["regression_model"]
-            == "AdaBoostRegression",
+            == "LassoRegression",
         )
         self.assertTrue(
             input_data_dict["params"]["passed_data"]["csv_file"]
@@ -615,7 +617,7 @@ class TestCommandLineUtils(unittest.TestCase):
             "csv_file": "heating_prediction.csv",
             "features": ["degreeday", "solar"],
             "target": "hour",
-            "regression_model": "AdaBoostRegression",
+            "regression_model": "LassoRegression",
             "model_type": "heating_hours_degreeday",
             "timestamp": "timestamp",
             "date_features": ["month", "day_of_week"],
@@ -677,7 +679,7 @@ class TestCommandLineUtils(unittest.TestCase):
             "--debug",
             "True",
             "--params",
-            json.dumps(get_test_params()),
+            json.dumps(get_test_params(set_use_pv=True)),
         ],
     )
     def test_main_perfect_forecast_optim(self):
@@ -740,7 +742,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
             "historic_days_to_retrieve": 20,
-            "model_type": "load_forecast",
+            "model_type": "long_train_data",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
@@ -776,7 +778,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
             "historic_days_to_retrieve": 20,
-            "model_type": "load_forecast",
+            "model_type": "long_train_data",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
@@ -812,7 +814,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
             "historic_days_to_retrieve": 20,
-            "model_type": "load_forecast",
+            "model_type": "long_train_data",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
@@ -850,7 +852,7 @@ class TestCommandLineUtils(unittest.TestCase):
             "csv_file": "heating_prediction.csv",
             "features": ["degreeday", "solar"],
             "target": "hour",
-            "regression_model": "AdaBoostRegression",
+            "regression_model": "LassoRegression",
             "model_type": "heating_hours_degreeday",
             "timestamp": "timestamp",
             "date_features": ["month", "day_of_week"],
@@ -883,7 +885,7 @@ class TestCommandLineUtils(unittest.TestCase):
             "csv_file": "heating_prediction.csv",
             "features": ["degreeday", "solar"],
             "target": "hour",
-            "regression_model": "AdaBoostRegression",
+            "regression_model": "LassoRegression",
             "model_type": "heating_hours_degreeday",
             "timestamp": "timestamp",
             "date_features": ["month", "day_of_week"],

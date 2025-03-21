@@ -14,6 +14,7 @@ secrets_emhass.yaml
 .devcontainer/devcontainer.json
 *.pkl
 **/app
+.cache.sqlite
 
 
 # Byte-compiled / optimized / DLL files
@@ -161,3 +162,4 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
+docs/EMHASS_presentation.pdf

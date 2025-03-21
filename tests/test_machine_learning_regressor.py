@@ -55,7 +55,7 @@ class TestMLRegressor(unittest.TestCase):
             "csv_file": "heating_prediction.csv",
             "features": ["degreeday", "solar"],
             "target": "hour",
-            "regression_model": "AdaBoostRegression",
+            "regression_model": "LassoRegression",
             "model_type": "heating_hours_degreeday",
             "timestamp": "timestamp",
             "date_features": ["month", "day_of_week"],

@@ -11,8 +11,10 @@ import pickle
 import re
 import unittest
 
+import numpy as np
 import pandas as pd
 import requests_mock
+from sklearn.metrics import mean_squared_error, r2_score
 
 from emhass import utils
 from emhass.command_line import set_input_data_dict
@@ -29,7 +31,6 @@ emhass_conf["data_path"] = root / "data/"
 emhass_conf["root_path"] = root / "src/emhass/"
 emhass_conf["defaults_path"] = emhass_conf["root_path"] / "data/config_defaults.json"
 emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations.csv"
-
 
 # create logger
 logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
@@ -86,12 +87,17 @@ class TestForecast(unittest.TestCase):
             self.retrieve_hass_conf["sensor_power_photovoltaics"] = str(
                 self.var_list[1]
             )
+            self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"] = str(
+                self.var_list[2]
+            )
             self.retrieve_hass_conf["sensor_linear_interp"] = [
                 retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
                 retrieve_hass_conf["sensor_power_load_no_var_loads"],
             ]
             self.retrieve_hass_conf["sensor_replace_zero"] = [
-                retrieve_hass_conf["sensor_power_photovoltaics"]
+                retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
             ]
         # Else obtain sensor values from HA
         else:
@@ -101,6 +107,7 @@ class TestForecast(unittest.TestCase):
             self.var_list = [
                 self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
                 self.retrieve_hass_conf["sensor_power_photovoltaics"],
+                self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
             ]
             self.rh.get_data(
                 self.days_list,
@@ -198,6 +205,45 @@ class TestForecast(unittest.TestCase):
         self.assertEqual(len(self.df_weather_csv), len(P_PV_forecast))
         df_weather_none = self.fcst.get_weather_forecast(method="none")
         self.assertTrue(df_weather_none is None)
+
+    # Test PV forecast adjustment
+    def test_pv_forecast_adjust(self):
+        model_type = "long_train_data"
+        data_path = emhass_conf["data_path"] / str(model_type + ".pkl")
+        with open(data_path, "rb") as fid:
+            data, _, _, _ = pickle.load(fid)
+        # Clean nan's
+        data = data.interpolate(method="linear", axis=0, limit=5)
+        data = data.fillna(0.0)
+        # Extract target and predictor
+        P_PV = data["sensor.power_photovoltaics"]  # Actual PV production
+        P_PV_forecast = data["sensor.p_pv_forecast"]  # Forecasted PV production
+        # Define time ranges
+        last_day = data.index.max().normalize()  # Last available day
+        three_months_ago = last_day - pd.DateOffset(months=3)
+        # Train/Test: Last 3 months (excluding the last day)
+        train_test_mask = (data.index >= three_months_ago) & (data.index < last_day)
+        P_PV_train_test = P_PV[train_test_mask]
+        P_PV_forecast_train_test = P_PV_forecast[train_test_mask]
+        # Validation: Last day only
+        validation_mask = data.index >= last_day
+        P_PV_validation = P_PV[validation_mask]
+        P_PV_forecast_validation = P_PV_forecast[validation_mask]
+        P_PV_forecast_adjusted = self.fcst.adjust_pv_forecast(
+            P_PV_train_test,
+            P_PV_forecast_train_test,
+            P_PV_forecast_validation,
+            n_splits = 5,
+            regression_model = "LassoRegression"
+        )
+        self.assertEqual(len(P_PV_forecast_adjusted), len(P_PV_forecast_validation))
+        self.assertFalse(P_PV_forecast_adjusted.isna().any().any(), "Adjusted forecast contains NaN values")
+        rmse = np.sqrt(mean_squared_error(P_PV_validation, P_PV_forecast_adjusted))
+        r2 = r2_score(P_PV_validation, P_PV_forecast_adjusted)
+        logger.info(f"Adjusted PV power metrics: RMSE = {rmse}, R2 = {r2}")
+        self.assertGreaterEqual(rmse, 0.0, "RMSE should be non-negative")
+        self.assertLessEqual(r2, 1.0, "R² score should be at most 1")
+        self.assertGreaterEqual(r2, -1.0, "R² score should be at least -1")
 
     # Test output weather forecast using openmeteo with mock get request data
     def test_get_weather_forecast_openmeteo_method_mock(self):
@@ -520,10 +566,12 @@ class TestForecast(unittest.TestCase):
             retrieve_hass_conf["sensor_power_photovoltaics"] = str(self.var_list[1])
             retrieve_hass_conf["sensor_linear_interp"] = [
                 retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
                 retrieve_hass_conf["sensor_power_load_no_var_loads"],
             ]
             retrieve_hass_conf["sensor_replace_zero"] = [
-                retrieve_hass_conf["sensor_power_photovoltaics"]
+                retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
             ]
         # Else obtain sensor values from HA
         else:
@@ -533,6 +581,7 @@ class TestForecast(unittest.TestCase):
             var_list = [
                 retrieve_hass_conf["sensor_power_load_no_var_loads"],
                 retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
             ]
             rh.get_data(
                 days_list,
@@ -757,10 +806,12 @@ class TestForecast(unittest.TestCase):
             retrieve_hass_conf["sensor_power_photovoltaics"] = str(self.var_list[1])
             retrieve_hass_conf["sensor_linear_interp"] = [
                 retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
                 retrieve_hass_conf["sensor_power_load_no_var_loads"],
             ]
             retrieve_hass_conf["sensor_replace_zero"] = [
-                retrieve_hass_conf["sensor_power_photovoltaics"]
+                retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
             ]
         # Else obtain sensor values from HA
         else:
@@ -770,6 +821,7 @@ class TestForecast(unittest.TestCase):
             var_list = [
                 retrieve_hass_conf["sensor_power_load_no_var_loads"],
                 retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
             ]
             rh.get_data(
                 days_list,
@@ -944,7 +996,7 @@ class TestForecast(unittest.TestCase):
         # pass custom runtime parameters
         runtimeparams = {
             "historic_days_to_retrieve": 20,
-            "model_type": "load_forecast",
+            "model_type": "long_train_data",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
@@ -1034,7 +1086,7 @@ class TestForecast(unittest.TestCase):
         self.assertTrue(self.fcst.var_prod_price in df_input_data.columns)
         self.assertTrue(df_input_data.isnull().sum().sum() == 0)
         df_input_data = self.fcst.get_prod_price_forecast(
-            self.df_input_data, method="csv", csv_path="data_load_cost_forecast.csv"
+            self.df_input_data, method="csv", csv_path="data_prod_price_forecast.csv"
         )
         self.assertTrue(self.fcst.var_prod_price in df_input_data.columns)
         self.assertTrue(df_input_data.isnull().sum().sum() == 0)
