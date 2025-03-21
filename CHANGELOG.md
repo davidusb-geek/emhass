@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+- Added a new feature to automatically adjust PV forecast using historical actual/forecast data
+- Added Support for multiple days forecasting with CSV data. Thanks to @nielskool for this contribution!
+- Fixed Value has dtype incompatible with int64 error, issue #465
+- Fixed Runtime "delta_forecast_daily" not recognized, issue #479
+- Refactored a new method `retrieve_home_assistant_data` in `command_line`
+- Added a presentation stack using `marp`
+- Fixed workflow for macos tests
+- Unified default training data for ML algorithms using `data/long_train_data.pkl`
+
 ## 0.12.8 - 2025-02-27
 ### Improvement
 - Added a new method for weather forecast: open-meteo. This offers a very nice API to obtain weather forecasts. We are dropping the old scrapper method, if you were using the scapper method you just need to change the Weather forecast method to open-meteo

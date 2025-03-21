@@ -28,7 +28,15 @@ default_csv_filename = "opt_res_latest.csv"
 default_pkl_suffix = "_mlf.pkl"
 default_metadata_json = "metadata.json"
 
-def retrieve_home_assistant_data(set_type, get_data_from_file, retrieve_hass_conf, optim_conf, rh, emhass_conf, test_df_literal):
+def retrieve_home_assistant_data(
+    set_type: str,
+    get_data_from_file: bool, 
+    retrieve_hass_conf: dict,
+    optim_conf: dict,
+    rh: RetrieveHass,
+    emhass_conf: dict,
+    test_df_literal: pd.DataFrame
+) -> dict:
     """Retrieve data from Home Assistant or file and prepare it for optimization."""
     # Determine days_list based on set_type
     if set_type == "perfect-optim":
@@ -39,7 +47,7 @@ def retrieve_home_assistant_data(set_type, get_data_from_file, retrieve_hass_con
         days_list = None  # Not needed for dayahead
     if get_data_from_file:
         with open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
-            rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
+            rh.df_final, _, var_list, rh.ha_config = pickle.load(inp) # TODO: Update rh.df_final with complete days >> Probably why perfect-optim fails
         # Assign variables based on set_type
         retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
         if optim_conf.get("set_use_pv", True):
@@ -49,7 +57,8 @@ def retrieve_home_assistant_data(set_type, get_data_from_file, retrieve_hass_con
                 retrieve_hass_conf["sensor_power_load_no_var_loads"],
             ]
             retrieve_hass_conf["sensor_replace_zero"] = [
-                retrieve_hass_conf["sensor_power_photovoltaics"]
+                retrieve_hass_conf["sensor_power_photovoltaics"],
+                var_list[2],
             ]
         else:
             retrieve_hass_conf["sensor_linear_interp"] = [
@@ -487,14 +496,16 @@ def perfect_forecast_optim(
     df_input_data = input_data_dict["fcst"].get_load_cost_forecast(
         input_data_dict["df_input_data"],
         method=input_data_dict["fcst"].optim_conf["load_cost_forecast_method"],
-        list_and_perfect=True,
+        list_and_perfect = True,
+        days_list = input_data_dict["days_list"]
     )
     if isinstance(df_input_data, bool) and not df_input_data:
         return False
     df_input_data = input_data_dict["fcst"].get_prod_price_forecast(
         df_input_data,
         method=input_data_dict["fcst"].optim_conf["production_price_forecast_method"],
-        list_and_perfect=True,
+        list_and_perfect = True,
+        days_list = input_data_dict["days_list"]
     )
     if isinstance(df_input_data, bool) and not df_input_data:
         return False

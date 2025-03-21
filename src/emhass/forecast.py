@@ -841,6 +841,7 @@ class Forecast(object):
         csv_path: str,
         data_list: Optional[list] = None,
         list_and_perfect: Optional[bool] = False,
+        days_list: Optional[pd.date_range] = None
     ) -> pd.DataFrame:
         r"""
         Get the forecast data as a DataFrame from a CSV file.
@@ -866,7 +867,6 @@ class Forecast(object):
             df_csv.drop(["ts"], axis=1, inplace=True)
             df_csv = set_df_index_freq(df_csv)
             if list_and_perfect:
-                df_final = set_df_index_freq(df_final)
                 days_list = df_final.index.day.unique().tolist()
             else:
                 days_list = df_csv.index.day.unique().tolist()
@@ -893,9 +893,11 @@ class Forecast(object):
         forecast_out = pd.DataFrame()
         for day in days_list:
             if csv_path is None:
+                df_final = set_df_index_freq(df_final)
                 df_tmp = copy.deepcopy(df_final)
             else:
                 if list_and_perfect:
+                    df_final = set_df_index_freq(df_final)
                     df_tmp = copy.deepcopy(df_final)
                 else:
                     df_tmp = copy.deepcopy(df_csv)
@@ -1281,6 +1283,7 @@ class Forecast(object):
         method: Optional[str] = "hp_hc_periods",
         csv_path: Optional[str] = "data_load_cost_forecast.csv",
         list_and_perfect: Optional[bool] = False,
+        days_list: Optional[pd.date_range] = None
     ) -> pd.DataFrame:
         r"""
         Get the unit cost for the load consumption based on multiple tariff \
@@ -1301,6 +1304,12 @@ class Forecast(object):
         :rtype: pd.DataFrame
 
         """
+        if days_list is not None:
+            days_list_tz = days_list.tz_convert(self.time_zone).round(self.freq)[
+                :-1
+            ]  # Converted to tz and without the current day (today)
+        else:
+            days_list_tz = None
         csv_path = self.emhass_conf["data_path"] / csv_path
         if method == "hp_hc_periods":
             df_final[self.var_load_cost] = self.optim_conf["load_offpeak_hours_cost"]
@@ -1321,8 +1330,9 @@ class Forecast(object):
                 df_final, forecast_dates_csv, csv_path
             )
             # Ensure correct length
-            forecast_out = forecast_out[0 : len(self.forecast_dates)]
-            df_final = df_final[0 : len(self.forecast_dates)]
+            if not list_and_perfect:
+                forecast_out = forecast_out[0 : len(self.forecast_dates)]
+                df_final = df_final[0 : len(self.forecast_dates)]
             df_final.loc[:,self.var_load_cost] = forecast_out.values
         elif method == "list":  # reading a list of values
             # Loading data from passed list
@@ -1337,6 +1347,8 @@ class Forecast(object):
             else:
                 # Ensure correct length
                 data_list = data_list[0 : len(self.forecast_dates)]
+                if not list_and_perfect:
+                    df_final = df_final.iloc[0 : len(self.forecast_dates)]
                 # Define the correct dates
                 forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
                 forecast_out = self.get_forecast_out_from_csv_or_list(
@@ -1345,11 +1357,15 @@ class Forecast(object):
                     None,
                     data_list=data_list,
                     list_and_perfect=list_and_perfect,
+                    days_list=days_list_tz,
                 )
                 # Ensure correct length
-                forecast_out = forecast_out[0 : len(self.forecast_dates)]
-                df_final = df_final[0 : len(self.forecast_dates)]
-                df_final.loc[:,self.var_load_cost] = forecast_out.values
+                # if list_and_perfect:
+                #     df_final[self.var_load_cost] = forecast_out
+                # else:
+                #     forecast_out = forecast_out[0 : len(self.forecast_dates)]
+                #     df_final.loc[:,self.var_load_cost] = forecast_out.values
+                df_final[self.var_load_cost] = forecast_out
         else:
             self.logger.error("Passed method is not valid")
             return False
@@ -1361,6 +1377,7 @@ class Forecast(object):
         method: Optional[str] = "constant",
         csv_path: Optional[str] = "data_prod_price_forecast.csv",
         list_and_perfect: Optional[bool] = False,
+        days_list: Optional[pd.date_range] = None
     ) -> pd.DataFrame:
         r"""
         Get the unit power production price for the energy injected to the grid.\
@@ -1382,6 +1399,12 @@ class Forecast(object):
         :rtype: pd.DataFrame
 
         """
+        if days_list is not None:
+            days_list_tz = days_list.tz_convert(self.time_zone).round(self.freq)[
+                :-1
+            ]  # Converted to tz and without the current day (today)
+        else:
+            days_list_tz = None
         csv_path = self.emhass_conf["data_path"] / csv_path
         if method == "constant":
             df_final[self.var_prod_price] = self.optim_conf[
@@ -1393,8 +1416,9 @@ class Forecast(object):
                 df_final, forecast_dates_csv, csv_path
             )
             # Ensure correct length
-            forecast_out = forecast_out[0 : len(self.forecast_dates)]
-            df_final = df_final[0 : len(self.forecast_dates)]
+            if not list_and_perfect:
+                forecast_out = forecast_out[0 : len(self.forecast_dates)]
+                df_final = df_final[0 : len(self.forecast_dates)]
             df_final.loc[:,self.var_prod_price] = forecast_out.values
         elif method == "list":  # reading a list of values
             # Loading data from passed list
@@ -1409,6 +1433,8 @@ class Forecast(object):
             else:
                 # Ensure correct length
                 data_list = data_list[0 : len(self.forecast_dates)]
+                if not list_and_perfect:
+                    df_final = df_final.iloc[0 : len(self.forecast_dates)]
                 # Define the correct dates
                 forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
                 forecast_out = self.get_forecast_out_from_csv_or_list(
@@ -1417,11 +1443,20 @@ class Forecast(object):
                     None,
                     data_list=data_list,
                     list_and_perfect=list_and_perfect,
+                    days_list=days_list_tz
                 )
                 # Ensure correct length
-                forecast_out = forecast_out[0 : len(self.forecast_dates)]
-                df_final = df_final[0 : len(self.forecast_dates)]
-                df_final.loc[:,self.var_prod_price] = forecast_out.values
+                # if list_and_perfect:
+                #     df_final[self.var_load_cost] = forecast_out
+                # else:
+                #     forecast_out = forecast_out[0 : len(self.forecast_dates)]
+                #     df_final.loc[:,self.var_load_cost] = forecast_out.values
+                df_final[self.var_prod_price] = forecast_out
+                # # Ensure correct length
+                # if not list_and_perfect:
+                #     forecast_out = forecast_out[0 : len(self.forecast_dates)]
+                #     df_final = df_final[0 : len(self.forecast_dates)]
+                # df_final.loc[:,self.var_prod_price] = forecast_out.values
         else:
             self.logger.error("Passed method is not valid")
             return False

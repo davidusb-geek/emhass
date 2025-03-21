@@ -656,10 +656,10 @@ class TestOptimization(unittest.TestCase):
         )
 
         self.df_input_data_dayahead = fcst.get_load_cost_forecast(
-            self.df_input_data_dayahead, method="list", list_and_perfect=True
+            self.df_input_data_dayahead, method="list"
         )
         self.df_input_data_dayahead = fcst.get_prod_price_forecast(
-            self.df_input_data_dayahead, method="list", list_and_perfect=True
+            self.df_input_data_dayahead, method="list"
         )
 
         self.opt_res_dayahead = self.opt.perform_naive_mpc_optim(

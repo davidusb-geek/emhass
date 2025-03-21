@@ -1689,7 +1689,7 @@ def get_days_list(days_to_retrieve: int) -> pd.date_range:
     """
     today = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     d = (today - timedelta(days=days_to_retrieve)).isoformat()
-    days_list = pd.date_range(start=d, end=today.isoformat(), freq="D")
+    days_list = pd.date_range(start=d, end=today.isoformat(), freq="D").normalize()
     return days_list
 
 
