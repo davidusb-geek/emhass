@@ -733,37 +733,72 @@ class Forecast(object):
         df["solar_elevation"] = solpos["elevation"]
         df["solar_azimuth"] = solpos["azimuth"]
         return df
-
-    def adjust_pv_forecast(
-            self, P_PV: pd.DataFrame, P_PV_forecast: pd.DataFrame, 
-            P_PV_forecast_new: pd.DataFrame, n_splits: int = 5, 
-            regression_model: str = "LassoRegression"
+    
+    def adjust_pv_forecast_data_prep(
+        self, data: pd.DataFrame
     ) -> pd.DataFrame:
         """
-        Adjust future PV forecast based on historical actual and forecasted PV production,
-        using Linear Regression with additional solar and date features.
+        Prepare data for adjusting the photovoltaic (PV) forecast.
 
-        :param P_PV: DataFrame with historical actual PV production (timestamps as index).
-        :param P_PV_forecast: DataFrame with historical PV forecast values (timestamps as index).
-        :param P_PV_forecast_new: DataFrame with new PV forecast values to adjust (timestamps as index).
-        :param n_splits: Number of time-based splits for cross-validation.
-        :return: DataFrame with adjusted PV forecast.
+        This method aligns the actual PV production data with the forecasted data,
+        adds additional features for analysis, and separates the predictors (X)
+        from the target variable (y).
+
+        :param data: A DataFrame containing the actual PV production data and the 
+        forecasted PV production data.
+        :type data: pd.DataFrame
         """
+        # Extract target and predictor
+        P_PV = data["sensor.power_photovoltaics"]  # Actual PV production
+        P_PV_forecast = data["sensor.p_pv_forecast"]  # Forecasted PV production
+        # Define time ranges
+        last_day = data.index.max().normalize()  # Last available day
+        three_months_ago = last_day - pd.DateOffset(days=90)
+        # Train/Test: Last 3 months (excluding the last day)
+        train_test_mask = (data.index >= three_months_ago) & (data.index < last_day)
+        self.P_PV_train_test = P_PV[train_test_mask]
+        self.P_PV_forecast_train_test = P_PV_forecast[train_test_mask]
+        # Validation: Last day only
+        validation_mask = data.index >= last_day
+        self.P_PV_validation = P_PV[validation_mask]
+        self.P_PV_forecast_validation = P_PV_forecast[validation_mask]
         # Ensure data is aligned
-        df = pd.concat([P_PV.rename("actual"), P_PV_forecast.rename("forecast")], axis=1).dropna()
+        self.data_adjust_pv = pd.concat([P_PV.rename("actual"), P_PV_forecast.rename("forecast")], axis=1).dropna()
         # Add more features
-        df = add_date_features(df)
-        df = Forecast.compute_solar_angles(df, self.lat, self.lon)
+        self.data_adjust_pv = add_date_features(self.data_adjust_pv)
+        self.data_adjust_pv = Forecast.compute_solar_angles(self.data_adjust_pv, self.lat, self.lon)
         # Features (X) and target (y)
-        X = df.drop(columns=["actual"])  # Predictors
-        y = df["actual"]  # Target: actual PV production
+        self.X_adjust_pv = self.data_adjust_pv.drop(columns=["actual"])  # Predictors
+        self.y_adjust_pv = self.data_adjust_pv["actual"]  # Target: actual PV production
+
+    def adjust_pv_forecast_fit(
+        self, n_splits: int = 5, regression_model: str = "LassoRegression", 
+        debug: Optional[bool] = False
+    ) -> pd.DataFrame:
+        """
+        Fit a regression model to adjust the photovoltaic (PV) forecast.
+
+        This method uses historical actual and forecasted PV production data, along with
+        additional solar and date features, to train a regression model. The model is
+        optimized using a grid search with time-series cross-validation.
+
+        :param n_splits: The number of splits for time-series cross-validation, defaults to 5.
+        :type n_splits: int, optional
+        :param regression_model: The type of regression model to use. Options include \
+            "LassoRegression", "RidgeRegression", etc., defaults to "LassoRegression".
+        :type regression_model: str, optional
+        :param debug: If True, the model is not saved to disk, useful for debugging, defaults to False.
+        :type debug: bool, optional
+        :return: A DataFrame containing the adjusted PV forecast.
+        :rtype: pd.DataFrame
+        """
         # Get regression model and hyperparameter grid
         mlr = MLRegressor(
-            df,
+            self.data_adjust_pv,
             "adjusted_pv_forecast",
             regression_model,
-            list(X.columns),
-            list(y.name),
+            list(self.X_adjust_pv.columns),
+            list(self.y_adjust_pv.name),
             None,
             self.logger,
         )
@@ -773,15 +808,30 @@ class Forecast(object):
         tscv = TimeSeriesSplit(n_splits=n_splits)
         grid_search = GridSearchCV(model, param_grid, cv=tscv, scoring="neg_mean_squared_error", verbose=0)
         # Train model
-        grid_search.fit(X, y)
-        best_model = grid_search.best_estimator_
-        # Prepare new forecast data
-        P_PV_forecast_new = P_PV_forecast_new.rename("forecast")
-        P_PV_forecast_new = P_PV_forecast_new.to_frame()
-        P_PV_forecast_new = add_date_features(P_PV_forecast_new)
-        P_PV_forecast_new = Forecast.compute_solar_angles(P_PV_forecast_new, self.lat, self.lon)
-        P_PV_forecast_new["adjusted_forecast"] = best_model.predict(P_PV_forecast_new)
-        return P_PV_forecast_new[["adjusted_forecast"]]
+        grid_search.fit(self.X_adjust_pv, self.y_adjust_pv)
+        self.model_adjust_pv = grid_search.best_estimator_
+        # Save model
+        if not debug:
+            filename = "adjust_pv_regressor.pkl"
+            filename_path = self.emhass_conf["data_path"] / filename
+            with open(filename_path, "wb") as outp:
+                pickle.dump(self.model_adjust_pv, outp, pickle.HIGHEST_PROTOCOL)
+
+    def adjust_pv_forecast_predict(self):
+        """
+        Predict the adjusted photovoltaic (PV) forecast.
+
+        This method uses the trained regression model to predict the adjusted PV forecast
+        based on the validation data. It applies additional features such as date and solar
+        angles to the forecasted PV production data before making predictions.
+
+        :return: None. The adjusted forecast is stored in the validation DataFrame as a new column.
+        """
+        self.P_PV_forecast_validation = self.P_PV_forecast_validation.rename("forecast")
+        self.P_PV_forecast_validation = self.P_PV_forecast_validation.to_frame()
+        self.P_PV_forecast_validation = add_date_features(self.P_PV_forecast_validation)
+        self.P_PV_forecast_validation = Forecast.compute_solar_angles(self.P_PV_forecast_validation, self.lat, self.lon)
+        self.P_PV_forecast_validation["adjusted_forecast"] = self.model_adjust_pv.predict(self.P_PV_forecast_validation)
 
     def get_forecast_days_csv(self, timedelta_days: Optional[int] = 1) -> pd.date_range:
         r"""
@@ -1137,6 +1187,8 @@ class Forecast(object):
             )
             with open(data_path, "rb") as fid:
                 data, _, _, _ = pickle.load(fid)
+            # Ensure the data index is timezone-aware and matches self.forecast_dates' timezone
+            data.index = data.index.tz_localize(self.forecast_dates.tz) if data.index.tz is None else data.index.tz_convert(self.forecast_dates.tz)
             # Resample the data if needed
             data = data[[self.var_load]]
             current_freq = pd.Timedelta("30min")

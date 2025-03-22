@@ -215,31 +215,23 @@ class TestForecast(unittest.TestCase):
         # Clean nan's
         data = data.interpolate(method="linear", axis=0, limit=5)
         data = data.fillna(0.0)
-        # Extract target and predictor
-        P_PV = data["sensor.power_photovoltaics"]  # Actual PV production
-        P_PV_forecast = data["sensor.p_pv_forecast"]  # Forecasted PV production
-        # Define time ranges
-        last_day = data.index.max().normalize()  # Last available day
-        three_months_ago = last_day - pd.DateOffset(months=3)
-        # Train/Test: Last 3 months (excluding the last day)
-        train_test_mask = (data.index >= three_months_ago) & (data.index < last_day)
-        P_PV_train_test = P_PV[train_test_mask]
-        P_PV_forecast_train_test = P_PV_forecast[train_test_mask]
-        # Validation: Last day only
-        validation_mask = data.index >= last_day
-        P_PV_validation = P_PV[validation_mask]
-        P_PV_forecast_validation = P_PV_forecast[validation_mask]
-        P_PV_forecast_adjusted = self.fcst.adjust_pv_forecast(
-            P_PV_train_test,
-            P_PV_forecast_train_test,
-            P_PV_forecast_validation,
+        # Call data preparation method
+        self.fcst.adjust_pv_forecast_data_prep(data)
+        self.assertIsInstance(self.fcst.data_adjust_pv, pd.DataFrame)
+        self.assertIsInstance(self.fcst.X_adjust_pv, pd.DataFrame)
+        self.assertIsInstance(self.fcst.y_adjust_pv, pd.core.series.Series)
+        # Call the fit method
+        self.fcst.adjust_pv_forecast_fit(
             n_splits = 5,
-            regression_model = "LassoRegression"
+            regression_model = "LassoRegression",
+            debug = False
         )
-        self.assertEqual(len(P_PV_forecast_adjusted), len(P_PV_forecast_validation))
-        self.assertFalse(P_PV_forecast_adjusted.isna().any().any(), "Adjusted forecast contains NaN values")
-        rmse = np.sqrt(mean_squared_error(P_PV_validation, P_PV_forecast_adjusted))
-        r2 = r2_score(P_PV_validation, P_PV_forecast_adjusted)
+        # Call the predict method
+        self.fcst.adjust_pv_forecast_predict()
+        self.assertEqual(len(self.fcst.P_PV_forecast_validation["adjusted_forecast"]), len(self.fcst.P_PV_forecast_validation))
+        self.assertFalse(self.fcst.P_PV_forecast_validation["adjusted_forecast"].isna().any().any(), "Adjusted forecast contains NaN values")
+        rmse = np.sqrt(mean_squared_error(self.fcst.P_PV_validation, self.fcst.P_PV_forecast_validation["adjusted_forecast"]))
+        r2 = r2_score(self.fcst.P_PV_validation, self.fcst.P_PV_forecast_validation["adjusted_forecast"])
         logger.info(f"Adjusted PV power metrics: RMSE = {rmse}, R2 = {r2}")
         self.assertGreaterEqual(rmse, 0.0, "RMSE should be non-negative")
         self.assertLessEqual(r2, 1.0, "R² score should be at most 1")

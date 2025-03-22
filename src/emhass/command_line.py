@@ -207,6 +207,9 @@ def set_input_data_dict(
             if isinstance(df_weather, bool) and not df_weather:
                 return False
             P_PV_forecast = fcst.get_power_from_weather(df_weather)
+            # Adjust PV forecast
+            # ... TODO
+            # if set_use_adjust_pv >> if pv_adjust_method == "fit-predict"
         else:
             P_PV_forecast = pd.Series(0, index=fcst.forecast_dates)
         P_load_forecast = fcst.get_load_forecast(
@@ -284,6 +287,8 @@ def set_input_data_dict(
             P_PV_forecast = fcst.get_power_from_weather(
                 df_weather, set_mix_forecast=set_mix_forecast, df_now=df_input_data
             )
+            # Adjust PV forecast
+            # ... TODO
         else:
             P_PV_forecast = pd.Series(0, index=fcst.forecast_dates)
         P_load_forecast = fcst.get_load_forecast(
