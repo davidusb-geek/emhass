@@ -27,6 +27,7 @@ from requests import get
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
+from sklearn.metrics import mean_squared_error, r2_score
 
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
@@ -810,6 +811,12 @@ class Forecast(object):
         # Train model
         grid_search.fit(self.X_adjust_pv, self.y_adjust_pv)
         self.model_adjust_pv = grid_search.best_estimator_
+        # Calculate training metrics
+        y_pred_train = self.model_adjust_pv.predict(self.X_adjust_pv)
+        self.rmse = np.sqrt(mean_squared_error(self.y_adjust_pv, y_pred_train))
+        self.r2 = r2_score(self.y_adjust_pv, y_pred_train)
+        # Log the metrics
+        self.logger.info(f"PV adjust Training metrics: RMSE = {self.rmse}, R2 = {self.r2}")
         # Save model
         if not debug:
             filename = "adjust_pv_regressor.pkl"
@@ -817,21 +824,58 @@ class Forecast(object):
             with open(filename_path, "wb") as outp:
                 pickle.dump(self.model_adjust_pv, outp, pickle.HIGHEST_PROTOCOL)
 
-    def adjust_pv_forecast_predict(self):
+    def adjust_pv_forecast_predict(
+        self, forecasted_pv: Optional[pd.DataFrame] = None
+    ) -> pd.DataFrame:
         """
         Predict the adjusted photovoltaic (PV) forecast.
 
         This method uses the trained regression model to predict the adjusted PV forecast
-        based on the validation data. It applies additional features such as date and solar
-        angles to the forecasted PV production data before making predictions.
+        based on either the validation data stored in `self` or a new forecasted PV data
+        passed as input. It applies additional features such as date and solar angles to
+        the forecasted PV production data before making predictions. The solar elevation
+        is used to avoid negative values and to fix values at the beginning and end of the day.
 
-        :return: None. The adjusted forecast is stored in the validation DataFrame as a new column.
+        :param forecasted_pv: Optional. A DataFrame containing the forecasted PV production data.
+                            It must have a DateTime index and a column named "forecast".
+                            If not provided, the method will use `self.P_PV_forecast_validation`.
+        :type forecasted_pv: pd.DataFrame, optional
+        :return: A DataFrame containing the adjusted PV forecast with additional features.
+        :rtype: pd.DataFrame
         """
-        self.P_PV_forecast_validation = self.P_PV_forecast_validation.rename("forecast")
-        self.P_PV_forecast_validation = self.P_PV_forecast_validation.to_frame()
-        self.P_PV_forecast_validation = add_date_features(self.P_PV_forecast_validation)
-        self.P_PV_forecast_validation = Forecast.compute_solar_angles(self.P_PV_forecast_validation, self.lat, self.lon)
-        self.P_PV_forecast_validation["adjusted_forecast"] = self.model_adjust_pv.predict(self.P_PV_forecast_validation)
+        # Use the provided forecasted PV data or fall back to the validation data in `self`
+        if forecasted_pv is not None:
+            # Ensure the input DataFrame has the required structure
+            if "forecast" not in forecasted_pv.columns:
+                raise ValueError("The input DataFrame must contain a 'forecast' column.")
+            forecast_data = forecasted_pv.copy()
+        else:
+            # Use the validation data stored in `self`
+            forecast_data = self.P_PV_forecast_validation.rename("forecast").to_frame()
+        # Prepare the forecasted PV data
+        forecast_data = add_date_features(forecast_data)
+        forecast_data = Forecast.compute_solar_angles(forecast_data, self.lat, self.lon)
+        # Predict the adjusted forecast
+        forecast_data["adjusted_forecast"] = self.model_adjust_pv.predict(forecast_data)
+        # Apply solar elevation weighting only for specific cases
+        def apply_weighting(row):
+            if row["solar_elevation"] <= 0:  # Nighttime or negative solar elevation
+                return 0
+            elif row["solar_elevation"] < 10:  # Early morning or late evening
+                return max(row["adjusted_forecast"] * (row["solar_elevation"] / 10), 0)
+            else:  # Daytime with sufficient solar elevation
+                return row["adjusted_forecast"]
+        forecast_data["adjusted_forecast"] = forecast_data.apply(apply_weighting, axis=1)
+        # If using validation data, calculate validation metrics
+        if forecasted_pv is None:
+            y_true = self.P_PV_validation.values
+            y_pred = forecast_data["adjusted_forecast"].values
+            self.validation_rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+            self.validation_r2 = r2_score(y_true, y_pred)
+            # Log the validation metrics
+            self.logger.info(f"PV adjust Validation metrics: RMSE = {self.validation_rmse}, R2 = {self.validation_r2}")
+        # Return the DataFrame with the adjusted forecast
+        return forecast_data
 
     def get_forecast_days_csv(self, timedelta_days: Optional[int] = 1) -> pd.date_range:
         r"""

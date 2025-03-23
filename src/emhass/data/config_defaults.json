@@ -34,12 +34,15 @@
     3000.0,
     750.0
   ],
+  "minimum_power_of_deferrable_loads": [
+    0.0,
+    0.0
+  ],
   "operating_hours_of_each_deferrable_load": [
     4,
     0
   ],
   "weather_forecast_method": "open-meteo",
-  "pv_adjust_method": "fit-predict",
   "load_forecast_method": "naive",
   "delta_forecast_daily": 1,
   "load_cost_forecast_method": "hp_hc_periods",

@@ -242,6 +242,12 @@
       "input": "boolean",
       "default_value": false
     },
+    "set_use_adjusted_pv": {
+      "friendly_name": "Enable adjusted PV system",
+      "Description": "Set to True if we should consider an adjusted solar PV system. Defaults to False",
+      "input": "boolean",
+      "default_value": false
+    },
     "pv_module_model": {
       "friendly_name": "PV module model name",
       "Description": "The PV module model. This parameter can be a list of items to enable the simulation of mixed orientation systems.",
@@ -293,6 +299,12 @@
       "Description": "The nominal (calculated max) power for each deferrable load in Watts.",
       "input": "array.float",
       "default_value": 3000.0
+    },
+    "minimum_power_of_deferrable_loads": {
+      "friendly_name": "Deferrable load minimum power",
+      "Description": "The minimum power for each deferrable load in Watts.",
+      "input": "array.float",
+      "default_value": 0.0
     },
     "operating_hours_of_each_deferrable_load": {
       "friendly_name": "Deferrable load operating hours",

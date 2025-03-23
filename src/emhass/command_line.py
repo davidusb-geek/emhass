@@ -39,7 +39,7 @@ def retrieve_home_assistant_data(
 ) -> dict:
     """Retrieve data from Home Assistant or file and prepare it for optimization."""
     # Determine days_list based on set_type
-    if set_type == "perfect-optim":
+    if set_type == "perfect-optim" or set_type == "adjust_pv":
         days_list = utils.get_days_list(retrieve_hass_conf["historic_days_to_retrieve"])
     elif set_type == "naive-mpc-optim":
         days_list = utils.get_days_list(1)
@@ -79,6 +79,64 @@ def retrieve_home_assistant_data(
         var_interp=retrieve_hass_conf["sensor_linear_interp"],
     )
     return True, rh.df_final.copy(), days_list
+
+def adjust_pv_forecast(
+    logger: logging.Logger,
+    fcst: Forecast,
+    P_PV_forecast: pd.Series,
+    get_data_from_file: bool,
+    retrieve_hass_conf: dict,
+    optim_conf: dict,
+    rh: RetrieveHass,
+    emhass_conf: dict,
+    test_df_literal: pd.DataFrame,
+) -> pd.Series:
+    """
+    Adjust the photovoltaic (PV) forecast using historical data and a regression model.
+
+    This method retrieves historical data, prepares it for model fitting, trains a regression
+    model, and adjusts the provided PV forecast based on the trained model.
+
+    :param logger: Logger object for logging information and errors.
+    :type logger: logging.Logger
+    :param fcst: Forecast object used for PV forecast adjustment.
+    :type fcst: Forecast
+    :param P_PV_forecast: The initial PV forecast to be adjusted.
+    :type P_PV_forecast: pd.Series
+    :param get_data_from_file: Whether to retrieve data from a file instead of Home Assistant.
+    :type get_data_from_file: bool
+    :param retrieve_hass_conf: Configuration dictionary for retrieving data from Home Assistant.
+    :type retrieve_hass_conf: dict
+    :param optim_conf: Configuration dictionary for optimization settings.
+    :type optim_conf: dict
+    :param rh: RetrieveHass object for interacting with Home Assistant.
+    :type rh: RetrieveHass
+    :param emhass_conf: Configuration dictionary for emhass paths and settings.
+    :type emhass_conf: dict
+    :param test_df_literal: DataFrame containing test data for debugging purposes.
+    :type test_df_literal: pd.DataFrame
+    :return: The adjusted PV forecast as a pandas Series.
+    :rtype: pd.Series
+    """
+    logger.info("Adjusting PV forecast, retrieving history data for model fit")
+    # Retrieve data from Home Assistant
+    success, df_input_data, days_list = retrieve_home_assistant_data(
+        "adjust_pv", get_data_from_file, retrieve_hass_conf, optim_conf, rh, emhass_conf, test_df_literal
+    )
+    if not success:
+        return False
+    # Call data preparation method
+    fcst.adjust_pv_forecast_data_prep(df_input_data)
+    # Call the fit method
+    fcst.adjust_pv_forecast_fit(
+        n_splits=5,
+        regression_model="LassoRegression",
+    )
+    # Call the predict method
+    P_PV_forecast = P_PV_forecast.rename("forecast").to_frame()
+    P_PV_forecast = fcst.adjust_pv_forecast_predict(forecasted_pv=P_PV_forecast)
+    # Update the PV forecast
+    return P_PV_forecast["adjusted_forecast"].rename(None)
 
 def set_input_data_dict(
     emhass_conf: dict,
@@ -208,8 +266,13 @@ def set_input_data_dict(
                 return False
             P_PV_forecast = fcst.get_power_from_weather(df_weather)
             # Adjust PV forecast
-            # ... TODO
-            # if set_use_adjust_pv >> if pv_adjust_method == "fit-predict"
+            if optim_conf["set_use_adjusted_pv"]:
+                # Update the PV forecast
+                P_PV_forecast = adjust_pv_forecast(
+                    logger, fcst, P_PV_forecast, get_data_from_file,
+                    retrieve_hass_conf, optim_conf, rh, emhass_conf,
+                    test_df_literal,
+                )
         else:
             P_PV_forecast = pd.Series(0, index=fcst.forecast_dates)
         P_load_forecast = fcst.get_load_forecast(
@@ -288,7 +351,13 @@ def set_input_data_dict(
                 df_weather, set_mix_forecast=set_mix_forecast, df_now=df_input_data
             )
             # Adjust PV forecast
-            # ... TODO
+            if optim_conf["set_use_adjusted_pv"]:
+                # Update the PV forecast
+                P_PV_forecast = adjust_pv_forecast(
+                    logger, fcst, P_PV_forecast, get_data_from_file,
+                    retrieve_hass_conf, optim_conf, rh, emhass_conf,
+                    test_df_literal,
+                )
         else:
             P_PV_forecast = pd.Series(0, index=fcst.forecast_dates)
         P_load_forecast = fcst.get_load_forecast(

@@ -227,15 +227,24 @@ class TestForecast(unittest.TestCase):
             debug = False
         )
         # Call the predict method
-        self.fcst.adjust_pv_forecast_predict()
-        self.assertEqual(len(self.fcst.P_PV_forecast_validation["adjusted_forecast"]), len(self.fcst.P_PV_forecast_validation))
-        self.assertFalse(self.fcst.P_PV_forecast_validation["adjusted_forecast"].isna().any().any(), "Adjusted forecast contains NaN values")
-        rmse = np.sqrt(mean_squared_error(self.fcst.P_PV_validation, self.fcst.P_PV_forecast_validation["adjusted_forecast"]))
-        r2 = r2_score(self.fcst.P_PV_validation, self.fcst.P_PV_forecast_validation["adjusted_forecast"])
-        logger.info(f"Adjusted PV power metrics: RMSE = {rmse}, R2 = {r2}")
-        self.assertGreaterEqual(rmse, 0.0, "RMSE should be non-negative")
-        self.assertLessEqual(r2, 1.0, "R² score should be at most 1")
-        self.assertGreaterEqual(r2, -1.0, "R² score should be at least -1")
+        P_PV_forecast = self.fcst.adjust_pv_forecast_predict()
+        self.assertEqual(len(P_PV_forecast), len(self.fcst.P_PV_forecast_validation))
+        self.assertFalse(P_PV_forecast.isna().any().any(), "Adjusted forecast contains NaN values")
+        self.assertGreaterEqual(self.fcst.validation_rmse, 0.0, "RMSE should be non-negative")
+        self.assertLessEqual(self.fcst.validation_r2, 1.0, "R² score should be at most 1")
+        self.assertGreaterEqual(self.fcst.validation_r2, -1.0, "R² score should be at least -1")
+
+        # import plotly.express as px
+        # data_to_plot = self.fcst.P_PV_forecast_validation[["forecast", "adjusted_forecast"]].reset_index()
+        # fig = px.line(
+        #     data_to_plot,
+        #     x="index",  # Assuming the index is the timestamp
+        #     y=["forecast", "adjusted_forecast"],
+        #     labels={"index": "Time", "value": "Power (W)", "variable": "Forecast Type"},
+        #     title="Forecast vs Adjusted Forecast",
+        #     template='presentation'
+        # )
+        # fig.show()
 
     # Test output weather forecast using openmeteo with mock get request data
     def test_get_weather_forecast_openmeteo_method_mock(self):
