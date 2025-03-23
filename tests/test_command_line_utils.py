@@ -306,7 +306,7 @@ class TestCommandLineUtils(unittest.TestCase):
             runtimeparams["prod_price_forecast"],
         )
 
-    # Test dataframe outpit of perfect forecast optimization
+    # Test dataframe output of perfect forecast optimization
     def test_perfect_forecast_optim(self):
         costfun = "profit"
         action = "perfect-optim"

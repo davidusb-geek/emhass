@@ -1319,9 +1319,14 @@ class Optimization:
             # Prepare data
             day_start = day.isoformat()
             day_end = (day + self.time_delta - self.freq).isoformat()
-            data_tp = df_input_data.copy().loc[
-                pd.date_range(start=day_start, end=day_end, freq=self.freq)
-            ]
+            # Generate the date range for the current day
+            day_range = pd.date_range(start=day_start, end=day_end, freq=self.freq)
+            # Check if all timestamps in the range exist in the DataFrame index
+            if not day_range.isin(df_input_data.index).all():
+                self.logger.warning(f"Skipping day {day} as some timestamps are missing in the data.")
+                continue  # Skip this day and move to the next iteration
+            # If all timestamps exist, proceed with the data preparation
+            data_tp = df_input_data.copy().loc[day_range]
             P_PV = data_tp[self.var_PV].values
             P_load = data_tp[self.var_load_new].values
             unit_load_cost = data_tp[self.var_load_cost].values  # €/kWh
