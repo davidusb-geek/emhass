@@ -937,27 +937,6 @@ class Optimization:
                     }
                 )
 
-            # Treat the number of starts for a deferrable load (old method, kept here just in case)
-            # if self.optim_conf['set_deferrable_load_single_constant'][k]:
-            #     constraints.update({"constraint_pdef{}_start1_{}".format(k, i) :
-            #         plp.LpConstraint(
-            #             e=P_deferrable[k][i] - P_def_bin2[k][i]*M,
-            #             sense=plp.LpConstraintLE,
-            #             rhs=0)
-            #         for i in set_I})
-            #     constraints.update({"constraint_pdef{}_start2_{}".format(k, i):
-            #         plp.LpConstraint(
-            #             e=P_def_start[k][i] - P_def_bin2[k][i] + (P_def_bin2[k][i-1] if i-1 >= 0 else 0),
-            #             sense=plp.LpConstraintGE,
-            #             rhs=0)
-            #         for i in set_I})
-            #     constraints.update({"constraint_pdef{}_start3".format(k) :
-            #     plp.LpConstraint(
-            #         e = plp.lpSum(P_def_start[k][i] for i in set_I),
-            #         sense = plp.LpConstraintEQ,
-            #         rhs = 1)
-            #     })
-
         # The battery constraints
         if self.optim_conf["set_use_battery"]:
             # Optional constraints to avoid charging the battery from the grid
@@ -1340,9 +1319,14 @@ class Optimization:
             # Prepare data
             day_start = day.isoformat()
             day_end = (day + self.time_delta - self.freq).isoformat()
-            data_tp = df_input_data.copy().loc[
-                pd.date_range(start=day_start, end=day_end, freq=self.freq)
-            ]
+            # Generate the date range for the current day
+            day_range = pd.date_range(start=day_start, end=day_end, freq=self.freq)
+            # Check if all timestamps in the range exist in the DataFrame index
+            if not day_range.isin(df_input_data.index).all():
+                self.logger.warning(f"Skipping day {day} as some timestamps are missing in the data.")
+                continue  # Skip this day and move to the next iteration
+            # If all timestamps exist, proceed with the data preparation
+            data_tp = df_input_data.copy().loc[day_range]
             P_PV = data_tp[self.var_PV].values
             P_load = data_tp[self.var_load_new].values
             unit_load_cost = data_tp[self.var_load_cost].values  # €/kWh
