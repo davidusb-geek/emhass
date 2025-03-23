@@ -305,6 +305,23 @@ class TestCommandLineUtils(unittest.TestCase):
             opt_res["unit_prod_price"].values.tolist(),
             runtimeparams["prod_price_forecast"],
         )
+        # Test dayahead output, using set_use_adjusted_pv = True
+        params = TestCommandLineUtils.get_test_params()
+        params['optim_conf']["set_use_adjusted_pv"] = True
+        params['optim_conf']["set_use_pv"] = True
+        params_json = json.dumps(params)
+        input_data_dict = set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            self.runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertTrue(opt_res.isnull().sum().sum() == 0)
 
     # Test dataframe output of perfect forecast optimization
     def test_perfect_forecast_optim(self):
@@ -442,7 +459,6 @@ class TestCommandLineUtils(unittest.TestCase):
         # self.assertTrue(len(opt_res_last)==1)
         # Check if status is published
         from datetime import datetime
-
         now_precise = datetime.now(
             input_data_dict["retrieve_hass_conf"]["time_zone"]
         ).replace(second=0, microsecond=0)
@@ -467,6 +483,24 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(
             data["attributes"]["friendly_name"] == "EMHASS optimization status"
         )
+        # When using set_use_adjusted_pv = True
+        params = copy.deepcopy(json.loads(self.params_json))
+        params['optim_conf']["set_use_adjusted_pv"] = True
+        params['optim_conf']["set_use_pv"] = True
+        params_json = json.dumps(params)
+        input_data_dict = set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            self.runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_res = naive_mpc_optim(input_data_dict, logger, debug=True)
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertTrue(opt_res.isnull().sum().sum() == 0)
+        self.assertTrue(len(opt_res) == 10)
 
     # Test outputs of fit, predict and tune
     def test_forecast_model_fit_predict_tune(self):
