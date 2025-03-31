@@ -35,21 +35,9 @@ RUN apt-get update \
     libhdf5-103-1 \
     libhdf5-dev \
     libhdf5-serial-dev \
-    # # cbc
+    # cbc
     coinor-cbc \
     coinor-libcbc-dev
-
-    # libffi-dev \
-    # gfortran \
-    # netcdf-bin \
-    # libnetcdf-dev \
-    # libglpk-dev \
-    # glpk-utils \
-    # libatlas3-base \
-    # libatlas-base-dev \
-    # libopenblas-dev \
-    # libopenblas0-pthread \
-    # libgfortran5 \
 
 # add build packadges (just in case wheel does not exist)
 RUN apt-get update \

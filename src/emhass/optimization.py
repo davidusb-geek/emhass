@@ -1317,8 +1317,14 @@ class Optimization:
                 + str(day.year)
             )
             # Prepare data
-            day_start = day.isoformat()
-            day_end = (day + self.time_delta - self.freq).isoformat()
+            if day.tzinfo is None:
+                day = day.replace(tzinfo=self.time_zone)  # Assign timezone if naive
+            else:
+                day = day.astimezone(self.time_zone)
+            day_start = day
+            day_end = (day + self.time_delta - self.freq)
+            day_start = day_start.astimezone(self.time_zone).isoformat()
+            day_end = day_end.astimezone(self.time_zone).isoformat()
             # Generate the date range for the current day
             day_range = pd.date_range(start=day_start, end=day_end, freq=self.freq)
             # Check if all timestamps in the range exist in the DataFrame index

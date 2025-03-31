@@ -484,6 +484,7 @@ class TestCommandLineUtils(unittest.TestCase):
             data["attributes"]["friendly_name"] == "EMHASS optimization status"
         )
         # When using set_use_adjusted_pv = True
+        action = "naive-mpc-optim"
         params = copy.deepcopy(json.loads(self.params_json))
         params['optim_conf']["set_use_adjusted_pv"] = True
         params['optim_conf']["set_use_pv"] = True
