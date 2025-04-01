@@ -1323,10 +1323,14 @@ class Optimization:
                 day = day.astimezone(self.time_zone)
             day_start = day
             day_end = (day + self.time_delta - self.freq)
-            day_start = day_start.astimezone(self.time_zone).isoformat()
-            day_end = day_end.astimezone(self.time_zone).isoformat()
-            # Generate the date range for the current day
-            day_range = pd.date_range(start=day_start, end=day_end, freq=self.freq)
+            if day_start.tzinfo != day_end.tzinfo:
+                self.logger.warning(f"Skipping day {day} as days have ddifferent timezone, probably because of DST.")
+                continue  # Skip this day and move to the next iteration
+            else:
+                day_start = day_start.astimezone(self.time_zone).isoformat()
+                day_end = day_end.astimezone(self.time_zone).isoformat()
+                # Generate the date range for the current day
+                day_range = pd.date_range(start=day_start, end=day_end, freq=self.freq)
             # Check if all timestamps in the range exist in the DataFrame index
             if not day_range.isin(df_input_data.index).all():
                 self.logger.warning(f"Skipping day {day} as some timestamps are missing in the data.")

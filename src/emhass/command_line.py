@@ -38,16 +38,9 @@ def retrieve_home_assistant_data(
     test_df_literal: pd.DataFrame
 ) -> dict:
     """Retrieve data from Home Assistant or file and prepare it for optimization."""
-    # Determine days_list based on set_type
-    if set_type == "perfect-optim" or set_type == "adjust_pv":
-        days_list = utils.get_days_list(retrieve_hass_conf["historic_days_to_retrieve"])
-    elif set_type == "naive-mpc-optim":
-        days_list = utils.get_days_list(1)
-    else:
-        days_list = None  # Not needed for dayahead
     if get_data_from_file:
         with open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
-            rh.df_final, _, var_list, rh.ha_config = pickle.load(inp) # TODO: Update rh.df_final with complete days >> Probably why perfect-optim fails
+            rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp) # TODO: Update rh.df_final with complete days >> Probably why perfect-optim fails
         # Assign variables based on set_type
         retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
         if optim_conf.get("set_use_pv", True):
@@ -66,6 +59,13 @@ def retrieve_home_assistant_data(
             ]
             retrieve_hass_conf["sensor_replace_zero"] = []
     else:
+        # Determine days_list based on set_type
+        if set_type == "perfect-optim" or set_type == "adjust_pv":
+            days_list = utils.get_days_list(retrieve_hass_conf["historic_days_to_retrieve"])
+        elif set_type == "naive-mpc-optim":
+            days_list = utils.get_days_list(1)
+        else:
+            days_list = None  # Not needed for dayahead
         var_list = [retrieve_hass_conf["sensor_power_load_no_var_loads"]]
         if optim_conf.get("set_use_pv", True):
             var_list.append(retrieve_hass_conf["sensor_power_photovoltaics"])
