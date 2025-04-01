@@ -11,10 +11,8 @@ import pickle
 import re
 import unittest
 
-import numpy as np
 import pandas as pd
 import requests_mock
-from sklearn.metrics import mean_squared_error, r2_score
 
 from emhass import utils
 from emhass.command_line import set_input_data_dict
