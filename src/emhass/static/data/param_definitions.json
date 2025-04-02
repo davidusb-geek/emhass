@@ -248,6 +248,26 @@
       "input": "boolean",
       "default_value": false
     },
+    "adjusted_pv_regression_model": {
+      "friendly_name": "Regression model for adjusted PV",
+      "Description": "Set the type of regression model that will be used to adjust the solr PV production to local conditions. Defaults to LassoRegression",
+      "input": "select",
+      "select_options": [
+        "LinearRegression",
+        "RidgeRegression",
+        "LassoRegression",
+        "RandomForestRegression",
+        "GradientBoostingRegression",
+        "AdaBoostRegression"
+      ],
+      "default_value": "LassoRegression"
+    },
+    "adjusted_pv_solar_elevation_threshold": {
+      "friendly_name": "Solar elevation threshold",
+      "Description": "This is the solar elevation threshold parameter used to identify the early morning or late evening periods. Defaults to 10.",
+      "input": "int",
+      "default_value": 10
+    },
     "pv_module_model": {
       "friendly_name": "PV module model name",
       "Description": "The PV module model. This parameter can be a list of items to enable the simulation of mixed orientation systems.",
