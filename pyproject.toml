@@ -35,7 +35,6 @@ dependencies = [
     "protobuf>=5.29.3",
     "pytz>=2024.2",
     "requests>=2.32.2",
-    "beautifulsoup4>=4.12.3",
     "h5py>=3.12.1",
     "pulp>=2.8.0",
     "pyyaml>=6.0.2",
@@ -53,6 +52,7 @@ docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
 test = ["requests_mock", "pytest", "coverage", "snakeviz", "ruff", "tabulate", "hatchling"]
 
 [tool.hatch.build.targets.sdist]
+packages = ["src/emhass"]
 include = [
     "/src/emhass/templates/index.html",
     "/src/emhass/templates/template.html",

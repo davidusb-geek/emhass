@@ -16,6 +16,7 @@ from urllib.parse import quote
 
 import numpy as np
 import pandas as pd
+from pvlib.solarposition import get_solarposition
 from pvlib.irradiance import disc
 from pvlib.location import Location
 from pvlib.modelchain import ModelChain
@@ -23,9 +24,15 @@ from pvlib.pvsystem import PVSystem
 from pvlib.temperature import TEMPERATURE_MODEL_PARAMETERS
 from requests import get
 
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
+from sklearn.metrics import mean_squared_error, r2_score
+
 from emhass.machine_learning_forecaster import MLForecaster
+from emhass.machine_learning_regressor import MLRegressor
 from emhass.retrieve_hass import RetrieveHass
-from emhass.utils import get_days_list, set_df_index_freq
+from emhass.utils import get_days_list, set_df_index_freq, add_date_features
 
 
 class Forecast(object):
@@ -603,7 +610,7 @@ class Forecast(object):
         :rtype: pd.DataFrame
         """
         first_fcst = alpha * df_forecast.iloc[0] + beta * df_now[col].iloc[-1]
-        df_forecast.iloc[0] = first_fcst
+        df_forecast.iloc[0] = int(round(first_fcst))
         return df_forecast
 
     def get_power_from_weather(
@@ -713,6 +720,166 @@ class Forecast(object):
         self.logger.debug("get_power_from_weather returning:\n%s", P_PV_forecast)
         return P_PV_forecast
 
+    @staticmethod
+    def compute_solar_angles(
+        df: pd.DataFrame, latitude: float, longitude: float
+    ) -> pd.DataFrame:
+        """
+        Compute solar angles (elevation, azimuth) based on timestamps and location.
+        
+        :param df: DataFrame with a DateTime index.
+        :param latitude: Latitude of the PV system.
+        :param longitude: Longitude of the PV system.
+        :return: DataFrame with added solar elevation and azimuth.
+        """
+        df = df.copy()
+        solpos = get_solarposition(df.index, latitude, longitude)
+        df["solar_elevation"] = solpos["elevation"]
+        df["solar_azimuth"] = solpos["azimuth"]
+        return df
+    
+    def adjust_pv_forecast_data_prep(
+        self, data: pd.DataFrame
+    ) -> pd.DataFrame:
+        """
+        Prepare data for adjusting the photovoltaic (PV) forecast.
+
+        This method aligns the actual PV production data with the forecasted data,
+        adds additional features for analysis, and separates the predictors (X)
+        from the target variable (y).
+
+        :param data: A DataFrame containing the actual PV production data and the 
+        forecasted PV production data.
+        :type data: pd.DataFrame
+        """
+        # Extract target and predictor
+        P_PV = data["sensor.power_photovoltaics"]  # Actual PV production
+        P_PV_forecast = data["sensor.p_pv_forecast"]  # Forecasted PV production
+        # Define time ranges
+        last_day = data.index.max().normalize()  # Last available day
+        three_months_ago = last_day - pd.DateOffset(days=self.retrieve_hass_conf["historic_days_to_retrieve"])
+        # Train/Test: Last historic_days_to_retrieve days (excluding the last day)
+        train_test_mask = (data.index >= three_months_ago) & (data.index < last_day)
+        self.P_PV_train_test = P_PV[train_test_mask]
+        self.P_PV_forecast_train_test = P_PV_forecast[train_test_mask]
+        # Validation: Last day only
+        validation_mask = data.index >= last_day
+        self.P_PV_validation = P_PV[validation_mask]
+        self.P_PV_forecast_validation = P_PV_forecast[validation_mask]
+        # Ensure data is aligned
+        self.data_adjust_pv = pd.concat([P_PV.rename("actual"), P_PV_forecast.rename("forecast")], axis=1).dropna()
+        # Add more features
+        self.data_adjust_pv = add_date_features(self.data_adjust_pv)
+        self.data_adjust_pv = Forecast.compute_solar_angles(self.data_adjust_pv, self.lat, self.lon)
+        # Features (X) and target (y)
+        self.X_adjust_pv = self.data_adjust_pv.drop(columns=["actual"])  # Predictors
+        self.y_adjust_pv = self.data_adjust_pv["actual"]  # Target: actual PV production
+
+    def adjust_pv_forecast_fit(
+        self, n_splits: int = 5, regression_model: str = "LassoRegression", 
+        debug: Optional[bool] = False
+    ) -> pd.DataFrame:
+        """
+        Fit a regression model to adjust the photovoltaic (PV) forecast.
+
+        This method uses historical actual and forecasted PV production data, along with
+        additional solar and date features, to train a regression model. The model is
+        optimized using a grid search with time-series cross-validation.
+
+        :param n_splits: The number of splits for time-series cross-validation, defaults to 5.
+        :type n_splits: int, optional
+        :param regression_model: The type of regression model to use. Options include \
+            "LassoRegression", "RidgeRegression", etc., defaults to "LassoRegression".
+        :type regression_model: str, optional
+        :param debug: If True, the model is not saved to disk, useful for debugging, defaults to False.
+        :type debug: bool, optional
+        :return: A DataFrame containing the adjusted PV forecast.
+        :rtype: pd.DataFrame
+        """
+        # Get regression model and hyperparameter grid
+        mlr = MLRegressor(
+            self.data_adjust_pv,
+            "adjusted_pv_forecast",
+            regression_model,
+            list(self.X_adjust_pv.columns),
+            list(self.y_adjust_pv.name),
+            None,
+            self.logger,
+        )
+        base_model, param_grid = mlr.get_regression_model()
+        model = make_pipeline(StandardScaler(), base_model)
+        # Time-series split
+        tscv = TimeSeriesSplit(n_splits=n_splits)
+        grid_search = GridSearchCV(model, param_grid, cv=tscv, scoring="neg_mean_squared_error", verbose=0)
+        # Train model
+        grid_search.fit(self.X_adjust_pv, self.y_adjust_pv)
+        self.model_adjust_pv = grid_search.best_estimator_
+        # Calculate training metrics
+        y_pred_train = self.model_adjust_pv.predict(self.X_adjust_pv)
+        self.rmse = np.sqrt(mean_squared_error(self.y_adjust_pv, y_pred_train))
+        self.r2 = r2_score(self.y_adjust_pv, y_pred_train)
+        # Log the metrics
+        self.logger.info(f"PV adjust Training metrics: RMSE = {self.rmse}, R2 = {self.r2}")
+        # Save model
+        if not debug:
+            filename = "adjust_pv_regressor.pkl"
+            filename_path = self.emhass_conf["data_path"] / filename
+            with open(filename_path, "wb") as outp:
+                pickle.dump(self.model_adjust_pv, outp, pickle.HIGHEST_PROTOCOL)
+
+    def adjust_pv_forecast_predict(
+        self, forecasted_pv: Optional[pd.DataFrame] = None
+    ) -> pd.DataFrame:
+        """
+        Predict the adjusted photovoltaic (PV) forecast.
+
+        This method uses the trained regression model to predict the adjusted PV forecast
+        based on either the validation data stored in `self` or a new forecasted PV data
+        passed as input. It applies additional features such as date and solar angles to
+        the forecasted PV production data before making predictions. The solar elevation
+        is used to avoid negative values and to fix values at the beginning and end of the day.
+
+        :param forecasted_pv: Optional. A DataFrame containing the forecasted PV production data.
+                            It must have a DateTime index and a column named "forecast".
+                            If not provided, the method will use `self.P_PV_forecast_validation`.
+        :type forecasted_pv: pd.DataFrame, optional
+        :return: A DataFrame containing the adjusted PV forecast with additional features.
+        :rtype: pd.DataFrame
+        """
+        # Use the provided forecasted PV data or fall back to the validation data in `self`
+        if forecasted_pv is not None:
+            # Ensure the input DataFrame has the required structure
+            if "forecast" not in forecasted_pv.columns:
+                raise ValueError("The input DataFrame must contain a 'forecast' column.")
+            forecast_data = forecasted_pv.copy()
+        else:
+            # Use the validation data stored in `self`
+            forecast_data = self.P_PV_forecast_validation.rename("forecast").to_frame()
+        # Prepare the forecasted PV data
+        forecast_data = add_date_features(forecast_data)
+        forecast_data = Forecast.compute_solar_angles(forecast_data, self.lat, self.lon)
+        # Predict the adjusted forecast
+        forecast_data["adjusted_forecast"] = self.model_adjust_pv.predict(forecast_data)
+        # Apply solar elevation weighting only for specific cases
+        def apply_weighting(row):
+            if row["solar_elevation"] <= 0:  # Nighttime or negative solar elevation
+                return 0
+            elif row["solar_elevation"] < self.optim_conf["adjusted_pv_solar_elevation_threshold"]:  # Early morning or late evening
+                return max(row["adjusted_forecast"] * (row["solar_elevation"] / self.optim_conf["adjusted_pv_solar_elevation_threshold"]), 0)
+            else:  # Daytime with sufficient solar elevation
+                return row["adjusted_forecast"]
+        forecast_data["adjusted_forecast"] = forecast_data.apply(apply_weighting, axis=1)
+        # If using validation data, calculate validation metrics
+        if forecasted_pv is None:
+            y_true = self.P_PV_validation.values
+            y_pred = forecast_data["adjusted_forecast"].values
+            self.validation_rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+            self.validation_r2 = r2_score(y_true, y_pred)
+            # Log the validation metrics
+            self.logger.info(f"PV adjust Validation metrics: RMSE = {self.validation_rmse}, R2 = {self.validation_r2}")
+        # Return the DataFrame with the adjusted forecast
+        return forecast_data
+
     def get_forecast_days_csv(self, timedelta_days: Optional[int] = 1) -> pd.date_range:
         r"""
         Get the date range vector of forecast dates that will be used when loading a CSV file.
@@ -770,7 +937,7 @@ class Forecast(object):
         forecast_dates_csv: pd.date_range,
         csv_path: str,
         data_list: Optional[list] = None,
-        list_and_perfect: Optional[bool] = False,
+        list_and_perfect: Optional[bool] = False
     ) -> pd.DataFrame:
         r"""
         Get the forecast data as a DataFrame from a CSV file.
@@ -815,17 +982,22 @@ class Forecast(object):
             else:
                 df_csv.index = forecast_dates_csv
                 df_csv.drop(["ts"], axis=1, inplace=True)
-                df_csv = set_df_index_freq(df_csv)
-            days_list = df_final.index.day.unique().tolist()
+            df_csv = set_df_index_freq(df_csv)
+            if list_and_perfect:
+                days_list = df_final.index.day.unique().tolist()
+            else:
+                days_list = df_csv.index.day.unique().tolist()
         forecast_out = pd.DataFrame()
         for day in days_list:
             if csv_path is None:
+                df_final = set_df_index_freq(df_final)
+                df_tmp = copy.deepcopy(df_final)
+            else:
                 if list_and_perfect:
+                    df_final = set_df_index_freq(df_final)
                     df_tmp = copy.deepcopy(df_final)
                 else:
                     df_tmp = copy.deepcopy(df_csv)
-            else:
-                df_tmp = copy.deepcopy(df_final)
             first_elm_index = [i for i, x in enumerate(df_tmp.index.day == day) if x][0]
             last_elm_index = [i for i, x in enumerate(df_tmp.index.day == day) if x][-1]
             fcst_index = pd.date_range(
@@ -834,20 +1006,22 @@ class Forecast(object):
                 freq=df_tmp.index.freq,
             )
             first_hour = (
-                str(df_tmp.index[first_elm_index].hour)
+                f"{df_tmp.index[first_elm_index].hour:02d}"
                 + ":"
-                + str(df_tmp.index[first_elm_index].minute)
+                + f"{df_tmp.index[first_elm_index].minute:02d}"
             )
             last_hour = (
-                str(df_tmp.index[last_elm_index].hour)
+                f"{df_tmp.index[last_elm_index].hour:02d}"
                 + ":"
-                + str(df_tmp.index[last_elm_index].minute)
+                + f"{df_tmp.index[last_elm_index].minute:02d}"
             )
             if len(forecast_out) == 0:
                 if csv_path is None:
                     if list_and_perfect:
+                        values_array = df_csv.between_time(first_hour, last_hour).values
+                        fcst_index = fcst_index[0:len(values_array)] # Fix for different lengths
                         forecast_out = pd.DataFrame(
-                            df_csv.between_time(first_hour, last_hour).values,
+                            values_array,
                             index=fcst_index,
                         )
                     else:
@@ -858,7 +1032,8 @@ class Forecast(object):
                             index=fcst_index,
                         )
                 else:
-                    df_csv_filtered_date = df_csv.loc[df_csv.index.strftime('%Y-%m-%d') == fcst_index[0].date().strftime('%Y-%m-%d')]
+                    df_csv_filtered_date = df_csv.loc[
+                        df_csv.index.strftime('%Y-%m-%d') == fcst_index[0].date().strftime('%Y-%m-%d')]
                     forecast_out = pd.DataFrame(
                         df_csv_filtered_date.between_time(first_hour, last_hour).values,
                         index=fcst_index,
@@ -866,8 +1041,10 @@ class Forecast(object):
             else:
                 if csv_path is None:
                     if list_and_perfect:
+                        values_array = df_csv.between_time(first_hour, last_hour).values
+                        fcst_index = fcst_index[0:len(values_array)] # Fix for different lengths
                         forecast_tp = pd.DataFrame(
-                            df_csv.between_time(first_hour, last_hour).values,
+                            values_array,
                             index=fcst_index,
                         )
                     else:
@@ -1052,13 +1229,16 @@ class Forecast(object):
             method == "typical"
         ):  # using typical statistical data from a household power consumption
             # Loading data from history file
-            model_type = "load_clustering"
+            model_type = "long_train_data"
             data_path = self.emhass_conf["data_path"] / str(
-                "data_train_" + model_type + ".pkl"
+                model_type + ".pkl"
             )
             with open(data_path, "rb") as fid:
-                data, _ = pickle.load(fid)
+                data, _, _, _ = pickle.load(fid)
+            # Ensure the data index is timezone-aware and matches self.forecast_dates' timezone
+            data.index = data.index.tz_localize(self.forecast_dates.tz) if data.index.tz is None else data.index.tz_convert(self.forecast_dates.tz)
             # Resample the data if needed
+            data = data[[self.var_load]]
             current_freq = pd.Timedelta("30min")
             if self.freq != current_freq:
                 data = Forecast.resample_data(data, self.freq, current_freq)
@@ -1201,7 +1381,7 @@ class Forecast(object):
         df_final: pd.DataFrame,
         method: Optional[str] = "hp_hc_periods",
         csv_path: Optional[str] = "data_load_cost_forecast.csv",
-        list_and_perfect: Optional[bool] = False,
+        list_and_perfect: Optional[bool] = False
     ) -> pd.DataFrame:
         r"""
         Get the unit cost for the load consumption based on multiple tariff \
@@ -1241,7 +1421,11 @@ class Forecast(object):
             forecast_out = self.get_forecast_out_from_csv_or_list(
                 df_final, forecast_dates_csv, csv_path
             )
-            df_final[self.var_load_cost] = forecast_out
+            # Ensure correct length
+            if not list_and_perfect:
+                forecast_out = forecast_out[0 : len(self.forecast_dates)]
+                df_final = df_final[0 : len(self.forecast_dates)]
+            df_final.loc[:,self.var_load_cost] = forecast_out.values
         elif method == "list":  # reading a list of values
             # Loading data from passed list
             data_list = self.params["passed_data"]["load_cost_forecast"]
@@ -1255,6 +1439,8 @@ class Forecast(object):
             else:
                 # Ensure correct length
                 data_list = data_list[0 : len(self.forecast_dates)]
+                if not list_and_perfect:
+                    df_final = df_final.iloc[0 : len(self.forecast_dates)]
                 # Define the correct dates
                 forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
                 forecast_out = self.get_forecast_out_from_csv_or_list(
@@ -1262,9 +1448,8 @@ class Forecast(object):
                     forecast_dates_csv,
                     None,
                     data_list=data_list,
-                    list_and_perfect=list_and_perfect,
+                    list_and_perfect=list_and_perfect
                 )
-                # Fill the final DF
                 df_final[self.var_load_cost] = forecast_out
         else:
             self.logger.error("Passed method is not valid")
@@ -1276,7 +1461,7 @@ class Forecast(object):
         df_final: pd.DataFrame,
         method: Optional[str] = "constant",
         csv_path: Optional[str] = "data_prod_price_forecast.csv",
-        list_and_perfect: Optional[bool] = False,
+        list_and_perfect: Optional[bool] = False
     ) -> pd.DataFrame:
         r"""
         Get the unit power production price for the energy injected to the grid.\
@@ -1308,7 +1493,11 @@ class Forecast(object):
             forecast_out = self.get_forecast_out_from_csv_or_list(
                 df_final, forecast_dates_csv, csv_path
             )
-            df_final[self.var_prod_price] = forecast_out
+            # Ensure correct length
+            if not list_and_perfect:
+                forecast_out = forecast_out[0 : len(self.forecast_dates)]
+                df_final = df_final[0 : len(self.forecast_dates)]
+            df_final.loc[:,self.var_prod_price] = forecast_out.values
         elif method == "list":  # reading a list of values
             # Loading data from passed list
             data_list = self.params["passed_data"]["prod_price_forecast"]
@@ -1322,6 +1511,8 @@ class Forecast(object):
             else:
                 # Ensure correct length
                 data_list = data_list[0 : len(self.forecast_dates)]
+                if not list_and_perfect:
+                    df_final = df_final.iloc[0 : len(self.forecast_dates)]
                 # Define the correct dates
                 forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
                 forecast_out = self.get_forecast_out_from_csv_or_list(
@@ -1329,9 +1520,8 @@ class Forecast(object):
                     forecast_dates_csv,
                     None,
                     data_list=data_list,
-                    list_and_perfect=list_and_perfect,
+                    list_and_perfect=list_and_perfect
                 )
-                # Fill the final DF
                 df_final[self.var_prod_price] = forecast_out
         else:
             self.logger.error("Passed method is not valid")
