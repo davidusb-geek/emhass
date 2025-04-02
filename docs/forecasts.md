@@ -64,7 +64,7 @@ curl -i -H "Content-Type:application/json" -X POST -d '{"solar_forecast_kwp":5}'
 If you use the Solar.Forecast or Solcast methods, or explicitly pass the PV power forecast values (see below), the list_pv_module_model and list_pv_inverter_model parameters defined in the configuration will be ignored.
 ```
 
-##### Caching PV Forecast
+#### Caching PV Forecast
 For the MPC users, running optimizations regularly; You may wish to cache your PV forecast results, to reuse throughout the day.
 Partially for those who use the free plan of Solcast, Caching can help reduce the amount of calls bellow 10 a day.
 Caching Forecast data will also speed up the forecast process, bypassing the need to call to the external forecast API each MPC run. 
@@ -93,6 +93,17 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 # Then run your regular MPC call (E.g. every 5 minutes) and make sure it only uses the Solcast cache. (do not pull from Solcast)
 curl -i -H 'Content-Type:application/json' -X POST -d '{"weather_forecast_cache_only":true}' http://localhost:5000/action/naive-mpc-optim
 ```
+
+#### Adjusting PV Forecasts using machine learning
+EMHASS provides methods to adjust the PV power forecast using machine learning regression techniques. The adjustment process consists of two steps: training a regression model using historical PV data and then applying the trained model to correct new PV forecasts.
+
+This functionality may help to **fine-tune** the PV prediction and model some local behavior of your PV production such as: tree shading, under-production due to dust/dirt, curtailment events, local micro-weather conditions, etc.
+
+To activate this option all that is needed is to set `set_use_adjusted_pv` to `True` in the configuration.
+
+The **Model Training** uses the `adjust_pv_forecast_fit` method in the `Forecast` class. This method fits a regression model to adjust the PV forecast. It uses historical forecasted and actual PV production data as training input, incorporating additional features such as time of day and solar angles. The model is trained using time-series cross-validation, with hyperparameter tuning performed via grid search. The best model is selected based on mean squared error scoring. The historical data retrieved depends on the `historic_days_to_retrieve` parameter in the configuration. By default, the method uses `LassoRegression`, but other models can also be specified using parameter `adjusted_pv_regression_model`. Once the model is trained, it computes root mean squared error (RMSE) and R² metrics to assess performance. These metrics are logged for reference. If debugging is disabled, the trained model is saved for future use.
+
+The actual **Forecast Adjustment** is perfomed by the `adjust_pv_forecast_predict` method. This method applies the trained regression model to adjust PV forecast data. Before making predictions, the method enhances the data by adding date-based and solar-related features. It then uses the trained model to predict the adjusted forecast. A correction is applied based on solar elevation to prevent negative or unrealistic values, ensuring that the adjusted forecast remains physically meaningful. The correction based on solar elevation can be parametrized using a treshold value with parameter `adjusted_pv_solar_elevation_threshold` from the configuration. 
 
 ## Load power forecast
 

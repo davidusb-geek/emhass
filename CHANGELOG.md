@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.0 - 2025-04-02
 - Added a new feature to automatically adjust PV forecast using historical actual/forecast data
 - Added Support for multiple days forecasting with CSV data. Thanks to @nielskool for this contribution!
 - Fixed Value has dtype incompatible with int64 error, issue #465

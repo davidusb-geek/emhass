@@ -92,6 +92,8 @@
   "maximum_power_to_grid": 9000,
   "set_use_pv": false,
   "set_use_adjusted_pv": false,
+  "adjusted_pv_regression_model": "LassoRegression",
+  "adjusted_pv_solar_elevation_threshold": 10,
   "pv_module_model": [
     "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M"
   ],

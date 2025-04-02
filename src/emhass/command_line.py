@@ -40,7 +40,7 @@ def retrieve_home_assistant_data(
     """Retrieve data from Home Assistant or file and prepare it for optimization."""
     if get_data_from_file:
         with open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
-            rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp) # TODO: Update rh.df_final with complete days >> Probably why perfect-optim fails
+            rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
         # Assign variables based on set_type
         retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
         if optim_conf.get("set_use_pv", True):
@@ -120,7 +120,7 @@ def adjust_pv_forecast(
     """
     logger.info("Adjusting PV forecast, retrieving history data for model fit")
     # Retrieve data from Home Assistant
-    success, df_input_data, days_list = retrieve_home_assistant_data(
+    success, df_input_data, _ = retrieve_home_assistant_data(
         "adjust_pv", get_data_from_file, retrieve_hass_conf, optim_conf, rh, emhass_conf, test_df_literal
     )
     if not success:
@@ -130,7 +130,7 @@ def adjust_pv_forecast(
     # Call the fit method
     fcst.adjust_pv_forecast_fit(
         n_splits=5,
-        regression_model="LassoRegression",
+        regression_model=optim_conf["adjusted_pv_regression_model"],
     )
     # Call the predict method
     P_PV_forecast = P_PV_forecast.rename("forecast").to_frame()

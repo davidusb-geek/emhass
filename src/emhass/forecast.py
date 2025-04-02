@@ -754,8 +754,8 @@ class Forecast(object):
         P_PV_forecast = data["sensor.p_pv_forecast"]  # Forecasted PV production
         # Define time ranges
         last_day = data.index.max().normalize()  # Last available day
-        three_months_ago = last_day - pd.DateOffset(days=90)
-        # Train/Test: Last 3 months (excluding the last day)
+        three_months_ago = last_day - pd.DateOffset(days=self.retrieve_hass_conf["historic_days_to_retrieve"])
+        # Train/Test: Last historic_days_to_retrieve days (excluding the last day)
         train_test_mask = (data.index >= three_months_ago) & (data.index < last_day)
         self.P_PV_train_test = P_PV[train_test_mask]
         self.P_PV_forecast_train_test = P_PV_forecast[train_test_mask]
@@ -861,8 +861,8 @@ class Forecast(object):
         def apply_weighting(row):
             if row["solar_elevation"] <= 0:  # Nighttime or negative solar elevation
                 return 0
-            elif row["solar_elevation"] < 10:  # Early morning or late evening
-                return max(row["adjusted_forecast"] * (row["solar_elevation"] / 10), 0)
+            elif row["solar_elevation"] < self.optim_conf["adjusted_pv_solar_elevation_threshold"]:  # Early morning or late evening
+                return max(row["adjusted_forecast"] * (row["solar_elevation"] / self.optim_conf["adjusted_pv_solar_elevation_threshold"]), 0)
             else:  # Daytime with sufficient solar elevation
                 return row["adjusted_forecast"]
         forecast_data["adjusted_forecast"] = forecast_data.apply(apply_weighting, axis=1)

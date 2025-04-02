@@ -52,6 +52,7 @@ docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
 test = ["requests_mock", "pytest", "coverage", "snakeviz", "ruff", "tabulate", "hatchling"]
 
 [tool.hatch.build.targets.sdist]
+packages = ["src/emhass"]
 include = [
     "/src/emhass/templates/index.html",
     "/src/emhass/templates/template.html",
