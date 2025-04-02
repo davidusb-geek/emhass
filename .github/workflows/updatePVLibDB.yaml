@@ -1,8 +1,6 @@
 name: Update EMHASS PVLib databases
 
 on:
-  push:
-    branches: [ master ]
   schedule: # run once a month
     - cron:  '0 0 1 * *'
   workflow_dispatch:
