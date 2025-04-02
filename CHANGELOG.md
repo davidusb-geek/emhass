@@ -1,14 +1,17 @@
 # Changelog
 
 ## 0.13.0 - 2025-04-02
+### Improvement
 - Added a new feature to automatically adjust PV forecast using historical actual/forecast data
 - Added Support for multiple days forecasting with CSV data. Thanks to @nielskool for this contribution!
+- Refactored a new method `retrieve_home_assistant_data` in `command_line`
+- Unified default training data for ML algorithms using `data/long_train_data.pkl`
+- Added a presentation stack using `marp`
+### Fix
 - Fixed Value has dtype incompatible with int64 error, issue #465
 - Fixed Runtime "delta_forecast_daily" not recognized, issue #479
-- Refactored a new method `retrieve_home_assistant_data` in `command_line`
-- Added a presentation stack using `marp`
+- Attempt to fix Missing files in python package after 0.12.5, issue #495
 - Fixed workflow for macos tests
-- Unified default training data for ML algorithms using `data/long_train_data.pkl`
 
 ## 0.12.8 - 2025-02-27
 ### Improvement
