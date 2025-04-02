@@ -228,7 +228,6 @@ class RetrieveHass:
                         )
                     return False
                 df_raw = pd.DataFrame.from_dict(data)
-                # self.logger.info(str(df_raw))
                 if len(df_raw) == 0:
                     if x == 0:
                         self.logger.error(
@@ -245,7 +244,6 @@ class RetrieveHass:
                             + " (check your recorder settings)"
                         )
                     return False
-                # self.logger.info(self.freq.seconds)
                 if (
                     len(df_raw) < ((60 / (self.freq.seconds / 60)) * 24)
                     and x != len(days_list) - 1

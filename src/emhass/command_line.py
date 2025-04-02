@@ -28,6 +28,116 @@ default_csv_filename = "opt_res_latest.csv"
 default_pkl_suffix = "_mlf.pkl"
 default_metadata_json = "metadata.json"
 
+def retrieve_home_assistant_data(
+    set_type: str,
+    get_data_from_file: bool, 
+    retrieve_hass_conf: dict,
+    optim_conf: dict,
+    rh: RetrieveHass,
+    emhass_conf: dict,
+    test_df_literal: pd.DataFrame
+) -> dict:
+    """Retrieve data from Home Assistant or file and prepare it for optimization."""
+    if get_data_from_file:
+        with open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
+            rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
+        # Assign variables based on set_type
+        retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
+        if optim_conf.get("set_use_pv", True):
+            retrieve_hass_conf["sensor_power_photovoltaics"] = str(var_list[1])
+            retrieve_hass_conf["sensor_linear_interp"] = [
+                retrieve_hass_conf["sensor_power_photovoltaics"],
+                retrieve_hass_conf["sensor_power_load_no_var_loads"],
+            ]
+            retrieve_hass_conf["sensor_replace_zero"] = [
+                retrieve_hass_conf["sensor_power_photovoltaics"],
+                var_list[2],
+            ]
+        else:
+            retrieve_hass_conf["sensor_linear_interp"] = [
+                retrieve_hass_conf["sensor_power_load_no_var_loads"]
+            ]
+            retrieve_hass_conf["sensor_replace_zero"] = []
+    else:
+        # Determine days_list based on set_type
+        if set_type == "perfect-optim" or set_type == "adjust_pv":
+            days_list = utils.get_days_list(retrieve_hass_conf["historic_days_to_retrieve"])
+        elif set_type == "naive-mpc-optim":
+            days_list = utils.get_days_list(1)
+        else:
+            days_list = None  # Not needed for dayahead
+        var_list = [retrieve_hass_conf["sensor_power_load_no_var_loads"]]
+        if optim_conf.get("set_use_pv", True):
+            var_list.append(retrieve_hass_conf["sensor_power_photovoltaics"])
+        if not rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False):
+            return False, None, days_list
+    rh.prepare_data(
+        retrieve_hass_conf["sensor_power_load_no_var_loads"],
+        load_negative=retrieve_hass_conf["load_negative"],
+        set_zero_min=retrieve_hass_conf["set_zero_min"],
+        var_replace_zero=retrieve_hass_conf["sensor_replace_zero"],
+        var_interp=retrieve_hass_conf["sensor_linear_interp"],
+    )
+    return True, rh.df_final.copy(), days_list
+
+def adjust_pv_forecast(
+    logger: logging.Logger,
+    fcst: Forecast,
+    P_PV_forecast: pd.Series,
+    get_data_from_file: bool,
+    retrieve_hass_conf: dict,
+    optim_conf: dict,
+    rh: RetrieveHass,
+    emhass_conf: dict,
+    test_df_literal: pd.DataFrame,
+) -> pd.Series:
+    """
+    Adjust the photovoltaic (PV) forecast using historical data and a regression model.
+
+    This method retrieves historical data, prepares it for model fitting, trains a regression
+    model, and adjusts the provided PV forecast based on the trained model.
+
+    :param logger: Logger object for logging information and errors.
+    :type logger: logging.Logger
+    :param fcst: Forecast object used for PV forecast adjustment.
+    :type fcst: Forecast
+    :param P_PV_forecast: The initial PV forecast to be adjusted.
+    :type P_PV_forecast: pd.Series
+    :param get_data_from_file: Whether to retrieve data from a file instead of Home Assistant.
+    :type get_data_from_file: bool
+    :param retrieve_hass_conf: Configuration dictionary for retrieving data from Home Assistant.
+    :type retrieve_hass_conf: dict
+    :param optim_conf: Configuration dictionary for optimization settings.
+    :type optim_conf: dict
+    :param rh: RetrieveHass object for interacting with Home Assistant.
+    :type rh: RetrieveHass
+    :param emhass_conf: Configuration dictionary for emhass paths and settings.
+    :type emhass_conf: dict
+    :param test_df_literal: DataFrame containing test data for debugging purposes.
+    :type test_df_literal: pd.DataFrame
+    :return: The adjusted PV forecast as a pandas Series.
+    :rtype: pd.Series
+    """
+    logger.info("Adjusting PV forecast, retrieving history data for model fit")
+    # Retrieve data from Home Assistant
+    success, df_input_data, _ = retrieve_home_assistant_data(
+        "adjust_pv", get_data_from_file, retrieve_hass_conf, optim_conf, rh, emhass_conf, test_df_literal
+    )
+    if not success:
+        return False
+    # Call data preparation method
+    fcst.adjust_pv_forecast_data_prep(df_input_data)
+    # Call the fit method
+    fcst.adjust_pv_forecast_fit(
+        n_splits=5,
+        regression_model=optim_conf["adjusted_pv_regression_model"],
+    )
+    # Call the predict method
+    P_PV_forecast = P_PV_forecast.rename("forecast").to_frame()
+    P_PV_forecast = fcst.adjust_pv_forecast_predict(forecasted_pv=P_PV_forecast)
+    # Update the PV forecast
+    return P_PV_forecast["adjusted_forecast"].rename(None)
+
 def set_input_data_dict(
     emhass_conf: dict,
     costfun: str,
@@ -136,42 +246,11 @@ def set_input_data_dict(
     # Perform setup based on type of action
     if set_type == "perfect-optim":
         # Retrieve data from hass
-        if get_data_from_file:
-            with open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
-                rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
-            retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
-            retrieve_hass_conf["sensor_power_photovoltaics"] = str(var_list[1])
-            retrieve_hass_conf["sensor_linear_interp"] = [
-                retrieve_hass_conf["sensor_power_photovoltaics"],
-                retrieve_hass_conf["sensor_power_load_no_var_loads"],
-            ]
-            retrieve_hass_conf["sensor_replace_zero"] = [
-                retrieve_hass_conf["sensor_power_photovoltaics"]
-            ]
-        else:
-            days_list = utils.get_days_list(
-                retrieve_hass_conf["historic_days_to_retrieve"]
-            )
-            var_list = [
-                retrieve_hass_conf["sensor_power_load_no_var_loads"],
-                retrieve_hass_conf["sensor_power_photovoltaics"],
-            ]
-            if not rh.get_data(
-                days_list,
-                var_list,
-                minimal_response=False,
-                significant_changes_only=False,
-            ):
-                return False
-        if not rh.prepare_data(
-            retrieve_hass_conf["sensor_power_load_no_var_loads"],
-            load_negative=retrieve_hass_conf["load_negative"],
-            set_zero_min=retrieve_hass_conf["set_zero_min"],
-            var_replace_zero=retrieve_hass_conf["sensor_replace_zero"],
-            var_interp=retrieve_hass_conf["sensor_linear_interp"],
-        ):
+        success, df_input_data, days_list = retrieve_home_assistant_data(
+            set_type, get_data_from_file, retrieve_hass_conf, optim_conf, rh, emhass_conf, test_df_literal
+        )
+        if not success:
             return False
-        df_input_data = rh.df_final.copy()
         # What we don't need for this type of action
         P_PV_forecast, P_load_forecast, df_input_data_dayahead = None, None, None
     elif set_type == "dayahead-optim":
@@ -186,6 +265,14 @@ def set_input_data_dict(
             if isinstance(df_weather, bool) and not df_weather:
                 return False
             P_PV_forecast = fcst.get_power_from_weather(df_weather)
+            # Adjust PV forecast
+            if optim_conf["set_use_adjusted_pv"]:
+                # Update the PV forecast
+                P_PV_forecast = adjust_pv_forecast(
+                    logger, fcst, P_PV_forecast, get_data_from_file,
+                    retrieve_hass_conf, optim_conf, rh, emhass_conf,
+                    test_df_literal,
+                )
         else:
             P_PV_forecast = pd.Series(0, index=fcst.forecast_dates)
         P_load_forecast = fcst.get_load_forecast(
@@ -244,53 +331,12 @@ def set_input_data_dict(
             df_input_data = None
         else:
             # Retrieve data from hass
-            if get_data_from_file:
-                with open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
-                    rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
-                if optim_conf["set_use_pv"]:
-                    retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
-                    retrieve_hass_conf["sensor_power_photovoltaics"] = str(var_list[1])
-                    retrieve_hass_conf["sensor_linear_interp"] = [
-                        retrieve_hass_conf["sensor_power_photovoltaics"],
-                        retrieve_hass_conf["sensor_power_load_no_var_loads"],
-                    ]
-                    retrieve_hass_conf["sensor_replace_zero"] = [
-                        retrieve_hass_conf["sensor_power_photovoltaics"]
-                    ]
-                else:
-                    retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
-                    retrieve_hass_conf["sensor_linear_interp"] = [
-                        retrieve_hass_conf["sensor_power_load_no_var_loads"],
-                    ]
-                    retrieve_hass_conf["sensor_replace_zero"] = []
-            else:
-                days_list = utils.get_days_list(1)
-                if optim_conf["set_use_pv"]:
-                    var_list = [
-                        retrieve_hass_conf["sensor_power_load_no_var_loads"],
-                        retrieve_hass_conf["sensor_power_photovoltaics"],
-                    ]
-                else:
-                    var_list = [
-                        retrieve_hass_conf["sensor_power_load_no_var_loads"],
-                    ]
-                if not rh.get_data(
-                    days_list,
-                    var_list,
-                    minimal_response=False,
-                    significant_changes_only=False,
-                ):
-                    return False
-            if not rh.prepare_data(
-                retrieve_hass_conf["sensor_power_load_no_var_loads"],
-                load_negative=retrieve_hass_conf["load_negative"],
-                set_zero_min=retrieve_hass_conf["set_zero_min"],
-                var_replace_zero=retrieve_hass_conf["sensor_replace_zero"],
-                var_interp=retrieve_hass_conf["sensor_linear_interp"],
-            ):
+            success, df_input_data, days_list = retrieve_home_assistant_data(
+                set_type, get_data_from_file, retrieve_hass_conf, optim_conf, rh, emhass_conf, test_df_literal
+            )
+            if not success:
                 return False
             set_mix_forecast = True
-            df_input_data = rh.df_final.copy()
         # Get PV and load forecasts
         if (
             optim_conf["set_use_pv"]
@@ -304,6 +350,14 @@ def set_input_data_dict(
             P_PV_forecast = fcst.get_power_from_weather(
                 df_weather, set_mix_forecast=set_mix_forecast, df_now=df_input_data
             )
+            # Adjust PV forecast
+            if optim_conf["set_use_adjusted_pv"]:
+                # Update the PV forecast
+                P_PV_forecast = adjust_pv_forecast(
+                    logger, fcst, P_PV_forecast, get_data_from_file,
+                    retrieve_hass_conf, optim_conf, rh, emhass_conf,
+                    test_df_literal,
+                )
         else:
             P_PV_forecast = pd.Series(0, index=fcst.forecast_dates)
         P_load_forecast = fcst.get_load_forecast(
@@ -361,10 +415,10 @@ def set_input_data_dict(
         var_model = params["passed_data"]["var_model"]
         if get_data_from_file:
             days_list = None
-            filename = "data_train_" + model_type + ".pkl"
+            filename = model_type + ".pkl"
             filename_path = emhass_conf["data_path"] / filename
             with open(filename_path, "rb") as inp:
-                df_input_data, _ = pickle.load(inp)
+                df_input_data, _, _, _ = pickle.load(inp)
             df_input_data = df_input_data[
                 df_input_data.index[-1] - pd.offsets.Day(days_to_retrieve) :
             ]
@@ -516,14 +570,14 @@ def perfect_forecast_optim(
     df_input_data = input_data_dict["fcst"].get_load_cost_forecast(
         input_data_dict["df_input_data"],
         method=input_data_dict["fcst"].optim_conf["load_cost_forecast_method"],
-        list_and_perfect=True,
+        list_and_perfect = True
     )
     if isinstance(df_input_data, bool) and not df_input_data:
         return False
     df_input_data = input_data_dict["fcst"].get_prod_price_forecast(
         df_input_data,
         method=input_data_dict["fcst"].optim_conf["production_price_forecast_method"],
-        list_and_perfect=True,
+        list_and_perfect = True
     )
     if isinstance(df_input_data, bool) and not df_input_data:
         return False

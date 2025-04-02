@@ -41,7 +41,7 @@ logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
 class TestCommandLineUtils(unittest.TestCase):
     @staticmethod
-    def get_test_params():
+    def get_test_params(set_use_pv=False):
         # Build params with default config and secrets
         if emhass_conf["defaults_path"].exists():
             config = utils.build_config(
@@ -49,6 +49,8 @@ class TestCommandLineUtils(unittest.TestCase):
             )
             _, secrets = utils.build_secrets(emhass_conf, logger, no_response=True)
             params = utils.build_params(emhass_conf, secrets, config, logger)
+            if set_use_pv:
+                params['optim_conf']['set_use_pv'] = True
         else:
             raise Exception(
                 "config_defaults. does not exist in path: "
@@ -57,7 +59,7 @@ class TestCommandLineUtils(unittest.TestCase):
         return params
 
     def setUp(self):
-        params = TestCommandLineUtils.get_test_params()
+        params = TestCommandLineUtils.get_test_params(set_use_pv=True)
         # Add runtime parameters for forecast lists
         runtimeparams = {
             "pv_power_forecast": [i + 1 for i in range(48)],
@@ -303,8 +305,25 @@ class TestCommandLineUtils(unittest.TestCase):
             opt_res["unit_prod_price"].values.tolist(),
             runtimeparams["prod_price_forecast"],
         )
+        # Test dayahead output, using set_use_adjusted_pv = True
+        params = TestCommandLineUtils.get_test_params()
+        params['optim_conf']["set_use_adjusted_pv"] = True
+        params['optim_conf']["set_use_pv"] = True
+        params_json = json.dumps(params)
+        input_data_dict = set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            self.runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=True)
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertTrue(opt_res.isnull().sum().sum() == 0)
 
-    # Test dataframe outpit of perfect forecast optimization
+    # Test dataframe output of perfect forecast optimization
     def test_perfect_forecast_optim(self):
         costfun = "profit"
         action = "perfect-optim"
@@ -440,7 +459,6 @@ class TestCommandLineUtils(unittest.TestCase):
         # self.assertTrue(len(opt_res_last)==1)
         # Check if status is published
         from datetime import datetime
-
         now_precise = datetime.now(
             input_data_dict["retrieve_hass_conf"]["time_zone"]
         ).replace(second=0, microsecond=0)
@@ -465,6 +483,25 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(
             data["attributes"]["friendly_name"] == "EMHASS optimization status"
         )
+        # When using set_use_adjusted_pv = True
+        action = "naive-mpc-optim"
+        params = copy.deepcopy(json.loads(self.params_json))
+        params['optim_conf']["set_use_adjusted_pv"] = True
+        params['optim_conf']["set_use_pv"] = True
+        params_json = json.dumps(params)
+        input_data_dict = set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            self.runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_res = naive_mpc_optim(input_data_dict, logger, debug=True)
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertTrue(opt_res.isnull().sum().sum() == 0)
+        self.assertTrue(len(opt_res) == 10)
 
     # Test outputs of fit, predict and tune
     def test_forecast_model_fit_predict_tune(self):
@@ -473,7 +510,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = TestCommandLineUtils.get_test_params()
         runtimeparams = {
             "historic_days_to_retrieve": 20,
-            "model_type": "load_forecast",
+            "model_type": "long_train_data",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
@@ -497,7 +534,7 @@ class TestCommandLineUtils(unittest.TestCase):
             get_data_from_file=True,
         )
         self.assertTrue(
-            input_data_dict["params"]["passed_data"]["model_type"] == "load_forecast"
+            input_data_dict["params"]["passed_data"]["model_type"] == "long_train_data"
         )
         self.assertTrue(
             input_data_dict["params"]["passed_data"]["sklearn_model"]
@@ -517,7 +554,7 @@ class TestCommandLineUtils(unittest.TestCase):
             get_data_from_file=True,
         )
         self.assertTrue(
-            input_data_dict["params"]["passed_data"]["model_type"] == "load_forecast"
+            input_data_dict["params"]["passed_data"]["model_type"] == "long_train_data"
         )
         self.assertTrue(
             input_data_dict["params"]["passed_data"]["sklearn_model"]
@@ -573,7 +610,7 @@ class TestCommandLineUtils(unittest.TestCase):
             "csv_file": "heating_prediction.csv",
             "features": ["degreeday", "solar"],
             "target": "hour",
-            "regression_model": "AdaBoostRegression",
+            "regression_model": "LassoRegression",
             "model_type": "heating_hours_degreeday",
             "timestamp": "timestamp",
             "date_features": ["month", "day_of_week"],
@@ -599,7 +636,7 @@ class TestCommandLineUtils(unittest.TestCase):
         )
         self.assertTrue(
             input_data_dict["params"]["passed_data"]["regression_model"]
-            == "AdaBoostRegression",
+            == "LassoRegression",
         )
         self.assertTrue(
             input_data_dict["params"]["passed_data"]["csv_file"]
@@ -615,7 +652,7 @@ class TestCommandLineUtils(unittest.TestCase):
             "csv_file": "heating_prediction.csv",
             "features": ["degreeday", "solar"],
             "target": "hour",
-            "regression_model": "AdaBoostRegression",
+            "regression_model": "LassoRegression",
             "model_type": "heating_hours_degreeday",
             "timestamp": "timestamp",
             "date_features": ["month", "day_of_week"],
@@ -677,7 +714,7 @@ class TestCommandLineUtils(unittest.TestCase):
             "--debug",
             "True",
             "--params",
-            json.dumps(get_test_params()),
+            json.dumps(get_test_params(set_use_pv=True)),
         ],
     )
     def test_main_perfect_forecast_optim(self):
@@ -740,7 +777,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
             "historic_days_to_retrieve": 20,
-            "model_type": "load_forecast",
+            "model_type": "long_train_data",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
@@ -776,7 +813,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
             "historic_days_to_retrieve": 20,
-            "model_type": "load_forecast",
+            "model_type": "long_train_data",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
@@ -812,7 +849,7 @@ class TestCommandLineUtils(unittest.TestCase):
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
             "historic_days_to_retrieve": 20,
-            "model_type": "load_forecast",
+            "model_type": "long_train_data",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
@@ -850,7 +887,7 @@ class TestCommandLineUtils(unittest.TestCase):
             "csv_file": "heating_prediction.csv",
             "features": ["degreeday", "solar"],
             "target": "hour",
-            "regression_model": "AdaBoostRegression",
+            "regression_model": "LassoRegression",
             "model_type": "heating_hours_degreeday",
             "timestamp": "timestamp",
             "date_features": ["month", "day_of_week"],
@@ -883,7 +920,7 @@ class TestCommandLineUtils(unittest.TestCase):
             "csv_file": "heating_prediction.csv",
             "features": ["degreeday", "solar"],
             "target": "hour",
-            "regression_model": "AdaBoostRegression",
+            "regression_model": "LassoRegression",
             "model_type": "heating_hours_degreeday",
             "timestamp": "timestamp",
             "date_features": ["month", "day_of_week"],
