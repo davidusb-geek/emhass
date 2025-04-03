@@ -69,6 +69,7 @@ def retrieve_home_assistant_data(
         var_list = [retrieve_hass_conf["sensor_power_load_no_var_loads"]]
         if optim_conf.get("set_use_pv", True):
             var_list.append(retrieve_hass_conf["sensor_power_photovoltaics"])
+            var_list.append(retrieve_hass_conf["sensor_power_photovoltaics_forecast"])
         if not rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False):
             return False, None, days_list
     rh.prepare_data(
