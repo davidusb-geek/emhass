@@ -756,7 +756,7 @@ class Forecast(object):
         # Extract target and predictor
         self.logger.debug("adjust_pv_forecast_data_prep using data:\n%s", data)
         if self.logger.isEnabledFor(logging.DEBUG):
-          data.to_csv(self.emhass_conf["data_path"] / 'debug-adjust-pv-forecast-data-prep-input-data.csv')
+            data.to_csv(self.emhass_conf["data_path"] / 'debug-adjust-pv-forecast-data-prep-input-data.csv')
         P_PV = data[self.var_PV]  # Actual PV production
         P_PV_forecast = data[self.var_PV_forecast] # Forecasted PV production
         # Define time ranges
@@ -780,7 +780,7 @@ class Forecast(object):
         self.y_adjust_pv = self.data_adjust_pv["actual"]  # Target: actual PV production
         self.logger.debug("adjust_pv_forecast_data_prep output data:\n%s", self.data_adjust_pv)
         if self.logger.isEnabledFor(logging.DEBUG):
-          self.data_adjust_pv.to_csv(self.emhass_conf["data_path"] / 'debug-adjust-pv-forecast-data-prep-output-data.csv')
+            self.data_adjust_pv.to_csv(self.emhass_conf["data_path"] / 'debug-adjust-pv-forecast-data-prep-output-data.csv')
 
     def adjust_pv_forecast_fit(
         self, n_splits: int = 5, regression_model: str = "LassoRegression", 
@@ -884,6 +884,9 @@ class Forecast(object):
             self.validation_r2 = r2_score(y_true, y_pred)
             # Log the validation metrics
             self.logger.info(f"PV adjust Validation metrics: RMSE = {self.validation_rmse}, R2 = {self.validation_r2}")
+        self.logger.debug("adjust_pv_forecast_predict forecast data:\n%s", forecast_data)
+        if self.logger.isEnabledFor(logging.DEBUG):
+            forecast_data.to_csv(self.emhass_conf["data_path"] / 'debug-adjust-pv-forecast-predict-forecast-data.csv')
         # Return the DataFrame with the adjusted forecast
         return forecast_data
 
