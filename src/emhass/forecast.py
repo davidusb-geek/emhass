@@ -221,10 +221,13 @@ class Forecast(object):
         r"""
         Get weather forecast json from Open-Meteo and cache it for re-use.
         The response json is cached in the local file system and returned
-        on subsequent calls until it is older than max_age at which point
-        an attempt is made to replace it with a new version.
+        on subsequent calls until it is older than max_age, at which point
+        attempts will be made to replace it with a new version.
         The cached version will not be overwritten until a new version has
         been successfully fetched from Open-Meteo.
+        In the event of connectivity issues, the cached version will continue
+        to be returned until such time as a new version can be successfully
+        fetched from Open-Meteo.
         If you want to force reload, pass max_age value of zero.
 
         :param max_age: The maximum age of the cached json file, in minutes,
@@ -251,14 +254,14 @@ class Forecast(object):
             with open(json_path) as json_file:
                 data = json.load(json_file)
             if use_cache:
-                self.logger.info("The cached Open-Meteo JSON file is fresh (age=%.0fm, max_age=%sm)",
+                self.logger.info("The cached Open-Meteo JSON file is recent (age=%.0fm, max_age=%sm)",
                                  json_age, max_age)
             else:
                 self.logger.info("The cached Open-Meteo JSON file is old (age=%.0fm, max_age=%sm)",
                                  json_age, max_age)
 
         if not use_cache:
-            self.logger.info("Attempting to fetching a new weather forecast from Open-Meteo")
+            self.logger.info("Fetching a new weather forecast from Open-Meteo")
             headers = {"User-Agent": "EMHASS", "Accept": "application/json"}
             url = (
                 "https://api.open-meteo.com/v1/forecast?"
@@ -283,13 +286,13 @@ class Forecast(object):
                 self.logger.debug("Returned HTTP status code: %s", response.status_code)
                 response.raise_for_status()
                 data = response.json()
-                self.logger.info("Saving response to Open-Meteo JSON cache file: %s", json_path)
+                self.logger.info("Saving response in Open-Meteo JSON cache file: %s", json_path)
                 with open(json_path, "w") as json_file:
                     json.dump(response.json(), json_file, indent=2)
             except RequestException:
-                self.logger.error("Failed to fetch weather forecast from Open-Meteo")
+                self.logger.error("Failed to fetch weather forecast from Open-Meteo", exc_info=True)
                 if data is not None:
-                    self.logger.warning("Returning old cached data until next Open-Meteo success")
+                    self.logger.warning("Returning old cached data until next Open-Meteo attempt")
 
         return data
 
