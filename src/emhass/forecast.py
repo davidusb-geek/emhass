@@ -14,7 +14,6 @@ from itertools import zip_longest
 from typing import Optional
 from urllib.parse import quote
 
-import numpy
 import numpy as np
 import pandas as pd
 from pvlib.solarposition import get_solarposition
@@ -611,7 +610,7 @@ class Forecast(object):
         :rtype: pd.DataFrame
         """
         first_fcst = alpha * df_forecast.iloc[0] + beta * df_now[col].iloc[-1]
-        if numpy.isnan(first_fcst):
+        if np.isnan(first_fcst):
             first_fcst = 0
         df_forecast.iloc[0] = int(round(first_fcst))
         return df_forecast
