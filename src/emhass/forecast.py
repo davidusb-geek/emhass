@@ -153,6 +153,7 @@ class Forecast(object):
         self.timeStep = self.freq.seconds / 3600  # in hours
         self.time_delta = pd.to_timedelta(opt_time_delta, "hours")
         self.var_PV = self.retrieve_hass_conf["sensor_power_photovoltaics"]
+        self.var_PV_forecast = self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
         self.var_load = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
         self.var_load_new = self.var_load + "_positive"
         self.lat = self.retrieve_hass_conf["Latitude"]
@@ -753,8 +754,11 @@ class Forecast(object):
         :type data: pd.DataFrame
         """
         # Extract target and predictor
-        P_PV = data["sensor.power_photovoltaics"]  # Actual PV production
-        P_PV_forecast = data["sensor.p_pv_forecast"]  # Forecasted PV production
+        self.logger.debug("adjust_pv_forecast_data_prep using data:\n%s", data)
+        if self.logger.isEnabledFor(logging.DEBUG):
+            data.to_csv(self.emhass_conf["data_path"] / 'debug-adjust-pv-forecast-data-prep-input-data.csv')
+        P_PV = data[self.var_PV]  # Actual PV production
+        P_PV_forecast = data[self.var_PV_forecast] # Forecasted PV production
         # Define time ranges
         last_day = data.index.max().normalize()  # Last available day
         three_months_ago = last_day - pd.DateOffset(days=self.retrieve_hass_conf["historic_days_to_retrieve"])
@@ -774,6 +778,9 @@ class Forecast(object):
         # Features (X) and target (y)
         self.X_adjust_pv = self.data_adjust_pv.drop(columns=["actual"])  # Predictors
         self.y_adjust_pv = self.data_adjust_pv["actual"]  # Target: actual PV production
+        self.logger.debug("adjust_pv_forecast_data_prep output data:\n%s", self.data_adjust_pv)
+        if self.logger.isEnabledFor(logging.DEBUG):
+            self.data_adjust_pv.to_csv(self.emhass_conf["data_path"] / 'debug-adjust-pv-forecast-data-prep-output-data.csv')
 
     def adjust_pv_forecast_fit(
         self, n_splits: int = 5, regression_model: str = "LassoRegression", 
@@ -877,6 +884,9 @@ class Forecast(object):
             self.validation_r2 = r2_score(y_true, y_pred)
             # Log the validation metrics
             self.logger.info(f"PV adjust Validation metrics: RMSE = {self.validation_rmse}, R2 = {self.validation_r2}")
+        self.logger.debug("adjust_pv_forecast_predict forecast data:\n%s", forecast_data)
+        if self.logger.isEnabledFor(logging.DEBUG):
+            forecast_data.to_csv(self.emhass_conf["data_path"] / 'debug-adjust-pv-forecast-predict-forecast-data.csv')
         # Return the DataFrame with the adjusted forecast
         return forecast_data
 
