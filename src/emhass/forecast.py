@@ -38,7 +38,7 @@ from emhass.utils import get_days_list, set_df_index_freq, add_date_features
 class Forecast(object):
     r"""
     Generate weather, load and costs forecasts needed as inputs to the optimization.
-7
+    
     In EMHASS we have basically 4 forecasts to deal with:
     
     - PV power production forecast (internally based on the weather forecast and the
@@ -229,7 +229,7 @@ class Forecast(object):
 
         :param max_age: The maximum age of the cached json file, in minutes,
             before it is discarded and a new version fetched from Open-Meteo.
-            Defaults to 30 minutes'.
+            Defaults to 30 minutes.
         :type max_age: int, optional
         :return: The json containing the Open-Meteo forecast data
         :rtype: str
