@@ -216,7 +216,7 @@ class Forecast(object):
 
     def get_cached_open_meteo_forecast_json(
         self,
-        max_age: Optional[int] = 60,
+        max_age: Optional[int] = 30,
     ) -> str:
         r"""
         Get weather forecast json from Open-Meteo and cache it for re-use.
