@@ -38,7 +38,7 @@ from emhass.utils import get_days_list, set_df_index_freq, add_date_features
 class Forecast(object):
     r"""
     Generate weather, load and costs forecasts needed as inputs to the optimization.
-    
+7
     In EMHASS we have basically 4 forecasts to deal with:
     
     - PV power production forecast (internally based on the weather forecast and the
@@ -214,6 +214,85 @@ class Forecast(object):
                         0 : self.params["passed_data"]["prediction_horizon"]
                     ]
 
+    def get_cached_open_meteo_forecast_json(
+        self,
+        max_age: Optional[int] = 60,
+    ) -> str:
+        r"""
+        Get weather forecast json from Open-Meteo and cache it for re-use.
+        The response json is cached in the local file system and returned
+        on subsequent calls until it is older than max_age at which point
+        an attempt is made to replace it with a new version.
+        The cached version will not be overwritten until a new version has
+        been successfully fetched from Open-Meteo.
+        If you want to force reload, pass max_age value of zero.
+
+        :param max_age: The maximum age of the cached json file, in minutes,
+            before it is discarded and a new version fetched from Open-Meteo.
+            Defaults to 30 minutes'.
+        :type max_age: int, optional
+        :return: The json containing the Open-Meteo forecast data
+        :rtype: str
+
+        """
+        json_path = os.path.abspath(
+            self.emhass_conf["data_path"] / "cached-open-meteo-forecast.json"
+        )
+        # The cached JSON file is always loaded, if it exists, as it is also a fallback
+        # in case the REST API call to Open-Meteo fails - the cached JSON will continue to
+        # be used until it can successfully fetch a new version from Open-Meteo.
+        data = None
+        use_cache = False
+        if os.path.exists(json_path):
+            delta = datetime.now() - datetime.fromtimestamp(os.path.getmtime(json_path))
+            json_age = int(delta / timedelta(seconds=60))
+            use_cache = json_age < max_age
+            self.logger.info("Loading existing cached Open-Meteo JSON file: %s", json_path)
+            with open(json_path) as json_file:
+                data = json.load(json_file)
+            if use_cache:
+                self.logger.info("The cached Open-Meteo JSON file is fresh (age=%.0fm, max_age=%sm)",
+                                 json_age, max_age)
+            else:
+                self.logger.info("The cached Open-Meteo JSON file is old (age=%.0fm, max_age=%sm)",
+                                 json_age, max_age)
+
+        if not use_cache:
+            self.logger.info("Attempting to fetching a new weather forecast from Open-Meteo")
+            headers = {"User-Agent": "EMHASS", "Accept": "application/json"}
+            url = (
+                "https://api.open-meteo.com/v1/forecast?"
+                + "latitude="
+                + str(round(self.lat, 2))
+                + "&longitude="
+                + str(round(self.lon, 2))
+                + "&minutely_15="
+                + "temperature_2m,"
+                + "relative_humidity_2m,"
+                + "rain,"
+                + "cloud_cover,"
+                + "wind_speed_10m,"
+                + "shortwave_radiation_instant,"
+                + "diffuse_radiation_instant,"
+                + "direct_normal_irradiance_instant"
+                + "&timezone="
+                + quote(str(self.time_zone), safe="")
+            )
+            try:
+                response = get(url, headers=headers)
+                self.logger.debug("Returned HTTP status code: %s", response.status_code)
+                response.raise_for_status()
+                data = response.json()
+                self.logger.info("Saving response to Open-Meteo JSON cache file: %s", json_path)
+                with open(json_path, "w") as json_file:
+                    json.dump(response.json(), json_file, indent=2)
+            except RequestException:
+                self.logger.error("Failed to fetch weather forecast from Open-Meteo")
+                if data is not None:
+                    self.logger.warning("Returning old cached data until next Open-Meteo success")
+
+        return data
+
     def get_weather_forecast(
         self,
         method: Optional[str] = "open-meteo",
@@ -247,32 +326,7 @@ class Forecast(object):
             method == "open-meteo" or method == "scrapper"
         ):  # The scrapper option is being left here for backward compatibility
             if not os.path.isfile(w_forecast_cache_path):
-                headers = {"User-Agent": "EMHASS", "Accept": "application/json"}
-                url = (
-                    "https://api.open-meteo.com/v1/forecast?"
-                    + "latitude="
-                    + str(round(self.lat, 2))
-                    + "&longitude="
-                    + str(round(self.lon, 2))
-                    + "&minutely_15="
-                    + "temperature_2m,"
-                    + "relative_humidity_2m,"
-                    + "rain,"
-                    + "cloud_cover,"
-                    + "wind_speed_10m,"
-                    + "shortwave_radiation_instant,"
-                    + "diffuse_radiation_instant,"
-                    + "direct_normal_irradiance_instant"
-                    + "&timezone="
-                    + quote(str(self.time_zone), safe="")
-                )
-                response = get(url, headers=headers)
-                """import bz2 # Uncomment to save a serialized data for tests
-                import _pickle as cPickle
-                with bz2.BZ2File("data/test_response_openmeteo_get_method.pbz2", "w") as f: 
-                    cPickle.dump(response, f)"""
-
-                data_raw = response.json()
+                data_raw = self.get_cached_open_meteo_forecast_json()
                 data_15min = pd.DataFrame.from_dict(data_raw["minutely_15"])
                 data_15min["time"] = pd.to_datetime(data_15min["time"])
                 data_15min.set_index("time", inplace=True)
