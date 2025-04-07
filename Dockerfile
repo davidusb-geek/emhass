@@ -35,21 +35,9 @@ RUN apt-get update \
     libhdf5-103-1 \
     libhdf5-dev \
     libhdf5-serial-dev \
-    # # cbc
+    # cbc
     coinor-cbc \
     coinor-libcbc-dev
-
-    # libffi-dev \
-    # gfortran \
-    # netcdf-bin \
-    # libnetcdf-dev \
-    # libglpk-dev \
-    # glpk-utils \
-    # libatlas3-base \
-    # libatlas-base-dev \
-    # libopenblas-dev \
-    # libopenblas0-pthread \
-    # libgfortran5 \
 
 # add build packadges (just in case wheel does not exist)
 RUN apt-get update \
@@ -87,8 +75,7 @@ COPY src/emhass/data/ /app/src/emhass/data/
 
 # pre generated optimization results 
 COPY data/opt_res_latest.csv /data/
-COPY data/data_train_load_forecast.pkl /data/
-COPY data/data_train_load_clustering.pkl /data/
+COPY data/long_train_data.pkl /data/
 COPY README.md /app/
 COPY pyproject.toml /app/
 

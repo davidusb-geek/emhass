@@ -47,6 +47,7 @@ class TestOptimization(unittest.TestCase):
             config = build_config(emhass_conf, logger, emhass_conf["defaults_path"])
             _, secrets = build_secrets(emhass_conf, logger, no_response=True)
             params = build_params(emhass_conf, secrets, config, logger)
+            params['optim_conf']['set_use_pv'] = True
         else:
             raise Exception(
                 "config_defaults. does not exist in path: "
@@ -634,18 +635,30 @@ class TestOptimization(unittest.TestCase):
         prediction_horizon = 10
         self.optim_conf.update({"number_of_deferrable_loads": 1})
 
-        self.fcst.params["passed_data"]["prod_price_forecast"] = [
-            0 for i in range(prediction_horizon)
-        ]
-        self.fcst.params["passed_data"]["solar_forecast_kwp"] = [
-            0 for i in range(prediction_horizon)
-        ]
-        self.fcst.params["passed_data"]["prediction_horizon"] = prediction_horizon
+        attributes = vars(self.fcst).copy()
 
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
+        attributes['params']["passed_data"]["prod_price_forecast"] = [
+            0 for i in range(prediction_horizon)
+        ]
+        attributes['params']["passed_data"]["solar_forecast_kwp"] = [
+            0 for i in range(prediction_horizon)
+        ]
+        attributes['params']["passed_data"]["prediction_horizon"] = prediction_horizon
+
+        fcst = Forecast(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            attributes['params'],
+            emhass_conf,
+            logger,
+            get_data_from_file=True,
+        )
+
+        self.df_input_data_dayahead = fcst.get_load_cost_forecast(
             self.df_input_data_dayahead, method="list"
         )
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(
+        self.df_input_data_dayahead = fcst.get_prod_price_forecast(
             self.df_input_data_dayahead, method="list"
         )
 
