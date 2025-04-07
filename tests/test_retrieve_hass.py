@@ -37,6 +37,7 @@ class TestRetrieveHass(unittest.TestCase):
     def setUp(self):
         self.get_data_from_file = True
         save_data_to_file = False
+        model_type = "test_df_final" # Options: "test_df_final" or "long_train_data"
 
         # Build params with default secrets (no config)
         if emhass_conf["defaults_path"].exists():
@@ -67,12 +68,17 @@ class TestRetrieveHass(unittest.TestCase):
         # Force config params for testing
         retrieve_hass_conf["optimization_time_step"] = pd.to_timedelta(30, "minutes")
         retrieve_hass_conf["sensor_power_photovoltaics"] = "sensor.power_photovoltaics"
+        retrieve_hass_conf["sensor_power_photovoltaics_forecast"] = "sensor.p_pv_forecast"
         retrieve_hass_conf["sensor_power_load_no_var_loads"] = (
             "sensor.power_load_no_var_loads"
         )
-        retrieve_hass_conf["sensor_replace_zero"] = ["sensor.power_photovoltaics"]
+        retrieve_hass_conf["sensor_replace_zero"] = [
+            "sensor.power_photovoltaics",
+            "sensor.p_pv_forecast",
+        ]
         retrieve_hass_conf["sensor_linear_interp"] = [
             "sensor.power_photovoltaics",
+            "sensor.p_pv_forecast",
             "sensor.power_load_no_var_loads",
         ]
         retrieve_hass_conf["set_zero_min"] = True
@@ -91,18 +97,23 @@ class TestRetrieveHass(unittest.TestCase):
         )
         # Obtain sensor values from saved file
         if self.get_data_from_file:
-            with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
+            with open(emhass_conf["data_path"] / str(model_type + ".pkl"), "rb") as inp:
                 self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = (
                     pickle.load(inp)
                 )
         # Else obtain sensor values from HA
         else:
+            if model_type == "long_train_data":
+                days_to_retrieve = 365
+            else:
+                days_to_retrieve = self.retrieve_hass_conf["historic_days_to_retrieve"]
             self.days_list = get_days_list(
-                self.retrieve_hass_conf["historic_days_to_retrieve"]
+                days_to_retrieve
             )
             self.var_list = [
                 self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
                 self.retrieve_hass_conf["sensor_power_photovoltaics"],
+                self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
             ]
             self.rh.get_data(
                 self.days_list,
@@ -131,7 +142,7 @@ class TestRetrieveHass(unittest.TestCase):
             }
             # Check to save updated data to file
             if save_data_to_file:
-                with open(emhass_conf["data_path"] / "test_df_final.pkl", "wb") as outp:
+                with open(emhass_conf["data_path"] / str(model_type + ".pkl"), "wb") as outp:
                     pickle.dump(
                         (
                             self.rh.df_final,
@@ -280,8 +291,9 @@ class TestRetrieveHass(unittest.TestCase):
     def test_publish_data(self):
         response, data = self.rh.post_data(
             self.df_raw[self.df_raw.columns[0]],
-            25,
+            10,
             "sensor.p_pv_forecast",
+            "power",
             "Unit",
             "Variable",
             type_var="power",
@@ -289,9 +301,9 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(
             data["state"]
-            == str(
+            == "{:.2f}".format(
                 np.round(
-                    self.df_raw.loc[self.df_raw.index[25], self.df_raw.columns[0]], 2
+                    self.df_raw.loc[self.df_raw.index[10], self.df_raw.columns[0]], 2
                 )
             )
         )
@@ -299,15 +311,21 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertTrue(data["attributes"]["friendly_name"] == "Variable")
         # Lets test publishing a forecast with more added attributes
         df = copy.deepcopy(self.df_raw.iloc[0:30])
-        df.columns = ["P_PV", "P_Load"]
+        df.columns = ["P_Load", "P_PV", "P_PV_forecast"]
         df["P_batt"] = 1000.0
         df["SOC_opt"] = 0.5
         response, data = self.rh.post_data(
-            df["P_PV"], 25, "sensor.p_pv_forecast", "W", "PV Forecast", type_var="power"
+            df["P_PV_forecast"], 
+            10, 
+            "sensor.p_pv_forecast", 
+            "power",
+            "W", 
+            "PV Forecast", 
+            type_var="power"
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(
-            data["state"] == str(np.round(df.loc[df.index[25], df.columns[0]], 2))
+            data["state"] == "{:.2f}".format(np.round(df.loc[df.index[10], df.columns[2]], 2))
         )
         self.assertTrue(data["attributes"]["unit_of_measurement"] == "W")
         self.assertTrue(data["attributes"]["friendly_name"] == "PV Forecast")
@@ -316,6 +334,7 @@ class TestRetrieveHass(unittest.TestCase):
             df["P_batt"],
             25,
             "sensor.p_batt_forecast",
+            "power",
             "W",
             "Battery Power Forecast",
             type_var="batt",
@@ -327,6 +346,7 @@ class TestRetrieveHass(unittest.TestCase):
             df["SOC_opt"],
             25,
             "sensor.SOC_forecast",
+            "battery",
             "%",
             "Battery SOC Forecast",
             type_var="SOC",

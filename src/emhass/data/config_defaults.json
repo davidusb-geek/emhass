@@ -2,7 +2,7 @@
   "logging_level": "INFO",
   "costfun": "profit",
   "optimization_time_step": 30,
-  "historic_days_to_retrieve": 2,
+  "historic_days_to_retrieve": 9,
   "method_ts_round": "nearest",
   "continual_publish": false,
   "data_path": "default",
@@ -17,9 +17,11 @@
   "weight_battery_discharge": 1.0,
   "weight_battery_charge": 1.0,
   "sensor_power_photovoltaics": "sensor.power_photovoltaics",
+  "sensor_power_photovoltaics_forecast": "sensor.p_pv_forecast",
   "sensor_power_load_no_var_loads": "sensor.power_load_no_var_loads",
   "sensor_replace_zero": [
-    "sensor.power_photovoltaics" 
+    "sensor.power_photovoltaics",
+    "sensor.p_pv_forecast"
   ],
   "sensor_linear_interp": [
     "sensor.power_photovoltaics",
@@ -32,11 +34,15 @@
     3000.0,
     750.0
   ],
+  "minimum_power_of_deferrable_loads": [
+    0.0,
+    0.0
+  ],
   "operating_hours_of_each_deferrable_load": [
     4,
     0
   ],
-  "weather_forecast_method": "scrapper",
+  "weather_forecast_method": "open-meteo",
   "load_forecast_method": "naive",
   "delta_forecast_daily": 1,
   "load_cost_forecast_method": "hp_hc_periods",
@@ -85,6 +91,9 @@
   "maximum_power_from_grid": 9000,
   "maximum_power_to_grid": 9000,
   "set_use_pv": false,
+  "set_use_adjusted_pv": false,
+  "adjusted_pv_regression_model": "LassoRegression",
+  "adjusted_pv_solar_elevation_threshold": 10,
   "pv_module_model": [
     "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M"
   ],
