@@ -217,7 +217,7 @@ class Forecast(object):
     def get_cached_open_meteo_forecast_json(
         self,
         max_age: Optional[int] = 30,
-    ) -> str:
+    ) -> dict:
         r"""
         Get weather forecast json from Open-Meteo and cache it for re-use.
         The response json is cached in the local file system and returned
@@ -235,7 +235,7 @@ class Forecast(object):
             Defaults to 30 minutes.
         :type max_age: int, optional
         :return: The json containing the Open-Meteo forecast data
-        :rtype: str
+        :rtype: dict
 
         """
         json_path = os.path.abspath(
