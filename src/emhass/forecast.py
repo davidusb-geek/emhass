@@ -289,7 +289,7 @@ class Forecast(object):
                 self.logger.info("Saving response in Open-Meteo JSON cache file: %s", json_path)
                 with open(json_path, "w") as json_file:
                     json.dump(response.json(), json_file, indent=2)
-            except RequestException:
+            except requests.exceptions.RequestException:
                 self.logger.error("Failed to fetch weather forecast from Open-Meteo", exc_info=True)
                 if data is not None:
                     self.logger.warning("Returning old cached data until next Open-Meteo attempt")
