@@ -1504,7 +1504,7 @@ class Forecast(object):
             if not isinstance(forecast_out, pd.Series):
                 forecast_out = pd.Series(forecast_out, index=df_final.index)
             df_final.loc[:, self.var_prod_price] = forecast_out
-         elif method == "list":  # reading a list of values
+        elif method == "list":  # reading a list of values
             # Loading data from passed list
             data_list = self.params["passed_data"]["prod_price_forecast"]
             # Check if the passed data has the correct length
