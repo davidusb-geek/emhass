@@ -7,6 +7,9 @@ build-backend = "hatchling.build"
 [tool.uv.workspace]
 members = ["emhass"]
 
+[tool.uv]
+default-groups = "all"
+
 [project]
 name = "emhass"
 version = "0.13.0.post1"
@@ -49,10 +52,10 @@ docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
 test = ["requests_mock", "pytest", "coverage", "snakeviz", "ruff", "tabulate", "hatchling"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["emhass"]
+packages = ["src/emhass"]
 
 [tool.hatch.build.targets.sdist]
-packages = ["emhass"]
+packages = ["src/emhass"]
 include = [
     "/src/emhass/templates/index.html",
     "/src/emhass/templates/template.html",
