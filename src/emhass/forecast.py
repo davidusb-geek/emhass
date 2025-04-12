@@ -1434,8 +1434,11 @@ class Forecast(object):
             # Ensure correct length
             if not list_and_perfect:
                 forecast_out = forecast_out[0 : len(self.forecast_dates)]
-                df_final = df_final[0 : len(self.forecast_dates)]
-            df_final.loc[:,self.var_load_cost] = forecast_out.values
+                df_final = df_final[0 : len(self.forecast_dates)].copy()
+            # Convert to Series if needed and align index
+            if not isinstance(forecast_out, pd.Series):
+                forecast_out = pd.Series(np.ravel(forecast_out), index=df_final.index)
+            df_final.loc[:, self.var_load_cost] = forecast_out
         elif method == "list":  # reading a list of values
             # Loading data from passed list
             data_list = self.params["passed_data"]["load_cost_forecast"]
@@ -1506,8 +1509,11 @@ class Forecast(object):
             # Ensure correct length
             if not list_and_perfect:
                 forecast_out = forecast_out[0 : len(self.forecast_dates)]
-                df_final = df_final[0 : len(self.forecast_dates)]
-            df_final.loc[:,self.var_prod_price] = forecast_out.values
+                df_final = df_final[0 : len(self.forecast_dates)].copy()
+            # Convert to Series if needed and align index
+            if not isinstance(forecast_out, pd.Series):
+                forecast_out = pd.Series(np.ravel(forecast_out), index=df_final.index)
+            df_final.loc[:, self.var_prod_price] = forecast_out
         elif method == "list":  # reading a list of values
             # Loading data from passed list
             data_list = self.params["passed_data"]["prod_price_forecast"]
