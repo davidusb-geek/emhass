@@ -7,12 +7,12 @@ build-backend = "hatchling.build"
 [tool.uv.workspace]
 members = ["emhass"]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/emhass"]
+[tool.uv]
+default-groups = "all"
 
 [project]
 name = "emhass"
-version = "0.13.0"
+version = "0.13.0.post1"
 description = "An Energy Management System for Home Assistant"
 readme = "README.md"
 requires-python = ">=3.10, <3.13"
@@ -50,6 +50,9 @@ dependencies = [
 docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
 # can add "mypy"
 test = ["requests_mock", "pytest", "coverage", "snakeviz", "ruff", "tabulate", "hatchling"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/emhass"]
 
 [tool.hatch.build.targets.sdist]
 packages = ["src/emhass"]
