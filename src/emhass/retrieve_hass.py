@@ -347,16 +347,22 @@ class RetrieveHass:
             )
             return False
         # Confirm var_replace_zero & var_interp contain only sensors contained in var_list
-        if isinstance(var_replace_zero, list) and all(
-            item in var_replace_zero for item in self.var_list
-        ):
-            pass
+        if isinstance(var_replace_zero, list):
+            original_list = var_replace_zero[:]
+            var_replace_zero = [item for item in var_replace_zero if item in self.var_list]
+            removed = set(original_list) - set(var_replace_zero)
+            for item in removed:
+                self.logger.warning(
+                    f"Sensor '{item}' in var_replace_zero not found in self.var_list and has been removed.")
         else:
             var_replace_zero = []
-        if isinstance(var_interp, list) and all(
-            item in var_interp for item in self.var_list
-        ):
-            pass
+        if isinstance(var_interp, list):
+            original_list = var_interp[:]
+            var_interp = [item for item in var_interp if item in self.var_list]
+            removed = set(original_list) - set(var_interp)
+            for item in removed:
+                self.logger.warning(
+                    f"Sensor '{item}' in var_interp not found in self.var_list and has been removed.")
         else:
             var_interp = []
         # Apply minimum values

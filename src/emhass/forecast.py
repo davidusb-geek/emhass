@@ -610,8 +610,6 @@ class Forecast(object):
         :rtype: pd.DataFrame
         """
         first_fcst = alpha * df_forecast.iloc[0] + beta * df_now[col].iloc[-1]
-        if np.isnan(first_fcst):
-            first_fcst = 0
         df_forecast.iloc[0] = int(round(first_fcst))
         return df_forecast
 
