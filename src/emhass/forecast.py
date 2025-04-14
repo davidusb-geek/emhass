@@ -1211,6 +1211,7 @@ class Forecast(object):
                     )
                     var_interp = [var_list[0]]
                     self.var_list = [var_list[0]]
+                    rh.var_list = self.var_list
                     self.var_load_new = self.var_load + "_positive"
             else:
                 days_list = get_days_list(days_min_load_forecast)

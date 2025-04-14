@@ -328,6 +328,12 @@ class RetrieveHass:
         :rtype: pandas.DataFrame
         
         """
+        self.logger.debug("prepare_data self.var_list=%s", self.var_list)
+        self.logger.debug("prepare_data var_load=%s", var_load)
+        self.logger.debug("prepare_data load_negative=%s", load_negative)
+        self.logger.debug("prepare_data set_zero_min=%s", set_zero_min)
+        self.logger.debug("prepare_data var_replace_zero=%s", var_replace_zero)
+        self.logger.debug("prepare_data var_interp=%s", var_interp)
         try:
             if load_negative:  # Apply the correct sign to load power
                 self.df_final[var_load + "_positive"] = -self.df_final[var_load]

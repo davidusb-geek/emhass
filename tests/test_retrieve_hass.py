@@ -101,6 +101,7 @@ class TestRetrieveHass(unittest.TestCase):
                 self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = (
                     pickle.load(inp)
                 )
+                self.rh.var_list = self.var_list
         # Else obtain sensor values from HA
         else:
             if model_type == "long_train_data":
@@ -301,9 +302,6 @@ class TestRetrieveHass(unittest.TestCase):
         # Verify a non-zero number of missing values in the actual and forecast PV columns before prepare_data
         self.assertTrue(self.rh.df_final[actual_pv_sensor].isna().sum() > 0)
         self.assertTrue(self.rh.df_final[forecast_pv_sensor].isna().sum() > 0)
-        # For some reason the self.rh.var_list is otherwise empty
-        self.rh.var_list = self.var_list
-        # self.assertEqual(len(self.var_list), len(self.rh.var_list))
         self.rh.prepare_data(
             load_sensor,
             load_negative=False,

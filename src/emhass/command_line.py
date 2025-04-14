@@ -41,6 +41,7 @@ def retrieve_home_assistant_data(
     if get_data_from_file:
         with open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
             rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
+            rh.var_list = var_list
         # Assign variables based on set_type
         retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
         if optim_conf.get("set_use_pv", True):
