@@ -287,6 +287,10 @@ class Forecast(object):
                 response = get(url, headers=headers)
                 self.logger.debug("Returned HTTP status code: %s", response.status_code)
                 response.raise_for_status()
+                """import bz2 # Uncomment to save a serialized data for tests
+                import _pickle as cPickle
+                with bz2.BZ2File("data/test_response_openmeteo_get_method.pbz2", "w") as f:
+                    cPickle.dump(response, f)"""
                 data = response.json()
                 self.logger.info("Saving response in Open-Meteo JSON cache file: %s", json_path)
                 with open(json_path, "w") as json_file:
