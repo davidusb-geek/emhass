@@ -77,6 +77,7 @@ class TestOptimization(unittest.TestCase):
                 self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = (
                     pickle.load(inp)
                 )
+                self.rh.var_list = self.var_list
             self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(
                 self.var_list[0]
             )
