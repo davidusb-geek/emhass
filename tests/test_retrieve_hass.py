@@ -101,6 +101,7 @@ class TestRetrieveHass(unittest.TestCase):
                 self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = (
                     pickle.load(inp)
                 )
+                self.rh.var_list = self.var_list
         # Else obtain sensor values from HA
         else:
             if model_type == "long_train_data":
@@ -286,6 +287,39 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertEqual(
             self.rh.df_final.index.tz, self.retrieve_hass_conf["time_zone"]
         )
+
+    # Tests that the prepare_data method does convert missing PV values to zero
+    # and also ignores any missing sensor columns.
+    def test_prepare_data_missing_pv(self):
+        load_sensor = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
+        actual_pv_sensor = self.retrieve_hass_conf["sensor_power_photovoltaics"]
+        forecast_pv_sensor = self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
+        var_replace_zero = [actual_pv_sensor, forecast_pv_sensor, 'sensor.missing1']
+        var_interp = [actual_pv_sensor, load_sensor, 'sensor.missing2']
+        # Replace actual and forecast PV zero values with NaN's (to test they get replaced back)
+        self.rh.df_final[actual_pv_sensor] = self.rh.df_final[actual_pv_sensor].replace(0, np.nan)
+        self.rh.df_final[forecast_pv_sensor] = self.rh.df_final[forecast_pv_sensor].replace(0, np.nan)
+        # Verify a non-zero number of missing values in the actual and forecast PV columns before prepare_data
+        self.assertTrue(self.rh.df_final[actual_pv_sensor].isna().sum() > 0)
+        self.assertTrue(self.rh.df_final[forecast_pv_sensor].isna().sum() > 0)
+        self.rh.prepare_data(
+            load_sensor,
+            load_negative=False,
+            set_zero_min=True,
+            var_replace_zero=var_replace_zero,
+            var_interp=var_interp
+        )
+        self.assertIsInstance(self.rh.df_final, type(pd.DataFrame()))
+        self.assertEqual(
+            self.rh.df_final.index.isin(self.days_list).sum(),
+            self.df_raw.index.isin(self.days_list).sum(),
+        )
+        # Check the before and after actual and forecast PV columns have the same number of values
+        self.assertEqual(len(self.df_raw[actual_pv_sensor]), len(self.rh.df_final[actual_pv_sensor]))
+        self.assertEqual(len(self.df_raw[forecast_pv_sensor]), len(self.rh.df_final[forecast_pv_sensor]))
+        # Verify no missing values in the actual and forecast PV columns after prepare_data
+        self.assertTrue(self.rh.df_final[actual_pv_sensor].isna().sum() == 0)
+        self.assertTrue(self.rh.df_final[forecast_pv_sensor].isna().sum() == 0)
 
     # Test publish data
     def test_publish_data(self):

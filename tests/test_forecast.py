@@ -79,6 +79,7 @@ class TestForecast(unittest.TestCase):
                 self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = (
                     pickle.load(inp)
                 )
+                self.rh.var_list = self.var_list
             self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(
                 self.var_list[0]
             )
@@ -561,6 +562,7 @@ class TestForecast(unittest.TestCase):
         if self.get_data_from_file:
             with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
                 rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
+                rh.var_list = var_list
             retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(self.var_list[0])
             retrieve_hass_conf["sensor_power_photovoltaics"] = str(self.var_list[1])
             retrieve_hass_conf["sensor_linear_interp"] = [
@@ -801,6 +803,7 @@ class TestForecast(unittest.TestCase):
         if self.get_data_from_file:
             with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
                 rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
+                rh.var_list = var_list
             retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(self.var_list[0])
             retrieve_hass_conf["sensor_power_photovoltaics"] = str(self.var_list[1])
             retrieve_hass_conf["sensor_linear_interp"] = [
