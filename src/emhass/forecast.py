@@ -335,7 +335,7 @@ class Forecast(object):
             method == "open-meteo" or method == "scrapper"
         ):  # The scrapper option is being left here for backward compatibility
             if not os.path.isfile(w_forecast_cache_path):
-                data_raw = self.get_cached_open_meteo_forecast_json()
+                data_raw = self.get_cached_open_meteo_forecast_json(self.optim_conf["open_meteo_cache_max_age"])
                 data_15min = pd.DataFrame.from_dict(data_raw["minutely_15"])
                 data_15min["time"] = pd.to_datetime(data_15min["time"])
                 data_15min.set_index("time", inplace=True)

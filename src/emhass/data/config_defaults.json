@@ -43,6 +43,7 @@
     0
   ],
   "weather_forecast_method": "open-meteo",
+  "open_meteo_cache_max_age": 30,
   "load_forecast_method": "naive",
   "delta_forecast_daily": 1,
   "load_cost_forecast_method": "hp_hc_periods",
