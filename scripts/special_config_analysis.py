@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 This is a script for analysis plot.
 To use this script you will need plotly and kaleido. Install them using:
@@ -318,12 +317,12 @@ if __name__ == "__main__":
     fig_res_dah.update_xaxes(title_text = "Time")
     fig_res_dah.show()"""
 
-    '''post_mpc_optim: "curl -i -H \"Content-Type: application/json\" -X POST -d '{ 
-        \"load_cost_forecast\":[17.836, 19.146, 18.753, 17.838, 17.277, 16.282, 16.736, 16.047, 17.004, 19.982, 17.17, 16.968, 16.556, 16.21, 12.333, 10.937],  
-        \"prod_price_forecast\":[6.651, 7.743, 7.415, 6.653, 6.185, 5.356, 5.734, 5.16, 5.958, 8.439, 6.096, 5.928, 5.584, 5.296, 4.495, 3.332], 
-        \"prediction_horizon\":16, 
-        \"pv_power_forecast\": [0, 8, 27, 42, 47, 41, 25, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 19, 52, 73, 74, 68, 44, 12, 0, 0, 0, 0], 
-        \"alpha\": 1, \"beta\": 0, \"soc_init\":0.98, \"soc_final\":0.3, \"operating_hours_of_each_deferrable_load\":[0]        
+    '''post_mpc_optim: "curl -i -H \"Content-Type: application/json\" -X POST -d '{
+        \"load_cost_forecast\":[17.836, 19.146, 18.753, 17.838, 17.277, 16.282, 16.736, 16.047, 17.004, 19.982, 17.17, 16.968, 16.556, 16.21, 12.333, 10.937],
+        \"prod_price_forecast\":[6.651, 7.743, 7.415, 6.653, 6.185, 5.356, 5.734, 5.16, 5.958, 8.439, 6.096, 5.928, 5.584, 5.296, 4.495, 3.332],
+        \"prediction_horizon\":16,
+        \"pv_power_forecast\": [0, 8, 27, 42, 47, 41, 25, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 19, 52, 73, 74, 68, 44, 12, 0, 0, 0, 0],
+        \"alpha\": 1, \"beta\": 0, \"soc_init\":0.98, \"soc_final\":0.3, \"operating_hours_of_each_deferrable_load\":[0]
         }' http://localhost:5000/action/naive-mpc-optim"'''
 
     # Perform a MPC optimization
