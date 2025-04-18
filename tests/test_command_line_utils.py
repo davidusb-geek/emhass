@@ -503,6 +503,62 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(opt_res.isnull().sum().sum() == 0)
         self.assertTrue(len(opt_res) == 10)
 
+    # Test naive mpc optimization
+    def test_special_debug_naive_mpc_optim(self):
+        # Test mpc optimization
+        costfun = "profit"
+        action = "forecast-model-fit"
+        params = copy.deepcopy(json.loads(self.params_json))
+        runtimeparams = {
+            "pv_power_forecast": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.6,
+            "operating_hours_of_each_deferrable_load": [1, 3],
+            "historic_days_to_retrieve": 20,
+            "model_type": "long_train_data",
+            "var_model": "sensor.power_load_no_var_loads",
+            "sklearn_model": "KNeighborsRegressor",
+            "num_lags": 48,
+            "split_date_delta": "48h",
+            "perform_backtest": False,
+            "model_predict_publish": True,
+            "model_predict_entity_id": "sensor.p_load_forecast_knn",
+            "model_predict_unit_of_measurement": "W",
+            "model_predict_friendly_name": "Load Power Forecast KNN regressor",
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params["passed_data"] = runtimeparams
+        params["optim_conf"]["weather_forecast_method"] = "list"
+        params["optim_conf"]["load_forecast_method"] = "mlforecaster"
+        params_json = json.dumps(params)
+        input_data_dict = set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        df_fit_pred, df_fit_pred_backtest, mlf = forecast_model_fit(
+            input_data_dict, logger, debug=False
+        )
+        action = "naive-mpc-optim"
+        input_data_dict = set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_res = naive_mpc_optim(input_data_dict, logger, debug=True)
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertTrue(opt_res.isnull().sum().sum() == 0)
+        self.assertTrue(len(opt_res) == 10)
+
     # Test outputs of fit, predict and tune
     def test_forecast_model_fit_predict_tune(self):
         costfun = "profit"
