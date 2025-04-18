@@ -35,7 +35,9 @@
 			"ms-python.python",
 			"charliermarsh.ruff",
 			"SonarSource.sonarlint-vscode",
-			"redhat.vscode-yaml"
+			"redhat.vscode-yaml",
+			"eamodio.gitlens",
+			"sourcery.sourcery"
 		],
 		  "settings": {
 			"[python]": {
