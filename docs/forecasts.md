@@ -94,6 +94,18 @@ curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/a
 curl -i -H 'Content-Type:application/json' -X POST -d '{"weather_forecast_cache_only":true}' http://localhost:5000/action/naive-mpc-optim
 ```
 
+#### Caching Open-Meteo Weather Service Usage
+
+When you have EMHASS configured to use the Open-Meteo weather service, to minimize API calls to the service, and to provide
+resilience in case of transient connectivity issues, EMHASS caches successful calls to the Open-Meteo API in a
+`cached-open-meteo-forecast.json` file in the data directory. The JSON file contains the default 3 days of weather forecast data.
+This Open-Meteo cache is independent of the PV cache discussed above and will be used even when the PV cache is not enabled.
+By default, when the JSON file is older than 30 minutes, attempts will be made to replace it with a more recent version
+from the Open-Meteo weather service. It will only be replaced if this is successful. If any errors occur the older version
+will continue to be used until a new version can been fetched. The maximum cache age, with a default value of 30 minutes, can be
+configured using the `open_meteo_cache_max_age` setting in config.json or as a parameter in EMHASS REST API calls.
+The value is specified in minutes. If you want to disable caching you can specify a value of 0.
+
 #### Adjusting PV Forecasts using machine learning
 EMHASS provides methods to adjust the PV power forecast using machine learning regression techniques. The adjustment process consists of two steps: training a regression model using historical PV data and then applying the trained model to correct new PV forecasts.
 
