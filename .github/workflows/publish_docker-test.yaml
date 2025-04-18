@@ -112,7 +112,7 @@ jobs:
             { target_arch: amd64 },
             { target_arch: aarch64 },
           ]
-    uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.0.0"
     with:
       download-artifact: "${{ matrix.platform.target_arch }}-packages"
       matrix-property: "${{ matrix.platform.target_arch }}-"
