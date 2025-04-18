@@ -150,6 +150,12 @@
       ],
       "default_value": "open-meteo"
     },
+    "open_meteo_cache_max_age": {
+      "friendly_name": "Open-Meteo Cache Max Age",
+      "Description": "The maximum age, in minutes, of the cached open-meteo json response, after which a new version will be fetched from Open-Meteo. Defaults to 30.",
+      "input": "int",
+      "default_value": 30
+    },
     "maximum_power_from_grid": {
       "friendly_name": "Max power from grid",
       "Description": "The maximum power that can be supplied by the utility grid in Watts (consumption). Defaults to 9000.",

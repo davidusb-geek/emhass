@@ -47,6 +47,8 @@ MANIFEST
 
 # Local session data 
 data/actionLogs.txt
+data/debug-*.csv
+data/cached-open-meteo-forecast.json
 data/entities/*.json
 
 # PyInstaller
