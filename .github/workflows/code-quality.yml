@@ -59,9 +59,7 @@ jobs:
       #   run: |
       #     uv run mypy ./src/
   scan-pr:
-    needs:
-      - build
-    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.0.0"
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.0.1"
     with:
       fail-on-vuln: false
       scan-args: |-
@@ -69,5 +67,3 @@ jobs:
         ./
     permissions:
       security-events: write
-      contents: read
-      actions: read
