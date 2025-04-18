@@ -11,7 +11,6 @@ permissions:
   contents: read
 
 jobs:
-  # Google OSV-Scanner
   build:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -30,22 +29,43 @@ jobs:
         with:
           python-version-file: ".python-version"
       - name: Set up Python venv
-        run: uv venv && source .venv/bin/activate
+        run: |
+          uv venv
+        shell: bash
       - name: Special dependencies for macos
+        if: matrix.os == 'macos-latest'
         run: |
           source .venv/bin/activate
           brew install hdf5
+          brew install cbc
           uv pip install numpy==2.0.0
           uv pip install tables==3.10.2
-          uv pip install pulp==3.2.0
+          uv pip install pulp==3.0.2
           uv run pulptest
-        if: ${{ matrix.os == 'macos-latest' }}
-      - name: Install EMHASS with test dependencies
+      - name: Install EMHASS with test dependencies (Linux/macOS)
+        if: matrix.os != 'windows-latest'
         run: |
-          source .venv/bin/activate && uv sync --reinstall --extra test
-      - name: Test with pytest
+          source .venv/bin/activate
+          uv sync --reinstall --extra test
+        shell: bash
+      - name: Install EMHASS with test dependencies (Windows)
+        if: matrix.os == 'windows-latest'
         run: |
-          source .venv/bin/activate uv run pytest
+          .venv\Scripts\activate
+          uv sync --reinstall --extra test
+        shell: cmd
+      - name: Test with pytest (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        run: |
+          source .venv/bin/activate
+          uv run pytest
+        shell: bash
+      - name: Test with pytest (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          .venv\Scripts\activate
+          uv run pytest
+        shell: cmd
   scan-pr:
     needs:
       - build

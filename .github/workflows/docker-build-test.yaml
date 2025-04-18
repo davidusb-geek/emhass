@@ -43,41 +43,41 @@ jobs:
           load: true
       - name: Test Image #Assume Docker fail with FileNotFound secrets_emhass.yaml error
         run: docker run --rm -it ${{ steps.build.outputs.imageid }} | grep -q secrets_emhass.yaml && echo 0 || echo 1
-      # Google OSV-Scanner
-      # Extract Debian and Python packadge list stored in Image
-      - name: Export Debian package list
-        run: mkdir OSV && docker run --rm --entrypoint '/bin/cat' ${{ steps.build.outputs.imageid }} /var/lib/dpkg/status >> ./OSV/${{ matrix.platform.target_arch }}.status
-      - name: Export Python package list
-        run: docker run --rm --entrypoint '/bin/cat' ${{ steps.build.outputs.imageid }} uv.lock >> ./OSV/${{ matrix.platform.target_arch }}.lock
-      - name: Upload package list as digest
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.platform.target_arch }}-packages
-          path: ./OSV/*
-          if-no-files-found: error
-          retention-days: 1
+  #     # Google OSV-Scanner
+  #     # Extract Debian and Python packadge list stored in Image
+  #     - name: Export Debian package list
+  #       run: mkdir OSV && docker run --rm --entrypoint '/bin/cat' ${{ steps.build.outputs.imageid }} /var/lib/dpkg/status >> ./OSV/${{ matrix.platform.target_arch }}.status
+  #     - name: Export Python package list
+  #       run: docker run --rm --entrypoint '/bin/cat' ${{ steps.build.outputs.imageid }} uv.lock >> ./OSV/${{ matrix.platform.target_arch }}.lock
+  #     - name: Upload package list as digest
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: ${{ matrix.platform.target_arch }}-packages
+  #         path: ./OSV/*
+  #         if-no-files-found: error
+  #         retention-days: 1
 
-  osv-scan:
-    needs:
-      - build
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          [
-            { target_arch: amd64 },
-            { target_arch: aarch64 }
-          ]
-    # Check Docker image debian and python packages list for known vulnerabilities
-    uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
-    with:
-      download-artifact: "${{ matrix.platform.target_arch }}-packages"
-      matrix-property: "${{ matrix.platform.target_arch }}-"
-      fail-on-vuln: false
-      scan-args: |-
-        --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
-        --lockfile=poetry.lock:./${{matrix.platform.target_arch }}.lock
-    permissions:
-      security-events: write
-      contents: read
-      actions: read
+  # osv-scan:
+  #   needs:
+  #     - build
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       platform:
+  #         [
+  #           { target_arch: amd64 },
+  #           { target_arch: aarch64 }
+  #         ]
+  #   # Check Docker image debian and python packages list for known vulnerabilities
+  #   uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
+  #   with:
+  #     download-artifact: "${{ matrix.platform.target_arch }}-packages"
+  #     matrix-property: "${{ matrix.platform.target_arch }}-"
+  #     fail-on-vuln: false
+  #     scan-args: |-
+  #       --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
+  #       --lockfile=poetry.lock:./${{matrix.platform.target_arch }}.lock
+  #   permissions:
+  #     security-events: write
+  #     contents: read
+  #     actions: read

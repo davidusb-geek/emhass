@@ -937,27 +937,6 @@ class Optimization:
                     }
                 )
 
-            # Treat the number of starts for a deferrable load (old method, kept here just in case)
-            # if self.optim_conf['set_deferrable_load_single_constant'][k]:
-            #     constraints.update({"constraint_pdef{}_start1_{}".format(k, i) :
-            #         plp.LpConstraint(
-            #             e=P_deferrable[k][i] - P_def_bin2[k][i]*M,
-            #             sense=plp.LpConstraintLE,
-            #             rhs=0)
-            #         for i in set_I})
-            #     constraints.update({"constraint_pdef{}_start2_{}".format(k, i):
-            #         plp.LpConstraint(
-            #             e=P_def_start[k][i] - P_def_bin2[k][i] + (P_def_bin2[k][i-1] if i-1 >= 0 else 0),
-            #             sense=plp.LpConstraintGE,
-            #             rhs=0)
-            #         for i in set_I})
-            #     constraints.update({"constraint_pdef{}_start3".format(k) :
-            #     plp.LpConstraint(
-            #         e = plp.lpSum(P_def_start[k][i] for i in set_I),
-            #         sense = plp.LpConstraintEQ,
-            #         rhs = 1)
-            #     })
-
         # The battery constraints
         if self.optim_conf["set_use_battery"]:
             # Optional constraints to avoid charging the battery from the grid
@@ -1338,11 +1317,26 @@ class Optimization:
                 + str(day.year)
             )
             # Prepare data
-            day_start = day.isoformat()
-            day_end = (day + self.time_delta - self.freq).isoformat()
-            data_tp = df_input_data.copy().loc[
-                pd.date_range(start=day_start, end=day_end, freq=self.freq)
-            ]
+            if day.tzinfo is None:
+                day = day.replace(tzinfo=self.time_zone)  # Assign timezone if naive
+            else:
+                day = day.astimezone(self.time_zone)
+            day_start = day
+            day_end = (day + self.time_delta - self.freq)
+            if day_start.tzinfo != day_end.tzinfo:
+                self.logger.warning(f"Skipping day {day} as days have ddifferent timezone, probably because of DST.")
+                continue  # Skip this day and move to the next iteration
+            else:
+                day_start = day_start.astimezone(self.time_zone).isoformat()
+                day_end = day_end.astimezone(self.time_zone).isoformat()
+                # Generate the date range for the current day
+                day_range = pd.date_range(start=day_start, end=day_end, freq=self.freq)
+            # Check if all timestamps in the range exist in the DataFrame index
+            if not day_range.isin(df_input_data.index).all():
+                self.logger.warning(f"Skipping day {day} as some timestamps are missing in the data.")
+                continue  # Skip this day and move to the next iteration
+            # If all timestamps exist, proceed with the data preparation
+            data_tp = df_input_data.copy().loc[day_range]
             P_PV = data_tp[self.var_PV].values
             P_load = data_tp[self.var_load_new].values
             unit_load_cost = data_tp[self.var_load_cost].values  # €/kWh
