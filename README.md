@@ -135,7 +135,7 @@ For Home Assistant OS and HA Supervised users, A [EMHASS an add-on repository](h
 
 You can find the add-on with the installation instructions here: [https://github.com/davidusb-geek/emhass-add-on](https://github.com/davidusb-geek/emhass-add-on)
 
-These architectures are supported: `amd64`, `armv7`, `armhf` and `aarch64`.
+These architectures are supported: `amd64` and `aarch64` (currently `armv7` and `armhf` are not supported).
 
 _Note: Both EMHASS via Docker and EMHASS-Add-on contain the same Docker image. The EMHASS-Add-on repository however, stores Home Assistant addon specific configuration information and maintains EMHASS image version control._
 

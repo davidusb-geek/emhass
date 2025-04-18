@@ -709,7 +709,7 @@ def main(
     # Initialise continual publish thread list
     continual_publish_thread = []
 
-    # Launch server
+    # Logging
     port = int(os.environ.get("PORT", 5000))
     app.logger.info(
         "Launching the emhass webserver at: http://" + server_ip + ":" + str(port)

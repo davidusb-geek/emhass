@@ -228,7 +228,6 @@ class RetrieveHass:
                         )
                     return False
                 df_raw = pd.DataFrame.from_dict(data)
-                # self.logger.info(str(df_raw))
                 if len(df_raw) == 0:
                     if x == 0:
                         self.logger.error(
@@ -245,7 +244,6 @@ class RetrieveHass:
                             + " (check your recorder settings)"
                         )
                     return False
-                # self.logger.info(self.freq.seconds)
                 if (
                     len(df_raw) < ((60 / (self.freq.seconds / 60)) * 24)
                     and x != len(days_list) - 1
@@ -330,6 +328,12 @@ class RetrieveHass:
         :rtype: pandas.DataFrame
         
         """
+        self.logger.debug("prepare_data self.var_list=%s", self.var_list)
+        self.logger.debug("prepare_data var_load=%s", var_load)
+        self.logger.debug("prepare_data load_negative=%s", load_negative)
+        self.logger.debug("prepare_data set_zero_min=%s", set_zero_min)
+        self.logger.debug("prepare_data var_replace_zero=%s", var_replace_zero)
+        self.logger.debug("prepare_data var_interp=%s", var_interp)
         try:
             if load_negative:  # Apply the correct sign to load power
                 self.df_final[var_load + "_positive"] = -self.df_final[var_load]
@@ -349,16 +353,22 @@ class RetrieveHass:
             )
             return False
         # Confirm var_replace_zero & var_interp contain only sensors contained in var_list
-        if isinstance(var_replace_zero, list) and all(
-            item in var_replace_zero for item in self.var_list
-        ):
-            pass
+        if isinstance(var_replace_zero, list):
+            original_list = var_replace_zero[:]
+            var_replace_zero = [item for item in var_replace_zero if item in self.var_list]
+            removed = set(original_list) - set(var_replace_zero)
+            for item in removed:
+                self.logger.warning(
+                    f"Sensor '{item}' in var_replace_zero not found in self.var_list and has been removed.")
         else:
             var_replace_zero = []
-        if isinstance(var_interp, list) and all(
-            item in var_interp for item in self.var_list
-        ):
-            pass
+        if isinstance(var_interp, list):
+            original_list = var_interp[:]
+            var_interp = [item for item in var_interp if item in self.var_list]
+            removed = set(original_list) - set(var_interp)
+            for item in removed:
+                self.logger.warning(
+                    f"Sensor '{item}' in var_interp not found in self.var_list and has been removed.")
         else:
             var_interp = []
         # Apply minimum values
@@ -414,6 +424,7 @@ class RetrieveHass:
         data_df: pd.DataFrame,
         idx: int,
         entity_id: str,
+        device_class: str,
         unit_of_measurement: str,
         friendly_name: str,
         list_name: str,
@@ -432,6 +443,7 @@ class RetrieveHass:
         data = {
             "state": "{:.2f}".format(state),
             "attributes": {
+                "device_class": device_class,
                 "unit_of_measurement": unit_of_measurement,
                 "friendly_name": friendly_name,
                 list_name: forecast_list,
@@ -444,6 +456,7 @@ class RetrieveHass:
         data_df: pd.DataFrame,
         idx: int,
         entity_id: str,
+        device_class: str,
         unit_of_measurement: str,
         friendly_name: str,
         type_var: str,
@@ -464,6 +477,8 @@ class RetrieveHass:
         :type idx: int
         :param entity_id: The unique entity_id of the sensor in hass.
         :type entity_id: str
+        :param device_class: The HASS device class for the sensor.
+        :type device_class: str
         :param unit_of_measurement: The units of the sensor.
         :type unit_of_measurement: str
         :param friendly_name: The friendly name that will be used in the hass frontend.
@@ -511,6 +526,7 @@ class RetrieveHass:
                 data_df,
                 idx,
                 entity_id,
+                device_class,
                 unit_of_measurement,
                 friendly_name,
                 "forecasts",
@@ -521,6 +537,7 @@ class RetrieveHass:
                 data_df,
                 idx,
                 entity_id,
+                device_class,
                 unit_of_measurement,
                 friendly_name,
                 "deferrables_schedule",
@@ -531,6 +548,7 @@ class RetrieveHass:
                 data_df,
                 idx,
                 entity_id,
+                device_class,
                 unit_of_measurement,
                 friendly_name,
                 "predicted_temperatures",
@@ -541,6 +559,7 @@ class RetrieveHass:
                 data_df,
                 idx,
                 entity_id,
+                device_class,
                 unit_of_measurement,
                 friendly_name,
                 "battery_scheduled_power",
@@ -551,6 +570,7 @@ class RetrieveHass:
                 data_df,
                 idx,
                 entity_id,
+                device_class,
                 unit_of_measurement,
                 friendly_name,
                 "battery_scheduled_soc",
@@ -561,6 +581,7 @@ class RetrieveHass:
                 data_df,
                 idx,
                 entity_id,
+                device_class,
                 unit_of_measurement,
                 friendly_name,
                 "unit_load_cost_forecasts",
@@ -571,6 +592,7 @@ class RetrieveHass:
                 data_df,
                 idx,
                 entity_id,
+                device_class,
                 unit_of_measurement,
                 friendly_name,
                 "unit_prod_price_forecasts",
@@ -581,6 +603,7 @@ class RetrieveHass:
                 data_df,
                 idx,
                 entity_id,
+                device_class,
                 unit_of_measurement,
                 friendly_name,
                 "scheduled_forecast",
@@ -590,6 +613,7 @@ class RetrieveHass:
             data = {
                 "state": state,
                 "attributes": {
+                    "device_class": device_class,
                     "unit_of_measurement": unit_of_measurement,
                     "friendly_name": friendly_name,
                 },
@@ -598,6 +622,7 @@ class RetrieveHass:
             data = {
                 "state": state,
                 "attributes": {
+                    "device_class": device_class,
                     "unit_of_measurement": unit_of_measurement,
                     "friendly_name": friendly_name,
                 },
@@ -606,6 +631,7 @@ class RetrieveHass:
             data = {
                 "state": "{:.2f}".format(state),
                 "attributes": {
+                    "device_class": device_class,
                     "unit_of_measurement": unit_of_measurement,
                     "friendly_name": friendly_name,
                 },
@@ -657,6 +683,7 @@ class RetrieveHass:
                     # Save entity metadata, key = entity_id
                     metadata[entity_id] = {
                         "name": data_df.name,
+                        "device_class": device_class,
                         "unit_of_measurement": unit_of_measurement,
                         "friendly_name": friendly_name,
                         "type_var": type_var,

@@ -12,10 +12,16 @@
       "default_value": "profit"
     },
     "sensor_power_photovoltaics": {
-      "friendly_name": "Sensor power sensor",
+      "friendly_name": "Sensor power photovoltaic",
       "Description": "This is the name of the photovoltaic power-produced sensor in Watts from Home Assistant. For example: ‘sensor.power_photovoltaics’.",
       "input": "string",
       "default_value": "sensor.power_photovoltaics"
+    },
+    "sensor_power_photovoltaics_forecast": {
+      "friendly_name": "Sensor power photovoltaic forecast",
+      "Description": "This is the name of the photovoltaic forecast sensor in Watts from Home Assistant. For example: ‘sensor.p_pv_forecast’.",
+      "input": "string",
+      "default_value": "sensor.p_pv_forecast"
     },
     "sensor_power_load_no_var_loads": {
       "friendly_name": "Sensor power loads with no variable loads",
@@ -140,15 +146,21 @@
     },
     "weather_forecast_method": {
       "friendly_name": "Weather forecast method",
-      "Description": "This will define the weather forecast method that will be used. options are 'scrapper' (ClearOutside), 'Solcast', 'solar.forecast' (forecast.solar) and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts.",
+      "Description": "This will define the weather forecast method that will be used. options are 'open-meteo', 'Solcast', 'solar.forecast' (forecast.solar) and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts.",
       "input": "select",
       "select_options": [
-        "scrapper",
+        "open-meteo",
         "solcast",
         "solar.forecast",
         "csv"
       ],
-      "default_value": "scrapper"
+      "default_value": "open-meteo"
+    },
+    "open_meteo_cache_max_age": {
+      "friendly_name": "Open-Meteo Cache Max Age",
+      "Description": "The maximum age, in minutes, of the cached open-meteo json response, after which a new version will be fetched from Open-Meteo. Defaults to 30.",
+      "input": "int",
+      "default_value": 30
     },
     "maximum_power_from_grid": {
       "friendly_name": "Max power from grid",
@@ -242,6 +254,32 @@
       "input": "boolean",
       "default_value": false
     },
+    "set_use_adjusted_pv": {
+      "friendly_name": "Enable adjusted PV system",
+      "Description": "Set to True if we should consider an adjusted solar PV system. Defaults to False",
+      "input": "boolean",
+      "default_value": false
+    },
+    "adjusted_pv_regression_model": {
+      "friendly_name": "Regression model for adjusted PV",
+      "Description": "Set the type of regression model that will be used to adjust the solr PV production to local conditions. Defaults to LassoRegression",
+      "input": "select",
+      "select_options": [
+        "LinearRegression",
+        "RidgeRegression",
+        "LassoRegression",
+        "RandomForestRegression",
+        "GradientBoostingRegression",
+        "AdaBoostRegression"
+      ],
+      "default_value": "LassoRegression"
+    },
+    "adjusted_pv_solar_elevation_threshold": {
+      "friendly_name": "Solar elevation threshold",
+      "Description": "This is the solar elevation threshold parameter used to identify the early morning or late evening periods. Defaults to 10.",
+      "input": "int",
+      "default_value": 10
+    },
     "pv_module_model": {
       "friendly_name": "PV module model name",
       "Description": "The PV module model. This parameter can be a list of items to enable the simulation of mixed orientation systems.",
@@ -293,6 +331,12 @@
       "Description": "The nominal (calculated max) power for each deferrable load in Watts.",
       "input": "array.float",
       "default_value": 3000.0
+    },
+    "minimum_power_of_deferrable_loads": {
+      "friendly_name": "Deferrable load minimum power",
+      "Description": "The minimum power for each deferrable load in Watts.",
+      "input": "array.float",
+      "default_value": 0.0
     },
     "operating_hours_of_each_deferrable_load": {
       "friendly_name": "Deferrable load operating hours",
