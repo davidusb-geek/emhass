@@ -342,7 +342,6 @@ def parameter_set():
             json.dump(config, f, indent=4)
     else:
         return make_response(["Unable to save config file"], 500)
-    request_data
 
     # Save params with updated config
     if os.path.exists(emhass_conf["data_path"]):

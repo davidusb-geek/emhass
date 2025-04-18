@@ -92,7 +92,7 @@ Community = "https://community.home-assistant.io/t/emhass-an-energy-management-f
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "C", "B", "Q", "UP", "YTT", "PYI"]
-ignore = ["E501", "B008", "B905"] 
+ignore = ["E501", "B008", "B905", "C901"] 
 
 [dependency-groups]
 dev = [
