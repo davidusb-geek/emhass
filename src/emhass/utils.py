@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 from __future__ import annotations
+
 import ast
 import copy
 import csv
@@ -8,8 +8,8 @@ import json
 import logging
 import os
 import pathlib
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple, List, TYPE_CHECKING
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 pd.options.plotting.backend = "plotly"
 
 
-def get_root(file: str, num_parent: Optional[int] = 3) -> str:
+def get_root(file: str, num_parent: int | None = 3) -> str:
     """
     Get the root absolute path of the working directory.
 
@@ -49,9 +49,9 @@ def get_root(file: str, num_parent: Optional[int] = 3) -> str:
 def get_logger(
     fun_name: str,
     emhass_conf: dict,
-    save_to_file: Optional[bool] = True,
-    logging_level: Optional[str] = "DEBUG",
-) -> Tuple[logging.Logger, logging.StreamHandler]:
+    save_to_file: bool | None = True,
+    logging_level: str | None = "DEBUG",
+) -> tuple[logging.Logger, logging.StreamHandler]:
     """
     Create a simple logger object.
 
@@ -104,7 +104,7 @@ def get_forecast_dates(
     freq: int,
     delta_forecast: int,
     time_zone: datetime.tzinfo,
-    timedelta_days: Optional[int] = 0,
+    timedelta_days: int | None = 0,
 ) -> pd.core.indexes.datetimes.DatetimeIndex:
     """
     Get the date_range list of the needed future dates using the delta_forecast parameter.
@@ -221,7 +221,7 @@ def treat_runtimeparams(
     set_type: str,
     logger: logging.Logger,
     emhass_conf: dict,
-) -> Tuple[str, dict]:
+) -> tuple[str, dict]:
     """
     Treat the passed optimization runtime parameters.
 
@@ -267,18 +267,18 @@ def treat_runtimeparams(
     for k in range(params["optim_conf"]["number_of_deferrable_loads"]):
         custom_deferrable_forecast_id.append(
             {
-                "entity_id": "sensor.p_deferrable{}".format(k),
+                "entity_id": f"sensor.p_deferrable{k}",
                 "device_class": "power",
                 "unit_of_measurement": "W",
-                "friendly_name": "Deferrable Load {}".format(k),
+                "friendly_name": f"Deferrable Load {k}",
             }
         )
         custom_predicted_temperature_id.append(
             {
-                "entity_id": "sensor.temp_predicted{}".format(k),
+                "entity_id": f"sensor.temp_predicted{k}",
                 "device_class": "temperature",
                 "unit_of_measurement": default_temperature_unit,
-                "friendly_name": "Predicted temperature {}".format(k),
+                "friendly_name": f"Predicted temperature {k}",
             }
         )
     default_passed_dict = {
@@ -415,7 +415,7 @@ def treat_runtimeparams(
                 )
             )
             params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(
-                days = delta_forecast
+                days=delta_forecast
             )
         else:
             delta_forecast = int(params["optim_conf"]["delta_forecast_daily"].days)
@@ -479,10 +479,14 @@ def treat_runtimeparams(
             else:
                 soc_init = runtimeparams["soc_init"]
             if soc_init < params["plant_conf"]["battery_minimum_state_of_charge"]:
-                logger.warning(f"Passed soc_init={soc_init} is lower than soc_min={params['plant_conf']['battery_minimum_state_of_charge']}, setting soc_init=soc_min")
+                logger.warning(
+                    f"Passed soc_init={soc_init} is lower than soc_min={params['plant_conf']['battery_minimum_state_of_charge']}, setting soc_init=soc_min"
+                )
                 soc_init = params["plant_conf"]["battery_minimum_state_of_charge"]
             if soc_init > params["plant_conf"]["battery_maximum_state_of_charge"]:
-                logger.warning(f"Passed soc_init={soc_init} is greater than soc_max={params['plant_conf']['battery_maximum_state_of_charge']}, setting soc_init=soc_max")
+                logger.warning(
+                    f"Passed soc_init={soc_init} is greater than soc_max={params['plant_conf']['battery_maximum_state_of_charge']}, setting soc_init=soc_max"
+                )
                 soc_init = params["plant_conf"]["battery_maximum_state_of_charge"]
             params["passed_data"]["soc_init"] = soc_init
             if "soc_final" not in runtimeparams.keys():
@@ -490,10 +494,14 @@ def treat_runtimeparams(
             else:
                 soc_final = runtimeparams["soc_final"]
             if soc_final < params["plant_conf"]["battery_minimum_state_of_charge"]:
-                logger.warning(f"Passed soc_final={soc_final} is lower than soc_min={params['plant_conf']['battery_minimum_state_of_charge']}, setting soc_final=soc_min")
+                logger.warning(
+                    f"Passed soc_final={soc_final} is lower than soc_min={params['plant_conf']['battery_minimum_state_of_charge']}, setting soc_final=soc_min"
+                )
                 soc_final = params["plant_conf"]["battery_minimum_state_of_charge"]
             if soc_final > params["plant_conf"]["battery_maximum_state_of_charge"]:
-                logger.warning(f"Passed soc_final={soc_final} is greater than soc_max={params['plant_conf']['battery_maximum_state_of_charge']}, setting soc_final=soc_max")
+                logger.warning(
+                    f"Passed soc_final={soc_final} is greater than soc_max={params['plant_conf']['battery_maximum_state_of_charge']}, setting soc_final=soc_max"
+                )
                 soc_final = params["plant_conf"]["battery_maximum_state_of_charge"]
             params["passed_data"]["soc_final"] = soc_final
             if "operating_timesteps_of_each_deferrable_load" in runtimeparams.keys():
@@ -674,12 +682,8 @@ def treat_runtimeparams(
         if "model_predict_device_class" not in runtimeparams.keys():
             model_predict_device_class = "power"
         else:
-            model_predict_device_class = runtimeparams[
-                "model_predict_device_class"
-            ]
-        params["passed_data"]["model_predict_device_class"] = (
-            model_predict_device_class
-        )
+            model_predict_device_class = runtimeparams["model_predict_device_class"]
+        params["passed_data"]["model_predict_device_class"] = model_predict_device_class
         if "model_predict_unit_of_measurement" not in runtimeparams.keys():
             model_predict_unit_of_measurement = "W"
         else:
@@ -704,12 +708,8 @@ def treat_runtimeparams(
         if "mlr_predict_device_class" not in runtimeparams.keys():
             mlr_predict_device_class = "power"
         else:
-            mlr_predict_device_class = runtimeparams[
-                "mlr_predict_device_class"
-            ]
-        params["passed_data"]["mlr_predict_device_class"] = (
-            mlr_predict_device_class
-        )
+            mlr_predict_device_class = runtimeparams["mlr_predict_device_class"]
+        params["passed_data"]["mlr_predict_device_class"] = mlr_predict_device_class
         if "mlr_predict_unit_of_measurement" not in runtimeparams.keys():
             mlr_predict_unit_of_measurement = None
         else:
@@ -851,7 +851,7 @@ def treat_runtimeparams(
     return params, retrieve_hass_conf, optim_conf, plant_conf
 
 
-def get_yaml_parse(params: str, logger: logging.Logger) -> Tuple[dict, dict, dict]:
+def get_yaml_parse(params: str, logger: logging.Logger) -> tuple[dict, dict, dict]:
     """
     Perform parsing of the params into the configuration catagories
 
@@ -892,7 +892,7 @@ def get_yaml_parse(params: str, logger: logging.Logger) -> Tuple[dict, dict, dic
     return retrieve_hass_conf, optim_conf, plant_conf
 
 
-def get_injection_dict(df: pd.DataFrame, plot_size: Optional[int] = 1366) -> dict:
+def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     """
     Build a dictionary with graphs and tables for the webui.
 
@@ -980,7 +980,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: Optional[int] = 1366) -> dic
 
 
 def get_injection_dict_forecast_model_fit(
-    df_fit_pred: pd.DataFrame, mlf: "MLForecaster"
+    df_fit_pred: pd.DataFrame, mlf: MLForecaster
 ) -> dict:
     """
     Build a dictionary with graphs and tables for the webui for special MLF fit case.
@@ -1011,7 +1011,7 @@ def get_injection_dict_forecast_model_fit(
 
 
 def get_injection_dict_forecast_model_tune(
-    df_pred_optim: pd.DataFrame, mlf: "MLForecaster"
+    df_pred_optim: pd.DataFrame, mlf: MLForecaster
 ) -> dict:
     """
     Build a dictionary with graphs and tables for the webui for special MLF tune case.
@@ -1047,8 +1047,8 @@ def build_config(
     emhass_conf: dict,
     logger: logging.Logger,
     defaults_path: str,
-    config_path: Optional[str] = None,
-    legacy_config_path: Optional[str] = None,
+    config_path: str | None = None,
+    legacy_config_path: str | None = None,
 ) -> dict:
     """
     Retrieve parameters from configuration files.
@@ -1093,7 +1093,7 @@ def build_config(
     # Check to see if legacy config_emhass.yaml was provided (default /app/config_emhass.yaml)
     # Convert legacy parameter definitions/format to match config.json
     if legacy_config_path and pathlib.Path(legacy_config_path).is_file():
-        with open(legacy_config_path, "r") as data:
+        with open(legacy_config_path) as data:
             legacy_config = yaml.load(data, Loader=yaml.FullLoader)
             legacy_config_parameters = build_legacy_config_params(
                 emhass_conf, legacy_config, logger
@@ -1214,11 +1214,11 @@ def param_to_config(param: dict, logger: logging.Logger) -> dict:
 def build_secrets(
     emhass_conf: dict,
     logger: logging.Logger,
-    argument: Optional[dict] = {},
-    options_path: Optional[str] = None,
-    secrets_path: Optional[str] = None,
-    no_response: Optional[bool] = False,
-) -> Tuple[dict, dict]:
+    argument: dict | None = {},
+    options_path: str | None = None,
+    secrets_path: str | None = None,
+    no_response: bool | None = False,
+) -> tuple[dict, dict]:
     """
     Retrieve and build parameters from secrets locations (ENV, ARG, Secrets file (secrets_emhass.yaml/options.json) and/or Home Assistant (via API))
     priority order (lwo to high) = Defaults (written in function), ENV, Options json file, Home Assistant API,  Secrets yaml file, Arguments
@@ -1389,7 +1389,7 @@ def build_secrets(
     # Obtain secrets from secrets_emhass.yaml? (default /app/secrets_emhass.yaml)
     if secrets_path and pathlib.Path(secrets_path).is_file():
         logger.debug("Obtaining secrets from secrets file")
-        with open(pathlib.Path(secrets_path), "r") as file:
+        with open(pathlib.Path(secrets_path)) as file:
             params_secrets.update(yaml.load(file, Loader=yaml.FullLoader))
 
     # Receive key and url from ARG/arguments?
@@ -1687,14 +1687,16 @@ def get_days_list(days_to_retrieve: int) -> pd.date_range:
     :rtype: pd.date_range
 
     """
-    today = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    today = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
     d = (today - timedelta(days=days_to_retrieve)).isoformat()
     days_list = pd.date_range(start=d, end=today.isoformat(), freq="D").normalize()
     return days_list
 
 
 def add_date_features(
-    data: pd.DataFrame, timestamp: Optional[str] = None, date_features: Optional[List[str]] = None
+    data: pd.DataFrame,
+    timestamp: str | None = None,
+    date_features: list[str] | None = None,
 ) -> pd.DataFrame:
     """Add date-related features from a DateTimeIndex or a timestamp column.
 
@@ -1707,9 +1709,9 @@ def add_date_features(
     :return: The DataFrame with added date features.
     :rtype: pd.DataFrame
     """
-    
+
     df = copy.deepcopy(data)  # Avoid modifying the original DataFrame
-    
+
     # If no specific features are requested, extract all by default
     default_features = ["year", "month", "day_of_week", "day_of_year", "day", "hour"]
     date_features = date_features or default_features
@@ -1720,7 +1722,9 @@ def add_date_features(
         source = df[timestamp].dt
     else:
         if not isinstance(df.index, pd.DatetimeIndex):
-            raise ValueError("DataFrame must have a DateTimeIndex or a valid timestamp column.")
+            raise ValueError(
+                "DataFrame must have a DateTimeIndex or a valid timestamp column."
+            )
         source = df.index
 
     # Extract date features

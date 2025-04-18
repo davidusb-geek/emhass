@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 
 import copy
 import json
@@ -50,7 +49,7 @@ class TestCommandLineUtils(unittest.TestCase):
             _, secrets = utils.build_secrets(emhass_conf, logger, no_response=True)
             params = utils.build_params(emhass_conf, secrets, config, logger)
             if set_use_pv:
-                params['optim_conf']['set_use_pv'] = True
+                params["optim_conf"]["set_use_pv"] = True
         else:
             raise Exception(
                 "config_defaults. does not exist in path: "
@@ -307,8 +306,8 @@ class TestCommandLineUtils(unittest.TestCase):
         )
         # Test dayahead output, using set_use_adjusted_pv = True
         params = TestCommandLineUtils.get_test_params()
-        params['optim_conf']["set_use_adjusted_pv"] = True
-        params['optim_conf']["set_use_pv"] = True
+        params["optim_conf"]["set_use_adjusted_pv"] = True
+        params["optim_conf"]["set_use_pv"] = True
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(
             emhass_conf,
@@ -459,6 +458,7 @@ class TestCommandLineUtils(unittest.TestCase):
         # self.assertTrue(len(opt_res_last)==1)
         # Check if status is published
         from datetime import datetime
+
         now_precise = datetime.now(
             input_data_dict["retrieve_hass_conf"]["time_zone"]
         ).replace(second=0, microsecond=0)
@@ -486,8 +486,8 @@ class TestCommandLineUtils(unittest.TestCase):
         # When using set_use_adjusted_pv = True
         action = "naive-mpc-optim"
         params = copy.deepcopy(json.loads(self.params_json))
-        params['optim_conf']["set_use_adjusted_pv"] = True
-        params['optim_conf']["set_use_pv"] = True
+        params["optim_conf"]["set_use_adjusted_pv"] = True
+        params["optim_conf"]["set_use_pv"] = True
         params_json = json.dumps(params)
         input_data_dict = set_input_data_dict(
             emhass_conf,

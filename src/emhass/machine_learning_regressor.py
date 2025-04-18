@@ -184,9 +184,7 @@ class MLRegressor:
         if date_features is not None:
             if self.timestamp is not None:
                 self.data_exo = utils.add_date_features(
-                    self.data_exo,
-                    timestamp=self.timestamp,
-                    date_features=date_features
+                    self.data_exo, timestamp=self.timestamp, date_features=date_features
                 )
             else:
                 self.logger.error(

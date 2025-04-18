@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 
 import bz2
 import copy
@@ -37,7 +36,7 @@ class TestRetrieveHass(unittest.TestCase):
     def setUp(self):
         self.get_data_from_file = True
         save_data_to_file = False
-        model_type = "test_df_final" # Options: "test_df_final" or "long_train_data"
+        model_type = "test_df_final"  # Options: "test_df_final" or "long_train_data"
 
         # Build params with default secrets (no config)
         if emhass_conf["defaults_path"].exists():
@@ -68,7 +67,9 @@ class TestRetrieveHass(unittest.TestCase):
         # Force config params for testing
         retrieve_hass_conf["optimization_time_step"] = pd.to_timedelta(30, "minutes")
         retrieve_hass_conf["sensor_power_photovoltaics"] = "sensor.power_photovoltaics"
-        retrieve_hass_conf["sensor_power_photovoltaics_forecast"] = "sensor.p_pv_forecast"
+        retrieve_hass_conf["sensor_power_photovoltaics_forecast"] = (
+            "sensor.p_pv_forecast"
+        )
         retrieve_hass_conf["sensor_power_load_no_var_loads"] = (
             "sensor.power_load_no_var_loads"
         )
@@ -108,9 +109,7 @@ class TestRetrieveHass(unittest.TestCase):
                 days_to_retrieve = 365
             else:
                 days_to_retrieve = self.retrieve_hass_conf["historic_days_to_retrieve"]
-            self.days_list = get_days_list(
-                days_to_retrieve
-            )
+            self.days_list = get_days_list(days_to_retrieve)
             self.var_list = [
                 self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
                 self.retrieve_hass_conf["sensor_power_photovoltaics"],
@@ -143,7 +142,9 @@ class TestRetrieveHass(unittest.TestCase):
             }
             # Check to save updated data to file
             if save_data_to_file:
-                with open(emhass_conf["data_path"] / str(model_type + ".pkl"), "wb") as outp:
+                with open(
+                    emhass_conf["data_path"] / str(model_type + ".pkl"), "wb"
+                ) as outp:
                     pickle.dump(
                         (
                             self.rh.df_final,
@@ -221,7 +222,7 @@ class TestRetrieveHass(unittest.TestCase):
                 self.rh.df_final.index.freq,
                 self.retrieve_hass_conf["optimization_time_step"],
             )
-            self.assertEqual(self.rh.df_final.index.tz, datetime.timezone.utc)
+            self.assertEqual(self.rh.df_final.index.tz, datetime.UTC)
 
     # Check the dataframe was formatted correctly
     def test_prepare_data(self):
@@ -240,7 +241,7 @@ class TestRetrieveHass(unittest.TestCase):
             self.rh.df_final.index.freq,
             self.retrieve_hass_conf["optimization_time_step"],
         )
-        self.assertEqual(self.rh.df_final.index.tz, datetime.timezone.utc)
+        self.assertEqual(self.rh.df_final.index.tz, datetime.UTC)
         self.rh.prepare_data(
             self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
             load_negative=self.retrieve_hass_conf["load_negative"],
@@ -293,12 +294,18 @@ class TestRetrieveHass(unittest.TestCase):
     def test_prepare_data_missing_pv(self):
         load_sensor = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
         actual_pv_sensor = self.retrieve_hass_conf["sensor_power_photovoltaics"]
-        forecast_pv_sensor = self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
-        var_replace_zero = [actual_pv_sensor, forecast_pv_sensor, 'sensor.missing1']
-        var_interp = [actual_pv_sensor, load_sensor, 'sensor.missing2']
+        forecast_pv_sensor = self.retrieve_hass_conf[
+            "sensor_power_photovoltaics_forecast"
+        ]
+        var_replace_zero = [actual_pv_sensor, forecast_pv_sensor, "sensor.missing1"]
+        var_interp = [actual_pv_sensor, load_sensor, "sensor.missing2"]
         # Replace actual and forecast PV zero values with NaN's (to test they get replaced back)
-        self.rh.df_final[actual_pv_sensor] = self.rh.df_final[actual_pv_sensor].replace(0, np.nan)
-        self.rh.df_final[forecast_pv_sensor] = self.rh.df_final[forecast_pv_sensor].replace(0, np.nan)
+        self.rh.df_final[actual_pv_sensor] = self.rh.df_final[actual_pv_sensor].replace(
+            0, np.nan
+        )
+        self.rh.df_final[forecast_pv_sensor] = self.rh.df_final[
+            forecast_pv_sensor
+        ].replace(0, np.nan)
         # Verify a non-zero number of missing values in the actual and forecast PV columns before prepare_data
         self.assertTrue(self.rh.df_final[actual_pv_sensor].isna().sum() > 0)
         self.assertTrue(self.rh.df_final[forecast_pv_sensor].isna().sum() > 0)
@@ -307,7 +314,7 @@ class TestRetrieveHass(unittest.TestCase):
             load_negative=False,
             set_zero_min=True,
             var_replace_zero=var_replace_zero,
-            var_interp=var_interp
+            var_interp=var_interp,
         )
         self.assertIsInstance(self.rh.df_final, type(pd.DataFrame()))
         self.assertEqual(
@@ -315,8 +322,13 @@ class TestRetrieveHass(unittest.TestCase):
             self.df_raw.index.isin(self.days_list).sum(),
         )
         # Check the before and after actual and forecast PV columns have the same number of values
-        self.assertEqual(len(self.df_raw[actual_pv_sensor]), len(self.rh.df_final[actual_pv_sensor]))
-        self.assertEqual(len(self.df_raw[forecast_pv_sensor]), len(self.rh.df_final[forecast_pv_sensor]))
+        self.assertEqual(
+            len(self.df_raw[actual_pv_sensor]), len(self.rh.df_final[actual_pv_sensor])
+        )
+        self.assertEqual(
+            len(self.df_raw[forecast_pv_sensor]),
+            len(self.rh.df_final[forecast_pv_sensor]),
+        )
         # Verify no missing values in the actual and forecast PV columns after prepare_data
         self.assertTrue(self.rh.df_final[actual_pv_sensor].isna().sum() == 0)
         self.assertTrue(self.rh.df_final[forecast_pv_sensor].isna().sum() == 0)
@@ -349,17 +361,17 @@ class TestRetrieveHass(unittest.TestCase):
         df["P_batt"] = 1000.0
         df["SOC_opt"] = 0.5
         response, data = self.rh.post_data(
-            df["P_PV_forecast"], 
-            10, 
-            "sensor.p_pv_forecast", 
+            df["P_PV_forecast"],
+            10,
+            "sensor.p_pv_forecast",
             "power",
-            "W", 
-            "PV Forecast", 
-            type_var="power"
+            "W",
+            "PV Forecast",
+            type_var="power",
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(
-            data["state"] == "{:.2f}".format(np.round(df.loc[df.index[10], df.columns[2]], 2))
+            data["state"] == f"{np.round(df.loc[df.index[10], df.columns[2]], 2):.2f}"
         )
         self.assertTrue(data["attributes"]["unit_of_measurement"] == "W")
         self.assertTrue(data["attributes"]["friendly_name"] == "PV Forecast")
