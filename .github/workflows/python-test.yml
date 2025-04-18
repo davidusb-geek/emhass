@@ -6,13 +6,13 @@ on:
   pull_request:
     branches: [master]
 
-permissions:
-  security-events: write
-  contents: read
-
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+    permissions:
+      actions: read
+      security-events: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:

@@ -8,14 +8,13 @@ on:
     branches: [master,testing]
   workflow_dispatch:
 
-permissions:
-  actions: read
-  security-events: write
-  contents: read
-
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      security-events: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -78,6 +77,6 @@ jobs:
         --lockfile=dpkg-status:./${{ matrix.platform.target_arch }}.status
         --lockfile=poetry.lock:./${{matrix.platform.target_arch }}.lock
     permissions:
+      actions: read
       security-events: write
       contents: read
-      actions: read
