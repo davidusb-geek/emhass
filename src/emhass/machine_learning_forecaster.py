@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 import logging
 import time
 import warnings
-from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -104,9 +102,9 @@ class MLForecaster:
 
     def fit(
         self,
-        split_date_delta: Optional[str] = "48h",
-        perform_backtest: Optional[bool] = False,
-    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        split_date_delta: str | None = "48h",
+        perform_backtest: bool | None = False,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         r"""The fit method to train the ML model.
 
         :param split_date_delta: The delta from now to `split_date_delta` that will be used \
@@ -208,7 +206,7 @@ class MLForecaster:
             df_pred_backtest["pred"] = predictions_backtest
         return df_pred, df_pred_backtest
 
-    def predict(self, data_last_window: Optional[pd.DataFrame] = None) -> pd.Series:
+    def predict(self, data_last_window: pd.DataFrame | None = None) -> pd.Series:
         """The predict method to generate forecasts from a previously fitted ML model.
 
         :param data_last_window: The data that will be used to generate the new forecast, this \
@@ -247,7 +245,7 @@ class MLForecaster:
                 )
         return predictions
 
-    def tune(self, debug: Optional[bool] = False) -> pd.DataFrame:
+    def tune(self, debug: bool | None = False) -> pd.DataFrame:
         """Tuning a previously fitted model using bayesian optimization.
 
         :param debug: Set to True for testing and faster optimizations, defaults to False

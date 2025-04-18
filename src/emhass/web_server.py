@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 import argparse
 import json
@@ -10,7 +9,6 @@ import re
 import threading
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Optional
 
 import yaml
 from flask import Flask, make_response, request
@@ -83,7 +81,7 @@ def checkFileLog(refString=None) -> bool:
         )  # grab reduced log array (everything after string match)
     else:
         if (emhass_conf["data_path"] / "actionLogs.txt").exists():
-            with open(str(emhass_conf["data_path"] / "actionLogs.txt"), "r") as fp:
+            with open(str(emhass_conf["data_path"] / "actionLogs.txt")) as fp:
                 logArray = fp.readlines()
         else:
             app.logger.debug("Unable to obtain actionLogs.txt")
@@ -106,7 +104,7 @@ def grabLog(refString) -> list:
     isFound = []
     output = []
     if (emhass_conf["data_path"] / "actionLogs.txt").exists():
-        with open(str(emhass_conf["data_path"] / "actionLogs.txt"), "r") as fp:
+        with open(str(emhass_conf["data_path"] / "actionLogs.txt")) as fp:
             logArray = fp.readlines()
         # Find all string matches, log key (line Number) in isFound
         for x in range(len(logArray) - 1):
@@ -551,7 +549,7 @@ def action_call(action_name):
 
 
 def main(
-    args: Optional[dict] = None,
+    args: dict | None = None,
 ):
     global continual_publish_thread
     global emhass_conf
