@@ -17,12 +17,12 @@
 
 
 	// Security issue, may be needed for Podman
-	// "runArgs": [
-	// 	"--userns=keep-id",
-	// 	"--pid=host"
-	// ],
-	// "remoteUser": "root",
-	// "containerUser": "root",
+	"runArgs": [
+		"--userns=keep-id",
+		"--pid=host"
+	],
+	"remoteUser": "root",
+	"containerUser": "root",
 
 
 	"customizations": {
@@ -46,7 +46,10 @@
 				"source.fixAll": "explicit",
 				"source.organizeImports": "explicit"
 			  },
-			  "editor.defaultFormatter": "charliermarsh.ruff"
+			  "editor.defaultFormatter": "charliermarsh.ruff",
+			  "gitlens.telemetry.enabled": false,
+			  "sonarlint.disableTelemetry": true,
+			  "telemetry.feedback.enabled": false
 			}
 		  }
 		}
