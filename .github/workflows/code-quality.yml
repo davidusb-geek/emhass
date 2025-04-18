@@ -8,6 +8,11 @@ on:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
+permissions:
+  actions: read
+  security-events: write
+  contents: read
+
 jobs:
   build:
     runs-on: ${{ matrix.os }}
@@ -56,7 +61,7 @@ jobs:
   scan-pr:
     needs:
       - build
-    uses: "geoderp/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v0.0.1"
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.0.0"
     with:
       fail-on-vuln: false
       scan-args: |-
