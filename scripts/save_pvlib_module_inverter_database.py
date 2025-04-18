@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 This is a script for saving the database to be used by PVLib for
 modules and inverters models. This was necessary to keep the

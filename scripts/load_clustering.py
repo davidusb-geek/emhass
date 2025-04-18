@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 import pathlib
 import pickle
@@ -121,7 +120,6 @@ def load_forecast(data, forecast_date, freq, template):
 
 
 if __name__ == "__main__":
-
     model_type = "long_train_data"
     data_path = emhass_conf["data_path"] / str(model_type + ".pkl")
     template = "presentation"
@@ -131,11 +129,11 @@ if __name__ == "__main__":
         with open(data_path, "rb") as fid:
             data, var_model = pickle.load(fid)
     else:
-        error_msg = f"Data file {model_type}.pkl does not exist. Use the test_retrieve_hass.py to save a data file."    
+        error_msg = f"Data file {model_type}.pkl does not exist. Use the test_retrieve_hass.py to save a data file."
         logger.error(error_msg)
         raise ValueError(error_msg)
 
-    data = data[['sensor.power_load_no_var_loads']]
+    data = data[["sensor.power_load_no_var_loads"]]
     logger.info(data.describe())
 
     # Plot the input data

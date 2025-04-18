@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 This is a script for analysis plot.
 To use this script you will need plotly and kaleido. Install them using:
