@@ -34,6 +34,11 @@ jobs:
         with:
           python-version-file: ".python-version"
 
+      - uses: sourcery-ai/action@v1
+        with:
+          token: ${{ secrets.SOURCERY_TOKEN }}
+          diff_ref: ${{ github.event.pull_request.base.sha }}
+
       - name: Install the project
         run: uv sync --reinstall --extra test
 
@@ -48,12 +53,6 @@ jobs:
       #   shell: bash
       #   run: |
       #     uv run mypy ./src/
-
-      # Removed due to superfluous
-      # - name: SonarQube Scan
-      #   uses: SonarSource/sonarqube-scan-action@v4.2.1
-      #   env:
-      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
   scan-pr:
     needs:
       - build
