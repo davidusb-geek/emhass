@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 import copy
 import pathlib
@@ -58,7 +57,6 @@ def neg_r2_score(y_true, y_pred):
 
 
 if __name__ == "__main__":
-
     model_type = "long_train_data"
     sklearn_model = "KNeighborsRegressor"
     num_lags = 48
@@ -70,11 +68,11 @@ if __name__ == "__main__":
         with open(data_path, "rb") as fid:
             data, var_model = pickle.load(fid)
     else:
-        error_msg = f"Data file {model_type}.pkl does not exist. Use the test_retrieve_hass.py to save a data file."    
+        error_msg = f"Data file {model_type}.pkl does not exist. Use the test_retrieve_hass.py to save a data file."
         logger.error(error_msg)
         raise ValueError(error_msg)
 
-    data = data[['sensor.power_load_no_var_loads']]
+    data = data[["sensor.power_load_no_var_loads"]]
 
     y_axis_title = "Power (W)"
     logger.info(data.describe())

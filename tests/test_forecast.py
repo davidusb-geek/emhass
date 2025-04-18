@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 
 import _pickle as cPickle
 import bz2
@@ -221,17 +220,23 @@ class TestForecast(unittest.TestCase):
         self.assertIsInstance(self.fcst.y_adjust_pv, pd.core.series.Series)
         # Call the fit method
         self.fcst.adjust_pv_forecast_fit(
-            n_splits = 5,
-            regression_model = "LassoRegression",
-            debug = False
+            n_splits=5, regression_model="LassoRegression", debug=False
         )
         # Call the predict method
         P_PV_forecast = self.fcst.adjust_pv_forecast_predict()
         self.assertEqual(len(P_PV_forecast), len(self.fcst.P_PV_forecast_validation))
-        self.assertFalse(P_PV_forecast.isna().any().any(), "Adjusted forecast contains NaN values")
-        self.assertGreaterEqual(self.fcst.validation_rmse, 0.0, "RMSE should be non-negative")
-        self.assertLessEqual(self.fcst.validation_r2, 1.0, "R² score should be at most 1")
-        self.assertGreaterEqual(self.fcst.validation_r2, -1.0, "R² score should be at least -1")
+        self.assertFalse(
+            P_PV_forecast.isna().any().any(), "Adjusted forecast contains NaN values"
+        )
+        self.assertGreaterEqual(
+            self.fcst.validation_rmse, 0.0, "RMSE should be non-negative"
+        )
+        self.assertLessEqual(
+            self.fcst.validation_r2, 1.0, "R² score should be at most 1"
+        )
+        self.assertGreaterEqual(
+            self.fcst.validation_r2, -1.0, "R² score should be at least -1"
+        )
 
         # import plotly.express as px
         # data_to_plot = self.fcst.P_PV_forecast_validation[["forecast", "adjusted_forecast"]].reset_index()
@@ -247,7 +252,6 @@ class TestForecast(unittest.TestCase):
 
     # Test output weather forecast using openmeteo with mock get request data
     def test_get_weather_forecast_openmeteo_method_mock(self):
-
         with requests_mock.mock() as m:
             data = bz2.BZ2File(
                 str(
@@ -260,8 +264,10 @@ class TestForecast(unittest.TestCase):
             lon = self.retrieve_hass_conf["Longitude"]
             get_url = (
                 "https://api.open-meteo.com/v1/forecast?"
-                + "latitude=" + str(round(lat, 2))
-                + "&longitude=" + str(round(lon, 2))
+                + "latitude="
+                + str(round(lat, 2))
+                + "&longitude="
+                + str(round(lon, 2))
                 + "&minutely_15="
                 + "temperature_2m,"
                 + "relative_humidity_2m,"
@@ -296,7 +302,9 @@ class TestForecast(unittest.TestCase):
                 ),
             )
             # Test the legacy code using PVLib module methods
-            df_weather_openmeteo = self.fcst.get_weather_forecast(method="open-meteo", use_legacy_pvlib=False)
+            df_weather_openmeteo = self.fcst.get_weather_forecast(
+                method="open-meteo", use_legacy_pvlib=False
+            )
             self.assertIsInstance(df_weather_openmeteo, type(pd.DataFrame()))
             self.assertIsInstance(
                 df_weather_openmeteo.index, pd.core.indexes.datetimes.DatetimeIndex
@@ -572,7 +580,7 @@ class TestForecast(unittest.TestCase):
             ]
             retrieve_hass_conf["sensor_replace_zero"] = [
                 retrieve_hass_conf["sensor_power_photovoltaics"],
-                retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
             ]
         # Else obtain sensor values from HA
         else:
@@ -813,7 +821,7 @@ class TestForecast(unittest.TestCase):
             ]
             retrieve_hass_conf["sensor_replace_zero"] = [
                 retrieve_hass_conf["sensor_power_photovoltaics"],
-                retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
             ]
         # Else obtain sensor values from HA
         else:
@@ -823,7 +831,7 @@ class TestForecast(unittest.TestCase):
             var_list = [
                 retrieve_hass_conf["sensor_power_load_no_var_loads"],
                 retrieve_hass_conf["sensor_power_photovoltaics"],
-                retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
+                retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
             ]
             rh.get_data(
                 days_list,
@@ -1055,8 +1063,8 @@ class TestForecast(unittest.TestCase):
         self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
         # Relaunch this test but changing the timestep to 1h
         params = self.fcst.params
-        params['retrieve_hass_conf']['optimization_time_step'] = 60
-        self.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta('1h')
+        params["retrieve_hass_conf"]["optimization_time_step"] = 60
+        self.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta("1h")
         fcst = Forecast(
             self.retrieve_hass_conf,
             self.optim_conf,

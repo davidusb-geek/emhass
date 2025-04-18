@@ -1,29 +1,22 @@
-[build-system]
-# These are the assumed default build requirements from pip:
-# https://pip.pypa.io/en/stable/reference/pip/#pep-517-and-518-support
-requires = ["hatchling>=1.27.0"]
-build-backend = "hatchling.build"
-
-[tool.uv.workspace]
-members = ["emhass"]
-
-[tool.uv]
-default-groups = "all"
-
 [project]
 name = "emhass"
 version = "0.13.0.post1"
 description = "An Energy Management System for Home Assistant"
 readme = "README.md"
 requires-python = ">=3.10, <3.13"
-authors = [{ name = "David HERNANDEZ", email = "davidusb@gmail.com" }]
-license = "MIT"
+authors = [
+    { name = "David HERNANDEZ", email = "davidusb@gmail.com" },
+]
+license = { text = "MIT" }
 keywords = ["energy", "management", "optimization", "hass"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
-    "Topic :: Software Development :: Build Tools",
+    "Topic :: Software Development :: Libraries :: Python Modules",
     "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Operating System :: OS Independent",
 ]
@@ -45,35 +38,46 @@ dependencies = [
     "plotly>=6.0.0",
     "gunicorn>=23.0.0",
 ]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+
+[tool.uv.workspace]
+members = ["emhass"]
+
+[tool.uv.sources]
+emhass = { workspace = true }
+
+[tool.uv]
+default-groups = "all"
+package = true
 
 [project.optional-dependencies]
 docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
-# can add "mypy"
-test = ["requests_mock", "pytest", "coverage", "snakeviz", "ruff", "tabulate", "hatchling"]
+test = ["requests-mock", "pytest", "coverage", "snakeviz", "ruff", "tabulate", "hatchling"]
+dev = ["ruff"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/emhass"]
+package-data = { "emhass" = [
+    "templates/*",
+    "static/*",
+    "img/*",
+    "data/cec_modules.pbz2",
+    "data/cec_inverters.pbz2",
+    "data/associations.csv",
+    "data/config_defaults.json"]}
 
 [tool.hatch.build.targets.sdist]
-packages = ["src/emhass"]
 include = [
-    "/src/emhass/templates/index.html",
-    "/src/emhass/templates/template.html",
-    "/src/emhass/templates/configuration.html",
-    "/src/emhass/static/advanced.html",
-    "/src/emhass/static/basic.html",
-    "/src/emhass/static/script.js",
-    "/src/emhass/static/configuration_script.js",
-    "/src/emhass/static/style.css",
-    "/src/emhass/static/configuration_list.html",
-    "/src/emhass/static/img/emhass_icon.png",
-    "/src/emhass/static/img/emhass_logo_short.svg",
-    "/src/emhass/static/img/feather-sprite.svg",
-    "/src/emhass/static/data/param_definitions.json",
-    "/src/emhass/data/cec_modules.pbz2",
-    "/src/emhass/data/cec_inverters.pbz2",
-    "/src/emhass/data/associations.csv",
-    "/src/emhass/data/config_defaults.json"
+    "src/emhass/templates/",
+    "src/emhass/static/",
+    "src/emhass/img/",
+    "src/emhass/data/cec_modules.pbz2",
+    "src/emhass/data/cec_inverters.pbz2",
+    "src/emhass/data/associations.csv",
+    "src/emhass/data/config_defaults.json",
 ]
 
 [project.scripts]
@@ -81,7 +85,20 @@ emhass = "emhass.command_line:main"
 
 [project.urls]
 Homepage = "https://github.com/davidusb-geek/emhass"
+Source = "https://github.com/davidusb-geek/emhass"
+Issues = "https://github.com/davidusb-geek/emhass/issues"
+Documentation = "https://emhass.readthedocs.io/en/latest/"
+Community = "https://community.home-assistant.io/t/emhass-an-energy-management-for-home-assistant" 
 
-#strict is strict
-#[tool.mypy]
-#strict =  true
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "C", "B", "Q", "UP", "YTT", "PYI"]
+ignore = ["E501", "B008", "B905", "C901"] 
+
+[dependency-groups]
+dev = [
+    "emhass",
+]
+
+[tool.ruff]
+target-version = "py311" 
+src = ["src", "tests"]

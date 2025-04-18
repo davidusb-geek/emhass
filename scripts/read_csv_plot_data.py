@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 This is a script for analysis plot.
 To use this script you will need plotly and kaleido. Install them using:
@@ -104,7 +103,7 @@ if __name__ == "__main__":
         data, x=data.index, y=cols_to_plot[0:3], markers=True, template=template
     )
 
-    fig.update_traces(marker=dict(size=symbol_size))
+    fig.update_traces(marker={"size": symbol_size})
 
     fig_traces = []
     for trace in range(len(fig["data"])):
@@ -123,7 +122,7 @@ if __name__ == "__main__":
         color_discrete_sequence=["#1F77B4", "#FF7F0E", "#D62728"],
     )
 
-    fig2.update_traces(marker=dict(size=symbol_size))
+    fig2.update_traces(marker={"size": symbol_size})
 
     fig_traces = []
     for k, trace in enumerate(range(len(fig2["data"]))):
@@ -146,7 +145,7 @@ if __name__ == "__main__":
         color_discrete_sequence=["#1F77B4", "#FF7F0E", "#9467BD"],
     )
 
-    fig3.update_traces(marker=dict(size=symbol_size))
+    fig3.update_traces(marker={"size": symbol_size})
 
     fig_traces = []
     for k, trace in enumerate(range(len(fig3["data"]))):
@@ -164,7 +163,7 @@ if __name__ == "__main__":
         data, x=data.index, y=cols_to_plot[5:], markers=False, template=template
     )
 
-    fig4.update_traces(marker=dict(size=symbol_size), line=dict(dash="solid"))
+    fig4.update_traces(marker={"size": symbol_size}, line={"dash": "solid"})
 
     fig_traces = []
     for trace in range(len(fig4["data"])):

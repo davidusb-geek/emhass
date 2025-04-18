@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 import argparse
 import copy
@@ -10,9 +9,8 @@ import pathlib
 import pickle
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib.metadata import version
-from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -28,14 +26,15 @@ default_csv_filename = "opt_res_latest.csv"
 default_pkl_suffix = "_mlf.pkl"
 default_metadata_json = "metadata.json"
 
+
 def retrieve_home_assistant_data(
     set_type: str,
-    get_data_from_file: bool, 
+    get_data_from_file: bool,
     retrieve_hass_conf: dict,
     optim_conf: dict,
     rh: RetrieveHass,
     emhass_conf: dict,
-    test_df_literal: pd.DataFrame
+    test_df_literal: pd.DataFrame,
 ) -> dict:
     """Retrieve data from Home Assistant or file and prepare it for optimization."""
     if get_data_from_file:
@@ -62,7 +61,9 @@ def retrieve_home_assistant_data(
     else:
         # Determine days_list based on set_type
         if set_type == "perfect-optim" or set_type == "adjust_pv":
-            days_list = utils.get_days_list(retrieve_hass_conf["historic_days_to_retrieve"])
+            days_list = utils.get_days_list(
+                retrieve_hass_conf["historic_days_to_retrieve"]
+            )
         elif set_type == "naive-mpc-optim":
             days_list = utils.get_days_list(1)
         else:
@@ -71,7 +72,9 @@ def retrieve_home_assistant_data(
         if optim_conf.get("set_use_pv", True):
             var_list.append(retrieve_hass_conf["sensor_power_photovoltaics"])
             var_list.append(retrieve_hass_conf["sensor_power_photovoltaics_forecast"])
-        if not rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False):
+        if not rh.get_data(
+            days_list, var_list, minimal_response=False, significant_changes_only=False
+        ):
             return False, None, days_list
     rh.prepare_data(
         retrieve_hass_conf["sensor_power_load_no_var_loads"],
@@ -81,6 +84,7 @@ def retrieve_home_assistant_data(
         var_interp=retrieve_hass_conf["sensor_linear_interp"],
     )
     return True, rh.df_final.copy(), days_list
+
 
 def adjust_pv_forecast(
     logger: logging.Logger,
@@ -123,7 +127,13 @@ def adjust_pv_forecast(
     logger.info("Adjusting PV forecast, retrieving history data for model fit")
     # Retrieve data from Home Assistant
     success, df_input_data, _ = retrieve_home_assistant_data(
-        "adjust_pv", get_data_from_file, retrieve_hass_conf, optim_conf, rh, emhass_conf, test_df_literal
+        "adjust_pv",
+        get_data_from_file,
+        retrieve_hass_conf,
+        optim_conf,
+        rh,
+        emhass_conf,
+        test_df_literal,
     )
     if not success:
         return False
@@ -140,6 +150,7 @@ def adjust_pv_forecast(
     # Update the PV forecast
     return P_PV_forecast["adjusted_forecast"].rename(None)
 
+
 def set_input_data_dict(
     emhass_conf: dict,
     costfun: str,
@@ -147,7 +158,7 @@ def set_input_data_dict(
     runtimeparams: str,
     set_type: str,
     logger: logging.Logger,
-    get_data_from_file: Optional[bool] = False,
+    get_data_from_file: bool | None = False,
 ) -> dict:
     """
     Set up some of the data needed for the different actions.
@@ -249,7 +260,13 @@ def set_input_data_dict(
     if set_type == "perfect-optim":
         # Retrieve data from hass
         success, df_input_data, days_list = retrieve_home_assistant_data(
-            set_type, get_data_from_file, retrieve_hass_conf, optim_conf, rh, emhass_conf, test_df_literal
+            set_type,
+            get_data_from_file,
+            retrieve_hass_conf,
+            optim_conf,
+            rh,
+            emhass_conf,
+            test_df_literal,
         )
         if not success:
             return False
@@ -271,8 +288,14 @@ def set_input_data_dict(
             if optim_conf["set_use_adjusted_pv"]:
                 # Update the PV forecast
                 P_PV_forecast = adjust_pv_forecast(
-                    logger, fcst, P_PV_forecast, get_data_from_file,
-                    retrieve_hass_conf, optim_conf, rh, emhass_conf,
+                    logger,
+                    fcst,
+                    P_PV_forecast,
+                    get_data_from_file,
+                    retrieve_hass_conf,
+                    optim_conf,
+                    rh,
+                    emhass_conf,
                     test_df_literal,
                 )
         else:
@@ -323,10 +346,11 @@ def set_input_data_dict(
         df_input_data, days_list = None, None
     elif set_type == "naive-mpc-optim":
         if (
-            (optim_conf.get("load_forecast_method", None) == "list"
-                and optim_conf.get("weather_forecast_method", None) == "list")
-            or (optim_conf.get("load_forecast_method", None) == "list"
-                and not(optim_conf["set_use_pv"]))
+            optim_conf.get("load_forecast_method", None) == "list"
+            and optim_conf.get("weather_forecast_method", None) == "list"
+        ) or (
+            optim_conf.get("load_forecast_method", None) == "list"
+            and not (optim_conf["set_use_pv"])
         ):
             days_list = None
             set_mix_forecast = False
@@ -334,7 +358,13 @@ def set_input_data_dict(
         else:
             # Retrieve data from hass
             success, df_input_data, days_list = retrieve_home_assistant_data(
-                set_type, get_data_from_file, retrieve_hass_conf, optim_conf, rh, emhass_conf, test_df_literal
+                set_type,
+                get_data_from_file,
+                retrieve_hass_conf,
+                optim_conf,
+                rh,
+                emhass_conf,
+                test_df_literal,
             )
             if not success:
                 return False
@@ -356,8 +386,14 @@ def set_input_data_dict(
             if optim_conf["set_use_adjusted_pv"]:
                 # Update the PV forecast
                 P_PV_forecast = adjust_pv_forecast(
-                    logger, fcst, P_PV_forecast, get_data_from_file,
-                    retrieve_hass_conf, optim_conf, rh, emhass_conf,
+                    logger,
+                    fcst,
+                    P_PV_forecast,
+                    get_data_from_file,
+                    retrieve_hass_conf,
+                    optim_conf,
+                    rh,
+                    emhass_conf,
                     test_df_literal,
                 )
         else:
@@ -549,8 +585,8 @@ def weather_forecast_cache(
 def perfect_forecast_optim(
     input_data_dict: dict,
     logger: logging.Logger,
-    save_data_to_file: Optional[bool] = True,
-    debug: Optional[bool] = False,
+    save_data_to_file: bool | None = True,
+    debug: bool | None = False,
 ) -> pd.DataFrame:
     """
     Perform a call to the perfect forecast optimization routine.
@@ -572,14 +608,14 @@ def perfect_forecast_optim(
     df_input_data = input_data_dict["fcst"].get_load_cost_forecast(
         input_data_dict["df_input_data"],
         method=input_data_dict["fcst"].optim_conf["load_cost_forecast_method"],
-        list_and_perfect = True
+        list_and_perfect=True,
     )
     if isinstance(df_input_data, bool) and not df_input_data:
         return False
     df_input_data = input_data_dict["fcst"].get_prod_price_forecast(
         df_input_data,
         method=input_data_dict["fcst"].optim_conf["production_price_forecast_method"],
-        list_and_perfect = True
+        list_and_perfect=True,
     )
     if isinstance(df_input_data, bool) and not df_input_data:
         return False
@@ -614,8 +650,8 @@ def perfect_forecast_optim(
 def dayahead_forecast_optim(
     input_data_dict: dict,
     logger: logging.Logger,
-    save_data_to_file: Optional[bool] = False,
-    debug: Optional[bool] = False,
+    save_data_to_file: bool | None = False,
+    debug: bool | None = False,
 ) -> pd.DataFrame:
     """
     Perform a call to the day-ahead optimization routine.
@@ -657,9 +693,7 @@ def dayahead_forecast_optim(
     )
     # Save CSV file for publish_data
     if save_data_to_file:
-        today = datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         filename = "opt_res_dayahead_" + today.strftime("%Y_%m_%d") + ".csv"
     else:  # Just save the latest optimization results
         filename = default_csv_filename
@@ -687,8 +721,8 @@ def dayahead_forecast_optim(
 def naive_mpc_optim(
     input_data_dict: dict,
     logger: logging.Logger,
-    save_data_to_file: Optional[bool] = False,
-    debug: Optional[bool] = False,
+    save_data_to_file: bool | None = False,
+    debug: bool | None = False,
 ) -> pd.DataFrame:
     """
     Perform a call to the naive Model Predictive Controller optimization routine.
@@ -753,9 +787,7 @@ def naive_mpc_optim(
     )
     # Save CSV file for publish_data
     if save_data_to_file:
-        today = datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         filename = "opt_res_naive_mpc_" + today.strftime("%Y_%m_%d") + ".csv"
     else:  # Just save the latest optimization results
         filename = default_csv_filename
@@ -781,8 +813,8 @@ def naive_mpc_optim(
 
 
 def forecast_model_fit(
-    input_data_dict: dict, logger: logging.Logger, debug: Optional[bool] = False
-) -> Tuple[pd.DataFrame, pd.DataFrame, MLForecaster]:
+    input_data_dict: dict, logger: logging.Logger, debug: bool | None = False
+) -> tuple[pd.DataFrame, pd.DataFrame, MLForecaster]:
     """Perform a forecast model fit from training data retrieved from Home Assistant.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
@@ -827,9 +859,9 @@ def forecast_model_fit(
 def forecast_model_predict(
     input_data_dict: dict,
     logger: logging.Logger,
-    use_last_window: Optional[bool] = True,
-    debug: Optional[bool] = False,
-    mlf: Optional[MLForecaster] = None,
+    use_last_window: bool | None = True,
+    debug: bool | None = False,
+    mlf: MLForecaster | None = None,
 ) -> pd.DataFrame:
     r"""Perform a forecast model predict using a previously trained skforecast model.
 
@@ -925,9 +957,9 @@ def forecast_model_predict(
 def forecast_model_tune(
     input_data_dict: dict,
     logger: logging.Logger,
-    debug: Optional[bool] = False,
-    mlf: Optional[MLForecaster] = None,
-) -> Tuple[pd.DataFrame, MLForecaster]:
+    debug: bool | None = False,
+    mlf: MLForecaster | None = None,
+) -> tuple[pd.DataFrame, MLForecaster]:
     """Tune a forecast model hyperparameters using bayesian optimization.
 
     :param input_data_dict: A dictionnary with multiple data used by the action functions
@@ -967,7 +999,7 @@ def forecast_model_tune(
 
 
 def regressor_model_fit(
-    input_data_dict: dict, logger: logging.Logger, debug: Optional[bool] = False
+    input_data_dict: dict, logger: logging.Logger, debug: bool | None = False
 ) -> MLRegressor:
     """Perform a forecast model fit from training data retrieved from Home Assistant.
 
@@ -1029,8 +1061,8 @@ def regressor_model_fit(
 def regressor_model_predict(
     input_data_dict: dict,
     logger: logging.Logger,
-    debug: Optional[bool] = False,
-    mlr: Optional[MLRegressor] = None,
+    debug: bool | None = False,
+    mlr: MLRegressor | None = None,
 ) -> np.ndarray:
     """Perform a prediction from csv file.
 
@@ -1094,10 +1126,10 @@ def regressor_model_predict(
 def publish_data(
     input_data_dict: dict,
     logger: logging.Logger,
-    save_data_to_file: Optional[bool] = False,
-    opt_res_latest: Optional[pd.DataFrame] = None,
-    entity_save: Optional[bool] = False,
-    dont_post: Optional[bool] = False,
+    save_data_to_file: bool | None = False,
+    opt_res_latest: pd.DataFrame | None = None,
+    entity_save: bool | None = False,
+    dont_post: bool | None = False,
 ) -> pd.DataFrame:
     """
     Publish the data obtained from the optimization results.
@@ -1125,9 +1157,7 @@ def publish_data(
 
     # Check if a day ahead optimization has been performed (read CSV file)
     if save_data_to_file:
-        today = datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         filename = "opt_res_dayahead_" + today.strftime("%Y_%m_%d") + ".csv"
     # If publish_prefix is passed, check if there is saved entities in data_path/entities with prefix, publish to results
     elif params["passed_data"].get("publish_prefix", "") != "" and not dont_post:
@@ -1272,14 +1302,14 @@ def publish_data(
         "custom_deferrable_forecast_id"
     ]
     for k in range(input_data_dict["opt"].optim_conf["number_of_deferrable_loads"]):
-        if "P_deferrable{}".format(k) not in opt_res_latest.columns:
+        if f"P_deferrable{k}" not in opt_res_latest.columns:
             logger.error(
-                "P_deferrable{}".format(k)
+                f"P_deferrable{k}"
                 + " was not found in results DataFrame. Optimization task may need to be relaunched or it did not converge to a solution.",
             )
         else:
             input_data_dict["rh"].post_data(
-                opt_res_latest["P_deferrable{}".format(k)],
+                opt_res_latest[f"P_deferrable{k}"],
                 idx_closest,
                 custom_deferrable_forecast_id[k]["entity_id"],
                 "power",
@@ -1290,7 +1320,7 @@ def publish_data(
                 save_entities=entity_save,
                 dont_post=dont_post,
             )
-            cols_published = cols_published + ["P_deferrable{}".format(k)]
+            cols_published = cols_published + [f"P_deferrable{k}"]
     # Publish thermal model data (predicted temperature)
     custom_predicted_temperature_id = params["passed_data"][
         "custom_predicted_temperature_id"
@@ -1302,7 +1332,7 @@ def publish_data(
                 in input_data_dict["opt"].optim_conf["def_load_config"][k]
             ):
                 input_data_dict["rh"].post_data(
-                    opt_res_latest["predicted_temp_heater{}".format(k)],
+                    opt_res_latest[f"predicted_temp_heater{k}"],
                     idx_closest,
                     custom_predicted_temperature_id[k]["entity_id"],
                     "temperature",
@@ -1313,7 +1343,7 @@ def publish_data(
                     save_entities=entity_save,
                     dont_post=dont_post,
                 )
-                cols_published = cols_published + ["predicted_temp_heater{}".format(k)]
+                cols_published = cols_published + [f"predicted_temp_heater{k}"]
     # Publish battery power
     if input_data_dict["opt"].optim_conf["set_use_battery"]:
         if "P_batt" not in opt_res_latest.columns:
@@ -1486,7 +1516,7 @@ def continual_publish(
                     )
             # Retrieve entity metadata from file
             if os.path.isfile(entity_path / default_metadata_json):
-                with open(entity_path / default_metadata_json, "r") as file:
+                with open(entity_path / default_metadata_json) as file:
                     metadata = json.load(file)
                     # Check if freq should be shorter
                     if metadata.get("lowest_time_step", None) is not None:
@@ -1501,7 +1531,7 @@ def publish_json(
     input_data_dict: dict,
     entity_path: pathlib.Path,
     logger: logging.Logger,
-    reference: Optional[str] = "",
+    reference: str | None = "",
 ):
     """
     Extract saved entity data from .json (in data_path/entities), build entity, post results to post_data
@@ -1520,7 +1550,7 @@ def publish_json(
     """
     # Retrieve entity metadata from file
     if os.path.isfile(entity_path / default_metadata_json):
-        with open(entity_path / default_metadata_json, "r") as file:
+        with open(entity_path / default_metadata_json) as file:
             metadata = json.load(file)
     else:
         logger.error("unable to located metadata.json in:" + entity_path)
@@ -1562,7 +1592,7 @@ def publish_json(
         data_df=entity_data[metadata[entity_id]["name"]],
         idx=idx_closest,
         entity_id=entity_id,
-        device_class=dict.get(metadata[entity_id],"device_class"),
+        device_class=dict.get(metadata[entity_id], "device_class"),
         unit_of_measurement=metadata[entity_id]["unit_of_measurement"],
         friendly_name=metadata[entity_id]["friendly_name"],
         type_var=metadata[entity_id].get("type_var", ""),

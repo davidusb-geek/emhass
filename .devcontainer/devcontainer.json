@@ -46,7 +46,10 @@
 				"source.fixAll": "explicit",
 				"source.organizeImports": "explicit"
 			  },
-			  "editor.defaultFormatter": "charliermarsh.ruff"
+			  "editor.defaultFormatter": "charliermarsh.ruff",
+			  "gitlens.telemetry.enabled": false,
+			  "sonarlint.disableTelemetry": true,
+			  "telemetry.feedback.enabled": false
 			}
 		  }
 		}
