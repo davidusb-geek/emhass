@@ -9,8 +9,6 @@ updates:
     directory: "/" 
     schedule:
       interval: "weekly"
-
-  # Enable version updates for Docker
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
