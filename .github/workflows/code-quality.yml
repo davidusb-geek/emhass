@@ -35,6 +35,7 @@ jobs:
           python-version-file: ".python-version"
 
       - uses: sourcery-ai/action@v1
+        continue-on-error: true
         with:
           token: ${{ secrets.SOURCERY_TOKEN }}
           diff_ref: ${{ github.event.pull_request.base.sha }}
