@@ -36,72 +36,72 @@ from emhass.utils import add_date_features, get_days_list, set_df_index_freq
 class Forecast:
     r"""
     Generate weather, load and costs forecasts needed as inputs to the optimization.
-    
+
     In EMHASS we have basically 4 forecasts to deal with:
-    
+
     - PV power production forecast (internally based on the weather forecast and the
       characteristics of your PV plant). This is given in Watts.
-    
+
     - Load power forecast: how much power your house will demand on the next 24h. This
       is given in Watts.
-    
+
     - PV production selling price forecast: at what price are you selling your excess
       PV production on the next 24h. This is given in EUR/kWh.
-    
+
     - Load cost forecast: the price of the energy from the grid on the next 24h. This
       is given in EUR/kWh.
-    
+
     There are methods that are generalized to the 4 forecast needed. For all there
     forecasts it is possible to pass the data either as a passed list of values or by
     reading from a CSV file. With these methods it is then possible to use data from
     external forecast providers.
-    
-    Then there are the methods that are specific to each type of forecast and that 
+
+    Then there are the methods that are specific to each type of forecast and that
     proposed forecast treated and generated internally by this EMHASS forecast class.
     For the weather forecast a first method (`open-meteo`) uses a open-meteos API
-    proposing detailed forecasts based on Lat/Lon locations. 
-    This method seems stable but as with any scrape method it will fail if any changes 
-    are made to the webpage API. Another method (`solcast`) is using the SolCast PV 
-    production forecast service. A final method (`solar.forecast`) is using another 
-    external service: Solar.Forecast, for which just the nominal PV peak installed 
-    power should be provided. Search the forecast section on the documentation for examples 
+    proposing detailed forecasts based on Lat/Lon locations.
+    This method seems stable but as with any scrape method it will fail if any changes
+    are made to the webpage API. Another method (`solcast`) is using the SolCast PV
+    production forecast service. A final method (`solar.forecast`) is using another
+    external service: Solar.Forecast, for which just the nominal PV peak installed
+    power should be provided. Search the forecast section on the documentation for examples
     on how to implement these different methods.
-    
+
     The `get_power_from_weather` method is proposed here to convert from irradiance
     data to electrical power. The PVLib module is used to model the PV plant.
-    
-    The specific methods for the load forecast are a first method (`naive`) that uses 
-    a naive approach, also called persistance. It simply assumes that the forecast for 
-    a future period will be equal to the observed values in a past period. The past 
+
+    The specific methods for the load forecast are a first method (`naive`) that uses
+    a naive approach, also called persistance. It simply assumes that the forecast for
+    a future period will be equal to the observed values in a past period. The past
     period is controlled using parameter `delta_forecast`. A second method (`mlforecaster`)
     uses an internal custom forecasting model using machine learning. There is a section
     in the documentation explaining how to use this method.
-    
+
     .. note:: This custom machine learning model is introduced from v0.4.0. EMHASS \
         proposed this new `mlforecaster` class with `fit`, `predict` and `tune` methods. \
         Only the `predict` method is used here to generate new forecasts, but it is \
         necessary to previously fit a forecaster model and it is a good idea to \
         optimize the model hyperparameters using the `tune` method. See the dedicated \
         section in the documentation for more help.
-    
+
     For the PV production selling price and Load cost forecasts the privileged method
     is a direct read from a user provided list of values. The list should be passed
     as a runtime parameter during the `curl` to the EMHASS API.
-    
-    I reading from a CSV file, it should contain no header and the timestamped data 
+
+    I reading from a CSV file, it should contain no header and the timestamped data
     should have the following format:
-    
+
     2021-04-29 00:00:00+00:00,287.07
-    
+
     2021-04-29 00:30:00+00:00,274.27
-    
+
     2021-04-29 01:00:00+00:00,243.38
-    
+
     ...
-    
+
     The data columns in these files will correspond to the data in the units expected
     for each forecasting method.
-    
+
     """
 
     def __init__(
@@ -323,13 +323,13 @@ class Forecast:
     ) -> pd.DataFrame:
         r"""
         Get and generate weather forecast data.
-        
+
         :param method: The desired method, options are 'open-meteo', 'csv', 'list', 'solcast' and \
             'solar.forecast'. Defaults to 'open-meteo'.
         :type method: str, optional
         :return: The DataFrame containing the forecasted data
         :rtype: pd.DataFrame
-        
+
         """
         csv_path = self.emhass_conf["data_path"] / csv_path
         w_forecast_cache_path = os.path.abspath(
@@ -455,7 +455,7 @@ class Forecast:
                         response = get(url, headers=headers)
                         """import bz2 # Uncomment to save a serialized data for tests
                         import _pickle as cPickle
-                        with bz2.BZ2File("data/test_response_solcast_get_method.pbz2", "w") as f: 
+                        with bz2.BZ2File("data/test_response_solcast_get_method.pbz2", "w") as f:
                             cPickle.dump(response, f)"""
                         # Verify the request passed
                         if int(response.status_code) == 200:
@@ -555,7 +555,7 @@ class Forecast:
                     response = get(url, headers=headers)
                     """import bz2 # Uncomment to save a serialized data for tests
                     import _pickle as cPickle
-                    with bz2.BZ2File("data/test_response_solarforecast_get_method.pbz2", "w") as f: 
+                    with bz2.BZ2File("data/test_response_solarforecast_get_method.pbz2", "w") as f:
                         cPickle.dump(response.json(), f)"""
                     data_raw = response.json()
                     data_dict = {
@@ -699,7 +699,7 @@ class Forecast:
     ) -> pd.Series:
         r"""
         Convert wheater forecast data into electrical power.
-        
+
         :param df_weather: The DataFrame containing the weather forecasted data. \
             This DF should be generated by the 'get_weather_forecast' method or at \
             least contain the same columns names filled with proper data.
@@ -1282,7 +1282,7 @@ class Forecast:
     ) -> pd.Series:
         r"""
         Get and generate the load forecast data.
-        
+
         :param days_min_load_forecast: The number of last days to retrieve that \
             will be used to generate a naive forecast, defaults to 3
         :type days_min_load_forecast: int, optional
@@ -1526,7 +1526,7 @@ class Forecast:
         Get the unit cost for the load consumption based on multiple tariff \
         periods. This is the cost of the energy from the utility in a vector \
         sampled at the fixed freq value.
-        
+
         :param df_final: The DataFrame containing the input data.
         :type df_final: pd.DataFrame
         :param method: The method to be used to generate load cost forecast, \
@@ -1545,7 +1545,7 @@ class Forecast:
         if method == "hp_hc_periods":
             df_final[self.var_load_cost] = self.optim_conf["load_offpeak_hours_cost"]
             list_df_hp = []
-            for key, period_hp in self.optim_conf["load_peak_hour_periods"].items():
+            for _key, period_hp in self.optim_conf["load_peak_hour_periods"].items():
                 list_df_hp.append(
                     df_final[self.var_load_cost].between_time(
                         period_hp[0]["start"], period_hp[1]["end"]
@@ -1609,7 +1609,7 @@ class Forecast:
         Get the unit power production price for the energy injected to the grid.\
         This is the price of the energy injected to the utility in a vector \
         sampled at the fixed freq value.
-        
+
         :param df_input_data: The DataFrame containing all the input data retrieved
             from hass
         :type df_input_data: pd.DataFrame

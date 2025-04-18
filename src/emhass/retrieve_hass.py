@@ -17,18 +17,18 @@ from emhass.utils import set_df_index_freq
 class RetrieveHass:
     r"""
     Retrieve data from Home Assistant using the restful API.
-    
+
     This class allows the user to retrieve data from a Home Assistant instance \
     using the provided restful API (https://developers.home-assistant.io/docs/api/rest/)
-    
+
     This class methods are:
-        
+
     - get_data: to retrieve the actual data from hass
-    
+
     - prepare_data: to apply some data treatment in preparation for the optimization task
-    
+
     - post_data: Post passed data to hass
-    
+
     """
 
     def __init__(
@@ -122,7 +122,7 @@ class RetrieveHass:
     ) -> None:
         r"""
         Retrieve the actual data from hass.
-        
+
         :param days_list: A list of days to retrieve. The ISO format should be used \
             and the timezone is UTC. The frequency of the data_range should be freq='D'
         :type days_list: pandas.date_range
@@ -138,7 +138,7 @@ class RetrieveHass:
         :type significant_changes_only: bool, optional
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
-        
+
         .. warning:: The minimal_response and significant_changes_only options \
             are experimental
         """
@@ -205,7 +205,7 @@ class RetrieveHass:
                         return f"Request Get Error: {response.status_code}"
                 """import bz2 # Uncomment to save a serialized data for tests
                 import _pickle as cPickle
-                with bz2.BZ2File("data/test_response_get_data_get_method.pbz2", "w") as f: 
+                with bz2.BZ2File("data/test_response_get_data_get_method.pbz2", "w") as f:
                     cPickle.dump(response, f)"""
                 try:  # Sometimes when there are connection problems we need to catch empty retrieved json
                     data = response.json()[0]
@@ -306,7 +306,7 @@ class RetrieveHass:
     ) -> None:
         r"""
         Apply some data treatment in preparation for the optimization task.
-        
+
         :param var_load: The name of the variable for the household load consumption.
         :type var_load: str
         :param load_negative: Set to True if the retrived load variable is \
@@ -324,7 +324,7 @@ class RetrieveHass:
         :return: The DataFrame populated with the retrieved data from hass and \
             after the data treatment
         :rtype: pandas.DataFrame
-        
+
         """
         self.logger.debug("prepare_data self.var_list=%s", self.var_list)
         self.logger.debug("prepare_data var_load=%s", var_load)
@@ -470,7 +470,7 @@ class RetrieveHass:
     ) -> None:
         r"""
         Post passed data to hass.
-        
+
         :param data_df: The DataFrame containing the data that will be posted \
             to hass. This should be a one columns DF or a series.
         :type data_df: pd.DataFrame
@@ -491,7 +491,7 @@ class RetrieveHass:
         :type publish_prefix: str, optional
         :param save_entities: if entity data should be saved in data_path/entities
         :type save_entities: bool, optional
-        :param logger_levels: set logger level, info or debug, to output  
+        :param logger_levels: set logger level, info or debug, to output
         :type logger_levels: str, optional
         :param dont_post: dont post to HA
         :type dont_post: bool, optional

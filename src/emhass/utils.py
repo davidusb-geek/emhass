@@ -1163,9 +1163,9 @@ def build_legacy_config_params(
                 association[2] == "load_peak_hour_periods"
                 and type(config[association[2]]) is list
             ):
-                config[association[2]] = dict(
-                    (key, d[key]) for d in config[association[2]] for key in d
-                )
+                config[association[2]] = {
+                    key: d[key] for d in config[association[2]] for key in d
+                }
 
     return config
     # params['associations_dict'] = associations_dict
@@ -1214,7 +1214,7 @@ def param_to_config(param: dict, logger: logging.Logger) -> dict:
 def build_secrets(
     emhass_conf: dict,
     logger: logging.Logger,
-    argument: dict | None = {},
+    argument: dict | None = None,
     options_path: str | None = None,
     secrets_path: str | None = None,
     no_response: bool | None = False,
@@ -1240,6 +1240,8 @@ def build_secrets(
     """
 
     # Set defaults to be overwritten
+    if argument is None:
+        argument = {}
     params_secrets = {
         "hass_url": "https://myhass.duckdns.org/",
         "long_lived_token": "thatverylongtokenhere",
@@ -1499,11 +1501,11 @@ def build_params(
     if params["optim_conf"].get(
         "load_peak_hour_periods", None
     ) is not None and isinstance(params["optim_conf"]["load_peak_hour_periods"], list):
-        params["optim_conf"]["load_peak_hour_periods"] = dict(
-            (key, d[key])
+        params["optim_conf"]["load_peak_hour_periods"] = {
+            key: d[key]
             for d in params["optim_conf"]["load_peak_hour_periods"]
             for key in d
-        )
+        }
 
     # Call function to check parameter lists that require the same length as deferrable loads
     # If not, set defaults it fill in gaps
@@ -1672,7 +1674,7 @@ def check_def_loads(
             + str(default)
             + ") to parameter"
         )
-        for x in range(len(parameter[parameter_name]), num_def_loads):
+        for _x in range(len(parameter[parameter_name]), num_def_loads):
             parameter[parameter_name].append(default)
     return parameter[parameter_name]
 

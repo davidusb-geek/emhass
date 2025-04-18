@@ -25,17 +25,17 @@ class MLForecaster:
     r"""
     A forecaster class using machine learning models with auto-regressive approach and features\
     based on timestamp information (hour, day, week, etc).
-    
+
     This class uses the `skforecast` module and the machine learning models are from `scikit-learn`.
-    
+
     It exposes three main methods:
-    
+
     - `fit`: to train a model with the passed data.
-    
+
     - `predict`: to obtain a forecast from a pre-trained model.
-    
-    - `tune`: to optimize the models hyperparameters using bayesian optimization. 
-    
+
+    - `tune`: to optimize the models hyperparameters using bayesian optimization.
+
     """
 
     def __init__(

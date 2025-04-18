@@ -14,10 +14,10 @@ from pulp import COIN_CMD, GLPK_CMD, PULP_CBC_CMD
 
 class Optimization:
     r"""
-    Optimize the deferrable load and battery energy dispatch problem using \ 
+    Optimize the deferrable load and battery energy dispatch problem using \
     the linear programming optimization technique. All equipement equations, \
     including the battery equations are hence transformed in a linear form.
-    
+
     This class methods are:
 
     - perform_optimization
@@ -25,9 +25,9 @@ class Optimization:
     - perform_perfect_forecast_optim
 
     - perform_dayahead_forecast_optim
-    
+
     - perform_naive_mpc_optim
-    
+
     """
 
     def __init__(
@@ -44,7 +44,7 @@ class Optimization:
     ) -> None:
         r"""
         Define constructor for Optimization class.
-        
+
         :param retrieve_hass_conf: Configuration parameters used to retrieve data \
             from hass
         :type retrieve_hass_conf: dict
@@ -67,7 +67,7 @@ class Optimization:
             more than one day then the optimization will be peformed by chunks of \
             opt_time_delta periods, defaults to 24
         :type opt_time_delta: float, optional
-        
+
         """
         self.retrieve_hass_conf = retrieve_hass_conf
         self.optim_conf = optim_conf
@@ -124,7 +124,7 @@ class Optimization:
     ) -> pd.DataFrame:
         r"""
         Perform the actual optimization using linear programming (LP).
-        
+
         :param data_opt: A DataFrame containing the input data. The results of the \
             optimization will be appended (decision variables, cost function values, etc)
         :type data_opt: pd.DataFrame
@@ -146,7 +146,7 @@ class Optimization:
         :type soc_init: float
         :param soc_final: The final battery SOC for the optimization. This parameter \
             is optional, if not given soc_init = soc_final = soc_target from the configuration file.
-        :type soc_final: 
+        :type soc_final:
         :param def_total_hours: The functioning hours for this iteration for each deferrable load. \
             (For continuous deferrable loads: functioning hours at nominal power)
         :type def_total_hours: list
@@ -1255,7 +1255,7 @@ class Optimization:
     ) -> pd.DataFrame:
         r"""
         Perform an optimization on historical data (perfectly known PV production).
-        
+
         :param df_input_data: A DataFrame containing all the input data used for \
             the optimization, notably photovoltaics and load consumption powers.
         :type df_input_data: pandas.DataFrame
@@ -1327,7 +1327,7 @@ class Optimization:
         r"""
         Perform a day-ahead optimization task using real forecast data. \
         This type of optimization is intented to be launched once a day.
-        
+
         :param df_input_data: A DataFrame containing all the input data used for \
             the optimization, notably the unit load cost for power consumption.
         :type df_input_data: pandas.DataFrame
@@ -1371,7 +1371,7 @@ class Optimization:
         This implementaion is naive because we are not using the formal formulation \
         of a MPC. Only the sense of a receiding horizon is considered here. \
         This optimization is more suitable for higher optimization frequency, ex: 5min.
-        
+
         :param df_input_data: A DataFrame containing all the input data used for \
             the optimization, notably the unit load cost for power consumption.
         :type df_input_data: pandas.DataFrame
@@ -1388,7 +1388,7 @@ class Optimization:
         :type soc_init: float
         :param soc_final: The final battery SOC for the optimization. This parameter \
             is optional, if not given soc_init = soc_final = soc_target from the configuration file.
-        :type soc_final: 
+        :type soc_final:
         :param def_total_timestep: The functioning timesteps for this iteration for each deferrable load. \
             (For continuous deferrable loads: functioning timesteps at nominal power)
         :type def_total_timestep: list

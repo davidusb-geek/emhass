@@ -92,7 +92,7 @@ def load_forecast(data, forecast_date, freq, template):
                 y=aligned_daily_data["load"],
                 mode="lines",
                 name=f"Historic day: {day}",
-                line=dict(width=1),
+                line={"width": 1},
                 opacity=0.6,
             )
         )
@@ -102,7 +102,7 @@ def load_forecast(data, forecast_date, freq, template):
             y=forecast["load"],
             mode="lines",
             name="Forecast (Mean)",
-            line=dict(color="red", width=3),
+            line={"color": "red", "width": 3},
         )
     )
     fig.update_layout(
@@ -111,8 +111,8 @@ def load_forecast(data, forecast_date, freq, template):
         yaxis_title="Load (kW)",
         legend_title="Legend",
         template=template,
-        xaxis=dict(range=[forecast.index.min(), forecast.index.max()]),
-        yaxis=dict(autorange=True),
+        xaxis={"range": [forecast.index.min(), forecast.index.max()]},
+        yaxis={"autorange": True},
     )
     fig.show()
 
