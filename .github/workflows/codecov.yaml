@@ -8,6 +8,10 @@ on:
 jobs:
   run:
     runs-on: ${{ matrix.os }}
+    permissions:
+      actions: read
+      security-events: write
+      contents: read
     strategy:
       matrix:
         os: [ubuntu-latest]

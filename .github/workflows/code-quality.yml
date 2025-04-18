@@ -8,11 +8,6 @@ on:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
-permissions:
-  actions: read
-  security-events: write
-  contents: read
-
 jobs:
   build:
     runs-on: ${{ matrix.os }}
@@ -66,4 +61,6 @@ jobs:
         --recursive
         ./
     permissions:
+      actions: read
       security-events: write
+      contents: read
