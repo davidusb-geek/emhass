@@ -38,7 +38,7 @@ The default values for these parameters are:
 ```yaml
 runtimeparams = {
     'historic_days_to_retrieve': 9,
-    "model_type": "load_forecast",
+    "model_type": "long_train_data",
     "var_model": "sensor.power_load_no_var_loads",
     "sklearn_model": "KNeighborsRegressor",
     "num_lags": 48,
@@ -91,7 +91,7 @@ curl -i -H "Content-Type:application/json" -X POST -d '{}' http://localhost:5000
 ```
 If needed pass the correct `model_type` like this:
 ```bash
-curl -i -H "Content-Type:application/json" -X POST -d '{"model_type": "load_forecast"}' http://localhost:5000/action/forecast-model-predict
+curl -i -H "Content-Type:application/json" -X POST -d '{"model_type": "long_train_data"}' http://localhost:5000/action/forecast-model-predict
 ```
 The resulting forecast DataFrame is shown in the web UI.
 
