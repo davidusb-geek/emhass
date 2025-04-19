@@ -1089,7 +1089,7 @@ class Optimization:
             )
         else:
             self.logger.warning("Solver %s unknown, using default", self.lp_solver)
-            opt_model.solve(COIN_CMD(msg=0, timeLimit=45, threads=7))
+            opt_model.solve(PULP_CBC_CMD(msg=0, timeLimit=timeout, threads=7))
 
         # The status of the solution is printed to the screen
         self.optim_status = plp.LpStatus[opt_model.status]
