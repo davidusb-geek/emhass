@@ -34,12 +34,11 @@ jobs:
         with:
           python-version-file: ".python-version"
 
-      # not necessary as its already running
-      # - uses: sourcery-ai/action@v1
-      #   continue-on-error: true
-      #   with:
-      #     token: ${{ secrets.SOURCERY_TOKEN }}
-      #     diff_ref: ${{ github.event.pull_request.base.sha }}
+      - uses: sourcery-ai/action@v1
+        continue-on-error: true
+        with:
+          token: ${{ secrets.SOURCERY_TOKEN }}
+          diff_ref: ${{ github.event.pull_request.base.sha }}
 
       - name: Install the project
         run: uv sync --reinstall --extra test
