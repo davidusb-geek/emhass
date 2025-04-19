@@ -1077,14 +1077,15 @@ class Optimization:
         opt_model.constraints = constraints
 
         ## Finally, we call the solver to solve our optimization model:
+        timeout = self.optim_conf["lp_solver_timeout"]
         # solving with default solver CBC
         if self.lp_solver == "PULP_CBC_CMD":
-            opt_model.solve(PULP_CBC_CMD(msg=0, timeLimit=45, threads=7))
+            opt_model.solve(PULP_CBC_CMD(msg=0, timeLimit=timeout, threads=7))
         elif self.lp_solver == "GLPK_CMD":
-            opt_model.solve(GLPK_CMD(msg=0, timeLimit=45, threads=7))
+            opt_model.solve(GLPK_CMD(msg=0, timeLimit=timeout, threads=7))
         elif self.lp_solver == "COIN_CMD":
             opt_model.solve(
-                COIN_CMD(msg=0, path=self.lp_solver_path, timeLimit=45, threads=7)
+                COIN_CMD(msg=0, path=self.lp_solver_path, timeLimit=timeout, threads=7)
             )
         else:
             self.logger.warning("Solver %s unknown, using default", self.lp_solver)
