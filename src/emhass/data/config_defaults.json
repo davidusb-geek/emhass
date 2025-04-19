@@ -9,6 +9,7 @@
   "set_total_pv_sell": false,
   "lp_solver": "default",
   "lp_solver_path": "empty",
+  "lp_solver_timeout": 45,
   "set_nocharge_from_grid": false,
   "set_nodischarge_to_grid": true,
   "set_battery_dynamic": false,
