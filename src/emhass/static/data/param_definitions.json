@@ -138,6 +138,12 @@
       "input": "text",
       "default_value": "/usr/bin/cbc"
     },
+    "lp_solver_timeout": {
+      "friendly_name": "Linear programming solver timeout",
+      "Description": "Set the maximum time (in seconds) for the LP solver. Defaults to 45.",
+      "input": "int",
+      "default_value": 45
+    },
     "weather_forecast_method": {
       "friendly_name": "Weather forecast method",
       "Description": "This will define the weather forecast method that will be used. options are 'open-meteo', 'Solcast', 'solar.forecast' (forecast.solar) and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts.",

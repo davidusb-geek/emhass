@@ -31,7 +31,7 @@
       "type": "debugpy",
       "request": "launch",
       "console": "integratedTerminal",
-      "module": "gunicorn",
+      "program": ".venv/lib/python3.12/site-packages/gunicorn",
       "purpose": [
         "debug-in-terminal"
       ],
