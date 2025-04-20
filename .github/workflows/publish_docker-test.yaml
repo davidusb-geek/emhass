@@ -4,7 +4,9 @@ name: "Publish Docker test image"
 
 on:
   push:
-    branches: [testing]
+    branches: 
+      - testing
+      - master
   workflow_dispatch:
 
 env:
