@@ -853,6 +853,7 @@ def forecast_model_fit(
         filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
         with open(filename_path, "wb") as outp:
             pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
+            logger.debug("saved model to " + str(filename_path))
     return df_pred, df_pred_backtest, mlf
 
 
@@ -891,9 +892,12 @@ def forecast_model_predict(
         if filename_path.is_file():
             with open(filename_path, "rb") as inp:
                 mlf = pickle.load(inp)
+                logger.debug("loaded saved model from " + str(filename_path))
         else:
             logger.error(
-                "The ML forecaster file was not found, please run a model fit method before this predict method",
+                "The ML forecaster file ("
+                + str(filename_path)
+                + ") was not found, please run a model fit method before this predict method",
             )
             return
     # Make predictions
@@ -982,9 +986,12 @@ def forecast_model_tune(
         if filename_path.is_file():
             with open(filename_path, "rb") as inp:
                 mlf = pickle.load(inp)
+                logger.debug("loaded saved model from " + str(filename_path))
         else:
             logger.error(
-                "The ML forecaster file was not found, please run a model fit method before this tune method",
+                "The ML forecaster file ("
+                + str(filename_path)
+                + ") was not found, please run a model fit method before this tune method",
             )
             return None, None
     # Tune the model
@@ -995,6 +1002,7 @@ def forecast_model_tune(
         filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
         with open(filename_path, "wb") as outp:
             pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
+            logger.debug("Saved model to " + str(filename_path))
     return df_pred_optim, mlf
 
 
