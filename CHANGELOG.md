@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.13.1 - 2025-04-21
+### Improvement
+- Add timeout and thread configuration for different LP solvers (CBC, GLPK, COIN). Thanks to @GeoDerp
+- Clean up actions and add sourcery scan action. Thanks to @GeoDerp
+- Cache Open-Meteo JSON reponse locally to reduce the number of API calls and add resilience. Thanks to @paulhomes
+### Fix
+- Update default weight battery value in config_defaults.json. Thanks to @purcell-lab
+- Fix forecast output assignment and avoid SettingWithCopyWarning. Thanks to @radim2tej
+- Fix for get_mix_forecast ValueError: cannot convert float NaN to integer. Thanks to @paulhomes
+- Fix for hard-coded actual/forecast PV sensor names. Thanks to @paulhomes
+- Update pyproject.toml to solve issue #495: Missing files in python package after 0.12.5. Thanks to @GeoDerp
+
 ## 0.13.0 - 2025-04-02
 ### Improvement
 - Added a new feature to automatically adjust PV forecast using historical actual/forecast data
