@@ -1417,7 +1417,7 @@ class Forecast:
             forecast_out = forecast_out.rename(columns={self.var_load_new: "yhat"})
             # Force forecast_out length to avoid mismatches
             forecast_out = forecast_out.iloc[0 : len(self.forecast_dates)]
-            forecast_out.index = forecast_out.index.tz_convert(self.forecast_dates.tz)
+            forecast_out.index = forecast_out.index.tz_localize(self.forecast_dates.tz)
         elif (
             method == "mlforecaster"
         ):  # using a custom forecast model with machine learning
