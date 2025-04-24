@@ -1592,6 +1592,7 @@ class Forecast:
                     data_list=data_list,
                     list_and_perfect=list_and_perfect,
                 )
+                df_final = df_final.copy()
                 df_final[self.var_load_cost] = forecast_out
         else:
             self.logger.error("Passed method is not valid")
@@ -1667,6 +1668,7 @@ class Forecast:
                     data_list=data_list,
                     list_and_perfect=list_and_perfect,
                 )
+                df_final = df_final.copy()
                 df_final[self.var_prod_price] = forecast_out
         else:
             self.logger.error("Passed method is not valid")
