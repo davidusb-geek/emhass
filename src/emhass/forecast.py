@@ -1371,11 +1371,11 @@ class Forecast:
             with open(data_path, "rb") as fid:
                 data, _, _, _ = pickle.load(fid)
             # Ensure the data index is timezone-aware and matches self.forecast_dates' timezone
-            data.index = (
-                data.index.tz_localize(self.forecast_dates.tz)
-                if data.index.tz is None
-                else data.index.tz_convert(self.forecast_dates.tz)
-            )
+            # data.index = (
+            #     data.index.tz_localize(self.forecast_dates.tz)
+            #     if data.index.tz is None
+            #     else data.index.tz_convert(self.forecast_dates.tz)
+            # )
             # Resample the data if needed
             data = data[[self.var_load]]
             current_freq = pd.Timedelta("30min")
@@ -1403,10 +1403,12 @@ class Forecast:
                     forecast = forecast_tmp
                 else:
                     forecast = pd.concat([forecast, forecast_tmp], axis=0)
+            forecast_dates = self.forecast_dates.tz_convert('UTC').round(self.freq, ambiguous="infer", nonexistent="shift_forward")
             forecast_out = forecast.loc[
-                forecast.index.intersection(self.forecast_dates)
+                forecast.index.intersection(forecast_dates)
             ]
-            forecast_out.index = self.forecast_dates
+            # forecast_out.index = self.forecast_dates
+            forecast_out.index = forecast_out.index.tz_convert(self.forecast_dates.tz)
             forecast_out.index.name = "ts"
             forecast_out = forecast_out.rename(columns={"load": "yhat"})
         elif method == "naive":  # using a naive approach
