@@ -265,7 +265,7 @@ class RetrieveHass:
                     ).max()
                     ts = pd.to_datetime(
                         pd.date_range(start=from_date, end=to_date, freq=self.freq),
-                        format="%Y-%d-%m %H:%M",
+                        format="%Y-%d-%m %H:%M"
                     ).round(self.freq, ambiguous="infer", nonexistent="shift_forward")
                     df_day = pd.DataFrame(index=ts)
                 # Caution with undefined string data: unknown, unavailable, etc.
