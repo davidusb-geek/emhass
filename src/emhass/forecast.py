@@ -1508,7 +1508,6 @@ class Forecast:
         if set_mix_forecast:
             P_Load_forecast = Forecast.get_mix_forecast(
                 df_now,
-                
                 P_Load_forecast,
                 self.params["passed_data"]["alpha"],
                 self.params["passed_data"]["beta"],
