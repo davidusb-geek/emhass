@@ -1508,11 +1508,13 @@ class Forecast:
         if set_mix_forecast:
             P_Load_forecast = Forecast.get_mix_forecast(
                 df_now,
+                
                 P_Load_forecast,
                 self.params["passed_data"]["alpha"],
                 self.params["passed_data"]["beta"],
                 self.var_load_new,
             )
+        self.logger.debug("get_load_forecast returning:\n%s", P_Load_forecast)
         return P_Load_forecast
 
     def get_load_cost_forecast(
@@ -1597,6 +1599,7 @@ class Forecast:
         else:
             self.logger.error("Passed method is not valid")
             return False
+        self.logger.debug("get_load_cost_forecast returning:\n%s", df_final)    
         return df_final
 
     def get_prod_price_forecast(
@@ -1673,6 +1676,7 @@ class Forecast:
         else:
             self.logger.error("Passed method is not valid")
             return False
+        self.logger.debug("get_prod_price_forecast returning:\n%s", df_final) 
         return df_final
 
     def get_cached_forecast_data(self, w_forecast_cache_path) -> pd.DataFrame:
