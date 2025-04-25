@@ -96,9 +96,9 @@ emhass --action 'dayahead-optim' --config ./config.json --root ./src/emhass --co
 **Run unittests**
 
 ```bash
+python3 -m pip install -e '.[test]'
 python3 -m unittest discover -s ./tests -p 'test_*.py'
 ```
-_Note:unittest will need to be installed prior_
 
 ### Method 2: VS-Code Debug and Run via Dev Container
 
