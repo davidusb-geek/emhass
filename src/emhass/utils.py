@@ -1720,7 +1720,7 @@ def add_date_features(
 
     # Determine whether to use index or a timestamp column
     if timestamp:
-        df[timestamp] = pd.to_datetime(df[timestamp])
+        df[timestamp] = pd.to_datetime(df[timestamp], utc=True)
         source = df[timestamp].dt
     else:
         if not isinstance(df.index, pd.DatetimeIndex):
