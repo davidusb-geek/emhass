@@ -622,7 +622,7 @@ class Forecast:
         else:
             self.logger.error("Method %r is not valid", method)
             data = None
-        self.logger.debug("get_weather_forecast returning:\n%s", data)
+        ("get_weather_forecast returning:\n%s", data)
         return data
 
     def cloud_cover_to_irradiance(
@@ -795,7 +795,7 @@ class Forecast:
                 self.var_PV,
             )
         P_PV_forecast[P_PV_forecast < 0] = 0  # replace any negative PV values with zero
-        self.logger.debug("get_power_from_weather returning:\n%s", P_PV_forecast)
+        ("get_power_from_weather returning:\n%s", P_PV_forecast)
         return P_PV_forecast
 
     @staticmethod
@@ -1598,7 +1598,7 @@ class Forecast:
         else:
             self.logger.error("Passed method is not valid")
             return False
-        self.logger.debug("get_load_cost_forecast returning:\n%s", df_final)    
+        self.logger.debug("get_load_cost_forecast returning:\n%s", df_final)
         return df_final
 
     def get_prod_price_forecast(
@@ -1675,7 +1675,7 @@ class Forecast:
         else:
             self.logger.error("Passed method is not valid")
             return False
-        self.logger.debug("get_prod_price_forecast returning:\n%s", df_final) 
+        self.logger.debug("get_prod_price_forecast returning:\n%s", df_final)
         return df_final
 
     def get_cached_forecast_data(self, w_forecast_cache_path) -> pd.DataFrame:
