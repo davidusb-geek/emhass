@@ -194,7 +194,7 @@ class Optimization:
             def_end_timestep = self.optim_conf["end_timesteps_of_each_deferrable_load"]
         type_self_conso = "bigm"  # maxmin
 
-        num_deferrable_loads = self.optim_conf['number_of_deferrable_loads']
+        num_deferrable_loads = self.optim_conf["number_of_deferrable_loads"]
 
         def_total_hours = def_total_hours + [0] * (num_deferrable_loads - len(def_total_hours))
         def_start_timestep = def_start_timestep + [0] * (num_deferrable_loads - len(def_start_timestep))
@@ -661,7 +661,7 @@ class Optimization:
                     sense_coeff = 1 if sense == "heat" else -1
 
                     self.logger.debug(f"Load {k}: Thermal parameters: start_temperature={start_temperature}, cooling_constant={cooling_constant}, heating_rate={heating_rate}, overshoot_temperature={overshoot_temperature}")
-        
+
                     predicted_temp = [start_temperature]
                     for Id in set_I:
                         if Id == 0:
@@ -684,7 +684,7 @@ class Optimization:
                                 )
                             )
                         )
-        
+
                         is_overshoot = plp.LpVariable(
                             "defload_{}_overshoot_{}".format(k, Id), cat="Binary"
                         )
@@ -715,7 +715,7 @@ class Optimization:
                                 ),
                             }
                         )
-        
+
                         if len(desired_temperatures) > Id and desired_temperatures[Id]:
                             penalty_factor = hc.get("penalty_factor", 10)
                             if penalty_factor < 0:
@@ -741,7 +741,7 @@ class Optimization:
                                 }
                             )
                             opt_model.setObjective(opt_model.objective + penalty_var)
-        
+
                     predicted_temps[k] = predicted_temp
                     self.logger.debug(f"Load {k}: Thermal constraints set.")
 
@@ -780,7 +780,7 @@ class Optimization:
                         }
                     )
                 self.logger.debug(f"Load {k}: Standard load constraints set.")
-        
+
 
             # Ensure deferrable loads consume energy between def_start_timestep & def_end_timestep
             self.logger.debug(
@@ -1307,13 +1307,13 @@ class Optimization:
         # Battery initialization logging
         if self.optim_conf["set_use_battery"]:
             self.logger.debug(f"Battery usage enabled. Initial SOC: {soc_init}, Final SOC: {soc_final}")
-    
+
         # Deferrable load initialization logging
         self.logger.debug(f"Deferrable load operating hours: {def_total_hours}")
         self.logger.debug(f"Deferrable load timesteps: {def_total_timestep}")
         self.logger.debug(f"Deferrable load start timesteps: {def_start_timestep}")
         self.logger.debug(f"Deferrable load end timesteps: {def_end_timestep}")
-    
+
         # Objective function logging
         self.logger.debug(f"Selected cost function type: {self.costfun}")
 
