@@ -686,7 +686,7 @@ class Optimization:
                         )
 
                         is_overshoot = plp.LpVariable(
-                            "defload_{}_overshoot_{}".format(k, Id), cat="Binary"
+                            f"defload_{k}_overshoot_{Id}"
                         )
                         constraints.update(
                             {
@@ -727,7 +727,7 @@ class Optimization:
                                 - desired_temperatures[Id]
                             ) * penalty_factor * sense_coeff
                             penalty_var = plp.LpVariable(
-                                "defload_{}_thermal_penalty_{}".format(k, Id),
+                                f"defload_{k}_thermal_penalty_{Id}",
                                 cat="Continuous",
                                 upBound=0,
                             )
@@ -1317,7 +1317,7 @@ class Optimization:
         # Objective function logging
         self.logger.debug(f"Selected cost function type: {self.costfun}")
 
-    
+
         # Constraints logging
         if "def_load_config" in self.optim_conf:
             if "thermal_config" in self.optim_conf["def_load_config"][k]:
@@ -1329,11 +1329,11 @@ class Optimization:
         else:
             self.logger.debug("'def_load_config' key not supplied in optim_conf")
 
-    
+
         # Solver execution logging
         self.logger.debug(f"Solver selected: {self.lp_solver}")
         self.logger.info(f"Optimization status: {self.optim_status}")
-    
+
         # Results logging
 
         return opt_tp
