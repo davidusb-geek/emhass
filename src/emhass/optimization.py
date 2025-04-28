@@ -645,9 +645,11 @@ class Optimization:
             elif ("def_load_config" in self.optim_conf.keys()
                 and len(self.optim_conf["def_load_config"]) > k
                 and "thermal_config" in self.optim_conf["def_load_config"][k]):
-                    
-                self.logger.debug(f"Load {k} is a thermal deferrable load.")
-                    
+
+
+                    self.logger.debug(f"Load {k} is a thermal deferrable load.")
+
+                    # Special case of a thermal deferrable load
                     def_load_config = self.optim_conf["def_load_config"][k]
                     if def_load_config and "thermal_config" in def_load_config:
                         hc = def_load_config["thermal_config"]
