@@ -1317,19 +1317,6 @@ class Optimization:
         # Objective function logging
         self.logger.debug(f"Selected cost function type: {self.costfun}")
 
-
-        # Constraints logging
-        if "def_load_config" in self.optim_conf:
-            if "thermal_config" in self.optim_conf["def_load_config"][k]:
-                self.logger.debug(
-                    f"Thermal load {k} constraints: Heating rate={hc['heating_rate']}, "
-                    f"Cooling constant={hc['cooling_constant']}, Desired temperatures={hc['desired_temperatures']}, "
-                    f"Overshoot temperature={hc['overshoot_temperature']}"
-                )
-        else:
-            self.logger.debug("'def_load_config' key not supplied in optim_conf")
-
-
         # Solver execution logging
         self.logger.debug(f"Solver selected: {self.lp_solver}")
         self.logger.info(f"Optimization status: {self.optim_status}")
