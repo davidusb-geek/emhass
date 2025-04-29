@@ -10,6 +10,7 @@
 - Fixing Missing files in python package issue (@pail23)
 - Fixed improper handling of home assistant API errors (@Gruek)
 - Remove an extraneous comma in the pd.to_datetime() method call in retrieve_hass.py (@GeoDerp)
+- Fixed the SettingWithCopyWarning Pandas problem and PV sensor handling when set_use_adjusted_pv is false (@paulhomes)
 
 ## 0.13.1 - 2025-04-21
 ### Improvement
