@@ -71,6 +71,7 @@ package-data = { "emhass" = [
 
 [tool.hatch.build.targets.sdist]
 include = [
+    "src/emhass/*.py",
     "src/emhass/templates/",
     "src/emhass/static/",
     "src/emhass/img/",
