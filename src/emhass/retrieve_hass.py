@@ -147,6 +147,8 @@ class RetrieveHass:
             "Authorization": "Bearer " + self.long_lived_token,
             "content-type": "application/json",
         }
+        # Remove empty strings from var_list
+        var_list = [var for var in var_list if var != ""]
         # Looping on each day from days list
         self.df_final = pd.DataFrame()
         x = 0  # iterate based on days
@@ -202,7 +204,8 @@ class RetrieveHass:
                         )
                         return False
                     if response.status_code > 299:
-                        return f"Request Get Error: {response.status_code}"
+                        self.logger.error(f"Home assistant request GET error: {response.status_code} for var {var}")
+                        return False
                 """import bz2 # Uncomment to save a serialized data for tests
                 import _pickle as cPickle
                 with bz2.BZ2File("data/test_response_get_data_get_method.pbz2", "w") as f:
