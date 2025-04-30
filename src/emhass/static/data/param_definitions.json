@@ -122,13 +122,14 @@
     },
     "lp_solver": {
       "friendly_name": "Linear programming solver",
-      "Description": "Set the name of the linear programming solver that will be used. Defaults to ‘COIN_CMD’. The options are ‘PULP_CBC_CMD’, ‘GLPK_CMD’ and ‘COIN_CMD’.",
+      "Description": "Set the name of the linear programming solver that will be used. Defaults to ‘COIN_CMD’. The options are ‘PULP_CBC_CMD’, ‘GLPK_CMD’, ‘HiGHS’, and ‘COIN_CMD’.",
       "input": "select",
       "select_options": [
         "default",
         "COIN_CMD",
         "PULP_CBC_CMD",
-        "GLPK_CMD"
+        "GLPK_CMD",
+        "HiGHS"
       ],
       "default_value": "COIN_CMD"
     },
@@ -137,6 +138,12 @@
       "Description": "Set the path to the LP solver. Defaults to ‘/usr/bin/cbc’.",
       "input": "text",
       "default_value": "/usr/bin/cbc"
+    },
+    "num_threads": {
+      "friendly_name": "Number of threads to use for the LP solver",
+      "Description": "Set the number of threads for the LP solver to use, when supported by the solver. Defaults to 0 (autodetect)",
+      "input": "int",
+      "default_value": 0
     },
     "lp_solver_timeout": {
       "friendly_name": "Linear programming solver timeout",
