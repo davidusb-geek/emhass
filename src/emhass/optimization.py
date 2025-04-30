@@ -10,7 +10,6 @@ from math import ceil
 import numpy as np
 import pandas as pd
 import pulp as plp
-import highspy
 from pulp import COIN_CMD, GLPK_CMD, HiGHS, PULP_CBC_CMD
 
 
