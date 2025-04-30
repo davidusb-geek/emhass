@@ -102,14 +102,14 @@ class RetrieveHass:
         try:
             response_config = get(url, headers=headers)
         except Exception:
-            self.logger.error("Unable to access Home Assistance instance, check URL")
+            self.logger.error("Unable to access Home Assistant instance, check URL")
             self.logger.error("If using addon, try setting url and token to 'empty'")
             return False
 
         try:
             self.ha_config = response_config.json()
         except Exception:
-            self.logger.error("EMHASS was unable to obtain configuration data from HA")
+            self.logger.error("EMHASS was unable to obtain configuration data from Home Assistant")
             return False
 
     def get_data(
@@ -188,7 +188,7 @@ class RetrieveHass:
                     response = get(url, headers=headers)
                 except Exception:
                     self.logger.error(
-                        "Unable to access Home Assistance instance, check URL"
+                        "Unable to access Home Assistant instance, check URL"
                     )
                     self.logger.error(
                         "If using addon, try setting url and token to 'empty'"
@@ -197,7 +197,7 @@ class RetrieveHass:
                 else:
                     if response.status_code == 401:
                         self.logger.error(
-                            "Unable to access Home Assistance instance, TOKEN/KEY"
+                            "Unable to access Home Assistant instance, TOKEN/KEY"
                         )
                         self.logger.error(
                             "If using addon, try setting url and token to 'empty'"
@@ -217,7 +217,7 @@ class RetrieveHass:
                         self.logger.error(
                             "The retrieved JSON is empty, A sensor:"
                             + var
-                            + " may have 0 days of history, passed sensor may not be correct, or days to retrieve is set too heigh"
+                            + " may have 0 days of history, passed sensor may not be correct, or days to retrieve is set too high. Check your Logger configuration, ensuring the sensors are in the include list."
                         )
                     else:
                         self.logger.error(
