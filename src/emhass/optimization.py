@@ -10,7 +10,7 @@ from math import ceil
 import numpy as np
 import pandas as pd
 import pulp as plp
-from pulp import COIN_CMD, GLPK_CMD, HiGHS, PULP_CBC_CMD
+from pulp import COIN_CMD, GLPK_CMD, PULP_CBC_CMD, HiGHS
 
 
 class Optimization:
@@ -90,11 +90,11 @@ class Optimization:
         self.optim_status = None
         if "num_threads" in optim_conf.keys():
             if optim_conf["num_threads"] == 0:
-                self.num_threads = str(os.cpu_count())
+                self.num_threads = int(os.cpu_count())
             else:
-                self.num_threads = str(optim_conf["num_threads"])
+                self.num_threads = int(optim_conf["num_threads"])
         else:
-            self.num_threads = str(os.cpu_count())
+            self.num_threads = int(os.cpu_count())
         if "lp_solver" in optim_conf.keys():
             self.lp_solver = optim_conf["lp_solver"]
         else:
