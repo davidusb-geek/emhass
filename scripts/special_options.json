@@ -9,6 +9,8 @@
   "set_total_pv_sell": true,                                                                                                                                                                                    
   "lp_solver": "default",                                                                                                                                                                                       
   "lp_solver_path": "empty",                                                                                                                                                                              
+  "num_threads": 0,
+
   "set_nocharge_from_grid": false,                                                                                                                                                                               
   "set_nodischarge_to_grid": false,
   "set_battery_dynamic": false,

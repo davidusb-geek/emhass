@@ -3,13 +3,15 @@
 import bz2
 import copy
 import logging
+import os
 import pickle as cPickle
 from math import ceil
 
 import numpy as np
 import pandas as pd
 import pulp as plp
-from pulp import COIN_CMD, GLPK_CMD, PULP_CBC_CMD
+import highspy
+from pulp import COIN_CMD, GLPK_CMD, HiGHS, PULP_CBC_CMD
 
 
 class Optimization:
@@ -87,6 +89,13 @@ class Optimization:
         self.var_load_cost = var_load_cost
         self.var_prod_price = var_prod_price
         self.optim_status = None
+        if "num_threads" in optim_conf.keys():
+            if optim_conf["num_threads"] == 0:
+                self.num_threads = str(os.cpu_count())
+            else:
+                self.num_threads = str(optim_conf["num_threads"])
+        else:
+            self.num_threads = str(os.cpu_count())
         if "lp_solver" in optim_conf.keys():
             self.lp_solver = optim_conf["lp_solver"]
         else:
@@ -110,6 +119,7 @@ class Optimization:
         self.logger.debug(f"Optimization configuration: {optim_conf}")
         self.logger.debug(f"Plant configuration: {plant_conf}")
         self.logger.debug(f"Solver configuration: lp_solver={self.lp_solver}, lp_solver_path={self.lp_solver_path}")
+        self.logger.debug(f"Number of threads: {self.num_threads}")
 
     def perform_optimization(
         self,
@@ -1135,16 +1145,18 @@ class Optimization:
         timeout = self.optim_conf["lp_solver_timeout"]
         # solving with default solver CBC
         if self.lp_solver == "PULP_CBC_CMD":
-            opt_model.solve(PULP_CBC_CMD(msg=0, timeLimit=timeout, threads=7))
+            opt_model.solve(PULP_CBC_CMD(msg=0, timeLimit=timeout, threads=self.num_threads))
         elif self.lp_solver == "GLPK_CMD":
-            opt_model.solve(GLPK_CMD(msg=0, timeLimit=timeout, threads=7))
+            opt_model.solve(GLPK_CMD(msg=0, timeLimit=timeout))
+        elif self.lp_solver == "HiGHS":
+            opt_model.solve(HiGHS(msg=0, timeLimit=timeout))
         elif self.lp_solver == "COIN_CMD":
             opt_model.solve(
-                COIN_CMD(msg=0, path=self.lp_solver_path, timeLimit=timeout, threads=7)
+                COIN_CMD(msg=0, path=self.lp_solver_path, timeLimit=timeout, threads=self.num_threads)
             )
         else:
             self.logger.warning("Solver %s unknown, using default", self.lp_solver)
-            opt_model.solve(PULP_CBC_CMD(msg=0, timeLimit=timeout, threads=7))
+            opt_model.solve(PULP_CBC_CMD(msg=0, timeLimit=timeout, threads=self.num_threads))
 
         # The status of the solution is printed to the screen
         self.optim_status = plp.LpStatus[opt_model.status]
