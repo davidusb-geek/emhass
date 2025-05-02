@@ -37,7 +37,9 @@ RUN apt-get update \
     libhdf5-serial-dev \
     # cbc
     coinor-cbc \
-    coinor-libcbc-dev
+    coinor-libcbc-dev \
+    # glpk
+    glpk-utils
 
 # add build packadges (just in case wheel does not exist)
 RUN apt-get update \
