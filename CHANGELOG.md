@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.3 - 2025-05-02
+### Improvement
+- Enhance optimization solver capabilities by adding HiGHS solver, improving thread configuration, and updating solver support across the project (@Crosenhain)
+- Update spelling and extended some error messages to include more troubleshooting information (@kcoffau)
+### Fix
+- Fixed incorrect indentation in a for loop, leaving relevant constraints out of the optimisation (@purcell_lab)
+
 ## 0.13.2 - 2025-04-29
 ### Improvement
 - Improved README and development documentation (@Crosenhain and @gieljnssns)
