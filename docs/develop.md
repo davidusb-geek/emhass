@@ -21,10 +21,10 @@ Here you may also wish to add the add the original/upstream repository as a remo
 A command example may be:
 ```bash
 # on GitHub, Fork url, then:
-git clone https://github.com/<YOURUSERNAME>/emhass.git
+git clone git@github.com:<YOURUSERNAME>/emhass.git
 cd emhass
 # add remote, call it upstream
-git remote add upstream https://github.com/OWNER/REPOSITORY.git
+git remote add upstream https://github.com/davidusb-geek/emhass.git
 ```
 
 ## Step 2 - Develop
@@ -38,37 +38,20 @@ We can use python virtual environments to build, develop and test/unittest the c
 _confirm terminal is in the root `emhass` directory before starting_
 
 **Install requirements**
-```bash
-python3 -m pip install -r requirements.txt #if on ARM, try setting --extra-index-url=https://www.piwheels.org/simple
-```
+
+Install the [`uv` package manager](https://docs.astral.sh/uv/).
 
 **Create a developer environment:**
 
 ```bash
-python3 -m venv .venv
+uv sync
+
+# If on ARM, try adding piwheels as an index.
+uv sync --index=https://www.piwheels.org/simple
 ```
 
-**Activate the environment:**
-
-- linux:
-
-  ```bash
-  source .venv/bin/activate
-  ```
-
-- windows:
-
-  ```cmd
-  .venv\Scripts\activate.bat
-  ```
-
+This installs dependencies and creates a `.venv` virtualenv in the working directory.
 An IDE like VSCode should automatically catch that a new virtual env was created.
-
-**Install the _emhass_ package in editable mode:**
-
-```bash
-python3 -m pip install -e .
-```
 
 **Set paths with environment variables:**
 
@@ -79,6 +62,8 @@ python3 -m pip install -e .
   export SECRETS_PATH="${PWD}/secrets_emhass.yaml" ##optional to test secrets_emhass.yaml
   export DATA_PATH="${PWD}/data/"
   ```
+  Optionally, use [direnv](https://direnv.net/) to have these variables handled for you.
+
 - windows
   ```batch
   set "OPTIONS_PATH=%cd%/options.json"  & ::  optional to test options.json
@@ -93,18 +78,18 @@ _Make sure `secrets_emhass.yaml` has been created and set. Copy `secrets_emhass(
 **Run EMHASS**
 
 ```bash
-python3 src/emhass/web_server.py
+uv run src/emhass/web_server.py
 ```
-or 
+or
 ``` bash
-emhass --action 'dayahead-optim' --config ./config.json --root ./src/emhass --costfun 'profit' --data ./data
+uv run emhass --action 'dayahead-optim' --config ./config.json --root ./src/emhass --costfun 'profit' --data ./data
 ```
 
 **Run unittests**
 
 ```bash
-python3 -m pip install -e '.[test]'
-python3 -m unittest discover -s ./tests -p 'test_*.py'
+uv sync --extra test
+uv run pytest
 ```
 
 ### Method 2: VS-Code Debug and Run via Dev Container
