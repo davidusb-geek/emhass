@@ -1,5 +1,12 @@
 # EMHASS Development
 
+When contributing to this repository, please first discuss the change you wish to make via issue,
+email, or any other method with the owners of this repository before making a change.
+
+Please note we have a code of conduct, please follow it in all your interactions with the project.
+
+# Setup
+
 There are multiple different approaches to developing for EMHASS.  
 The choice depends on your and preference (Python venv/DevContainer/Docker).  
 Below are some development workflow examples:  
