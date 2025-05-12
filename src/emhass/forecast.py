@@ -218,7 +218,7 @@ class Forecast:
     def get_cached_open_meteo_forecast_json(
         self,
         max_age: int | None = 30,
-        forecast_days: int | None = 2
+        forecast_days: int = 3
     ) -> dict:
         r"""
         Get weather forecast json from Open-Meteo and cache it for re-use.
@@ -244,6 +244,17 @@ class Forecast:
         :rtype: dict
 
         """
+
+        # Ensure at least 3 weather forecast days (and 1 more than requested)
+        if forecast_days is None:
+            self.logger.warning("Open-Meteo forecast_days is missing so defaulting to 3 days")
+            forecast_days = 3
+        elif forecast_days < 3:
+            self.logger.warning("Open-Meteo forecast_days is too low (%s) so defaulting to 3 days", forecast_days)
+            forecast_days = 3
+        else:
+            forecast_days = forecast_days + 1
+
         json_path = os.path.abspath(
             self.emhass_conf["data_path"] / "cached-open-meteo-forecast.json"
         )
@@ -292,7 +303,7 @@ class Forecast:
                 + "shortwave_radiation_instant,"
                 + "diffuse_radiation_instant,"
                 + "direct_normal_irradiance_instant"
-                + "&forecast_days=" + str(forecast_days+1)
+                + "&forecast_days=" + str(forecast_days)
                 + "&timezone="
                 + quote(str(self.time_zone), safe="")
             )
