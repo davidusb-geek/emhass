@@ -409,11 +409,10 @@ def treat_runtimeparams(
             runtimeparams.get("delta_forecast_daily", None) is not None
             or runtimeparams.get("delta_forecast", None) is not None
         ):
-            delta_forecast = int(
-                runtimeparams.get(
-                    "delta_forecast_daily", runtimeparams["delta_forecast"]
-                )
-            )
+            # Use old param name delta_forecast (if provided) for backwards compatibility
+            delta_forecast = runtimeparams.get("delta_forecast", None)
+            # Prefer new param name delta_forecast_daily
+            delta_forecast = int(runtimeparams.get("delta_forecast_daily", delta_forecast))
             params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(
                 days=delta_forecast
             )
