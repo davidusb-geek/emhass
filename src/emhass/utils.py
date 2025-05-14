@@ -604,6 +604,7 @@ def treat_runtimeparams(
                         forecast_input = ast.literal_eval(
                             forecast_input
                         )
+                        runtimeparams[forecast_key] = forecast_input
                 list_non_digits = [
                     x
                     for x in forecast_input
