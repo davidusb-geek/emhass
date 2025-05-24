@@ -37,18 +37,35 @@ We can use python virtual environments to build, develop and test/unittest the c
 
 _confirm terminal is in the root `emhass` directory before starting_
 
-**Install requirements**
-
-Install the [`uv` package manager](https://docs.astral.sh/uv/).
-
 **Create a developer environment:**
 
+Using the [`uv` package manager](https://docs.astral.sh/uv/):
 ```bash
-uv sync
-
+# With the 'test' packages to run unit tests locally.
+uv sync --extra test
 # If on ARM, try adding piwheels as an index.
-uv sync --index=https://www.piwheels.org/simple
+#uv sync --extra test --index=https://www.piwheels.org/simple
 ```
+
+Using virtualenv and pip:
+```bash
+virtualenv .venv
+
+# Then activate the virtualenv, see below...
+
+# With the 'test' packages to run unit tests locally.
+python3 -m pip install -e '.[test]'
+```
+
+To activate the virtualenv, created by either uv or pip:
+- Linux:
+  ```bash
+  source .venv/bin/activate
+  ```
+- windows:
+  ```cmd
+  .venv\Scripts\activate.bat
+  ```
 
 This installs dependencies and creates a `.venv` virtualenv in the working directory.
 An IDE like VSCode should automatically catch that a new virtual env was created.
@@ -76,20 +93,17 @@ An IDE like VSCode should automatically catch that a new virtual env was created
 _Make sure `secrets_emhass.yaml` has been created and set. Copy `secrets_emhass(example).yaml` for an example._
 
 **Run EMHASS**
-
 ```bash
-uv run src/emhass/web_server.py
+python3 ./src/emhass/web_server.py
 ```
 or
 ``` bash
-uv run emhass --action 'dayahead-optim' --config ./config.json --root ./src/emhass --costfun 'profit' --data ./data
+emhass --action 'dayahead-optim' --config ./config.json --root ./src/emhass --costfun 'profit' --data ./data
 ```
 
 **Run unittests**
-
 ```bash
-uv sync --extra test
-uv run pytest
+pytest
 ```
 
 ### Method 2: VS-Code Debug and Run via Dev Container
