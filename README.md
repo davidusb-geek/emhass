@@ -60,6 +60,7 @@
      <img src="https://raw.githubusercontent.com/davidusb-geek/emhass/master/docs/images/EMHASS_Add_on_button.svg" alt="EMHASS Add-on">
   </a>
 </div>
+<br>
 
 EHMASS is a Python module designed to optimize your home energy interfacing with Home Assistant.
 
