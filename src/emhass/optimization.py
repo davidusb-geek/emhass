@@ -114,10 +114,14 @@ class Optimization:
                 "lp_solver=COIN_CMD but lp_solver_path=empty, attempting to use lp_solver_path=/usr/bin/cbc"
             )
             self.lp_solver_path = "/usr/bin/cbc"
-        self.logger.debug(f"Initialized Optimization with retrieve_hass_conf: {retrieve_hass_conf}")
+        self.logger.debug(
+            f"Initialized Optimization with retrieve_hass_conf: {retrieve_hass_conf}"
+        )
         self.logger.debug(f"Optimization configuration: {optim_conf}")
         self.logger.debug(f"Plant configuration: {plant_conf}")
-        self.logger.debug(f"Solver configuration: lp_solver={self.lp_solver}, lp_solver_path={self.lp_solver_path}")
+        self.logger.debug(
+            f"Solver configuration: lp_solver={self.lp_solver}, lp_solver_path={self.lp_solver_path}"
+        )
         self.logger.debug(f"Number of threads: {self.num_threads}")
 
     def perform_optimization(
@@ -187,7 +191,9 @@ class Optimization:
                     soc_final = soc_init
                 else:
                     soc_final = self.plant_conf["battery_target_state_of_charge"]
-            self.logger.debug(f"Battery usage enabled. Initial SOC: {soc_init}, Final SOC: {soc_final}")
+            self.logger.debug(
+                f"Battery usage enabled. Initial SOC: {soc_init}, Final SOC: {soc_final}"
+            )
 
         # If def_total_timestep os set, bypass def_total_hours
         if def_total_timestep is not None:
@@ -205,9 +211,15 @@ class Optimization:
 
         num_deferrable_loads = self.optim_conf["number_of_deferrable_loads"]
 
-        def_total_hours = def_total_hours + [0] * (num_deferrable_loads - len(def_total_hours))
-        def_start_timestep = def_start_timestep + [0] * (num_deferrable_loads - len(def_start_timestep))
-        def_end_timestep = def_end_timestep + [0] * (num_deferrable_loads - len(def_end_timestep))
+        def_total_hours = def_total_hours + [0] * (
+            num_deferrable_loads - len(def_total_hours)
+        )
+        def_start_timestep = def_start_timestep + [0] * (
+            num_deferrable_loads - len(def_start_timestep)
+        )
+        def_end_timestep = def_end_timestep + [0] * (
+            num_deferrable_loads - len(def_end_timestep)
+        )
 
         #### The LP problem using Pulp ####
         opt_model = plp.LpProblem("LP_Model", plp.LpMaximize)
@@ -591,7 +603,9 @@ class Optimization:
             if isinstance(
                 self.optim_conf["nominal_power_of_deferrable_loads"][k], list
             ):
-                self.logger.debug(f"Load {k} is sequence-based. Sequence: {self.optim_conf['nominal_power_of_deferrable_loads'][k]}")
+                self.logger.debug(
+                    f"Load {k} is sequence-based. Sequence: {self.optim_conf['nominal_power_of_deferrable_loads'][k]}"
+                )
                 # Constraint for sequence of deferrable
                 # WARNING: This is experimental, formulation seems correct but feasibility problems.
                 # Probably uncomptabile with other constraints
@@ -609,7 +623,9 @@ class Optimization:
                 y = plp.LpVariable.dicts(
                     f"y{k}", (i for i in range(len(matrix))), cat="Binary"
                 )
-                self.logger.debug(f"Load {k}: Created binary variables for sequence placement: y = {list(y.keys())}")
+                self.logger.debug(
+                    f"Load {k}: Created binary variables for sequence placement: y = {list(y.keys())}"
+                )
                 constraints.update(
                     {
                         f"single_value_constraint_{k}": plp.LpConstraint(
@@ -664,12 +680,16 @@ class Optimization:
                     cooling_constant = hc["cooling_constant"]
                     heating_rate = hc["heating_rate"]
                     overshoot_temperature = hc["overshoot_temperature"]
-                    outdoor_temperature_forecast = data_opt["outdoor_temperature_forecast"]
+                    outdoor_temperature_forecast = data_opt[
+                        "outdoor_temperature_forecast"
+                    ]
                     desired_temperatures = hc["desired_temperatures"]
                     sense = hc.get("sense", "heat")
                     sense_coeff = 1 if sense == "heat" else -1
 
-                    self.logger.debug(f"Load {k}: Thermal parameters: start_temperature={start_temperature}, cooling_constant={cooling_constant}, heating_rate={heating_rate}, overshoot_temperature={overshoot_temperature}")
+                    self.logger.debug(
+                        f"Load {k}: Thermal parameters: start_temperature={start_temperature}, cooling_constant={cooling_constant}, heating_rate={heating_rate}, overshoot_temperature={overshoot_temperature}"
+                    )
 
                     predicted_temp = [start_temperature]
                     for Id in set_I:
@@ -682,7 +702,9 @@ class Optimization:
                                 * (
                                     heating_rate
                                     * self.timeStep
-                                    / self.optim_conf["nominal_power_of_deferrable_loads"][k]
+                                    / self.optim_conf[
+                                        "nominal_power_of_deferrable_loads"
+                                    ][k]
                                 )
                             )
                             - (
@@ -694,9 +716,7 @@ class Optimization:
                             )
                         )
 
-                        is_overshoot = plp.LpVariable(
-                            f"defload_{k}_overshoot_{Id}"
-                        )
+                        is_overshoot = plp.LpVariable(f"defload_{k}_overshoot_{Id}")
                         constraints.update(
                             {
                                 f"constraint_defload{k}_overshoot_{Id}_1": plp.LpConstraint(
@@ -732,9 +752,10 @@ class Optimization:
                                     "penalty_factor must be positive, otherwise the problem will become unsolvable"
                                 )
                             penalty_value = (
-                                predicted_temp[Id]
-                                - desired_temperatures[Id]
-                            ) * penalty_factor * sense_coeff
+                                (predicted_temp[Id] - desired_temperatures[Id])
+                                * penalty_factor
+                                * sense_coeff
+                            )
                             penalty_var = plp.LpVariable(
                                 f"defload_{k}_thermal_penalty_{Id}",
                                 cat="Continuous",
@@ -755,13 +776,14 @@ class Optimization:
                     self.logger.debug(f"Load {k}: Thermal constraints set.")
 
             # --- Standard/non-thermal deferrable load logic comes after thermal ---
-            elif (
-                (def_total_timestep and def_total_timestep[k] > 0)
-                or (len(def_total_hours) > k and def_total_hours[k] > 0)):
-
+            elif (def_total_timestep and def_total_timestep[k] > 0) or (
+                len(def_total_hours) > k and def_total_hours[k] > 0
+            ):
                 self.logger.debug(f"Load {k} is standard/non-thermal.")
                 if def_total_timestep and def_total_timestep[k] > 0:
-                    self.logger.debug(f"Load {k}: Using total timesteps constraint: {def_total_timestep[k]}")
+                    self.logger.debug(
+                        f"Load {k}: Using total timesteps constraint: {def_total_timestep[k]}"
+                    )
                     constraints.update(
                         {
                             f"constraint_defload{k}_energy": plp.LpConstraint(
@@ -770,12 +792,16 @@ class Optimization:
                                 ),
                                 sense=plp.LpConstraintEQ,
                                 rhs=(self.timeStep * def_total_timestep[k])
-                                * self.optim_conf["nominal_power_of_deferrable_loads"][k],
+                                * self.optim_conf["nominal_power_of_deferrable_loads"][
+                                    k
+                                ],
                             )
                         }
                     )
                 else:
-                    self.logger.debug(f"Load {k}: Using total hours constraint: {def_total_hours[k]}")
+                    self.logger.debug(
+                        f"Load {k}: Using total hours constraint: {def_total_hours[k]}"
+                    )
                     constraints.update(
                         {
                             f"constraint_defload{k}_energy": plp.LpConstraint(
@@ -784,12 +810,13 @@ class Optimization:
                                 ),
                                 sense=plp.LpConstraintEQ,
                                 rhs=def_total_hours[k]
-                                * self.optim_conf["nominal_power_of_deferrable_loads"][k],
+                                * self.optim_conf["nominal_power_of_deferrable_loads"][
+                                    k
+                                ],
                             )
                         }
                     )
                 self.logger.debug(f"Load {k}: Standard load constraints set.")
-
 
             # Ensure deferrable loads consume energy between def_start_timestep & def_end_timestep
             self.logger.debug(
@@ -1142,18 +1169,27 @@ class Optimization:
         timeout = self.optim_conf["lp_solver_timeout"]
         # solving with default solver CBC
         if self.lp_solver == "PULP_CBC_CMD":
-            opt_model.solve(PULP_CBC_CMD(msg=0, timeLimit=timeout, threads=self.num_threads))
+            opt_model.solve(
+                PULP_CBC_CMD(msg=0, timeLimit=timeout, threads=self.num_threads)
+            )
         elif self.lp_solver == "GLPK_CMD":
             opt_model.solve(GLPK_CMD(msg=0, timeLimit=timeout))
         elif self.lp_solver == "HiGHS":
             opt_model.solve(HiGHS(msg=0, timeLimit=timeout))
         elif self.lp_solver == "COIN_CMD":
             opt_model.solve(
-                COIN_CMD(msg=0, path=self.lp_solver_path, timeLimit=timeout, threads=self.num_threads)
+                COIN_CMD(
+                    msg=0,
+                    path=self.lp_solver_path,
+                    timeLimit=timeout,
+                    threads=self.num_threads,
+                )
             )
         else:
             self.logger.warning("Solver %s unknown, using default", self.lp_solver)
-            opt_model.solve(PULP_CBC_CMD(msg=0, timeLimit=timeout, threads=self.num_threads))
+            opt_model.solve(
+                PULP_CBC_CMD(msg=0, timeLimit=timeout, threads=self.num_threads)
+            )
 
         # The status of the solution is printed to the screen
         self.optim_status = plp.LpStatus[opt_model.status]
@@ -1317,7 +1353,9 @@ class Optimization:
 
         # Battery initialization logging
         if self.optim_conf["set_use_battery"]:
-            self.logger.debug(f"Battery usage enabled. Initial SOC: {soc_init}, Final SOC: {soc_final}")
+            self.logger.debug(
+                f"Battery usage enabled. Initial SOC: {soc_init}, Final SOC: {soc_final}"
+            )
 
         # Deferrable load initialization logging
         self.logger.debug(f"Deferrable load operating hours: {def_total_hours}")
