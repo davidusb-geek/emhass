@@ -257,11 +257,21 @@ Additional optimization strategies were developed later, that can be used in com
 
 ### Dayahead Optimization - Method 1) Add-on and docker standalone
 
-In `configuration.yaml`:
+We can use the `shell_command` integration in `configuration.yaml`:
 ```yaml
 shell_command:
   dayahead_optim: "curl -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/dayahead-optim"
   publish_data: "curl -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/publish-data"
+```
+An alternative that will be useful when passing data at runtime (see dedicated section), we can use the the `rest_command` instead:
+```yaml
+rest_command:
+  url: http://127.0.0.1:5000/action/dayahead-optim
+  method: POST
+  headers:
+    content-type: application/json
+  payload: >-
+    {}
 ```
 ### Dayahead Optimization - Method 2) Legacy method using a Python virtual environment
 
@@ -325,8 +335,8 @@ In `automations.yaml`:
 ```
 in configuration page/`config.json` 
 ```json
-'method_ts_round': "first"
-'continual_publish': true
+"method_ts_round": "first"
+"continual_publish": true
 ```
 In this automation, the day-ahead optimization is performed once a day, every day at 5:30am. 
 If the `optimization_time_step` parameter is set to `30` *(default)* in the configuration, the results of the day-ahead optimization will generate 48 values *(for each entity)*, a value for every 30 minutes in a day *(i.e. 24 hrs x 2)*.
@@ -480,7 +490,7 @@ For users who wish to have full control of exactly when they would like to run a
 
 in configuration page/`config.json` :
 ```json
-'continual_publish': false
+"continual_publish": false
 ```
 POST action :
 ```bash
@@ -602,6 +612,25 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 
 *Example with :`operating_hours_of_each_deferrable_load`, `start_timesteps_of_each_deferrable_load`, `end_timesteps_of_each_deferrable_load`.*
 ```bash
 curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"operating_hours_of_each_deferrable_load":[1,3],"start_timesteps_of_each_deferrable_load":[0,3],"end_timesteps_of_each_deferrable_load":[0,6]}' http://localhost:5000/action/naive-mpc-optim
+```
+
+For a more readable option we can use the `rest_command` integration:
+```yaml
+rest_command:
+  url: http://127.0.0.1:5000/action/dayahead-optim
+  method: POST
+  headers:
+    content-type: application/json
+  payload: >-
+    {
+	  "pv_power_forecast": [0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93],
+	  "prediction_horizon":10,
+	  "soc_init":0.5,
+	  "soc_final":0.6,
+	  "operating_hours_of_each_deferrable_load":[1,3],
+	  "start_timesteps_of_each_deferrable_load":[0,3],
+	  "end_timesteps_of_each_deferrable_load":[0,6]
+	}
 ```
 
 ## A machine learning forecaster
