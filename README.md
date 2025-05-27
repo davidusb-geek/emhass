@@ -630,7 +630,7 @@ rest_command:
       "operating_hours_of_each_deferrable_load":[1,3],
       "start_timesteps_of_each_deferrable_load":[0,3],
       "end_timesteps_of_each_deferrable_load":[0,6]
-	}
+    }
 ```
 
 ## A machine learning forecaster
