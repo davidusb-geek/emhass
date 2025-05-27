@@ -623,13 +623,13 @@ rest_command:
     content-type: application/json
   payload: >-
     {
-		"pv_power_forecast": [0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93],
-		"prediction_horizon":10,
-		"soc_init":0.5,
-		"soc_final":0.6,
-		"operating_hours_of_each_deferrable_load":[1,3],
-		"start_timesteps_of_each_deferrable_load":[0,3],
-		"end_timesteps_of_each_deferrable_load":[0,6]
+      "pv_power_forecast": [0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93],
+      "prediction_horizon":10,
+      "soc_init":0.5,
+      "soc_final":0.6,
+      "operating_hours_of_each_deferrable_load":[1,3],
+      "start_timesteps_of_each_deferrable_load":[0,3],
+      "end_timesteps_of_each_deferrable_load":[0,6]
 	}
 ```
 
