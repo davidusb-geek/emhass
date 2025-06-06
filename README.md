@@ -174,18 +174,18 @@ docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v ./
 
 #### Docker, things to note 
 
-- You can create a `config.json` file prior to running emhass. *(obtain a example from: [config_defaults.json](https://github.com/davidusb-geek/emhass/blob/enhass-standalone-addon-merge/src/emhass/data/config_defaults.json)* Alteratively, you can insert your parameters into the configuration page on the EMHASS web server. (for EMHASS to auto create a config.json) With either option, the volume mount `-v ./config.json:/share/config.json` should be applied to make sure your config is stored on the host device. (to be not deleted when the EMHASS container gets removed/image updated)*
+- You can create a `config.json` file prior to running emhass. *(obtain a example from: [config_defaults.json](https://github.com/davidusb-geek/emhass/blob/enhass-standalone-addon-merge/src/emhass/data/config_defaults.json)* Alteratively, you can insert your parameters into the configuration page on the EMHASS web server. (for EMHASS to auto create a config.json) With either option, the volume mount `-v ~/emhass/share:/share` should be applied to make sure your config is stored on the host device. (to be not deleted when the EMHASS container gets removed/image updated)*
 
 - If you wish to keep a local, semi-persistent copy of the EMHASS-generated data, create a local folder on your device, then mount said folder inside the container.  
   ```bash
   #create data folder 
   mkdir -p ~/emhass/data 
-  docker run -it --restart always -p 5000:5000 -e LOCAL_COSTFUN="profit" -v ~/emhass/config.json:/app/config.json -v ~/emhass/data:/data  -v ~/emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
+  docker run -it --restart always -p 5000:5000 -e LOCAL_COSTFUN="profit" -v ~/emhass/share:/share -v ~/emhass/data:/data  -v ~/emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
   ```
     
 - If you wish to set the web_server's homepage optimization diagrams to a timezone other than UTC, set `TZ` environment variable on docker run:
   ```bash
-  docker run -it --restart always -p 5000:5000  -e TZ="Europe/Paris" -v ~/emhass/config.json:/app/config.json -v ~/emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
+  docker run -it --restart always -p 5000:5000  -e TZ="Europe/Paris" -v ~/emhass/share:/share -v ~/emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
   ```  
 ### Method 3) Legacy method using a Python virtual environment *(Legacy CLI)*
 If you wish to run EMHASS optimizations with cli commands. *(no persistent web server session)* you can run EMHASS via the python package alone *(not wrapped in a Docker container)*.
