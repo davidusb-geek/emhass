@@ -120,12 +120,12 @@ def get_forecast_dates(
 
     """
     freq = pd.to_timedelta(freq, "minutes")
-    start_forecast = pd.Timestamp(datetime.now()).replace(
-        hour=0, minute=0, second=0, microsecond=0
+    start_forecast = (
+        pd.Timestamp(datetime.now(), tz=time_zone)
+        .replace(microsecond=0)
+        .floor(freq=freq)
     )
-    end_forecast = (start_forecast + pd.Timedelta(days=delta_forecast)).replace(
-        microsecond=0
-    )
+    end_forecast = start_forecast + pd.Timedelta(days=delta_forecast)
     forecast_dates = (
         pd.date_range(
             start=start_forecast,
@@ -409,11 +409,23 @@ def treat_runtimeparams(
             runtimeparams.get("delta_forecast_daily", None) is not None
             or runtimeparams.get("delta_forecast", None) is not None
         ):
-            delta_forecast = int(
-                runtimeparams.get(
-                    "delta_forecast_daily", runtimeparams["delta_forecast"]
-                )
-            )
+            # Use old param name delta_forecast (if provided) for backwards compatibility
+            delta_forecast = runtimeparams.get("delta_forecast", None)
+            # Prefer new param name delta_forecast_daily
+            delta_forecast = runtimeparams.get("delta_forecast_daily", delta_forecast)
+            # Ensure delta_forecast is numeric and at least 1 day
+            if delta_forecast is None:
+                logger.warning("delta_forecast_daily is missing so defaulting to 1 day")
+                delta_forecast = 1
+            else:
+                try:
+                    delta_forecast = int(delta_forecast)
+                except ValueError:
+                    logger.warning("Invalid delta_forecast_daily value (%s) so defaulting to 1 day", delta_forecast)
+                    delta_forecast = 1
+            if delta_forecast <= 0:
+                logger.warning("delta_forecast_daily is too low (%s) so defaulting to 1 day", delta_forecast)
+                delta_forecast = 1
             params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(
                 days=delta_forecast
             )
@@ -574,27 +586,40 @@ def treat_runtimeparams(
         # Loop forecasts, check if value is a list and greater than or equal to forecast_dates
         for method, forecast_key in enumerate(list_forecast_key):
             if forecast_key in runtimeparams.keys():
-                if isinstance(runtimeparams[forecast_key], list) and len(
-                    runtimeparams[forecast_key]
-                ) >= len(forecast_dates):
-                    params["passed_data"][forecast_key] = runtimeparams[forecast_key]
+                forecast_input = runtimeparams[forecast_key]
+                if isinstance(forecast_input, dict):
+                    forecast_data_df = pd.DataFrame.from_dict(forecast_input, orient="index").reset_index()
+                    forecast_data_df.columns = ["time", "value"]
+                    forecast_data_df['time'] = pd.to_datetime(forecast_data_df['time'], format='ISO8601', utc=True).dt.tz_convert(time_zone)
+
+                    # align index with forecast_dates
+                    forecast_data_df = (forecast_data_df
+                        .resample(pd.to_timedelta(optimization_time_step, "minutes"), on='time')
+                        .aggregate({'value': 'mean'})
+                        .reindex(forecast_dates, method='nearest')
+                    )
+                    forecast_data_df['value'] = forecast_data_df['value'].ffill().bfill()
+                    forecast_input = forecast_data_df['value'].tolist()
+                if isinstance(forecast_input, list) and len(forecast_input) >= len(forecast_dates):
+                    params["passed_data"][forecast_key] = forecast_input
                     params["optim_conf"][forecast_methods[method]] = "list"
                 else:
                     logger.error(
-                        f"ERROR: The passed data is either not a list or the length is not correct, length should be {str(len(forecast_dates))}"
+                        f"ERROR: The passed data is either the wrong type or the length is not correct, length should be {str(len(forecast_dates))}"
                     )
                     logger.error(
                         f"Passed type is {str(type(runtimeparams[forecast_key]))} and length is {str(len(runtimeparams[forecast_key]))}"
                     )
                 # Check if string contains list, if so extract
-                if isinstance(runtimeparams[forecast_key], str):
-                    if isinstance(ast.literal_eval(runtimeparams[forecast_key]), list):
-                        runtimeparams[forecast_key] = ast.literal_eval(
-                            runtimeparams[forecast_key]
+                if isinstance(forecast_input, str):
+                    if isinstance(ast.literal_eval(forecast_input), list):
+                        forecast_input = ast.literal_eval(
+                            forecast_input
                         )
+                        runtimeparams[forecast_key] = forecast_input
                 list_non_digits = [
                     x
-                    for x in runtimeparams[forecast_key]
+                    for x in forecast_input
                     if not (isinstance(x, int) or isinstance(x, float))
                 ]
                 if len(list_non_digits) > 0:
@@ -1720,7 +1745,7 @@ def add_date_features(
 
     # Determine whether to use index or a timestamp column
     if timestamp:
-        df[timestamp] = pd.to_datetime(df[timestamp])
+        df[timestamp] = pd.to_datetime(df[timestamp], utc=True)
         source = df[timestamp].dt
     else:
         if not isinstance(df.index, pd.DatetimeIndex):
