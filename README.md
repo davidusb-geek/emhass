@@ -62,16 +62,9 @@
 </div>
 
 <br>
-<p align="center">
-If you like this work please consider buying a coffee ;-) 
-</p>
-<p align="center">
-  <a href="https://www.buymeacoffee.com/davidusbgeek" target="_blank">
-    <img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy Me A Coffee" style="height: 41px !important;width: 174px !important;box-shadow: 0px 3px 2px 0px rgba(190, 190, 190, 0.5) !important;-webkit-box-shadow: 0px 3px 2px 0px rgba(190, 190, 190, 0.5) !important;" >
-  </a>
-</p>
-
+<p align="left">
 EHMASS is a Python module designed to optimize your home energy interfacing with Home Assistant.
+</p>
 
 ## Introduction
 
@@ -264,11 +257,21 @@ Additional optimization strategies were developed later, that can be used in com
 
 ### Dayahead Optimization - Method 1) Add-on and docker standalone
 
-In `configuration.yaml`:
+We can use the `shell_command` integration in `configuration.yaml`:
 ```yaml
 shell_command:
   dayahead_optim: "curl -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/dayahead-optim"
   publish_data: "curl -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/publish-data"
+```
+An alternative that will be useful when passing data at runtime (see dedicated section), we can use the the `rest_command` instead:
+```yaml
+rest_command:
+  url: http://127.0.0.1:5000/action/dayahead-optim
+  method: POST
+  headers:
+    content-type: application/json
+  payload: >-
+    {}
 ```
 ### Dayahead Optimization - Method 2) Legacy method using a Python virtual environment
 
@@ -332,8 +335,8 @@ In `automations.yaml`:
 ```
 in configuration page/`config.json` 
 ```json
-'method_ts_round': "first"
-'continual_publish': true
+"method_ts_round": "first"
+"continual_publish": true
 ```
 In this automation, the day-ahead optimization is performed once a day, every day at 5:30am. 
 If the `optimization_time_step` parameter is set to `30` *(default)* in the configuration, the results of the day-ahead optimization will generate 48 values *(for each entity)*, a value for every 30 minutes in a day *(i.e. 24 hrs x 2)*.
@@ -410,7 +413,7 @@ Below you can find a list of the variables resulting from EMHASS computation, sh
 | P_grid_pos | Forecasted power imported from the grid (Watts). This indicates the amount of energy you are expected to draw from the grid when your solar production is insufficient to meet your needs or it is advantageous to consume from the grid. | - |
 | P_grid_neg | Forecasted power exported to the grid (Watts). This indicates the amount of excess solar energy you are expected to send back to the grid during the forecast period. | - |
 | P_batt | Forecasted (dis)charge power load (Watts) for the battery (if installed). If negative it indicates the battery is charging, if positive that the battery is discharging. | sensor.p_batt_forecast |
-| P_grid | Forecasted net power flow between your home and the grid (Watts). This is calculated as P_grid_pos - P_grid_neg. A positive value indicates net export, while a negative value indicates net import. | sensor.p_grid_forecast |
+| P_grid | Forecasted net power flow between your home and the grid (Watts). This is calculated as P_grid_pos + P_grid_neg. A positive value indicates net import, while a negative value indicates net export. | sensor.p_grid_forecast |
 | SOC_opt | Forecasted battery optimized Status Of Charge (SOC) percentage level | sensor.soc_batt_forecast |
 | unit_load_cost | Forecasted cost per unit of energy you pay to the grid (typically "Currency"/kWh). This helps you understand the expected energy cost during the forecast period. | sensor.unit_load_cost |
 | unit_prod_price | Forecasted price you receive for selling excess solar energy back to the grid (typically "Currency"/kWh). This helps you understand the potential income from your solar production. | sensor.unit_prod_price |
@@ -487,7 +490,7 @@ For users who wish to have full control of exactly when they would like to run a
 
 in configuration page/`config.json` :
 ```json
-'continual_publish': false
+"continual_publish": false
 ```
 POST action :
 ```bash
@@ -611,6 +614,25 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 
 curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"operating_hours_of_each_deferrable_load":[1,3],"start_timesteps_of_each_deferrable_load":[0,3],"end_timesteps_of_each_deferrable_load":[0,6]}' http://localhost:5000/action/naive-mpc-optim
 ```
 
+For a more readable option we can use the `rest_command` integration:
+```yaml
+rest_command:
+  url: http://127.0.0.1:5000/action/dayahead-optim
+  method: POST
+  headers:
+    content-type: application/json
+  payload: >-
+    {
+      "pv_power_forecast": [0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93],
+      "prediction_horizon":10,
+      "soc_init":0.5,
+      "soc_final":0.6,
+      "operating_hours_of_each_deferrable_load":[1,3],
+      "start_timesteps_of_each_deferrable_load":[0,3],
+      "end_timesteps_of_each_deferrable_load":[0,6]
+    }
+```
+
 ## A machine learning forecaster
 
 Starting in v0.4.0 a new machine learning forecaster class was introduced.
@@ -625,7 +647,7 @@ Pull requests are very much accepted on this project. For development, you can f
 
 Some problems may arise from solver-related issues in the Pulp package. It was found that for arm64 architectures (ie. Raspberry Pi4, 64 bits) the default solver is not available. A workaround is to use another solver. The `glpk` solver is an option.
 
-This can be controlled in the configuration file with parameters `lp_solver` and `lp_solver_path`. The options for `lp_solver` are: 'PULP_CBC_CMD', 'GLPK_CMD' and 'COIN_CMD'. If using 'COIN_CMD' as the solver you will need to provide the correct path to this solver in parameter `lp_solver_path`, ex: '/usr/bin/cbc'.
+This can be controlled in the configuration file with parameters `lp_solver` and `lp_solver_path`. The options for `lp_solver` are: 'PULP_CBC_CMD', 'GLPK_CMD', 'HiGHS', and 'COIN_CMD'. If using 'COIN_CMD' as the solver you will need to provide the correct path to this solver in parameter `lp_solver_path`, ex: '/usr/bin/cbc'.
 
 
 ## License
