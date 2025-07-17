@@ -885,7 +885,7 @@ class Optimization:
                         f"constraint_defload{k}_start_timestep": plp.LpConstraint(
                             e=plp.lpSum(
                                 P_deferrable[k][i] * self.timeStep
-                                for i in range(0, def_start)
+                                for i in range(def_start)
                             ),
                             sense=plp.LpConstraintEQ,
                             rhs=0,
@@ -1369,7 +1369,7 @@ class Optimization:
             opt_tp[f"predicted_temp_heater{i}"] = pd.Series(
                 [
                     round(pt.value(), 2)
-                    if isinstance(pt, plp.LpAffineExpression) and hasattr(pt, 'value') and pt.value() is not None
+                    if isinstance(pt, plp.LpAffineExpression) and hasattr(pt, "value") and pt.value() is not None
                     else (float(pt) if pt is not None else 0.0)
                     for pt in predicted_temp
                 ],

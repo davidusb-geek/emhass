@@ -143,7 +143,7 @@ class Forecast:
         :type get_data_from_file: bool, optional
 
         """
-        print("__init__ - forecast_async.py")
+        # print("__init__ - forecast_async.py")
         self.retrieve_hass_conf = retrieve_hass_conf
         self.optim_conf = optim_conf
         self.plant_conf = plant_conf
@@ -244,7 +244,7 @@ class Forecast:
         :rtype: dict
 
         """
-        print("get_cached_open_meteo_forecast_json - forecast_async.py")
+        # print("get_cached_open_meteo_forecast_json - forecast_async.py")
 
         # Ensure at least 3 weather forecast days (and 1 more than requested)
         if forecast_days is None:
@@ -353,7 +353,7 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        print("get_weather_forecast - forecast_async.py")
+        # print("get_weather_forecast - forecast_async.py")
         csv_path = self.emhass_conf["data_path"] / csv_path
         w_forecast_cache_path = os.path.abspath(
             self.emhass_conf["data_path"] / "weather_forecast_data.pkl"
@@ -636,7 +636,7 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        print("cloud_cover_to_irradiance - forecast_async.py")
+        # print("cloud_cover_to_irradiance - forecast_async.py")
         # Compute solar positions
         if use_legacy_pvlib:
             solar_position = get_solarposition(
@@ -682,7 +682,7 @@ class Forecast:
         :return: The output DataFrame with the corrected values
         :rtype: pd.DataFrame
         """
-        print("get_mix_forecast - forecast_async.py")
+        # print("get_mix_forecast - forecast_async.py")
         first_fcst = alpha * df_forecast.iloc[0] + beta * df_now[col].iloc[-1]
         df_forecast.iloc[0] = int(round(first_fcst))
         return df_forecast
@@ -708,7 +708,7 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        print("get_power_from_weather - forecast_async.py")
+        # print("get_power_from_weather - forecast_async.py")
         # If using csv method we consider that yhat is the PV power in W
         if (
             "solar_forecast_kwp" in self.retrieve_hass_conf.keys()
@@ -807,7 +807,7 @@ class Forecast:
         :param longitude: Longitude of the PV system.
         :return: DataFrame with added solar elevation and azimuth.
         """
-        print("compute_solar_angles - forecast_async.py")
+        # print("compute_solar_angles - forecast_async.py")
         df = df.copy()
         solpos = get_solarposition(df.index, latitude, longitude)
         df["solar_elevation"] = solpos["elevation"]
@@ -826,7 +826,7 @@ class Forecast:
         forecasted PV production data.
         :type data: pd.DataFrame
         """
-        print("adjust_pv_forecast_data_prep - forecast_async.py")
+        # print("adjust_pv_forecast_data_prep - forecast_async.py")
         # Extract target and predictor
         self.logger.debug("adjust_pv_forecast_data_prep using data:\n%s", data)
         if self.logger.isEnabledFor(logging.DEBUG):
@@ -893,7 +893,7 @@ class Forecast:
         :return: A DataFrame containing the adjusted PV forecast.
         :rtype: pd.DataFrame
         """
-        print("adjust_pv_forecast_fit - forecast_async.py")
+        # print("adjust_pv_forecast_fit - forecast_async.py")
         # Get regression model and hyperparameter grid
         mlr = MLRegressor(
             self.data_adjust_pv,
@@ -948,7 +948,7 @@ class Forecast:
         :return: A DataFrame containing the adjusted PV forecast with additional features.
         :rtype: pd.DataFrame
         """
-        print("adjust_pv_forecast_predict - forecast_async.py")
+        # print("adjust_pv_forecast_predict - forecast_async.py")
         # Use the provided forecasted PV data or fall back to the validation data in `self`
         if forecasted_pv is not None:
             # Ensure the input DataFrame has the required structure
@@ -968,7 +968,7 @@ class Forecast:
 
         # Apply solar elevation weighting only for specific cases
         def apply_weighting(row):
-            print("apply_weighting - forecast_async.py")
+            # print("apply_weighting - forecast_async.py")
             if row["solar_elevation"] <= 0:  # Nighttime or negative solar elevation
                 return 0
             elif (
@@ -1018,7 +1018,7 @@ class Forecast:
         :rtype: pd.date_range
 
         """
-        print("get_forecast_days_csv - forecast_async.py")
+        # print("get_forecast_days_csv - forecast_async.py")
         start_forecast_csv = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(
             microsecond=0
         )
@@ -1085,7 +1085,7 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        print("get_forecast_out_from_csv_or_list - forecast_async.py")
+        # print("get_forecast_out_from_csv_or_list - forecast_async.py")
         if csv_path is None:
             data_dict = {"ts": forecast_dates_csv, "yhat": data_list}
             df_csv = pd.DataFrame.from_dict(data_dict)
@@ -1214,7 +1214,7 @@ class Forecast:
         :return: Resampled data at the specified frequency.
         :rtype: pd.DataFrame
         """
-        print("resample_data - forecast_async.py")
+        # print("resample_data - forecast_async.py")
         if freq > current_freq:
             # Downsampling
             # Use 'mean' to aggregate or choose other options ('sum', 'max', etc.)
@@ -1243,7 +1243,7 @@ class Forecast:
                 to calculate the forecast.
         :rtype: tuple (pd.Series, list)
         """
-        print("get_typical_load_forecast - forecast_async.py")
+        # print("get_typical_load_forecast - forecast_async.py")
         # Ensure the 'load' column exists
         if "load" not in data.columns:
             raise ValueError("Data must have a 'load' column.")
@@ -1319,7 +1319,7 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        print("get_load_forecast - forecast_async.py")
+        # print("get_load_forecast - forecast_async.py")
         csv_path = self.emhass_conf["data_path"] / csv_path
 
         if (
@@ -1359,7 +1359,7 @@ class Forecast:
             else:
                 days_list = get_days_list(days_min_load_forecast or 3)
                 if not await rh.get_data(days_list, var_list):
-                    print("Failed to get data")
+                    # print("Failed to get data")
                     return False
             # print(self.retrieve_hass_conf["sensor_power_load_no_var_loads"])
             # print(self.retrieve_hass_conf["load_negative"])
@@ -1559,7 +1559,7 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        print("get_load_cost_forecast - forecast_async.py")
+        # print("get_load_cost_forecast - forecast_async.py")
         csv_path = self.emhass_conf["data_path"] / csv_path
         if method == "hp_hc_periods":
             df_final[self.var_load_cost] = self.optim_conf["load_offpeak_hours_cost"]
@@ -1648,7 +1648,7 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        print("get_prod_price_forecast - forecast_async.py")
+        # print("get_prod_price_forecast - forecast_async.py")
         csv_path = self.emhass_conf["data_path"] / csv_path
         if method == "constant":
             df_final[self.var_prod_price] = self.optim_conf[
@@ -1711,7 +1711,7 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        print("get_cached_forecast_data - forecast_async.py")
+        # print("get_cached_forecast_data - forecast_async.py")
         async with aiofiles.open(w_forecast_cache_path, "rb") as file:
             content = await file.read()
             data = pickle.loads(content)
@@ -1765,7 +1765,7 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        print("set_cached_forecast_data - forecast_async.py")
+        # print("set_cached_forecast_data - forecast_async.py")
         async with aiofiles.open(w_forecast_cache_path, "wb") as file:
             content = pickle.dumps(data)
             await file.write(content)

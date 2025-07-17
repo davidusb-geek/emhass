@@ -118,16 +118,6 @@ class MLForecaster:
         :rtype: Tuple[pd.DataFrame, pd.DataFrame]
         """
         self.logger.info("Performing a forecast model fit for " + self.model_type)
-
-        # Debug information about the input data only if there are issues
-        # if self.data.empty:
-        #     print("DEBUG MLForecaster: self.data is empty!")
-        # elif self.var_model not in self.data.columns:
-        #     print(f"DEBUG MLForecaster: self.data shape: {self.data.shape}")
-        #     print(f"DEBUG MLForecaster: self.data columns: {list(self.data.columns)}")
-        #     print(f"DEBUG MLForecaster: self.var_model: {self.var_model}")
-        #     print(f"DEBUG MLForecaster: var_model in data columns: {self.var_model in self.data.columns}")
-
         # Preparing the data: adding exogenous features
         self.data_exo = pd.DataFrame(index=self.data.index)
         self.data_exo = utils_async.add_date_features(self.data_exo)

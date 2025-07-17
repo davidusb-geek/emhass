@@ -33,73 +33,9 @@ _global_retrieve_hass_ws = None
 
 def set_global_retrieve_hass(retrieve_hass_instance):
     """Set global WebSocket instance from web server."""
-    print("set_global_retrieve_hass - command_line_async.py")
+    # print("set_global_retrieve_hass - command_line_async.py")
     global _global_retrieve_hass_ws
     _global_retrieve_hass_ws = retrieve_hass_instance
-
-# def create_retrieve_hass_instance(
-#     hass_url: str,
-#     long_lived_token: str,
-#     optimization_time_step: int,
-#     time_zone,
-#     params: dict,
-#     emhass_conf: dict,
-#     logger,
-#     get_data_from_file: bool = False,
-# ):
-#     """
-#     Get the global persistent WebSocket RetrieveHass instance if available,
-#     otherwise create a REST API instance.
-
-#     :param hass_url: Home Assistant URL
-#     :param long_lived_token: Long lived token
-#     :param optimization_time_step: Optimization time step
-#     :param time_zone: Time zone
-#     :param params: Parameters dict
-#     :param emhass_conf: EMHASS configuration
-#     :param logger: Logger instance
-#     :param get_data_from_file: Whether to get data from file
-#     :return: RetrieveHass instance
-#     """
-#     print("create_retrieve_hass_instance - command_line_async.py")
-#     logger.debug("Creating fresh WebSocket RetrieveHass instance for current request")
-
-#     # Handle freq conversion - optimization_time_step might already be a Timedelta
-#     if isinstance(optimization_time_step, pd.Timedelta):
-#         freq = optimization_time_step
-#     elif isinstance(optimization_time_step, int | float):
-#         freq = pd.Timedelta(minutes=optimization_time_step)
-#     else:
-#         # Default to 30 minutes if something goes wrong
-#         freq = pd.Timedelta(minutes=30)
-#         logger.warning(f"Invalid optimization_time_step type: {type(optimization_time_step)}, using default 30 minutes")
-
-#     # Handle time_zone conversion if it's a string
-#     if isinstance(time_zone, str):
-#         import pytz
-#         time_zone = pytz.timezone(time_zone)
-#     elif hasattr(time_zone, "zone"):
-#         # Already a timezone object
-#         pass
-#     else:
-#         # Default to UTC if something goes wrong
-#         import datetime
-#         time_zone = datetime.UTC
-
-#     retrieve_hass_instance = RetrieveHass.create_temp_instance(
-#         hass_url=hass_url,
-#         long_lived_token=long_lived_token,
-#         freq=freq,
-#         time_zone=time_zone,
-#         params=orjson.dumps(params).decode() if params else "{}",
-#         emhass_conf=emhass_conf,
-#         logger=logger,
-#         get_data_from_file=get_data_from_file or False,
-#     )
-
-#     return retrieve_hass_instance
-
-
 
 
 async def retrieve_home_assistant_data(
@@ -112,7 +48,7 @@ async def retrieve_home_assistant_data(
     test_df_literal: str,
 ) -> tuple:
     """Retrieve data from Home Assistant or file and prepare it for optimization."""
-    print("retrieve_home_assistant_data - command_line_async.py")
+    # print("retrieve_home_assistant_data - command_line_async.py")
     if get_data_from_file:
         async with aiofiles.open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
             content = await inp.read()
@@ -203,7 +139,7 @@ async def adjust_pv_forecast(
     :return: The adjusted PV forecast as a pandas Series.
     :rtype: pd.Series
     """
-    print("adjust_pv_forecast - command_line_async.py")
+    # print("adjust_pv_forecast - command_line_async.py")
     logger.info("Adjusting PV forecast, retrieving history data for model fit")
     # Retrieve data from Home Assistant
     success, df_input_data, _ = await retrieve_home_assistant_data(
@@ -261,7 +197,7 @@ async def set_input_data_dict(
     :rtype: dict
 
     """
-    print("set_input_data_dict - command_line_async.py")
+    # print("set_input_data_dict - command_line_async.py")
     logger.info("Setting up needed data")
 
     # check if passed params is a dict
@@ -325,7 +261,7 @@ async def set_input_data_dict(
             _, _, _, rh.ha_config = pickle.loads(content)
     else:
         response = await rh.get_ha_config()
-        print(response)
+        # print(response)
 
         if type(response) is bool:
             return {}
@@ -683,7 +619,7 @@ async def weather_forecast_cache(
     :rtype: bool
 
     """
-    print("weather_forecast_cache - command_line_async.py")
+    # print("weather_forecast_cache - command_line_async.py")
     # Parsing yaml
     retrieve_hass_conf, optim_conf, plant_conf = await utils.get_yaml_parse(params, logger)
     # Treat runtimeparams
@@ -736,7 +672,7 @@ async def perfect_forecast_optim(
     :rtype: pd.DataFrame
 
     """
-    print("perfect_forecast_optim - command_line_async.py")
+    # print("perfect_forecast_optim - command_line_async.py")
     logger.info("Performing perfect forecast optimization")
     # Load cost and prod price forecast
     df_input_data = input_data_dict["fcst"].get_load_cost_forecast(
@@ -800,7 +736,7 @@ async def dayahead_forecast_optim(
     :rtype: pd.DataFrame
 
     """
-    print("dayahead_forecast_optim - command_line_async.py")
+    # print("dayahead_forecast_optim - command_line_async.py")
     logger.info("Performing day-ahead forecast optimization")
     # Load cost and prod price forecast
     df_input_data_dayahead = input_data_dict["fcst"].get_load_cost_forecast(
@@ -872,7 +808,7 @@ async def naive_mpc_optim(
     :rtype: pd.DataFrame
 
     """
-    print("naive_mpc_optim - command_line_async.py")
+    # print("naive_mpc_optim - command_line_async.py")
     logger.info("Performing naive MPC optimization")
 
     # Validate input data before proceeding
@@ -980,7 +916,7 @@ async def forecast_model_fit(
     :return: The DataFrame containing the forecast data results without and with backtest and the `mlforecaster` object
     :rtype: Tuple[pd.DataFrame, pd.DataFrame, mlforecaster]
     """
-    print("forecast_model_fit - command_line_async.py")
+    # print("forecast_model_fit - command_line_async.py")
     data = copy.deepcopy(input_data_dict["df_input_data"])
     model_type = input_data_dict["params"]["passed_data"]["model_type"]
     var_model = input_data_dict["params"]["passed_data"]["var_model"]
@@ -1039,7 +975,7 @@ async def forecast_model_predict(
     :return: The DataFrame containing the forecast prediction data
     :rtype: pd.DataFrame
     """
-    print("forecast_model_predict - command_line_async.py")
+    # print("forecast_model_predict - command_line_async.py")
     # Load model
     model_type = input_data_dict["params"]["passed_data"]["model_type"]
     filename = model_type + default_pkl_suffix
@@ -1135,7 +1071,7 @@ async def forecast_model_tune(
     :return: The DataFrame containing the forecast data results using the optimized model
     :rtype: pd.DataFrame
     """
-    print("forecast_model_tune - command_line_async.py")
+    # print("forecast_model_tune - command_line_async.py")
     # Load model
     model_type = input_data_dict["params"]["passed_data"]["model_type"]
     filename = model_type + default_pkl_suffix
@@ -1177,7 +1113,7 @@ async def regressor_model_fit(
     :param debug: True to debug, useful for unit testing, defaults to False
     :type debug: Optional[bool], optional
     """
-    print("regressor_model_fit - command_line_async.py")
+    # print("regressor_model_fit - command_line_async.py")
     data = copy.deepcopy(input_data_dict["df_input_data"])
     if "model_type" in input_data_dict["params"]["passed_data"]:
         model_type = input_data_dict["params"]["passed_data"]["model_type"]
@@ -1241,7 +1177,7 @@ async def regressor_model_predict(
     :param debug: True to debug, useful for unit testing, defaults to False
     :type debug: Optional[bool], optional
     """
-    print("regressor_model_predict - command_line_async.py")
+    # print("regressor_model_predict - command_line_async.py")
     if "model_type" in input_data_dict["params"]["passed_data"]:
         model_type = input_data_dict["params"]["passed_data"]["model_type"]
     else:
@@ -1318,7 +1254,7 @@ async def publish_data(
     :type dont_post: bool, optional
 
     """
-    print("publish_data - command_line_async.py")
+    # print("publish_data - command_line_async.py")
     logger.info("Publishing data to HASS instance")
     if input_data_dict:
         if not isinstance(input_data_dict.get("params", {}), dict):
@@ -1653,7 +1589,7 @@ async def continual_publish(
     :type logger: logging.Logger
 
     """
-    print("continual_publish - command_line_async.py")
+    # print("continual_publish - command_line_async.py")
     logger.info("Continual publish thread service started")
     freq = input_data_dict["retrieve_hass_conf"].get(
         "optimization_time_step", pd.to_timedelta(1, "minutes")
@@ -1721,7 +1657,7 @@ async def publish_json(
     :type reference: str, optional
 
     """
-    print("publish_json - command_line_async.py")
+    # print("publish_json - command_line_async.py")
     # Retrieve entity metadata from file
     if os.path.isfile(entity_path / default_metadata_json):
         async with aiofiles.open(entity_path / default_metadata_json) as file:
@@ -1798,7 +1734,7 @@ async def main():
     - debug: Use True for testing purposes
 
     """
-    print("main - command_line_async.py")
+    # print("main - command_line_async.py")
     # Parsing arguments
     parser = argparse.ArgumentParser()
     parser.add_argument(

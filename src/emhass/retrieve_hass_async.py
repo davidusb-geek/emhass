@@ -41,7 +41,7 @@ class RetrieveHass:
         get_data_from_file: bool = False,
         # auto_cleanup: bool = True,
     ):
-        print("RetrieveHass.__init__ - retrieve_hass_async")
+        # print("RetrieveHass.__init__ - retrieve_hass_async")
         self.hass_url = hass_url
         self.long_lived_token = long_lived_token
         self.freq = freq
@@ -63,10 +63,10 @@ class RetrieveHass:
 
     async def get_ha_config(self) -> Dict[str, Any]:
         """Get Home Assistant configuration."""
-        print("RetrieveHass.get_ha_config - retrieve_hass_async")
+        # print("RetrieveHass.get_ha_config - retrieve_hass_async")
         # global websocket
         try:
-            print("get_ha_config_try")
+            # print("get_ha_config_try")
             self._client = await get_websocket_client(self.hass_url, self.long_lived_token)
         except Exception as e:
             self.logger.error(f"Fout bij connectie opzetten: {e}")
@@ -88,7 +88,7 @@ class RetrieveHass:
         This method maintains compatibility with the original EMHASS interface
         while using the new WebSocket implementation.
         """
-        print("RetrieveHass.get_data - retrieve_hass_async")
+        # print("RetrieveHass.get_data - retrieve_hass_async")
         t0 = time.time()
         # if not self._client:
         #     try:
@@ -153,40 +153,7 @@ class RetrieveHass:
 
         except Exception as e:
             self.logger.error(f"Failed to get data via WebSocket: {e}")
-            # # Try fallback to history data
-            # try:
-            #     self.logger.info("Falling back to history data...")
-            #     history_data = await self._client.get_history(
-            #         start_time=start_time,
-            #         end_time=end_time,
-            #         entity_ids=var_list,
-            #         minimal_response=True,
-            #         no_attributes=True
-            #     )
 
-            #     # Convert history format to list format for compatibility
-            #     if isinstance(history_data, dict):
-            #         converted_data = []
-            #         for entity_id in var_list:
-            #             if entity_id in history_data:
-            #                 entity_states = history_data[entity_id]
-            #                 # Add entity_id to each state for compatibility
-            #                 for state in entity_states:
-            #                     state['entity_id'] = entity_id
-            #                 converted_data.append(entity_states)
-            #             else:
-            #                 converted_data.append([])
-            #         self.df_final = self._convert_history_to_dataframe(converted_data, var_list)
-            #     else:
-            # #         self.df_final = self._convert_history_to_dataframe(history_data, var_list)
-
-            #     t1 = time.time()
-            #     total = t1 - t0
-            #     print(total)
-            #     return not self.df_final.empty
-            # except Exception as history_e:
-            #     self.logger.error(f"History fallback also failed: {history_e}")
-            #     return False
 
     async def get_statistics_data(
         self,
@@ -195,7 +162,7 @@ class RetrieveHass:
         period: str = "hour"
     ) -> pd.DataFrame:
         """Get statistical data for entities."""
-        print("RetrieveHass.get_statistics_data - retrieve_hass_async")
+        # print("RetrieveHass.get_statistics_data - retrieve_hass_async")
         t0 = time.time()
         if not self._client:
             try:
@@ -224,7 +191,7 @@ class RetrieveHass:
         Retrieve data using Home Assistant statistics API for older data.
         Compatibility method for original interface.
         """
-        print("RetrieveHass._get_statistics_data - retrieve_hass_async")
+        # print("RetrieveHass._get_statistics_data - retrieve_hass_async")
         try:
             df_stats = await self.get_statistics_data(days_list, var_list)
             if not df_stats.empty:
@@ -247,7 +214,7 @@ class RetrieveHass:
         Prepare data for optimization.
         Compatibility method for original interface.
         """
-        print("RetrieveHass.prepare_data - retrieve_hass_async")
+        # print("RetrieveHass.prepare_data - retrieve_hass_async")
         try:
             if load_negative:  # Apply the correct sign to load power
                 self.df_final[var_load + "_positive"] = -self.df_final[var_load]
@@ -348,7 +315,7 @@ class RetrieveHass:
         list_name: str,
         state: float,
     ) -> dict:
-        print("RetrieveHass.get_attr_data_dict - retrieve_hass_async")
+        # print("RetrieveHass.get_attr_data_dict - retrieve_hass_async")
         list_df = copy.deepcopy(data_df).loc[data_df.index[idx] :].reset_index()
         list_df.columns = ["timestamps", entity_id]
         ts_list = [str(i) for i in list_df["timestamps"].tolist()]
@@ -414,7 +381,7 @@ class RetrieveHass:
         :type dont_post: bool, optional
 
         """
-        print("RetrieveHass.post_data - retrieve_hass_async")
+        # print("RetrieveHass.post_data - retrieve_hass_async")
         # Add a possible prefix to the entity ID
         entity_id = entity_id.replace("sensor.", "sensor." + publish_prefix)
         # Set the URL
@@ -636,7 +603,7 @@ class RetrieveHass:
 
     def _load_data_from_file(self) -> pd.DataFrame:
         """Load data from pickle file (unchanged from original)."""
-        print("RetrieveHass._load_data_from_file retrieve_hass_async")
+        # print("RetrieveHass._load_data_from_file retrieve_hass_async")
         import pickle
         from pathlib import Path
 
@@ -657,7 +624,7 @@ class RetrieveHass:
         var_list: List[str]
     ) -> pd.DataFrame:
         """Convert WebSocket history data to DataFrame."""
-        print("RetrieveHass._convert_history_to_dataframe retrieve_hass_async")
+        # print("RetrieveHass._convert_history_to_dataframe retrieve_hass_async")
         import pandas as pd
         import numpy as np
         from datetime import datetime
@@ -770,7 +737,7 @@ class RetrieveHass:
         var_list: List[str]
     ) -> pd.DataFrame:
         """Convert WebSocket statistics data to DataFrame."""
-        print("RetrieveHass._convert_statistics_to_dataframe retrieve_hass_async")
+        # print("RetrieveHass._convert_statistics_to_dataframe retrieve_hass_async")
         import pandas as pd
 
         # Initialize empty DataFrame
