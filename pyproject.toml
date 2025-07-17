@@ -4,9 +4,7 @@ version = "0.13.3"
 description = "An Energy Management System for Home Assistant"
 readme = "README.md"
 requires-python = ">=3.10, <3.13"
-authors = [
-    { name = "David HERNANDEZ", email = "davidusb@gmail.com" },
-]
+authors = [{ name = "David HERNANDEZ", email = "davidusb@gmail.com" }]
 license = { text = "MIT" }
 keywords = ["energy", "management", "optimization", "hass"]
 classifiers = [
@@ -38,6 +36,14 @@ dependencies = [
     "waitress>=3.0.2",
     "plotly>=6.0.0",
     "gunicorn>=23.0.0",
+    "quart",
+    "aiofiles",
+    "hypercorn",
+    "jinja2",
+    "asyncio",
+    "aiohttp",
+    "orjson",
+    "websockets",
 ]
 [build-system]
 requires = ["hatchling"]
@@ -56,7 +62,15 @@ package = true
 
 [project.optional-dependencies]
 docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
-test = ["requests-mock", "pytest", "coverage", "snakeviz", "ruff", "tabulate", "hatchling"]
+test = [
+    "requests-mock",
+    "pytest",
+    "coverage",
+    "snakeviz",
+    "ruff",
+    "tabulate",
+    "hatchling",
+]
 dev = ["ruff"]
 
 [tool.hatch.build.targets.wheel]
@@ -68,7 +82,8 @@ package-data = { "emhass" = [
     "data/cec_modules.pbz2",
     "data/cec_inverters.pbz2",
     "data/associations.csv",
-    "data/config_defaults.json"]}
+    "data/config_defaults.json",
+] }
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -84,23 +99,22 @@ include = [
 
 [project.scripts]
 emhass = "emhass.command_line:main"
+emhass-async = "emhass.web_server_async:main"
 
 [project.urls]
 Homepage = "https://github.com/davidusb-geek/emhass"
 Source = "https://github.com/davidusb-geek/emhass"
 Issues = "https://github.com/davidusb-geek/emhass/issues"
 Documentation = "https://emhass.readthedocs.io/en/latest/"
-Community = "https://community.home-assistant.io/t/emhass-an-energy-management-for-home-assistant" 
+Community = "https://community.home-assistant.io/t/emhass-an-energy-management-for-home-assistant"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "C", "B", "Q", "UP", "YTT", "PYI"]
-ignore = ["E501", "B008", "B905", "C901"] 
+ignore = ["E501", "B008", "B905", "C901"]
 
 [dependency-groups]
-dev = [
-    "emhass",
-]
+dev = ["emhass"]
 
 [tool.ruff]
-target-version = "py311" 
+target-version = "py311"
 src = ["src", "tests"]
