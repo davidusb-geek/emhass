@@ -44,6 +44,7 @@ RUN apt-get update \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     gcc \
+    g++ \
     patchelf \
     cmake \
     ninja-build
@@ -84,8 +85,8 @@ COPY pyproject.toml /app/
 # options.json file will be automatically generated and passed from Home Assistant using the addon
 
 #set python env variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 # Docker Labels for hass
 LABEL \
@@ -109,6 +110,7 @@ RUN uv lock
 # remove build only packages
 RUN apt-get remove --purge -y --auto-remove \
     gcc \
+    g++ \
     patchelf \
     cmake \
     ninja-build \
