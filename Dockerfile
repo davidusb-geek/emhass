@@ -89,7 +89,7 @@ ENV PYTHONUNBUFFERED 1
 
 # Docker Labels for hass
 LABEL \
-    io.hass.name="emhass-async" \
+    io.hass.name="emhass" \
     io.hass.description="EMHASS: Energy Management for Home Assistant (Async Version)" \
     io.hass.version=${BUILD_VERSION} \
     io.hass.type="addon" \
@@ -115,7 +115,7 @@ RUN apt-get remove --purge -y --auto-remove \
     && rm -rf /var/lib/apt/lists/*
 
 # Use async web server with Hypercorn instead of gunicorn
-ENTRYPOINT [ "uv", "run", "--frozen", "emhass-async" ]
+ENTRYPOINT [ "uv", "run", "--frozen", "emhass.web_server_async" ]
 
 # for running Unittest
 #COPY tests/ /app/tests
