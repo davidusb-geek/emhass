@@ -1,13 +1,12 @@
 import asyncio
+import logging
 import ssl
 import time
 import urllib.parse as urlparse
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import orjson
 import websockets
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +24,7 @@ class AsyncWebSocketClient:
         self,
         hass_url: str,
         long_lived_token: str,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger | None = None,
         ping_interval: int = 30,
         reconnect_delay: int = 5,
         max_reconnect_attempts: int = 5,
@@ -41,10 +40,10 @@ class AsyncWebSocketClient:
         self._connected = False
         self._authenticated = False
         self._id = 0
-        self._pending: Dict[int, asyncio.Future] = {}
+        self._pending: dict[int, asyncio.Future] = {}
         self._lock = asyncio.Lock()
-        self._ping_task: Optional[asyncio.Task] = None
-        self._recv_task: Optional[asyncio.Task] = None
+        self._ping_task: asyncio.Task | None = None
+        self._recv_task: asyncio.Task | None = None
         self._reconnects = 0
 
     @property
@@ -57,7 +56,7 @@ class AsyncWebSocketClient:
     def connected(self) -> bool:
         return self._connected and self._authenticated
 
-    def _get_ssl_context(self) -> Optional[ssl.SSLContext]:
+    def _get_ssl_context(self) -> ssl.SSLContext | None:
         if self.websocket_url.startswith("wss://"):
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
@@ -85,7 +84,7 @@ class AsyncWebSocketClient:
             await asyncio.sleep(1)
             try:
                 await asyncio.wait_for(self._connect(), timeout=10.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self.logger.error("Reconnection timed out")
                 raise ConnectionError("Reconnection timed out")
             except Exception as e:
@@ -175,13 +174,13 @@ class AsyncWebSocketClient:
         return await fut
 
     # Convenience API methods:
-    async def get_config(self) -> Dict[str, Any]:
+    async def get_config(self) -> dict[str, Any]:
         return await self.send("get_config")
 
-    async def get_states(self) -> List[Dict[str, Any]]:
+    async def get_states(self) -> list[dict[str, Any]]:
         return await self.send("get_states")
 
-    async def get_state(self, entity_id: str) -> Optional[Dict[str, Any]]:
+    async def get_state(self, entity_id: str) -> dict[str, Any] | None:
         states = await self.get_states()
         return next((s for s in states if s["entity_id"] == entity_id), None)
 

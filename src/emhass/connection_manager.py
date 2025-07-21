@@ -1,13 +1,12 @@
 import asyncio
 import logging
-from typing import Optional
 
 from emhass.websocket_client import AsyncWebSocketClient, ConnectionError
 
-_global_client: Optional[AsyncWebSocketClient] = None
+_global_client: AsyncWebSocketClient | None = None
 _lock = asyncio.Lock()
 
-async def get_websocket_client(hass_url: str, token: str, logger: Optional[logging.Logger] = None) -> AsyncWebSocketClient:
+async def get_websocket_client(hass_url: str, token: str, logger: logging.Logger | None = None) -> AsyncWebSocketClient:
     global _global_client
 
     async with _lock:
@@ -15,7 +14,7 @@ async def get_websocket_client(hass_url: str, token: str, logger: Optional[loggi
             _global_client = AsyncWebSocketClient(hass_url=hass_url, long_lived_token=token, logger=logger)
             try:
                 await asyncio.wait_for(_global_client.startup(), timeout=15.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if logger:
                     logger.error("WebSocket startup timed out")
                 _global_client = None
@@ -28,7 +27,7 @@ async def get_websocket_client(hass_url: str, token: str, logger: Optional[loggi
         elif not _global_client.connected:
             try:
                 await asyncio.wait_for(_global_client.reconnect(), timeout=15.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if logger:
                     logger.error("WebSocket reconnect timed out")
                 _global_client = None

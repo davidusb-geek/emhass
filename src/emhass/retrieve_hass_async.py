@@ -10,7 +10,7 @@ import os
 import pathlib
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import aiofiles
 import aiohttp
@@ -18,15 +18,45 @@ import numpy as np
 import orjson
 import pandas as pd
 
-from emhass.utils_async import set_df_index_freq
 from emhass.connection_manager import get_websocket_client
+from emhass.utils_async import set_df_index_freq
 
 logger = logging.getLogger(__name__)
 
+
+def convert_numpy_types(obj):
+    """Convert numpy types to native Python types for JSON serialization."""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(convert_numpy_types(item) for item in obj)
+    else:
+        return obj
+
+
 class RetrieveHass:
-    """
-    Compatibility wrapper for EMHASS integration.
-    Provides the same interface as the original RetrieveHass class.
+    r"""
+    Retrieve data from Home Assistant using the restful API.
+
+    This class allows the user to retrieve data from a Home Assistant instance \
+    using the provided restful API (https://developers.home-assistant.io/docs/api/rest/)
+
+    This class methods are:
+
+    - get_data: to retrieve the actual data from hass
+
+    - prepare_data: to apply some data treatment in preparation for the optimization task
+
+    - post_data: Post passed data to hass
+
     """
 
     def __init__(
@@ -39,9 +69,30 @@ class RetrieveHass:
         emhass_conf: dict,
         logger: logging.Logger,
         get_data_from_file: bool = False,
-        # auto_cleanup: bool = True,
     ):
-        # print("RetrieveHass.__init__ - retrieve_hass_async")
+        """
+        Define constructor for RetrieveHass class.
+
+        :param hass_url: The URL of the Home Assistant instance
+        :type hass_url: str
+        :param long_lived_token: The long lived token retrieved from the configuration pane
+        :type long_lived_token: str
+        :param freq: The frequency of the data DateTimeIndexes
+        :type freq: pd.TimeDelta
+        :param time_zone: The time zone
+        :type time_zone: datetime.timezone
+        :param params: Configuration parameters passed from data/options.json
+        :type params: str
+        :param emhass_conf: Dictionary containing the needed emhass paths
+        :type emhass_conf: dict
+        :param logger: The passed logger object
+        :type logger: logging object
+        :param get_data_from_file: Select if data should be retrieved from a
+        previously saved pickle useful for testing or directly from connection to
+        hass database
+        :type get_data_from_file: bool, optional
+
+        """
         self.hass_url = hass_url
         self.long_lived_token = long_lived_token
         self.freq = freq
@@ -61,12 +112,9 @@ class RetrieveHass:
         self.df_weather = pd.DataFrame()
         self.df_forecast = pd.DataFrame()
 
-    async def get_ha_config(self) -> Dict[str, Any]:
+    async def get_ha_config(self) -> dict[str, Any]:
         """Get Home Assistant configuration."""
-        # print("RetrieveHass.get_ha_config - retrieve_hass_async")
-        # global websocket
         try:
-            # print("get_ha_config_try")
             self._client = await get_websocket_client(self.hass_url, self.long_lived_token)
         except Exception as e:
             self.logger.error(f"Fout bij connectie opzetten: {e}")
@@ -77,8 +125,8 @@ class RetrieveHass:
 
     async def get_data(
         self,
-        days_list: List[pd.Timestamp],
-        var_list: List[str],
+        days_list: list[pd.Timestamp],
+        var_list: list[str],
         minimal_response: bool = True,
         no_attributes: bool = True
     ) -> bool:
@@ -88,20 +136,12 @@ class RetrieveHass:
         This method maintains compatibility with the original EMHASS interface
         while using the new WebSocket implementation.
         """
-        # print("RetrieveHass.get_data - retrieve_hass_async")
-        t0 = time.time()
-        # if not self._client:
-        #     try:
-        #         await self.startup()
-        #     except Exception as e:
-        #         self.logger.error(f"Auto-startup failed for get_data: {e}")
-        #         return False
         try:
             self._client = await asyncio.wait_for(
                 get_websocket_client(self.hass_url, self.long_lived_token, self.logger),
                 timeout=20.0
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self.logger.error("WebSocket connection timed out")
             return False
         except Exception as e:
@@ -157,8 +197,8 @@ class RetrieveHass:
 
     async def get_statistics_data(
         self,
-        days_list: List[pd.Timestamp],
-        var_list: List[str],
+        days_list: list[pd.Timestamp],
+        var_list: list[str],
         period: str = "hour"
     ) -> pd.DataFrame:
         """Get statistical data for entities."""
@@ -186,7 +226,7 @@ class RetrieveHass:
 
         return self._convert_statistics_to_dataframe(stats_data, var_list)
 
-    async def _get_statistics_data(self, days_list: List[pd.Timestamp], var_list: List[str]) -> bool:
+    async def _get_statistics_data(self, days_list: list[pd.Timestamp], var_list: list[str]) -> bool:
         """
         Retrieve data using Home Assistant statistics API for older data.
         Compatibility method for original interface.
@@ -207,8 +247,8 @@ class RetrieveHass:
         var_load: str,
         load_negative: bool,
         set_zero_min: bool,
-        var_replace_zero: List[str],
-        var_interp: List[str],
+        var_replace_zero: list[str],
+        var_interp: list[str],
     ) -> pd.DataFrame:
         """
         Prepare data for optimization.
@@ -319,12 +359,12 @@ class RetrieveHass:
         list_df = copy.deepcopy(data_df).loc[data_df.index[idx] :].reset_index()
         list_df.columns = ["timestamps", entity_id]
         ts_list = [str(i) for i in list_df["timestamps"].tolist()]
-        vals_list = [str(np.round(i, 2)) for i in list_df[entity_id].tolist()]
+        vals_list = [str(float(np.round(i, 2))) for i in list_df[entity_id].tolist()]
         forecast_list = []
         for i, ts in enumerate(ts_list):
             datum = {}
             datum["date"] = ts
-            datum[entity_id.split("sensor.")[1]] = vals_list[i]
+            datum[entity_id.split("sensor.")[1]] = float(vals_list[i])
             forecast_list.append(datum)
         data = {
             "state": f"{state:.2f}",
@@ -399,15 +439,15 @@ class RetrieveHass:
         if type_var == "cost_fun":
             if isinstance(data_df.iloc[0], pd.Series):  # if Series extract
                 data_df = data_df.iloc[:, 0]
-            state = np.round(data_df.sum(), 2)
+            state = float(np.round(data_df.sum(), 2))
         elif type_var == "unit_load_cost" or type_var == "unit_prod_price":
-            state = np.round(data_df.loc[data_df.index[idx]], 4)
+            state = float(np.round(data_df.loc[data_df.index[idx]], 4))
         elif type_var == "optim_status":
             state = data_df.loc[data_df.index[idx]]
         elif type_var == "mlregressor":
-            state = data_df[idx]
+            state = convert_numpy_types(data_df[idx])
         else:
-            state = np.round(data_df.loc[data_df.index[idx]], 2)
+            state = float(np.round(data_df.loc[data_df.index[idx]], 2))
         if type_var == "power":
             data = RetrieveHass.get_attr_data_dict(
                 data_df,
@@ -533,7 +573,7 @@ class RetrieveHass:
             response.ok = True
         else:
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, data=orjson.dumps(data)) as response:
+                async with session.post(url, headers=headers, data=orjson.dumps(convert_numpy_types(data)).decode("utf-8")) as response:
                     # Store response data since we need to access it after the context manager
                     response_ok = response.ok
                     response_status_code = response.status
@@ -567,7 +607,7 @@ class RetrieveHass:
                 # Save the required metadata to json file
                 metadata_path = entities_path / "metadata.json"
                 if os.path.isfile(metadata_path):
-                    async with aiofiles.open(metadata_path, "r") as file:
+                    async with aiofiles.open(metadata_path) as file:
                         content = await file.read()
                         metadata = orjson.loads(content)
                 else:
@@ -620,14 +660,14 @@ class RetrieveHass:
 
     def _convert_history_to_dataframe(
         self,
-        history_data: List[List[Dict[str, Any]]],
-        var_list: List[str]
+        history_data: list[list[dict[str, Any]]],
+        var_list: list[str]
     ) -> pd.DataFrame:
         """Convert WebSocket history data to DataFrame."""
         # print("RetrieveHass._convert_history_to_dataframe retrieve_hass_async")
-        import pandas as pd
+
         import numpy as np
-        from datetime import datetime
+        import pandas as pd
 
         # Initialize empty DataFrame with DatetimeIndex
         df_final = pd.DataFrame()
@@ -665,14 +705,14 @@ class RetrieveHass:
                     elif "last_updated" in state:
                         # WebSocket compressed format - use timestamp
                         if isinstance(state["last_updated"], (int, float)):
-                            timestamp = pd.to_datetime(state["last_updated"], unit='s')
+                            timestamp = pd.to_datetime(state["last_updated"], unit="s")
                         else:
                             timestamp = pd.to_datetime(state["last_updated"])
                         value = state["state"]
                     elif "lu" in state:
                         # WebSocket compressed format - 'lu' = last_updated, 's' = state
                         if isinstance(state["lu"], (int, float)):
-                            timestamp = pd.to_datetime(state["lu"], unit='s')
+                            timestamp = pd.to_datetime(state["lu"], unit="s")
                         else:
                             timestamp = pd.to_datetime(state["lu"])
                         value = state["s"]
@@ -733,8 +773,8 @@ class RetrieveHass:
 
     def _convert_statistics_to_dataframe(
         self,
-        stats_data: Dict[str, Any],
-        var_list: List[str]
+        stats_data: dict[str, Any],
+        var_list: list[str]
     ) -> pd.DataFrame:
         """Convert WebSocket statistics data to DataFrame."""
         # print("RetrieveHass._convert_statistics_to_dataframe retrieve_hass_async")
@@ -765,7 +805,7 @@ class RetrieveHass:
                     # Handle timestamp from start time (milliseconds or ISO string)
                     if isinstance(stat["start"], (int, float)):
                         # Convert from milliseconds to datetime with UTC timezone
-                        timestamp = pd.to_datetime(stat["start"], unit='ms', utc=True)
+                        timestamp = pd.to_datetime(stat["start"], unit="ms", utc=True)
                     else:
                         # Assume ISO string
                         timestamp = pd.to_datetime(stat["start"], utc=True)
@@ -810,7 +850,7 @@ class RetrieveHass:
             # Ensure timezone awareness - timestamps should already be UTC from conversion above
             if df_final.index.tz is None:
                 # If somehow still naive, localize as UTC first then convert
-                df_final.index = df_final.index.tz_localize('UTC').tz_convert(self.time_zone)
+                df_final.index = df_final.index.tz_localize("UTC").tz_convert(self.time_zone)
             else:
                 # Convert from existing timezone to target timezone
                 df_final.index = df_final.index.tz_convert(self.time_zone)

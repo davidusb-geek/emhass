@@ -7,8 +7,8 @@ import logging
 import os
 import pickle
 import re
-import threading
 import signal
+import threading
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -435,7 +435,6 @@ async def action_call(action_name):
     input_data_dict = await set_input_data_dict(
         emhass_conf, costfun, params, runtimeparams, action_name, app.logger
     )
-    # print(input_data_dict)
     if not input_data_dict:
         return await make_response(await grabLog(ActionStr), 400)
 
@@ -645,13 +644,6 @@ async def initialize():
     # Argument
     argument = {}
     no_response = False
-    # if args is not None:
-    #     if args.get("url", None):
-    #         argument["url"] = args["url"]
-    #     if args.get("key", None):
-    #         argument["key"] = args["key"]
-    #     if args.get("no_response", None):
-    #         no_response = args["no_response"]
     # Combine secrets from ENV, Arguments/ARG, Secrets file (secrets_emhass.yaml), options (options.json from addon configuration file) and/or Home Assistant Standalone API (if exist)
     emhass_conf, secrets = await build_secrets(
         emhass_conf,
@@ -820,227 +812,3 @@ if __name__ == "__main__":
     args_dict = {k: v for k, v in vars(args).items() if v is not None}
 
     asyncio.run(main_with_server(args_dict))
-# async def main(
-#     args: dict | None = None,
-# ):
-#     global continual_publish_thread
-#     global emhass_conf
-#     global entity_path
-#     global injection_dict
-#     global app
-#     global params_secrets
-#     # Pre formatted config parameters
-#     config = {}
-#     params = None
-
-#     # Find env's, not not set defaults
-#     DATA_PATH = os.getenv("DATA_PATH", default="/data/")
-#     ROOT_PATH = os.getenv("ROOT_PATH", default=str(Path(__file__).parent))
-#     CONFIG_PATH = os.getenv("CONFIG_PATH", default="/share/config.json")
-#     OPTIONS_PATH = os.getenv("OPTIONS_PATH", default="/data/options.json")
-#     DEFAULTS_PATH = os.getenv(
-#         "DEFAULTS_PATH", default=ROOT_PATH + "/data/config_defaults.json"
-#     )
-#     ASSOCIATIONS_PATH = os.getenv(
-#         "ASSOCIATIONS_PATH", default=ROOT_PATH + "/data/associations.csv"
-#     )
-#     LEGACY_CONFIG_PATH = os.getenv(
-#         "LEGACY_CONFIG_PATH", default="/app/config_emhass.yaml"
-#     )
-
-#     # Define the paths
-#     config_path = Path(CONFIG_PATH)
-#     options_path = Path(OPTIONS_PATH)
-#     defaults_path = Path(DEFAULTS_PATH)
-#     associations_path = Path(ASSOCIATIONS_PATH)
-#     legacy_config_path = Path(LEGACY_CONFIG_PATH)
-#     data_path = Path(DATA_PATH)
-#     root_path = Path(ROOT_PATH)
-#     # Add paths to emhass_conf
-#     emhass_conf["config_path"] = config_path
-#     emhass_conf["options_path"] = options_path
-#     emhass_conf["defaults_path"] = defaults_path
-#     emhass_conf["associations_path"] = associations_path
-#     emhass_conf["legacy_config_path"] = legacy_config_path
-#     emhass_conf["data_path"] = data_path
-#     emhass_conf["root_path"] = root_path
-
-#     # Combine parameters from configuration sources (if exists)
-#     config.update(
-#         await build_config(
-#             emhass_conf, app.logger, str(defaults_path), str(config_path), str(legacy_config_path)
-#         )
-#     )
-#     if type(config) is bool and not config:
-#         raise Exception("Failed to find default config")
-
-#     # Set local variables
-#     costfun = os.getenv("LOCAL_COSTFUN", config.get("costfun", "profit"))
-#     logging_level = os.getenv("LOGGING_LEVEL", config.get("logging_level", "INFO"))
-#     # Temporary set logging level if debug
-#     if logging_level == "DEBUG":
-#         app.logger.setLevel(logging.DEBUG)
-
-#     ## Secrets
-#     # Argument
-#     argument = {}
-#     no_response = False
-#     if args is not None:
-#         if args.get("url", None):
-#             argument["url"] = args["url"]
-#         if args.get("key", None):
-#             argument["key"] = args["key"]
-#         if args.get("no_response", None):
-#             no_response = args["no_response"]
-#     # Combine secrets from ENV, Arguments/ARG, Secrets file (secrets_emhass.yaml), options (options.json from addon configuration file) and/or Home Assistant Standalone API (if exist)
-#     emhass_conf, secrets = await build_secrets(
-#         emhass_conf,
-#         app.logger,
-#         argument,
-#         str(options_path),
-#         os.getenv("SECRETS_PATH", default="/app/secrets_emhass.yaml"),
-#         bool(no_response),
-#     )
-#     params_secrets.update(secrets)
-
-#     server_ip = params_secrets.get("server_ip", "0.0.0.0")
-
-#     # Check if data path exists
-#     if not os.path.isdir(emhass_conf["data_path"]):
-#         app.logger.warning("Unable to find data_path: " + str(emhass_conf["data_path"]))
-#         if os.path.isdir(Path("/data/")):
-#             emhass_conf["data_path"] = Path("/data/")
-#         else:
-#             Path(root_path / "data/").mkdir(parents=True, exist_ok=True)
-#             emhass_conf["data_path"] = root_path / "data/"
-#         app.logger.info("data_path has been set to " + str(emhass_conf["data_path"]))
-
-#     # Initialize this global dict
-#     if (emhass_conf["data_path"] / "injection_dict.pkl").exists():
-#         async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "rb") as fid:
-#             content = await fid.read()
-#             injection_dict = pickle.loads(content)
-#     else:
-#         injection_dict = None
-
-#     # Build params from config and param_secrets (migrate params to correct config catagories), save result to params.pkl
-#     params = await build_params(emhass_conf, params_secrets, config, app.logger)
-#     if type(params) is bool:
-#         raise Exception("A error has occurred while building params")
-#     # Update params with local variables
-#     params["optim_conf"]["costfun"] = costfun
-#     params["optim_conf"]["logging_level"] = logging_level
-
-#     # Save params to file for later reference
-#     if os.path.exists(str(emhass_conf["data_path"])):
-#         async with aiofiles.open(str(emhass_conf["data_path"] / "params.pkl"), "wb") as fid:
-#             content = pickle.dumps((config_path, params))
-#             await fid.write(content)
-#     else:
-#         raise Exception("missing: " + str(emhass_conf["data_path"]))
-
-#     # Define loggers
-#     formatter = logging.Formatter(
-#         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-#     )
-#     log.default_handler.setFormatter(formatter)
-#     # Action file logger
-#     fileLogger = logging.FileHandler(str(emhass_conf["data_path"] / "actionLogs.txt"))
-#     formatter = logging.Formatter("%(levelname)s - %(name)s - %(message)s")
-#     fileLogger.setFormatter(formatter)  # add format to Handler
-#     if logging_level == "DEBUG":
-#         app.logger.setLevel(logging.DEBUG)
-#         fileLogger.setLevel(logging.DEBUG)
-#     elif logging_level == "INFO":
-#         app.logger.setLevel(logging.INFO)
-#         fileLogger.setLevel(logging.INFO)
-#     elif logging_level == "WARNING":
-#         app.logger.setLevel(logging.WARNING)
-#         fileLogger.setLevel(logging.WARNING)
-#     elif logging_level == "ERROR":
-#         app.logger.setLevel(logging.ERROR)
-#         fileLogger.setLevel(logging.ERROR)
-#     else:
-#         app.logger.setLevel(logging.DEBUG)
-#         fileLogger.setLevel(logging.DEBUG)
-#     app.logger.propagate = False
-#     app.logger.addHandler(fileLogger)
-#     # Clear Action File logger file, ready for new instance
-#     await clearFileLog()
-
-#     # If entity_path exists, remove any entity/metadata files
-#     entity_path = emhass_conf["data_path"] / "entities"
-#     if os.path.exists(entity_path):
-#         entity_pathContents = os.listdir(entity_path)
-#         if len(entity_pathContents) > 0:
-#             for entity in entity_pathContents:
-#                 os.remove(entity_path / entity)
-
-#     # Initialise continual publish thread list
-#     continual_publish_thread = []
-
-#     # Logging
-#     port = int(os.environ.get("PORT", 5000))
-#     app.logger.info(
-#         "Launching the emhass webserver at: http://" + server_ip + ":" + str(port)
-#     )
-#     app.logger.info(
-#         "Home Assistant data fetch will be performed using url: "
-#         + params_secrets["hass_url"]
-#     )
-#     app.logger.info("The data path is: " + str(emhass_conf["data_path"]))
-#     app.logger.info("The logging is: " + str(logging_level))
-#     try:
-#         app.logger.info("Using core emhass version: " + version("emhass"))
-#     except PackageNotFoundError:
-#         app.logger.info("Using development emhass version")
-
-#     # Initialize persistent WebSocket connection
-#     # await initialize_websocket_connection(params, app.logger)
-#     await get_websocket_client(
-#             hass_url=params_secrets["hass_url"],
-#             token=params_secrets["long_lived_token"],
-#             logger=app.logger
-#         )
-
-#     # Register shutdown handler
-#     # atexit.register(shutdown_websocket_connection)
-#     atexit.register(lambda: asyncio.run(close_global_connection()))
-
-#     return server_ip, port
-
-
-# if __name__ == "__main__":
-#     parser = argparse.ArgumentParser()
-#     parser.add_argument(
-#         "--url", type=str, help="URL to the Home Assistant instance"
-#     )
-#     parser.add_argument(
-#         "--key", type=str, help="Long-lived access token for Home Assistant"
-#     )
-#     parser.add_argument(
-#         "--no_response",
-#         action="store_true",
-#         help="Disable response printing",
-#     )
-#     args = parser.parse_args()
-
-#     # Convert args to dict
-#     args_dict = {}
-#     if args.url:
-#         args_dict["url"] = args.url
-#     if args.key:
-#         args_dict["key"] = args.key
-#     if args.no_response:
-#         args_dict["no_response"] = args.no_response
-
-#     # Run the async main function
-#     server_ip, port = asyncio.run(main(args_dict))
-
-#     # Create hypercorn config
-#     config = Config()
-#     config.bind = [f"{server_ip}:{port}"]
-#     config.use_reloader = False
-
-#     # Run the app with hypercorn
-#     asyncio.run(serve(app, config))

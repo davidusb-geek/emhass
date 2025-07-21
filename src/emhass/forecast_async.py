@@ -271,7 +271,7 @@ class Forecast:
             self.logger.info(
                 "Loading existing cached Open-Meteo JSON file: %s", json_path
             )
-            async with aiofiles.open(json_path, "r") as json_file:
+            async with aiofiles.open(json_path) as json_file:
                 content = await json_file.read()
                 data = orjson.loads(content)
             if use_cache:
