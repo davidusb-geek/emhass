@@ -226,7 +226,7 @@ async def update_params_with_ha_config(
     for key, value in updated_passed_dict.items():
         params["passed_data"][key]["unit_of_measurement"] = value["unit_of_measurement"]
     # Serialize the final params
-    params = orjson.dumps(params, default=str).decode()
+    params = orjson.dumps(params, default=str).decode("utf-8")
     return params
 
 
@@ -384,7 +384,7 @@ async def treat_runtimeparams(
         # Loop though parameters stored in association file, Check to see if any stored in runtime
         # If true, set runtime parameter to params
         if emhass_conf["associations_path"].exists():
-            async with aiofiles.open(emhass_conf["associations_path"], "r") as data:
+            async with aiofiles.open(emhass_conf["associations_path"]) as data:
                 content = await data.read()
                 associations = list(csv.reader(content.splitlines(), delimiter=","))
                 # Association file key reference
@@ -906,7 +906,6 @@ async def get_yaml_parse(params: str, logger: logging.Logger) -> tuple[dict, dic
     :rtype: tuple(dict)
 
     """
-    # print(params)
     if params:
         if type(params) is str:
             input_conf = orjson.loads(params)
@@ -933,7 +932,6 @@ async def get_yaml_parse(params: str, logger: logging.Logger) -> tuple[dict, dic
     if retrieve_hass_conf.get("time_zone", None) is not None:
         retrieve_hass_conf["time_zone"] = pytz.timezone(retrieve_hass_conf["time_zone"])
 
-    # print(retrieve_hass_conf, optim_conf, plant_conf)
     return retrieve_hass_conf, optim_conf, plant_conf
 
 
@@ -1115,7 +1113,7 @@ async def build_config(
 
     # Read default parameters (default root_path/data/config_defaults.json)
     if defaults_path and pathlib.Path(defaults_path).is_file():
-        async with aiofiles.open(defaults_path, "r") as data:
+        async with aiofiles.open(defaults_path) as data:
             content = await data.read()
             config = orjson.loads(content)
     else:
@@ -1124,7 +1122,7 @@ async def build_config(
 
     # Read user config parameters if provided (default /share/config.json)
     if config_path and pathlib.Path(config_path).is_file():
-        async with aiofiles.open(config_path, "r") as data:
+        async with aiofiles.open(config_path) as data:
             content = await data.read()
             # Set override default parameters (config_defaults) with user given parameters (config.json)
             logger.info("Obtaining parameters from config.json:")
@@ -1140,7 +1138,7 @@ async def build_config(
     # Check to see if legacy config_emhass.yaml was provided (default /app/config_emhass.yaml)
     # Convert legacy parameter definitions/format to match config.json
     if legacy_config_path and pathlib.Path(legacy_config_path).is_file():
-        async with aiofiles.open(legacy_config_path, "r") as data:
+        async with aiofiles.open(legacy_config_path) as data:
             content = await data.read()
             legacy_config = yaml.safe_load(content)
             legacy_config_parameters = await build_legacy_config_params(
@@ -1187,7 +1185,7 @@ async def build_legacy_config_params(
 
     # Use associations list to map legacy parameter name with config.json parameter name
     if emhass_conf["associations_path"].exists():
-        async with aiofiles.open(emhass_conf["associations_path"], "r") as data:
+        async with aiofiles.open(emhass_conf["associations_path"]) as data:
             content = await data.read()
             associations = list(csv.reader(content.splitlines(), delimiter=","))
     else:
@@ -1286,7 +1284,7 @@ async def build_secrets(
     :return: Updated emhass_conf, the built secrets dictionary
     :rtype: Tuple[dict, dict]:
     """
-
+    print("building secrets")
     # Set defaults to be overwritten
     if argument is None:
         argument = {}
@@ -1316,7 +1314,7 @@ async def build_secrets(
     # Use local supervisor API to obtain secrets from Home Assistant if hass_url in options.json is empty and SUPERVISOR_TOKEN ENV exists (provided by Home Assistant when running the container as addon)
     options = {}
     if options_path and pathlib.Path(options_path).is_file():
-        async with aiofiles.open(options_path, "r") as data:
+        async with aiofiles.open(options_path) as data:
             content = await data.read()
             options = orjson.loads(content)
 
@@ -1353,6 +1351,7 @@ async def build_secrets(
                     async with session.get(
                         params_secrets["hass_url"] + "/config", headers=headers
                     ) as response:
+                        print(response)
                         if response.status < 400:
                             config_hass = await response.json()
                             params_secrets = {
@@ -1441,7 +1440,7 @@ async def build_secrets(
     # Obtain secrets from secrets_emhass.yaml? (default /app/secrets_emhass.yaml)
     if secrets_path and pathlib.Path(secrets_path).is_file():
         logger.debug("Obtaining secrets from secrets file")
-        async with aiofiles.open(pathlib.Path(secrets_path), "r") as file:
+        async with aiofiles.open(pathlib.Path(secrets_path)) as file:
             content = await file.read()
             params_secrets.update(yaml.safe_load(content))
 
@@ -1488,7 +1487,7 @@ async def build_params(
     if emhass_conf.get(
         "associations_path", get_root(__file__, num_parent=2) / "data/associations.csv"
     ).exists():
-        async with aiofiles.open(emhass_conf["associations_path"], "r") as data:
+        async with aiofiles.open(emhass_conf["associations_path"]) as data:
             content = await data.read()
             associations = list(csv.reader(content.splitlines(), delimiter=","))
     else:

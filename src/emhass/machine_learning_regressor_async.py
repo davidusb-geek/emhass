@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 import warnings
-import asyncio
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -79,14 +79,14 @@ class MLRegressor:
     """
 
     def __init__(
-        self: "MLRegressorAsync",
+        self: MLRegressor,
         data: pd.DataFrame,
         model_type: str,
         regression_model: str,
         features: list,
         target: str,
         timestamp: str,
-        logger: "logging.Logger",
+        logger: logging.Logger,
     ) -> None:
         r"""Define constructor for the forecast class.
 
@@ -125,7 +125,7 @@ class MLRegressor:
         self.model = None
         self.grid_search = None
 
-    async def get_regression_model(self: "MLRegressorAsync") -> tuple[str, str]:
+    async def get_regression_model(self: MLRegressor) -> tuple[str, str]:
         r"""
         Get the base model and parameter grid for the specified regression model.
         Returns a tuple containing the base model and parameter grid corresponding to \
@@ -164,7 +164,7 @@ class MLRegressor:
             return None, None
         return base_model, param_grid
 
-    async def fit(self: "MLRegressorAsync", date_features: list | None = None) -> bool:
+    async def fit(self: MLRegressor, date_features: list | None = None) -> bool:
         r"""Fit the model using the provided data.
 
         :param date_features: A list of 'date_features' to take into account when \
@@ -247,7 +247,7 @@ class MLRegressor:
         )
         return True
 
-    async def predict(self: "MLRegressorAsync", new_values: list) -> np.ndarray:
+    async def predict(self: MLRegressor, new_values: list) -> np.ndarray:
         """Predict a new value.
 
         :param new_values: The new values for the features \

@@ -8,7 +8,6 @@ import os
 import pathlib
 import pickle
 import re
-import time
 from datetime import UTC, datetime
 from importlib.metadata import version
 
@@ -29,13 +28,13 @@ default_pkl_suffix = "_mlf.pkl"
 default_metadata_json = "metadata.json"
 
 # Global variable to store WebSocket instance from web server
-_global_retrieve_hass_ws = None
+# _global_retrieve_hass_ws = None
 
-def set_global_retrieve_hass(retrieve_hass_instance):
-    """Set global WebSocket instance from web server."""
-    # print("set_global_retrieve_hass - command_line_async.py")
-    global _global_retrieve_hass_ws
-    _global_retrieve_hass_ws = retrieve_hass_instance
+# def set_global_retrieve_hass(retrieve_hass_instance):
+#     """Set global WebSocket instance from web server."""
+#     print("set_global_retrieve_hass - command_line_async.py")
+#     global _global_retrieve_hass_ws
+#     _global_retrieve_hass_ws = retrieve_hass_instance
 
 
 async def retrieve_home_assistant_data(
@@ -639,7 +638,7 @@ async def weather_forecast_cache(
     else:
         params = {}
     params["passed_data"]["weather_forecast_cache"] = True
-    params = orjson.dumps(params).decode('utf-8')
+    params = orjson.dumps(params).decode("utf-8")
     # Create Forecast object
     fcst = Forecast(
         retrieve_hass_conf, optim_conf, plant_conf, params, emhass_conf, logger
@@ -1520,7 +1519,7 @@ async def publish_data(
     )
     # cols_published = cols_published + col_cost_fun
     # Publish the optimization status
-    custom_cost_fun_id = params["passed_data"]["custom_optim_status_id"]
+    custom_optim_status_id = params["passed_data"]["custom_optim_status_id"]
     if "optim_status" not in opt_res_latest:
         opt_res_latest["optim_status"] = "Optimal"
         logger.warning(
@@ -1530,10 +1529,10 @@ async def publish_data(
         await input_data_dict["rh"].post_data(
             opt_res_latest["optim_status"],
             idx_closest,
-            custom_cost_fun_id["entity_id"],
+            custom_optim_status_id["entity_id"],
             "",
-            custom_cost_fun_id["unit_of_measurement"],
-            custom_cost_fun_id["friendly_name"],
+            custom_optim_status_id["unit_of_measurement"],
+            custom_optim_status_id["friendly_name"],
             type_var="optim_status",
             publish_prefix=publish_prefix,
             save_entities=entity_save,
@@ -1906,7 +1905,7 @@ async def main():
     input_data_dict = await set_input_data_dict(
         emhass_conf,
         args.costfun,
-        orjson.dumps(params).decode('utf-8'),
+        orjson.dumps(params).decode("utf-8"),
         args.runtimeparams,
         args.action,
         logger,
