@@ -27,14 +27,7 @@ default_csv_filename = "opt_res_latest.csv"
 default_pkl_suffix = "_mlf.pkl"
 default_metadata_json = "metadata.json"
 
-# Global variable to store WebSocket instance from web server
-# _global_retrieve_hass_ws = None
 
-# def set_global_retrieve_hass(retrieve_hass_instance):
-#     """Set global WebSocket instance from web server."""
-#     print("set_global_retrieve_hass - command_line_async.py")
-#     global _global_retrieve_hass_ws
-#     _global_retrieve_hass_ws = retrieve_hass_instance
 
 
 async def retrieve_home_assistant_data(
@@ -1989,5 +1982,10 @@ async def main():
         return opt_res
 
 
-if __name__ == "__main__":
+def main_sync():
+    """Sync wrapper for async main function - used as CLI entry point."""
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    main_sync()

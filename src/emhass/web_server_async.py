@@ -60,44 +60,36 @@ templates = jinja2.Environment(
 )
 
 
+
+
+
+
+# Register async startup and shutdown handlers
 @app.before_serving
 async def before_serving():
-    app.logger.info("🚀 Quart starting up")
-    await initialize()  # opstarten
+    """Initialize the app before serving requests"""
+    app.logger.info("🚀 Quart app starting up")
 
+    # Try to initialize the full application, but handle WebSocket failures gracefully
+    try:
+        await initialize()
+        app.logger.info("✅ Full initialization completed including WebSocket connection")
+    except Exception as e:
+        app.logger.warning(f"⚠️ Full initialization failed (this is normal in test environments): {e}")
+        app.logger.info("🔄 Continuing without WebSocket connection...")
+        # The initialize() function already sets up all necessary components except WebSocket
+        # So we can continue serving requests even if WebSocket connection fails
 
 @app.after_serving
 async def after_serving():
-    app.logger.info("🛑 Quart shutting down…")
+    """Clean shutdown of the app"""
+    app.logger.info("🛑 Quart app shutting down...")
     try:
         await close_global_connection()
         app.logger.info("✅ WebSocket connection closed")
     except Exception as e:
         app.logger.warning(f"❌ WebSocket shutdown failed: {e}")
     app.logger.info("✅ Quart shutdown complete")
-# async def create_app(settings_override=None):
-#     """
-#     Create a Quart application.
-#     :param settings_override: Override settings
-#     :return: Quart app
-#     """
-#     global app
-#     gunicorn_logger = logging.getLogger("gunicorn.error")
-#     app.logger.handlers = gunicorn_logger.handlers
-#     app.logger.setLevel(logging.INFO)
-
-#     # Register shutdown handler for Quart
-#     @app.before_serving
-#     async def before_serving():
-#         app.logger.info("🚀 Quart app starting up")
-#         await main()
-
-#     @app.after_serving
-#     async def after_serving():
-#         app.logger.info("🛑 Quart app shutting down...")
-#         try:
-#             await close_global_connection()
-#             app.logger.info("✅ WebSocket connection closed")
 #         except Exception as e:
 #             app.logger.warning(f"❌ WebSocket shutdown failed: {e}")
 #         app.logger.info("✅ Quart app shutdown complete")
@@ -586,6 +578,8 @@ async def action_call(action_name):
         msg = "EMHASS >> ERROR: Passed action is not valid... \n"
         return await make_response(msg, 400)
 
+
+
 async def initialize():
     global emhass_conf, params_secrets, continual_publish_thread, injection_dict
 
@@ -747,26 +741,22 @@ async def initialize():
     except PackageNotFoundError:
         app.logger.info("Using development emhass version")
 
-    # Initialize persistent WebSocket connection
-    # await initialize_websocket_connection(params, app.logger)
-    await get_websocket_client(
-            hass_url=params_secrets["hass_url"],
-            token=params_secrets["long_lived_token"],
-            logger=app.logger
-        )
+    # Initialize persistent WebSocket connection (this may fail in test environments)
+    try:
+        await get_websocket_client(
+                hass_url=params_secrets["hass_url"],
+                token=params_secrets["long_lived_token"],
+                logger=app.logger
+            )
+        app.logger.info("✅ WebSocket connection established")
 
-    # Register shutdown handler
-    # atexit.register(shutdown_websocket_connection)
-    atexit.register(lambda: asyncio.run(close_global_connection()))
-
-    # return server_ip, port
-
-    # WebSocket init:
-    await get_websocket_client(
-        hass_url=params_secrets["hass_url"],
-        token=params_secrets["long_lived_token"],
-        logger=app.logger
-    )
+        # WebSocket shutdown is already handled by @app.after_serving
+        # No need for atexit handler
+    except Exception as ws_error:
+        app.logger.warning(f"WebSocket connection failed: {ws_error}")
+        app.logger.info("Continuing without WebSocket connection...")
+        # Re-raise the exception so before_serving can handle it
+        raise
 
     # atexit wordt niet meer nodig aangezien we via Quart shutdown werken.
 

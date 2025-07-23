@@ -4,11 +4,7 @@
       "friendly_name": "Cost function",
       "Description": "Define the type of cost function.",
       "input": "select",
-      "select_options": [
-        "profit",
-        "cost",
-        "self-consumption"
-      ],
+      "select_options": ["profit", "cost", "self-consumption"],
       "default_value": "profit"
     },
     "sensor_power_photovoltaics": {
@@ -51,12 +47,7 @@
       "friendly_name": "Logging level",
       "Description": "DEBUG provides detailed diagnostic information, INFO gives general operational messages, WARNING highlights potential issues, and ERROR indicates critical problems that may disrupt functionality.",
       "input": "select",
-      "select_options": [
-        "INFO",
-        "DEBUG",  
-        "WARNING",
-        "ERROR"
-      ],
+      "select_options": ["INFO", "DEBUG", "WARNING", "ERROR"],
       "default_value": "INFO"
     }
   },
@@ -89,11 +80,7 @@
       "friendly_name": "Timestamp rounding method",
       "Description": "Set the method for timestamp rounding, options are: first, last and nearest.",
       "input": "select",
-      "select_options": [
-        "nearest",
-        "first",
-        "last"
-      ],
+      "select_options": ["nearest", "first", "last"],
       "default_value": "nearest"
     },
     "delta_forecast_daily": {
@@ -106,12 +93,7 @@
       "friendly_name": "Load forecast method",
       "Description": "The load forecast method that will be used. The options are ‘csv’ to load a CSV file or ‘naive’ for a simple 1-day persistence model.",
       "input": "select",
-      "select_options": [
-        "typical",
-        "naive",
-        "mlforecaster",
-        "csv"
-      ],
+      "select_options": ["typical", "naive", "mlforecaster", "csv"],
       "default_value": "typical"
     },
     "set_total_pv_sell": {
@@ -122,16 +104,16 @@
     },
     "lp_solver": {
       "friendly_name": "Linear programming solver",
-      "Description": "Set the name of the linear programming solver that will be used. Defaults to ‘COIN_CMD’. The options are ‘PULP_CBC_CMD’, ‘GLPK_CMD’, ‘HiGHS’, and ‘COIN_CMD’.",
+      "Description": "Set the name of the linear programming solver that will be used. Defaults to 'PULP_CBC_CMD'. The options are 'PULP_CBC_CMD', 'GLPK_CMD', 'HiGHS', and 'COIN_CMD'.",
       "input": "select",
       "select_options": [
         "default",
-        "COIN_CMD",
         "PULP_CBC_CMD",
         "GLPK_CMD",
-        "HiGHS"
+        "HiGHS",
+        "COIN_CMD"
       ],
-      "default_value": "COIN_CMD"
+      "default_value": "PULP_CBC_CMD"
     },
     "lp_solver_path": {
       "friendly_name": "Linear programming solver program path",
@@ -155,12 +137,7 @@
       "friendly_name": "Weather forecast method",
       "Description": "This will define the weather forecast method that will be used. options are 'open-meteo', 'Solcast', 'solar.forecast' (forecast.solar) and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts.",
       "input": "select",
-      "select_options": [
-        "open-meteo",
-        "solcast",
-        "solar.forecast",
-        "csv"
-      ],
+      "select_options": ["open-meteo", "solcast", "solar.forecast", "csv"],
       "default_value": "open-meteo"
     },
     "open_meteo_cache_max_age": {
@@ -199,10 +176,7 @@
       "friendly_name": "Load cost method",
       "Description": "Define the method that will be used for load cost forecast. The options are ‘hp_hc_periods’ for peak and non-peak hours contracts, and ‘csv’ to load custom cost from CSV file.",
       "input": "select",
-      "select_options": [
-        "hp_hc_periods",
-        "csv"
-      ],
+      "select_options": ["hp_hc_periods", "csv"],
       "default_value": "hp_hc_periods"
     },
     "load_peak_hour_periods": {
@@ -210,7 +184,7 @@
       "Description": "A list of peak hour periods for load consumption from the grid. This is useful if you have a contract with peak and non-peak hours.",
       "input": "array.time",
       "default_value": {
-        "period_hp_template": [{"start": "02:54"},{"end": "15:24"}]
+        "period_hp_template": [{ "start": "02:54" }, { "end": "15:24" }]
       },
       "requires": {
         "load_cost_forecast_method": "hp_hc_periods"
@@ -238,10 +212,7 @@
       "friendly_name": "PV power production price forecast method",
       "Description": "Define the method that will be used for PV power production price forecast. This is the price that is paid by the utility for energy injected into the grid. The options are ‘constant’ for a constant fixed value or ‘csv’ to load custom price forecasts from a CSV file.",
       "input": "select",
-      "select_options": [
-        "constant",
-        "csv"
-      ],
+      "select_options": ["constant", "csv"],
       "default_value": "constant"
     },
     "photovoltaic_production_sell_price": {

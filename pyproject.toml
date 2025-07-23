@@ -99,7 +99,7 @@ include = [
 
 [project.scripts]
 emhass = "emhass.command_line:main"
-emhass-async = "emhass.web_server_async:main"
+emhass-async = "emhass.command_line_async:main_sync"
 
 [project.urls]
 Homepage = "https://github.com/davidusb-geek/emhass"

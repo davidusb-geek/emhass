@@ -80,8 +80,8 @@ The following parameters and definitions are only needed if load_cost_forecast_m
 - `production_price_forecast_method`: Define the method that will be used for PV power production price forecast. This is the price that is paid by the utility for energy injected into the grid. The options are 'constant' for a constant fixed value or 'csv' to load custom price forecasts from a CSV file. The default CSV file path that will be used is '/data/data_prod_price_forecast.csv'.
 - `photovoltaic_production_sell_price`: The paid price for energy injected to the grid from excedent PV production in €/kWh. Defaults to 0.065. This parameter is only needed if production_price_forecast_method='constant'.
 - `set_total_pv_sell`: Set this parameter to true to consider that all the PV power produced is injected to the grid. No direct self-consumption. The default is false, for a system with direct self-consumption.
-- `lp_solver`: Set the name of the linear programming solver that will be used. Defaults to 'COIN_CMD'. The options are 'PULP_CBC_CMD', 'GLPK_CMD', 'HiGHS', and 'COIN_CMD'.
-- `lp_solver_path`: Set the path to the LP solver. Defaults to '/usr/bin/cbc'. 
+- `lp_solver`: Set the name of the linear programming solver that will be used. Defaults to 'PULP_CBC_CMD'. The options are 'PULP_CBC_CMD', 'GLPK_CMD', 'HiGHS', and 'COIN_CMD'.
+- `lp_solver_path`: Set the path to the LP solver. Only needed when using 'COIN_CMD'. EMHASS will auto-detect the CBC solver path when using COIN_CMD with an empty path. Defaults to 'empty'.
 - `num_threads`: Set the number of threads to pass to LP solvers that support specifying a number of threads. Defaults to 0 (auto-detect).
 - `set_nocharge_from_grid`: Set this to true if you want to forbid charging the battery from the grid. The battery will only be charged from excess PV.
 - `set_nodischarge_to_grid`: Set this to true if you want to forbid discharging battery power to the grid.
