@@ -1,8 +1,8 @@
-## EMHASS Docker (Async Version)
+## EMHASS Docker
 ## Docker run addon testing example:
-## docker build -f Dockerfile.async -t emhass-async .
-## OR docker build --build-arg TARGETARCH=amd64 -f Dockerfile.async -t emhass-async .
-## docker run --rm -it -p 5000:5000 --name emhass-async-container -v ./config.json:/share/config.json -v ./secrets_emhass.yaml:/app/secrets_emhass.yaml emhass-async
+## docker build -t emhass .
+## OR docker build --build-arg TARGETARCH=amd64 -t emhass .
+## docker run --rm -it -p 5000:5000 --name emhass-container -v ./config.json:/share/config.json -v ./secrets_emhass.yaml:/app/secrets_emhass.yaml emhass
 
 # armhf,amd64,armv7,aarch64
 ARG TARGETARCH
@@ -18,6 +18,7 @@ ENV TARGETARCH=${TARGETARCH:?}
 WORKDIR /app
 COPY pyproject.toml /app/
 COPY .python-version /app/
+COPY gunicorn.conf.py /app/
 
 RUN apt update \
     && apt install -y --no-install-recommends \
@@ -84,23 +85,24 @@ COPY pyproject.toml /app/
 # options.json file will be automatically generated and passed from Home Assistant using the addon
 
 #set python env variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
 
 # Docker Labels for hass
 LABEL \
     io.hass.name="emhass" \
-    io.hass.description="EMHASS: Energy Management for Home Assistant (Async Version)" \
+    io.hass.description="EMHASS: Energy Management for Home Assistant" \
     io.hass.version=${BUILD_VERSION} \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.source="https://github.com/davidusb-geek/emhass" \
-    org.opencontainers.image.description="EMHASS python package and requirements, in Home Assistant Debian container (Async Version)."
+    org.opencontainers.image.description="EMHASS python package and requirements, in Home Assistant Debian container."
 
 # Set up venv
 RUN uv venv && . .venv/bin/activate
 
 RUN [[ "${TARGETARCH}" == "aarch64" ]] && uv pip install --verbose ndindex || echo "libatomic1 cant be installed"
+
 
 # install packadges and build EMHASS
 RUN uv pip install --verbose .
@@ -115,8 +117,7 @@ RUN apt-get remove --purge -y --auto-remove \
     ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
-# Use async web server with Hypercorn instead of gunicorn
-ENTRYPOINT [ "uv", "run", "--frozen", "emhass.web_server_async" ]
+ENTRYPOINT [ "uv", "run", "--frozen", "hypercorn", "emhass.web_server_async:app", "--bind", "0.0.0.0:5000", "--workers", "1", "--access-logfile", "-", "--error-logfile", "-" ]
 
 # for running Unittest
 #COPY tests/ /app/tests

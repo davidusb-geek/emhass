@@ -6,6 +6,8 @@ import copy
 import logging
 import os
 import pickle as cPickle
+import shutil
+import subprocess
 from math import ceil
 from typing import Any
 
@@ -113,14 +115,68 @@ class Optimization:
             self.lp_solver == "COIN_CMD" and self.lp_solver_path == "empty"
         ):  # if COIN_CMD but lp_solver_path is empty
             self.logger.warning(
-                "lp_solver=COIN_CMD but lp_solver_path=empty, attempting to use lp_solver_path=/usr/bin/cbc"
+                "lp_solver=COIN_CMD but lp_solver_path=empty, attempting to auto-detect CBC path"
             )
-            self.lp_solver_path = "/usr/bin/cbc"
+            self.lp_solver_path = self._detect_cbc_path()
+
+        # Always log solver configuration at INFO level for debugging
+        self.logger.info(f"OPTIMIZATION SOLVER CONFIG: lp_solver={self.lp_solver}, lp_solver_path={self.lp_solver_path}")
         self.logger.debug(f"Initialized Optimization with retrieve_hass_conf: {retrieve_hass_conf}")
         self.logger.debug(f"Optimization configuration: {optim_conf}")
         self.logger.debug(f"Plant configuration: {plant_conf}")
-        self.logger.debug(f"Solver configuration: lp_solver={self.lp_solver}, lp_solver_path={self.lp_solver_path}")
         self.logger.debug(f"Number of threads: {self.num_threads}")
+
+    def _detect_cbc_path(self) -> str:
+        """Auto-detect CBC solver path on different systems.
+
+        Prioritizes container environments (Docker) and then local development environments.
+        """
+        # First try to find CBC in system PATH
+        cbc_path = shutil.which("cbc")
+        if cbc_path and os.path.isfile(cbc_path) and os.access(cbc_path, os.X_OK):
+            self.logger.info(f"Found CBC solver in PATH: {cbc_path}")
+            return cbc_path
+
+        # Common paths to check (prioritize container/system paths first)
+        common_paths = [
+            "/usr/bin/cbc",                   # System installation (Docker containers)
+            "/usr/local/bin/cbc",             # Alternative system installation
+            "/opt/homebrew/opt/cbc/bin/cbc",  # Homebrew on Apple Silicon (keg-only)
+            "/usr/local/opt/cbc/bin/cbc",     # Homebrew on Intel Mac (keg-only)
+            "/opt/homebrew/bin/cbc",          # Homebrew on Apple Silicon (if linked)
+        ]
+
+        # Try common installation paths
+        for path in common_paths:
+            if os.path.isfile(path) and os.access(path, os.X_OK):
+                self.logger.info(f"Found CBC solver at: {path}")
+                return path
+
+        # Try to use Homebrew to find CBC on macOS (development environment fallback)
+        try:
+            result = subprocess.run(
+                ["brew", "--prefix", "cbc"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                homebrew_path = result.stdout.strip() + "/bin/cbc"
+                if os.path.isfile(homebrew_path) and os.access(homebrew_path, os.X_OK):
+                    self.logger.info(f"Found CBC solver via Homebrew: {homebrew_path}")
+                    return homebrew_path
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
+            self.logger.debug("Homebrew not available or CBC not installed via Homebrew")
+
+        # Fallback to default container path with detailed warning
+        self.logger.warning(
+            "Could not auto-detect CBC solver path. "
+            "In Docker containers, CBC should be available at /usr/bin/cbc. "
+            "For local development, install CBC via your system package manager or Homebrew. "
+            "You can also manually set 'lp_solver_path' in the configuration. "
+            "Falling back to /usr/bin/cbc"
+        )
+        return "/usr/bin/cbc"
 
     async def perform_optimization(
         self,
@@ -885,7 +941,7 @@ class Optimization:
                         f"constraint_defload{k}_start_timestep": plp.LpConstraint(
                             e=plp.lpSum(
                                 P_deferrable[k][i] * self.timeStep
-                                for i in range(def_start)
+                                for i in range(0, def_start)
                             ),
                             sense=plp.LpConstraintEQ,
                             rhs=0,
@@ -1206,19 +1262,26 @@ class Optimization:
 
         ## Finally, we call the solver to solve our optimization model:
         timeout = self.optim_conf["lp_solver_timeout"]
+        # Log which solver is being used
+        self.logger.info(f"USING SOLVER: {self.lp_solver} with path: {self.lp_solver_path}")
+
         # solving with default solver CBC
         if self.lp_solver == "PULP_CBC_CMD":
+            self.logger.info("Calling PULP_CBC_CMD solver")
             opt_model.solve(PULP_CBC_CMD(msg=False, timeLimit=timeout, threads=self.num_threads))
         elif self.lp_solver == "GLPK_CMD":
+            self.logger.info("Calling GLPK_CMD solver")
             opt_model.solve(GLPK_CMD(msg=False, timeLimit=timeout))
         elif self.lp_solver == "HiGHS":
+            self.logger.info("Calling HiGHS solver")
             opt_model.solve(HiGHS(msg=False, timeLimit=timeout))
         elif self.lp_solver == "COIN_CMD":
+            self.logger.info(f"Calling COIN_CMD solver with path: {self.lp_solver_path}")
             opt_model.solve(
                 COIN_CMD(msg=False, path=self.lp_solver_path, timeLimit=timeout, threads=self.num_threads)
             )
         else:
-            self.logger.warning("Solver %s unknown, using default", self.lp_solver)
+            self.logger.warning("Solver %s unknown, using default PULP_CBC_CMD", self.lp_solver)
             opt_model.solve(PULP_CBC_CMD(msg=False, timeLimit=timeout, threads=self.num_threads))
 
         # The status of the solution is printed to the screen
