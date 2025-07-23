@@ -1334,7 +1334,9 @@ async def build_secrets(
                 not no_response
                 and os.getenv("SUPERVISOR_TOKEN", None) is not None
             ):
-                params_secrets["long_lived_token"] = os.getenv("SUPERVISOR_TOKEN", None)
+                supervisor_token = os.getenv("SUPERVISOR_TOKEN", None)
+                logger.info(f"SUPERVISOR_TOKEN found: {supervisor_token[:20]}..." if supervisor_token else "SUPERVISOR_TOKEN not found")
+                params_secrets["long_lived_token"] = supervisor_token
                 # Use hass_url from options.json if available, otherwise use local addon address
                 if url_from_options != "empty" and url_from_options != "":
                     params_secrets["hass_url"] = url_from_options
@@ -1346,6 +1348,7 @@ async def build_secrets(
                     "Authorization": "Bearer " + params_secrets["long_lived_token"],
                     "content-type": "application/json",
                 }
+                logger.info(f"Using token for auth: {params_secrets['long_lived_token'][:20]}...")
                 # Obtain secrets from Home Assistant via API
                 api_url = params_secrets["hass_url"] + "/api/config"
                 logger.info(f"Attempting to connect to Home Assistant API at: {api_url}")
