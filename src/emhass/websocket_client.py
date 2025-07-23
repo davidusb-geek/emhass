@@ -48,9 +48,16 @@ class AsyncWebSocketClient:
 
     @property
     def websocket_url(self) -> str:
-        parsed = urlparse.urlparse(self.hass_url)
-        ws_scheme = "wss" if parsed.scheme == "https" else "ws"
-        return f"{ws_scheme}://{parsed.netloc}/api/websocket"
+        # For supervisor API, use the dedicated websocket endpoint
+        if self.hass_url.startswith("http://supervisor/core/api"):
+            return "ws://supervisor/core/websocket"
+        elif self.hass_url.startswith("https://supervisor/core/api"):
+            return "wss://supervisor/core/websocket"
+        else:
+            # Standard Home Assistant instance
+            parsed = urlparse.urlparse(self.hass_url)
+            ws_scheme = "wss" if parsed.scheme == "https" else "ws"
+            return f"{ws_scheme}://{parsed.netloc}/api/websocket"
 
     @property
     def connected(self) -> bool:
