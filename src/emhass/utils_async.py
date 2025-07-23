@@ -1332,15 +1332,16 @@ async def build_secrets(
             # Check to use Home Assistant local API
             if (
                 not no_response
-                and (
-                    url_from_options == "empty"
-                    or url_from_options == ""
-                    or url_from_options == "http://supervisor/core/api"
-                )
                 and os.getenv("SUPERVISOR_TOKEN", None) is not None
             ):
                 params_secrets["long_lived_token"] = os.getenv("SUPERVISOR_TOKEN", None)
-                params_secrets["hass_url"] = "http://supervisor/core/api"
+                # Use hass_url from options.json if available, otherwise use local addon address
+                if url_from_options != "empty" and url_from_options != "":
+                    params_secrets["hass_url"] = url_from_options
+                else:
+                    # For addons, use homeassistant hostname for Home Assistant access
+                    params_secrets["hass_url"] = "http://homeassistant:8123"
+                    logger.info("Using homeassistant:8123 for addon WebSocket/API access")
                 headers = {
                     "Authorization": "Bearer " + params_secrets["long_lived_token"],
                     "content-type": "application/json",
