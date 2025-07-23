@@ -1330,12 +1330,16 @@ async def build_secrets(
                 emhass_conf["data_path"] = pathlib.Path(options["data_path"])
 
             # Check to use Home Assistant local API
+            supervisor_token = os.getenv("SUPERVISOR_TOKEN", None)
+            logger.info(f"Environment check - SUPERVISOR_TOKEN exists: {supervisor_token is not None}")
+            logger.info(f"Environment check - no_response: {no_response}")
+            if supervisor_token:
+                logger.info(f"SUPERVISOR_TOKEN preview: {supervisor_token[:20]}...")
+
             if (
                 not no_response
-                and os.getenv("SUPERVISOR_TOKEN", None) is not None
+                and supervisor_token is not None
             ):
-                supervisor_token = os.getenv("SUPERVISOR_TOKEN", None)
-                logger.info(f"SUPERVISOR_TOKEN found: {supervisor_token[:20]}..." if supervisor_token else "SUPERVISOR_TOKEN not found")
                 params_secrets["long_lived_token"] = supervisor_token
                 # Use hass_url from options.json if available, otherwise use local addon address
                 if url_from_options != "empty" and url_from_options != "":
