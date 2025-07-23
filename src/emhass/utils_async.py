@@ -1347,11 +1347,12 @@ async def build_secrets(
                     "content-type": "application/json",
                 }
                 # Obtain secrets from Home Assistant via API
+                api_url = params_secrets["hass_url"] + "/api/config"
+                logger.info(f"Attempting to connect to Home Assistant API at: {api_url}")
                 logger.debug("Obtaining secrets from Home Assistant Supervisor API")
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(
-                        params_secrets["hass_url"] + "/config", headers=headers
-                    ) as response:
+                    async with session.get(api_url, headers=headers) as response:
+                        logger.info(f"Response from {api_url}: {response.status} {response.reason}")
                         print(response)
                         if response.status < 400:
                             config_hass = await response.json()
