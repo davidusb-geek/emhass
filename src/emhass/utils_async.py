@@ -1341,13 +1341,13 @@ async def build_secrets(
                 and supervisor_token is not None
             ):
                 params_secrets["long_lived_token"] = supervisor_token
-                # Use hass_url from options.json if available, otherwise use local addon address
+                # Use hass_url from options.json if available, otherwise use supervisor API for addon
                 if url_from_options != "empty" and url_from_options != "":
                     params_secrets["hass_url"] = url_from_options
                 else:
-                    # For addons, use homeassistant hostname for Home Assistant access
-                    params_secrets["hass_url"] = "http://homeassistant:8123"
-                    logger.info("Using homeassistant:8123 for addon WebSocket/API access")
+                    # For addons, use supervisor API for both REST and WebSocket access
+                    params_secrets["hass_url"] = "http://supervisor/core/api"
+                    logger.info("Using supervisor/core/api for addon API access")
                 headers = {
                     "Authorization": "Bearer " + params_secrets["long_lived_token"],
                     "content-type": "application/json",
