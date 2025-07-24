@@ -117,7 +117,7 @@ RUN apt-get remove --purge -y --auto-remove \
     ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
-ENTRYPOINT [ "uv", "run", "--frozen", "hypercorn", "emhass.web_server_async:app", "--bind", "0.0.0.0:5000", "--workers", "8", "--access-logfile", "-", "--error-logfile", "-" ]
+ENTRYPOINT [ "uv", "run", "--frozen", "hypercorn", "emhass.web_server_async:app", "--bind", "0.0.0.0:5000", "--workers", "1", "--access-logfile", "-", "--error-logfile", "-" ]
 
 # for running Unittest
 #COPY tests/ /app/tests
