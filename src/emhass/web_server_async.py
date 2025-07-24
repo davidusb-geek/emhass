@@ -49,7 +49,7 @@ from emhass.utils_async import (
 app = Quart(__name__)
 
 emhass_conf = {}
-entity_path = None
+entity_path = Path
 params_secrets = {}
 continual_publish_thread = []
 injection_dict = {}
@@ -57,10 +57,6 @@ injection_dict = {}
 templates = jinja2.Environment(
     loader=jinja2.PackageLoader("emhass", "templates"),
 )
-
-
-
-
 
 
 # Register async startup and shutdown handlers
@@ -113,7 +109,6 @@ async def checkFileLog(refString=None) -> bool:
                 logArray = content.splitlines()
         else:
             app.logger.debug("Unable to obtain actionLogs.txt")
-            return False
     for logString in logArray:
         if logString.split(" ", 1)[0] == "ERROR":
             return True
@@ -178,6 +173,10 @@ async def index():
         )
         injection_dict = {}
 
+    # replace {{basename}} in html template html with path root
+    # basename = request.headers.get("X-Ingress-Path", "")
+    # return make_response(template.render(injection_dict=injection_dict, basename=basename))
+
     template = templates.get_template("index.html")
     return await make_response(template.render(injection_dict=injection_dict))
 
@@ -191,7 +190,7 @@ async def configuration():
     """
     app.logger.info("serving configuration.html...")
     # get params
-    params = {}
+    # params = {}
     if (emhass_conf["data_path"] / "params.pkl").exists():
         async with aiofiles.open(str(emhass_conf["data_path"] / "params.pkl"), "rb") as fid:
             content = await fid.read()
@@ -385,7 +384,7 @@ async def action_call(action_name):
     # Params
     ActionStr = " >> Obtaining params: "
     app.logger.info(ActionStr)
-    costfun = "profit"  # Default value
+    # costfun = "profit"  # Default value
     if (emhass_conf["data_path"] / "params.pkl").exists():
         async with aiofiles.open(str(emhass_conf["data_path"] / "params.pkl"), "rb") as fid:
             content = await fid.read()
@@ -432,13 +431,14 @@ async def action_call(action_name):
         # Start Thread
         continualLoop = threading.Thread(
             name="continual_publish",
-            target=lambda: asyncio.run(continual_publish(input_data_dict, entity_path or Path(), app.logger)),
+            target=lambda: asyncio.run(continual_publish(input_data_dict, entity_path, app.logger)),
         )
         continualLoop.start()
         continual_publish_thread.append(continualLoop)
 
     # Run action based on POST request
     # If error in log when running action, return actions log (list) as response. (Using ActionStr as a reference of the action start in the log)
+    # publish-data
     if action_name == "publish-data":
         ActionStr = " >> Publishing data..."
         app.logger.info(ActionStr)
@@ -477,19 +477,15 @@ async def action_call(action_name):
     elif action_name == "naive-mpc-optim":
         ActionStr = " >> Performing naive MPC optimization..."
         app.logger.info(ActionStr)
-
-        # Validate input_data_dict
-        if not input_data_dict or len(input_data_dict) == 0:
-            app.logger.error("Input data dictionary is empty - cannot perform optimization")
-            return await make_response("EMHASS >> Error: No input data available for optimization", 400)
-
+        # # Validate input_data_dict
+        # if not input_data_dict or len(input_data_dict) == 0:
+        #     app.logger.error("Input data dictionary is empty - cannot perform optimization")
+        #     return await make_response("EMHASS >> Error: No input data available for optimization", 400)
         opt_res = await naive_mpc_optim(input_data_dict, app.logger)
-
         # Check if optimization returned valid results
-        if opt_res is None or (isinstance(opt_res, bool) and not opt_res):
-            app.logger.error("Naive MPC optimization failed")
-            return await make_response("EMHASS >> Error: Naive MPC optimization failed", 400)
-
+        # if opt_res is None or (isinstance(opt_res, bool) and not opt_res):
+        #     app.logger.error("Naive MPC optimization failed")
+        #     return await make_response("EMHASS >> Error: Naive MPC optimization failed", 400)
         injection_dict = get_injection_dict(opt_res)
         async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
             content = pickle.dumps(injection_dict)
@@ -638,7 +634,7 @@ async def initialize():
         emhass_conf,
         app.logger,
         argument,
-        str(options_path),
+        options_path,
         os.getenv("SECRETS_PATH", default="/app/secrets_emhass.yaml"),
         bool(no_response),
     )
