@@ -244,7 +244,7 @@ async def parameter_get():
     if type(params) is bool and not params:
         return await make_response(["Unable to obtain associations file"], 500)
     # Covert formatted parameters from params back into config.json format
-    return_config = await param_to_config(params, app.logger)
+    return_config = param_to_config(params, app.logger)
     # Send config
     return await make_response(return_config, 201)
 
@@ -266,7 +266,7 @@ async def config_get():
     if type(params) is bool and not params:
         return await make_response(["Unable to obtain associations file"], 500)
     # Covert formatted parameters from params back into config.json format
-    return_config = await param_to_config(params, app.logger)
+    return_config = param_to_config(params, app.logger)
     # Send params
     return await make_response(return_config, 201)
 
@@ -296,7 +296,7 @@ async def json_convert():
     if type(params) is bool and not params:
         return await make_response(["Unable to obtain associations file"], 500)
     # Covert formatted parameters from params back into config.json format
-    config = await param_to_config(params, app.logger)
+    config = param_to_config(params, app.logger)
     # convert json to str
     config = orjson.dumps(config).decode()
 
@@ -343,7 +343,7 @@ async def parameter_set():
 
     # Covert formatted parameters from params back into config.json format.
     # Overwrite existing default parameters in config
-    config.update(await param_to_config(params, app.logger))
+    config.update(param_to_config(params, app.logger))
 
     # Save config to config.json
     if os.path.exists(emhass_conf["config_path"].parent):
@@ -452,7 +452,7 @@ async def action_call(action_name):
         ActionStr = " >> Performing perfect optimization..."
         app.logger.info(ActionStr)
         opt_res = await perfect_forecast_optim(input_data_dict, app.logger)
-        injection_dict = await get_injection_dict(opt_res)
+        injection_dict = get_injection_dict(opt_res)
         async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
             content = pickle.dumps(injection_dict)
             await fid.write(content)
@@ -465,7 +465,7 @@ async def action_call(action_name):
         ActionStr = " >> Performing dayahead optimization..."
         app.logger.info(ActionStr)
         opt_res = await dayahead_forecast_optim(input_data_dict, app.logger)
-        injection_dict = await get_injection_dict(opt_res)
+        injection_dict = get_injection_dict(opt_res)
         async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
             content = pickle.dumps(injection_dict)
             await fid.write(content)
@@ -490,7 +490,7 @@ async def action_call(action_name):
             app.logger.error("Naive MPC optimization failed")
             return await make_response("EMHASS >> Error: Naive MPC optimization failed", 400)
 
-        injection_dict = await get_injection_dict(opt_res)
+        injection_dict = get_injection_dict(opt_res)
         async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
             content = pickle.dumps(injection_dict)
             await fid.write(content)
@@ -503,7 +503,7 @@ async def action_call(action_name):
         ActionStr = " >> Performing a machine learning forecast model fit..."
         app.logger.info(ActionStr)
         df_fit_pred, _, mlf = await forecast_model_fit(input_data_dict, app.logger)
-        injection_dict = await get_injection_dict_forecast_model_fit(df_fit_pred, mlf)
+        injection_dict = get_injection_dict_forecast_model_fit(df_fit_pred, mlf)
         async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
             content = pickle.dumps(injection_dict)
             await fid.write(content)
