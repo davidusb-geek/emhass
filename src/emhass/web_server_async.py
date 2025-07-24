@@ -2,7 +2,6 @@
 
 import argparse
 import asyncio
-import atexit
 import logging
 import os
 import pickle
@@ -90,11 +89,7 @@ async def after_serving():
     except Exception as e:
         app.logger.warning(f"❌ WebSocket shutdown failed: {e}")
     app.logger.info("✅ Quart shutdown complete")
-#         except Exception as e:
-#             app.logger.warning(f"❌ WebSocket shutdown failed: {e}")
-#         app.logger.info("✅ Quart app shutdown complete")
 
-#     return app
 
 
 async def checkFileLog(refString=None) -> bool:
@@ -406,7 +401,7 @@ async def action_call(action_name):
     runtimeparams = await request.get_json(force=True, silent=True)
     if runtimeparams is not None:
         if runtimeparams != "{}":
-            app.logger.debug("Passed runtime parameters: " + str(runtimeparams))
+            app.logger.info("Passed runtime parameters: " + str(runtimeparams))
     else:
         app.logger.warning("Unable to parse runtime parameters")
         runtimeparams = {}

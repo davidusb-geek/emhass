@@ -125,7 +125,8 @@ class RetrieveHass:
 
     async def get_data(
         self,
-        days_list: list[pd.Timestamp],
+        days_list: pd.date_range,
+        # days_list: list[pd.Timestamp],
         var_list: list[str],
         minimal_response: bool = True,
         no_attributes: bool = True
@@ -162,6 +163,7 @@ class RetrieveHass:
         # Try to get statistics data (which contains the actual historical data)
         try:
             # Get statistics data with 5-minute period for good resolution
+            t0 = time.time()
             stats_data = await asyncio.wait_for(
                 self._client.get_statistics(
                     start_time=start_time,
@@ -189,58 +191,59 @@ class RetrieveHass:
                 )
                 self.df_final = self._convert_statistics_to_dataframe(stats_data, var_list)
 
+            t1 = time.time()
+            self.logger.info(f"Statistics data retrieval for {len(days_list):.2f} days took {t1 - t0:.2f} seconds")
+
             return not self.df_final.empty
 
         except Exception as e:
             self.logger.error(f"Failed to get data via WebSocket: {e}")
 
 
-    async def get_statistics_data(
-        self,
-        days_list: list[pd.Timestamp],
-        var_list: list[str],
-        period: str = "hour"
-    ) -> pd.DataFrame:
-        """Get statistical data for entities."""
-        # print("RetrieveHass.get_statistics_data - retrieve_hass_async")
-        t0 = time.time()
-        if not self._client:
-            try:
-                await self.startup()
-            except Exception as e:
-                self.logger.error(f"Auto-startup failed for get_statistics_data: {e}")
-                raise ConnectionError(f"Failed to establish connection: {e}")
+    # async def get_statistics_data(
+    #     self,
+    #     days_list: list[pd.Timestamp],
+    #     var_list: list[str],
+    #     period: str = "hour"
+    # ) -> pd.DataFrame:
+    #     """Get statistical data for entities."""
+    #     t0 = time.time()
+    #     if not self._client:
+    #         try:
+    #             await self.startup()
+    #         except Exception as e:
+    #             self.logger.error(f"Auto-startup failed for get_statistics_data: {e}")
+    #             raise ConnectionError(f"Failed to establish connection: {e}")
 
-        start_time = min(days_list).to_pydatetime()
-        end_time = max(days_list).to_pydatetime()
+    #     start_time = min(days_list).to_pydatetime()
+    #     end_time = max(days_list).to_pydatetime()
 
-        stats_data = await self._client.get_statistics(
-            start_time=start_time,
-            end_time=end_time,
-            statistic_ids=var_list,
-            period=period
-        )
-        t1 = time.time()
-        total = t1 - t0
-        print("time_getting_statistics", total)
+    #     stats_data = await self._client.get_statistics(
+    #         start_time=start_time,
+    #         end_time=end_time,
+    #         statistic_ids=var_list,
+    #         period=period
+    #     )
+    #     t1 = time.time()
+    #     total = t1 - t0
+    #     print("time_getting_statistics", total)
 
-        return self._convert_statistics_to_dataframe(stats_data, var_list)
+    #     return self._convert_statistics_to_dataframe(stats_data, var_list)
 
-    async def _get_statistics_data(self, days_list: list[pd.Timestamp], var_list: list[str]) -> bool:
-        """
-        Retrieve data using Home Assistant statistics API for older data.
-        Compatibility method for original interface.
-        """
-        # print("RetrieveHass._get_statistics_data - retrieve_hass_async")
-        try:
-            df_stats = await self.get_statistics_data(days_list, var_list)
-            if not df_stats.empty:
-                self.df_final = df_stats
-                return True
-            return False
-        except Exception as e:
-            self.logger.error(f"Statistics data retrieval failed: {e}")
-            return False
+    # async def _get_statistics_data(self, days_list: list[pd.Timestamp], var_list: list[str]) -> bool:
+    #     """
+    #     Retrieve data using Home Assistant statistics API for older data.
+    #     Compatibility method for original interface.
+    #     """
+    #     try:
+    #         df_stats = await self.get_statistics_data(days_list, var_list)
+    #         if not df_stats.empty:
+    #             self.df_final = df_stats
+    #             return True
+    #         return False
+    #     except Exception as e:
+    #         self.logger.error(f"Statistics data retrieval failed: {e}")
+    #         return False
 
     def prepare_data(
         self,
@@ -254,7 +257,6 @@ class RetrieveHass:
         Prepare data for optimization.
         Compatibility method for original interface.
         """
-        # print("RetrieveHass.prepare_data - retrieve_hass_async")
         try:
             if load_negative:  # Apply the correct sign to load power
                 self.df_final[var_load + "_positive"] = -self.df_final[var_load]
@@ -355,7 +357,6 @@ class RetrieveHass:
         list_name: str,
         state: float,
     ) -> dict:
-        # print("RetrieveHass.get_attr_data_dict - retrieve_hass_async")
         list_df = copy.deepcopy(data_df).loc[data_df.index[idx] :].reset_index()
         list_df.columns = ["timestamps", entity_id]
         ts_list = [str(i) for i in list_df["timestamps"].tolist()]
@@ -421,7 +422,6 @@ class RetrieveHass:
         :type dont_post: bool, optional
 
         """
-        # print("RetrieveHass.post_data - retrieve_hass_async")
         # Add a possible prefix to the entity ID
         entity_id = entity_id.replace("sensor.", "sensor." + publish_prefix)
         # Set the URL
@@ -643,7 +643,6 @@ class RetrieveHass:
 
     def _load_data_from_file(self) -> pd.DataFrame:
         """Load data from pickle file (unchanged from original)."""
-        # print("RetrieveHass._load_data_from_file retrieve_hass_async")
         import pickle
         from pathlib import Path
 
@@ -664,7 +663,6 @@ class RetrieveHass:
         var_list: list[str]
     ) -> pd.DataFrame:
         """Convert WebSocket history data to DataFrame."""
-        # print("RetrieveHass._convert_history_to_dataframe retrieve_hass_async")
 
         import numpy as np
         import pandas as pd
@@ -777,7 +775,6 @@ class RetrieveHass:
         var_list: list[str]
     ) -> pd.DataFrame:
         """Convert WebSocket statistics data to DataFrame."""
-        # print("RetrieveHass._convert_statistics_to_dataframe retrieve_hass_async")
         import pandas as pd
 
         # Initialize empty DataFrame

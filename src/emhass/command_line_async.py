@@ -18,9 +18,9 @@ import pandas as pd
 
 from emhass import utils_async as utils
 from emhass.forecast_async import Forecast
-from emhass.machine_learning_forecaster_async import MLForecaster
-from emhass.machine_learning_regressor_async import MLRegressor
-from emhass.optimization_async import Optimization
+from emhass.machine_learning_forecaster import MLForecaster
+from emhass.machine_learning_regressor import MLRegressor
+from emhass.optimization import Optimization
 from emhass.retrieve_hass_async import RetrieveHass
 
 default_csv_filename = "opt_res_latest.csv"
@@ -40,7 +40,6 @@ async def retrieve_home_assistant_data(
     test_df_literal: str,
 ) -> tuple:
     """Retrieve data from Home Assistant or file and prepare it for optimization."""
-    # print("retrieve_home_assistant_data - command_line_async.py")
     if get_data_from_file:
         async with aiofiles.open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
             content = await inp.read()
@@ -131,7 +130,6 @@ async def adjust_pv_forecast(
     :return: The adjusted PV forecast as a pandas Series.
     :rtype: pd.Series
     """
-    # print("adjust_pv_forecast - command_line_async.py")
     logger.info("Adjusting PV forecast, retrieving history data for model fit")
     # Retrieve data from Home Assistant
     success, df_input_data, _ = await retrieve_home_assistant_data(
@@ -189,7 +187,6 @@ async def set_input_data_dict(
     :rtype: dict
 
     """
-    # print("set_input_data_dict - command_line_async.py")
     logger.info("Setting up needed data")
 
     # check if passed params is a dict
@@ -234,16 +231,6 @@ async def set_input_data_dict(
         logger,
         get_data_from_file=get_data_from_file or False,
     )
-    # rh = create_retrieve_hass_instance(
-    #     retrieve_hass_conf["hass_url"],
-    #     retrieve_hass_conf["long_lived_token"],
-    #     retrieve_hass_conf["optimization_time_step"],
-    #     retrieve_hass_conf["time_zone"],
-    #     str(params),
-    #     emhass_conf,
-    #     logger,
-    #     get_data_from_file=get_data_from_file or False,
-    # )
 
     # Retrieve basic configuration data from hass
     test_df_literal = "test_df_final.pkl"
@@ -253,7 +240,6 @@ async def set_input_data_dict(
             _, _, _, rh.ha_config = pickle.loads(content)
     else:
         response = await rh.get_ha_config()
-        # print(response)
 
         if type(response) is bool:
             return {}
@@ -520,6 +506,7 @@ async def set_input_data_dict(
                 df_input_data.index[-1] - pd.offsets.Day(days_to_retrieve) :
             ]
         else:
+            print(days_to_retrieve)
             days_list = utils.get_days_list(days_to_retrieve)
             var_list = [var_model]
             # await rh.connect_websocket()
@@ -611,7 +598,6 @@ async def weather_forecast_cache(
     :rtype: bool
 
     """
-    # print("weather_forecast_cache - command_line_async.py")
     # Parsing yaml
     retrieve_hass_conf, optim_conf, plant_conf = await utils.get_yaml_parse(params, logger)
     # Treat runtimeparams
@@ -664,7 +650,6 @@ async def perfect_forecast_optim(
     :rtype: pd.DataFrame
 
     """
-    # print("perfect_forecast_optim - command_line_async.py")
     logger.info("Performing perfect forecast optimization")
     # Load cost and prod price forecast
     df_input_data = input_data_dict["fcst"].get_load_cost_forecast(
@@ -728,7 +713,6 @@ async def dayahead_forecast_optim(
     :rtype: pd.DataFrame
 
     """
-    # print("dayahead_forecast_optim - command_line_async.py")
     logger.info("Performing day-ahead forecast optimization")
     # Load cost and prod price forecast
     df_input_data_dayahead = input_data_dict["fcst"].get_load_cost_forecast(
@@ -800,7 +784,6 @@ async def naive_mpc_optim(
     :rtype: pd.DataFrame
 
     """
-    # print("naive_mpc_optim - command_line_async.py")
     logger.info("Performing naive MPC optimization")
 
     # Validate input data before proceeding
@@ -855,7 +838,7 @@ async def naive_mpc_optim(
     def_end_timestep = input_data_dict["params"]["optim_conf"][
         "end_timesteps_of_each_deferrable_load"
     ]
-    opt_res_naive_mpc = await input_data_dict["opt"].perform_naive_mpc_optim(
+    opt_res_naive_mpc = input_data_dict["opt"].perform_naive_mpc_optim(
         df_input_data_dayahead,
         input_data_dict["P_PV_forecast"],
         input_data_dict["P_load_forecast"],
@@ -908,7 +891,6 @@ async def forecast_model_fit(
     :return: The DataFrame containing the forecast data results without and with backtest and the `mlforecaster` object
     :rtype: Tuple[pd.DataFrame, pd.DataFrame, mlforecaster]
     """
-    # print("forecast_model_fit - command_line_async.py")
     data = copy.deepcopy(input_data_dict["df_input_data"])
     model_type = input_data_dict["params"]["passed_data"]["model_type"]
     var_model = input_data_dict["params"]["passed_data"]["var_model"]
@@ -927,7 +909,7 @@ async def forecast_model_fit(
         logger,
     )
     # Fit the ML model
-    df_pred, df_pred_backtest = await mlf.fit(
+    df_pred, df_pred_backtest = mlf.fit(
         split_date_delta=split_date_delta, perform_backtest=perform_backtest
     )
     # Save model
@@ -967,7 +949,6 @@ async def forecast_model_predict(
     :return: The DataFrame containing the forecast prediction data
     :rtype: pd.DataFrame
     """
-    # print("forecast_model_predict - command_line_async.py")
     # Load model
     model_type = input_data_dict["params"]["passed_data"]["model_type"]
     filename = model_type + default_pkl_suffix
@@ -990,7 +971,7 @@ async def forecast_model_predict(
         data_last_window = copy.deepcopy(input_data_dict["df_input_data"])
     else:
         data_last_window = None
-    predictions = await mlf.predict(data_last_window)
+    predictions = mlf.predict(data_last_window)
     # Publish data to a Home Assistant sensor
     model_predict_publish = input_data_dict["params"]["passed_data"][
         "model_predict_publish"
@@ -1063,7 +1044,6 @@ async def forecast_model_tune(
     :return: The DataFrame containing the forecast data results using the optimized model
     :rtype: pd.DataFrame
     """
-    # print("forecast_model_tune - command_line_async.py")
     # Load model
     model_type = input_data_dict["params"]["passed_data"]["model_type"]
     filename = model_type + default_pkl_suffix
@@ -1082,7 +1062,7 @@ async def forecast_model_tune(
             )
             return None, None
     # Tune the model
-    df_pred_optim = await mlf.tune(debug=debug)
+    df_pred_optim = mlf.tune(debug=debug)
     # Save model
     if not debug:
         filename = model_type + default_pkl_suffix
@@ -1105,7 +1085,6 @@ async def regressor_model_fit(
     :param debug: True to debug, useful for unit testing, defaults to False
     :type debug: Optional[bool], optional
     """
-    # print("regressor_model_fit - command_line_async.py")
     data = copy.deepcopy(input_data_dict["df_input_data"])
     if "model_type" in input_data_dict["params"]["passed_data"]:
         model_type = input_data_dict["params"]["passed_data"]["model_type"]
@@ -1142,7 +1121,7 @@ async def regressor_model_fit(
         data, model_type, regression_model, features, target, timestamp, logger
     )
     # Fit the ML model
-    fit = await mlr.fit(date_features=date_features)
+    fit = mlr.fit(date_features=date_features)
     if not fit:
         return False
     # Save model
@@ -1169,7 +1148,6 @@ async def regressor_model_predict(
     :param debug: True to debug, useful for unit testing, defaults to False
     :type debug: Optional[bool], optional
     """
-    # print("regressor_model_predict - command_line_async.py")
     if "model_type" in input_data_dict["params"]["passed_data"]:
         model_type = input_data_dict["params"]["passed_data"]["model_type"]
     else:
@@ -1193,7 +1171,7 @@ async def regressor_model_predict(
         logger.error("parameter: 'new_values' not passed")
         return False
     # Predict from csv file
-    prediction = await mlr.predict(new_values)
+    prediction = mlr.predict(new_values)
     mlr_predict_entity_id = input_data_dict["params"]["passed_data"].get(
         "mlr_predict_entity_id", "sensor.mlr_predict"
     )
@@ -1246,7 +1224,6 @@ async def publish_data(
     :type dont_post: bool, optional
 
     """
-    # print("publish_data - command_line_async.py")
     logger.info("Publishing data to HASS instance")
     if input_data_dict:
         if not isinstance(input_data_dict.get("params", {}), dict):
@@ -1524,7 +1501,8 @@ async def publish_data(
             idx_closest,
             custom_optim_status_id["entity_id"],
             "",
-            custom_optim_status_id["unit_of_measurement"],
+            "",
+            # custom_optim_status_id["unit_of_measurement"],
             custom_optim_status_id["friendly_name"],
             type_var="optim_status",
             publish_prefix=publish_prefix,
@@ -1581,7 +1559,6 @@ async def continual_publish(
     :type logger: logging.Logger
 
     """
-    # print("continual_publish - command_line_async.py")
     logger.info("Continual publish thread service started")
     freq = input_data_dict["retrieve_hass_conf"].get(
         "optimization_time_step", pd.to_timedelta(1, "minutes")
@@ -1649,7 +1626,6 @@ async def publish_json(
     :type reference: str, optional
 
     """
-    # print("publish_json - command_line_async.py")
     # Retrieve entity metadata from file
     if os.path.isfile(entity_path / default_metadata_json):
         async with aiofiles.open(entity_path / default_metadata_json) as file:
@@ -1726,7 +1702,6 @@ async def main():
     - debug: Use True for testing purposes
 
     """
-    # print("main - command_line_async.py")
     # Parsing arguments
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -1915,7 +1890,7 @@ async def main():
     elif args.action == "naive-mpc-optim":
         opt_res = await naive_mpc_optim(input_data_dict, logger, debug=args.debug)
     elif args.action == "forecast-model-fit":
-        df_fit_pred, df_fit_pred_backtest, mlf = await forecast_model_fit(
+        df_fit_pred, df_fit_pred_backtest, mlf = forecast_model_fit(
             input_data_dict, logger, debug=args.debug
         )
         opt_res = None
