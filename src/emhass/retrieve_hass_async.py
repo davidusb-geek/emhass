@@ -68,8 +68,8 @@ class RetrieveHass:
         params: str,
         emhass_conf: dict,
         logger: logging.Logger,
-        get_data_from_file: bool = False,
-    ):
+        get_data_from_file: bool | None = False,
+    ) -> None:
         """
         Define constructor for RetrieveHass class.
 
@@ -97,7 +97,13 @@ class RetrieveHass:
         self.long_lived_token = long_lived_token
         self.freq = freq
         self.time_zone = time_zone
-        self.params = orjson.loads(params) if isinstance(params, str) else params
+        if (params is None) or (params == "null"):
+            self.params = {}
+        elif type(params) is dict:
+            self.params = params
+        else:
+            self.params = orjson.loads(params)
+        # self.params = orjson.loads(params) if isinstance(params, str) else params
         self.emhass_conf = emhass_conf
         self.logger = logger
         self.get_data_from_file = get_data_from_file
@@ -117,7 +123,7 @@ class RetrieveHass:
         try:
             self._client = await get_websocket_client(self.hass_url, self.long_lived_token)
         except Exception as e:
-            self.logger.error(f"Fout bij connectie opzetten: {e}")
+            self.logger.error(f"Websocket connection error: {e}")
             raise
 
         self.ha_config = await self._client.get_config()
@@ -126,17 +132,22 @@ class RetrieveHass:
     async def get_data(
         self,
         days_list: pd.date_range,
-        # days_list: list[pd.Timestamp],
         var_list: list[str],
-        minimal_response: bool = True,
-        no_attributes: bool = True
     ) -> bool:
-        """
-        Retrieve data from Home Assistant.
+        r"""
+        Retrieve the actual data from hass.
 
-        This method maintains compatibility with the original EMHASS interface
-        while using the new WebSocket implementation.
+        :param days_list: A list of days to retrieve. The ISO format should be used \
+            and the timezone is UTC. The frequency of the data_range should be freq='D'
+        :type days_list: pandas.date_range
+        :param var_list: The list of variables to retrive from hass. These should \
+            be the exact name of the sensor in Home Assistant. \
+            For example: ['sensor.home_load', 'sensor.home_pv']
+        :type var_list: list
+        :return: The DataFrame populated with the retrieved data from hass
+        :rtype: pandas.DataFrame
         """
+        self.logger.info("Retrieve hass get data method initiated...")
         try:
             self._client = await asyncio.wait_for(
                 get_websocket_client(self.hass_url, self.long_lived_token, self.logger),
@@ -151,10 +162,10 @@ class RetrieveHass:
 
         self.var_list = var_list
 
-        if self.get_data_from_file:
-            # Handle file-based data loading (unchanged)
-            self.df_final = self._load_data_from_file()
-            return True
+        # if self.get_data_from_file:
+        #     # Handle file-based data loading (unchanged)
+        #     self.df_final = self._load_data_from_file()
+        #     return True
 
         # Calculate time range
         start_time = min(days_list).to_pydatetime()
@@ -177,19 +188,19 @@ class RetrieveHass:
             # Convert statistics data to DataFrame
             self.df_final = self._convert_statistics_to_dataframe(stats_data, var_list)
 
-            if self.df_final.empty:
-                self.logger.warning("Statistics data conversion resulted in empty DataFrame")
-                # Try with different period
-                stats_data = await asyncio.wait_for(
-                    self._client.get_statistics(
-                        start_time=start_time,
-                        end_time=end_time,
-                        statistic_ids=var_list,
-                        period="hour"
-                    ),
-                    timeout=30.0
-                )
-                self.df_final = self._convert_statistics_to_dataframe(stats_data, var_list)
+            # if self.df_final.empty:
+            #     self.logger.warning("Statistics data conversion resulted in empty DataFrame")
+            #     # Try with different period
+            #     stats_data = await asyncio.wait_for(
+            #         self._client.get_statistics(
+            #             start_time=start_time,
+            #             end_time=end_time,
+            #             statistic_ids=var_list,
+            #             period="hour"
+            #         ),
+            #         timeout=30.0
+            #     )
+            #     self.df_final = self._convert_statistics_to_dataframe(stats_data, var_list)
 
             t1 = time.time()
             self.logger.info(f"Statistics data retrieval for {len(days_list):.2f} days took {t1 - t0:.2f} seconds")
@@ -199,52 +210,6 @@ class RetrieveHass:
         except Exception as e:
             self.logger.error(f"Failed to get data via WebSocket: {e}")
 
-
-    # async def get_statistics_data(
-    #     self,
-    #     days_list: list[pd.Timestamp],
-    #     var_list: list[str],
-    #     period: str = "hour"
-    # ) -> pd.DataFrame:
-    #     """Get statistical data for entities."""
-    #     t0 = time.time()
-    #     if not self._client:
-    #         try:
-    #             await self.startup()
-    #         except Exception as e:
-    #             self.logger.error(f"Auto-startup failed for get_statistics_data: {e}")
-    #             raise ConnectionError(f"Failed to establish connection: {e}")
-
-    #     start_time = min(days_list).to_pydatetime()
-    #     end_time = max(days_list).to_pydatetime()
-
-    #     stats_data = await self._client.get_statistics(
-    #         start_time=start_time,
-    #         end_time=end_time,
-    #         statistic_ids=var_list,
-    #         period=period
-    #     )
-    #     t1 = time.time()
-    #     total = t1 - t0
-    #     print("time_getting_statistics", total)
-
-    #     return self._convert_statistics_to_dataframe(stats_data, var_list)
-
-    # async def _get_statistics_data(self, days_list: list[pd.Timestamp], var_list: list[str]) -> bool:
-    #     """
-    #     Retrieve data using Home Assistant statistics API for older data.
-    #     Compatibility method for original interface.
-    #     """
-    #     try:
-    #         df_stats = await self.get_statistics_data(days_list, var_list)
-    #         if not df_stats.empty:
-    #             self.df_final = df_stats
-    #             return True
-    #         return False
-    #     except Exception as e:
-    #         self.logger.error(f"Statistics data retrieval failed: {e}")
-    #         return False
-
     def prepare_data(
         self,
         var_load: str,
@@ -252,10 +217,28 @@ class RetrieveHass:
         set_zero_min: bool,
         var_replace_zero: list[str],
         var_interp: list[str],
-    ) -> pd.DataFrame:
-        """
-        Prepare data for optimization.
-        Compatibility method for original interface.
+    ) -> bool:
+        r"""
+        Apply some data treatment in preparation for the optimization task.
+
+        :param var_load: The name of the variable for the household load consumption.
+        :type var_load: str
+        :param load_negative: Set to True if the retrived load variable is \
+            negative by convention, defaults to False
+        :type load_negative: bool, optional
+        :param set_zero_min: A special treatment for a minimum value saturation \
+            to zero. Values below zero are replaced by nans, defaults to True
+        :type set_zero_min: bool, optional
+        :param var_replace_zero: A list of retrived variables that we would want \
+            to replace nans with zeros, defaults to None
+        :type var_replace_zero: list, optional
+        :param var_interp: A list of retrived variables that we would want to \
+            interpolate nan values using linear interpolation, defaults to None
+        :type var_interp: list, optional
+        :return: The DataFrame populated with the retrieved data from hass and \
+            after the data treatment
+        :rtype: pandas.DataFrame
+
         """
         try:
             if load_negative:  # Apply the correct sign to load power
@@ -360,12 +343,12 @@ class RetrieveHass:
         list_df = copy.deepcopy(data_df).loc[data_df.index[idx] :].reset_index()
         list_df.columns = ["timestamps", entity_id]
         ts_list = [str(i) for i in list_df["timestamps"].tolist()]
-        vals_list = [str(float(np.round(i, 2))) for i in list_df[entity_id].tolist()]
+        vals_list = [str(np.round(i, 2)) for i in list_df[entity_id].tolist()]
         forecast_list = []
         for i, ts in enumerate(ts_list):
             datum = {}
             datum["date"] = ts
-            datum[entity_id.split("sensor.")[1]] = float(vals_list[i])
+            datum[entity_id.split("sensor.")[1]] = vals_list[i]
             forecast_list.append(datum)
         data = {
             "state": f"{state:.2f}",
@@ -439,15 +422,15 @@ class RetrieveHass:
         if type_var == "cost_fun":
             if isinstance(data_df.iloc[0], pd.Series):  # if Series extract
                 data_df = data_df.iloc[:, 0]
-            state = float(np.round(data_df.sum(), 2))
+            state = np.round(data_df.sum(), 2)
         elif type_var == "unit_load_cost" or type_var == "unit_prod_price":
-            state = float(np.round(data_df.loc[data_df.index[idx]], 4))
+            state = np.round(data_df.loc[data_df.index[idx]], 4)
         elif type_var == "optim_status":
             state = data_df.loc[data_df.index[idx]]
         elif type_var == "mlregressor":
             state = convert_numpy_types(data_df[idx])
         else:
-            state = float(np.round(data_df.loc[data_df.index[idx]], 2))
+            state = np.round(data_df.loc[data_df.index[idx]], 2)
         if type_var == "power":
             data = RetrieveHass.get_attr_data_dict(
                 data_df,
@@ -579,8 +562,8 @@ class RetrieveHass:
                     response_status_code = response.status
 
         # Treating the response status and posting them on the logger
-        if response.ok if self.get_data_from_file or dont_post else response_ok:
-            if logger_levels == "DEBUG":
+        if response.ok:
+            if logger_levels == "DEBUG" or dont_post:
                 self.logger.debug(
                     "Successfully posted to " + entity_id + " = " + str(state)
                 )
@@ -657,117 +640,117 @@ class RetrieveHass:
         else:
             raise FileNotFoundError(f"Data file not found: {pickle_file}")
 
-    def _convert_history_to_dataframe(
-        self,
-        history_data: list[list[dict[str, Any]]],
-        var_list: list[str]
-    ) -> pd.DataFrame:
-        """Convert WebSocket history data to DataFrame."""
+    # def _convert_history_to_dataframe(
+    #     self,
+    #     history_data: list[list[dict[str, Any]]],
+    #     var_list: list[str]
+    # ) -> pd.DataFrame:
+    #     """Convert WebSocket history data to DataFrame."""
 
-        import numpy as np
-        import pandas as pd
+    #     import numpy as np
+    #     import pandas as pd
 
-        # Initialize empty DataFrame with DatetimeIndex
-        df_final = pd.DataFrame()
+    #     # Initialize empty DataFrame with DatetimeIndex
+    #     df_final = pd.DataFrame()
 
-        # Check if we have any data
-        if not history_data:
-            self.logger.warning("No history data received")
-            return df_final
+    #     # Check if we have any data
+    #     if not history_data:
+    #         self.logger.warning("No history data received")
+    #         return df_final
 
-        # Process each entity's history
-        for i, entity_history in enumerate(history_data):
-            if i >= len(var_list):
-                break
+    #     # Process each entity's history
+    #     for i, entity_history in enumerate(history_data):
+    #         if i >= len(var_list):
+    #             break
 
-            entity_id = var_list[i]
+    #         entity_id = var_list[i]
 
-            if not entity_history:
-                self.logger.warning(f"No history data for {entity_id}")
-                continue
+    #         if not entity_history:
+    #             self.logger.warning(f"No history data for {entity_id}")
+    #             continue
 
-            # Convert to DataFrame
-            entity_data = []
-            for state in entity_history:
-                try:
-                    # Handle both string and dict formats
-                    if isinstance(state, str):
-                        # Skip string entries that are not state objects
-                        continue
+    #         # Convert to DataFrame
+    #         entity_data = []
+    #         for state in entity_history:
+    #             try:
+    #                 # Handle both string and dict formats
+    #                 if isinstance(state, str):
+    #                     # Skip string entries that are not state objects
+    #                     continue
 
-                    # Handle WebSocket compressed state format
-                    if "last_changed" in state:
-                        # REST API format
-                        timestamp = pd.to_datetime(state["last_changed"])
-                        value = state["state"]
-                    elif "last_updated" in state:
-                        # WebSocket compressed format - use timestamp
-                        if isinstance(state["last_updated"], (int, float)):
-                            timestamp = pd.to_datetime(state["last_updated"], unit="s")
-                        else:
-                            timestamp = pd.to_datetime(state["last_updated"])
-                        value = state["state"]
-                    elif "lu" in state:
-                        # WebSocket compressed format - 'lu' = last_updated, 's' = state
-                        if isinstance(state["lu"], (int, float)):
-                            timestamp = pd.to_datetime(state["lu"], unit="s")
-                        else:
-                            timestamp = pd.to_datetime(state["lu"])
-                        value = state["s"]
-                    else:
-                        # Skip if no timestamp available
-                        continue
+    #                 # Handle WebSocket compressed state format
+    #                 if "last_changed" in state:
+    #                     # REST API format
+    #                     timestamp = pd.to_datetime(state["last_changed"])
+    #                     value = state["state"]
+    #                 elif "last_updated" in state:
+    #                     # WebSocket compressed format - use timestamp
+    #                     if isinstance(state["last_updated"], (int, float)):
+    #                         timestamp = pd.to_datetime(state["last_updated"], unit="s")
+    #                     else:
+    #                         timestamp = pd.to_datetime(state["last_updated"])
+    #                     value = state["state"]
+    #                 elif "lu" in state:
+    #                     # WebSocket compressed format - 'lu' = last_updated, 's' = state
+    #                     if isinstance(state["lu"], (int, float)):
+    #                         timestamp = pd.to_datetime(state["lu"], unit="s")
+    #                     else:
+    #                         timestamp = pd.to_datetime(state["lu"])
+    #                     value = state["s"]
+    #                 else:
+    #                     # Skip if no timestamp available
+    #                     continue
 
-                    # Try to convert to numeric
-                    try:
-                        value = float(value)
-                    except (ValueError, TypeError):
-                        # Handle non-numeric states
-                        if value in ["on", "off"]:
-                            value = 1 if value == "on" else 0
-                        elif value in ["unknown", "unavailable", ""]:
-                            value = np.nan
-                        else:
-                            continue
+    #                 # Try to convert to numeric
+    #                 try:
+    #                     value = float(value)
+    #                 except (ValueError, TypeError):
+    #                     # Handle non-numeric states
+    #                     if value in ["on", "off"]:
+    #                         value = 1 if value == "on" else 0
+    #                     elif value in ["unknown", "unavailable", ""]:
+    #                         value = np.nan
+    #                     else:
+    #                         continue
 
-                    entity_data.append({
-                        "timestamp": timestamp,
-                        entity_id: value
-                    })
-                except (KeyError, ValueError, TypeError) as e:
-                    self.logger.debug(f"Skipping invalid state for {entity_id}: {e}")
-                    continue
+    #                 entity_data.append({
+    #                     "timestamp": timestamp,
+    #                     entity_id: value
+    #                 })
+    #             except (KeyError, ValueError, TypeError) as e:
+    #                 self.logger.debug(f"Skipping invalid state for {entity_id}: {e}")
+    #                 continue
 
-            if entity_data:
-                entity_df = pd.DataFrame(entity_data)
-                entity_df.set_index("timestamp", inplace=True)
+    #         if entity_data:
+    #             entity_df = pd.DataFrame(entity_data)
+    #             entity_df.set_index("timestamp", inplace=True)
 
-                if df_final.empty:
-                    df_final = entity_df
-                else:
-                    df_final = df_final.join(entity_df, how="outer")
+    #             if df_final.empty:
+    #                 df_final = entity_df
+    #             else:
+    #                 df_final = df_final.join(entity_df, how="outer")
 
-        # Process the final DataFrame
-        if not df_final.empty:
-            # Ensure timezone awareness
-            if df_final.index.tz is None:
-                df_final.index = df_final.index.tz_localize(self.time_zone)
-            else:
-                df_final.index = df_final.index.tz_convert(self.time_zone)
+    #     # Process the final DataFrame
+    #     if not df_final.empty:
+    #         # Ensure timezone awareness
+    #         if df_final.index.tz is None:
+    #             df_final.index = df_final.index.tz_localize(self.time_zone)
+    #         else:
+    #             df_final.index = df_final.index.tz_convert(self.time_zone)
 
-            # Sort by index
-            df_final = df_final.sort_index()
+    #         # Sort by index
+    #         df_final = df_final.sort_index()
 
-            # Resample to frequency
-            df_final = df_final.resample(self.freq).mean()
+    #         # Resample to frequency
+    #         df_final = df_final.resample(self.freq).mean()
 
-            # Forward fill missing values
-            df_final = df_final.ffill()
+    #         # Forward fill missing values
+    #         df_final = df_final.ffill()
 
-            # Set frequency for the DataFrame index
-            df_final = set_df_index_freq(df_final)
+    #         # Set frequency for the DataFrame index
+    #         df_final = set_df_index_freq(df_final)
 
-        return df_final
+    #     return df_final
 
     def _convert_statistics_to_dataframe(
         self,
