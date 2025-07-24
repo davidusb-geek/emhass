@@ -37,8 +37,8 @@ async def retrieve_home_assistant_data(
     optim_conf: dict,
     rh: RetrieveHass,
     emhass_conf: dict,
-    test_df_literal: str,
-) -> tuple:
+    test_df_literal: pd.DataFrame,
+) -> dict:
     """Retrieve data from Home Assistant or file and prepare it for optimization."""
     if get_data_from_file:
         async with aiofiles.open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
@@ -81,7 +81,7 @@ async def retrieve_home_assistant_data(
         if not await rh.get_data(
             days_list, var_list
         ):
-            return (False, None, days_list)
+            return False, None, days_list
     rh.prepare_data(
         retrieve_hass_conf["sensor_power_load_no_var_loads"],
         load_negative=retrieve_hass_conf["load_negative"],
@@ -89,7 +89,7 @@ async def retrieve_home_assistant_data(
         var_replace_zero=retrieve_hass_conf["sensor_replace_zero"],
         var_interp=retrieve_hass_conf["sensor_linear_interp"],
     )
-    return (True, rh.df_final.copy(), days_list)
+    return True, rh.df_final.copy(), days_list
 
 
 async def adjust_pv_forecast(
@@ -101,8 +101,8 @@ async def adjust_pv_forecast(
     optim_conf: dict,
     rh: RetrieveHass,
     emhass_conf: dict,
-    test_df_literal: str,
-) -> tuple:
+    test_df_literal: pd.DataFrame,
+) -> pd.Series:
     """
     Adjust the photovoltaic (PV) forecast using historical data and a regression model.
 
@@ -197,7 +197,7 @@ async def set_input_data_dict(
         params = {}
 
     # Parsing yaml
-    yaml_result = await utils.get_yaml_parse(params, logger)
+    yaml_result = utils.get_yaml_parse(params, logger)
     if isinstance(yaml_result, tuple) and len(yaml_result) == 4:
         retrieve_hass_conf, optim_conf, plant_conf, _ = yaml_result
     elif isinstance(yaml_result, tuple) and len(yaml_result) == 3:
@@ -245,7 +245,7 @@ async def set_input_data_dict(
             return {}
 
     # Update the params dict using data from the HA configuration
-    params = await utils.update_params_with_ha_config(
+    params = utils.update_params_with_ha_config(
         params,
         rh.ha_config,
     )
@@ -599,7 +599,7 @@ async def weather_forecast_cache(
 
     """
     # Parsing yaml
-    retrieve_hass_conf, optim_conf, plant_conf = await utils.get_yaml_parse(params, logger)
+    retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params, logger)
     # Treat runtimeparams
     params, retrieve_hass_conf, optim_conf, plant_conf = await utils.treat_runtimeparams(
         runtimeparams,
