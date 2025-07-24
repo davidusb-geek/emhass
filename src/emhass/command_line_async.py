@@ -77,7 +77,6 @@ async def retrieve_home_assistant_data(
             var_list.append(retrieve_hass_conf["sensor_power_photovoltaics"])
             if optim_conf.get("set_use_adjusted_pv", True):
                 var_list.append(retrieve_hass_conf["sensor_power_photovoltaics_forecast"])
-        # await rh.connect_websocket()
         if not await rh.get_data(
             days_list, var_list
         ):
@@ -197,16 +196,17 @@ async def set_input_data_dict(
         params = {}
 
     # Parsing yaml
-    yaml_result = utils.get_yaml_parse(params, logger)
-    if isinstance(yaml_result, tuple) and len(yaml_result) == 4:
-        retrieve_hass_conf, optim_conf, plant_conf, _ = yaml_result
-    elif isinstance(yaml_result, tuple) and len(yaml_result) == 3:
-        retrieve_hass_conf, optim_conf, plant_conf = yaml_result
-    else:
-        return {}
+    retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params, logger)
+    # yaml_result = utils.get_yaml_parse(params, logger)
+    # if isinstance(yaml_result, tuple) and len(yaml_result) == 4:
+    #     retrieve_hass_conf, optim_conf, plant_conf, _ = yaml_result
+    # elif isinstance(yaml_result, tuple) and len(yaml_result) == 3:
+    #     retrieve_hass_conf, optim_conf, plant_conf = yaml_result
+    # else:
+    #     return {}
 
     if type(retrieve_hass_conf) is bool:
-        return {}
+        return False
 
     # Treat runtimeparams
     params, retrieve_hass_conf, optim_conf, plant_conf = await utils.treat_runtimeparams(
@@ -220,16 +220,16 @@ async def set_input_data_dict(
         emhass_conf,
     )
 
-    # Define the data retrieve object - create fresh WebSocket connection for this request
+    # Define the data retrieve object
     rh = RetrieveHass(
         retrieve_hass_conf["hass_url"],
         retrieve_hass_conf["long_lived_token"],
         retrieve_hass_conf["optimization_time_step"],
         retrieve_hass_conf["time_zone"],
-        str(params),
+        params,
         emhass_conf,
         logger,
-        get_data_from_file=get_data_from_file or False,
+        get_data_from_file=get_data_from_file,
     )
 
     # Retrieve basic configuration data from hass
@@ -240,9 +240,8 @@ async def set_input_data_dict(
             _, _, _, rh.ha_config = pickle.loads(content)
     else:
         response = await rh.get_ha_config()
-
         if type(response) is bool:
-            return {}
+            return False
 
     # Update the params dict using data from the HA configuration
     params = utils.update_params_with_ha_config(
@@ -284,7 +283,7 @@ async def set_input_data_dict(
             test_df_literal,
         )
         if not success:
-            return {}
+            return False
         # What we don't need for this type of action
         P_PV_forecast, P_load_forecast, df_input_data_dayahead = None, None, None
     elif set_type == "dayahead-optim":
@@ -347,7 +346,7 @@ async def set_input_data_dict(
             )
         else:
             df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
-        params = dict(orjson.loads(params))
+        params = orjson.loads(params)
         if (
             "prediction_horizon" in params["passed_data"]
             and params["passed_data"]["prediction_horizon"] is not None
@@ -414,7 +413,6 @@ async def set_input_data_dict(
                 )
         else:
             P_PV_forecast = pd.Series(0, index=fcst.forecast_dates)
-
         P_load_forecast = await fcst.get_load_forecast(
             days_min_load_forecast=optim_conf["delta_forecast_daily"].days,
             method=optim_conf["load_forecast_method"],
@@ -425,18 +423,18 @@ async def set_input_data_dict(
             logger.error(
                 "Unable to get sensor power photovoltaics, or sensor power load no var loads. Check HA sensors and their daily data"
             )
-            return {}
+            return False
 
-        # Validate forecast data before proceeding
-        if len(P_load_forecast) == 0:
-            logger.error("P_load_forecast is empty - no load forecast data available")
-            return {}
-        if len(P_PV_forecast) == 0:
-            logger.error("P_PV_forecast is empty - no PV forecast data available")
-            return {}
+        # # Validate forecast data before proceeding
+        # if len(P_load_forecast) == 0:
+        #     logger.error("P_load_forecast is empty - no load forecast data available")
+        #     return {}
+        # if len(P_PV_forecast) == 0:
+        #     logger.error("P_PV_forecast is empty - no PV forecast data available")
+        #     return {}
 
-        logger.info(f"Generated P_load_forecast with {len(P_load_forecast)} data points")
-        logger.info(f"Generated P_PV_forecast with {len(P_PV_forecast)} data points")
+        # logger.info(f"Generated P_load_forecast with {len(P_load_forecast)} data points")
+        # logger.info(f"Generated P_PV_forecast with {len(P_PV_forecast)} data points")
         df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
         if (
             "optimization_time_step" in retrieve_hass_conf
@@ -469,20 +467,20 @@ async def set_input_data_dict(
                 ]
             ]
 
-        # Extract individual forecast series from DataFrame for naive-mpc-optim
-        P_PV_forecast = df_input_data_dayahead["P_PV_forecast"]
-        P_load_forecast = df_input_data_dayahead["P_load_forecast"]
+        # # Extract individual forecast series from DataFrame for naive-mpc-optim
+        # P_PV_forecast = df_input_data_dayahead["P_PV_forecast"]
+        # P_load_forecast = df_input_data_dayahead["P_load_forecast"]
 
-        # Validate extracted forecast data
-        if len(P_load_forecast) == 0:
-            logger.error("Extracted P_load_forecast is empty after prediction_horizon filtering")
-            return {}
-        if len(P_PV_forecast) == 0:
-            logger.error("Extracted P_PV_forecast is empty after prediction_horizon filtering")
-            return {}
+        # # Validate extracted forecast data
+        # if len(P_load_forecast) == 0:
+        #     logger.error("Extracted P_load_forecast is empty after prediction_horizon filtering")
+        #     return {}
+        # if len(P_PV_forecast) == 0:
+        #     logger.error("Extracted P_PV_forecast is empty after prediction_horizon filtering")
+        #     return {}
 
-        logger.info(f"Final P_load_forecast for optimization: {len(P_load_forecast)} data points")
-        logger.info(f"Final P_PV_forecast for optimization: {len(P_PV_forecast)} data points")
+        # logger.info(f"Final P_load_forecast for optimization: {len(P_load_forecast)} data points")
+        # logger.info(f"Final P_PV_forecast for optimization: {len(P_PV_forecast)} data points")
     elif (
         set_type == "forecast-model-fit"
         or set_type == "forecast-model-predict"
@@ -506,10 +504,8 @@ async def set_input_data_dict(
                 df_input_data.index[-1] - pd.offsets.Day(days_to_retrieve) :
             ]
         else:
-            print(days_to_retrieve)
             days_list = utils.get_days_list(days_to_retrieve)
             var_list = [var_model]
-            # await rh.connect_websocket()
             if not await rh.get_data(days_list, var_list):
                 return False
             df_input_data = rh.df_final.copy()
@@ -655,12 +651,14 @@ async def perfect_forecast_optim(
     df_input_data = input_data_dict["fcst"].get_load_cost_forecast(
         input_data_dict["df_input_data"],
         method=input_data_dict["fcst"].optim_conf["load_cost_forecast_method"],
+        list_and_perfect=True,
     )
     if isinstance(df_input_data, bool) and not df_input_data:
         return False
     df_input_data = input_data_dict["fcst"].get_prod_price_forecast(
         df_input_data,
         method=input_data_dict["fcst"].optim_conf["production_price_forecast_method"],
+        list_and_perfect=True,
     )
     if isinstance(df_input_data, bool) and not df_input_data:
         return False
@@ -786,24 +784,24 @@ async def naive_mpc_optim(
     """
     logger.info("Performing naive MPC optimization")
 
-    # Validate input data before proceeding
-    if "P_load_forecast" not in input_data_dict or input_data_dict["P_load_forecast"] is None:
-        logger.error("P_load_forecast is missing or None")
-        return None
-    if "P_PV_forecast" not in input_data_dict or input_data_dict["P_PV_forecast"] is None:
-        logger.error("P_PV_forecast is missing or None")
-        return None
+    # # Validate input data before proceeding
+    # if "P_load_forecast" not in input_data_dict or input_data_dict["P_load_forecast"] is None:
+    #     logger.error("P_load_forecast is missing or None")
+    #     return None
+    # if "P_PV_forecast" not in input_data_dict or input_data_dict["P_PV_forecast"] is None:
+    #     logger.error("P_PV_forecast is missing or None")
+    #     return None
 
-    # Check if forecasts have data
-    if isinstance(input_data_dict["P_load_forecast"], pd.Series) and len(input_data_dict["P_load_forecast"]) == 0:
-        logger.error("P_load_forecast is empty")
-        return None
-    if isinstance(input_data_dict["P_PV_forecast"], pd.Series) and len(input_data_dict["P_PV_forecast"]) == 0:
-        logger.error("P_PV_forecast is empty")
-        return None
+    # # Check if forecasts have data
+    # if isinstance(input_data_dict["P_load_forecast"], pd.Series) and len(input_data_dict["P_load_forecast"]) == 0:
+    #     logger.error("P_load_forecast is empty")
+    #     return None
+    # if isinstance(input_data_dict["P_PV_forecast"], pd.Series) and len(input_data_dict["P_PV_forecast"]) == 0:
+    #     logger.error("P_PV_forecast is empty")
+    #     return None
 
-    logger.info(f"P_load_forecast shape: {input_data_dict['P_load_forecast'].shape if hasattr(input_data_dict['P_load_forecast'], 'shape') else 'N/A'}")
-    logger.info(f"P_PV_forecast shape: {input_data_dict['P_PV_forecast'].shape if hasattr(input_data_dict['P_PV_forecast'], 'shape') else 'N/A'}")
+    # logger.info(f"P_load_forecast shape: {input_data_dict['P_load_forecast'].shape if hasattr(input_data_dict['P_load_forecast'], 'shape') else 'N/A'}")
+    # logger.info(f"P_PV_forecast shape: {input_data_dict['P_PV_forecast'].shape if hasattr(input_data_dict['P_PV_forecast'], 'shape') else 'N/A'}")
 
     # Load cost and prod price forecast
     df_input_data_dayahead = input_data_dict["fcst"].get_load_cost_forecast(
@@ -811,13 +809,13 @@ async def naive_mpc_optim(
         method=input_data_dict["fcst"].optim_conf["load_cost_forecast_method"],
     )
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
-        return None
+        return False
     df_input_data_dayahead = input_data_dict["fcst"].get_prod_price_forecast(
         df_input_data_dayahead,
         method=input_data_dict["fcst"].optim_conf["production_price_forecast_method"],
     )
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
-        return None
+        return False
     if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
         df_input_data_dayahead["outdoor_temperature_forecast"] = input_data_dict[
             "params"
@@ -1502,7 +1500,6 @@ async def publish_data(
             custom_optim_status_id["entity_id"],
             "",
             "",
-            # custom_optim_status_id["unit_of_measurement"],
             custom_optim_status_id["friendly_name"],
             type_var="optim_status",
             publish_prefix=publish_prefix,
@@ -1632,7 +1629,7 @@ async def publish_json(
             content = await file.read()
             metadata = orjson.loads(content)
     else:
-        logger.error("unable to located metadata.json in:" + str(entity_path))
+        logger.error("unable to located metadata.json in:" + entity_path)
         return False
     # Round current timecode (now)
     now_precise = datetime.now(
