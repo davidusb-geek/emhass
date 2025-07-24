@@ -143,7 +143,6 @@ class Forecast:
         :type get_data_from_file: bool, optional
 
         """
-        # print("__init__ - forecast_async.py")
         self.retrieve_hass_conf = retrieve_hass_conf
         self.optim_conf = optim_conf
         self.plant_conf = plant_conf
@@ -221,7 +220,7 @@ class Forecast:
         forecast_days: int = 3
     ) -> dict:
         r"""
-        Get weather forecast json from Open-Meteo and cache it for re-use (async version).
+        Get weather forecast json from Open-Meteo and cache it for re-use.
         The response json is cached in the local file system and returned
         on subsequent calls until it is older than max_age, at which point
         attempts will be made to replace it with a new version.
@@ -244,7 +243,6 @@ class Forecast:
         :rtype: dict
 
         """
-        # print("get_cached_open_meteo_forecast_json - forecast_async.py")
 
         # Ensure at least 3 weather forecast days (and 1 more than requested)
         if forecast_days is None:
@@ -344,7 +342,7 @@ class Forecast:
         use_legacy_pvlib: bool | None = False,
     ) -> pd.DataFrame:
         r"""
-        Get and generate weather forecast data (async version).
+        Get and generate weather forecast data.
 
         :param method: The desired method, options are 'open-meteo', 'csv', 'list', 'solcast' and \
             'solar.forecast'. Defaults to 'open-meteo'.
@@ -353,7 +351,6 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        # print("get_weather_forecast - forecast_async.py")
         csv_path = self.emhass_conf["data_path"] / csv_path
         w_forecast_cache_path = os.path.abspath(
             self.emhass_conf["data_path"] / "weather_forecast_data.pkl"
@@ -636,7 +633,6 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        # print("cloud_cover_to_irradiance - forecast_async.py")
         # Compute solar positions
         if use_legacy_pvlib:
             solar_position = get_solarposition(
@@ -682,7 +678,6 @@ class Forecast:
         :return: The output DataFrame with the corrected values
         :rtype: pd.DataFrame
         """
-        # print("get_mix_forecast - forecast_async.py")
         first_fcst = alpha * df_forecast.iloc[0] + beta * df_now[col].iloc[-1]
         df_forecast.iloc[0] = int(round(first_fcst))
         return df_forecast
@@ -708,7 +703,6 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        # print("get_power_from_weather - forecast_async.py")
         # If using csv method we consider that yhat is the PV power in W
         if (
             "solar_forecast_kwp" in self.retrieve_hass_conf.keys()
@@ -807,7 +801,6 @@ class Forecast:
         :param longitude: Longitude of the PV system.
         :return: DataFrame with added solar elevation and azimuth.
         """
-        # print("compute_solar_angles - forecast_async.py")
         df = df.copy()
         solpos = get_solarposition(df.index, latitude, longitude)
         df["solar_elevation"] = solpos["elevation"]
@@ -826,7 +819,6 @@ class Forecast:
         forecasted PV production data.
         :type data: pd.DataFrame
         """
-        # print("adjust_pv_forecast_data_prep - forecast_async.py")
         # Extract target and predictor
         self.logger.debug("adjust_pv_forecast_data_prep using data:\n%s", data)
         if self.logger.isEnabledFor(logging.DEBUG):
@@ -893,7 +885,6 @@ class Forecast:
         :return: A DataFrame containing the adjusted PV forecast.
         :rtype: pd.DataFrame
         """
-        # print("adjust_pv_forecast_fit - forecast_async.py")
         # Get regression model and hyperparameter grid
         mlr = MLRegressor(
             self.data_adjust_pv,
@@ -948,7 +939,6 @@ class Forecast:
         :return: A DataFrame containing the adjusted PV forecast with additional features.
         :rtype: pd.DataFrame
         """
-        # print("adjust_pv_forecast_predict - forecast_async.py")
         # Use the provided forecasted PV data or fall back to the validation data in `self`
         if forecasted_pv is not None:
             # Ensure the input DataFrame has the required structure
@@ -968,7 +958,6 @@ class Forecast:
 
         # Apply solar elevation weighting only for specific cases
         def apply_weighting(row):
-            # print("apply_weighting - forecast_async.py")
             if row["solar_elevation"] <= 0:  # Nighttime or negative solar elevation
                 return 0
             elif (
@@ -1018,7 +1007,6 @@ class Forecast:
         :rtype: pd.date_range
 
         """
-        # print("get_forecast_days_csv - forecast_async.py")
         start_forecast_csv = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(
             microsecond=0
         )
@@ -1085,7 +1073,6 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        # print("get_forecast_out_from_csv_or_list - forecast_async.py")
         if csv_path is None:
             data_dict = {"ts": forecast_dates_csv, "yhat": data_list}
             df_csv = pd.DataFrame.from_dict(data_dict)
@@ -1214,7 +1201,6 @@ class Forecast:
         :return: Resampled data at the specified frequency.
         :rtype: pd.DataFrame
         """
-        # print("resample_data - forecast_async.py")
         if freq > current_freq:
             # Downsampling
             # Use 'mean' to aggregate or choose other options ('sum', 'max', etc.)
@@ -1243,7 +1229,6 @@ class Forecast:
                 to calculate the forecast.
         :rtype: tuple (pd.Series, list)
         """
-        # print("get_typical_load_forecast - forecast_async.py")
         # Ensure the 'load' column exists
         if "load" not in data.columns:
             raise ValueError("Data must have a 'load' column.")
@@ -1285,7 +1270,7 @@ class Forecast:
         debug: bool | None = False,
     ) -> pd.Series:
         r"""
-        Get and generate the load forecast data (async version).
+        Get and generate the load forecast data.
 
         :param days_min_load_forecast: The number of last days to retrieve that \
             will be used to generate a naive forecast, defaults to 3
@@ -1319,7 +1304,6 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        # print("get_load_forecast - forecast_async.py")
         csv_path = self.emhass_conf["data_path"] / csv_path
 
         if (
@@ -1343,7 +1327,6 @@ class Forecast:
                 self.logger,
             )
             if self.get_data_from_file:
-                # print("Loading data from file...")
                 filename_path = self.emhass_conf["data_path"] / "test_df_final.pkl"
                 async with aiofiles.open(filename_path, "rb") as inp:
                     content = await inp.read()
@@ -1359,13 +1342,8 @@ class Forecast:
             else:
                 days_list = get_days_list(days_min_load_forecast or 3)
                 if not await rh.get_data(days_list, var_list):
-                    # print("Failed to get data")
                     return False
-            # print(self.retrieve_hass_conf["sensor_power_load_no_var_loads"])
-            # print(self.retrieve_hass_conf["load_negative"])
-            # print(self.retrieve_hass_conf["set_zero_min"])
-            # print(var_replace_zero)
-            # print(var_interp)
+
             if not rh.prepare_data(
                 self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
                 load_negative=self.retrieve_hass_conf["load_negative"],
@@ -1373,10 +1351,8 @@ class Forecast:
                 var_replace_zero=var_replace_zero,
                 var_interp=var_interp,
             ):
-                # print("Failed to prepare data")
                 return False
             df = rh.df_final.copy()[[self.var_load_new]]
-            # print(df)
         if (
             method == "typical"
         ):  # using typical statistical data from a household power consumption
@@ -1450,7 +1426,7 @@ class Forecast:
                     self.logger.error(
                         "The ML forecaster file was not found, please run a model fit method before this predict method"
                     )
-                    return pd.Series()
+                    return False
             # Make predictions
             if use_last_window:
                 data_last_window = copy.deepcopy(df)
@@ -1477,7 +1453,7 @@ class Forecast:
                     + str(len(self.forecast_dates))
                     + " lags_opt values from sensor: power load no var loads, check optimization_time_step/freq and historic_days_to_retrieve/days_to_retrieve parameters"
                 )
-                return pd.Series()
+                return False
             # Define DataFrame
             data_dict = {
                 "ts": self.forecast_dates,
@@ -1508,7 +1484,7 @@ class Forecast:
                 and self.params["passed_data"]["prediction_horizon"] is None
             ):
                 self.logger.error("Passed data from passed list is not long enough")
-                return pd.Series()
+                return False
             else:
                 # Ensure correct length
                 data_list = data_list[0 : len(self.forecast_dates)]
@@ -1520,7 +1496,7 @@ class Forecast:
                 forecast_out = data.copy().loc[self.forecast_dates]
         else:
             self.logger.error("Passed method is not valid")
-            return pd.Series()
+            return False
         P_Load_forecast = copy.deepcopy(forecast_out["yhat"])
         if set_mix_forecast and df_now is not None:
             P_Load_forecast = Forecast.get_mix_forecast(
@@ -1559,7 +1535,6 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        # print("get_load_cost_forecast - forecast_async.py")
         csv_path = self.emhass_conf["data_path"] / csv_path
         if method == "hp_hc_periods":
             df_final[self.var_load_cost] = self.optim_conf["load_offpeak_hours_cost"]
@@ -1596,7 +1571,7 @@ class Forecast:
                 and self.params["passed_data"]["prediction_horizon"] is None
             ):
                 self.logger.error("Passed data from passed list is not long enough")
-                return pd.DataFrame()
+                return False
             else:
                 # Define the correct dates first
                 forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
@@ -1617,7 +1592,7 @@ class Forecast:
                 df_final[self.var_load_cost] = forecast_out
         else:
             self.logger.error("Passed method is not valid")
-            return pd.DataFrame()
+            return False
         self.logger.debug("get_load_cost_forecast returning:\n%s", df_final)
         return df_final
 
@@ -1648,7 +1623,6 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        # print("get_prod_price_forecast - forecast_async.py")
         csv_path = self.emhass_conf["data_path"] / csv_path
         if method == "constant":
             df_final[self.var_prod_price] = self.optim_conf[
@@ -1676,7 +1650,7 @@ class Forecast:
                 and self.params["passed_data"]["prediction_horizon"] is None
             ):
                 self.logger.error("Passed data from passed list is not long enough")
-                return pd.DataFrame()
+                return False
             else:
                 # Define the correct dates first
                 forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
@@ -1697,13 +1671,13 @@ class Forecast:
                 df_final[self.var_prod_price] = forecast_out
         else:
             self.logger.error("Passed method is not valid")
-            return pd.DataFrame()
+            return False
         self.logger.debug("get_prod_price_forecast returning:\n%s", df_final)
         return df_final
 
     async def get_cached_forecast_data(self, w_forecast_cache_path) -> pd.DataFrame:
         r"""
-        Get cached weather forecast data from file (async version).
+        Get cached weather forecast data from file.
 
         :param w_forecast_cache_path: the path to file.
         :type method: Any
@@ -1711,7 +1685,6 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        # print("get_cached_forecast_data - forecast_async.py")
         async with aiofiles.open(w_forecast_cache_path, "rb") as file:
             content = await file.read()
             data = pickle.loads(content)
@@ -1728,7 +1701,7 @@ class Forecast:
                     "Removing old forecast cache file. Next optimization will pull data from forecast API, unless 'weather_forecast_cache_only': true"
                 )
                 os.remove(w_forecast_cache_path)
-                return pd.DataFrame()
+                return False
             # Filter cached forecast data to match current forecast_dates start-end range (reduce forecast Dataframe size to appropriate length)
             if (
                 self.forecast_dates[0] in data.index
@@ -1749,7 +1722,7 @@ class Forecast:
                     "Removing old forecast cache file. Next optimization will pull data from forecast API, unless 'weather_forecast_cache_only': true"
                 )
                 os.remove(w_forecast_cache_path)
-                return pd.DataFrame()
+                return False
             return data
 
     async def set_cached_forecast_data(self, w_forecast_cache_path, data) -> pd.DataFrame:
@@ -1765,7 +1738,6 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        # print("set_cached_forecast_data - forecast_async.py")
         async with aiofiles.open(w_forecast_cache_path, "wb") as file:
             content = pickle.dumps(data)
             await file.write(content)
