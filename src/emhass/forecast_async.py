@@ -2,7 +2,6 @@
 
 import bz2
 import copy
-import json
 import logging
 import os
 import pickle
@@ -150,7 +149,7 @@ class Forecast:
         self.time_zone = self.retrieve_hass_conf["time_zone"]
         self.method_ts_round = self.retrieve_hass_conf["method_ts_round"]
         self.timeStep = self.freq.seconds / 3600  # in hours
-        self.time_delta = pd.to_timedelta(opt_time_delta or 24, "hours")
+        self.time_delta = pd.to_timedelta(opt_time_delta, "hours")
         self.var_PV = self.retrieve_hass_conf["sensor_power_photovoltaics"]
         self.var_PV_forecast = self.retrieve_hass_conf[
             "sensor_power_photovoltaics_forecast"
@@ -169,7 +168,7 @@ class Forecast:
         elif type(params) is dict:
             self.params = params
         else:
-            self.params = json.loads(params)
+            self.params = orjson.loads(params)
 
         if self.method_ts_round == "nearest":
             self.start_forecast = pd.Timestamp(
@@ -179,13 +178,13 @@ class Forecast:
             self.start_forecast = (
                 pd.Timestamp(datetime.now(), tz=self.time_zone)
                 .replace(microsecond=0)
-                .floor(self.freq)
+                .floor(freq=self.freq)
             )
         elif self.method_ts_round == "last":
             self.start_forecast = (
                 pd.Timestamp(datetime.now(), tz=self.time_zone)
                 .replace(microsecond=0)
-                .ceil(self.freq)
+                .ceil(freq=self.freq)
             )
         else:
             self.logger.error("Wrong method_ts_round passed parameter")
@@ -206,7 +205,7 @@ class Forecast:
                 tz=self.time_zone,
             )
             .tz_convert("utc")
-            .round(self.freq)
+            .round(self.freq, ambiguous="infer", nonexistent="shift_forward")
             .tz_convert(self.time_zone)
         )
         if params is not None and "prediction_horizon" in list(self.params["passed_data"].keys()) and self.params["passed_data"]["prediction_horizon"] is not None:
@@ -248,7 +247,7 @@ class Forecast:
         if forecast_days is None:
             self.logger.warning("Open-Meteo forecast_days is missing so defaulting to 3 days")
             forecast_days = 3
-        elif forecast_days is not None and forecast_days < 3:
+        elif forecast_days < 3:
             self.logger.warning("Open-Meteo forecast_days is too low (%s) so defaulting to 3 days", forecast_days)
             forecast_days = 3
         else:
@@ -333,7 +332,7 @@ class Forecast:
                         "Returning old cached data until next Open-Meteo attempt"
                     )
 
-        return data or {}
+        return data
 
     async def get_weather_forecast(
         self,
@@ -356,7 +355,7 @@ class Forecast:
             self.emhass_conf["data_path"] / "weather_forecast_data.pkl"
         )
 
-        self.logger.info("Retrieving weather forecast data using method = " + (method or ""))
+        self.logger.info("Retrieving weather forecast data using method = " + method)
         if method == "scrapper":
             self.logger.warning(
                 "The scrapper method has been deprecated and the keyword is accepted just for backward compatibility, please change the PV forecast method to open-meteo"
@@ -400,61 +399,111 @@ class Forecast:
                 )
                 data = set_df_index_freq(data)
                 index_utc = data.index.tz_convert("utc")
-                # Compute cloud cover to irradiance
-                data = self.cloud_cover_to_irradiance(data, index_utc, use_legacy_pvlib or False)
+                index_tz = index_utc.round(
+                    freq=data.index.freq, ambiguous="infer", nonexistent="shift_forward"
+                ).tz_convert(self.time_zone)
+                data.index = index_tz
+                data = set_df_index_freq(data)
+
+                # Convert mm to cm and clip the minimum value to 0.1 cm as expected by PVLib
+                data["precipitable_water"] = (data["precipitable_water"] / 10).clip(
+                    lower=0.1
+                )
+
+                if use_legacy_pvlib:
+                    # Converting the cloud cover into Global Horizontal Irradiance with a PVLib method
+                    data = data.drop(columns=["ghi", "dhi", "dni"])
+                    ghi_est = self.cloud_cover_to_irradiance(data["cloud_cover"])
+                    data["ghi"] = ghi_est["ghi"]
+                    data["dni"] = ghi_est["dni"]
+                    data["dhi"] = ghi_est["dhi"]
+
                 # If runtime weather_forecast_cache is true save forecast result to file as cache
                 if self.params["passed_data"].get("weather_forecast_cache", False):
                     data = await self.set_cached_forecast_data(
                         w_forecast_cache_path, data
                     )
+            # Else, open stored weather_forecast_data.pkl file for previous forecast data (cached data)
+            # Trim data to match the current required dates
             else:
                 data = await self.get_cached_forecast_data(w_forecast_cache_path)
 
-        elif method == "solcast":  # using the solcast API
+        elif method == "solcast":  # using Solcast API
+            # Check if weather_forecast_cache is true or if forecast_data file does not exist
             if os.path.isfile(w_forecast_cache_path):
                 data = await self.get_cached_forecast_data(w_forecast_cache_path)
+            # open stored weather_forecast_data.pkl file for previous forecast data (cached data)
             else:
-                if "solcast_api_key" not in self.retrieve_hass_conf:
+                # Check if weather_forecast_cache_only is true, if so produce error for not finding cache file
+                if self.params["passed_data"].get("weather_forecast_cache_only", False):
+                    self.logger.error("Unable to obtain Solcast cache file.")
                     self.logger.error(
-                        "The solcast_api_key parameter was not defined"
+                        "Try running optimization again with 'weather_forecast_cache_only': false"
                     )
-                    return pd.DataFrame()
-                if "solcast_rooftop_id" not in self.retrieve_hass_conf:
                     self.logger.error(
-                        "The solcast_rooftop_id parameter was not defined"
+                        "Optionally, obtain new Solcast cache with runtime parameter 'weather_forecast_cache': true in an optimization, or run the `weather-forecast-cache` action, to pull new data from Solcast and cache."
                     )
-                    return pd.DataFrame()
-                headers = {
-                    "User-Agent": "EMHASS",
-                    "Authorization": "Bearer "
-                    + self.retrieve_hass_conf["solcast_api_key"],
-                    "content-type": "application/json",
-                }
-                days_solcast = int(
-                    len(self.forecast_dates) * self.freq.seconds / 3600
-                )
-                # Split `roof_id` into a list (support comma or space as separator)
-                roof_ids = re.split(
-                    r"[,\s]+", self.retrieve_hass_conf["solcast_rooftop_id"].strip()
-                )
-                # Summary list of data
-                total_data_list = [0] * len(self.forecast_dates)
-
-                # Iteration over individual `roof_id`
-                async with aiohttp.ClientSession() as session:
-                    for roof_id in roof_ids:
-                        url = f"https://api.solcast.com.au/rooftop_sites/{roof_id}/forecasts?hours={days_solcast}"
-                        async with session.get(url, headers=headers) as response:
-                            """import bz2 # Uncomment to save a serialized data for tests
-                            import _pickle as cPickle
-                            with bz2.BZ2File("data/test_response_solcast_get_method.pbz2", "w") as f:
-                                cPickle.dump(response, f)"""
-                            # Verify the request passed
-                            if response.status == 200:
-                                data_json = await response.json()
-                                # Data processing for the current `roof_id`
+                    return False
+                else:
+                    # Retrieve data from the Solcast API
+                    if "solcast_api_key" not in self.retrieve_hass_conf:
+                        self.logger.error(
+                            "The solcast_api_key parameter was not defined"
+                        )
+                        return False
+                    if "solcast_rooftop_id" not in self.retrieve_hass_conf:
+                        self.logger.error(
+                            "The solcast_rooftop_id parameter was not defined"
+                        )
+                        return False
+                    headers = {
+                        "User-Agent": "EMHASS",
+                        "Authorization": "Bearer "
+                        + self.retrieve_hass_conf["solcast_api_key"],
+                        "content-type": "application/json",
+                    }
+                    days_solcast = int(
+                        len(self.forecast_dates) * self.freq.seconds / 3600
+                    )
+                    # Split `roof_id` into a list (support comma or space as separator)
+                    roof_ids = re.split(
+                        r"[,\s]+", self.retrieve_hass_conf["solcast_rooftop_id"].strip()
+                    )
+                    # Summary list of data
+                    total_data_list = [0] * len(self.forecast_dates)
+                    # Iteration over individual `roof_id`
+                    async with aiohttp.ClientSession() as session:
+                        for roof_id in roof_ids:
+                            url = f"https://api.solcast.com.au/rooftop_sites/{roof_id}/forecasts?hours={days_solcast}"
+                            async with session.get(url, headers=headers) as response:
+                                """import bz2 # Uncomment to save a serialized data for tests
+                                import _pickle as cPickle
+                                with bz2.BZ2File("data/test_response_solcast_get_method.pbz2", "w") as f:
+                                    cPickle.dump(response, f)"""
+                                # Verify the request passed
+                                if int(response.status) == 200:
+                                    data_json = await response.json()
+                                elif (
+                                    int(response.status) == 402
+                                    or int(response.status) == 429
+                                ):
+                                    self.logger.error(
+                                        "Solcast error: May have exceeded your subscription limit."
+                                    )
+                                    return False
+                                elif int(response.status) >= 400 or (
+                                    int(response.status) >= 202
+                                    and int(response.status) <= 299
+                                ):
+                                    self.logger.error(
+                                        "Solcast error: There was a issue with the solcast request, check solcast API key and rooftop ID."
+                                    )
+                                    self.logger.error(
+                                        "Solcast error: Check that your subscription is valid and your network can connect to Solcast."
+                                    )
+                                    return False
                                 data_list = []
-                                for elm in data_json["forecasts"]:
+                                for elm in data["forecasts"]:
                                     data_list.append(
                                         elm["pv_estimate"] * 1000
                                     )  # Converting kW to W
@@ -463,7 +512,7 @@ class Forecast:
                                     self.logger.error(
                                         "Not enough data retrieved from Solcast service, try increasing the time step or use MPC."
                                     )
-                                    return pd.DataFrame()
+                                    return False
                                 # Adding the data of the current `roof_id` to the total
                                 total_data_list = [
                                     total + current
@@ -471,36 +520,20 @@ class Forecast:
                                         total_data_list, data_list, fillvalue=0
                                     )
                                 ]
-                            elif response.status == 402 or response.status == 429:
-                                self.logger.error(
-                                    "Solcast error: May have exceeded your subscription limit."
-                                )
-                                return pd.DataFrame()
-                            elif response.status >= 400 or (
-                                response.status >= 202 and response.status <= 299
-                            ):
-                                self.logger.error(
-                                    "Solcast error: There was a issue with the solcast request, check solcast API key and rooftop ID."
-                                )
-                                self.logger.error(
-                                    "Solcast error: Check that your subscription is valid and your network can connect to Solcast."
-                                )
-                                return pd.DataFrame()
-                            return pd.DataFrame()
 
-                # Trim request results to forecast_dates
-                total_data_list = total_data_list[0 : len(self.forecast_dates)]
-                data_dict = {"ts": self.forecast_dates, "yhat": total_data_list}
-                # Define DataFrame
-                data = pd.DataFrame.from_dict(data_dict)
-                # Define index
-                data.set_index("ts", inplace=True)
-                # If runtime weather_forecast_cache is true save forecast result to file as cache
-                # Trim data to match the current required dates
-                if self.params["passed_data"].get("weather_forecast_cache", False):
-                    data = await self.set_cached_forecast_data(
-                        w_forecast_cache_path, data
-                    )
+                            # Trim request results to forecast_dates
+                            total_data_list = total_data_list[0 : len(self.forecast_dates)]
+                            data_dict = {"ts": self.forecast_dates, "yhat": total_data_list}
+                            # Define DataFrame
+                            data = pd.DataFrame.from_dict(data_dict)
+                            # Define index
+                            data.set_index("ts", inplace=True)
+                            # If runtime weather_forecast_cache is true save forecast result to file as cache
+                            # Trim data to match the current required dates
+                            if self.params["passed_data"].get("weather_forecast_cache", False):
+                                data = await self.set_cached_forecast_data(
+                                    w_forecast_cache_path, data
+                                )
 
         elif method == "solar.forecast":  # using the solar.forecast API
             # Retrieve data from the solar.forecast API
@@ -613,47 +646,48 @@ class Forecast:
                 data.set_index("ts", inplace=True)
         else:
             self.logger.error("Method %r is not valid", method)
-            data = pd.DataFrame()
+            data = None
         self.logger.debug("get_weather_forecast returning:\n%s", data)
         return data
 
     def cloud_cover_to_irradiance(
-        self, data: pd.DataFrame, index_utc: pd.DatetimeIndex, use_legacy_pvlib: bool
+        self, cloud_cover: pd.Series, offset: int | None = 35
     ) -> pd.DataFrame:
-        r"""
-        Convert from cloud cover to irradiance using the disc method.
-
-        :param data: The data object containing the cloud cover data
-        :type data: pd.DataFrame
-        :param index_utc: The UTC DatetimeIndex
-        :type index_utc: pd.DatetimeIndex
-        :param use_legacy_pvlib: Use the legacy pvlib parameter names
-        :type use_legacy_pvlib: bool
-        :return: The modified data object with computed irradiance
-        :rtype: pd.DataFrame
-
         """
-        # Compute solar positions
-        if use_legacy_pvlib:
-            solar_position = get_solarposition(
-                data.index, self.lat, self.lon, altitude=self.retrieve_hass_conf["Altitude"]
-            )
-        else:
-            solar_position = get_solarposition(
-                data.index, self.lat, self.lon, altitude=self.retrieve_hass_conf["Altitude"]
-            )
-        # Compute DNI for any not known
-        if "dni" not in data.columns:
-            data["dni"] = disc(
-                data["ghi"],
-                solar_position["zenith"],
-                index_utc,
-                altitude=self.retrieve_hass_conf["Altitude"],
-            )["dni"]
-        # Compute DHI for any not known
-        if "dhi" not in data.columns:
-            data["dhi"] = data["ghi"] - data["dni"] * np.cos(np.radians(solar_position["zenith"]))
-        return data
+        Estimates irradiance from cloud cover in the following steps.
+
+        1. Determine clear sky GHI using Ineichen model and
+           climatological turbidity.
+
+        2. Estimate cloudy sky GHI using a function of cloud_cover
+
+        3. Estimate cloudy sky DNI using the DISC model.
+
+        4. Calculate DHI from DNI and GHI.
+
+        (This function was copied and modified from PVLib)
+
+        :param cloud_cover: Cloud cover in %.
+        :type cloud_cover: pd.Series
+        :param offset: Determines the minimum GHI., defaults to 35
+        :type offset: Optional[int], optional
+        :return: Estimated GHI, DNI, and DHI.
+        :rtype: pd.DataFrame
+        """
+        location = Location(latitude=self.lat, longitude=self.lon)
+        solpos = location.get_solarposition(cloud_cover.index)
+        cs = location.get_clearsky(
+            cloud_cover.index, model="ineichen", solar_position=solpos
+        )
+        # Using only the linear method
+        offset = offset / 100.0
+        cloud_cover_unit = copy.deepcopy(cloud_cover) / 100.0
+        ghi = (offset + (1 - offset) * (1 - cloud_cover_unit)) * cs["ghi"]
+        # Using disc model
+        dni = disc(ghi, solpos["zenith"], cloud_cover.index)["dni"]
+        dhi = ghi - dni * np.cos(np.radians(solpos["zenith"]))
+        irrads = pd.DataFrame({"ghi": ghi, "dni": dni, "dhi": dhi}).fillna(0)
+        return irrads
 
     @staticmethod
     def get_mix_forecast(
@@ -777,7 +811,7 @@ class Forecast:
                     mc.run_model(df_weather)
                     # Extracting results for AC power
                     P_PV_forecast = mc.results.ac
-        if set_mix_forecast and df_now is not None:
+        if set_mix_forecast:
             P_PV_forecast = Forecast.get_mix_forecast(
                 df_now,
                 P_PV_forecast,
@@ -843,7 +877,7 @@ class Forecast:
         self.P_PV_forecast_validation = P_PV_forecast[validation_mask]
         # Ensure data is aligned
         self.data_adjust_pv = pd.concat(
-            [P_PV.to_frame("actual"), P_PV_forecast.to_frame("forecast")], axis=1
+            [P_PV.rename("actual"), P_PV_forecast.rename("forecast")], axis=1
         ).dropna()
         # Add more features
         self.data_adjust_pv = add_date_features(self.data_adjust_pv)
@@ -891,7 +925,7 @@ class Forecast:
             "adjusted_pv_forecast",
             regression_model,
             list(self.X_adjust_pv.columns),
-            "actual",
+            list(self.y_adjust_pv.name),
             None,
             self.logger,
         )
@@ -949,7 +983,7 @@ class Forecast:
             forecast_data = forecasted_pv.copy()
         else:
             # Use the validation data stored in `self`
-            forecast_data = self.P_PV_forecast_validation.to_frame("forecast")
+            forecast_data = self.P_PV_forecast_validation.rename("forecast").to_frame()
         # Prepare the forecasted PV data
         forecast_data = add_date_features(forecast_data)
         forecast_data = Forecast.compute_solar_angles(forecast_data, self.lat, self.lon)
@@ -1018,13 +1052,13 @@ class Forecast:
             start_forecast_csv = (
                 pd.Timestamp(datetime.now(), tz=self.time_zone)
                 .replace(microsecond=0)
-                .floor(self.freq)
+                .floor(freq=self.freq)
             )
         elif self.method_ts_round == "last":
             start_forecast_csv = (
                 pd.Timestamp(datetime.now(), tz=self.time_zone)
                 .replace(microsecond=0)
-                .ceil(self.freq)
+                .ceil(freq=self.freq)
             )
         else:
             self.logger.error("Wrong method_ts_round passed parameter")
@@ -1034,12 +1068,12 @@ class Forecast:
         forecast_dates_csv = (
             pd.date_range(
                 start=start_forecast_csv,
-                end=end_forecast_csv + timedelta(days=timedelta_days or 1) - self.freq,
+                end=end_forecast_csv + timedelta(days=timedelta_days) - self.freq,
                 freq=self.freq,
                 tz=self.time_zone,
             )
             .tz_convert("utc")
-            .round(self.freq)
+            .round(self.freq, ambiguous="infer", nonexistent="shift_forward")
             .tz_convert(self.time_zone)
         )
         if self.params is not None and "prediction_horizon" in list(self.params["passed_data"].keys()) and self.params["passed_data"]["prediction_horizon"] is not None:
@@ -1340,7 +1374,7 @@ class Forecast:
                     rh.var_list = self.var_list
                     self.var_load_new = self.var_load + "_positive"
             else:
-                days_list = get_days_list(days_min_load_forecast or 3)
+                days_list = get_days_list(days_min_load_forecast)
                 if not await rh.get_data(days_list, var_list):
                     return False
 
@@ -1498,7 +1532,7 @@ class Forecast:
             self.logger.error("Passed method is not valid")
             return False
         P_Load_forecast = copy.deepcopy(forecast_out["yhat"])
-        if set_mix_forecast and df_now is not None:
+        if set_mix_forecast:
             P_Load_forecast = Forecast.get_mix_forecast(
                 df_now,
                 P_Load_forecast,
@@ -1573,14 +1607,18 @@ class Forecast:
                 self.logger.error("Passed data from passed list is not long enough")
                 return False
             else:
-                # Define the correct dates first
-                forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
-                # Ensure data_list matches forecast_dates_csv length
-                min_length = min(len(forecast_dates_csv), len(data_list))
-                data_list = data_list[0:min_length]
-                forecast_dates_csv = forecast_dates_csv[0:min_length]
+                # Ensure correct length
+                data_list = data_list[0 : len(self.forecast_dates)]
                 if not list_and_perfect:
-                    df_final = df_final.iloc[0:min_length]
+                    df_final = df_final.iloc[0 : len(self.forecast_dates)]
+                # Define the correct dates
+                forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
+                # # Ensure data_list matches forecast_dates_csv length
+                # min_length = min(len(forecast_dates_csv), len(data_list))
+                # data_list = data_list[0:min_length]
+                # forecast_dates_csv = forecast_dates_csv[0:min_length]
+                # if not list_and_perfect:
+                #     df_final = df_final.iloc[0:min_length]
                 forecast_out = self.get_forecast_out_from_csv_or_list(
                     df_final,
                     forecast_dates_csv,
@@ -1652,14 +1690,18 @@ class Forecast:
                 self.logger.error("Passed data from passed list is not long enough")
                 return False
             else:
-                # Define the correct dates first
-                forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
-                # Ensure data_list matches forecast_dates_csv length
-                min_length = min(len(forecast_dates_csv), len(data_list))
-                data_list = data_list[0:min_length]
-                forecast_dates_csv = forecast_dates_csv[0:min_length]
+                # Ensure correct length
+                data_list = data_list[0 : len(self.forecast_dates)]
                 if not list_and_perfect:
-                    df_final = df_final.iloc[0:min_length]
+                    df_final = df_final.iloc[0 : len(self.forecast_dates)]
+                # Define the correct dates
+                forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
+                # # Ensure data_list matches forecast_dates_csv length
+                # min_length = min(len(forecast_dates_csv), len(data_list))
+                # data_list = data_list[0:min_length]
+                # forecast_dates_csv = forecast_dates_csv[0:min_length]
+                # if not list_and_perfect:
+                #     df_final = df_final.iloc[0:min_length]
                 forecast_out = self.get_forecast_out_from_csv_or_list(
                     df_final,
                     forecast_dates_csv,
@@ -1727,7 +1769,7 @@ class Forecast:
 
     async def set_cached_forecast_data(self, w_forecast_cache_path, data) -> pd.DataFrame:
         r"""
-        Set generated weather forecast data to file (async version).
+        Set generated weather forecast data to file.
         Trim data to match the original requested forecast dates
 
         :param w_forecast_cache_path: the path to file.
@@ -1760,7 +1802,7 @@ class Forecast:
                 tz=self.time_zone,
             )
             .tz_convert("utc")
-            .round(self.freq)
+            .round(self.freq, ambiguous="infer", nonexistent="shift_forward")
             .tz_convert(self.time_zone)
         )
         data = data.loc[forecast_dates[0] : forecast_dates[-1]]
