@@ -20,7 +20,7 @@ import pytz
 import yaml
 
 if TYPE_CHECKING:
-    from emhass.machine_learning_forecaster_async import MLForecaster
+    from emhass.machine_learning_forecaster import MLForecaster
 
 pd.options.plotting.backend = "plotly"
 
@@ -158,7 +158,7 @@ def get_forecast_dates(
     return forecast_dates
 
 
-async def update_params_with_ha_config(
+def update_params_with_ha_config(
     params: str,
     ha_config: dict,
 ) -> dict:
@@ -894,7 +894,7 @@ async def treat_runtimeparams(
     return params, retrieve_hass_conf, optim_conf, plant_conf
 
 
-async def get_yaml_parse(params: str, logger: logging.Logger) -> tuple[dict, dict, dict]:
+def get_yaml_parse(params: str, logger: logging.Logger) -> tuple[dict, dict, dict]:
     """
     Perform parsing of the params into the configuration catagories
 
@@ -935,7 +935,7 @@ async def get_yaml_parse(params: str, logger: logging.Logger) -> tuple[dict, dic
     return retrieve_hass_conf, optim_conf, plant_conf
 
 
-async def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
+def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     """
     Build a dictionary with graphs and tables for the webui.
 
@@ -1022,7 +1022,7 @@ async def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> 
     return injection_dict
 
 
-async def get_injection_dict_forecast_model_fit(
+def get_injection_dict_forecast_model_fit(
     df_fit_pred: pd.DataFrame, mlf: MLForecaster
 ) -> dict:
     """
@@ -1053,7 +1053,7 @@ async def get_injection_dict_forecast_model_fit(
     return injection_dict
 
 
-async def get_injection_dict_forecast_model_tune(
+def get_injection_dict_forecast_model_tune(
     df_pred_optim: pd.DataFrame, mlf: MLForecaster
 ) -> dict:
     """
@@ -1217,7 +1217,7 @@ async def build_legacy_config_params(
     return config
 
 
-async def param_to_config(param: dict, logger: logging.Logger) -> dict:
+def param_to_config(param: dict, logger: logging.Logger) -> dict:
     """
     A function that extracts the parameters from param back to the config.json format.
     Extracts parameters from config catagories.
@@ -1284,7 +1284,6 @@ async def build_secrets(
     :return: Updated emhass_conf, the built secrets dictionary
     :rtype: Tuple[dict, dict]:
     """
-    print("building secrets")
     # Set defaults to be overwritten
     if argument is None:
         argument = {}
@@ -1330,37 +1329,27 @@ async def build_secrets(
                 emhass_conf["data_path"] = pathlib.Path(options["data_path"])
 
             # Check to use Home Assistant local API
-            supervisor_token = os.getenv("SUPERVISOR_TOKEN", None)
-            logger.info(f"Environment check - SUPERVISOR_TOKEN exists: {supervisor_token is not None}")
-            logger.info(f"Environment check - no_response: {no_response}")
-            if supervisor_token:
-                logger.info(f"SUPERVISOR_TOKEN preview: {supervisor_token[:20]}...")
-
             if (
                 not no_response
-                and supervisor_token is not None
+                and os.getenv("SUPERVISOR_TOKEN", None) is not None
             ):
-                params_secrets["long_lived_token"] = supervisor_token
+                params_secrets["long_lived_token"] = os.getenv("SUPERVISOR_TOKEN", None)
                 # Use hass_url from options.json if available, otherwise use supervisor API for addon
                 if url_from_options != "empty" and url_from_options != "":
                     params_secrets["hass_url"] = url_from_options
                 else:
                     # For addons, use supervisor API for both REST and WebSocket access
                     params_secrets["hass_url"] = "http://supervisor/core/api"
-                    logger.info("Using supervisor/core/api for addon API access")
                 headers = {
                     "Authorization": "Bearer " + params_secrets["long_lived_token"],
                     "content-type": "application/json",
                 }
-                logger.info(f"Using token for auth: {params_secrets['long_lived_token'][:20]}...")
                 # Obtain secrets from Home Assistant via API
-                api_url = params_secrets["hass_url"] + "/api/config"
-                logger.info(f"Attempting to connect to Home Assistant API at: {api_url}")
                 logger.debug("Obtaining secrets from Home Assistant Supervisor API")
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(api_url, headers=headers) as response:
-                        logger.info(f"Response from {api_url}: {response.status} {response.reason}")
-                        print(response)
+                    async with session.get(
+                        params_secrets["hass_url"] + "/config", headers=headers
+                    ) as response:
                         if response.status < 400:
                             config_hass = await response.json()
                             params_secrets = {
@@ -1572,7 +1561,7 @@ async def build_params(
     if params["optim_conf"].get("number_of_deferrable_loads", None) is not None:
         num_def_loads = params["optim_conf"]["number_of_deferrable_loads"]
         params["optim_conf"]["start_timesteps_of_each_deferrable_load"] = (
-            await check_def_loads(
+            check_def_loads(
                 num_def_loads,
                 params["optim_conf"],
                 0,
@@ -1580,28 +1569,28 @@ async def build_params(
                 logger,
             )
         )
-        params["optim_conf"]["end_timesteps_of_each_deferrable_load"] = await check_def_loads(
+        params["optim_conf"]["end_timesteps_of_each_deferrable_load"] = check_def_loads(
             num_def_loads,
             params["optim_conf"],
             0,
             "end_timesteps_of_each_deferrable_load",
             logger,
         )
-        params["optim_conf"]["set_deferrable_load_single_constant"] = await check_def_loads(
+        params["optim_conf"]["set_deferrable_load_single_constant"] = check_def_loads(
             num_def_loads,
             params["optim_conf"],
             False,
             "set_deferrable_load_single_constant",
             logger,
         )
-        params["optim_conf"]["treat_deferrable_load_as_semi_cont"] = await check_def_loads(
+        params["optim_conf"]["treat_deferrable_load_as_semi_cont"] = check_def_loads(
             num_def_loads,
             params["optim_conf"],
             True,
             "treat_deferrable_load_as_semi_cont",
             logger,
         )
-        params["optim_conf"]["set_deferrable_startup_penalty"] = await check_def_loads(
+        params["optim_conf"]["set_deferrable_startup_penalty"] = check_def_loads(
             num_def_loads,
             params["optim_conf"],
             0.0,
@@ -1609,7 +1598,7 @@ async def build_params(
             logger,
         )
         params["optim_conf"]["operating_hours_of_each_deferrable_load"] = (
-            await check_def_loads(
+            check_def_loads(
                 num_def_loads,
                 params["optim_conf"],
                 0,
@@ -1617,7 +1606,7 @@ async def build_params(
                 logger,
             )
         )
-        params["optim_conf"]["nominal_power_of_deferrable_loads"] = await check_def_loads(
+        params["optim_conf"]["nominal_power_of_deferrable_loads"] = check_def_loads(
             num_def_loads,
             params["optim_conf"],
             0,
@@ -1703,7 +1692,7 @@ async def build_params(
     return params
 
 
-async def check_def_loads(
+def check_def_loads(
     num_def_loads: int, parameter: list[dict], default, parameter_name: str, logger
 ):
     """
