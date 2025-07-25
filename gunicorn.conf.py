@@ -5,8 +5,8 @@ import multiprocessing
 bind = f"{os.getenv('IP', '0.0.0.0')}:{os.getenv('PORT', '5000')}"
 
 # Worker configuration
-workers = int(os.getenv("WEB_CONCURRENCY", min(multiprocessing.cpu_count(), 2)))
-threads = int(os.getenv("PYTHON_MAX_THREADS", 1))  # Set to 1 for async workers
+workers = int(os.getenv("WEB_CONCURRENCY", 1))
+threads = int(os.getenv("PYTHON_MAX_THREADS", 8))
 
 # Worker class for async support
 worker_class = os.getenv("WORKER_CLASS", "uvicorn.workers.UvicornWorker")
