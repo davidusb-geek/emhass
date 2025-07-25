@@ -23,7 +23,7 @@ preload_app = True
 reload = (os.getenv("WEB_RELOAD", "false").lower()) == "true"
 
 # Timeouts
-timeout = int(os.getenv("WEB_TIMEOUT", 240))
+timeout = int(os.getenv("WEB_TIMEOUT", 4000))
 graceful_timeout = 60
 keepalive = 2
 
