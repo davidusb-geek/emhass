@@ -18,8 +18,8 @@ import pandas as pd
 
 from emhass import utils_async as utils
 from emhass.forecast_async import Forecast
-from emhass.machine_learning_forecaster import MLForecaster
-from emhass.machine_learning_regressor import MLRegressor
+from emhass.machine_learning_forecaster_async import MLForecaster
+from emhass.machine_learning_regressor_async import MLRegressor
 from emhass.optimization import Optimization
 from emhass.retrieve_hass_async import RetrieveHass
 
@@ -907,7 +907,7 @@ async def forecast_model_fit(
         logger,
     )
     # Fit the ML model
-    df_pred, df_pred_backtest = mlf.fit(
+    df_pred, df_pred_backtest = await mlf.fit(
         split_date_delta=split_date_delta, perform_backtest=perform_backtest
     )
     # Save model
@@ -969,7 +969,7 @@ async def forecast_model_predict(
         data_last_window = copy.deepcopy(input_data_dict["df_input_data"])
     else:
         data_last_window = None
-    predictions = mlf.predict(data_last_window)
+    predictions = await mlf.predict(data_last_window)
     # Publish data to a Home Assistant sensor
     model_predict_publish = input_data_dict["params"]["passed_data"][
         "model_predict_publish"
@@ -1060,7 +1060,7 @@ async def forecast_model_tune(
             )
             return None, None
     # Tune the model
-    df_pred_optim = mlf.tune(debug=debug)
+    df_pred_optim = await mlf.tune(debug=debug)
     # Save model
     if not debug:
         filename = model_type + default_pkl_suffix
@@ -1119,7 +1119,7 @@ async def regressor_model_fit(
         data, model_type, regression_model, features, target, timestamp, logger
     )
     # Fit the ML model
-    fit = mlr.fit(date_features=date_features)
+    fit = await mlr.fit(date_features=date_features)
     if not fit:
         return False
     # Save model
@@ -1169,7 +1169,7 @@ async def regressor_model_predict(
         logger.error("parameter: 'new_values' not passed")
         return False
     # Predict from csv file
-    prediction = mlr.predict(new_values)
+    prediction = await mlr.predict(new_values)
     mlr_predict_entity_id = input_data_dict["params"]["passed_data"].get(
         "mlr_predict_entity_id", "sensor.mlr_predict"
     )
