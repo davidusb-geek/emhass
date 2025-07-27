@@ -27,8 +27,8 @@ from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from emhass.machine_learning_forecaster import MLForecaster
-from emhass.machine_learning_regressor import MLRegressor
+from emhass.machine_learning_forecaster_async import MLForecaster
+from emhass.machine_learning_regressor_async import MLRegressor
 from emhass.retrieve_hass_async import RetrieveHass
 from emhass.utils_async import add_date_features, get_days_list, set_df_index_freq
 
@@ -896,7 +896,7 @@ class Forecast:
                 / "debug-adjust-pv-forecast-data-prep-output-data.csv"
             )
 
-    def adjust_pv_forecast_fit(
+    async def adjust_pv_forecast_fit(
         self,
         n_splits: int = 5,
         regression_model: str = "LassoRegression",
@@ -929,7 +929,7 @@ class Forecast:
             None,
             self.logger,
         )
-        base_model, param_grid = mlr.get_regression_model()
+        base_model, param_grid = await mlr.get_regression_model()
         model = make_pipeline(StandardScaler(), base_model)
         # Time-series split
         tscv = TimeSeriesSplit(n_splits=n_splits)
@@ -1469,7 +1469,7 @@ class Forecast:
                 )
             else:
                 data_last_window = None
-            forecast_out = mlf.predict(data_last_window)
+            forecast_out = await mlf.predict(data_last_window)
             # Force forecast length to avoid mismatches
             self.logger.debug(
                 "Number of ML predict forcast data generated (lags_opt): "

@@ -20,7 +20,7 @@ import pytz
 import yaml
 
 if TYPE_CHECKING:
-    from emhass.machine_learning_forecaster import MLForecaster
+    from emhass.machine_learning_forecaster_async import MLForecaster
 
 pd.options.plotting.backend = "plotly"
 
