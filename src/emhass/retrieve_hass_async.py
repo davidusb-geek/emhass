@@ -15,6 +15,7 @@ from typing import Any
 import aiofiles
 import aiohttp
 import numpy as np
+from memory_profiler import profile
 import orjson
 import pandas as pd
 
@@ -23,23 +24,25 @@ from emhass.utils_async import set_df_index_freq
 
 logger = logging.getLogger(__name__)
 
-
-def convert_numpy_types(obj):
-    """Convert numpy types to native Python types for JSON serialization."""
-    if isinstance(obj, np.integer):
-        return int(obj)
-    elif isinstance(obj, np.floating):
-        return float(obj)
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, dict):
-        return {key: convert_numpy_types(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_numpy_types(item) for item in obj]
-    elif isinstance(obj, tuple):
-        return tuple(convert_numpy_types(item) for item in obj)
-    else:
-        return obj
+# def convert_numpy_types(obj):
+#     """Convert numpy types to native Python types for JSON serialization."""
+#     # print(obj)
+#     print(type(obj))
+#     print(len(obj))
+#     if isinstance(obj, np.integer):
+#         return int(obj)
+#     elif isinstance(obj, np.floating):
+#         return float(obj)
+#     elif isinstance(obj, np.ndarray):
+#         return obj.tolist()
+#     elif isinstance(obj, dict):
+#         return {key: convert_numpy_types(value) for key, value in obj.items()}
+#     elif isinstance(obj, list):
+#         return [convert_numpy_types(item) for item in obj]
+#     elif isinstance(obj, tuple):
+#         return tuple(convert_numpy_types(item) for item in obj)
+#     else:
+#         return obj
 
 
 class RetrieveHass:
@@ -117,7 +120,6 @@ class RetrieveHass:
         self.df_final = pd.DataFrame()
         self.df_weather = pd.DataFrame()
         self.df_forecast = pd.DataFrame()
-
     async def get_ha_config(self) -> dict[str, Any]:
         """Get Home Assistant configuration."""
         try:
@@ -128,7 +130,7 @@ class RetrieveHass:
 
         self.ha_config = await self._client.get_config()
 
-
+    # @profile
     async def get_data(
         self,
         days_list: pd.date_range,
@@ -187,20 +189,7 @@ class RetrieveHass:
 
             # Convert statistics data to DataFrame
             self.df_final = self._convert_statistics_to_dataframe(stats_data, var_list)
-
-            # if self.df_final.empty:
-            #     self.logger.warning("Statistics data conversion resulted in empty DataFrame")
-            #     # Try with different period
-            #     stats_data = await asyncio.wait_for(
-            #         self._client.get_statistics(
-            #             start_time=start_time,
-            #             end_time=end_time,
-            #             statistic_ids=var_list,
-            #             period="hour"
-            #         ),
-            #         timeout=30.0
-            #     )
-            #     self.df_final = self._convert_statistics_to_dataframe(stats_data, var_list)
+            # print(self.df_final)
 
             t1 = time.time()
             self.logger.info(f"Statistics data retrieval for {len(days_list):.2f} days took {t1 - t0:.2f} seconds")
@@ -209,7 +198,6 @@ class RetrieveHass:
 
         except Exception as e:
             self.logger.error(f"Failed to get data via WebSocket: {e}")
-
     def prepare_data(
         self,
         var_load: str,
@@ -428,7 +416,7 @@ class RetrieveHass:
         elif type_var == "optim_status":
             state = data_df.loc[data_df.index[idx]]
         elif type_var == "mlregressor":
-            state = convert_numpy_types(data_df[idx])
+            state = float(data_df[idx])
         else:
             state = np.round(data_df.loc[data_df.index[idx]], 2)
         if type_var == "power":
@@ -556,7 +544,7 @@ class RetrieveHass:
             response.ok = True
         else:
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, data=orjson.dumps(convert_numpy_types(data)).decode("utf-8")) as response:
+                async with session.post(url, headers=headers, data=orjson.dumps(data).decode("utf-8")) as response:
                     # Store response data since we need to access it after the context manager
                     response_ok = response.ok
                     response_status_code = response.status

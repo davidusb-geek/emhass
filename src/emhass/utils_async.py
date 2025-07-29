@@ -9,6 +9,7 @@ import os
 import pathlib
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
+# from memory_profiler import profile
 
 import aiofiles
 import aiohttp
@@ -229,7 +230,7 @@ def update_params_with_ha_config(
     params = orjson.dumps(params, default=str).decode("utf-8")
     return params
 
-
+# @profile
 async def treat_runtimeparams(
     runtimeparams: str,
     params: str,
