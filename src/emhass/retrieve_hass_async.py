@@ -15,7 +15,7 @@ from typing import Any
 import aiofiles
 import aiohttp
 import numpy as np
-from memory_profiler import profile
+# from memory_profiler import profile
 import orjson
 import pandas as pd
 
