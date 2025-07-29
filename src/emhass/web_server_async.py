@@ -749,14 +749,10 @@ async def initialize():
         # Re-raise the exception so before_serving can handle it
         raise
 
-    # atexit wordt niet meer nodig aangezien we via Quart shutdown werken.
-
-    # eventuele extra opstart-logica...
     app.logger.info("✅ Initialization complete")
 
 async def setup_config_and_paths(args_dict) -> (str, int):
     """Rebuild minimal config to pass into hypercorn."""
-    # Kan uitgebreid worden met build_config/build_secrets etc. als header
     host = params_secrets.get("server_ip", "0.0.0.0")
     port = int(os.getenv("PORT", 5000))
     return host, port

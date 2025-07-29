@@ -10,6 +10,8 @@ import re
 from datetime import datetime, timedelta
 from itertools import zip_longest
 from urllib.parse import quote
+# from memory_profiler import profile
+
 
 import aiofiles
 import aiohttp
@@ -1291,7 +1293,7 @@ class Forecast:
         # Compute the mean load for each timestamp
         forecast = combined_data.groupby(combined_data.index).mean()
         return forecast, used_days
-
+    # @profile
     async def get_load_forecast(
         self,
         days_min_load_forecast: int | None = 3,
@@ -1375,6 +1377,7 @@ class Forecast:
                     self.var_load_new = self.var_load + "_positive"
             else:
                 days_list = get_days_list(days_min_load_forecast)
+                # print("forecast", days_list, var_list)
                 if not await rh.get_data(days_list, var_list):
                     return False
 
@@ -1496,7 +1499,9 @@ class Forecast:
             data = pd.DataFrame.from_dict(data_dict)
             # Define index
             data.set_index("ts", inplace=True)
+            del mlf
             forecast_out = data.copy().loc[self.forecast_dates]
+            del data
         elif method == "csv":  # reading from a csv file
             load_csv_file_path = csv_path
             df_csv = pd.read_csv(load_csv_file_path, header=None, names=["ts", "yhat"])

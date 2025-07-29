@@ -10,7 +10,7 @@ import pickle
 import re
 from datetime import UTC, datetime
 from importlib.metadata import version
-
+# from memory_profiler import profile
 import aiofiles
 import numpy as np
 import orjson
@@ -77,6 +77,7 @@ async def retrieve_home_assistant_data(
             var_list.append(retrieve_hass_conf["sensor_power_photovoltaics"])
             if optim_conf.get("set_use_adjusted_pv", True):
                 var_list.append(retrieve_hass_conf["sensor_power_photovoltaics_forecast"])
+        # print("not_command_line", days_list, var_list)
         if not await rh.get_data(
             days_list, var_list
         ):
@@ -155,7 +156,7 @@ async def adjust_pv_forecast(
     # Update the PV forecast
     return P_PV_forecast["adjusted_forecast"].rename(None)
 
-
+# @profile
 async def set_input_data_dict(
     emhass_conf: dict,
     costfun: str,
@@ -197,13 +198,6 @@ async def set_input_data_dict(
 
     # Parsing yaml
     retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params, logger)
-    # yaml_result = utils.get_yaml_parse(params, logger)
-    # if isinstance(yaml_result, tuple) and len(yaml_result) == 4:
-    #     retrieve_hass_conf, optim_conf, plant_conf, _ = yaml_result
-    # elif isinstance(yaml_result, tuple) and len(yaml_result) == 3:
-    #     retrieve_hass_conf, optim_conf, plant_conf = yaml_result
-    # else:
-    #     return {}
 
     if type(retrieve_hass_conf) is bool:
         return False
@@ -425,16 +419,6 @@ async def set_input_data_dict(
             )
             return False
 
-        # # Validate forecast data before proceeding
-        # if len(P_load_forecast) == 0:
-        #     logger.error("P_load_forecast is empty - no load forecast data available")
-        #     return {}
-        # if len(P_PV_forecast) == 0:
-        #     logger.error("P_PV_forecast is empty - no PV forecast data available")
-        #     return {}
-
-        # logger.info(f"Generated P_load_forecast with {len(P_load_forecast)} data points")
-        # logger.info(f"Generated P_PV_forecast with {len(P_PV_forecast)} data points")
         df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
         if (
             "optimization_time_step" in retrieve_hass_conf
@@ -467,20 +451,6 @@ async def set_input_data_dict(
                 ]
             ]
 
-        # # Extract individual forecast series from DataFrame for naive-mpc-optim
-        # P_PV_forecast = df_input_data_dayahead["P_PV_forecast"]
-        # P_load_forecast = df_input_data_dayahead["P_load_forecast"]
-
-        # # Validate extracted forecast data
-        # if len(P_load_forecast) == 0:
-        #     logger.error("Extracted P_load_forecast is empty after prediction_horizon filtering")
-        #     return {}
-        # if len(P_PV_forecast) == 0:
-        #     logger.error("Extracted P_PV_forecast is empty after prediction_horizon filtering")
-        #     return {}
-
-        # logger.info(f"Final P_load_forecast for optimization: {len(P_load_forecast)} data points")
-        # logger.info(f"Final P_PV_forecast for optimization: {len(P_PV_forecast)} data points")
     elif (
         set_type == "forecast-model-fit"
         or set_type == "forecast-model-predict"
@@ -506,6 +476,7 @@ async def set_input_data_dict(
         else:
             days_list = utils.get_days_list(days_to_retrieve)
             var_list = [var_model]
+            # print("command_line", days_list, var_list)
             if not await rh.get_data(days_list, var_list):
                 return False
             df_input_data = rh.df_final.copy()
