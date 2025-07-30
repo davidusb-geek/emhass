@@ -20,7 +20,7 @@ from emhass import utils_async as utils
 from emhass.forecast_async import Forecast
 from emhass.machine_learning_forecaster_async import MLForecaster
 from emhass.machine_learning_regressor_async import MLRegressor
-from emhass.optimization import Optimization
+from emhass.optimization_async import Optimization
 from emhass.retrieve_hass_async import RetrieveHass
 
 default_csv_filename = "opt_res_latest.csv"
