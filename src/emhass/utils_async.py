@@ -9,7 +9,6 @@ import os
 import pathlib
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
-# from memory_profiler import profile
 
 import aiofiles
 import aiohttp
@@ -24,24 +23,6 @@ if TYPE_CHECKING:
     from emhass.machine_learning_forecaster_async import MLForecaster
 
 pd.options.plotting.backend = "plotly"
-
-# def convert_pandas_to_json_serializable(obj):
-#     """
-#     Convert pandas objects to JSON-serializable format.
-
-#     :param obj: Object that may contain pandas objects
-#     :return: JSON-serializable version of the object
-#     """
-#     if isinstance(obj, pd.Timedelta):
-#         return {"__pandas_timedelta__": obj.total_seconds()}
-#     elif hasattr(obj, 'zone') and hasattr(obj, 'localize'):  # pytz timezone object
-#         return {"__pytz_timezone__": str(obj)}
-#     elif isinstance(obj, dict):
-#         return {k: convert_pandas_to_json_serializable(v) for k, v in obj.items()}
-#     elif isinstance(obj, list):
-#         return [convert_pandas_to_json_serializable(item) for item in obj]
-#     else:
-#         return obj
 
 def get_root(file: str, num_parent: int | None = 3) -> str:
     """
@@ -1201,7 +1182,7 @@ async def build_legacy_config_params(
     for association in associations:
         # if legacy config catagories exists and if legacy parameter exists in config catagories
         if (
-            legacy_config.get(association[0], None) is not None
+            legacy_config.get(association[0]) is not None
             and legacy_config[association[0]].get(association[1], None) is not None
         ):
             config[association[2]] = legacy_config[association[0]][association[1]]
@@ -1288,6 +1269,7 @@ async def build_secrets(
     # Set defaults to be overwritten
     if argument is None:
         argument = {}
+
     params_secrets = {
         "hass_url": "https://myhass.duckdns.org/",
         "long_lived_token": "thatverylongtokenhere",
@@ -1300,7 +1282,16 @@ async def build_secrets(
         "solar_forecast_kwp": 5,
     }
 
-    # Obtain Secrets from ENV?
+    params_secrets = await _get_env_secrets(params_secrets)
+    options = await _load_options(options_path, logger) if options_path else {}
+    params_secrets = await _get_home_assistant_secrets(params_secrets, options, logger, no_response)
+    params_secrets = await _get_options_secrets(params_secrets, options, logger)
+    params_secrets = await _load_secrets_file(secrets_path, logger) if secrets_path else params_secrets
+    params_secrets = _get_argument_secrets(params_secrets, argument, logger)
+
+    return emhass_conf, params_secrets
+
+async def _get_env_secrets(params_secrets: dict) -> dict:
     params_secrets["hass_url"] = os.getenv("EMHASS_URL", params_secrets["hass_url"])
     params_secrets["long_lived_token"] = os.getenv(
         "SUPERVISOR_TOKEN", params_secrets["long_lived_token"]
@@ -1309,149 +1300,271 @@ async def build_secrets(
     params_secrets["Latitude"] = float(os.getenv("LAT", params_secrets["Latitude"]))
     params_secrets["Longitude"] = float(os.getenv("LON", params_secrets["Longitude"]))
     params_secrets["Altitude"] = float(os.getenv("ALT", params_secrets["Altitude"]))
+    return params_secrets
 
-    # Obtain secrets from options.json (Generated from EMHASS-Add-on, Home Assistant addon Configuration page) or Home Assistant API (from local Supervisor API)?
-    # Use local supervisor API to obtain secrets from Home Assistant if hass_url in options.json is empty and SUPERVISOR_TOKEN ENV exists (provided by Home Assistant when running the container as addon)
+async def _load_options(options_path: str, logger: logging.Logger) -> dict:
     options = {}
     if options_path and pathlib.Path(options_path).is_file():
         async with aiofiles.open(options_path) as data:
             content = await data.read()
             options = orjson.loads(content)
+    return options
 
-            # Obtain secrets from Home Assistant?
-            url_from_options = options.get("hass_url", "empty")
-            key_from_options = options.get("long_lived_token", "empty")
-
-            # If data path specified by options.json, overwrite emhass_conf['data_path']
-            if (
-                options.get("data_path", None) is not None
-                and pathlib.Path(options["data_path"]).exists()
-            ):
-                emhass_conf["data_path"] = pathlib.Path(options["data_path"])
-
-            # Check to use Home Assistant local API
-            if (
-                not no_response
-                and os.getenv("SUPERVISOR_TOKEN", None) is not None
-            ):
-                params_secrets["long_lived_token"] = os.getenv("SUPERVISOR_TOKEN", None)
-                # Use hass_url from options.json if available, otherwise use supervisor API for addon
-                if url_from_options != "empty" and url_from_options != "":
-                    params_secrets["hass_url"] = url_from_options
+async def _get_home_assistant_secrets(params_secrets: dict, options: dict, logger: logging.Logger, no_response: bool) -> dict:
+    if not no_response and os.getenv("SUPERVISOR_TOKEN", None) is not None:
+        params_secrets["long_lived_token"] = os.getenv("SUPERVISOR_TOKEN", None)
+        url_from_options = options.get("hass_url", "empty")
+        if url_from_options != "empty" and url_from_options != "":
+            params_secrets["hass_url"] = url_from_options
+        else:
+            params_secrets["hass_url"] = "http://supervisor/core/api"
+        headers = {
+            "Authorization": "Bearer " + params_secrets["long_lived_token"],
+            "content-type": "application/json",
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                params_secrets["hass_url"] + "/config", headers=headers
+            ) as response:
+                if response.status < 400:
+                    config_hass = await response.json()
+                    params_secrets.update({
+                        "time_zone": config_hass["time_zone"],
+                        "Latitude": config_hass["latitude"],
+                        "Longitude": config_hass["longitude"],
+                        "Altitude": config_hass["elevation"],
+                    })
                 else:
-                    # For addons, use supervisor API for both REST and WebSocket access
-                    params_secrets["hass_url"] = "http://supervisor/core/api"
-                headers = {
-                    "Authorization": "Bearer " + params_secrets["long_lived_token"],
-                    "content-type": "application/json",
-                }
-                # Obtain secrets from Home Assistant via API
-                logger.debug("Obtaining secrets from Home Assistant Supervisor API")
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(
-                        params_secrets["hass_url"] + "/config", headers=headers
-                    ) as response:
-                        if response.status < 400:
-                            config_hass = await response.json()
-                            params_secrets = {
-                                "hass_url": params_secrets["hass_url"],
-                                "long_lived_token": params_secrets["long_lived_token"],
-                                "time_zone": config_hass["time_zone"],
-                                "Latitude": config_hass["latitude"],
-                                "Longitude": config_hass["longitude"],
-                                "Altitude": config_hass["elevation"],
-                            }
-                        else:
-                            # Obtain the url and key secrets if any from options.json (default /app/options.json)
-                            logger.warning(
-                                "Error obtaining secrets from Home Assistant Supervisor API"
-                            )
-                            logger.debug("Obtaining url and key secrets from options.json")
-                            if url_from_options != "empty" and url_from_options != "":
-                                params_secrets["hass_url"] = url_from_options
-                            if key_from_options != "empty" and key_from_options != "":
-                                params_secrets["long_lived_token"] = key_from_options
-                            if (
-                                options.get("time_zone", "empty") != "empty"
-                                and options["time_zone"] != ""
-                            ):
-                                params_secrets["time_zone"] = options["time_zone"]
-                            if options.get("Latitude", None) is not None and bool(
-                                options["Latitude"]
-                            ):
-                                params_secrets["Latitude"] = options["Latitude"]
-                            if options.get("Longitude", None) is not None and bool(
-                                options["Longitude"]
-                            ):
-                                params_secrets["Longitude"] = options["Longitude"]
-                            if options.get("Altitude", None) is not None and bool(
-                                options["Altitude"]
-                            ):
-                                params_secrets["Altitude"] = options["Altitude"]
-            else:
-                # Obtain the url and key secrets if any from options.json (default /app/options.json)
-                logger.debug("Obtaining url and key secrets from options.json")
-                if url_from_options != "empty" and url_from_options != "":
-                    params_secrets["hass_url"] = url_from_options
-                if key_from_options != "empty" and key_from_options != "":
-                    params_secrets["long_lived_token"] = key_from_options
-                if (
-                    options.get("time_zone", "empty") != "empty"
-                    and options["time_zone"] != ""
-                ):
-                    params_secrets["time_zone"] = options["time_zone"]
-                if options.get("Latitude", None) is not None and bool(
-                    options["Latitude"]
-                ):
-                    params_secrets["Latitude"] = options["Latitude"]
-                if options.get("Longitude", None) is not None and bool(
-                    options["Longitude"]
-                ):
-                    params_secrets["Longitude"] = options["Longitude"]
-                if options.get("Altitude", None) is not None and bool(
-                    options["Altitude"]
-                ):
-                    params_secrets["Altitude"] = options["Altitude"]
+                    logger.warning("Error obtaining secrets from Home Assistant Supervisor API")
+                    params_secrets = _update_from_options(params_secrets, options, logger)
+    else:
+        params_secrets = _update_from_options(params_secrets, options, logger)
+    return params_secrets
 
-            # Obtain the forecast secrets (if any) from options.json (default /app/options.json)
-            forecast_secrets = [
-                "solcast_api_key",
-                "solcast_rooftop_id",
-                "solar_forecast_kwp",
-            ]
-            if any(x in forecast_secrets for x in list(options.keys())):
-                logger.debug("Obtaining forecast secrets from options.json")
-                if (
-                    options.get("solcast_api_key", "empty") != "empty"
-                    and options["solcast_api_key"] != ""
-                ):
-                    params_secrets["solcast_api_key"] = options["solcast_api_key"]
-                if (
-                    options.get("solcast_rooftop_id", "empty") != "empty"
-                    and options["solcast_rooftop_id"] != ""
-                ):
-                    params_secrets["solcast_rooftop_id"] = options["solcast_rooftop_id"]
-                if options.get("solar_forecast_kwp", None) and bool(
-                    options["solar_forecast_kwp"]
-                ):
-                    params_secrets["solar_forecast_kwp"] = options["solar_forecast_kwp"]
+def _update_from_options(params_secrets: dict, options: dict, logger: logging.Logger) -> dict:
+    url_from_options = options.get("hass_url", "empty")
+    key_from_options = options.get("long_lived_token", "empty")
+    if url_from_options != "empty" and url_from_options != "":
+        params_secrets["hass_url"] = url_from_options
+    if key_from_options != "empty" and key_from_options != "":
+        params_secrets["long_lived_token"] = key_from_options
+    if options.get("time_zone", "empty") != "empty" and options["time_zone"] != "":
+        params_secrets["time_zone"] = options["time_zone"]
+    if options.get("Latitude") is not None and bool(options["Latitude"]):
+        params_secrets["Latitude"] = options["Latitude"]
+    if options.get("Longitude") is not None and bool(options["Longitude"]):
+        params_secrets["Longitude"] = options["Longitude"]
+    if options.get("Altitude") is not None and bool(options["Altitude"]):
+        params_secrets["Altitude"] = options["Altitude"]
+    return params_secrets
 
-    # Obtain secrets from secrets_emhass.yaml? (default /app/secrets_emhass.yaml)
+async def _get_options_secrets(params_secrets: dict, options: dict, logger: logging.Logger) -> dict:
+    forecast_secrets = [
+        "solcast_api_key",
+        "solcast_rooftop_id",
+        "solar_forecast_kwp",
+    ]
+    if any(x in forecast_secrets for x in list(options.keys())):
+        logger.debug("Obtaining forecast secrets from options.json")
+        if (
+            options.get("solcast_api_key", "empty") != "empty"
+            and options["solcast_api_key"] != ""
+        ):
+            params_secrets["solcast_api_key"] = options["solcast_api_key"]
+        if (
+            options.get("solcast_rooftop_id", "empty") != "empty"
+            and options["solcast_rooftop_id"] != ""
+        ):
+            params_secrets["solcast_rooftop_id"] = options["solcast_rooftop_id"]
+        if options.get("solar_forecast_kwp") and bool(
+            options["solar_forecast_kwp"]
+        ):
+            params_secrets["solar_forecast_kwp"] = options["solar_forecast_kwp"]
+    return params_secrets
+
+async def _load_secrets_file(secrets_path: str, logger: logging.Logger) -> dict:
+    params_secrets = {}
     if secrets_path and pathlib.Path(secrets_path).is_file():
         logger.debug("Obtaining secrets from secrets file")
         async with aiofiles.open(pathlib.Path(secrets_path)) as file:
             content = await file.read()
             params_secrets.update(yaml.safe_load(content))
+    return params_secrets
 
-    # Receive key and url from ARG/arguments?
-    if argument.get("url", None) is not None:
+def _get_argument_secrets(params_secrets: dict, argument: dict, logger: logging.Logger) -> dict:
+    if argument.get("url") is not None:
         params_secrets["hass_url"] = argument["url"]
         logger.debug("Obtaining url from passed argument")
-    if argument.get("key", None) is not None:
+    if argument.get("key") is not None:
         params_secrets["long_lived_token"] = argument["key"]
         logger.debug("Obtaining long_lived_token from passed argument")
+    return params_secrets
+    # if argument is None:
+    #     argument = {}
+    # params_secrets = {
+    #     "hass_url": "https://myhass.duckdns.org/",
+    #     "long_lived_token": "thatverylongtokenhere",
+    #     "time_zone": "Europe/Paris",
+    #     "Latitude": 45.83,
+    #     "Longitude": 6.86,
+    #     "Altitude": 4807.8,
+    #     "solcast_api_key": "yoursecretsolcastapikey",
+    #     "solcast_rooftop_id": "yourrooftopid",
+    #     "solar_forecast_kwp": 5,
+    # }
 
-    return emhass_conf, params_secrets
+    # # Obtain Secrets from ENV?
+    # params_secrets["hass_url"] = os.getenv("EMHASS_URL", params_secrets["hass_url"])
+    # params_secrets["long_lived_token"] = os.getenv(
+    #     "SUPERVISOR_TOKEN", params_secrets["long_lived_token"]
+    # )
+    # params_secrets["time_zone"] = os.getenv("TIME_ZONE", params_secrets["time_zone"])
+    # params_secrets["Latitude"] = float(os.getenv("LAT", params_secrets["Latitude"]))
+    # params_secrets["Longitude"] = float(os.getenv("LON", params_secrets["Longitude"]))
+    # params_secrets["Altitude"] = float(os.getenv("ALT", params_secrets["Altitude"]))
+
+    # # Obtain secrets from options.json (Generated from EMHASS-Add-on, Home Assistant addon Configuration page) or Home Assistant API (from local Supervisor API)?
+    # # Use local supervisor API to obtain secrets from Home Assistant if hass_url in options.json is empty and SUPERVISOR_TOKEN ENV exists (provided by Home Assistant when running the container as addon)
+    # options = {}
+    # if options_path and pathlib.Path(options_path).is_file():
+    #     async with aiofiles.open(options_path) as data:
+    #         content = await data.read()
+    #         options = orjson.loads(content)
+
+    #         # Obtain secrets from Home Assistant?
+    #         url_from_options = options.get("hass_url", "empty")
+    #         key_from_options = options.get("long_lived_token", "empty")
+
+    #         # If data path specified by options.json, overwrite emhass_conf['data_path']
+    #         if (
+    #             options.get("data_path", None) is not None
+    #             and pathlib.Path(options["data_path"]).exists()
+    #         ):
+    #             emhass_conf["data_path"] = pathlib.Path(options["data_path"])
+
+    #         # Check to use Home Assistant local API
+    #         if (
+    #             not no_response
+    #             and os.getenv("SUPERVISOR_TOKEN", None) is not None
+    #         ):
+    #             params_secrets["long_lived_token"] = os.getenv("SUPERVISOR_TOKEN", None)
+    #             # Use hass_url from options.json if available, otherwise use supervisor API for addon
+    #             if url_from_options != "empty" and url_from_options != "":
+    #                 params_secrets["hass_url"] = url_from_options
+    #             else:
+    #                 # For addons, use supervisor API for both REST and WebSocket access
+    #                 params_secrets["hass_url"] = "http://supervisor/core/api"
+    #             headers = {
+    #                 "Authorization": "Bearer " + params_secrets["long_lived_token"],
+    #                 "content-type": "application/json",
+    #             }
+    #             # Obtain secrets from Home Assistant via API
+    #             logger.debug("Obtaining secrets from Home Assistant Supervisor API")
+    #             async with aiohttp.ClientSession() as session:
+    #                 async with session.get(
+    #                     params_secrets["hass_url"] + "/config", headers=headers
+    #                 ) as response:
+    #                     if response.status < 400:
+    #                         config_hass = await response.json()
+    #                         params_secrets = {
+    #                             "hass_url": params_secrets["hass_url"],
+    #                             "long_lived_token": params_secrets["long_lived_token"],
+    #                             "time_zone": config_hass["time_zone"],
+    #                             "Latitude": config_hass["latitude"],
+    #                             "Longitude": config_hass["longitude"],
+    #                             "Altitude": config_hass["elevation"],
+    #                         }
+    #                     else:
+    #                         # Obtain the url and key secrets if any from options.json (default /app/options.json)
+    #                         logger.warning(
+    #                             "Error obtaining secrets from Home Assistant Supervisor API"
+    #                         )
+    #                         logger.debug("Obtaining url and key secrets from options.json")
+    #                         if url_from_options != "empty" and url_from_options != "":
+    #                             params_secrets["hass_url"] = url_from_options
+    #                         if key_from_options != "empty" and key_from_options != "":
+    #                             params_secrets["long_lived_token"] = key_from_options
+    #                         if (
+    #                             options.get("time_zone", "empty") != "empty"
+    #                             and options["time_zone"] != ""
+    #                         ):
+    #                             params_secrets["time_zone"] = options["time_zone"]
+    #                         if options.get("Latitude", None) is not None and bool(
+    #                             options["Latitude"]
+    #                         ):
+    #                             params_secrets["Latitude"] = options["Latitude"]
+    #                         if options.get("Longitude", None) is not None and bool(
+    #                             options["Longitude"]
+    #                         ):
+    #                             params_secrets["Longitude"] = options["Longitude"]
+    #                         if options.get("Altitude", None) is not None and bool(
+    #                             options["Altitude"]
+    #                         ):
+    #                             params_secrets["Altitude"] = options["Altitude"]
+    #         else:
+    #             # Obtain the url and key secrets if any from options.json (default /app/options.json)
+    #             logger.debug("Obtaining url and key secrets from options.json")
+    #             if url_from_options != "empty" and url_from_options != "":
+    #                 params_secrets["hass_url"] = url_from_options
+    #             if key_from_options != "empty" and key_from_options != "":
+    #                 params_secrets["long_lived_token"] = key_from_options
+    #             if (
+    #                 options.get("time_zone", "empty") != "empty"
+    #                 and options["time_zone"] != ""
+    #             ):
+    #                 params_secrets["time_zone"] = options["time_zone"]
+    #             if options.get("Latitude", None) is not None and bool(
+    #                 options["Latitude"]
+    #             ):
+    #                 params_secrets["Latitude"] = options["Latitude"]
+    #             if options.get("Longitude", None) is not None and bool(
+    #                 options["Longitude"]
+    #             ):
+    #                 params_secrets["Longitude"] = options["Longitude"]
+    #             if options.get("Altitude", None) is not None and bool(
+    #                 options["Altitude"]
+    #             ):
+    #                 params_secrets["Altitude"] = options["Altitude"]
+
+    #         # Obtain the forecast secrets (if any) from options.json (default /app/options.json)
+    #         forecast_secrets = [
+    #             "solcast_api_key",
+    #             "solcast_rooftop_id",
+    #             "solar_forecast_kwp",
+    #         ]
+    #         if any(x in forecast_secrets for x in list(options.keys())):
+    #             logger.debug("Obtaining forecast secrets from options.json")
+    #             if (
+    #                 options.get("solcast_api_key", "empty") != "empty"
+    #                 and options["solcast_api_key"] != ""
+    #             ):
+    #                 params_secrets["solcast_api_key"] = options["solcast_api_key"]
+    #             if (
+    #                 options.get("solcast_rooftop_id", "empty") != "empty"
+    #                 and options["solcast_rooftop_id"] != ""
+    #             ):
+    #                 params_secrets["solcast_rooftop_id"] = options["solcast_rooftop_id"]
+    #             if options.get("solar_forecast_kwp", None) and bool(
+    #                 options["solar_forecast_kwp"]
+    #             ):
+    #                 params_secrets["solar_forecast_kwp"] = options["solar_forecast_kwp"]
+
+    # # Obtain secrets from secrets_emhass.yaml? (default /app/secrets_emhass.yaml)
+    # if secrets_path and pathlib.Path(secrets_path).is_file():
+    #     logger.debug("Obtaining secrets from secrets file")
+    #     async with aiofiles.open(pathlib.Path(secrets_path)) as file:
+    #         content = await file.read()
+    #         params_secrets.update(yaml.safe_load(content))
+
+    # # Receive key and url from ARG/arguments?
+    # if argument.get("url") is not None:
+    #     params_secrets["hass_url"] = argument["url"]
+    #     logger.debug("Obtaining url from passed argument")
+    # if argument.get("key") is not None:
+    #     params_secrets["long_lived_token"] = argument["key"]
+    #     logger.debug("Obtaining long_lived_token from passed argument")
+
+    # return emhass_conf, params_secrets
 
 
 async def build_params(
@@ -1505,7 +1618,7 @@ async def build_params(
     for association in associations:
         # If parameter has list_ name and parameter in config is presented with its list name
         # (ie, config parameter is in legacy options.json format)
-        if len(association) == 4 and config.get(association[3], None) is not None:
+        if len(association) == 4 and config.get(association[3]) is not None:
             # Extract lists of dictionaries
             if config[association[3]] and type(config[association[3]][0]) is dict:
                 params[association[0]][association[2]] = [
@@ -1514,14 +1627,14 @@ async def build_params(
             else:
                 params[association[0]][association[2]] = config[association[3]]
         # Else, directly set value of config parameter to param
-        elif config.get(association[2], None) is not None:
+        elif config.get(association[2]) is not None:
             params[association[0]][association[2]] = config[association[2]]
 
     # Check if we need to create `list_hp_periods` from config (ie. legacy options.json format)
     if (
-        params.get("optim_conf", None) is not None
-        and config.get("list_peak_hours_periods_start_hours", None) is not None
-        and config.get("list_peak_hours_periods_end_hours", None) is not None
+        params.get("optim_conf") is not None
+        and config.get("list_peak_hours_periods_start_hours") is not None
+        and config.get("list_peak_hours_periods_end_hours") is not None
     ):
         start_hours_list = [
             i["peak_hours_periods_start_hours"]
@@ -1628,14 +1741,12 @@ async def build_params(
 
     # Configure secrets, set params to correct config categorie
     # retrieve_hass_conf
-    params["retrieve_hass_conf"]["hass_url"] = params_secrets.get("hass_url", None)
-    params["retrieve_hass_conf"]["long_lived_token"] = params_secrets.get(
-        "long_lived_token", None
-    )
-    params["retrieve_hass_conf"]["time_zone"] = params_secrets.get("time_zone", None)
-    params["retrieve_hass_conf"]["Latitude"] = params_secrets.get("Latitude", None)
-    params["retrieve_hass_conf"]["Longitude"] = params_secrets.get("Longitude", None)
-    params["retrieve_hass_conf"]["Altitude"] = params_secrets.get("Altitude", None)
+    params["retrieve_hass_conf"]["hass_url"] = params_secrets.get("hass_url")
+    params["retrieve_hass_conf"]["long_lived_token"] = params_secrets.get("long_lived_token")
+    params["retrieve_hass_conf"]["time_zone"] = params_secrets.get("time_zone")
+    params["retrieve_hass_conf"]["Latitude"] = params_secrets.get("Latitude")
+    params["retrieve_hass_conf"]["Longitude"] = params_secrets.get("Longitude")
+    params["retrieve_hass_conf"]["Altitude"] = params_secrets.get("Altitude")
     # Update optional param secrets
     if params["optim_conf"].get("weather_forecast_method", None) is not None:
         if params["optim_conf"]["weather_forecast_method"] == "solcast":
