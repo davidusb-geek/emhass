@@ -91,9 +91,9 @@ class AsyncWebSocketClient:
             await asyncio.sleep(1)
             try:
                 await asyncio.wait_for(self._connect(), timeout=10.0)
-            except TimeoutError:
+            except TimeoutError as e:
                 self.logger.error("Reconnection timed out")
-                raise ConnectionError("Reconnection timed out")
+                raise ConnectionError("Reconnection timed out") from e
             except Exception as e:
                 self.logger.error(f"Reconnection failed: {e}")
                 raise

@@ -10,7 +10,7 @@ import pickle
 import re
 from datetime import UTC, datetime
 from importlib.metadata import version
-# from memory_profiler import profile
+
 import aiofiles
 import numpy as np
 import orjson
@@ -700,7 +700,7 @@ async def dayahead_forecast_optim(
         df_input_data_dayahead["outdoor_temperature_forecast"] = input_data_dict[
             "params"
         ]["passed_data"]["outdoor_temperature_forecast"]
-    opt_res_dayahead = await input_data_dict["opt"].perform_dayahead_forecast_optim(
+    opt_res_dayahead = input_data_dict["opt"].perform_dayahead_forecast_optim(
         df_input_data_dayahead,
         input_data_dict["P_PV_forecast"],
         input_data_dict["P_load_forecast"],
