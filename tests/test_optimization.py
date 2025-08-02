@@ -414,7 +414,7 @@ class TestOptimization(unittest.TestCase):
         )
         self.assertTrue("cost_fun_cost" in self.opt_res_dayahead.columns)
 
-    #
+    # Test with total PV sell and different solvers
     def test_perform_dayahead_forecast_optim_aux(self):
         self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False, False]
         self.optim_conf["set_total_pv_sell"] = True
@@ -481,6 +481,36 @@ class TestOptimization(unittest.TestCase):
             self.assertIsInstance(
                 self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
             )
+
+    # Check minimum deferrable load power
+    def test_perform_dayahead_forecast_optim_min_def_load_power(self):
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0.1, 0.1]
+        self.opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
+            self.df_input_data_dayahead
+        )
+        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(
+            self.df_input_data_dayahead
+        )
+        self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
+            self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast
+        )
+        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+        self.assertIsInstance(
+            self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex
+        )
+        self.assertIsInstance(
+            self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
+        )
 
     def test_perform_naive_mpc_optim(self):
         self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
