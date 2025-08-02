@@ -214,9 +214,7 @@ class Forecast:
                     ]
 
     def get_cached_open_meteo_forecast_json(
-        self,
-        max_age: int | None = 30,
-        forecast_days: int = 3
+        self, max_age: int | None = 30, forecast_days: int = 3
     ) -> dict:
         r"""
         Get weather forecast json from Open-Meteo and cache it for re-use.
@@ -245,10 +243,15 @@ class Forecast:
 
         # Ensure at least 3 weather forecast days (and 1 more than requested)
         if forecast_days is None:
-            self.logger.warning("Open-Meteo forecast_days is missing so defaulting to 3 days")
+            self.logger.warning(
+                "Open-Meteo forecast_days is missing so defaulting to 3 days"
+            )
             forecast_days = 3
         elif forecast_days < 3:
-            self.logger.warning("Open-Meteo forecast_days is too low (%s) so defaulting to 3 days", forecast_days)
+            self.logger.warning(
+                "Open-Meteo forecast_days is too low (%s) so defaulting to 3 days",
+                forecast_days,
+            )
             forecast_days = 3
         else:
             forecast_days = forecast_days + 1
@@ -301,7 +304,8 @@ class Forecast:
                 + "shortwave_radiation_instant,"
                 + "diffuse_radiation_instant,"
                 + "direct_normal_irradiance_instant"
-                + "&forecast_days=" + str(forecast_days)
+                + "&forecast_days="
+                + str(forecast_days)
                 + "&timezone="
                 + quote(str(self.time_zone), safe="")
             )
@@ -366,7 +370,7 @@ class Forecast:
             if not os.path.isfile(w_forecast_cache_path):
                 data_raw = self.get_cached_open_meteo_forecast_json(
                     self.optim_conf["open_meteo_cache_max_age"],
-                    self.optim_conf["delta_forecast_daily"].days
+                    self.optim_conf["delta_forecast_daily"].days,
                 )
                 data_15min = pd.DataFrame.from_dict(data_raw["minutely_15"])
                 data_15min["time"] = pd.to_datetime(data_15min["time"])

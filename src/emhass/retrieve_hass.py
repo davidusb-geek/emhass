@@ -107,7 +107,9 @@ class RetrieveHass:
         try:
             self.ha_config = response_config.json()
         except Exception:
-            self.logger.error("EMHASS was unable to obtain configuration data from Home Assistant")
+            self.logger.error(
+                "EMHASS was unable to obtain configuration data from Home Assistant"
+            )
             return False
 
     def get_data(
@@ -202,7 +204,9 @@ class RetrieveHass:
                         )
                         return False
                     if response.status_code > 299:
-                        self.logger.error(f"Home assistant request GET error: {response.status_code} for var {var}")
+                        self.logger.error(
+                            f"Home assistant request GET error: {response.status_code} for var {var}"
+                        )
                         return False
                 """import bz2 # Uncomment to save a serialized data for tests
                 import _pickle as cPickle
@@ -266,7 +270,7 @@ class RetrieveHass:
                     ).max()
                     ts = pd.to_datetime(
                         pd.date_range(start=from_date, end=to_date, freq=self.freq),
-                        format="%Y-%d-%m %H:%M"
+                        format="%Y-%d-%m %H:%M",
                     ).round(self.freq, ambiguous="infer", nonexistent="shift_forward")
                     df_day = pd.DataFrame(index=ts)
                 # Caution with undefined string data: unknown, unavailable, etc.
