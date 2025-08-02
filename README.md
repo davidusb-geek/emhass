@@ -62,16 +62,9 @@
 </div>
 
 <br>
-<p align="center">
-If you like this work please consider buying a coffee ;-) 
-</p>
-<p align="center">
-  <a href="https://www.buymeacoffee.com/davidusbgeek" target="_blank">
-    <img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy Me A Coffee" style="height: 41px !important;width: 174px !important;box-shadow: 0px 3px 2px 0px rgba(190, 190, 190, 0.5) !important;-webkit-box-shadow: 0px 3px 2px 0px rgba(190, 190, 190, 0.5) !important;" >
-  </a>
-</p>
-
+<p align="left">
 EHMASS is a Python module designed to optimize your home energy interfacing with Home Assistant.
+</p>
 
 ## Introduction
 
@@ -141,12 +134,13 @@ _Note: Both EMHASS via Docker and EMHASS-Add-on contain the same Docker image. T
 
 ### Method 2) Running EMHASS in Docker
 
-You can also install EMHASS using Docker as a container. This can be in the same machine as Home Assistant (if your running Home Assistant as a Docker container) or in a different distant machine. To install first pull the latest image:
+You can also install EMHASS using Docker as a container. This can be in the same machine as Home Assistant (if your running Home Assistant as a Docker container) or in a different distant machine. The "share" folder is where EMHASS stores the config.json file. In the examples below adjust the "-v" volume mappings to reflect where your path to the local host directory needs to be mapped to.
+To install first pull the latest image:
 ```bash
 # pull Docker image
 docker pull ghcr.io/davidusb-geek/emhass:latest
-# run Docker image, mounting config.json and secrets_emhass.yaml from host
-docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v ./config.json:/share/config.json -v ./secrets_emhass.yaml:/app/secrets_emhass.yaml ghcr.io/davidusb-geek/emhass:latest
+# run Docker image, mounting the dir storing config.json and secrets_emhass.yaml from host
+docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v /emhass/share:/share/ -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml ghcr.io/davidusb-geek/emhass:latest
 ```
 *Note it is not recommended to install the latest EMHASS image with `:latest` *(as you would likely want to control when you update EMHASS version)*. Instead, find the [latest version tag](https://github.com/davidusb-geek/emhass/pkgs/container/emhass) (E.g: `v0.2.1`) and replace `latest`*
 
@@ -160,7 +154,7 @@ cd emhass
 # may need to set architecture tag (docker build --build-arg TARGETARCH=amd64 -t emhass-local .)
 docker build -t emhass-local . 
 # run built Docker image, mounting config.json and secrets_emhass.yaml from host
-docker run --rm -it -p 5000:5000 --name emhass-container -v ./config.json:/share/config.json -v ./secrets_emhass.yaml:/app/secrets_emhass.yaml emhass-local
+docker run --rm -it -p 5000:5000 --name emhass-container -v /emhass/share:/share -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml emhass-local
 ```
 
 Before running the docker container, make sure you have a designated folder for emhass on your host device and a `secrets_emhass.yaml` file. You can get a example of the secrets file from [`secrets_emhass(example).yaml`](https://github.com/davidusb-geek/emhass/blob/master/secrets_emhass(example).yaml) file on this repository.
@@ -176,23 +170,23 @@ Latitude: 45.83
 Longitude: 6.86
 Altitude: 4807.8
 EOT
-docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v ./config.json:/share/config.json -v ./secrets_emhass.yaml:/app/secrets_emhass.yaml ghcr.io/davidusb-geek/emhass:latest
+docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v /emhass/share:/share -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml ghcr.io/davidusb-geek/emhass:latest
 ```
 
 #### Docker, things to note 
 
-- You can create a `config.json` file prior to running emhass. *(obtain a example from: [config_defaults.json](https://github.com/davidusb-geek/emhass/blob/enhass-standalone-addon-merge/src/emhass/data/config_defaults.json)* Alteratively, you can insert your parameters into the configuration page on the EMHASS web server. (for EMHASS to auto create a config.json) With either option, the volume mount `-v ./config.json:/share/config.json` should be applied to make sure your config is stored on the host device. (to be not deleted when the EMHASS container gets removed/image updated)*
+- You can create a `config.json` file prior to running emhass. *(obtain a example from: [config_defaults.json](https://github.com/davidusb-geek/emhass/blob/enhass-standalone-addon-merge/src/emhass/data/config_defaults.json)* Alteratively, you can insert your parameters into the configuration page on the EMHASS web server. (for EMHASS to auto create a config.json) With either option, the volume mount `-v /emhass/share:/share` should be applied to make sure your config is stored on the host device. (to be not deleted when the EMHASS container gets removed/image updated)*
 
 - If you wish to keep a local, semi-persistent copy of the EMHASS-generated data, create a local folder on your device, then mount said folder inside the container.  
   ```bash
   #create data folder 
   mkdir -p ~/emhass/data 
-  docker run -it --restart always -p 5000:5000 -e LOCAL_COSTFUN="profit" -v ~/emhass/config.json:/app/config.json -v ~/emhass/data:/data  -v ~/emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
+  docker run -it --restart always -p 5000:5000 -e LOCAL_COSTFUN="profit" -v /emhass/share:/share -v /emhass/data:/data  -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
   ```
     
 - If you wish to set the web_server's homepage optimization diagrams to a timezone other than UTC, set `TZ` environment variable on docker run:
   ```bash
-  docker run -it --restart always -p 5000:5000  -e TZ="Europe/Paris" -v ~/emhass/config.json:/app/config.json -v ~/emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
+  docker run -it --restart always -p 5000:5000  -e TZ="Europe/Paris" -v /emhass/share:/share -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml --name DockerEMHASS <REPOSITORY:TAG>
   ```  
 ### Method 3) Legacy method using a Python virtual environment *(Legacy CLI)*
 If you wish to run EMHASS optimizations with cli commands. *(no persistent web server session)* you can run EMHASS via the python package alone *(not wrapped in a Docker container)*.
@@ -264,11 +258,21 @@ Additional optimization strategies were developed later, that can be used in com
 
 ### Dayahead Optimization - Method 1) Add-on and docker standalone
 
-In `configuration.yaml`:
+We can use the `shell_command` integration in `configuration.yaml`:
 ```yaml
 shell_command:
   dayahead_optim: "curl -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/dayahead-optim"
   publish_data: "curl -i -H \"Content-Type:application/json\" -X POST -d '{}' http://localhost:5000/action/publish-data"
+```
+An alternative that will be useful when passing data at runtime (see dedicated section), we can use the the `rest_command` instead:
+```yaml
+rest_command:
+  url: http://127.0.0.1:5000/action/dayahead-optim
+  method: POST
+  headers:
+    content-type: application/json
+  payload: >-
+    {}
 ```
 ### Dayahead Optimization - Method 2) Legacy method using a Python virtual environment
 
@@ -332,8 +336,8 @@ In `automations.yaml`:
 ```
 in configuration page/`config.json` 
 ```json
-'method_ts_round': "first"
-'continual_publish': true
+"method_ts_round": "first"
+"continual_publish": true
 ```
 In this automation, the day-ahead optimization is performed once a day, every day at 5:30am. 
 If the `optimization_time_step` parameter is set to `30` *(default)* in the configuration, the results of the day-ahead optimization will generate 48 values *(for each entity)*, a value for every 30 minutes in a day *(i.e. 24 hrs x 2)*.
@@ -487,7 +491,7 @@ For users who wish to have full control of exactly when they would like to run a
 
 in configuration page/`config.json` :
 ```json
-'continual_publish': false
+"continual_publish": false
 ```
 POST action :
 ```bash
@@ -609,6 +613,25 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 
 *Example with :`operating_hours_of_each_deferrable_load`, `start_timesteps_of_each_deferrable_load`, `end_timesteps_of_each_deferrable_load`.*
 ```bash
 curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93], "prediction_horizon":10, "soc_init":0.5,"soc_final":0.6,"operating_hours_of_each_deferrable_load":[1,3],"start_timesteps_of_each_deferrable_load":[0,3],"end_timesteps_of_each_deferrable_load":[0,6]}' http://localhost:5000/action/naive-mpc-optim
+```
+
+For a more readable option we can use the `rest_command` integration:
+```yaml
+rest_command:
+  url: http://127.0.0.1:5000/action/dayahead-optim
+  method: POST
+  headers:
+    content-type: application/json
+  payload: >-
+    {
+      "pv_power_forecast": [0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93],
+      "prediction_horizon":10,
+      "soc_init":0.5,
+      "soc_final":0.6,
+      "operating_hours_of_each_deferrable_load":[1,3],
+      "start_timesteps_of_each_deferrable_load":[0,3],
+      "end_timesteps_of_each_deferrable_load":[0,6]
+    }
 ```
 
 ## A machine learning forecaster
