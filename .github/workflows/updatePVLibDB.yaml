@@ -32,5 +32,5 @@ jobs:
         git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git add ./src/emhass/data/cec_inverters.pbz2
         git add ./src/emhass/data/cec_modules.pbz2
-        git commit -m "Bump inverter/module database"
-        git push
+        git commit -m "chore(database): bump inverter and module database" && git push || echo "No modification needed, databases already up to date"
+        
