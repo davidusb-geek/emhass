@@ -1,5 +1,4 @@
 import os
-import multiprocessing
 
 # Bind address
 bind = f"{os.getenv('IP', '0.0.0.0')}:{os.getenv('PORT', '5000')}"
