@@ -714,7 +714,7 @@ class Forecast:
         # If ignoring PV feedback (e.g., during curtailment), return original forecast
         if ignore_pv_feedback:
             return df_forecast
-        
+
         first_fcst = alpha * df_forecast.iloc[0] + beta * df_now[col].iloc[-1]
         df_forecast.iloc[0] = int(round(first_fcst))
         return df_forecast
