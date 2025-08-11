@@ -1677,6 +1677,7 @@ def build_params(
         "end_timesteps_of_each_deferrable_load": None,
         "alpha": None,
         "beta": None,
+        "ignore_pv_feedback_during_curtailment": None,
     }
 
     return params

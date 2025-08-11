@@ -484,6 +484,12 @@
       "Description": "The desired battery state of charge at the end of each optimization cycle. (percentage/100)",
       "input": "float",
       "default_value": 0.6
+    },
+    "ignore_pv_feedback_during_curtailment": {
+      "friendly_name": "Ignore PV feedback during curtailment",
+      "Description": "When set to true, prevents PV forecast from being updated with real PV data, avoiding flip-flop behavior during curtailment operations",
+      "input": "bool",
+      "default_value": false
     }
   }
 }
