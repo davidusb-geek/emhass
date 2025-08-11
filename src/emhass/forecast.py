@@ -692,6 +692,7 @@ class Forecast:
         alpha: float,
         beta: float,
         col: str,
+        ignore_pv_feedback: bool = False,
     ) -> pd.DataFrame:
         """A simple correction method for forecasted data using the current real values of a variable.
 
@@ -705,9 +706,15 @@ class Forecast:
         :type beta: float
         :param col: The column variable name
         :type col: str
+        :param ignore_pv_feedback: If True, bypass mixing and return original forecast (used during curtailment)
+        :type ignore_pv_feedback: bool
         :return: The output DataFrame with the corrected values
         :rtype: pd.DataFrame
         """
+        # If ignoring PV feedback (e.g., during curtailment), return original forecast
+        if ignore_pv_feedback:
+            return df_forecast
+        
         first_fcst = alpha * df_forecast.iloc[0] + beta * df_now[col].iloc[-1]
         df_forecast.iloc[0] = int(round(first_fcst))
         return df_forecast
@@ -808,12 +815,14 @@ class Forecast:
                     # Extracting results for AC power
                     P_PV_forecast = mc.results.ac
         if set_mix_forecast:
+            ignore_pv_feedback = self.params["passed_data"].get("ignore_pv_feedback_during_curtailment", False)
             P_PV_forecast = Forecast.get_mix_forecast(
                 df_now,
                 P_PV_forecast,
                 self.params["passed_data"]["alpha"],
                 self.params["passed_data"]["beta"],
                 self.var_PV,
+                ignore_pv_feedback,
             )
         P_PV_forecast[P_PV_forecast < 0] = 0  # replace any negative PV values with zero
         self.logger.debug("get_power_from_weather returning:\n%s", P_PV_forecast)
@@ -1527,12 +1536,14 @@ class Forecast:
             return False
         P_Load_forecast = copy.deepcopy(forecast_out["yhat"])
         if set_mix_forecast:
+            # Load forecasts don't need curtailment protection - always use feedback
             P_Load_forecast = Forecast.get_mix_forecast(
                 df_now,
                 P_Load_forecast,
                 self.params["passed_data"]["alpha"],
                 self.params["passed_data"]["beta"],
                 self.var_load_new,
+                False,  # Never ignore feedback for load forecasts
             )
         self.logger.debug("get_load_forecast returning:\n%s", P_Load_forecast)
         return P_Load_forecast
