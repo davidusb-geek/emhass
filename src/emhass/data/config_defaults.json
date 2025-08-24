@@ -116,6 +116,8 @@
     1
   ],
   "inverter_is_hybrid": false,
+  "inverter_ac_output_max": 1000,
+  "inverter_ac_input_max": 1000,
   "compute_curtailment": false,
   "set_use_battery": false,
   "battery_discharge_power_max": 1000,
