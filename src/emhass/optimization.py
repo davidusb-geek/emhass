@@ -528,48 +528,88 @@ class Optimization:
             if P_nom_inverter_input is None:
                 P_nom_inverter_input = P_nom_inverter_output
 
-            constraints.update(
-                {
-                    f"constraint_hybrid_inverter_output_{i}": plp.LpConstraint(
-                        e=P_PV[i]
-                        - P_PV_curtailment[i]
-                        + P_sto_pos[i]
-                        + P_sto_neg[i]
-                        - P_nom_inverter_output,
-                        sense=plp.LpConstraintLE,
-                        rhs=0,
-                    )
-                    for i in set_I
-                }
-            )
-            constraints.update(
-                {
-                    f"constraint_hybrid_inverter_input_{i}": plp.LpConstraint(
-                        e=P_PV[i]
-                        - P_PV_curtailment[i]
-                        + P_sto_pos[i]
-                        + P_sto_neg[i]
-                        + P_nom_inverter_input,
-                        sense=plp.LpConstraintGE,
-                        rhs=0,
-                    )
-                    for i in set_I
-                }
-            )
-            constraints.update(
-                {
-                    f"constraint_hybrid_inverter2_{i}": plp.LpConstraint(
-                        e=P_PV[i]
-                        - P_PV_curtailment[i]
-                        + P_sto_pos[i]
-                        + P_sto_neg[i]
-                        - P_hybrid_inverter[i],
-                        sense=plp.LpConstraintEQ,
-                        rhs=0,
-                    )
-                    for i in set_I
-                }
-            )
+            # Get efficiency parameters, defaulting to 100%
+            eff_dc_ac = self.plant_conf.get("inverter_efficiency_dc_ac", 1.0)
+            eff_ac_dc = self.plant_conf.get("inverter_efficiency_ac_dc", 1.0)
+
+            # Calculate the maximum allowed DC power flows based on AC limits and efficiency.
+            P_dc_ac_max = P_nom_inverter_output / eff_dc_ac
+            P_ac_dc_max = P_nom_inverter_input * eff_ac_dc
+
+            # Define unidirectional DC power flow variables with the tight, calculated bounds.
+            P_dc_ac = {
+                (i): plp.LpVariable(
+                    cat="Continuous",
+                    lowBound=0,
+                    upBound=P_dc_ac_max,
+                    name=f"P_dc_ac_{i}",
+                )
+                for i in set_I
+            }
+            P_ac_dc = {
+                (i): plp.LpVariable(
+                    cat="Continuous",
+                    lowBound=0,
+                    upBound=P_ac_dc_max,
+                    name=f"P_ac_dc_{i}",
+                )
+                for i in set_I
+            }
+            # Binary variable to enforce unidirectional flow
+            is_dc_sourcing = {
+                (i): plp.LpVariable(cat="Binary", name=f"is_dc_sourcing_{i}")
+                for i in set_I
+            }
+
+            # Define the core energy balance equations for each timestep
+            for i in set_I:
+                # The net DC power from PV and battery must equal the net DC flow of the inverter
+                constraints.update(
+                    {
+                        f"constraint_dc_bus_balance_{i}": plp.LpConstraint(
+                            e=(
+                                P_PV[i]
+                                - P_PV_curtailment[i]
+                                + P_sto_pos[i]
+                                + P_sto_neg[i]
+                            )
+                            - (P_dc_ac[i] - P_ac_dc[i]),
+                            sense=plp.LpConstraintEQ,
+                            rhs=0,
+                        )
+                    }
+                )
+
+                # The AC power is defined by the efficiency-adjusted DC flows
+                constraints.update(
+                    {
+                        f"constraint_ac_bus_balance_{i}": plp.LpConstraint(
+                            e=P_hybrid_inverter[i]
+                            - ((P_dc_ac[i] * eff_dc_ac) - (P_ac_dc[i] / eff_ac_dc)),
+                            sense=plp.LpConstraintEQ,
+                            rhs=0,
+                        )
+                    }
+                )
+
+                # Use the binary variable to ensure only one direction is active at a time
+                constraints.update(
+                    {
+                        # If is_dc_sourcing = 1 (DC->AC is active), then P_ac_dc must be 0.
+                        f"constraint_enforce_ac_dc_zero_{i}": plp.LpConstraint(
+                            e=P_ac_dc[i] - (1 - is_dc_sourcing[i]) * P_ac_dc_max,
+                            sense=plp.LpConstraintLE,
+                            rhs=0,
+                        ),
+                        # If is_dc_sourcing = 0 (AC->DC is active), then P_dc_ac must be 0.
+                        f"constraint_enforce_dc_ac_zero_{i}": plp.LpConstraint(
+                            e=P_dc_ac[i] - is_dc_sourcing[i] * P_dc_ac_max,
+                            sense=plp.LpConstraintLE,
+                            rhs=0,
+                        ),
+                    }
+                )
+
         else:
             if self.plant_conf["compute_curtailment"]:
                 constraints.update(
