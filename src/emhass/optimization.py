@@ -483,40 +483,74 @@ class Optimization:
                     for i in set_I
                 }
 
-        # Constraint for hybrid inverter and curtailment cases
-        if isinstance(self.plant_conf["pv_module_model"], list):
-            P_nom_inverter = 0.0
-            for i in range(len(self.plant_conf["pv_inverter_model"])):
-                if isinstance(self.plant_conf["pv_inverter_model"][i], str):
-                    cec_inverters = bz2.BZ2File(
-                        self.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2",
-                        "rb",
-                    )
-                    cec_inverters = cPickle.load(cec_inverters)
-                    inverter = cec_inverters[self.plant_conf["pv_inverter_model"][i]]
-                    P_nom_inverter += inverter.Paco
-                else:
-                    P_nom_inverter += self.plant_conf["pv_inverter_model"][i]
-        else:
-            if isinstance(self.plant_conf["pv_inverter_model"][i], str):
-                cec_inverters = bz2.BZ2File(
-                    self.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2", "rb"
-                )
-                cec_inverters = cPickle.load(cec_inverters)
-                inverter = cec_inverters[self.plant_conf["pv_inverter_model"]]
-                P_nom_inverter = inverter.Paco
-            else:
-                P_nom_inverter = self.plant_conf["pv_inverter_model"]
         if self.plant_conf["inverter_is_hybrid"]:
+            P_nom_inverter_output = self.plant_conf.get("inverter_ac_output_max", None)
+            P_nom_inverter_input = self.plant_conf.get("inverter_ac_input_max", None)
+
+            # Fallback to legacy pv_inverter_model for output power if new setting is not provided
+            if P_nom_inverter_output is None:
+                if "pv_inverter_model" in self.plant_conf:
+                    if isinstance(self.plant_conf["pv_inverter_model"], list):
+                        P_nom_inverter_output = 0.0
+                        for i in range(len(self.plant_conf["pv_inverter_model"])):
+                            if isinstance(self.plant_conf["pv_inverter_model"][i], str):
+                                cec_inverters = bz2.BZ2File(
+                                    self.emhass_conf["root_path"]
+                                    / "data"
+                                    / "cec_inverters.pbz2",
+                                    "rb",
+                                )
+                                cec_inverters = cPickle.load(cec_inverters)
+                                inverter = cec_inverters[
+                                    self.plant_conf["pv_inverter_model"][i]
+                                ]
+                                P_nom_inverter_output += inverter.Paco
+                            else:
+                                P_nom_inverter_output += self.plant_conf[
+                                    "pv_inverter_model"
+                                ][i]
+                    else:
+                        if isinstance(self.plant_conf["pv_inverter_model"], str):
+                            cec_inverters = bz2.BZ2File(
+                                self.emhass_conf["root_path"]
+                                / "data"
+                                / "cec_inverters.pbz2",
+                                "rb",
+                            )
+                            cec_inverters = cPickle.load(cec_inverters)
+                            inverter = cec_inverters[
+                                self.plant_conf["pv_inverter_model"]
+                            ]
+                            P_nom_inverter_output = inverter.Paco
+                        else:
+                            P_nom_inverter_output = self.plant_conf["pv_inverter_model"]
+
+            if P_nom_inverter_input is None:
+                P_nom_inverter_input = P_nom_inverter_output
+
             constraints.update(
                 {
-                    f"constraint_hybrid_inverter1_{i}": plp.LpConstraint(
+                    f"constraint_hybrid_inverter_output_{i}": plp.LpConstraint(
                         e=P_PV[i]
                         - P_PV_curtailment[i]
                         + P_sto_pos[i]
                         + P_sto_neg[i]
-                        - P_nom_inverter,
+                        - P_nom_inverter_output,
                         sense=plp.LpConstraintLE,
+                        rhs=0,
+                    )
+                    for i in set_I
+                }
+            )
+            constraints.update(
+                {
+                    f"constraint_hybrid_inverter_input_{i}": plp.LpConstraint(
+                        e=P_PV[i]
+                        - P_PV_curtailment[i]
+                        + P_sto_pos[i]
+                        + P_sto_neg[i]
+                        + P_nom_inverter_input,
+                        sense=plp.LpConstraintGE,
                         rhs=0,
                     )
                     for i in set_I
