@@ -187,6 +187,30 @@
       "input": "boolean",
       "default_value": false
     },
+    "inverter_ac_output_max": {
+      "friendly_name": "Max hybrid inverter AC output power",
+      "Description": "Maximum hybrid inverter output power from combined PV and battery discharge.",
+      "input": "int",
+      "default_value": 0
+    },
+    "inverter_ac_input_max": {
+      "friendly_name": "Max hybrid inverter AC input power",
+      "Description": "Maximum hybrid inverter input power from grid to charge battery.",
+      "input": "int",
+      "default_value": 0
+    },
+    "inverter_efficiency_dc_ac": {
+      "friendly_name": "Hybrid inverter efficency DC to AC",
+      "Description": "Hybrid inverter efficiency from the DC bus to AC output. (percentage/100)",
+      "input": "float",
+      "default_value": 1.0
+    },
+    "inverter_efficiency_ac_dc": {
+      "friendly_name": "Hybrid inverter efficency AC to DC",
+      "Description": "Hybrid inverter efficiency when charging from the AC input to DC bus. (percentage/100)",
+      "input": "float",
+      "default_value": 1.0
+    },
     "compute_curtailment": {
       "friendly_name": "Set compute curtailment (grid export limit)",
       "Description": "Set to True to compute a special PV curtailment variable (Default False)",
