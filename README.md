@@ -63,7 +63,7 @@
 
 <br>
 <p align="left">
-EHMASS is a Python module designed to optimize your home energy interfacing with Home Assistant.
+EMHASS is a Python module designed to optimize your home energy interfacing with Home Assistant.
 </p>
 
 ## Introduction
