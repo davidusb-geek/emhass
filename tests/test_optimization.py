@@ -485,14 +485,13 @@ class TestOptimization(unittest.TestCase):
     # Check minimum deferrable load power
     def test_perform_dayahead_forecast_optim_min_def_load_power(self):
         self.optim_conf["minimum_power_of_deferrable_loads"] = [0.1, 0.1]
-        costfun = "self-consumption"
         self.opt = Optimization(
             self.retrieve_hass_conf,
             self.optim_conf,
             self.plant_conf,
             self.fcst.var_load_cost,
             self.fcst.var_prod_price,
-            costfun,
+            self.costfun,
             emhass_conf,
             logger,
         )
