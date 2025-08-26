@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.13.4 - 2025-08-25
+### Improvement
+- Added support for minimum power value for each deferrable load
+- Add configuration for hybrid inverter input power limit and efficiency (@rmounce)
+- Add runtime parameter to prevent PV forecast feedback loop during curtailment (@scruysberghs)
+- Update Docker documentation for volume mounting of config.json (@cabberley)
+- Apply ruff formatting for improved code consistency (@polyfloyd)
+- Set executable permissions for `__main__` entrypoints and remove unused shebangs (@polyfloyd)
+- Correct minor typos in README documentation (@Ultimation)
+### Fix
+- Fixed naive load power forecast shifted timestamp issue #516
+- Fix Docker build for aarch64 architecture (@polyfloyd)
+
 ## 0.13.3 - 2025-05-02
 ### Improvement
 - Enhance optimization solver capabilities by adding HiGHS solver, improving thread configuration, and updating solver support across the project (@Crosenhain)
