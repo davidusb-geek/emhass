@@ -1440,19 +1440,22 @@ class Forecast:
             forecast_out.index.name = "ts"
             forecast_out = forecast_out.rename(columns={"load": "yhat"})
         elif method == "naive":  # using a naive approach
-            mask_forecast_out = (
-                df.index > days_list[-1] - self.optim_conf["delta_forecast_daily"]
-            )
-            forecast_out = df.copy().loc[mask_forecast_out]
-            forecast_out = forecast_out.rename(columns={self.var_load_new: "yhat"})
-            # Force forecast_out length to avoid mismatches
-            forecast_out = forecast_out.iloc[0 : len(self.forecast_dates)]
-            forecast_out.index = self.forecast_dates
-            # forecast_out.index = (
-            #     forecast_out.index.tz_localize(self.forecast_dates.tz)
-            #     if forecast_out.index.tz is None
-            #     else forecast_out.index.tz_convert(self.forecast_dates.tz)
+            # Old code logic (shifted timestamp problem)
+            # mask_forecast_out = (
+            #     df.index > days_list[-1] - self.optim_conf["delta_forecast_daily"]
             # )
+            # forecast_out = df.copy().loc[mask_forecast_out]
+            # forecast_out = forecast_out.rename(columns={self.var_load_new: "yhat"})
+            # forecast_out = forecast_out.iloc[0 : len(self.forecast_dates)]
+            # forecast_out.index = self.forecast_dates
+            # New code logic
+            forecast_horizon = len(self.forecast_dates)
+            historical_values = df.iloc[-forecast_horizon:]
+            forecast_out = pd.DataFrame(
+                historical_values.values,
+                index=self.forecast_dates,
+                columns=["yhat"]
+            )
         elif (
             method == "mlforecaster"
         ):  # using a custom forecast model with machine learning
