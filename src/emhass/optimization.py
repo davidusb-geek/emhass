@@ -209,6 +209,12 @@ class Optimization:
 
         num_deferrable_loads = self.optim_conf["number_of_deferrable_loads"]
 
+        # Retrieve the minimum power for each deferrable load, defaulting to 0 if not provided
+        min_power_of_deferrable_loads = self.optim_conf.get("minimum_power_of_deferrable_loads", [0] * num_deferrable_loads)
+        min_power_of_deferrable_loads = min_power_of_deferrable_loads + [0] * (
+            num_deferrable_loads - len(min_power_of_deferrable_loads)
+        )
+
         def_total_hours = def_total_hours + [0] * (
             num_deferrable_loads - len(def_total_hours)
         )
@@ -940,6 +946,20 @@ class Optimization:
                             sense=plp.LpConstraintEQ,
                             rhs=0,
                         )
+                    }
+                )
+
+            # Constraint for the minimum power of deferrable loads using the big-M method.
+            # This enforces: P_deferrable = 0 OR P_deferrable >= min_power.
+            if min_power_of_deferrable_loads[k] > 0:
+                self.logger.debug(f"Applying minimum power constraint for deferrable load {k}: {min_power_of_deferrable_loads[k]} W")
+                constraints.update(
+                    {
+                        f"constraint_pdef{k}_min_power_{i}": plp.LpConstraint(
+                            e=P_deferrable[k][i] - (min_power_of_deferrable_loads[k] * P_def_bin2[k][i]),
+                            sense=plp.LpConstraintGE,
+                            rhs=0
+                        ) for i in set_I
                     }
                 )
 

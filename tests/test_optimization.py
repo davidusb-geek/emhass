@@ -484,7 +484,7 @@ class TestOptimization(unittest.TestCase):
 
     # Check minimum deferrable load power
     def test_perform_dayahead_forecast_optim_min_def_load_power(self):
-        self.optim_conf["minimum_power_of_deferrable_loads"] = [0.1, 0.1]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [1000.0, 100.0]
         self.opt = Optimization(
             self.retrieve_hass_conf,
             self.optim_conf,
@@ -511,6 +511,22 @@ class TestOptimization(unittest.TestCase):
         self.assertIsInstance(
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
+        # Verify the minimum power constraint for each deferrable load <<<
+        num_loads = self.optim_conf["number_of_deferrable_loads"]
+        min_powers = self.optim_conf["minimum_power_of_deferrable_loads"]
+        for k in range(num_loads):
+            min_power_k = min_powers[k]
+            power_column = self.opt_res_dayahead[f"P_deferrable{k}"]
+            # Filter for all values that are not close to zero (i.e., when the load is ON)
+            non_zero_powers = power_column[~np.isclose(power_column, 0)]
+            # If there are any non-zero values, assert that they are all greater than
+            # or equal to the minimum power setting.
+            if not non_zero_powers.empty:
+                self.assertTrue(
+                    (non_zero_powers >= min_power_k).all(),
+                    f"Deferrable load {k} has values below the minimum power of {min_power_k} W. "
+                    f"Invalid values found: {non_zero_powers[non_zero_powers < min_power_k].tolist()}"
+                )
 
     def test_perform_naive_mpc_optim(self):
         self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
