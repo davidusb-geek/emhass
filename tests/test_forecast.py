@@ -959,7 +959,9 @@ class TestForecast(unittest.TestCase):
         )
         self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
+        self.assertEqual(len(P_load_forecast), len(self.fcst.forecast_dates))
         print(">> The length of the load forecast = " + str(len(P_load_forecast)))
+
         # Test the mixed forecast
         params = json.dumps({"passed_data": {"alpha": 0.5, "beta": 0.5}})
         df_input_data = self.input_data_dict["rh"].df_final.copy()
