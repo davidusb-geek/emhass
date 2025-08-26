@@ -20,8 +20,8 @@ COPY pyproject.toml /app/
 COPY .python-version /app/
 COPY gunicorn.conf.py /app/
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+RUN apt update \
+    && apt install -y --no-install-recommends \
     # Numpy
     libgfortran5 \
     libopenblas0-pthread \
@@ -37,15 +37,17 @@ RUN apt-get update \
     libhdf5-serial-dev \
     # cbc
     coinor-cbc \
-    coinor-libcbc-dev
-
-# add build packadges (just in case wheel does not exist)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+    coinor-libcbc-dev \
+    # glpk
+    glpk-utils \
+    # build packages (just in case wheel does not exist)
     gcc \
+    g++ \
     patchelf \
     cmake \
-    ninja-build
+    ninja-build \
+    && rm -rf /var/cache/apt/* \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install uv (pip alternative)
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
@@ -105,14 +107,6 @@ RUN [[ "${TARGETARCH}" == "aarch64" ]] && uv pip install --verbose ndindex || ec
 # install packadges and build EMHASS
 RUN uv pip install --verbose .
 RUN uv lock
-
-# remove build only packages
-RUN apt-get remove --purge -y --auto-remove \
-    gcc \
-    patchelf \
-    cmake \
-    ninja-build \
-    && rm -rf /var/lib/apt/lists/*
 
 ENTRYPOINT [ "uv", "run", "--frozen", "gunicorn", "emhass.web_server:create_app()" ]
 

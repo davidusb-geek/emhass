@@ -1,6 +1,6 @@
 [project]
 name = "emhass"
-version = "0.13.1"
+version = "0.13.3"
 description = "An Energy Management System for Home Assistant"
 readme = "README.md"
 requires-python = ">=3.10, <3.13"
@@ -29,6 +29,7 @@ dependencies = [
     "pytz>=2024.2",
     "requests>=2.32.2",
     "h5py>=3.12.1",
+    "highspy>=1.10.0",
     "pulp>=2.8.0",
     "pyyaml>=6.0.2",
     "tables>=3.10.0",
@@ -71,6 +72,7 @@ package-data = { "emhass" = [
 
 [tool.hatch.build.targets.sdist]
 include = [
+    "src/emhass/*.py",
     "src/emhass/templates/",
     "src/emhass/static/",
     "src/emhass/img/",

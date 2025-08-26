@@ -108,7 +108,7 @@ if __name__ == "__main__":
     # Solver configurations
     optim_conf.update(
         {"lp_solver": "PULP_CBC_CMD"}
-    )  # set the name of the linear programming solver that will be used. Options are 'PULP_CBC_CMD', 'GLPK_CMD' and 'COIN_CMD'.
+    )  # set the name of the linear programming solver that will be used. Options are 'PULP_CBC_CMD', 'GLPK_CMD', 'HiGHS' and 'COIN_CMD'.
     optim_conf.update(
         {"lp_solver_path": "empty"}
     )  # set the path to the LP solver, COIN_CMD default is /usr/bin/cbc
