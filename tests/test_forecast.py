@@ -947,7 +947,7 @@ class TestForecast(unittest.TestCase):
         self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.df_weather_scrap), len(P_PV_forecast))
 
-    # Test dataframe output of load forecast
+    # Test dataframe output of load forecast (using the default naive method)
     def test_get_load_forecast(self):
         P_load_forecast = self.fcst.get_load_forecast()
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
