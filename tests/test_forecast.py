@@ -947,7 +947,7 @@ class TestForecast(unittest.TestCase):
         self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.df_weather_scrap), len(P_PV_forecast))
 
-    # Test dataframe output of load forecast
+    # Test dataframe output of load forecast (using the default naive method)
     def test_get_load_forecast(self):
         P_load_forecast = self.fcst.get_load_forecast()
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
@@ -959,7 +959,9 @@ class TestForecast(unittest.TestCase):
         )
         self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
+        self.assertEqual(len(P_load_forecast), len(self.fcst.forecast_dates))
         print(">> The length of the load forecast = " + str(len(P_load_forecast)))
+
         # Test the mixed forecast
         params = json.dumps({"passed_data": {"alpha": 0.5, "beta": 0.5}})
         df_input_data = self.input_data_dict["rh"].df_final.copy()
