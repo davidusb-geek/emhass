@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.13.3 - 2025-05-02
+### Improvement
+- Enhance optimization solver capabilities by adding HiGHS solver, improving thread configuration, and updating solver support across the project (@Crosenhain)
+- Update spelling and extended some error messages to include more troubleshooting information (@kcoffau)
+### Fix
+- Fixed incorrect indentation in a for loop, leaving relevant constraints out of the optimisation (@purcell_lab)
+
+## 0.13.2 - 2025-04-29
+### Improvement
+- Improved README and development documentation (@Crosenhain and @gieljnssns)
+- Improved forecasting and optimization classes logging (@purcell_lab)
+### Fix
+- Fixed ML Regressor for correct time zone treatment (@gieljnssns)
+- Fixed long standing problem to allow thermal and standard loads to be scheduled (@purcell_lab)
+- Fixing Missing files in python package issue (@pail23)
+- Fixed improper handling of home assistant API errors (@Gruek)
+- Remove an extraneous comma in the pd.to_datetime() method call in retrieve_hass.py (@GeoDerp)
+- Fixed the SettingWithCopyWarning Pandas problem and PV sensor handling when set_use_adjusted_pv is false (@paulhomes)
+
 ## 0.13.1 - 2025-04-21
 ### Improvement
 - Add timeout and thread configuration for different LP solvers (CBC, GLPK, COIN). Thanks to @GeoDerp

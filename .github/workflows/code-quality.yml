@@ -49,6 +49,9 @@ jobs:
       - name: Run Ruff
         run: uvx ruff check --output-format=github .
 
+      - name: Check formatting
+        run: uvx ruff format --check --diff
+
       # Removed due to too many recommendations.
       # - name: Type Check with Mypy
       #   shell: bash
