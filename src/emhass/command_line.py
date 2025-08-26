@@ -72,7 +72,9 @@ def retrieve_home_assistant_data(
         if optim_conf.get("set_use_pv", True):
             var_list.append(retrieve_hass_conf["sensor_power_photovoltaics"])
             if optim_conf.get("set_use_adjusted_pv", True):
-                var_list.append(retrieve_hass_conf["sensor_power_photovoltaics_forecast"])
+                var_list.append(
+                    retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
+                )
         if not rh.get_data(
             days_list, var_list, minimal_response=False, significant_changes_only=False
         ):
@@ -302,7 +304,8 @@ def set_input_data_dict(
         else:
             P_PV_forecast = pd.Series(0, index=fcst.forecast_dates)
         P_load_forecast = fcst.get_load_forecast(
-            method=optim_conf["load_forecast_method"]
+            days_min_load_forecast=optim_conf["delta_forecast_daily"].days,
+            method=optim_conf["load_forecast_method"],
         )
         if isinstance(P_load_forecast, bool) and not P_load_forecast:
             logger.error(
@@ -400,6 +403,7 @@ def set_input_data_dict(
         else:
             P_PV_forecast = pd.Series(0, index=fcst.forecast_dates)
         P_load_forecast = fcst.get_load_forecast(
+            days_min_load_forecast=optim_conf["delta_forecast_daily"].days,
             method=optim_conf["load_forecast_method"],
             set_mix_forecast=set_mix_forecast,
             df_now=df_input_data,
