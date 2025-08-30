@@ -1038,6 +1038,109 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(params["retrieve_hass_conf"]["hass_url"] == "test.url")
         self.assertTrue(params["retrieve_hass_conf"]["long_lived_token"] == "test.key")
 
+class TestGetInjectionDict(unittest.TestCase):
+    @staticmethod
+    def _df_base(with_soc: bool = True) -> pd.DataFrame:
+        idx = pd.date_range("2025-01-01", periods=3, freq="h")
+        df = pd.DataFrame(
+            {
+                "P_PV": [100.4, 200.6, 300.5],        # cast to int
+                "P_Load": [150.9, 175.1, 125.4],      # cast to int
+                "unit_price": [0.12345, 0.54321, 0.99999],  # round(3)
+                "cost_grid": [1.1111, 2.2222, 3.3333],      # round(3)
+                "optim_status": ["optimal", "optimal", "optimal"],
+            },
+            index=idx,
+        )
+        if with_soc:
+            df["SOC_opt"] = [10.1234, 20.5555, 30.9999]  # round(3)
+        return df
+
+    def test_get_injection_with_soc(self):
+        df = self._df_base(with_soc=True)
+        res = utils.get_injection_dict(df.copy())
+
+        # expected keys
+        for k in ["title", "subsubtitle0", "figure_0", "figure_2", "table1", "table2"]:
+            self.assertIn(k, res)
+        self.assertIn("figure_1", res)  # SOC present -> figure_1 present
+
+        # minimal HTML sanity
+        self.assertIn("plotly", res["figure_0"].lower())
+        self.assertIn("mystyle", res["table1"])
+        self.assertIn("mystyle", res["table2"])
+
+        # rounding & coercion (use table1 HTML as a stable surface)
+        # P_* become ints
+        self.assertIn(">100<", res["table1"])  # 100.4 -> 100
+        # Non-P columns rounded to 3 decimals
+        for s in ["0.123", "0.543", "1.111", "2.222"]:
+            self.assertIn(s, res["table1"])
+
+        # table2: sums of numeric cost_* cols + optim_status echoed
+        # cost_grid: 1.111 + 2.222 + 3.333 = 6.666
+        self.assertIn("cost_grid", res["table2"])
+        self.assertIn("optim_status", res["table2"])
+        self.assertIn("6.666", res["table2"])
+        self.assertIn("optimal", res["table2"])
+        self.assertNotIn("unit_price", res["table2"])
+
+    def test_without_soc_omits_figure_1(self):
+        df = self._df_base(with_soc=False)
+        res = utils.get_injection_dict(df.copy())
+        self.assertIn("figure_0", res)
+        self.assertIn("figure_2", res)
+        self.assertNotIn("figure_1", res)
+
+    def test_multiple_cost_columns_summed(self):
+        df = self._df_base(with_soc=False)
+        df["cost_other"] = [0.1, 0.2, 0.3]  # -> 0.6 after round(3)
+        res = utils.get_injection_dict(df.copy())
+        self.assertIn("0.6", res["table2"])
+
+    def test_missing_optim_status_raises(self):
+        df = self._df_base(with_soc=False).drop(columns=["optim_status"])
+        with self.assertRaises(KeyError):
+            utils.get_injection_dict(df)
+
+    @unittest.expectedFailure
+    def test_single_power_series_color_scale(self):
+        """Documents current ZeroDivisionError when len(cols_p)==1."""
+        idx = pd.date_range("2025-01-01", periods=3, freq="h")
+        df = pd.DataFrame(
+            {
+                "P_PV": [100, 200, 300],     # only one P_* column
+                "unit_price": [0.1, 0.2, 0.3],
+                "cost_grid": [1, 2, 3],
+                "optim_status": ["optimal", "optimal", "optimal"],
+            },
+            index=idx,
+        )
+        res = utils.get_injection_dict(df.copy())
+        self.assertIn("figure_0", res)
+
+    def test_no_cost_columns_behavior(self):
+        """When no 'cost_' or 'unit_' columns exist, figure_2 still renders (empty)
+        and table2 contains only optim_status."""
+        idx = pd.date_range("2025-01-01", periods=3, freq="h")
+        df = pd.DataFrame(
+            {
+                "P_PV": [1, 2, 3],
+                "P_Load": [4, 5, 6],
+                "optim_status": ["ok", "ok", "ok"],
+            },
+            index=idx,
+        )
+        res = utils.get_injection_dict(df.copy())
+        # Plots exist
+        self.assertIn("figure_0", res)
+        self.assertIn("figure_2", res)  # plotly can render an empty df
+        # table2 should only include optim_status row
+        self.assertIn("table2", res)
+        self.assertIn("optim_status", res["table2"])
+        # No 'cost_' entries present
+        self.assertNotIn("cost_", res["table2"])
+
 
 if __name__ == "__main__":
     unittest.main()
