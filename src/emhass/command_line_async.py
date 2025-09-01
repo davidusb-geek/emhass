@@ -20,14 +20,12 @@ from emhass import utils_async as utils
 from emhass.forecast_async import Forecast
 from emhass.machine_learning_forecaster_async import MLForecaster
 from emhass.machine_learning_regressor_async import MLRegressor
-from emhass.optimization_async import Optimization
+from emhass.optimization import Optimization
 from emhass.retrieve_hass_async import RetrieveHass
 
 default_csv_filename = "opt_res_latest.csv"
 default_pkl_suffix = "_mlf.pkl"
 default_metadata_json = "metadata.json"
-
-
 
 
 async def retrieve_home_assistant_data(
@@ -77,7 +75,6 @@ async def retrieve_home_assistant_data(
             var_list.append(retrieve_hass_conf["sensor_power_photovoltaics"])
             if optim_conf.get("set_use_adjusted_pv", True):
                 var_list.append(retrieve_hass_conf["sensor_power_photovoltaics_forecast"])
-        # print("not_command_line", days_list, var_list)
         if not await rh.get_data(
             days_list, var_list
         ):
@@ -156,7 +153,7 @@ async def adjust_pv_forecast(
     # Update the PV forecast
     return P_PV_forecast["adjusted_forecast"].rename(None)
 
-# @profile
+
 async def set_input_data_dict(
     emhass_conf: dict,
     costfun: str,
@@ -476,7 +473,6 @@ async def set_input_data_dict(
         else:
             days_list = utils.get_days_list(days_to_retrieve)
             var_list = [var_model]
-            # print("command_line", days_list, var_list)
             if not await rh.get_data(days_list, var_list):
                 return False
             df_input_data = rh.df_final.copy()
@@ -754,25 +750,6 @@ async def naive_mpc_optim(
 
     """
     logger.info("Performing naive MPC optimization")
-
-    # # Validate input data before proceeding
-    # if "P_load_forecast" not in input_data_dict or input_data_dict["P_load_forecast"] is None:
-    #     logger.error("P_load_forecast is missing or None")
-    #     return None
-    # if "P_PV_forecast" not in input_data_dict or input_data_dict["P_PV_forecast"] is None:
-    #     logger.error("P_PV_forecast is missing or None")
-    #     return None
-
-    # # Check if forecasts have data
-    # if isinstance(input_data_dict["P_load_forecast"], pd.Series) and len(input_data_dict["P_load_forecast"]) == 0:
-    #     logger.error("P_load_forecast is empty")
-    #     return None
-    # if isinstance(input_data_dict["P_PV_forecast"], pd.Series) and len(input_data_dict["P_PV_forecast"]) == 0:
-    #     logger.error("P_PV_forecast is empty")
-    #     return None
-
-    # logger.info(f"P_load_forecast shape: {input_data_dict['P_load_forecast'].shape if hasattr(input_data_dict['P_load_forecast'], 'shape') else 'N/A'}")
-    # logger.info(f"P_PV_forecast shape: {input_data_dict['P_PV_forecast'].shape if hasattr(input_data_dict['P_PV_forecast'], 'shape') else 'N/A'}")
 
     # Load cost and prod price forecast
     df_input_data_dayahead = input_data_dict["fcst"].get_load_cost_forecast(
@@ -1166,7 +1143,6 @@ async def regressor_model_predict(
             type_var="mlregressor",
         )
     return prediction
-
 
 async def publish_data(
     input_data_dict: dict,

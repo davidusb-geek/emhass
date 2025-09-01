@@ -163,7 +163,6 @@ class RetrieveHass:
 
             # Convert statistics data to DataFrame
             self.df_final = self._convert_statistics_to_dataframe(stats_data, var_list)
-            # print(self.df_final)
 
             t1 = time.time()
             self.logger.info(f"Statistics data retrieval for {len(days_list):.2f} days took {t1 - t0:.2f} seconds")

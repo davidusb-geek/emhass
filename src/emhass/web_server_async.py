@@ -537,7 +537,7 @@ async def action_call(action_name):
         df_pred_optim, mlf = await forecast_model_tune(input_data_dict, app.logger)
         if df_pred_optim is None or mlf is None:
             return await make_response(await grabLog(ActionStr), 400)
-        injection_dict = await get_injection_dict_forecast_model_tune(df_pred_optim, mlf)
+        injection_dict = get_injection_dict_forecast_model_tune(df_pred_optim, mlf)
         async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
             content = pickle.dumps(injection_dict)
             await fid.write(content)

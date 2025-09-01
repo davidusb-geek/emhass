@@ -21,8 +21,10 @@ COPY .python-version /app/
 COPY gunicorn.conf.py /app/
 COPY docker-entrypoint.sh /app/
 
-RUN apt update \
-    && apt install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y gnupg && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
     # Numpy
     libgfortran5 \
     libopenblas0-pthread \
