@@ -66,6 +66,19 @@ REGRESSION_METHODS = {
 
 
 class MLRegressor:
+    r"""A forecaster class using machine learning models.
+
+    This class uses the `sklearn` module and the machine learning models are \
+        from `scikit-learn`.
+
+    It exposes two main methods:
+
+    - `fit`: to train a model with the passed data.
+
+    - `predict`: to obtain a forecast from a pre-trained model.
+
+    """
+
     def __init__(
         self: MLRegressor,
         data: pd.DataFrame,
@@ -76,6 +89,29 @@ class MLRegressor:
         timestamp: str,
         logger: logging.Logger,
     ) -> None:
+        r"""Define constructor for the forecast class.
+
+        :param data: The data that will be used for train/test
+        :type data: pd.DataFrame
+        :param model_type: A unique name defining this model and useful to identify \
+            for what it will be used for.
+        :type model_type: str
+        :param regression_model: The model that will be used. For now only \
+            this options are possible: `LinearRegression`, `RidgeRegression`, \
+            `LassoRegression`, `RandomForestRegression`, \
+            `GradientBoostingRegression` and `AdaBoostRegression`.
+        :type regression_model: str
+        :param features: A list of features. \
+            Example: [`solar_production`, `degree_days`].
+        :type features: list
+        :param target: The target(to be predicted). \
+            Example: `heating_hours`.
+        :type target: str
+        :param timestamp: If defined, the column key that has to be used of timestamp.
+        :type timestamp: str
+        :param logger: The passed logger object
+        :type logger: logging.Logger
+        """
         self.data = data.sort_index()
         self.features = features
         self.target = target
@@ -113,6 +149,16 @@ class MLRegressor:
         return X, y
 
     def _get_model_and_params(self) -> tuple[GridSearchCV, dict] | tuple[None, None]:
+        r"""
+        Get the base model and parameter grid for the specified regression model.
+        Returns a tuple containing the base model and parameter grid corresponding to \
+            the specified regression model.
+
+        :param self: The instance of the MLRegressor class.
+        :type self: MLRegressor
+        :return: A tuple containing the base model and parameter grid.
+        :rtype: tuple[str, str]
+        """
         method = REGRESSION_METHODS.get(self.regression_model)
         if not method:
             self.logger.error("Invalid regression model: %s", self.regression_model)
@@ -123,6 +169,14 @@ class MLRegressor:
         return pipeline, param_grid
 
     async def fit(self: MLRegressor, date_features: list[str] | None = None) -> bool:
+        r"""Fit the model using the provided data.
+
+        :param date_features: A list of 'date_features' to take into account when \
+            fitting the model.
+        :type data: list
+        :return: bool if successful
+        :rtype: bool
+        """
         self.logger.info("Fitting MLRegressor model for %s", self.model_type)
 
         X, y = self._prepare_data(date_features)
@@ -156,6 +210,15 @@ class MLRegressor:
         return True
 
     async def predict(self: MLRegressor, new_values: list[float]) -> np.ndarray:
+        """Predict a new value.
+
+        :param new_values: The new values for the features \
+            (in the same order as the features list). \
+            Example: [2.24, 5.68].
+        :type new_values: list
+        :return: The np.ndarray containing the predicted value.
+        :rtype: np.ndarray
+        """
         self.logger.info("Making prediction with model %s", self.model_type)
         new_values_array = np.array([new_values])
         prediction = await asyncio.to_thread(self.model.predict, new_values_array)
