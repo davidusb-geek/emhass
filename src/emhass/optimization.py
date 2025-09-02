@@ -616,18 +616,18 @@ class Optimization:
                     }
                 )
 
-        else:
-            if self.plant_conf["compute_curtailment"]:
-                constraints.update(
-                    {
-                        f"constraint_curtailment_{i}": plp.LpConstraint(
-                            e=P_PV_curtailment[i] - max(P_PV[i], 0),
-                            sense=plp.LpConstraintLE,
-                            rhs=0,
-                        )
-                        for i in set_I
-                    }
-                )
+        # Apply curtailment constraint if enabled, regardless of inverter type
+        if self.plant_conf["compute_curtailment"]:
+            constraints.update(
+                {
+                    f"constraint_curtailment_{i}": plp.LpConstraint(
+                        e=P_PV_curtailment[i] - max(P_PV[i], 0),
+                        sense=plp.LpConstraintLE,
+                        rhs=0,
+                    )
+                    for i in set_I
+                }
+            )
 
         # Two special constraints just for a self-consumption cost function
         if self.costfun == "self-consumption":
