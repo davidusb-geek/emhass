@@ -947,6 +947,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         template="presentation",
         line_shape="hv",
         color_discrete_sequence=colors,
+        render_mode="svg",
     )
     fig_0.update_layout(xaxis_title="Timestamp", yaxis_title="System powers (W)")
     if "SOC_opt" in df.columns.to_list():
@@ -956,6 +957,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
             template="presentation",
             line_shape="hv",
             color_discrete_sequence=colors,
+            render_mode="svg",
         )
         fig_1.update_layout(xaxis_title="Timestamp", yaxis_title="Battery SOC (%)")
     cols_cost = [i for i in df.columns.to_list() if "cost_" in i or "unit_" in i]
@@ -969,6 +971,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         template="presentation",
         line_shape="hv",
         color_discrete_sequence=colors,
+        render_mode="svg",
     )
     fig_2.update_layout(xaxis_title="Timestamp", yaxis_title="System costs (currency)")
     # Get full path to image
