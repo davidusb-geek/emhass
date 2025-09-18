@@ -894,9 +894,9 @@ class TestOptimization(unittest.TestCase):
         prediction_horizon = 10
         soc_init = 0.4
         soc_final = 0.6
-        def_total_timestep = [8, 4]  # 8 timesteps = 2 hours, 4 timesteps = 1 hour at 15min intervals
-        def_start_timestep = [0, 0]
-        def_end_timestep = [8, 8]
+        def_total_timestep = [8, 12]  # 8 timesteps = 2 hours, 12 timesteps = 3 hours at 15min intervals
+        def_start_timestep = [-5, 0]
+        def_end_timestep = [4, 0]
         self.opt_res_dayahead = self.opt.perform_naive_mpc_optim(
             self.df_input_data_dayahead,
             self.P_PV_forecast,
