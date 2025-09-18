@@ -195,6 +195,8 @@ class Optimization:
 
         # If def_total_timestep os set, bypass def_total_hours
         if def_total_timestep is not None:
+            if def_total_hours is None:
+                def_total_hours = self.optim_conf["operating_hours_of_each_deferrable_load"]
             def_total_hours = [0 if x != 0 else x for x in def_total_hours]
         elif def_total_hours is None:
             def_total_hours = self.optim_conf["operating_hours_of_each_deferrable_load"]
