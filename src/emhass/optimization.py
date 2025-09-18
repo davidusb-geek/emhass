@@ -904,10 +904,7 @@ class Optimization:
                 def_start, def_end, warning = Optimization.validate_def_timewindow(
                     def_start_timestep[k],
                     def_end_timestep[k],
-                    ceil(
-                        (60 / ((self.freq.seconds / 60) * def_total_timestep[k]))
-                        / self.timeStep
-                    ),
+                    ceil(def_total_timestep[k]),
                     n,
                 )
             else:
