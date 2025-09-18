@@ -1039,16 +1039,7 @@ class Optimization:
                             f"constraint_pdef{k}_start5": plp.LpConstraint(
                                 e=plp.lpSum(P_def_bin2[k][i] for i in set_I),
                                 sense=plp.LpConstraintEQ,
-                                rhs=(
-                                    (
-                                        60
-                                        / (
-                                            (self.freq.seconds / 60)
-                                            * def_total_timestep[k]
-                                        )
-                                    )
-                                    / self.timeStep
-                                ),
+                                rhs=def_total_timestep[k],
                             )
                         }
                     )
