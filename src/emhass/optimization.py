@@ -195,6 +195,8 @@ class Optimization:
 
         # If def_total_timestep os set, bypass def_total_hours
         if def_total_timestep is not None:
+            if def_total_hours is None:
+                def_total_hours = self.optim_conf["operating_hours_of_each_deferrable_load"]
             def_total_hours = [0 if x != 0 else x for x in def_total_hours]
         elif def_total_hours is None:
             def_total_hours = self.optim_conf["operating_hours_of_each_deferrable_load"]
@@ -904,10 +906,7 @@ class Optimization:
                 def_start, def_end, warning = Optimization.validate_def_timewindow(
                     def_start_timestep[k],
                     def_end_timestep[k],
-                    ceil(
-                        (60 / ((self.freq.seconds / 60) * def_total_timestep[k]))
-                        / self.timeStep
-                    ),
+                    ceil(def_total_timestep[k]),
                     n,
                 )
             else:
@@ -1042,16 +1041,7 @@ class Optimization:
                             f"constraint_pdef{k}_start5": plp.LpConstraint(
                                 e=plp.lpSum(P_def_bin2[k][i] for i in set_I),
                                 sense=plp.LpConstraintEQ,
-                                rhs=(
-                                    (
-                                        60
-                                        / (
-                                            (self.freq.seconds / 60)
-                                            * def_total_timestep[k]
-                                        )
-                                    )
-                                    / self.timeStep
-                                ),
+                                rhs=def_total_timestep[k],
                             )
                         }
                     )
