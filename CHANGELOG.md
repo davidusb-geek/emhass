@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.5 - 2025-09-19
+### Improvement
+- Use SVG render mode for Plotly figures (@Crosenhain)
+- Constrain PV curtailment of hybrid inverter (@rmounce)
+### Fix
+- Fix operating_timesteps_of_each_deferrable_load validation formula (@scruysberghs)
+
 ## 0.13.4 - 2025-08-25
 ### Improvement
 - Added support for minimum power value for each deferrable load
