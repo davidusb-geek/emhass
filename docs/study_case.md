@@ -2,19 +2,26 @@
 
 In this section example configurations are presented as study cases using real data.
 
+The example configuration all start with the default configuration that is located at: [https://github.com/davidusb-geek/emhass/tree/master/src/emhass/data/config_defaults.json](https://github.com/davidusb-geek/emhass/tree/master/src/emhass/data/config_defaults.json)
+
+We will also use a JSON format to store some secret parameters.
+You can add your own secrets parameters to retrieve your own data and reproduce the results presented on this page.
+A template for the secrets file is found here: [https://github.com/davidusb-geek/emhass/options.json](https://github.com/davidusb-geek/emhass/options.json)
+
 ## First test system: a simple system with no PV and two deferrable loads
 
 In this example, we will consider a simple system with no PV installation and just two deferrable loads that we want to optimize their schedule.
 
-For this, the following parameters can be added to the `secrets.yaml` file: `solar_forecast_kwp: 0`. Also, we will set the PV forecast method to `method='solar.forecast'`. This is a simple way to just set a vector with zero values on the PV forecast power, emulating the case where there is no PV installation. The other values on the configuration file are set to their default values.
+For this, the following parameter can be set in the `options.json` file: `solar_forecast_kwp: 0`. Also, we will set the PV forecast method to `method='solar.forecast'`. For this we can modify the original default configuration file `config_defaults.json` and save for example as `config_emhass.json`.
+This is a simple way to just set a vector with zero values on the PV forecast power, emulating the case where there is no PV installation. The other values on the configuration file are set to their default values.
 
 ### Day-ahead optimization
 
 Let's perform a day-ahead optimization task on this simple system. We want to schedule our two deferrable loads.
 
-For this, we use the following command (for example using the legacy EMHASS Python module command line):
+For this, we use the following command (this example is using the legacy EMHASS Python module command line, check the documentation for the alternative REST commands):
 ```
-emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.yaml' --costfun 'profit'
+emhass --action 'dayahead-optim' --config '/home/user/emhass/config_emhass.json' --costfun 'profit'
 ```
 
 The retrieved input forecasted powers are shown below:
@@ -25,11 +32,11 @@ Finally, the optimization results are:
 
 ![](./images/optim_results_defLoads_dayaheadOptim.png)
 
-For this system, the total value of the obtained cost function is -5.38 EUR. 
+For this system, the total value of the obtained cost function is **-5.38 EUR**. 
 
 ## A second test system: a 5kW PV installation and two deferrable loads
 
-Let's add a 5 kWp solar production with two deferrable loads. No battery is considered for now. The configuration used is the default configuration proposed with EMHASS. 
+Let's add a 5 kWp solar production with two deferrable loads. No battery is considered for now. In this case the configuration used is exactly the same as the default configuration proposed with EMHASS in the `config_defaults.json` file. 
 
 We will first consider a perfect optimization task, to obtain the optimization results with perfectly known PV production and load power values for the last week.
 
@@ -37,9 +44,9 @@ We will first consider a perfect optimization task, to obtain the optimization r
 
 Let's perform a 7-day historical data optimization.
 
-For this, we use the following command (for example using the legacy EMHASS Python module command line):
+For this, we use the following command (using the legacy EMHASS Python module command line):
 ```
-emhass --action 'perfect-optim' --config '/home/user/emhass/config_emhass.yaml' --costfun 'profit'
+emhass --action 'perfect-optim' --config '/home/user/emhass/config_emhass.json' --costfun 'profit'
 ```
 
 The retrieved input powers are shown below:
@@ -54,7 +61,7 @@ Finally, the optimization results are:
 
 ![](./images/optim_results_PV_defLoads_perfectOptim.png)
 
-For this 7-day period, the total value of the cost function was -26.23 EUR. 
+For this 7-day period, the total value of the cost function was **-26.23 EUR**. 
 
 ### Day-ahead optimization
 
@@ -64,11 +71,11 @@ The optimization results are:
 
 ![](./images/optim_results_PV_defLoads_dayaheadOptim.png)
 
-For this system, the total value of the obtained cost function is -1.56 EUR. We can note the important improvement in the cost function value when adding a PV installation.
+For this system, the total value of the obtained cost function is **-1.56 EUR**. We can note the important improvement in the cost function value when adding a PV installation.
 
 ## A third test system: a 5kW PV installation, a 5kWh battery and two deferrable loads
 
-Now we will consider a complete system with PV and added batteries. To add the battery we will set `set_use_battery: true` in the `optim_conf` section of the `config_emhass.yaml` file.
+Now we will consider a complete system with PV and added batteries. To add the battery we will set `set_use_battery: true` in the `config_emhass.json` file.
 
 In this case, we want to schedule our deferrable loads but also the battery charge/discharge. We use again the `dayahead-optim` action or endpoint.
 
@@ -80,7 +87,7 @@ The battery state of charge plot is shown below:
 
 ![](./images/optim_results_PV_Batt_defLoads_dayaheadOptim_SOC.png)
 
-For this system, the total value of the obtained cost function is -1.23 EUR, a substantial improvement when adding a battery.
+For this system, the total value of the obtained cost function is **-1.23 EUR**, a substantial improvement when adding a battery.
 
 ## Configuration example to pass data at runtime
 
@@ -138,24 +145,6 @@ The dedicated automation for these shell commands can be for example:
     platform: time_pattern
   action:
   - service: shell_command.publish_data
-```
-And as a bonus, an automation can be set to relaunch the optimization task automatically. This is very useful when restarting Home Assistant and when updating the EMHASS add-on:
-```
-- alias: Relaunch EMHASS tasks after HASS restart
-  trigger:
-  - platform: homeassistant
-    event: start
-  - platform: state
-    entity_id: update.emhass_update
-    to: 'off'
-    for:
-      minutes: 10
-  action:
-  - service: shell_command.dayahead_optim
-  - service: notify.sms_free
-    data_template:
-      title: EMHASS relaunched optimization
-      message: Home assistant restarted or the EMHASS add-on was updated and the optimization task was automatically relaunched
 ```
 
 ## Some real forecast data
