@@ -340,32 +340,15 @@ class RetrieveHass:
         """
         self.logger.info("Retrieve InfluxDB get data method initiated...")
 
-        try:
-            from influxdb import InfluxDBClient
-        except ImportError:
-            self.logger.error("InfluxDB client not installed. Install with: pip install influxdb")
+        # Check for empty inputs
+        if not days_list.size:
+            self.logger.error("Empty days_list provided")
             return False
 
-        # Remove empty strings from var_list
-        var_list = [var for var in var_list if var != ""]
-
-        # Connect to InfluxDB
-        try:
-            client = InfluxDBClient(
-                host=self.influxdb_host,
-                port=self.influxdb_port,
-                username=self.influxdb_username if self.influxdb_username else None,
-                password=self.influxdb_password if self.influxdb_password else None,
-                database=self.influxdb_database
-            )
-            # Test connection
-            client.ping()
-            self.logger.debug(f"Successfully connected to InfluxDB at {self.influxdb_host}:{self.influxdb_port}")
-        except Exception as e:
-            self.logger.error(f"Failed to connect to InfluxDB: {e}")
+        client = self._init_influx_client()
+        if not client:
             return False
 
-        # Calculate total time range
         start_time = days_list[0]
         end_time = days_list[-1] + pd.Timedelta(days=1)
         total_days = (end_time - start_time).days
@@ -373,89 +356,47 @@ class RetrieveHass:
         self.logger.info(f"Retrieving {len(var_list)} sensors over {total_days} days from InfluxDB")
         self.logger.debug(f"Time range: {start_time} to {end_time}")
 
-        self.df_final = pd.DataFrame()
+        # Collect sensor dataframes
+        sensor_dfs = []
+        global_min_time = None
+        global_max_time = None
 
-        for i, sensor in enumerate(var_list):
-            self.logger.debug(f"Retrieving sensor {i+1}/{len(var_list)}: {sensor}")
-
-            # Convert sensor name: sensor.sec_pac_solar -> sec_pac_solar
-            entity_id = sensor.replace('sensor.', '') if sensor.startswith('sensor.') else sensor
-
-            # Convert frequency to InfluxDB interval
-            freq_minutes = int(self.freq.total_seconds() / 60)
-            interval = f"{freq_minutes}m"
-
-            # Build InfluxQL query - format times properly for InfluxDB
-            start_time_str = start_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-            end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-
-            query = f'''
-            SELECT mean("value") AS "mean_value"
-            FROM "{self.influxdb_database}"."{self.influxdb_retention_policy}"."{self.influxdb_measurement}"
-            WHERE time >= '{start_time_str}'
-            AND time < '{end_time_str}'
-            AND "entity_id"='{entity_id}'
-            GROUP BY time({interval}) FILL(linear)
-            '''
-
-            self.logger.debug(f"InfluxDB query: {query}")
-
-            try:
-                # Execute query
-                result = client.query(query)
-
-                # Convert result to points
-                points = list(result.get_points())
-                if not points:
-                    self.logger.warning(f"No data found for sensor: {sensor}")
-                    continue
-
-                self.logger.info(f"Retrieved {len(points)} data points for {sensor}")
-
-                # Create DataFrame from points
-                df_sensor = pd.DataFrame(points)
-
-                # Convert time column and set as index
-                df_sensor['time'] = pd.to_datetime(df_sensor['time'])
-                df_sensor.set_index('time', inplace=True)
-
-                # Rename value column to original sensor name
-                if 'mean_value' in df_sensor.columns:
-                    df_sensor = df_sensor[['mean_value']].rename(columns={'mean_value': sensor})
-                else:
-                    self.logger.error(f"Expected 'mean_value' column not found for {sensor}")
-                    continue
-
-                # Handle non-numeric data (same as HA processing)
-                df_sensor[sensor] = pd.to_numeric(df_sensor[sensor], errors='coerce')
-
-                # Create time index for first sensor
-                if i == 0:
-                    # Create complete time range with specified frequency
-                    ts = pd.date_range(
-                        start=df_sensor.index.min(),
-                        end=df_sensor.index.max(),
-                        freq=self.freq
-                    )
-                    df_complete = pd.DataFrame(index=ts)
-                    df_complete = pd.concat([df_complete, df_sensor], axis=1)
-                    self.df_final = df_complete
-                else:
-                    # Add to existing dataframe
-                    self.df_final = pd.concat([self.df_final, df_sensor], axis=1)
-
-            except Exception as e:
-                self.logger.error(f"Failed to query sensor {sensor}: {e}")
-                continue
+        for sensor in filter(None, var_list):
+            df_sensor = self._fetch_sensor_data(client, sensor, start_time, end_time)
+            if df_sensor is not None:
+                sensor_dfs.append(df_sensor)
+                # Track global time range
+                sensor_min = df_sensor.index.min()
+                sensor_max = df_sensor.index.max()
+                global_min_time = min(global_min_time or sensor_min, sensor_min)
+                global_max_time = max(global_max_time or sensor_max, sensor_max)
 
         client.close()
 
-        if self.df_final.empty:
+        if not sensor_dfs:
             self.logger.error("No data retrieved from InfluxDB")
             return False
 
-        # Set frequency and validate
-        self.df_final = set_df_index_freq(self.df_final)
+        # Create complete time index covering all sensors
+        if global_min_time is not None and global_max_time is not None:
+            complete_index = pd.date_range(
+                start=global_min_time,
+                end=global_max_time,
+                freq=self.freq
+            )
+            self.df_final = pd.DataFrame(index=complete_index)
+
+            # Merge all sensor dataframes
+            for df_sensor in sensor_dfs:
+                self.df_final = pd.concat([self.df_final, df_sensor], axis=1)
+
+        # Set frequency and validate with error handling
+        try:
+            self.df_final = set_df_index_freq(self.df_final)
+        except Exception as e:
+            self.logger.error(f"Exception occurred while setting DataFrame index frequency: {e}")
+            return False
+
         if self.df_final.index.freq != self.freq:
             self.logger.warning(
                 f"InfluxDB data frequency ({self.df_final.index.freq}) differs from expected ({self.freq})"
@@ -464,6 +405,105 @@ class RetrieveHass:
         self.var_list = var_list
         self.logger.info(f"InfluxDB data retrieval completed: {self.df_final.shape}")
         return True
+
+    def _init_influx_client(self):
+        """Initialize InfluxDB client connection."""
+        try:
+            from influxdb import InfluxDBClient
+        except ImportError:
+            self.logger.error("InfluxDB client not installed. Install with: pip install influxdb")
+            return None
+
+        try:
+            client = InfluxDBClient(
+                host=self.influxdb_host,
+                port=self.influxdb_port,
+                username=self.influxdb_username or None,
+                password=self.influxdb_password or None,
+                database=self.influxdb_database
+            )
+            # Test connection
+            client.ping()
+            self.logger.debug(f"Successfully connected to InfluxDB at {self.influxdb_host}:{self.influxdb_port}")
+            return client
+        except Exception as e:
+            self.logger.error(f"Failed to connect to InfluxDB: {e}")
+            return None
+
+    def _build_influx_query(self, sensor: str, start_time, end_time) -> str:
+        """Build InfluxQL query for sensor data retrieval."""
+        # Convert sensor name: sensor.sec_pac_solar -> sec_pac_solar
+        entity_id = sensor.replace('sensor.', '') if sensor.startswith('sensor.') else sensor
+
+        # Convert frequency to InfluxDB interval
+        freq_minutes = int(self.freq.total_seconds() / 60)
+        interval = f"{freq_minutes}m"
+
+        # Format times properly for InfluxDB
+        start_time_str = start_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+        end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        # Use FILL(previous) instead of FILL(linear) for compatibility with open-source InfluxDB
+        query = f'''
+        SELECT mean("value") AS "mean_value"
+        FROM "{self.influxdb_database}"."{self.influxdb_retention_policy}"."{self.influxdb_measurement}"
+        WHERE time >= '{start_time_str}'
+        AND time < '{end_time_str}'
+        AND "entity_id"='{entity_id}'
+        GROUP BY time({interval}) FILL(previous)
+        '''
+        return query
+
+    def _fetch_sensor_data(self, client, sensor: str, start_time, end_time):
+        """Fetch and process data for a single sensor."""
+        self.logger.debug(f"Retrieving sensor: {sensor}")
+
+        try:
+            query = self._build_influx_query(sensor, start_time, end_time)
+            self.logger.debug(f"InfluxDB query: {query}")
+
+            # Execute query
+            result = client.query(query)
+            points = list(result.get_points())
+
+            if not points:
+                self.logger.warning(f"No data found for sensor: {sensor}")
+                return None
+
+            self.logger.info(f"Retrieved {len(points)} data points for {sensor}")
+
+            # Create DataFrame from points
+            df_sensor = pd.DataFrame(points)
+
+            # Convert time column and set as index with timezone awareness
+            df_sensor['time'] = pd.to_datetime(df_sensor['time'], utc=True)
+            df_sensor.set_index('time', inplace=True)
+
+            # Rename value column to original sensor name
+            if 'mean_value' in df_sensor.columns:
+                df_sensor = df_sensor[['mean_value']].rename(columns={'mean_value': sensor})
+            else:
+                self.logger.error(f"Expected 'mean_value' column not found for {sensor}")
+                return None
+
+            # Handle non-numeric data with NaN ratio warning
+            df_sensor[sensor] = pd.to_numeric(df_sensor[sensor], errors='coerce')
+
+            # Check proportion of NaNs and log warning if high
+            nan_count = df_sensor[sensor].isna().sum()
+            total_count = len(df_sensor[sensor])
+            if total_count > 0:
+                nan_ratio = nan_count / total_count
+                if nan_ratio > 0.2:
+                    self.logger.warning(
+                        f"Sensor '{sensor}' has {nan_count}/{total_count} ({nan_ratio:.1%}) non-numeric values coerced to NaN."
+                    )
+
+            return df_sensor
+
+        except Exception as e:
+            self.logger.error(f"Failed to query sensor {sensor}: {e}")
+            return None
 
     def prepare_data(
         self,
