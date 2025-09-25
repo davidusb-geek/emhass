@@ -78,6 +78,21 @@ class RetrieveHass:
         self.get_data_from_file = get_data_from_file
         self.var_list = []
 
+        # Initialize InfluxDB configuration
+        self.use_influxdb = self.params.get("retrieve_hass_conf", {}).get("use_influxdb", False)
+        if self.use_influxdb:
+            influx_conf = self.params.get("retrieve_hass_conf", {})
+            self.influxdb_host = influx_conf.get("influxdb_host", "localhost")
+            self.influxdb_port = influx_conf.get("influxdb_port", 8086)
+            self.influxdb_username = influx_conf.get("influxdb_username", "")
+            self.influxdb_password = influx_conf.get("influxdb_password", "")
+            self.influxdb_database = influx_conf.get("influxdb_database", "homeassistant")
+            self.influxdb_measurement = influx_conf.get("influxdb_measurement", "W")
+            self.influxdb_retention_policy = influx_conf.get("influxdb_retention_policy", "autogen")
+            self.logger.info(f"InfluxDB integration enabled: {self.influxdb_host}:{self.influxdb_port}/{self.influxdb_database}")
+        else:
+            self.logger.debug("InfluxDB integration disabled, using Home Assistant API")
+
     def get_ha_config(self):
         """
         Extract some configuration data from HA.
@@ -142,6 +157,10 @@ class RetrieveHass:
         .. warning:: The minimal_response and significant_changes_only options \
             are experimental
         """
+        # Use InfluxDB if configured, otherwise use Home Assistant API
+        if self.use_influxdb:
+            return self.get_data_influxdb(days_list, var_list)
+
         self.logger.info("Retrieve hass get data method initiated...")
         headers = {
             "Authorization": "Bearer " + self.long_lived_token,
@@ -299,6 +318,151 @@ class RetrieveHass:
             )
             return False
         self.var_list = var_list
+        return True
+
+    def get_data_influxdb(
+        self,
+        days_list: pd.date_range,
+        var_list: list,
+    ) -> bool:
+        """
+        Retrieve data from InfluxDB database.
+
+        This method provides an alternative data source to Home Assistant API,
+        enabling longer historical data retention for better machine learning model training.
+
+        :param days_list: A list of days to retrieve data for
+        :type days_list: pandas.date_range
+        :param var_list: List of sensor entity IDs to retrieve
+        :type var_list: list
+        :return: Success status of data retrieval
+        :rtype: bool
+        """
+        self.logger.info("Retrieve InfluxDB get data method initiated...")
+
+        try:
+            from influxdb import InfluxDBClient
+        except ImportError:
+            self.logger.error("InfluxDB client not installed. Install with: pip install influxdb")
+            return False
+
+        # Remove empty strings from var_list
+        var_list = [var for var in var_list if var != ""]
+
+        # Connect to InfluxDB
+        try:
+            client = InfluxDBClient(
+                host=self.influxdb_host,
+                port=self.influxdb_port,
+                username=self.influxdb_username if self.influxdb_username else None,
+                password=self.influxdb_password if self.influxdb_password else None,
+                database=self.influxdb_database
+            )
+            # Test connection
+            client.ping()
+            self.logger.debug(f"Successfully connected to InfluxDB at {self.influxdb_host}:{self.influxdb_port}")
+        except Exception as e:
+            self.logger.error(f"Failed to connect to InfluxDB: {e}")
+            return False
+
+        # Calculate total time range
+        start_time = days_list[0]
+        end_time = days_list[-1] + pd.Timedelta(days=1)
+        total_days = (end_time - start_time).days
+
+        self.logger.info(f"Retrieving {len(var_list)} sensors over {total_days} days from InfluxDB")
+        self.logger.debug(f"Time range: {start_time} to {end_time}")
+
+        self.df_final = pd.DataFrame()
+
+        for i, sensor in enumerate(var_list):
+            self.logger.debug(f"Retrieving sensor {i+1}/{len(var_list)}: {sensor}")
+
+            # Convert sensor name: sensor.sec_pac_solar -> sec_pac_solar
+            entity_id = sensor.replace('sensor.', '') if sensor.startswith('sensor.') else sensor
+
+            # Convert frequency to InfluxDB interval
+            freq_minutes = int(self.freq.total_seconds() / 60)
+            interval = f"{freq_minutes}m"
+
+            # Build InfluxQL query - format times properly for InfluxDB
+            start_time_str = start_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+            end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+            query = f'''
+            SELECT mean("value") AS "mean_value"
+            FROM "{self.influxdb_database}"."{self.influxdb_retention_policy}"."{self.influxdb_measurement}"
+            WHERE time >= '{start_time_str}'
+            AND time < '{end_time_str}'
+            AND "entity_id"='{entity_id}'
+            GROUP BY time({interval}) FILL(linear)
+            '''
+
+            self.logger.debug(f"InfluxDB query: {query}")
+
+            try:
+                # Execute query
+                result = client.query(query)
+
+                # Convert result to points
+                points = list(result.get_points())
+                if not points:
+                    self.logger.warning(f"No data found for sensor: {sensor}")
+                    continue
+
+                self.logger.info(f"Retrieved {len(points)} data points for {sensor}")
+
+                # Create DataFrame from points
+                df_sensor = pd.DataFrame(points)
+
+                # Convert time column and set as index
+                df_sensor['time'] = pd.to_datetime(df_sensor['time'])
+                df_sensor.set_index('time', inplace=True)
+
+                # Rename value column to original sensor name
+                if 'mean_value' in df_sensor.columns:
+                    df_sensor = df_sensor[['mean_value']].rename(columns={'mean_value': sensor})
+                else:
+                    self.logger.error(f"Expected 'mean_value' column not found for {sensor}")
+                    continue
+
+                # Handle non-numeric data (same as HA processing)
+                df_sensor[sensor] = pd.to_numeric(df_sensor[sensor], errors='coerce')
+
+                # Create time index for first sensor
+                if i == 0:
+                    # Create complete time range with specified frequency
+                    ts = pd.date_range(
+                        start=df_sensor.index.min(),
+                        end=df_sensor.index.max(),
+                        freq=self.freq
+                    )
+                    df_complete = pd.DataFrame(index=ts)
+                    df_complete = pd.concat([df_complete, df_sensor], axis=1)
+                    self.df_final = df_complete
+                else:
+                    # Add to existing dataframe
+                    self.df_final = pd.concat([self.df_final, df_sensor], axis=1)
+
+            except Exception as e:
+                self.logger.error(f"Failed to query sensor {sensor}: {e}")
+                continue
+
+        client.close()
+
+        if self.df_final.empty:
+            self.logger.error("No data retrieved from InfluxDB")
+            return False
+
+        # Set frequency and validate
+        self.df_final = set_df_index_freq(self.df_final)
+        if self.df_final.index.freq != self.freq:
+            self.logger.warning(
+                f"InfluxDB data frequency ({self.df_final.index.freq}) differs from expected ({self.freq})"
+            )
+
+        self.var_list = var_list
+        self.logger.info(f"InfluxDB data retrieval completed: {self.df_final.shape}")
         return True
 
     def prepare_data(
