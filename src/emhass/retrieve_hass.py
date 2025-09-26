@@ -425,16 +425,67 @@ class RetrieveHass:
             # Test connection
             client.ping()
             self.logger.debug(f"Successfully connected to InfluxDB at {self.influxdb_host}:{self.influxdb_port}")
+
+            # Initialize measurement cache
+            if not hasattr(self, '_measurement_cache'):
+                self._measurement_cache = {}
+
             return client
         except Exception as e:
             self.logger.error(f"Failed to connect to InfluxDB: {e}")
             return None
 
-    def _build_influx_query(self, sensor: str, start_time, end_time) -> str:
-        """Build InfluxQL query for sensor data retrieval."""
-        # Convert sensor name: sensor.sec_pac_solar -> sec_pac_solar
-        entity_id = sensor.replace('sensor.', '') if sensor.startswith('sensor.') else sensor
+    def _discover_entity_measurement(self, client, entity_id: str) -> str:
+        """Auto-discover which measurement contains the given entity."""
+        # Check cache first
+        if entity_id in self._measurement_cache:
+            return self._measurement_cache[entity_id]
 
+        try:
+            # Get all available measurements
+            measurements_query = "SHOW MEASUREMENTS"
+            measurements_result = client.query(measurements_query)
+            measurements = [m['name'] for m in measurements_result.get_points()]
+
+            # Priority order: check common sensor types first
+            priority_measurements = ['EUR/kWh', '€/kWh', 'W', 'EUR', '€', '%', 'A', 'V']
+            all_measurements = priority_measurements + [m for m in measurements if m not in priority_measurements]
+
+            self.logger.debug(f"Searching for entity '{entity_id}' across {len(measurements)} measurements")
+
+            # Search for entity in each measurement
+            for measurement in all_measurements:
+                if measurement not in measurements:
+                    continue  # Skip if measurement doesn't exist
+
+                try:
+                    # Use SHOW TAG VALUES to get all entity_ids in this measurement
+                    tag_query = f'SHOW TAG VALUES FROM "{measurement}" WITH KEY = "entity_id"'
+                    self.logger.debug(f"Checking measurement '{measurement}' with tag query: {tag_query}")
+                    result = client.query(tag_query)
+                    points = list(result.get_points())
+
+                    # Check if our target entity_id is in the tag values
+                    for point in points:
+                        if point.get('value') == entity_id:
+                            self.logger.debug(f"Found entity '{entity_id}' in measurement '{measurement}'")
+                            # Cache the result
+                            self._measurement_cache[entity_id] = measurement
+                            return measurement
+
+                except Exception as query_error:
+                    self.logger.debug(f"Tag query failed for measurement '{measurement}': {query_error}")
+                    continue
+
+        except Exception as e:
+            self.logger.error(f"Error discovering measurement for entity {entity_id}: {e}")
+
+        # Fallback to default measurement if not found
+        self.logger.warning(f"Entity '{entity_id}' not found in any measurement, using default: {self.influxdb_measurement}")
+        return self.influxdb_measurement
+
+    def _build_influx_query_for_measurement(self, entity_id: str, measurement: str, start_time, end_time) -> str:
+        """Build InfluxQL query for specific measurement and entity."""
         # Convert frequency to InfluxDB interval
         freq_minutes = int(self.freq.total_seconds() / 60)
         interval = f"{freq_minutes}m"
@@ -446,7 +497,7 @@ class RetrieveHass:
         # Use FILL(previous) instead of FILL(linear) for compatibility with open-source InfluxDB
         query = f'''
         SELECT mean("value") AS "mean_value"
-        FROM "{self.influxdb_database}"."{self.influxdb_retention_policy}"."{self.influxdb_measurement}"
+        FROM "{self.influxdb_database}"."{self.influxdb_retention_policy}"."{measurement}"
         WHERE time >= '{start_time_str}'
         AND time < '{end_time_str}'
         AND "entity_id"='{entity_id}'
@@ -454,12 +505,29 @@ class RetrieveHass:
         '''
         return query
 
+    def _build_influx_query(self, sensor: str, start_time, end_time) -> str:
+        """Build InfluxQL query for sensor data retrieval (legacy method)."""
+        # Convert sensor name: sensor.sec_pac_solar -> sec_pac_solar
+        entity_id = sensor.replace('sensor.', '') if sensor.startswith('sensor.') else sensor
+
+        # Use default measurement (for backward compatibility)
+        return self._build_influx_query_for_measurement(entity_id, self.influxdb_measurement, start_time, end_time)
+
     def _fetch_sensor_data(self, client, sensor: str, start_time, end_time):
-        """Fetch and process data for a single sensor."""
+        """Fetch and process data for a single sensor with auto-discovery."""
         self.logger.debug(f"Retrieving sensor: {sensor}")
 
+        # Clean sensor name (remove sensor. prefix if present)
+        entity_id = sensor.replace('sensor.', '') if sensor.startswith('sensor.') else sensor
+
+        # Auto-discover which measurement contains this entity
+        measurement = self._discover_entity_measurement(client, entity_id)
+        if not measurement:
+            self.logger.warning(f"Entity '{entity_id}' not found in any InfluxDB measurement")
+            return None
+
         try:
-            query = self._build_influx_query(sensor, start_time, end_time)
+            query = self._build_influx_query_for_measurement(entity_id, measurement, start_time, end_time)
             self.logger.debug(f"InfluxDB query: {query}")
 
             # Execute query
@@ -467,7 +535,7 @@ class RetrieveHass:
             points = list(result.get_points())
 
             if not points:
-                self.logger.warning(f"No data found for sensor: {sensor}")
+                self.logger.warning(f"No data found for entity: {entity_id} in measurement: {measurement}")
                 return None
 
             self.logger.info(f"Retrieved {len(points)} data points for {sensor}")
@@ -483,7 +551,7 @@ class RetrieveHass:
             if 'mean_value' in df_sensor.columns:
                 df_sensor = df_sensor[['mean_value']].rename(columns={'mean_value': sensor})
             else:
-                self.logger.error(f"Expected 'mean_value' column not found for {sensor}")
+                self.logger.error(f"Expected 'mean_value' column not found for {sensor} in measurement {measurement}")
                 return None
 
             # Handle non-numeric data with NaN ratio warning
@@ -496,13 +564,14 @@ class RetrieveHass:
                 nan_ratio = nan_count / total_count
                 if nan_ratio > 0.2:
                     self.logger.warning(
-                        f"Sensor '{sensor}' has {nan_count}/{total_count} ({nan_ratio:.1%}) non-numeric values coerced to NaN."
+                        f"Entity '{entity_id}' has {nan_count}/{total_count} ({nan_ratio:.1%}) non-numeric values coerced to NaN."
                     )
 
+            self.logger.debug(f"Successfully retrieved {len(df_sensor)} data points for '{entity_id}' from measurement '{measurement}'")
             return df_sensor
 
         except Exception as e:
-            self.logger.error(f"Failed to query sensor {sensor}: {e}")
+            self.logger.error(f"Failed to query entity {entity_id} from measurement {measurement}: {e}")
             return None
 
     def prepare_data(
