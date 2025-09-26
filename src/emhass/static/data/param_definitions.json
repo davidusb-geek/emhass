@@ -62,13 +62,13 @@
     "influxdb_username": {
       "friendly_name": "InfluxDB username",
       "Description": "Username for authenticating with InfluxDB. Leave empty if no authentication is required.",
-      "input": "string",
+      "input": "secrets.string",
       "default_value": ""
     },
     "influxdb_password": {
       "friendly_name": "InfluxDB password",
       "Description": "Password for authenticating with InfluxDB. Leave empty if no authentication is required.",
-      "input": "string",
+      "input": "secrets.string",
       "default_value": ""
     },
     "influxdb_database": {
