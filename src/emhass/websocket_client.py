@@ -10,14 +10,25 @@ import websockets
 
 logger = logging.getLogger(__name__)
 
-class WebSocketError(Exception): pass
-class AuthenticationError(WebSocketError): pass
-class ConnectionError(WebSocketError): pass
+
+class WebSocketError(Exception):
+    pass
+
+
+class AuthenticationError(WebSocketError):
+    pass
+
+
+class ConnectionError(WebSocketError):
+    pass
+
+
 class RequestError(WebSocketError):
     def __init__(self, code: str, message: str):
         self.code = code
         self.message = message
         super().__init__(f"{code}: {message}")
+
 
 class AsyncWebSocketClient:
     def __init__(
@@ -101,13 +112,15 @@ class AsyncWebSocketClient:
     async def _connect(self):
         """Internal connect/authenticate and start background tasks."""
         ssl_ctx = self._get_ssl_context()
-        self._ws = await websockets.connect(self.websocket_url, ssl=ssl_ctx, ping_interval=None, max_size=None)
+        self._ws = await websockets.connect(
+            self.websocket_url, ssl=ssl_ctx, ping_interval=None, max_size=None
+        )
         # Authenticate
         msg = await asyncio.wait_for(self._ws.recv(), timeout=5.0)
         data = orjson.loads(msg)
         if data.get("type") != "auth_required":
             raise AuthenticationError("No auth_required")
-        auth = orjson.dumps({"type":"auth", "access_token":self.token}).decode()
+        auth = orjson.dumps({"type": "auth", "access_token": self.token}).decode()
         await self._ws.send(auth)
         resp = orjson.loads(await asyncio.wait_for(self._ws.recv(), timeout=5.0))
         if resp.get("type") != "auth_ok":
@@ -140,7 +153,9 @@ class AsyncWebSocketClient:
         try:
             while self.connected:
                 await asyncio.sleep(self.ping_interval)
-                await self._ws.send(orjson.dumps({"id": self._next_id(), "type": "ping"}).decode())
+                await self._ws.send(
+                    orjson.dumps({"id": self._next_id(), "type": "ping"}).decode()
+                )
         except Exception:
             pass
 
@@ -156,7 +171,9 @@ class AsyncWebSocketClient:
                     fut = self._pending.pop(mid)
                     if data.get("type") == "result" and not data.get("success", True):
                         err = data.get("error", {})
-                        fut.set_exception(RequestError(err.get("code",""), err.get("message","")))
+                        fut.set_exception(
+                            RequestError(err.get("code", ""), err.get("message", ""))
+                        )
                     else:
                         fut.set_result(data.get("result", None))
         except Exception as e:
@@ -191,8 +208,16 @@ class AsyncWebSocketClient:
         states = await self.get_states()
         return next((s for s in states if s["entity_id"] == entity_id), None)
 
-    async def call_service(self, domain: str, service: str, service_data: dict = None, target: dict = None):
-        return await self.send("call_service", domain=domain, service=service, service_data=service_data or {}, target=target or {})
+    async def call_service(
+        self, domain: str, service: str, service_data: dict = None, target: dict = None
+    ):
+        return await self.send(
+            "call_service",
+            domain=domain,
+            service=service,
+            service_data=service_data or {},
+            target=target or {},
+        )
 
     async def get_history(self, **kwargs):
         return await self.send("history/history_during_period", **kwargs)

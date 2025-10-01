@@ -10,6 +10,7 @@ retrieve_hass_conf,var_replace_zero,sensor_replace_zero,list_sensor_replace_zero
 retrieve_hass_conf,var_interp,sensor_linear_interp,list_sensor_linear_interp
 retrieve_hass_conf,method_ts_round,method_ts_round
 retrieve_hass_conf,continual_publish,continual_publish
+retrieve_hass_conf,use_websocket,use_websocket
 params_secrets,time_zone,time_zone
 params_secrets,lat,Latitude
 params_secrets,lon,Longitude

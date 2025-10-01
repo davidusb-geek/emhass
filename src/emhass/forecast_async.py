@@ -202,15 +202,17 @@ class Forecast:
             .round(self.freq, ambiguous="infer", nonexistent="shift_forward")
             .tz_convert(self.time_zone)
         )
-        if params is not None and "prediction_horizon" in list(self.params["passed_data"].keys()) and self.params["passed_data"]["prediction_horizon"] is not None:
+        if (
+            params is not None
+            and "prediction_horizon" in list(self.params["passed_data"].keys())
+            and self.params["passed_data"]["prediction_horizon"] is not None
+        ):
             self.forecast_dates = self.forecast_dates[
                 0 : self.params["passed_data"]["prediction_horizon"]
             ]
 
     async def get_cached_open_meteo_forecast_json(
-        self,
-        max_age: int | None = 30,
-        forecast_days: int = 3
+        self, max_age: int | None = 30, forecast_days: int = 3
     ) -> dict:
         r"""
         Get weather forecast json from Open-Meteo and cache it for re-use.
@@ -239,10 +241,15 @@ class Forecast:
 
         # Ensure at least 3 weather forecast days (and 1 more than requested)
         if forecast_days is None:
-            self.logger.warning("Open-Meteo forecast_days is missing so defaulting to 3 days")
+            self.logger.warning(
+                "Open-Meteo forecast_days is missing so defaulting to 3 days"
+            )
             forecast_days = 3
         elif forecast_days < 3:
-            self.logger.warning("Open-Meteo forecast_days is too low (%s) so defaulting to 3 days", forecast_days)
+            self.logger.warning(
+                "Open-Meteo forecast_days is too low (%s) so defaulting to 3 days",
+                forecast_days,
+            )
             forecast_days = 3
         else:
             forecast_days = forecast_days + 1
@@ -296,7 +303,8 @@ class Forecast:
                 + "shortwave_radiation_instant,"
                 + "diffuse_radiation_instant,"
                 + "direct_normal_irradiance_instant"
-                + "&forecast_days=" + str(forecast_days)
+                + "&forecast_days="
+                + str(forecast_days)
                 + "&timezone="
                 + quote(str(self.time_zone), safe="")
             )
@@ -304,7 +312,9 @@ class Forecast:
                 self.logger.debug("Fetching data from Open-Meteo using URL: %s", url)
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url, headers=headers) as response:
-                        self.logger.debug("Returned HTTP status code: %s", response.status)
+                        self.logger.debug(
+                            "Returned HTTP status code: %s", response.status
+                        )
                         response.raise_for_status()
                         """import bz2 # Uncomment to save a serialized data for tests
                         import _pickle as cPickle
@@ -312,10 +322,13 @@ class Forecast:
                             cPickle.dump(response, f)"""
                         data = await response.json()
                         self.logger.info(
-                            "Saving response in Open-Meteo JSON cache file: %s", json_path
+                            "Saving response in Open-Meteo JSON cache file: %s",
+                            json_path,
                         )
                         async with aiofiles.open(json_path, "w") as json_file:
-                            content = orjson.dumps(data, option=orjson.OPT_INDENT_2).decode()
+                            content = orjson.dumps(
+                                data, option=orjson.OPT_INDENT_2
+                            ).decode()
                             await json_file.write(content)
             except aiohttp.ClientError:
                 self.logger.error(
@@ -363,7 +376,7 @@ class Forecast:
             if not os.path.isfile(w_forecast_cache_path):
                 data_raw = await self.get_cached_open_meteo_forecast_json(
                     self.optim_conf["open_meteo_cache_max_age"],
-                    self.optim_conf["delta_forecast_daily"].days
+                    self.optim_conf["delta_forecast_daily"].days,
                 )
                 data_15min = pd.DataFrame.from_dict(data_raw["minutely_15"])
                 data_15min["time"] = pd.to_datetime(data_15min["time"])
@@ -516,15 +529,22 @@ class Forecast:
                                 ]
 
                             # Trim request results to forecast_dates
-                            total_data_list = total_data_list[0 : len(self.forecast_dates)]
-                            data_dict = {"ts": self.forecast_dates, "yhat": total_data_list}
+                            total_data_list = total_data_list[
+                                0 : len(self.forecast_dates)
+                            ]
+                            data_dict = {
+                                "ts": self.forecast_dates,
+                                "yhat": total_data_list,
+                            }
                             # Define DataFrame
                             data = pd.DataFrame.from_dict(data_dict)
                             # Define index
                             data.set_index("ts", inplace=True)
                             # If runtime weather_forecast_cache is true save forecast result to file as cache
                             # Trim data to match the current required dates
-                            if self.params["passed_data"].get("weather_forecast_cache", False):
+                            if self.params["passed_data"].get(
+                                "weather_forecast_cache", False
+                            ):
                                 data = await self.set_cached_forecast_data(
                                     w_forecast_cache_path, data
                                 )
@@ -603,7 +623,9 @@ class Forecast:
                                 data = data + data_tmp
                             # If runtime weather_forecast_cache is true save forecast result to file as cache.
                             # Trim data to match the current required dates
-                            if self.params["passed_data"].get("weather_forecast_cache", False):
+                            if self.params["passed_data"].get(
+                                "weather_forecast_cache", False
+                            ):
                                 data = await self.set_cached_forecast_data(
                                     w_forecast_cache_path, data
                                 )
@@ -1070,7 +1092,11 @@ class Forecast:
             .round(self.freq, ambiguous="infer", nonexistent="shift_forward")
             .tz_convert(self.time_zone)
         )
-        if self.params is not None and "prediction_horizon" in list(self.params["passed_data"].keys()) and self.params["passed_data"]["prediction_horizon"] is not None:
+        if (
+            self.params is not None
+            and "prediction_horizon" in list(self.params["passed_data"].keys())
+            and self.params["passed_data"]["prediction_horizon"] is not None
+        ):
             forecast_dates_csv = forecast_dates_csv[
                 0 : self.params["passed_data"]["prediction_horizon"]
             ]
@@ -1335,7 +1361,9 @@ class Forecast:
         csv_path = self.emhass_conf["data_path"] / csv_path
 
         if method == "naive" or method == "mlforecaster":
-            self.logger.info(f"Retrieving data from hass for load forecast using method = {method}")
+            self.logger.info(
+                f"Retrieving data from hass for load forecast using method = {method}"
+            )
             df = await self._retrieve_load_data(days_min_load_forecast)
             if not isinstance(df, pd.DataFrame):
                 return False
@@ -1347,7 +1375,9 @@ class Forecast:
         elif method == "naive":
             forecast_out = self._get_naive_load_forecast(df)
         elif method == "mlforecaster":
-            forecast_out = await self._get_ml_load_forecast(df, use_last_window, mlf, debug)
+            forecast_out = await self._get_ml_load_forecast(
+                df, use_last_window, mlf, debug
+            )
         elif method == "csv":
             forecast_out = self._get_csv_load_forecast(csv_path)
         elif method == "list":
@@ -1369,7 +1399,6 @@ class Forecast:
         return P_Load_forecast
 
     async def _retrieve_load_data(self, days_min_load_forecast: int) -> pd.DataFrame:
-
         var_list = [self.var_load]
         var_replace_zero = None
         var_interp = [self.var_load]
@@ -1447,9 +1476,7 @@ class Forecast:
                 forecast = forecast_tmp
             else:
                 forecast = pd.concat([forecast, forecast_tmp], axis=0)
-        forecast_out = forecast.loc[
-            forecast.index.intersection(self.forecast_dates)
-        ]
+        forecast_out = forecast.loc[forecast.index.intersection(self.forecast_dates)]
         forecast_out.index = self.forecast_dates
         forecast_out.index.name = "ts"
         forecast_out = forecast_out.rename(columns={"load": "yhat"})
@@ -1749,7 +1776,9 @@ class Forecast:
                 return False
             return data
 
-    async def set_cached_forecast_data(self, w_forecast_cache_path, data) -> pd.DataFrame:
+    async def set_cached_forecast_data(
+        self, w_forecast_cache_path, data
+    ) -> pd.DataFrame:
         r"""
         Set generated weather forecast data to file.
         Trim data to match the original requested forecast dates
