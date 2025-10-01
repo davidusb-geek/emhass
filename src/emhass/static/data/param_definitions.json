@@ -37,6 +37,12 @@
       "input": "array.string",
       "default_value": "sensor.power_photovoltaics"
     },
+    "use_websocket": {
+      "friendly_name": "Use Home Assistant websocket for data retrieval",
+      "Description": "Enable Home Assistant websocket as data source instead of Home Assistant API. This allows for longer historical data retention and better performance for machine learning models.",
+      "input": "boolean",
+      "default_value": false
+    },
     "use_influxdb": {
       "friendly_name": "Use InfluxDB for data retrieval",
       "Description": "Enable InfluxDB as data source instead of Home Assistant API. This allows for longer historical data retention and better performance for machine learning models.",

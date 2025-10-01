@@ -2,7 +2,6 @@ import asyncio
 import logging
 import time
 import warnings
-from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
@@ -99,7 +98,9 @@ class MLForecaster:
     @staticmethod
     async def interpolate_async(data: pd.DataFrame) -> pd.DataFrame:
         """Interpolate missing values asynchronously."""
-        return await asyncio.to_thread(data.interpolate, method="linear", axis=0, limit=None)
+        return await asyncio.to_thread(
+            data.interpolate, method="linear", axis=0, limit=None
+        )
 
     @staticmethod
     async def generate_exog(data_last_window, periods, var_name):
@@ -122,7 +123,9 @@ class MLForecaster:
         }
 
         if model_name not in models:
-            self.logger.error(f"Passed sklearn model {model_name} is not valid. Defaulting to KNeighborsRegressor")
+            self.logger.error(
+                f"Passed sklearn model {model_name} is not valid. Defaulting to KNeighborsRegressor"
+            )
             return KNeighborsRegressor()
 
         return models[model_name]
@@ -148,7 +151,9 @@ class MLForecaster:
 
             # Check if variable exists in data
             if self.var_model not in self.data.columns:
-                raise KeyError(f"Variable '{self.var_model}' not found in data columns: {list(self.data.columns)}")
+                raise KeyError(
+                    f"Variable '{self.var_model}' not found in data columns: {list(self.data.columns)}"
+                )
 
             # Preparing the data: adding exogenous features
             self.data_exo = pd.DataFrame(index=self.data.index)
@@ -159,7 +164,9 @@ class MLForecaster:
 
             # train/test split
             self.date_train = (
-                self.data_exo.index[-1] - pd.Timedelta("5days") + self.data_exo.index.freq
+                self.data_exo.index[-1]
+                - pd.Timedelta("5days")
+                + self.data_exo.index.freq
             )  # The last 5 days
             self.date_split = (
                 self.data_exo.index[-1]
@@ -176,7 +183,9 @@ class MLForecaster:
             base_model = self._get_sklearn_model(self.sklearn_model)
 
             # Define the forecaster object
-            self.forecaster = ForecasterRecursive(regressor=base_model, lags=self.num_lags)
+            self.forecaster = ForecasterRecursive(
+                regressor=base_model, lags=self.num_lags
+            )
 
             # Fit and time it
             self.logger.info("Training a " + self.sklearn_model + " model")
@@ -195,10 +204,14 @@ class MLForecaster:
             predictions = await asyncio.to_thread(
                 self.forecaster.predict,
                 steps=self.steps,
-                exog=self.data_test.drop(self.var_model, axis=1)
+                exog=self.data_test.drop(self.var_model, axis=1),
             )
-            pred_metric = await asyncio.to_thread(r2_score, self.data_test[self.var_model], predictions)
-            self.logger.info(f"Prediction R2 score of fitted model on test data: {pred_metric}")
+            pred_metric = await asyncio.to_thread(
+                r2_score, self.data_test[self.var_model], predictions
+            )
+            self.logger.info(
+                f"Prediction R2 score of fitted model on test data: {pred_metric}"
+            )
 
             # Packing results in a DataFrame
             df_pred = pd.DataFrame(
@@ -275,7 +288,7 @@ class MLForecaster:
                 predictions = await asyncio.to_thread(
                     self.forecaster.predict,
                     steps=self.num_lags,
-                    exog=self.data_test.drop(self.var_model, axis=1)
+                    exog=self.data_test.drop(self.var_model, axis=1),
                 )
             else:
                 data_last_window = await self.interpolate_async(data_last_window)
@@ -316,48 +329,68 @@ class MLForecaster:
         """Get the hyperparameter search space for the given model."""
         if self.sklearn_model == "LinearRegression":
             if debug:
+
                 def search_space(trial):
                     return {
-                        "fit_intercept": trial.suggest_categorical("fit_intercept", [True]),
+                        "fit_intercept": trial.suggest_categorical(
+                            "fit_intercept", [True]
+                        ),
                         "lags": trial.suggest_categorical("lags", [3]),
                     }
             else:
+
                 def search_space(trial):
                     return {
-                        "fit_intercept": trial.suggest_categorical("fit_intercept", [True, False]),
-                        "lags": trial.suggest_categorical("lags", [6, 12, 24, 36, 48, 60, 72]),
+                        "fit_intercept": trial.suggest_categorical(
+                            "fit_intercept", [True, False]
+                        ),
+                        "lags": trial.suggest_categorical(
+                            "lags", [6, 12, 24, 36, 48, 60, 72]
+                        ),
                     }
 
         elif self.sklearn_model == "ElasticNet":
             if debug:
+
                 def search_space(trial):
                     return {
                         "selection": trial.suggest_categorical("selection", ["random"]),
                         "lags": trial.suggest_categorical("lags", [3]),
                     }
             else:
+
                 def search_space(trial):
                     return {
                         "alpha": trial.suggest_float("alpha", 0.0, 2.0),
                         "l1_ratio": trial.suggest_float("l1_ratio", 0.0, 1.0),
-                        "selection": trial.suggest_categorical("selection", ["cyclic", "random"]),
-                        "lags": trial.suggest_categorical("lags", [6, 12, 24, 36, 48, 60, 72]),
+                        "selection": trial.suggest_categorical(
+                            "selection", ["cyclic", "random"]
+                        ),
+                        "lags": trial.suggest_categorical(
+                            "lags", [6, 12, 24, 36, 48, 60, 72]
+                        ),
                     }
 
         elif self.sklearn_model == "KNeighborsRegressor":
             if debug:
+
                 def search_space(trial):
                     return {
                         "weights": trial.suggest_categorical("weights", ["uniform"]),
                         "lags": trial.suggest_categorical("lags", [3]),
                     }
             else:
+
                 def search_space(trial):
                     return {
                         "n_neighbors": trial.suggest_int("n_neighbors", 2, 20),
                         "leaf_size": trial.suggest_int("leaf_size", 20, 40),
-                        "weights": trial.suggest_categorical("weights", ["uniform", "distance"]),
-                        "lags": trial.suggest_categorical("lags", [6, 12, 24, 36, 48, 60, 72]),
+                        "weights": trial.suggest_categorical(
+                            "weights", ["uniform", "distance"]
+                        ),
+                        "lags": trial.suggest_categorical(
+                            "lags", [6, 12, 24, 36, 48, 60, 72]
+                        ),
                     }
         else:
             raise ValueError(f"Unsupported model for tuning: {self.sklearn_model}")
@@ -394,12 +427,13 @@ class MLForecaster:
 
             train_data_length = len(self.data_train)  # Use actual training data length
             # Ensure initial_train_size doesn't exceed actual training data
-            train_data_length = min(train_data_length - 1, len(self.data_train[self.var_model]))
+            train_data_length = min(
+                train_data_length - 1, len(self.data_train[self.var_model])
+            )
 
             # The optimization routine call
             self.logger.info("Bayesian hyperparameter optimization with backtesting")
             start_time = time.time()
-            # print(f"Training data length: {train_data_length}")
 
             cv = TimeSeriesFold(
                 steps=num_lags,
@@ -411,11 +445,10 @@ class MLForecaster:
                 refit=refit,
             )
 
-            # print("Data shapes:")
-            # print(f"data_train shape: {self.data_train.shape}")
-            # print(f"data_train[var_model] shape: {self.data_train[self.var_model].shape}")
-
-            self.optimize_results, self.optimize_results_object = await asyncio.to_thread(
+            (
+                self.optimize_results,
+                self.optimize_results_object,
+            ) = await asyncio.to_thread(
                 bayesian_search_forecaster,
                 forecaster=self.forecaster,
                 y=self.data_train[self.var_model],
@@ -436,7 +469,7 @@ class MLForecaster:
             predictions_opt = await asyncio.to_thread(
                 self.forecaster.predict,
                 steps=self.num_lags,
-                exog=self.data_test.drop(self.var_model, axis=1)
+                exog=self.data_test.drop(self.var_model, axis=1),
             )
 
             freq_hours = self.data_exo.index.freq.delta.seconds / 3600
@@ -451,14 +484,18 @@ class MLForecaster:
             df_pred_opt["pred_optim"] = predictions_opt
 
             pred_optim_metric_train = -self.optimize_results.iloc[0]["neg_r2_score"]
-            self.logger.info(f"R2 score for optimized prediction in train period: {pred_optim_metric_train}")
+            self.logger.info(
+                f"R2 score for optimized prediction in train period: {pred_optim_metric_train}"
+            )
 
             pred_optim_metric_test = await asyncio.to_thread(
                 r2_score,
                 df_pred_opt.loc[predictions_opt.index, "test"],
                 df_pred_opt.loc[predictions_opt.index, "pred_optim"],
             )
-            self.logger.info(f"R2 score for optimized prediction in test period: {pred_optim_metric_test}")
+            self.logger.info(
+                f"R2 score for optimized prediction in test period: {pred_optim_metric_test}"
+            )
             self.logger.info("Number of optimal lags obtained: " + str(self.lags_opt))
 
             return df_pred_opt

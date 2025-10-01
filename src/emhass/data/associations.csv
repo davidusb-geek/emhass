@@ -20,6 +20,7 @@ retrieve_hass_conf,influxdb_use_ssl,influxdb_use_ssl
 retrieve_hass_conf,influxdb_verify_ssl,influxdb_verify_ssl
 retrieve_hass_conf,method_ts_round,method_ts_round
 retrieve_hass_conf,continual_publish,continual_publish
+retrieve_hass_conf,use_websocket,use_websocket
 params_secrets,time_zone,time_zone
 params_secrets,lat,Latitude
 params_secrets,lon,Longitude

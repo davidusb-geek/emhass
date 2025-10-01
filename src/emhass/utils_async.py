@@ -23,7 +23,8 @@ if TYPE_CHECKING:
 
 pd.options.plotting.backend = "plotly"
 
-def get_root(file: str, num_parent: int | None = 3) -> str:
+
+def get_root(file: str, num_parent: int = 3) -> str:
     """
     Get the root absolute path of the working directory.
 
@@ -47,9 +48,9 @@ def get_root(file: str, num_parent: int | None = 3) -> str:
 
 def get_logger(
     fun_name: str,
-    emhass_conf: dict,
-    save_to_file: bool | None = True,
-    logging_level: str | None = "DEBUG",
+    emhass_conf: dict[str, pathlib.Path],
+    save_to_file: bool = True,
+    logging_level: str = "DEBUG",
 ) -> tuple[logging.Logger, logging.StreamHandler]:
     """
     Create a simple logger object.
@@ -210,17 +211,17 @@ def update_params_with_ha_config(
     params = orjson.dumps(params, default=str).decode("utf-8")
     return params
 
-# @profile
+
 async def treat_runtimeparams(
     runtimeparams: str,
-    params: str,
-    retrieve_hass_conf: dict,
-    optim_conf: dict,
-    plant_conf: dict,
+    params: dict[str, dict],
+    retrieve_hass_conf: dict[str, str],
+    optim_conf: dict[str, str],
+    plant_conf: dict[str, str],
     set_type: str,
     logger: logging.Logger,
-    emhass_conf: dict,
-) -> tuple[str, dict]:
+    emhass_conf: dict[str, pathlib.Path],
+) -> tuple[str, dict[str, dict]]:
     """
     Treat the passed optimization runtime parameters.
 
@@ -421,10 +422,16 @@ async def treat_runtimeparams(
                 try:
                     delta_forecast = int(delta_forecast)
                 except ValueError:
-                    logger.warning("Invalid delta_forecast_daily value (%s) so defaulting to 1 day", delta_forecast)
+                    logger.warning(
+                        "Invalid delta_forecast_daily value (%s) so defaulting to 1 day",
+                        delta_forecast,
+                    )
                     delta_forecast = 1
             if delta_forecast <= 0:
-                logger.warning("delta_forecast_daily is too low (%s) so defaulting to 1 day", delta_forecast)
+                logger.warning(
+                    "delta_forecast_daily is too low (%s) so defaulting to 1 day",
+                    delta_forecast,
+                )
                 delta_forecast = 1
             params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(
                 days=delta_forecast
@@ -588,19 +595,30 @@ async def treat_runtimeparams(
             if forecast_key in runtimeparams.keys():
                 forecast_input = runtimeparams[forecast_key]
                 if isinstance(forecast_input, dict):
-                    forecast_data_df = pd.DataFrame.from_dict(forecast_input, orient="index").reset_index()
+                    forecast_data_df = pd.DataFrame.from_dict(
+                        forecast_input, orient="index"
+                    ).reset_index()
                     forecast_data_df.columns = ["time", "value"]
-                    forecast_data_df["time"] = pd.to_datetime(forecast_data_df["time"], format="ISO8601", utc=True).dt.tz_convert(time_zone)
+                    forecast_data_df["time"] = pd.to_datetime(
+                        forecast_data_df["time"], format="ISO8601", utc=True
+                    ).dt.tz_convert(time_zone)
 
                     # align index with forecast_dates
-                    forecast_data_df = (forecast_data_df
-                        .resample(pd.to_timedelta(optimization_time_step, "minutes"), on="time")
+                    forecast_data_df = (
+                        forecast_data_df.resample(
+                            pd.to_timedelta(optimization_time_step, "minutes"),
+                            on="time",
+                        )
                         .aggregate({"value": "mean"})
                         .reindex(forecast_dates, method="nearest")
                     )
-                    forecast_data_df["value"] = forecast_data_df["value"].ffill().bfill()
+                    forecast_data_df["value"] = (
+                        forecast_data_df["value"].ffill().bfill()
+                    )
                     forecast_input = forecast_data_df["value"].tolist()
-                if isinstance(forecast_input, list) and len(forecast_input) >= len(forecast_dates):
+                if isinstance(forecast_input, list) and len(forecast_input) >= len(
+                    forecast_dates
+                ):
                     params["passed_data"][forecast_key] = forecast_input
                     params["optim_conf"][forecast_methods[method]] = "list"
                 else:
@@ -611,10 +629,10 @@ async def treat_runtimeparams(
                         f"Passed type is {str(type(runtimeparams[forecast_key]))} and length is {str(len(runtimeparams[forecast_key]))}"
                     )
                 # Check if string contains list, if so extract
-                if isinstance(forecast_input, str) and isinstance(ast.literal_eval(forecast_input), list):
-                    forecast_input = ast.literal_eval(
-                        forecast_input
-                    )
+                if isinstance(forecast_input, str) and isinstance(
+                    ast.literal_eval(forecast_input), list
+                ):
+                    forecast_input = ast.literal_eval(forecast_input)
                     runtimeparams[forecast_key] = forecast_input
                 list_non_digits = [
                     x
@@ -1138,8 +1156,10 @@ async def build_config(
 
 
 async def build_legacy_config_params(
-    emhass_conf: dict, legacy_config: dict, logger: logging.Logger
-) -> dict:
+    emhass_conf: dict[str, pathlib.Path],
+    legacy_config: dict[str, str],
+    logger: logging.Logger,
+) -> dict[str, str]:
     """
     Build a config dictionary with legacy config_emhass.yaml file.
     Uses the associations file to convert parameter naming conventions (to config.json/config_defaults.json).
@@ -1201,18 +1221,18 @@ async def build_legacy_config_params(
     return config
 
 
-def param_to_config(param: dict, logger: logging.Logger) -> dict:
+def param_to_config(param: dict[str, dict], logger: logging.Logger) -> dict[str, str]:
     """
     A function that extracts the parameters from param back to the config.json format.
     Extracts parameters from config catagories.
     Attempts to exclude secrets hosed in retrieve_hass_conf.
 
     :param params: Built configuration parameters
-    :type param: dict
+    :type param: dict[str, dict]
     :param logger: The logger object
     :type logger: logging.Logger
     :return: The built config dictionary
-    :rtype: dict
+    :rtype: dict[str, str]
     """
     logger.debug("Converting param to config")
 
@@ -1242,13 +1262,13 @@ def param_to_config(param: dict, logger: logging.Logger) -> dict:
 
 
 async def build_secrets(
-    emhass_conf: dict,
+    emhass_conf: dict[str, pathlib.Path],
     logger: logging.Logger,
-    argument: dict | None = None,
+    argument: dict[str, str] | None = None,
     options_path: str | None = None,
     secrets_path: str | None = None,
-    no_response: bool | None = False,
-) -> tuple[dict, dict]:
+    no_response: bool = False,
+) -> tuple[dict[str, pathlib.Path], dict[str, str | float]]:
     """
     Retrieve and build parameters from secrets locations (ENV, ARG, Secrets file (secrets_emhass.yaml/options.json) and/or Home Assistant (via API))
     priority order (lwo to high) = Defaults (written in function), ENV, Options json file, Home Assistant API,  Secrets yaml file, Arguments
@@ -1269,138 +1289,6 @@ async def build_secrets(
     :rtype: Tuple[dict, dict]:
     """
     # Set defaults to be overwritten
-#     if argument is None:
-#         argument = {}
-
-#     params_secrets = {
-#         "hass_url": "https://myhass.duckdns.org/",
-#         "long_lived_token": "thatverylongtokenhere",
-#         "time_zone": "Europe/Paris",
-#         "Latitude": 45.83,
-#         "Longitude": 6.86,
-#         "Altitude": 4807.8,
-#         "solcast_api_key": "yoursecretsolcastapikey",
-#         "solcast_rooftop_id": "yourrooftopid",
-#         "solar_forecast_kwp": 5,
-#     }
-
-#     params_secrets = await _get_env_secrets(params_secrets)
-#     options = await _load_options(options_path, logger) if options_path else {}
-#     params_secrets = await _get_home_assistant_secrets(params_secrets, options, logger, no_response)
-#     params_secrets = await _get_options_secrets(params_secrets, options, logger)
-#     params_secrets = await _load_secrets_file(secrets_path, logger) if secrets_path else params_secrets
-#     params_secrets = _get_argument_secrets(params_secrets, argument, logger)
-
-#     return emhass_conf, params_secrets
-
-# async def _get_env_secrets(params_secrets: dict) -> dict:
-#     params_secrets["hass_url"] = os.getenv("EMHASS_URL", params_secrets["hass_url"])
-#     params_secrets["long_lived_token"] = os.getenv(
-#         "SUPERVISOR_TOKEN", params_secrets["long_lived_token"]
-#     )
-#     params_secrets["time_zone"] = os.getenv("TIME_ZONE", params_secrets["time_zone"])
-#     params_secrets["Latitude"] = float(os.getenv("LAT", params_secrets["Latitude"]))
-#     params_secrets["Longitude"] = float(os.getenv("LON", params_secrets["Longitude"]))
-#     params_secrets["Altitude"] = float(os.getenv("ALT", params_secrets["Altitude"]))
-#     return params_secrets
-
-# async def _load_options(options_path: str, logger: logging.Logger) -> dict:
-#     options = {}
-#     if options_path and pathlib.Path(options_path).is_file():
-#         async with aiofiles.open(options_path) as data:
-#             content = await data.read()
-#             options = orjson.loads(content)
-#     return options
-
-# async def _get_home_assistant_secrets(params_secrets: dict, options: dict, logger: logging.Logger, no_response: bool) -> dict:
-#     if not no_response and os.getenv("SUPERVISOR_TOKEN", None) is not None:
-#         params_secrets["long_lived_token"] = os.getenv("SUPERVISOR_TOKEN", None)
-#         url_from_options = options.get("hass_url", "empty")
-#         if url_from_options != "empty" and url_from_options != "":
-#             params_secrets["hass_url"] = url_from_options
-#         else:
-#             params_secrets["hass_url"] = "http://supervisor/core/api"
-#         headers = {
-#             "Authorization": "Bearer " + params_secrets["long_lived_token"],
-#             "content-type": "application/json",
-#         }
-#         async with aiohttp.ClientSession() as session:
-#             async with session.get(
-#                 params_secrets["hass_url"] + "/config", headers=headers
-#             ) as response:
-#                 if response.status < 400:
-#                     config_hass = await response.json()
-#                     params_secrets.update({
-#                         "time_zone": config_hass["time_zone"],
-#                         "Latitude": config_hass["latitude"],
-#                         "Longitude": config_hass["longitude"],
-#                         "Altitude": config_hass["elevation"],
-#                     })
-#                 else:
-#                     logger.warning("Error obtaining secrets from Home Assistant Supervisor API")
-#                     params_secrets = _update_from_options(params_secrets, options, logger)
-#     else:
-#         params_secrets = _update_from_options(params_secrets, options, logger)
-#     return params_secrets
-
-# def _update_from_options(params_secrets: dict, options: dict, logger: logging.Logger) -> dict:
-#     url_from_options = options.get("hass_url", "empty")
-#     key_from_options = options.get("long_lived_token", "empty")
-#     if url_from_options != "empty" and url_from_options != "":
-#         params_secrets["hass_url"] = url_from_options
-#     if key_from_options != "empty" and key_from_options != "":
-#         params_secrets["long_lived_token"] = key_from_options
-#     if options.get("time_zone", "empty") != "empty" and options["time_zone"] != "":
-#         params_secrets["time_zone"] = options["time_zone"]
-#     if options.get("Latitude") is not None and bool(options["Latitude"]):
-#         params_secrets["Latitude"] = options["Latitude"]
-#     if options.get("Longitude") is not None and bool(options["Longitude"]):
-#         params_secrets["Longitude"] = options["Longitude"]
-#     if options.get("Altitude") is not None and bool(options["Altitude"]):
-#         params_secrets["Altitude"] = options["Altitude"]
-#     return params_secrets
-
-# async def _get_options_secrets(params_secrets: dict, options: dict, logger: logging.Logger) -> dict:
-#     forecast_secrets = [
-#         "solcast_api_key",
-#         "solcast_rooftop_id",
-#         "solar_forecast_kwp",
-#     ]
-#     if any(x in forecast_secrets for x in list(options.keys())):
-#         logger.debug("Obtaining forecast secrets from options.json")
-#         if (
-#             options.get("solcast_api_key", "empty") != "empty"
-#             and options["solcast_api_key"] != ""
-#         ):
-#             params_secrets["solcast_api_key"] = options["solcast_api_key"]
-#         if (
-#             options.get("solcast_rooftop_id", "empty") != "empty"
-#             and options["solcast_rooftop_id"] != ""
-#         ):
-#             params_secrets["solcast_rooftop_id"] = options["solcast_rooftop_id"]
-#         if options.get("solar_forecast_kwp") and bool(
-#             options["solar_forecast_kwp"]
-#         ):
-#             params_secrets["solar_forecast_kwp"] = options["solar_forecast_kwp"]
-#     return params_secrets
-
-# async def _load_secrets_file(secrets_path: str, logger: logging.Logger) -> dict:
-#     params_secrets = {}
-#     if secrets_path and pathlib.Path(secrets_path).is_file():
-#         logger.debug("Obtaining secrets from secrets file")
-#         async with aiofiles.open(pathlib.Path(secrets_path)) as file:
-#             content = await file.read()
-#             params_secrets.update(yaml.safe_load(content))
-#     return params_secrets
-
-# def _get_argument_secrets(params_secrets: dict, argument: dict, logger: logging.Logger) -> dict:
-#     if argument.get("url") is not None:
-#         params_secrets["hass_url"] = argument["url"]
-#         logger.debug("Obtaining url from passed argument")
-#     if argument.get("key") is not None:
-#         params_secrets["long_lived_token"] = argument["key"]
-#         logger.debug("Obtaining long_lived_token from passed argument")
-#     return params_secrets
     if argument is None:
         argument = {}
     params_secrets = {
@@ -1445,10 +1333,7 @@ async def build_secrets(
                 emhass_conf["data_path"] = pathlib.Path(options["data_path"])
 
             # Check to use Home Assistant local API
-            if (
-                not no_response
-                and os.getenv("SUPERVISOR_TOKEN", None) is not None
-            ):
+            if not no_response and os.getenv("SUPERVISOR_TOKEN", None) is not None:
                 params_secrets["long_lived_token"] = os.getenv("SUPERVISOR_TOKEN", None)
                 # Use hass_url from options.json if available, otherwise use supervisor API for addon
                 if url_from_options != "empty" and url_from_options != "":
@@ -1481,7 +1366,9 @@ async def build_secrets(
                             logger.warning(
                                 "Error obtaining secrets from Home Assistant Supervisor API"
                             )
-                            logger.debug("Obtaining url and key secrets from options.json")
+                            logger.debug(
+                                "Obtaining url and key secrets from options.json"
+                            )
                             if url_from_options != "empty" and url_from_options != "":
                                 params_secrets["hass_url"] = url_from_options
                             if key_from_options != "empty" and key_from_options != "":
@@ -1570,24 +1457,27 @@ async def build_secrets(
 
 
 async def build_params(
-    emhass_conf: dict, params_secrets: dict, config: dict, logger: logging.Logger
-) -> dict:
+    emhass_conf: dict[str, pathlib.Path],
+    params_secrets: dict[str, str | float],
+    config: dict[str, str],
+    logger: logging.Logger,
+) -> dict[str, dict]:
     """
     Build the main params dictionary from the config and secrets
     Appends configuration catagories used by emhass to the parameters. (with use of the associations file as a reference)
 
     :param emhass_conf: Dictionary containing the needed emhass paths
-    :type emhass_conf: dict
+    :type emhass_conf: dict[str, pathlib.Path]
     :param params_secrets: The dictionary containing the built secret variables
-    :type params_secrets: dict
+    :type params_secrets: dict[str, str | float]
     :param config: The dictionary of built config parameters
-    :type config: dict
+    :type config: dict[str, str]
     :param logger: The logger object
     :type logger: logging.Logger
     :return: The built param dictionary
-    :rtype: dict
+    :rtype: dict[str, dict]
     """
-    if type(params_secrets) is not dict:
+    if not isinstance(params_secrets, dict):
         params_secrets = {}
 
     params = {}
@@ -1609,7 +1499,7 @@ async def build_params(
             "Unable to obtain the associations file (associations.csv) in: "
             + str(emhass_conf["associations_path"])
         )
-        return False
+        return {}
 
     # Association file key reference
     # association[0] = config catagories
@@ -1744,7 +1634,9 @@ async def build_params(
     # Configure secrets, set params to correct config categorie
     # retrieve_hass_conf
     params["retrieve_hass_conf"]["hass_url"] = params_secrets.get("hass_url")
-    params["retrieve_hass_conf"]["long_lived_token"] = params_secrets.get("long_lived_token")
+    params["retrieve_hass_conf"]["long_lived_token"] = params_secrets.get(
+        "long_lived_token"
+    )
     params["retrieve_hass_conf"]["time_zone"] = params_secrets.get("time_zone")
     params["retrieve_hass_conf"]["Latitude"] = params_secrets.get("Latitude")
     params["retrieve_hass_conf"]["Longitude"] = params_secrets.get("Longitude")
@@ -1807,24 +1699,27 @@ async def build_params(
 
 
 def check_def_loads(
-    num_def_loads: int, parameter: list[dict], default, parameter_name: str, logger
-):
+    num_def_loads: int,
+    parameter: list[dict],
+    default: str | float,
+    parameter_name: str,
+    logger: logging.Logger,
+) -> list[dict]:
     """
     Check parameter lists with deferrable loads number, if they do not match, enlarge to fit.
 
     :param num_def_loads: Total number deferrable loads
     :type num_def_loads: int
     :param parameter: parameter config dict containing paramater
-    :type: list[dict]
+    :type parameter: list[dict]
     :param default: default value for parameter to pad missing
-    :type: obj
+    :type default: str | int | float
     :param parameter_name: name of parameter
-    :type logger: str
+    :type parameter_name: str
     :param logger: The logger object
     :type logger: logging.Logger
-    return: parameter list
+    :return: parameter list
     :rtype: list[dict]
-
     """
     if (
         parameter.get(parameter_name, None) is not None
@@ -1842,14 +1737,14 @@ def check_def_loads(
     return parameter[parameter_name]
 
 
-def get_days_list(days_to_retrieve: int) -> pd.date_range:
+def get_days_list(days_to_retrieve: int) -> pd.DatetimeIndex:
     """
     Get list of past days from today to days_to_retrieve.
 
     :param days_to_retrieve: Total number of days to retrieve from the past
     :type days_to_retrieve: int
     :return: The list of days
-    :rtype: pd.date_range
+    :rtype: pd.DatetimeIndex
 
     """
     today = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)

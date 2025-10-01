@@ -87,25 +87,310 @@ class RetrieveHass:
         # self.auto_cleanup = auto_cleanup
 
         # Internal state
-        self._client = None
 
         # For compatibility with existing code
         self.var_list = []
+        self.use_websocket = self.params.get("retrieve_hass_conf", {}).get(
+            "use_websocket", False
+        )
+        if self.use_websocket:
+            self._client = None
         self.df_final = pd.DataFrame()
         self.df_weather = pd.DataFrame()
         self.df_forecast = pd.DataFrame()
-    async def get_ha_config(self) -> dict[str, Any]:
-        """Get Home Assistant configuration."""
+
+    async def get_ha_config(self):
+        """
+        Extract some configuration data from HA.
+
+        """
+        if self.use_websocket is True:
+            return await self.get_ha_config_websocket()
+        self.logger.info("get HA config from rest api.")
+        headers = {
+            "Authorization": "Bearer " + self.long_lived_token,
+            "content-type": "application/json",
+        }
+        if self.hass_url == "http://supervisor/core/api":
+            url = self.hass_url + "/config"
+        else:
+            if self.hass_url[-1] != "/":
+                self.logger.warning(
+                    "Missing slash </> at the end of the defined URL, appending a slash but please fix your URL"
+                )
+                self.hass_url = self.hass_url + "/"
+            url = self.hass_url + "api/config"
+
         try:
-            self._client = await get_websocket_client(self.hass_url, self.long_lived_token)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as response:
+                    response.raise_for_status()
+                    data = await response.read()
+        except aiohttp.ClientError:
+            self.logger.error("Unable to access Home Assistant instance, check URL")
+            self.logger.error("If using addon, try setting url and token to 'empty'")
+            return False
+        try:
+            self.ha_config = orjson.loads(data)
+        except Exception:
+            self.logger.error(
+                "EMHASS was unable to obtain configuration data from Home Assistant"
+            )
+            return False
+
+    async def get_ha_config_websocket(self) -> dict[str, Any]:
+        """Get Home Assistant configuration."""
+        self.logger.info("get HA config from websocket")
+        try:
+            self._client = await get_websocket_client(
+                self.hass_url, self.long_lived_token, self.logger
+            )
+            self.ha_config = await self._client.get_config()
+            return self.ha_config
         except Exception as e:
-            self.logger.error(f"Websocket connection error: {e}")
+            self.logger.error(
+                f"EMHASS was unable to obtain configuration data from Home Assistant through websocket: {e}"
+            )
             raise
 
-        self.ha_config = await self._client.get_config()
-
-    # @profile
     async def get_data(
+        self,
+        days_list: pd.date_range,
+        var_list: list,
+        minimal_response: bool | None = False,
+        significant_changes_only: bool | None = False,
+        test_url: str | None = "empty",
+    ) -> None:
+        r"""
+        Retrieve the actual data from hass.
+
+        :param days_list: A list of days to retrieve. The ISO format should be used \
+            and the timezone is UTC. The frequency of the data_range should be freq='D'
+        :type days_list: pandas.date_range
+        :param var_list: The list of variables to retrive from hass. These should \
+            be the exact name of the sensor in Home Assistant. \
+            For example: ['sensor.home_load', 'sensor.home_pv']
+        :type var_list: list
+        :param minimal_response: Retrieve a minimal response using the hass \
+            restful API, defaults to False
+        :type minimal_response: bool, optional
+        :param significant_changes_only: Retrieve significant changes only \
+            using the hass restful API, defaults to False
+        :type significant_changes_only: bool, optional
+        :return: The DataFrame populated with the retrieved data from hass
+        :rtype: pandas.DataFrame
+
+        .. warning:: The minimal_response and significant_changes_only options \
+            are experimental
+        """
+        # Use WebSockets if configured, otherwise use Home Assistant REST API
+        if self.use_websocket:
+            self.logger.info("Using WebSocket connection for data retrieval")
+            success = await self.get_data_websocket(days_list, var_list)
+            if not success:
+                self.logger.warning(
+                    "WebSocket data retrieval failed, falling back to REST API"
+                )
+                # Fall back to REST API if websocket fails
+                return await self._get_data_rest_api(
+                    days_list,
+                    var_list,
+                    minimal_response,
+                    significant_changes_only,
+                    test_url,
+                )
+            return success
+
+        self.logger.info("Using REST API for data retrieval")
+        return await self._get_data_rest_api(
+            days_list, var_list, minimal_response, significant_changes_only, test_url
+        )
+
+    async def _get_data_rest_api(
+        self,
+        days_list: pd.date_range,
+        var_list: list,
+        minimal_response: bool | None = False,
+        significant_changes_only: bool | None = False,
+        test_url: str | None = "empty",
+    ) -> bool:
+        """Internal method to handle REST API data retrieval."""
+        self.logger.info("Retrieve hass get data method initiated...")
+        headers = {
+            "Authorization": "Bearer " + self.long_lived_token,
+            "content-type": "application/json",
+        }
+        # Remove empty strings from var_list
+        var_list = [var for var in var_list if var != ""]
+        # Looping on each day from days list
+        self.df_final = pd.DataFrame()
+        x = 0  # iterate based on days
+
+        async with aiohttp.ClientSession() as session:
+            for day in days_list:
+                for i, var in enumerate(var_list):
+                    if test_url == "empty":
+                        if (
+                            self.hass_url == "http://supervisor/core/api"
+                        ):  # If we are using the supervisor API
+                            url = (
+                                self.hass_url
+                                + "/history/period/"
+                                + day.isoformat()
+                                + "?filter_entity_id="
+                                + var
+                            )
+                        else:  # Otherwise the Home Assistant Core API it is
+                            if self.hass_url[-1] != "/":
+                                self.logger.warning(
+                                    "Missing slash </> at the end of the defined URL, appending a slash but please fix your URL"
+                                )
+                                self.hass_url = self.hass_url + "/"
+                            url = (
+                                self.hass_url
+                                + "api/history/period/"
+                                + day.isoformat()
+                                + "?filter_entity_id="
+                                + var
+                            )
+                        if minimal_response:  # A support for minimal response
+                            url = url + "?minimal_response"
+                        if significant_changes_only:  # And for signicant changes only (check the HASS restful API for more info)
+                            url = url + "?significant_changes_only"
+                    else:
+                        url = test_url
+
+                    try:
+                        async with session.get(url, headers=headers) as response:
+                            if response.status == 401:
+                                self.logger.error(
+                                    "Unable to access Home Assistant instance, TOKEN/KEY"
+                                )
+                                self.logger.error(
+                                    "If using addon, try setting url and token to 'empty'"
+                                )
+                                return False
+                            if response.status > 299:
+                                self.logger.error(
+                                    f"Home assistant request GET error: {response.status} for var {var}"
+                                )
+                                return False
+
+                            raw_data = await response.read()
+                            data_list = orjson.loads(raw_data)
+
+                    except aiohttp.ClientError:
+                        self.logger.error(
+                            "Unable to access Home Assistant instance, check URL"
+                        )
+                        self.logger.error(
+                            "If using addon, try setting url and token to 'empty'"
+                        )
+                        return False
+
+                    """import bz2 # Uncomment to save a serialized data for tests
+                    import _pickle as cPickle
+                    with bz2.BZ2File("data/test_response_get_data_get_method.pbz2", "w") as f:
+                        cPickle.dump(response, f)"""
+
+                    try:  # Sometimes when there are connection problems we need to catch empty retrieved json
+                        data = data_list[0]
+                    except IndexError:
+                        if x == 0:
+                            self.logger.error(
+                                "The retrieved JSON is empty, A sensor:"
+                                + var
+                                + " may have 0 days of history, passed sensor may not be correct, or days to retrieve is set too high. Check your Logger configuration, ensuring the sensors are in the include list."
+                            )
+                        else:
+                            self.logger.error(
+                                "The retrieved JSON is empty for day:"
+                                + str(day)
+                                + ", days_to_retrieve may be larger than the recorded history of sensor:"
+                                + var
+                                + " (check your recorder settings)"
+                            )
+                        return False
+
+                    df_raw = pd.DataFrame.from_dict(data)
+                    if len(df_raw) == 0:
+                        if x == 0:
+                            self.logger.error(
+                                "The retrieved Dataframe is empty, A sensor:"
+                                + var
+                                + " may have 0 days of history or passed sensor may not be correct"
+                            )
+                        else:
+                            self.logger.error(
+                                "Retrieved empty Dataframe for day:"
+                                + str(day)
+                                + ", days_to_retrieve may be larger than the recorded history of sensor:"
+                                + var
+                                + " (check your recorder settings)"
+                            )
+                        return False
+
+                    if (
+                        len(df_raw) < ((60 / (self.freq.seconds / 60)) * 24)
+                        and x != len(days_list) - 1
+                    ):  # check if there is enough Dataframes for passed frequency per day (not inc current day)
+                        self.logger.debug(
+                            "sensor:"
+                            + var
+                            + " retrieved Dataframe count: "
+                            + str(len(df_raw))
+                            + ", on day: "
+                            + str(day)
+                            + ". This is less than freq value passed: "
+                            + str(self.freq)
+                        )
+
+                    if i == 0:  # Defining the DataFrame container
+                        from_date = pd.to_datetime(
+                            df_raw["last_changed"], format="ISO8601"
+                        ).min()
+                        to_date = pd.to_datetime(
+                            df_raw["last_changed"], format="ISO8601"
+                        ).max()
+                        ts = pd.to_datetime(
+                            pd.date_range(start=from_date, end=to_date, freq=self.freq),
+                            format="%Y-%d-%m %H:%M",
+                        ).round(
+                            self.freq, ambiguous="infer", nonexistent="shift_forward"
+                        )
+                        df_day = pd.DataFrame(index=ts)
+
+                    # Caution with undefined string data: unknown, unavailable, etc.
+                    df_tp = (
+                        df_raw.copy()[["state"]]
+                        .replace(["unknown", "unavailable", ""], np.nan)
+                        .astype(float)
+                        .rename(columns={"state": var})
+                    )
+                    # Setting index, resampling and concatenation
+                    df_tp.set_index(
+                        pd.to_datetime(df_raw["last_changed"], format="ISO8601"),
+                        inplace=True,
+                    )
+                    df_tp = df_tp.resample(self.freq).mean()
+                    df_day = pd.concat([df_day, df_tp], axis=1)
+
+                self.df_final = pd.concat([self.df_final, df_day], axis=0)
+                x += 1
+
+        self.df_final = set_df_index_freq(self.df_final)
+        if self.df_final.index.freq != self.freq:
+            self.logger.error(
+                "The inferred freq:"
+                + str(self.df_final.index.freq)
+                + " from data is not equal to the defined freq in passed:"
+                + str(self.freq)
+            )
+            return False
+        self.var_list = var_list
+        return True
+
+    async def get_data_websocket(
         self,
         days_list: pd.date_range,
         var_list: list[str],
@@ -123,11 +408,11 @@ class RetrieveHass:
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
         """
-        self.logger.info("Retrieve hass get data method initiated...")
+        self.logger.info("Retrieve hass websocket get data method initiated...")
         try:
             self._client = await asyncio.wait_for(
                 get_websocket_client(self.hass_url, self.long_lived_token, self.logger),
-                timeout=20.0
+                timeout=20.0,
             )
         except TimeoutError:
             self.logger.error("WebSocket connection timed out")
@@ -156,21 +441,23 @@ class RetrieveHass:
                     start_time=start_time,
                     end_time=end_time,
                     statistic_ids=var_list,
-                    period="5minute"
+                    period="5minute",
                 ),
-                timeout=30.0
+                timeout=30.0,
             )
 
             # Convert statistics data to DataFrame
             self.df_final = self._convert_statistics_to_dataframe(stats_data, var_list)
 
             t1 = time.time()
-            self.logger.info(f"Statistics data retrieval for {len(days_list):.2f} days took {t1 - t0:.2f} seconds")
+            self.logger.info(f"Statistics data retrieval took {t1 - t0:.2f} seconds")
 
             return not self.df_final.empty
 
         except Exception as e:
             self.logger.error(f"Failed to get data via WebSocket: {e}")
+            return False
+
     def prepare_data(
         self,
         var_load: str,
@@ -338,7 +625,11 @@ class RetrieveHass:
         dont_post: bool | None = False,
     ) -> None:
         r"""
-        Post passed data to hass.
+        Post passed data to hass using REST API.
+
+        .. note:: This method ALWAYS uses the REST API for posting data to Home Assistant,
+                  regardless of the use_websocket setting. WebSocket is only used for
+                  data retrieval, not for publishing/posting data.
 
         :param data_df: The DataFrame containing the data that will be posted \
             to hass. This should be a one columns DF or a series.
@@ -366,8 +657,12 @@ class RetrieveHass:
         :type dont_post: bool, optional
 
         """
+        self.logger.debug(
+            f"Starting post_data for entity_id: {entity_id}, dont_post: {dont_post}"
+        )
         # Add a possible prefix to the entity ID
         entity_id = entity_id.replace("sensor.", "sensor." + publish_prefix)
+        self.logger.debug(f"Entity ID with prefix: {entity_id}")
         # Set the URL
         if (
             self.hass_url == "http://supervisor/core/api"
@@ -507,23 +802,38 @@ class RetrieveHass:
                     "friendly_name": friendly_name,
                 },
             }
+        self.logger.debug(
+            f"Prepared data for {entity_id}: state={state}, type_var={type_var}"
+        )
         # Actually post the data
         if self.get_data_from_file or dont_post:
-
-            class response:
-                pass
-
-            response.status_code = 200
-            response.ok = True
+            # Create mock response for file mode or dont_post mode
+            self.logger.debug(
+                f"Skipping actual POST (get_data_from_file={self.get_data_from_file}, dont_post={dont_post})"
+            )
+            response_ok = True
+            response_status_code = 200
         else:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, data=orjson.dumps(data).decode("utf-8")) as response:
-                    # Store response data since we need to access it after the context manager
-                    response_ok = response.ok
-                    response_status_code = response.status
+            # Always use REST API for posting data, regardless of use_websocket setting
+            self.logger.debug(f"Posting data to URL: {url}")
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        url, headers=headers, data=orjson.dumps(data).decode("utf-8")
+                    ) as response:
+                        # Store response data since we need to access it after the context manager
+                        response_ok = response.ok
+                        response_status_code = response.status
+                        self.logger.debug(
+                            f"HTTP POST response: ok={response_ok}, status={response_status_code}"
+                        )
+            except Exception as e:
+                self.logger.error(f"Failed to post data to {entity_id}: {e}")
+                response_ok = False
+                response_status_code = 500
 
         # Treating the response status and posting them on the logger
-        if response.ok:
+        if response_ok:
             if logger_levels == "DEBUG" or dont_post:
                 self.logger.debug(
                     "Successfully posted to " + entity_id + " = " + str(state)
@@ -545,8 +855,12 @@ class RetrieveHass:
                     index="timestamp", orient="index", date_unit="s", date_format="iso"
                 )
                 parsed = orjson.loads(result)
-                async with aiofiles.open(entities_path / (entity_id + ".json"), "w") as file:
-                    await file.write(orjson.dumps(parsed, option=orjson.OPT_INDENT_2).decode())
+                async with aiofiles.open(
+                    entities_path / (entity_id + ".json"), "w"
+                ) as file:
+                    await file.write(
+                        orjson.dumps(parsed, option=orjson.OPT_INDENT_2).decode()
+                    )
 
                 # Save the required metadata to json file
                 metadata_path = entities_path / "metadata.json"
@@ -569,21 +883,30 @@ class RetrieveHass:
                     }
 
                     # Find lowest frequency to set for continual loop freq
-                    if metadata.get("lowest_time_step", None) is None or metadata[
+                    if metadata.get("lowest_time_step") is None or metadata[
                         "lowest_time_step"
                     ] > int(self.freq.seconds / 60):
                         metadata["lowest_time_step"] = int(self.freq.seconds / 60)
-                    await file.write(orjson.dumps(metadata, option=orjson.OPT_INDENT_2).decode())
+                    await file.write(
+                        orjson.dumps(metadata, option=orjson.OPT_INDENT_2).decode()
+                    )
 
                     self.logger.debug("Saved " + entity_id + " to json file")
 
         else:
             self.logger.warning(
-                "The status code for received curl command response is: "
-                + str(response.status_code if self.get_data_from_file or dont_post else response_status_code)
+                f"Failed to post data to {entity_id}. Status code: {response_status_code}"
             )
-        return response, data
 
+        # Create a response object to maintain compatibility
+        class MockResponse:
+            def __init__(self, ok, status_code):
+                self.ok = ok
+                self.status_code = status_code
+
+        mock_response = MockResponse(response_ok, response_status_code)
+        self.logger.debug(f"Completed post_data for {entity_id}")
+        return mock_response, data
 
     def _load_data_from_file(self) -> pd.DataFrame:
         """Load data from pickle file (unchanged from original)."""
@@ -601,122 +924,8 @@ class RetrieveHass:
         else:
             raise FileNotFoundError(f"Data file not found: {pickle_file}")
 
-    # def _convert_history_to_dataframe(
-    #     self,
-    #     history_data: list[list[dict[str, Any]]],
-    #     var_list: list[str]
-    # ) -> pd.DataFrame:
-    #     """Convert WebSocket history data to DataFrame."""
-
-    #     import numpy as np
-    #     import pandas as pd
-
-    #     # Initialize empty DataFrame with DatetimeIndex
-    #     df_final = pd.DataFrame()
-
-    #     # Check if we have any data
-    #     if not history_data:
-    #         self.logger.warning("No history data received")
-    #         return df_final
-
-    #     # Process each entity's history
-    #     for i, entity_history in enumerate(history_data):
-    #         if i >= len(var_list):
-    #             break
-
-    #         entity_id = var_list[i]
-
-    #         if not entity_history:
-    #             self.logger.warning(f"No history data for {entity_id}")
-    #             continue
-
-    #         # Convert to DataFrame
-    #         entity_data = []
-    #         for state in entity_history:
-    #             try:
-    #                 # Handle both string and dict formats
-    #                 if isinstance(state, str):
-    #                     # Skip string entries that are not state objects
-    #                     continue
-
-    #                 # Handle WebSocket compressed state format
-    #                 if "last_changed" in state:
-    #                     # REST API format
-    #                     timestamp = pd.to_datetime(state["last_changed"])
-    #                     value = state["state"]
-    #                 elif "last_updated" in state:
-    #                     # WebSocket compressed format - use timestamp
-    #                     if isinstance(state["last_updated"], (int, float)):
-    #                         timestamp = pd.to_datetime(state["last_updated"], unit="s")
-    #                     else:
-    #                         timestamp = pd.to_datetime(state["last_updated"])
-    #                     value = state["state"]
-    #                 elif "lu" in state:
-    #                     # WebSocket compressed format - 'lu' = last_updated, 's' = state
-    #                     if isinstance(state["lu"], (int, float)):
-    #                         timestamp = pd.to_datetime(state["lu"], unit="s")
-    #                     else:
-    #                         timestamp = pd.to_datetime(state["lu"])
-    #                     value = state["s"]
-    #                 else:
-    #                     # Skip if no timestamp available
-    #                     continue
-
-    #                 # Try to convert to numeric
-    #                 try:
-    #                     value = float(value)
-    #                 except (ValueError, TypeError):
-    #                     # Handle non-numeric states
-    #                     if value in ["on", "off"]:
-    #                         value = 1 if value == "on" else 0
-    #                     elif value in ["unknown", "unavailable", ""]:
-    #                         value = np.nan
-    #                     else:
-    #                         continue
-
-    #                 entity_data.append({
-    #                     "timestamp": timestamp,
-    #                     entity_id: value
-    #                 })
-    #             except (KeyError, ValueError, TypeError) as e:
-    #                 self.logger.debug(f"Skipping invalid state for {entity_id}: {e}")
-    #                 continue
-
-    #         if entity_data:
-    #             entity_df = pd.DataFrame(entity_data)
-    #             entity_df.set_index("timestamp", inplace=True)
-
-    #             if df_final.empty:
-    #                 df_final = entity_df
-    #             else:
-    #                 df_final = df_final.join(entity_df, how="outer")
-
-    #     # Process the final DataFrame
-    #     if not df_final.empty:
-    #         # Ensure timezone awareness
-    #         if df_final.index.tz is None:
-    #             df_final.index = df_final.index.tz_localize(self.time_zone)
-    #         else:
-    #             df_final.index = df_final.index.tz_convert(self.time_zone)
-
-    #         # Sort by index
-    #         df_final = df_final.sort_index()
-
-    #         # Resample to frequency
-    #         df_final = df_final.resample(self.freq).mean()
-
-    #         # Forward fill missing values
-    #         df_final = df_final.ffill()
-
-    #         # Set frequency for the DataFrame index
-    #         df_final = set_df_index_freq(df_final)
-
-    #     return df_final
-
     def _convert_statistics_to_dataframe(
-        self,
-        stats_data: dict[str, Any],
-        var_list: list[str]
+        self, stats_data: dict[str, Any], var_list: list[str]
     ) -> pd.DataFrame:
         """Convert WebSocket statistics data to DataFrame."""
         import pandas as pd
@@ -734,17 +943,15 @@ class RetrieveHass:
 
             entity_stats = stats_data[entity_id]
 
-
             if not entity_stats:
                 continue
 
             # Convert statistics to DataFrame
             entity_data = []
-            for i, stat in enumerate(entity_stats):
+            for _i, stat in enumerate(entity_stats):
                 try:
-
                     # Handle timestamp from start time (milliseconds or ISO string)
-                    if isinstance(stat["start"], (int, float)):
+                    if isinstance(stat["start"], int | float):
                         # Convert from milliseconds to datetime with UTC timezone
                         timestamp = pd.to_datetime(stat["start"], unit="ms", utc=True)
                     else:
@@ -765,17 +972,19 @@ class RetrieveHass:
                     if value is not None:
                         try:
                             value = float(value)
-                            entity_data.append({
-                                "timestamp": timestamp,
-                                entity_id: value
-                            })
+                            entity_data.append(
+                                {"timestamp": timestamp, entity_id: value}
+                            )
                         except (ValueError, TypeError):
-                            self.logger.debug(f"Could not convert value to float: {value}")
+                            self.logger.debug(
+                                f"Could not convert value to float: {value}"
+                            )
 
                 except (KeyError, ValueError, TypeError) as e:
-                    self.logger.debug(f"Skipping invalid statistic for {entity_id}: {e}")
+                    self.logger.debug(
+                        f"Skipping invalid statistic for {entity_id}: {e}"
+                    )
                     continue
-
 
             if entity_data:
                 entity_df = pd.DataFrame(entity_data)
@@ -791,7 +1000,9 @@ class RetrieveHass:
             # Ensure timezone awareness - timestamps should already be UTC from conversion above
             if df_final.index.tz is None:
                 # If somehow still naive, localize as UTC first then convert
-                df_final.index = df_final.index.tz_localize("UTC").tz_convert(self.time_zone)
+                df_final.index = df_final.index.tz_localize("UTC").tz_convert(
+                    self.time_zone
+                )
             else:
                 # Convert from existing timezone to target timezone
                 df_final.index = df_final.index.tz_convert(self.time_zone)
@@ -801,11 +1012,9 @@ class RetrieveHass:
 
             # Resample to frequency if needed
             try:
-                original_shape = df_final.shape
                 df_final = df_final.resample(self.freq).mean()
             except Exception as e:
                 self.logger.warning(f"Could not resample data to {self.freq}: {e}")
-
 
             # Forward fill missing values
             df_final = df_final.ffill()
