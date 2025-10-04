@@ -381,8 +381,8 @@ class Forecast:
                 data_15min = pd.DataFrame.from_dict(data_raw["minutely_15"])
                 # Date/times in the Open-Meteo JSON are now unix timestamps and need to
                 # be converted locally to DST/TimeZone aware date/times.
-                data_15min["time"] = pd.to_datetime(data_15min["time"], unit='s', utc=True)
-                data_15min['time'] = data_15min['time'].dt.tz_convert(self.time_zone)
+                data_15min["time"] = pd.to_datetime(data_15min["time"], unit="s", utc=True)
+                data_15min["time"] = data_15min["time"].dt.tz_convert(self.time_zone)
                 data_15min.set_index("time", inplace=True)
 
                 data_15min = data_15min.rename(
