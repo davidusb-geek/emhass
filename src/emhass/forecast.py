@@ -256,8 +256,10 @@ class Forecast:
         else:
             forecast_days = forecast_days + 1
 
+        # The addition of -b.json file name suffix is because the time format
+        # has changed, and it avoids any attempt to use the old format file.
         json_path = os.path.abspath(
-            self.emhass_conf["data_path"] / "cached-open-meteo-forecast.json"
+            self.emhass_conf["data_path"] / "cached-open-meteo-forecast-b.json"
         )
         # The cached JSON file is always loaded, if it exists, as it is also a fallback
         # in case the REST API call to Open-Meteo fails - the cached JSON will continue to
@@ -289,6 +291,9 @@ class Forecast:
         if not use_cache:
             self.logger.info("Fetching a new weather forecast from Open-Meteo")
             headers = {"User-Agent": "EMHASS", "Accept": "application/json"}
+            # Open-Meteo has returned non-existent time over DST transitions,
+            # so we now return unix timestamps and convert to date/times locally
+            # instead.
             url = (
                 "https://api.open-meteo.com/v1/forecast?"
                 + "latitude="
@@ -308,6 +313,7 @@ class Forecast:
                 + str(forecast_days)
                 + "&timezone="
                 + quote(str(self.time_zone), safe="")
+                + "&timeformat=unixtime"
             )
             try:
                 self.logger.debug("Fetching data from Open-Meteo using URL: %s", url)
@@ -373,9 +379,11 @@ class Forecast:
                     self.optim_conf["delta_forecast_daily"].days,
                 )
                 data_15min = pd.DataFrame.from_dict(data_raw["minutely_15"])
-                data_15min["time"] = pd.to_datetime(data_15min["time"])
+                # Date/times in the Open-Meteo JSON are now unix timestamps and need to
+                # be converted locally to DST/TimeZone aware date/times.
+                data_15min["time"] = pd.to_datetime(data_15min["time"], unit='s', utc=True)
+                data_15min['time'] = data_15min['time'].dt.tz_convert(self.time_zone)
                 data_15min.set_index("time", inplace=True)
-                data_15min.index = data_15min.index.tz_localize(self.time_zone)
 
                 data_15min = data_15min.rename(
                     columns={
@@ -389,6 +397,13 @@ class Forecast:
                         "direct_normal_irradiance_instant": "dni",
                     }
                 )
+
+                # Save a CSV copy of the Open Meteo weather data when debugging
+                if self.logger.isEnabledFor(logging.DEBUG):
+                    data_15min.to_csv(
+                        self.emhass_conf["data_path"]
+                        / "debug-weather-forecast-open-meteo.csv"
+                    )
 
                 data = data_15min.reindex(self.forecast_dates)
                 data.interpolate(
