@@ -38,6 +38,7 @@ dependencies = [
     "waitress>=3.0.2",
     "plotly>=6.0.0",
     "gunicorn>=23.0.0",
+    "influxdb>=5.3.1",
 ]
 [build-system]
 requires = ["hatchling"]
