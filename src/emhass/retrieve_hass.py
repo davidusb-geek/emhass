@@ -709,11 +709,12 @@ class RetrieveHass:
         friendly_name: str,
         list_name: str,
         state: float,
+        decimals: int = 2,
     ) -> dict:
         list_df = copy.deepcopy(data_df).loc[data_df.index[idx] :].reset_index()
         list_df.columns = ["timestamps", entity_id]
         ts_list = [str(i) for i in list_df["timestamps"].tolist()]
-        vals_list = [str(np.round(i, 2)) for i in list_df[entity_id].tolist()]
+        vals_list = [str(np.round(i, decimals)) for i in list_df[entity_id].tolist()]
         forecast_list = []
         for i, ts in enumerate(ts_list):
             datum = {}
@@ -721,7 +722,7 @@ class RetrieveHass:
             datum[entity_id.split("sensor.")[1]] = vals_list[i]
             forecast_list.append(datum)
         data = {
-            "state": f"{state:.2f}",
+            "state": f"{state:.{decimals}f}",
             "attributes": {
                 "device_class": device_class,
                 "unit_of_measurement": unit_of_measurement,
@@ -866,6 +867,7 @@ class RetrieveHass:
                 friendly_name,
                 "unit_load_cost_forecasts",
                 state,
+                decimals=4,
             )
         elif type_var == "unit_prod_price":
             data = RetrieveHass.get_attr_data_dict(
@@ -877,6 +879,7 @@ class RetrieveHass:
                 friendly_name,
                 "unit_prod_price_forecasts",
                 state,
+                decimals=4,
             )
         elif type_var == "mlforecaster":
             data = RetrieveHass.get_attr_data_dict(
