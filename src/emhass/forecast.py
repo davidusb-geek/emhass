@@ -243,13 +243,13 @@ class Forecast:
 
         # Ensure at least 3 weather forecast days (and 1 more than requested)
         if forecast_days is None:
-            self.logger.warning(
+            self.logger.debug(
                 "Open-Meteo forecast_days is missing so defaulting to 3 days"
             )
             forecast_days = 3
         elif forecast_days < 3:
-            self.logger.warning(
-                "Open-Meteo forecast_days is too low (%s) so defaulting to 3 days",
+            self.logger.debug(
+                "Open-Meteo forecast_days is low (%s) so defaulting to 3 days",
                 forecast_days,
             )
             forecast_days = 3
