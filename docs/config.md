@@ -24,6 +24,14 @@ We will need to define these parameters to retrieve data from Home Assistant. Th
 	- 'sensor.power_load_no_var_loads'
 - `method_ts_round`: Set the method for timestamp rounding, options are: first, last and nearest.
 - `continual_publish`: set to True to save entities to .json after an optimization run. Then automatically republish the saved entities *(with updated current state value)* every `optimization_time_step` minutes. *entity data saved to data_path/entities.*
+- `use_influxdb`: Enable InfluxDB as a data source instead of the Home Assistant API. This allows for longer historical data retention and better performance for machine learning models.
+- `influxdb_host`: The IP address or hostname of your InfluxDB instance. Defaults to `localhost`.
+- `influxdb_port`: The port number for your InfluxDB instance. Defaults to 8086.
+- `influxdb_username`: Username for authenticating with InfluxDB. Leave empty if no authentication is required.
+- `influxdb_password`: Password for authenticating with InfluxDB. Leave empty if no authentication is required.
+- `influxdb_database`: The name of the InfluxDB database containing your Home Assistant data. Defaults to `homeassistant`.
+- `influxdb_measurement`: The measurement name where your sensor data is stored. Defaults to `W` for the Home Assistant integration.
+- `influxdb_retention_policy`: The retention policy to use for InfluxDB queries. Defaults to `autogen`.
 
 A second part of this section is given by some privacy-sensitive parameters that should be included in a `secrets_emhass.yaml` file alongside the `config_emhass.yaml` file.
 
