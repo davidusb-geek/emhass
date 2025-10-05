@@ -5,14 +5,14 @@ email, or any other method with the owners of this repository before making a ch
 
 Please note we have a code of conduct, please follow it in all your interactions with the project.
 
-# Setup
+## Setup
 
 There are multiple different approaches to developing for EMHASS.  
 The choice depends on your and preference (Python venv/DevContainer/Docker).  
 Below are some development workflow examples:  
 _Note: It is preferred to run the actions and unittest once before submitting and pull request._
 
-## Step 1 - Fork
+### Step 1 - Fork
 
 _With your preferred Git tool of choice:_  
 Fork the EMHASS github repository into your own account, then clone the forked repository into your local development platform. (ie. PC or Codespace)
@@ -27,11 +27,11 @@ cd emhass
 git remote add upstream https://github.com/davidusb-geek/emhass.git
 ```
 
-## Step 2 - Develop
+### Step 2 - Develop
 
 To develop and test code choose one of the following methods:
 
-### Method 1 - Python Virtual Environment
+#### Method 1 - Python Virtual Environment
 
 We can use python virtual environments to build, develop and test/unittest the code.
 
@@ -106,7 +106,7 @@ emhass --action 'dayahead-optim' --config ./config.json --root ./src/emhass --co
 pytest
 ```
 
-### Method 2: VS-Code Debug and Run via Dev Container
+#### Method 2: VS-Code Debug and Run via Dev Container
 
 In VS-Code, you can run a Docker Dev Container to set up a virtual environment. The Dev Container's Container will be almost identical to the one build for EMHASS (Docker/Add-on). There you can edit and test EMHASS.
 
@@ -233,7 +233,7 @@ docker build -t emhass/test --build-arg build_version=addon-local .
 docker run -it -p 5000:5000 --name emhass-test -e EMHASS_KEY -e EMHASS_URL -e TIME_ZONE -e LAT -e LON -e ALT emhass/test
 ```
 
-### Example Docker testing pipeline 
+#### Example Docker testing pipeline 
 The following pipeline will run unittest and most of the EMHASS actions. This may be a good option for those who wish to test their changes against the production EMHASS environment.
 
 *Linux:*  
@@ -284,7 +284,7 @@ docker exec emhass-test python3 -m unittest discover -s ./tests -p 'test_*.py' |
 User may wish to re-test with tweaked parameters such as `lp_solver`, `weather_forecast_method` and `load_forecast_method`, in `config.json` to broaden the testing scope. 
 *See [Differences](https://emhass.readthedocs.io/en/latest/differences.html) for more information on how the different methods of running EMHASS differ.*
 
-### Adding a parameter
+#### Adding a parameter
 When enhancing EMHASS, users may like to add or modify the EMHASS parameters. To add a new parameter see the following steps:
 
 *Example parameter = `this_parameter_is_amazing`*
@@ -340,7 +340,7 @@ If you are only adding another option for a existing parameter, editing param_de
 },
 ```
 
-## Step 3 - Pull request
+### Step 3 - Pull request
 
 Once developed, commit your code, and push the commit to your fork on Github.
 Once ready, submit a pull request with your fork to the [davidusb-geek/emhass@master](https://github.com/davidusb-geek/emhass) repository.
