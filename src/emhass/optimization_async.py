@@ -209,7 +209,7 @@ class Optimization:
 
         """
         with self._memory_cleanup_context("main_optimization"):
-            # Prepare some data in the case of a battery - ORIGINEEL
+            # Prepare some data in the case of a battery
             if self.optim_conf["set_use_battery"]:
                 if soc_init is None:
                     if soc_final is not None:
@@ -225,7 +225,7 @@ class Optimization:
                     f"Battery usage enabled. Initial SOC: {soc_init}, Final SOC: {soc_final}"
                 )
 
-            # If def_total_timestep os set, bypass def_total_hours - ORIGINEEL
+            # If def_total_timestep os set, bypass def_total_hours
             if def_total_timestep is not None:
                 def_total_hours = [0 if x != 0 else x for x in def_total_hours]
             elif def_total_hours is None:
@@ -255,14 +255,14 @@ class Optimization:
                 num_deferrable_loads - len(def_end_timestep)
             )
 
-            #### The LP problem using Pulp #### - ORIGINEEL MAAR MET MEMORY CLEANUP
+            #### The LP problem using Pulp ####
             opt_model = plp.LpProblem("LP_Model", plp.LpMaximize)
 
             n = len(data_opt.index)
             set_I = range(n)
             M = 10e10
 
-            ## Add decision variables - ORIGINEEL
+            ## Add decision variables
             P_grid_neg = {
                 (i): plp.LpVariable(
                     cat="Continuous",
@@ -284,7 +284,7 @@ class Optimization:
             P_deferrable = []
             P_def_bin1 = []
             for k in range(num_deferrable_loads):
-                # Memory cleanup elke 10 loads
+                # Memory cleanup every 10 loads
                 if k > 0 and k % 10 == 0:
                     gc.collect()
 
@@ -379,10 +379,10 @@ class Optimization:
                 for i in set_I
             }
 
-            # Memory cleanup na variabele creatie
+            # Memory cleanup after variabele creation
             gc.collect()
 
-            ## Define objective - VOLLEDIG ORIGINEEL
+            ## Define objective
             P_def_sum = []
             for i in set_I:
                 P_def_sum.append(
@@ -482,9 +482,7 @@ class Optimization:
 
             opt_model.setObjective(objective)
 
-            # Rest van de constraints - VOLLEDIG ORIGINEEL maar met memory cleanup tussentijds
-
-            ## Setting constraints
+            ## Setting constraints with memory cleanup
             # The main constraint: power balance
             if self.plant_conf["inverter_is_hybrid"]:
                 constraints = {
@@ -532,10 +530,9 @@ class Optimization:
                         for i in set_I
                     }
 
-            # Memory cleanup na main constraints
+            # Memory cleanup after main constraints
             gc.collect()
 
-            # [ALLE ANDERE CONSTRAINTS BLIJVEN IDENTIEK AAN ORIGINEEL]
             # Constraint for hybrid inverter and curtailment cases
             if isinstance(self.plant_conf["pv_module_model"], list):
                 P_nom_inverter = 0.0
@@ -1240,7 +1237,7 @@ class Optimization:
                 )
             opt_model.constraints = constraints
 
-            # Solve optimization met memory management
+            # Solve optimization with memory management
             with self._memory_cleanup_context("solver_execution"):
                 ## Finally, we call the solver to solve our optimization model:
                 timeout = self.optim_conf["lp_solver_timeout"]
@@ -1282,7 +1279,7 @@ class Optimization:
                         plp.value(opt_model.objective),
                     )
 
-            # Build results Dataframe - ORIGINEEL met memory optimalisatie
+            # Build results Dataframe memory cleanup
             with self._memory_cleanup_context("results_building"):
                 opt_tp = pd.DataFrame()
                 opt_tp["P_PV"] = [P_PV[i] for i in set_I]
@@ -1469,7 +1466,6 @@ class Optimization:
             with self._memory_cleanup_context(f"day_{day_idx}"):
                 self.logger.info(f"Solving for day: {day.day}-{day.month}-{day.year}")
 
-                # ORIGINELE LOGICA
                 if day.tzinfo is None:
                     day = day.replace(tzinfo=self.time_zone)
                 else:

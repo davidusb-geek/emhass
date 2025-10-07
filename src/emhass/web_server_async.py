@@ -209,7 +209,6 @@ async def configuration():
     """
     app.logger.info("serving configuration.html...")
     # get params
-    # params = {}
     if (emhass_conf["data_path"] / "params.pkl").exists():
         async with aiofiles.open(
             str(emhass_conf["data_path"] / "params.pkl"), "rb"
@@ -417,7 +416,6 @@ async def action_call(action_name: str):
     # Params
     ActionStr = " >> Obtaining params: "
     app.logger.info(ActionStr)
-    # costfun = "profit"  # Default value
     if (emhass_conf["data_path"] / "params.pkl").exists():
         async with aiofiles.open(
             str(emhass_conf["data_path"] / "params.pkl"), "rb"
@@ -518,15 +516,7 @@ async def action_call(action_name: str):
     elif action_name == "naive-mpc-optim":
         ActionStr = " >> Performing naive MPC optimization..."
         app.logger.info(ActionStr)
-        # # Validate input_data_dict
-        # if not input_data_dict or len(input_data_dict) == 0:
-        #     app.logger.error("Input data dictionary is empty - cannot perform optimization")
-        #     return await make_response("EMHASS >> Error: No input data available for optimization", 400)
         opt_res = await naive_mpc_optim(input_data_dict, app.logger)
-        # Check if optimization returned valid results
-        # if opt_res is None or (isinstance(opt_res, bool) and not opt_res):
-        #     app.logger.error("Naive MPC optimization failed")
-        #     return await make_response("EMHASS >> Error: Naive MPC optimization failed", 400)
         injection_dict = get_injection_dict(opt_res)
         async with aiofiles.open(
             str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb"
@@ -681,6 +671,13 @@ async def initialize():
     # Argument
     argument = {}
     no_response = False
+    # if args is not None:
+    #     if args.get("url", None):
+    #         argument["url"] = args["url"]
+    #     if args.get("key", None):
+    #         argument["key"] = args["key"]
+    #     if args.get("no_response", None):
+    #         no_response = args["no_response"]
     # Combine secrets from ENV, Arguments/ARG, Secrets file (secrets_emhass.yaml), options (options.json from addon configuration file) and/or Home Assistant Standalone API (if exist)
     emhass_conf, secrets = await build_secrets(
         emhass_conf,
