@@ -82,7 +82,6 @@ async def retrieve_home_assistant_data(
                 )
                 if logger:
                     logger.debug(f"Variable list for data retrieval: {var_list}")
-                    logger.info(f"WebSocket mode enabled: {rh.use_websocket}")
         if not await rh.get_data(
             days_list, var_list, minimal_response=False, significant_changes_only=False
         ):
@@ -150,7 +149,7 @@ async def adjust_pv_forecast(
     if not success:
         return False
     # Call data preparation method
-    await fcst.adjust_pv_forecast_data_prep(df_input_data)
+    fcst.adjust_pv_forecast_data_prep(df_input_data)
     # Call the fit method
     await fcst.adjust_pv_forecast_fit(
         n_splits=5,
@@ -158,7 +157,7 @@ async def adjust_pv_forecast(
     )
     # Call the predict method
     P_PV_forecast = P_PV_forecast.rename("forecast").to_frame()
-    P_PV_forecast = await fcst.adjust_pv_forecast_predict(forecasted_pv=P_PV_forecast)
+    P_PV_forecast = fcst.adjust_pv_forecast_predict(forecasted_pv=P_PV_forecast)
     # Update the PV forecast
     return P_PV_forecast["adjusted_forecast"].rename(None)
 
@@ -1194,7 +1193,6 @@ async def publish_data(
 
     """
     logger.info("Publishing data to HASS instance")
-    logger.debug(f"dont_post: {dont_post}, save_data_to_file: {save_data_to_file}")
     if input_data_dict:
         if not isinstance(input_data_dict.get("params", {}), dict):
             params = orjson.loads(input_data_dict["params"])
@@ -1320,10 +1318,8 @@ async def publish_data(
         save_entities=entity_save,
         dont_post=dont_post,
     )
-    logger.debug("PV forecast published successfully")
     # Publish Load forecast
     custom_load_forecast_id = params["passed_data"]["custom_load_forecast_id"]
-    logger.debug("Publishing Load forecast data...")
     await input_data_dict["rh"].post_data(
         opt_res_latest["P_Load"],
         idx_closest,
@@ -1336,7 +1332,6 @@ async def publish_data(
         save_entities=entity_save,
         dont_post=dont_post,
     )
-    logger.debug("Load forecast published successfully")
     cols_published = ["P_PV", "P_Load"]
     # Publish PV curtailment
     if input_data_dict["fcst"].plant_conf["compute_curtailment"]:
@@ -1355,10 +1350,8 @@ async def publish_data(
             dont_post=dont_post,
         )
         cols_published = cols_published + ["P_PV_curtailment"]
-        logger.debug("PV curtailment published successfully")
     # Publish P_hybrid_inverter
     if input_data_dict["fcst"].plant_conf["inverter_is_hybrid"]:
-        logger.debug("Publishing hybrid inverter data...")
         custom_hybrid_inverter_id = params["passed_data"]["custom_hybrid_inverter_id"]
         await input_data_dict["rh"].post_data(
             opt_res_latest["P_hybrid_inverter"],
@@ -1373,7 +1366,6 @@ async def publish_data(
             dont_post=dont_post,
         )
         cols_published = cols_published + ["P_hybrid_inverter"]
-        logger.debug("Hybrid inverter published successfully")
     # Publish deferrable loads
     custom_deferrable_forecast_id = params["passed_data"][
         "custom_deferrable_forecast_id"

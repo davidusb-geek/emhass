@@ -1,3 +1,4 @@
+import asyncio
 import bz2
 import copy
 import logging
@@ -22,8 +23,6 @@ from pvlib.solarposition import get_solarposition
 from pvlib.temperature import TEMPERATURE_MODEL_PARAMETERS
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
 
 from emhass.machine_learning_forecaster_async import MLForecaster
 from emhass.machine_learning_regressor_async import MLRegressor
@@ -509,6 +508,7 @@ class Forecast:
                                         "Solcast error: Check that your subscription is valid and your network can connect to Solcast."
                                     )
                                     return False
+                                # Data processing for the current `roof_id`
                                 data_list = []
                                 for elm in data["forecasts"]:
                                     data_list.append(
@@ -756,7 +756,7 @@ class Forecast:
         # If using csv method we consider that yhat is the PV power in W
         if (
             "solar_forecast_kwp" in self.retrieve_hass_conf.keys()
-            and self.retrieve_hass_conf.get("solar_forecast_kwp", 0) == 0
+            and self.retrieve_hass_conf["solar_forecast_kwp"] == 0
         ):
             P_PV_forecast = pd.Series(0, index=df_weather.index)
         else:
@@ -945,15 +945,14 @@ class Forecast:
             None,
             self.logger,
         )
-        base_model, param_grid = await mlr.get_regression_model()
-        model = make_pipeline(StandardScaler(), base_model)
+        pipeline, param_grid = mlr._get_model_and_params()
         # Time-series split
         tscv = TimeSeriesSplit(n_splits=n_splits)
         grid_search = GridSearchCV(
-            model, param_grid, cv=tscv, scoring="neg_mean_squared_error", verbose=0
+            pipeline, param_grid, cv=tscv, scoring="neg_mean_squared_error", verbose=0
         )
         # Train model
-        grid_search.fit(self.X_adjust_pv, self.y_adjust_pv)
+        await asyncio.to_thread(grid_search.fit, self.X_adjust_pv, self.y_adjust_pv)
         self.model_adjust_pv = grid_search.best_estimator_
         # Calculate training metrics
         y_pred_train = self.model_adjust_pv.predict(self.X_adjust_pv)

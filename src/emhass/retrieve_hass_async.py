@@ -80,15 +80,9 @@ class RetrieveHass:
             self.params = params
         else:
             self.params = orjson.loads(params)
-        # self.params = orjson.loads(params) if isinstance(params, str) else params
         self.emhass_conf = emhass_conf
         self.logger = logger
         self.get_data_from_file = get_data_from_file
-        # self.auto_cleanup = auto_cleanup
-
-        # Internal state
-
-        # For compatibility with existing code
         self.var_list = []
         self.use_websocket = self.params.get("retrieve_hass_conf", {}).get(
             "use_websocket", False
@@ -423,11 +417,6 @@ class RetrieveHass:
 
         self.var_list = var_list
 
-        # if self.get_data_from_file:
-        #     # Handle file-based data loading (unchanged)
-        #     self.df_final = self._load_data_from_file()
-        #     return True
-
         # Calculate time range
         start_time = min(days_list).to_pydatetime()
         end_time = datetime.now()
@@ -488,6 +477,12 @@ class RetrieveHass:
         :rtype: pandas.DataFrame
 
         """
+        self.logger.debug("prepare_data self.var_list=%s", self.var_list)
+        self.logger.debug("prepare_data var_load=%s", var_load)
+        self.logger.debug("prepare_data load_negative=%s", load_negative)
+        self.logger.debug("prepare_data set_zero_min=%s", set_zero_min)
+        self.logger.debug("prepare_data var_replace_zero=%s", var_replace_zero)
+        self.logger.debug("prepare_data var_interp=%s", var_interp)
         try:
             if load_negative:  # Apply the correct sign to load power
                 self.df_final[var_load + "_positive"] = -self.df_final[var_load]
@@ -657,12 +652,8 @@ class RetrieveHass:
         :type dont_post: bool, optional
 
         """
-        self.logger.debug(
-            f"Starting post_data for entity_id: {entity_id}, dont_post: {dont_post}"
-        )
         # Add a possible prefix to the entity ID
         entity_id = entity_id.replace("sensor.", "sensor." + publish_prefix)
-        self.logger.debug(f"Entity ID with prefix: {entity_id}")
         # Set the URL
         if (
             self.hass_url == "http://supervisor/core/api"
@@ -802,9 +793,6 @@ class RetrieveHass:
                     "friendly_name": friendly_name,
                 },
             }
-        self.logger.debug(
-            f"Prepared data for {entity_id}: state={state}, type_var={type_var}"
-        )
         # Actually post the data
         if self.get_data_from_file or dont_post:
             # Create mock response for file mode or dont_post mode
@@ -908,22 +896,6 @@ class RetrieveHass:
         self.logger.debug(f"Completed post_data for {entity_id}")
         return mock_response, data
 
-    def _load_data_from_file(self) -> pd.DataFrame:
-        """Load data from pickle file (unchanged from original)."""
-        import pickle
-        from pathlib import Path
-
-        data_path = Path(self.emhass_conf.get("data_path", "/tmp"))
-        pickle_file = data_path / "data_retrieve_hass.pkl"
-
-        if pickle_file.exists():
-            with open(pickle_file, "rb") as f:
-                df_final = pickle.load(f)
-            self.logger.info(f"Loaded data from file: {pickle_file}")
-            return df_final
-        else:
-            raise FileNotFoundError(f"Data file not found: {pickle_file}")
-
     def _convert_statistics_to_dataframe(
         self, stats_data: dict[str, Any], var_list: list[str]
     ) -> pd.DataFrame:
@@ -1023,3 +995,19 @@ class RetrieveHass:
             df_final = set_df_index_freq(df_final)
 
         return df_final
+    
+     # async def _load_data_from_file(self) -> pd.DataFrame:
+    #     """Asynchronously load data from pickle file using aiofiles."""
+    #     import pickle
+    #     from pathlib import Path
+    #     data_path = Path(self.emhass_conf.get("data_path", "/tmp"))
+    #     pickle_file = data_path / "data_retrieve_hass.pkl"
+
+    #     if pickle_file.exists():
+    #         async with aiofiles.open(pickle_file, "rb") as f:
+    #             content = await f.read()
+    #             df_final = pickle.loads(content)
+    #         self.logger.info(f"Loaded data from file: {pickle_file}")
+    #         return df_final
+    #     else:
+    #         raise FileNotFoundError(f"Data file not found: {pickle_file}")

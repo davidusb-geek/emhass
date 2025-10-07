@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from typing import List
 import warnings
 
 import numpy as np
@@ -158,6 +159,7 @@ class MLForecaster:
             # Preparing the data: adding exogenous features
             self.data_exo = pd.DataFrame(index=self.data.index)
             self.data_exo = utils_async.add_date_features(self.data_exo)
+            # self.data_exo = utils_async.add_extra_features(self.data_exo)
             self.data_exo[self.var_model] = self.data[self.var_model]
 
             self.data_exo = await self.interpolate_async(self.data_exo)
@@ -195,6 +197,7 @@ class MLForecaster:
                 self.forecaster.fit,
                 y=self.data_train[self.var_model],
                 exog=self.data_train.drop(self.var_model, axis=1),
+                store_in_sample_residuals=True,
             )
 
             fit_time = time.time() - start_time
@@ -217,9 +220,11 @@ class MLForecaster:
             df_pred = pd.DataFrame(
                 index=self.data_exo.index, columns=["train", "test", "pred"]
             )
+
             df_pred["train"] = self.data_train[self.var_model]
             df_pred["test"] = self.data_test[self.var_model]
             df_pred["pred"] = predictions
+
             df_pred_backtest = None
 
             if perform_backtest is True:
@@ -250,12 +255,25 @@ class MLForecaster:
                 backtest_r2 = -metric
                 self.logger.info(f"Elapsed backtesting time: {backtest_time}")
                 self.logger.info(f"Backtest R2 score: {backtest_r2}")
-
                 df_pred_backtest = pd.DataFrame(
                     index=self.data_exo.index, columns=["train", "pred"]
                 )
                 df_pred_backtest["train"] = self.data_exo[self.var_model]
                 df_pred_backtest["pred"] = predictions_backtest
+                # Handle skforecast 0.18.0+ DataFrame output with fold column
+                if isinstance(predictions_backtest, pd.DataFrame):
+                    # Extract the 'pred' column from the DataFrame
+                    pred_values = (
+                        predictions_backtest["pred"]
+                        if "pred" in predictions_backtest.columns
+                        else predictions_backtest.iloc[:, -1]
+                    )
+                else:
+                    # If it's a Series, use it directly
+                    pred_values = predictions_backtest
+
+                # Use loc to align indices properly - only assign where indices match
+                df_pred_backtest.loc[pred_values.index, "pred"] = pred_values
 
             return df_pred, df_pred_backtest
 
@@ -419,25 +437,15 @@ class MLForecaster:
             if debug:
                 refit = False
                 num_lags = 3
-                n_trials = 5
             else:
                 refit = True
                 num_lags = self.num_lags
-                n_trials = 10
-
-            train_data_length = len(self.data_train)  # Use actual training data length
-            # Ensure initial_train_size doesn't exceed actual training data
-            train_data_length = min(
-                train_data_length - 1, len(self.data_train[self.var_model])
-            )
-
             # The optimization routine call
             self.logger.info("Bayesian hyperparameter optimization with backtesting")
             start_time = time.time()
-
             cv = TimeSeriesFold(
                 steps=num_lags,
-                initial_train_size=train_data_length,
+                initial_train_size=len(self.data_exo.loc[: self.date_train]),
                 fixed_train_size=True,
                 gap=0,
                 skip_folds=None,
@@ -456,7 +464,7 @@ class MLForecaster:
                 cv=cv,
                 search_space=search_space,
                 metric=MLForecaster.neg_r2_score,
-                n_trials=n_trials,
+                n_trials=10,
                 random_state=123,
                 return_best=True,
             )
