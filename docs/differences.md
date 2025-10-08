@@ -24,6 +24,14 @@ See below for a list of associations between the parameters from `config_emhass.
 | retrieve_hass_conf |  set_zero_min |  set_zero_min | |
 | retrieve_hass_conf |  method_ts_round |  method_ts_round | |
 | retrieve_hass_conf |  continual_publish |  continual_publish | |
+| retrieve_hass_conf | | use_influxdb | |
+| retrieve_hass_conf | | influxdb_host | |
+| retrieve_hass_conf | | influxdb_port | |
+| retrieve_hass_conf | | influxdb_username | |
+| retrieve_hass_conf | | influxdb_password | |
+| retrieve_hass_conf | | influxdb_database | |
+| retrieve_hass_conf | | influxdb_measurement | |
+| retrieve_hass_conf | | influxdb_retention_policy | |
 | params_secrets |  solcast_api_key |  optional_solcast_api_key | |
 | params_secrets |  solcast_rooftop_id |  optional_solcast_rooftop_id | |
 | params_secrets |  solar_forecast_kwp |  optional_solar_forecast_kwp | |
@@ -78,6 +86,12 @@ See below for a list of associations between the parameters from `config_emhass.
 Descriptions of each parameter can be found at:
 -  [`Configuration Documentation`](https://emhass.readthedocs.io/en/latest/config.html) 
 - Configuration page on EMHASS web server (E.g. http://localhost:5000/configuration)
+
+## InfluxDB as a data source
+A new feature allows using **InfluxDB** as an alternative data source to the Home Assistant recorder database. This is beneficial for users who want to treat longer data retention periods for training machine learning models or to reduce the query load on their main Home Assistant instance.
+
+When `use_influxdb: true` is set, EMHASS will fetch sensor data directly from your InfluxDB instance using the provided connection parameters. The `influxdb_username` and `influxdb_password` are treated as secrets.
+
 
 ## Passing in secret parameters
 Secret parameters are passed differently, depending on which method you choose. Alternative options are also present for passing secrets, if you are running EMHASS separately from Home Assistant. _(I.e. not via EMHASS-Add-on)_ 
