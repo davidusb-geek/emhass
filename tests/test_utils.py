@@ -152,7 +152,9 @@ class TestCommandLineUtils(unittest.TestCase):
         mock_now = datetime(2025, 10, 11, 7, 0, 0)
         expected_start = "2025-10-11T07:00:00"
         expected_end = "2025-10-12T06:00:00"
-        expected_range = pd.date_range(start=expected_start, end=expected_end, freq=f"{freq}min", tz=time_zone)
+        expected_range = pd.date_range(
+            start=expected_start, end=expected_end, freq=f"{freq}min", tz=time_zone
+        )
         expected_dates = [ts.isoformat() for ts in expected_range]
 
         # 3. Set the return value for the mock (which is now passed in as an argument)
@@ -179,7 +181,9 @@ class TestCommandLineUtils(unittest.TestCase):
         mock_now = datetime(2025, 10, 4, 23, 0, 0)
         expected_start = "2025-10-04T23:00:00"
         expected_end = "2025-10-05T22:00:00"
-        expected_range = pd.date_range(start=expected_start, end=expected_end, freq=f"{freq}min", tz=time_zone)
+        expected_range = pd.date_range(
+            start=expected_start, end=expected_end, freq=f"{freq}min", tz=time_zone
+        )
         expected_dates = [ts.isoformat() for ts in expected_range]
 
         # 3. Set the return value for the mock
@@ -188,7 +192,7 @@ class TestCommandLineUtils(unittest.TestCase):
         actual_dates = utils.get_forecast_dates(freq, delta_forecast, time_zone)
         # 4. Perform assertions
         self.assertIsInstance(actual_dates, list)
-        self.assertEqual(len(actual_dates), 23) # This day correctly has 23 hours
+        self.assertEqual(len(actual_dates), 23)  # This day correctly has 23 hours
         self.assertListEqual(actual_dates, expected_dates)
         self.assertTrue("+10:00" in actual_dates[2])
         self.assertTrue("+11:00" in actual_dates[3])
@@ -1085,16 +1089,17 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(params["retrieve_hass_conf"]["hass_url"] == "test.url")
         self.assertTrue(params["retrieve_hass_conf"]["long_lived_token"] == "test.key")
 
+
 class TestGetInjectionDict(unittest.TestCase):
     @staticmethod
     def _df_base(with_soc: bool = True) -> pd.DataFrame:
         idx = pd.date_range("2025-01-01", periods=3, freq="h")
         df = pd.DataFrame(
             {
-                "P_PV": [100.4, 200.6, 300.5],        # cast to int
-                "P_Load": [150.9, 175.1, 125.4],      # cast to int
+                "P_PV": [100.4, 200.6, 300.5],  # cast to int
+                "P_Load": [150.9, 175.1, 125.4],  # cast to int
                 "unit_price": [0.12345, 0.54321, 0.99999],  # round(3)
-                "cost_grid": [1.1111, 2.2222, 3.3333],      # round(3)
+                "cost_grid": [1.1111, 2.2222, 3.3333],  # round(3)
                 "optim_status": ["optimal", "optimal", "optimal"],
             },
             index=idx,
@@ -1156,7 +1161,7 @@ class TestGetInjectionDict(unittest.TestCase):
         idx = pd.date_range("2025-01-01", periods=3, freq="h")
         df = pd.DataFrame(
             {
-                "P_PV": [100, 200, 300],     # only one P_* column
+                "P_PV": [100, 200, 300],  # only one P_* column
                 "unit_price": [0.1, 0.2, 0.3],
                 "cost_grid": [1, 2, 3],
                 "optim_status": ["optimal", "optimal", "optimal"],
