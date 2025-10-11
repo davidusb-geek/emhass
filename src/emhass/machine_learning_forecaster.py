@@ -201,7 +201,7 @@ class MLForecaster:
                 index=self.data_exo.index, columns=["train", "pred"]
             )
             df_pred_backtest["train"] = self.data_exo[self.var_model]
-            df_pred_backtest["pred"] = predictions_backtest
+            df_pred_backtest["pred"] = predictions_backtest["pred"]
         return df_pred, df_pred_backtest
 
     def predict(self, data_last_window: pd.DataFrame | None = None) -> pd.Series:

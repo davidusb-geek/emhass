@@ -3,6 +3,9 @@
 import json
 import pathlib
 import unittest
+from datetime import datetime, time, tzinfo
+from unittest.mock import patch
+import pytz
 
 import pandas as pd
 
@@ -135,16 +138,60 @@ class TestCommandLineUtils(unittest.TestCase):
         )
         self.assertTrue(retrieve_hass_conf["Altitude"] == 8000.0)
 
-    def test_get_forecast_dates(self):
-        retrieve_hass_conf, optim_conf, _ = utils.get_yaml_parse(
-            self.params_json, logger
-        )
-        freq = int(retrieve_hass_conf["optimization_time_step"].seconds / 60.0)
-        delta_forecast = int(optim_conf["delta_forecast_daily"].days)
-        time_zone = retrieve_hass_conf["time_zone"]
-        forecast_dates = utils.get_forecast_dates(freq, delta_forecast, time_zone)
-        self.assertIsInstance(forecast_dates, pd.core.indexes.datetimes.DatetimeIndex)
-        self.assertTrue(len(forecast_dates) == int(delta_forecast * 60 * 24 / freq))
+    @patch('emhass.utils._get_now')
+    def test_get_forecast_dates_standard_day(self, mock_ts_now):
+        """
+        Tests the forecast date generation on a standard 24-hour day.
+        """
+        # 1. Define parameters for this specific test
+        time_zone = pytz.timezone("Australia/Sydney")
+        freq = 60  # in minutes
+        delta_forecast = 1  # in days
+
+        # 2. Define the mock 'now' and the expected results
+        mock_now = datetime(2025, 10, 11, 7, 0, 0)
+        expected_start = '2025-10-11T07:00:00'
+        expected_end = '2025-10-12T06:00:00'
+        expected_range = pd.date_range(start=expected_start, end=expected_end, freq=f'{freq}min', tz=time_zone)
+        expected_dates = [ts.isoformat() for ts in expected_range]
+
+        # 3. Set the return value for the mock (which is now passed in as an argument)
+        mock_ts_now.return_value = mock_now
+
+        actual_dates = utils.get_forecast_dates(freq, delta_forecast, time_zone)
+
+        # 4. Perform assertions
+        self.assertIsInstance(actual_dates, list)
+        self.assertEqual(len(actual_dates), 24)
+        self.assertListEqual(actual_dates, expected_dates)
+
+    @patch('emhass.utils._get_now')
+    def test_get_forecast_dates_dst_crossing(self, mock_ts_now):
+        """
+        Tests the forecast date generation on a day with a DST transition (23 hours).
+        """
+        # 1. Define parameters for this specific test
+        time_zone = pytz.timezone("Australia/Sydney")
+        freq = 60  # in minutes
+        delta_forecast = 1  # in days
+
+        # 2. Define mock 'now' and expected results
+        mock_now = datetime(2025, 10, 4, 23, 0, 0)
+        expected_start = '2025-10-04T23:00:00'
+        expected_end = '2025-10-05T22:00:00'
+        expected_range = pd.date_range(start=expected_start, end=expected_end, freq=f'{freq}min', tz=time_zone)
+        expected_dates = [ts.isoformat() for ts in expected_range]
+
+        # 3. Set the return value for the mock
+        mock_ts_now.return_value = mock_now
+
+        actual_dates = utils.get_forecast_dates(freq, delta_forecast, time_zone)
+        # 4. Perform assertions
+        self.assertIsInstance(actual_dates, list)
+        self.assertEqual(len(actual_dates), 23) # This day correctly has 23 hours
+        self.assertListEqual(actual_dates, expected_dates)
+        self.assertTrue("+10:00" in actual_dates[2])
+        self.assertTrue("+11:00" in actual_dates[3])
 
     def test_treat_runtimeparams(self):
         # Test dayahead runtime params

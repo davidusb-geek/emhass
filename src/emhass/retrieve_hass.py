@@ -713,7 +713,7 @@ class RetrieveHass:
     ) -> dict:
         list_df = copy.deepcopy(data_df).loc[data_df.index[idx] :].reset_index()
         list_df.columns = ["timestamps", entity_id]
-        ts_list = [str(i) for i in list_df["timestamps"].tolist()]
+        ts_list = [i.isoformat() for i in list_df["timestamps"].tolist()]
         vals_list = [str(np.round(i, decimals)) for i in list_df[entity_id].tolist()]
         forecast_list = []
         for i, ts in enumerate(ts_list):
