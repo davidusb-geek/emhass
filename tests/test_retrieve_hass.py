@@ -8,7 +8,7 @@ import pathlib
 import pickle
 import pickle as cPickle
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
@@ -336,7 +336,7 @@ class TestRetrieveHass(unittest.TestCase):
 
 
     # Proposed new test method for InfluxDB
-    @patch('influxdb.InfluxDBClient', autospec=True)
+    @patch("influxdb.InfluxDBClient", autospec=True)
     def test_get_data_influxdb_mock(self, mock_influx_client_class):
         """
         Test the get_data_influxdb method by mocking the InfluxDB client.
@@ -344,13 +344,13 @@ class TestRetrieveHass(unittest.TestCase):
         # Build a correctly structured params dictionary for the test
         params_influx = {
             "retrieve_hass_conf": {
-                'use_influxdb': True,
-                'influxdb_host': 'fake-host',
-                'influxdb_port': 8086,
-                'influxdb_username': 'fake-user',
-                'influxdb_password': 'fake-pass',
-                'influxdb_database': 'fake-db',
-                'influxdb_measurement': 'W',
+                "use_influxdb": True,
+                "influxdb_host": "fake-host",
+                "influxdb_port": 8086,
+                "influxdb_username": "fake-user",
+                "influxdb_password": "fake-pass",
+                "influxdb_database": "fake-db",
+                "influxdb_measurement": "W",
                 # Add other necessary keys from the original conf
                 "sensor_power_photovoltaics": self.retrieve_hass_conf["sensor_power_photovoltaics"],
                 "sensor_power_load_no_var_loads": self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
@@ -374,23 +374,23 @@ class TestRetrieveHass(unittest.TestCase):
 
         # Define mock data points to be returned by the client
         mock_pv_data = [
-            {'time': '2023-04-01T10:00:00Z', 'mean_value': 1500.0},
-            {'time': '2023-04-01T10:30:00Z', 'mean_value': 1800.0},
+            {"time": "2023-04-01T10:00:00Z", "mean_value": 1500.0},
+            {"time": "2023-04-01T10:30:00Z", "mean_value": 1800.0},
         ]
         mock_load_data = [
-            {'time': '2023-04-01T10:00:00Z', 'mean_value': 500.0},
-            {'time': '2023-04-01T10:30:00Z', 'mean_value': 450.0},
+            {"time": "2023-04-01T10:00:00Z", "mean_value": 500.0},
+            {"time": "2023-04-01T10:30:00Z", "mean_value": 450.0},
         ]
 
         # Define a side_effect function to handle different queries
         def query_side_effect(query):
             mock_result = MagicMock()
-            if 'SHOW MEASUREMENTS' in query:
-                mock_result.get_points.return_value = [{'name': 'W'}]
-            elif 'SHOW TAG VALUES' in query and '"W"' in query:
+            if "SHOW MEASUREMENTS" in query:
+                mock_result.get_points.return_value = [{"name": "W"}]
+            elif "SHOW TAG VALUES" in query and '"W"' in query:
                 mock_result.get_points.return_value = [
-                    {'value': 'power_photovoltaics'},
-                    {'value': 'power_load_no_var_loads'}
+                    {"value": "power_photovoltaics"},
+                    {"value": "power_load_no_var_loads"}
                 ]
             elif "entity_id" in query and "'power_photovoltaics'" in query:
                 mock_result.get_points.return_value = mock_pv_data
@@ -404,7 +404,7 @@ class TestRetrieveHass(unittest.TestCase):
         mock_client_instance.query.side_effect = query_side_effect
 
         # Define the inputs for the get_data method
-        days_list = pd.date_range(start='2023-04-01', periods=1, freq='D', tz='UTC')
+        days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
         var_list = [
             params_influx["retrieve_hass_conf"]["sensor_power_photovoltaics"],
             params_influx["retrieve_hass_conf"]["sensor_power_load_no_var_loads"]
@@ -418,8 +418,8 @@ class TestRetrieveHass(unittest.TestCase):
 
         # Verify that the InfluxDB client was initialized correctly
         mock_influx_client_class.assert_called_with(
-            host='fake-host', port=8086,
-            username='fake-user', password='fake-pass', database='fake-db'
+            host="fake-host", port=8086,
+            username="fake-user", password="fake-pass", database="fake-db"
         )
         mock_client_instance.ping.assert_called_once()
         mock_client_instance.close.assert_called_once()
@@ -429,8 +429,8 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertIsInstance(df, pd.DataFrame)
         self.assertEqual(len(df.index), 2)
         self.assertEqual(list(df.columns), var_list)
-        self.assertEqual(df.loc['2023-04-01 10:00:00+00:00']['sensor.power_photovoltaics'], 1500.0)
-        self.assertEqual(df.loc['2023-04-01 10:30:00+00:00']['sensor.power_load_no_var_loads'], 450.0)
+        self.assertEqual(df.loc["2023-04-01 10:00:00+00:00"]["sensor.power_photovoltaics"], 1500.0)
+        self.assertEqual(df.loc["2023-04-01 10:30:00+00:00"]["sensor.power_load_no_var_loads"], 450.0)
 
 
     # Test publish data
