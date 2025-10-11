@@ -3,11 +3,11 @@
 import json
 import pathlib
 import unittest
-from datetime import datetime, time, tzinfo
+from datetime import datetime
 from unittest.mock import patch
-import pytz
 
 import pandas as pd
+import pytz
 
 from emhass import utils
 
@@ -138,7 +138,7 @@ class TestCommandLineUtils(unittest.TestCase):
         )
         self.assertTrue(retrieve_hass_conf["Altitude"] == 8000.0)
 
-    @patch('emhass.utils._get_now')
+    @patch("emhass.utils._get_now")
     def test_get_forecast_dates_standard_day(self, mock_ts_now):
         """
         Tests the forecast date generation on a standard 24-hour day.
@@ -150,9 +150,9 @@ class TestCommandLineUtils(unittest.TestCase):
 
         # 2. Define the mock 'now' and the expected results
         mock_now = datetime(2025, 10, 11, 7, 0, 0)
-        expected_start = '2025-10-11T07:00:00'
-        expected_end = '2025-10-12T06:00:00'
-        expected_range = pd.date_range(start=expected_start, end=expected_end, freq=f'{freq}min', tz=time_zone)
+        expected_start = "2025-10-11T07:00:00"
+        expected_end = "2025-10-12T06:00:00"
+        expected_range = pd.date_range(start=expected_start, end=expected_end, freq=f"{freq}min", tz=time_zone)
         expected_dates = [ts.isoformat() for ts in expected_range]
 
         # 3. Set the return value for the mock (which is now passed in as an argument)
@@ -165,7 +165,7 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertEqual(len(actual_dates), 24)
         self.assertListEqual(actual_dates, expected_dates)
 
-    @patch('emhass.utils._get_now')
+    @patch("emhass.utils._get_now")
     def test_get_forecast_dates_dst_crossing(self, mock_ts_now):
         """
         Tests the forecast date generation on a day with a DST transition (23 hours).
@@ -177,9 +177,9 @@ class TestCommandLineUtils(unittest.TestCase):
 
         # 2. Define mock 'now' and expected results
         mock_now = datetime(2025, 10, 4, 23, 0, 0)
-        expected_start = '2025-10-04T23:00:00'
-        expected_end = '2025-10-05T22:00:00'
-        expected_range = pd.date_range(start=expected_start, end=expected_end, freq=f'{freq}min', tz=time_zone)
+        expected_start = "2025-10-04T23:00:00"
+        expected_end = "2025-10-05T22:00:00"
+        expected_range = pd.date_range(start=expected_start, end=expected_end, freq=f"{freq}min", tz=time_zone)
         expected_dates = [ts.isoformat() for ts in expected_range]
 
         # 3. Set the return value for the mock
