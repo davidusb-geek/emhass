@@ -98,6 +98,9 @@ def get_logger(
 
     return logger, ch
 
+def _get_now() -> datetime:
+    """Helper function to get the current time, for easier mocking."""
+    return datetime.now()
 
 def get_forecast_dates(
     freq: int,
@@ -119,24 +122,24 @@ def get_forecast_dates(
 
     """
     freq = pd.to_timedelta(freq, "minutes")
+    start_time = _get_now()
+
     start_forecast = (
-        pd.Timestamp(datetime.now(), tz=time_zone)
+        pd.Timestamp(start_time, tz=time_zone)
         .replace(microsecond=0)
         .floor(freq=freq)
     )
-    end_forecast = start_forecast + pd.Timedelta(days=delta_forecast)
-    forecast_dates = (
-        pd.date_range(
-            start=start_forecast,
-            end=end_forecast + timedelta(days=timedelta_days) - freq,
-            freq=freq,
-            tz=time_zone,
-        )
-        .tz_convert("utc")
-        .round(freq, ambiguous="infer", nonexistent="shift_forward")
-        .tz_convert(time_zone)
+    end_forecast = start_forecast + pd.tseries.offsets.DateOffset(days=delta_forecast)
+    final_end_date = end_forecast + pd.tseries.offsets.DateOffset(days=timedelta_days) - freq
+
+    forecast_dates = pd.date_range(
+        start=start_forecast,
+        end=final_end_date,
+        freq=freq,
+        tz=time_zone,
     )
-    return forecast_dates
+
+    return [ts.isoformat() for ts in forecast_dates]
 
 
 def update_params_with_ha_config(
