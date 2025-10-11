@@ -427,7 +427,7 @@ class RetrieveHass:
             self.logger.debug(f"Successfully connected to InfluxDB at {self.influxdb_host}:{self.influxdb_port}")
 
             # Initialize measurement cache
-            if not hasattr(self, '_measurement_cache'):
+            if not hasattr(self, "_measurement_cache"):
                 self._measurement_cache = {}
 
             return client
@@ -445,10 +445,10 @@ class RetrieveHass:
             # Get all available measurements
             measurements_query = "SHOW MEASUREMENTS"
             measurements_result = client.query(measurements_query)
-            measurements = [m['name'] for m in measurements_result.get_points()]
+            measurements = [m["name"] for m in measurements_result.get_points()]
 
             # Priority order: check common sensor types first
-            priority_measurements = ['EUR/kWh', '€/kWh', 'W', 'EUR', '€', '%', 'A', 'V']
+            priority_measurements = ["EUR/kWh", "€/kWh", "W", "EUR", "€", "%", "A", "V"]
             all_measurements = priority_measurements + [m for m in measurements if m not in priority_measurements]
 
             self.logger.debug(f"Searching for entity '{entity_id}' across {len(measurements)} measurements")
@@ -467,7 +467,7 @@ class RetrieveHass:
 
                     # Check if our target entity_id is in the tag values
                     for point in points:
-                        if point.get('value') == entity_id:
+                        if point.get("value") == entity_id:
                             self.logger.debug(f"Found entity '{entity_id}' in measurement '{measurement}'")
                             # Cache the result
                             self._measurement_cache[entity_id] = measurement
@@ -491,24 +491,24 @@ class RetrieveHass:
         interval = f"{freq_minutes}m"
 
         # Format times properly for InfluxDB
-        start_time_str = start_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-        end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+        start_time_str = start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_time_str = end_time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         # Use FILL(previous) instead of FILL(linear) for compatibility with open-source InfluxDB
-        query = f'''
+        query = f"""
         SELECT mean("value") AS "mean_value"
         FROM "{self.influxdb_database}"."{self.influxdb_retention_policy}"."{measurement}"
         WHERE time >= '{start_time_str}'
         AND time < '{end_time_str}'
         AND "entity_id"='{entity_id}'
         GROUP BY time({interval}) FILL(previous)
-        '''
+        """
         return query
 
     def _build_influx_query(self, sensor: str, start_time, end_time) -> str:
         """Build InfluxQL query for sensor data retrieval (legacy method)."""
         # Convert sensor name: sensor.sec_pac_solar -> sec_pac_solar
-        entity_id = sensor.replace('sensor.', '') if sensor.startswith('sensor.') else sensor
+        entity_id = sensor.replace("sensor.", "") if sensor.startswith("sensor.") else sensor
 
         # Use default measurement (for backward compatibility)
         return self._build_influx_query_for_measurement(entity_id, self.influxdb_measurement, start_time, end_time)
@@ -518,7 +518,7 @@ class RetrieveHass:
         self.logger.debug(f"Retrieving sensor: {sensor}")
 
         # Clean sensor name (remove sensor. prefix if present)
-        entity_id = sensor.replace('sensor.', '') if sensor.startswith('sensor.') else sensor
+        entity_id = sensor.replace("sensor.", "") if sensor.startswith("sensor.") else sensor
 
         # Auto-discover which measurement contains this entity
         measurement = self._discover_entity_measurement(client, entity_id)
@@ -544,18 +544,18 @@ class RetrieveHass:
             df_sensor = pd.DataFrame(points)
 
             # Convert time column and set as index with timezone awareness
-            df_sensor['time'] = pd.to_datetime(df_sensor['time'], utc=True)
-            df_sensor.set_index('time', inplace=True)
+            df_sensor["time"] = pd.to_datetime(df_sensor["time"], utc=True)
+            df_sensor.set_index("time", inplace=True)
 
             # Rename value column to original sensor name
-            if 'mean_value' in df_sensor.columns:
-                df_sensor = df_sensor[['mean_value']].rename(columns={'mean_value': sensor})
+            if "mean_value" in df_sensor.columns:
+                df_sensor = df_sensor[["mean_value"]].rename(columns={"mean_value": sensor})
             else:
                 self.logger.error(f"Expected 'mean_value' column not found for {sensor} in measurement {measurement}")
                 return None
 
             # Handle non-numeric data with NaN ratio warning
-            df_sensor[sensor] = pd.to_numeric(df_sensor[sensor], errors='coerce')
+            df_sensor[sensor] = pd.to_numeric(df_sensor[sensor], errors="coerce")
 
             # Check proportion of NaNs and log warning if high
             nan_count = df_sensor[sensor].isna().sum()
