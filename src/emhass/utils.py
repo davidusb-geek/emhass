@@ -98,9 +98,11 @@ def get_logger(
 
     return logger, ch
 
+
 def _get_now() -> datetime:
     """Helper function to get the current time, for easier mocking."""
     return datetime.now()
+
 
 def get_forecast_dates(
     freq: int,
@@ -125,12 +127,12 @@ def get_forecast_dates(
     start_time = _get_now()
 
     start_forecast = (
-        pd.Timestamp(start_time, tz=time_zone)
-        .replace(microsecond=0)
-        .floor(freq=freq)
+        pd.Timestamp(start_time, tz=time_zone).replace(microsecond=0).floor(freq=freq)
     )
     end_forecast = start_forecast + pd.tseries.offsets.DateOffset(days=delta_forecast)
-    final_end_date = end_forecast + pd.tseries.offsets.DateOffset(days=timedelta_days) - freq
+    final_end_date = (
+        end_forecast + pd.tseries.offsets.DateOffset(days=timedelta_days) - freq
+    )
 
     forecast_dates = pd.date_range(
         start=start_forecast,

@@ -334,7 +334,6 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertTrue(self.rh.df_final[actual_pv_sensor].isna().sum() == 0)
         self.assertTrue(self.rh.df_final[forecast_pv_sensor].isna().sum() == 0)
 
-
     # Proposed new test method for InfluxDB
     @patch("influxdb.InfluxDBClient", autospec=True)
     def test_get_data_influxdb_mock(self, mock_influx_client_class):
@@ -352,8 +351,12 @@ class TestRetrieveHass(unittest.TestCase):
                 "influxdb_database": "fake-db",
                 "influxdb_measurement": "W",
                 # Add other necessary keys from the original conf
-                "sensor_power_photovoltaics": self.retrieve_hass_conf["sensor_power_photovoltaics"],
-                "sensor_power_load_no_var_loads": self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
+                "sensor_power_photovoltaics": self.retrieve_hass_conf[
+                    "sensor_power_photovoltaics"
+                ],
+                "sensor_power_load_no_var_loads": self.retrieve_hass_conf[
+                    "sensor_power_load_no_var_loads"
+                ],
             }
         }
 
@@ -366,7 +369,7 @@ class TestRetrieveHass(unittest.TestCase):
             params_influx,
             emhass_conf,
             logger,
-            get_data_from_file=False
+            get_data_from_file=False,
         )
 
         # Mock the client instance that will be created inside the method
@@ -390,7 +393,7 @@ class TestRetrieveHass(unittest.TestCase):
             elif "SHOW TAG VALUES" in query and '"W"' in query:
                 mock_result.get_points.return_value = [
                     {"value": "power_photovoltaics"},
-                    {"value": "power_load_no_var_loads"}
+                    {"value": "power_load_no_var_loads"},
                 ]
             elif "entity_id" in query and "'power_photovoltaics'" in query:
                 mock_result.get_points.return_value = mock_pv_data
@@ -407,19 +410,22 @@ class TestRetrieveHass(unittest.TestCase):
         days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
         var_list = [
             params_influx["retrieve_hass_conf"]["sensor_power_photovoltaics"],
-            params_influx["retrieve_hass_conf"]["sensor_power_load_no_var_loads"]
+            params_influx["retrieve_hass_conf"]["sensor_power_load_no_var_loads"],
         ]
 
         # Call the method to be tested
         success = rh_influx.get_data(days_list, var_list)
 
         # Verify the outcomes
-        self.assertTrue(success) # Check if the method reports success
+        self.assertTrue(success)  # Check if the method reports success
 
         # Verify that the InfluxDB client was initialized correctly
         mock_influx_client_class.assert_called_with(
-            host="fake-host", port=8086,
-            username="fake-user", password="fake-pass", database="fake-db"
+            host="fake-host",
+            port=8086,
+            username="fake-user",
+            password="fake-pass",
+            database="fake-db",
         )
         mock_client_instance.ping.assert_called_once()
         mock_client_instance.close.assert_called_once()
@@ -429,9 +435,12 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertIsInstance(df, pd.DataFrame)
         self.assertEqual(len(df.index), 2)
         self.assertEqual(list(df.columns), var_list)
-        self.assertEqual(df.loc["2023-04-01 10:00:00+00:00"]["sensor.power_photovoltaics"], 1500.0)
-        self.assertEqual(df.loc["2023-04-01 10:30:00+00:00"]["sensor.power_load_no_var_loads"], 450.0)
-
+        self.assertEqual(
+            df.loc["2023-04-01 10:00:00+00:00"]["sensor.power_photovoltaics"], 1500.0
+        )
+        self.assertEqual(
+            df.loc["2023-04-01 10:30:00+00:00"]["sensor.power_load_no_var_loads"], 450.0
+        )
 
     # Test publish data
     def test_publish_data(self):
