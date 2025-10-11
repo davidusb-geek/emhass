@@ -347,7 +347,7 @@ class TestRetrieveHass(unittest.TestCase):
                 "influxdb_host": "fake-host",
                 "influxdb_port": 8086,
                 "influxdb_username": "fake-user",
-                "influxdb_password": "fake-pass",
+                "influxdb_password": None,
                 "influxdb_database": "fake-db",
                 "influxdb_measurement": "W",
                 # Add other necessary keys from the original conf
@@ -424,7 +424,7 @@ class TestRetrieveHass(unittest.TestCase):
             host="fake-host",
             port=8086,
             username="fake-user",
-            password="fake-pass",
+            password=None,
             database="fake-db",
         )
         mock_client_instance.ping.assert_called_once()
