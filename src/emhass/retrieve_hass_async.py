@@ -89,16 +89,16 @@ class RetrieveHass:
         )
         if self.use_websocket:
             self._client = None
-        self.df_final = pd.DataFrame()
-        self.df_weather = pd.DataFrame()
-        self.df_forecast = pd.DataFrame()
+            self.logger.info(f"Websocket integration enabled")
+        else:
+            self.logger.debug("Websocket integration disabled, using Home Assistant API")
 
     async def get_ha_config(self):
         """
         Extract some configuration data from HA.
 
         """
-        if self.use_websocket is True:
+        if self.use_websocket:
             return await self.get_ha_config_websocket()
         self.logger.info("get HA config from rest api.")
         headers = {
@@ -207,7 +207,7 @@ class RetrieveHass:
         minimal_response: bool | None = False,
         significant_changes_only: bool | None = False,
         test_url: str | None = "empty",
-    ) -> bool:
+    ) -> None:
         """Internal method to handle REST API data retrieval."""
         self.logger.info("Retrieve hass get data method initiated...")
         headers = {
@@ -220,157 +220,155 @@ class RetrieveHass:
         self.df_final = pd.DataFrame()
         x = 0  # iterate based on days
 
-        async with aiohttp.ClientSession() as session:
-            for day in days_list:
-                for i, var in enumerate(var_list):
-                    if test_url == "empty":
-                        if (
-                            self.hass_url == "http://supervisor/core/api"
-                        ):  # If we are using the supervisor API
-                            url = (
-                                self.hass_url
-                                + "/history/period/"
-                                + day.isoformat()
-                                + "?filter_entity_id="
-                                + var
+        for day in days_list:
+            for i, var in enumerate(var_list):
+                if test_url == "empty":
+                    if (
+                        self.hass_url == "http://supervisor/core/api"
+                    ):  # If we are using the supervisor API
+                        url = (
+                            self.hass_url
+                            + "/history/period/"
+                            + day.isoformat()
+                            + "?filter_entity_id="
+                            + var
+                        )
+                    else:  # Otherwise the Home Assistant Core API it is
+                        if self.hass_url[-1] != "/":
+                            self.logger.warning(
+                                "Missing slash </> at the end of the defined URL, appending a slash but please fix your URL"
                             )
-                        else:  # Otherwise the Home Assistant Core API it is
-                            if self.hass_url[-1] != "/":
-                                self.logger.warning(
-                                    "Missing slash </> at the end of the defined URL, appending a slash but please fix your URL"
-                                )
-                                self.hass_url = self.hass_url + "/"
-                            url = (
-                                self.hass_url
-                                + "api/history/period/"
-                                + day.isoformat()
-                                + "?filter_entity_id="
-                                + var
-                            )
-                        if minimal_response:  # A support for minimal response
-                            url = url + "?minimal_response"
-                        if significant_changes_only:  # And for signicant changes only (check the HASS restful API for more info)
-                            url = url + "?significant_changes_only"
-                    else:
-                        url = test_url
+                            self.hass_url = self.hass_url + "/"
+                        url = (
+                            self.hass_url
+                            + "api/history/period/"
+                            + day.isoformat()
+                            + "?filter_entity_id="
+                            + var
+                        )
+                    if minimal_response:  # A support for minimal response
+                        url = url + "?minimal_response"
+                    if significant_changes_only:  # And for signicant changes only (check the HASS restful API for more info)
+                        url = url + "?significant_changes_only"
+                else:
+                    url = test_url
 
-                    try:
+                try:
+                    async with aiohttp.ClientSession() as session:
                         async with session.get(url, headers=headers) as response:
-                            if response.status == 401:
-                                self.logger.error(
-                                    "Unable to access Home Assistant instance, TOKEN/KEY"
-                                )
-                                self.logger.error(
-                                    "If using addon, try setting url and token to 'empty'"
-                                )
-                                return False
-                            if response.status > 299:
-                                self.logger.error(
-                                    f"Home assistant request GET error: {response.status} for var {var}"
-                                )
-                                return False
-
-                            raw_data = await response.read()
-                            data_list = orjson.loads(raw_data)
-
-                    except aiohttp.ClientError:
+                            response.raise_for_status()
+                            data = await response.read()
+                            data_list = orjson.loads(data)
+                except Exception:
+                    self.logger.error(
+                        "Unable to access Home Assistant instance, check URL"
+                    )
+                    self.logger.error(
+                        "If using addon, try setting url and token to 'empty'"
+                    )
+                    return False
+                else:
+                    if response.status == 401:
                         self.logger.error(
-                            "Unable to access Home Assistant instance, check URL"
+                            "Unable to access Home Assistant instance, TOKEN/KEY"
                         )
                         self.logger.error(
                             "If using addon, try setting url and token to 'empty'"
                         )
                         return False
-
-                    """import bz2 # Uncomment to save a serialized data for tests
-                    import _pickle as cPickle
-                    with bz2.BZ2File("data/test_response_get_data_get_method.pbz2", "w") as f:
-                        cPickle.dump(response, f)"""
-
-                    try:  # Sometimes when there are connection problems we need to catch empty retrieved json
-                        data = data_list[0]
-                    except IndexError:
-                        if x == 0:
-                            self.logger.error(
-                                "The retrieved JSON is empty, A sensor:"
-                                + var
-                                + " may have 0 days of history, passed sensor may not be correct, or days to retrieve is set too high. Check your Logger configuration, ensuring the sensors are in the include list."
-                            )
-                        else:
-                            self.logger.error(
-                                "The retrieved JSON is empty for day:"
-                                + str(day)
-                                + ", days_to_retrieve may be larger than the recorded history of sensor:"
-                                + var
-                                + " (check your recorder settings)"
-                            )
+                    if response.status > 299:
+                        self.logger.error(
+                            f"Home assistant request GET error: {response.status} for var {var}"
+                        )
                         return False
+                """import bz2 # Uncomment to save a serialized data for tests
+                import _pickle as cPickle
+                with bz2.BZ2File("data/test_response_get_data_get_method.pbz2", "w") as f:
+                    cPickle.dump(response, f)"""
 
-                    df_raw = pd.DataFrame.from_dict(data)
-                    if len(df_raw) == 0:
-                        if x == 0:
-                            self.logger.error(
-                                "The retrieved Dataframe is empty, A sensor:"
-                                + var
-                                + " may have 0 days of history or passed sensor may not be correct"
-                            )
-                        else:
-                            self.logger.error(
-                                "Retrieved empty Dataframe for day:"
-                                + str(day)
-                                + ", days_to_retrieve may be larger than the recorded history of sensor:"
-                                + var
-                                + " (check your recorder settings)"
-                            )
-                        return False
-
-                    if (
-                        len(df_raw) < ((60 / (self.freq.seconds / 60)) * 24)
-                        and x != len(days_list) - 1
-                    ):  # check if there is enough Dataframes for passed frequency per day (not inc current day)
-                        self.logger.debug(
-                            "sensor:"
+                try:  # Sometimes when there are connection problems we need to catch empty retrieved json
+                    data = data_list[0]
+                except IndexError:
+                    if x == 0:
+                        self.logger.error(
+                            "The retrieved JSON is empty, A sensor:"
                             + var
-                            + " retrieved Dataframe count: "
-                            + str(len(df_raw))
-                            + ", on day: "
+                            + " may have 0 days of history, passed sensor may not be correct, or days to retrieve is set too high. Check your Logger configuration, ensuring the sensors are in the include list."
+                        )
+                    else:
+                        self.logger.error(
+                            "The retrieved JSON is empty for day:"
                             + str(day)
-                            + ". This is less than freq value passed: "
-                            + str(self.freq)
+                            + ", days_to_retrieve may be larger than the recorded history of sensor:"
+                            + var
+                            + " (check your recorder settings)"
                         )
+                    return False
 
-                    if i == 0:  # Defining the DataFrame container
-                        from_date = pd.to_datetime(
-                            df_raw["last_changed"], format="ISO8601"
-                        ).min()
-                        to_date = pd.to_datetime(
-                            df_raw["last_changed"], format="ISO8601"
-                        ).max()
-                        ts = pd.to_datetime(
-                            pd.date_range(start=from_date, end=to_date, freq=self.freq),
-                            format="%Y-%d-%m %H:%M",
-                        ).round(
-                            self.freq, ambiguous="infer", nonexistent="shift_forward"
+                df_raw = pd.DataFrame.from_dict(data)
+                if len(df_raw) == 0:
+                    if x == 0:
+                        self.logger.error(
+                            "The retrieved Dataframe is empty, A sensor:"
+                            + var
+                            + " may have 0 days of history or passed sensor may not be correct"
                         )
-                        df_day = pd.DataFrame(index=ts)
+                    else:
+                        self.logger.error(
+                            "Retrieved empty Dataframe for day:"
+                            + str(day)
+                            + ", days_to_retrieve may be larger than the recorded history of sensor:"
+                            + var
+                            + " (check your recorder settings)"
+                        )
+                    return False
 
-                    # Caution with undefined string data: unknown, unavailable, etc.
-                    df_tp = (
-                        df_raw.copy()[["state"]]
-                        .replace(["unknown", "unavailable", ""], np.nan)
-                        .astype(float)
-                        .rename(columns={"state": var})
+                if (
+                    len(df_raw) < ((60 / (self.freq.seconds / 60)) * 24)
+                    and x != len(days_list) - 1
+                ):  # check if there is enough Dataframes for passed frequency per day (not inc current day)
+                    self.logger.debug(
+                        "sensor:"
+                        + var
+                        + " retrieved Dataframe count: "
+                        + str(len(df_raw))
+                        + ", on day: "
+                        + str(day)
+                        + ". This is less than freq value passed: "
+                        + str(self.freq)
                     )
-                    # Setting index, resampling and concatenation
-                    df_tp.set_index(
-                        pd.to_datetime(df_raw["last_changed"], format="ISO8601"),
-                        inplace=True,
-                    )
-                    df_tp = df_tp.resample(self.freq).mean()
-                    df_day = pd.concat([df_day, df_tp], axis=1)
 
-                self.df_final = pd.concat([self.df_final, df_day], axis=0)
-                x += 1
+                if i == 0:  # Defining the DataFrame container
+                    from_date = pd.to_datetime(
+                        df_raw["last_changed"], format="ISO8601"
+                    ).min()
+                    to_date = pd.to_datetime(
+                        df_raw["last_changed"], format="ISO8601"
+                    ).max()
+                    ts = pd.to_datetime(
+                        pd.date_range(start=from_date, end=to_date, freq=self.freq),
+                        format="%Y-%d-%m %H:%M",
+                    ).round(
+                        self.freq, ambiguous="infer", nonexistent="shift_forward"
+                    )
+                    df_day = pd.DataFrame(index=ts)
+
+                # Caution with undefined string data: unknown, unavailable, etc.
+                df_tp = (
+                    df_raw.copy()[["state"]]
+                    .replace(["unknown", "unavailable", ""], np.nan)
+                    .astype(float)
+                    .rename(columns={"state": var})
+                )
+                # Setting index, resampling and concatenation
+                df_tp.set_index(
+                    pd.to_datetime(df_raw["last_changed"], format="ISO8601"),
+                    inplace=True,
+                )
+                df_tp = df_tp.resample(self.freq).mean()
+                df_day = pd.concat([df_day, df_tp], axis=1)
+            self.df_final = pd.concat([self.df_final, df_day], axis=0)
+            x += 1
 
         self.df_final = set_df_index_freq(self.df_final)
         if self.df_final.index.freq != self.freq:
@@ -582,11 +580,12 @@ class RetrieveHass:
         friendly_name: str,
         list_name: str,
         state: float,
+        decimals: int = 2,
     ) -> dict:
         list_df = copy.deepcopy(data_df).loc[data_df.index[idx] :].reset_index()
         list_df.columns = ["timestamps", entity_id]
         ts_list = [str(i) for i in list_df["timestamps"].tolist()]
-        vals_list = [str(np.round(i, 2)) for i in list_df[entity_id].tolist()]
+        vals_list = [str(np.round(i, decimals)) for i in list_df[entity_id].tolist()]
         forecast_list = []
         for i, ts in enumerate(ts_list):
             datum = {}
@@ -594,7 +593,7 @@ class RetrieveHass:
             datum[entity_id.split("sensor.")[1]] = vals_list[i]
             forecast_list.append(datum)
         data = {
-            "state": f"{state:.2f}",
+            "state": f"{state:.{decimals}f}",
             "attributes": {
                 "device_class": device_class,
                 "unit_of_measurement": unit_of_measurement,
@@ -743,6 +742,7 @@ class RetrieveHass:
                 friendly_name,
                 "unit_load_cost_forecasts",
                 state,
+                decimals=4,
             )
         elif type_var == "unit_prod_price":
             data = RetrieveHass.get_attr_data_dict(
@@ -754,6 +754,7 @@ class RetrieveHass:
                 friendly_name,
                 "unit_prod_price_forecasts",
                 state,
+                decimals=4,
             )
         elif type_var == "mlforecaster":
             data = RetrieveHass.get_attr_data_dict(
@@ -995,19 +996,3 @@ class RetrieveHass:
             df_final = set_df_index_freq(df_final)
 
         return df_final
-    
-     # async def _load_data_from_file(self) -> pd.DataFrame:
-    #     """Asynchronously load data from pickle file using aiofiles."""
-    #     import pickle
-    #     from pathlib import Path
-    #     data_path = Path(self.emhass_conf.get("data_path", "/tmp"))
-    #     pickle_file = data_path / "data_retrieve_hass.pkl"
-
-    #     if pickle_file.exists():
-    #         async with aiofiles.open(pickle_file, "rb") as f:
-    #             content = await f.read()
-    #             df_final = pickle.loads(content)
-    #         self.logger.info(f"Loaded data from file: {pickle_file}")
-    #         return df_final
-    #     else:
-    #         raise FileNotFoundError(f"Data file not found: {pickle_file}")

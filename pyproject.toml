@@ -71,6 +71,7 @@ test = [
     "ruff",
     "tabulate",
     "hatchling",
+    "aioresponses"
 ]
 dev = ["ruff"]
 

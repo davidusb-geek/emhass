@@ -159,7 +159,6 @@ class MLForecaster:
             # Preparing the data: adding exogenous features
             self.data_exo = pd.DataFrame(index=self.data.index)
             self.data_exo = utils_async.add_date_features(self.data_exo)
-            # self.data_exo = utils_async.add_extra_features(self.data_exo)
             self.data_exo[self.var_model] = self.data[self.var_model]
 
             self.data_exo = await self.interpolate_async(self.data_exo)
@@ -259,7 +258,6 @@ class MLForecaster:
                     index=self.data_exo.index, columns=["train", "pred"]
                 )
                 df_pred_backtest["train"] = self.data_exo[self.var_model]
-                df_pred_backtest["pred"] = predictions_backtest
                 # Handle skforecast 0.18.0+ DataFrame output with fold column
                 if isinstance(predictions_backtest, pd.DataFrame):
                     # Extract the 'pred' column from the DataFrame

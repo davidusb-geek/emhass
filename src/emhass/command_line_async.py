@@ -203,7 +203,6 @@ async def set_input_data_dict(
 
     # Parsing yaml
     retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params, logger)
-
     if type(retrieve_hass_conf) is bool:
         return False
 
@@ -432,7 +431,6 @@ async def set_input_data_dict(
                 "Unable to get sensor power photovoltaics, or sensor power load no var loads. Check HA sensors and their daily data"
             )
             return False
-
         df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
         if (
             "optimization_time_step" in retrieve_hass_conf
@@ -464,7 +462,6 @@ async def set_input_data_dict(
                     prediction_horizon - 1
                 ]
             ]
-
     elif (
         set_type == "forecast-model-fit"
         or set_type == "forecast-model-predict"
@@ -651,7 +648,7 @@ async def perfect_forecast_optim(
     )
     if isinstance(df_input_data, bool) and not df_input_data:
         return False
-    opt_res = await input_data_dict["opt"].perform_perfect_forecast_optim(
+    opt_res = input_data_dict["opt"].perform_perfect_forecast_optim(
         df_input_data, input_data_dict["days_list"]
     )
     # Save CSV file for analysis
@@ -772,7 +769,6 @@ async def naive_mpc_optim(
 
     """
     logger.info("Performing naive MPC optimization")
-
     # Load cost and prod price forecast
     df_input_data_dayahead = input_data_dict["fcst"].get_load_cost_forecast(
         input_data_dict["df_input_data_dayahead"],
@@ -1279,33 +1275,33 @@ async def publish_data(
             0
         ]
     # Publish the data
-    try:
-        publish_prefix = params["passed_data"]["publish_prefix"]
-        logger.debug(f"Starting data publishing with prefix: {publish_prefix}")
+    # try:
+    publish_prefix = params["passed_data"]["publish_prefix"]
+        # logger.debug(f"Starting data publishing with prefix: {publish_prefix}")
 
-        # Check if opt_res_latest has required columns
-        required_columns = ["P_PV", "P_Load"]
-        missing_columns = [
-            col for col in required_columns if col not in opt_res_latest.columns
-        ]
-        if missing_columns:
-            logger.error(
-                f"Missing required columns in opt_res_latest: {missing_columns}"
-            )
-            logger.debug(f"Available columns: {list(opt_res_latest.columns)}")
-            return pd.DataFrame()
+        # # Check if opt_res_latest has required columns
+        # required_columns = ["P_PV", "P_Load"]
+        # missing_columns = [
+        #     col for col in required_columns if col not in opt_res_latest.columns
+        # ]
+        # if missing_columns:
+        #     logger.error(
+        #         f"Missing required columns in opt_res_latest: {missing_columns}"
+        #     )
+        #     logger.debug(f"Available columns: {list(opt_res_latest.columns)}")
+        #     return pd.DataFrame()
 
-        # Publish PV forecast
-        custom_pv_forecast_id = params["passed_data"]["custom_pv_forecast_id"]
-        logger.debug(
-            f"Publishing PV forecast data with entity_id: {custom_pv_forecast_id.get('entity_id', 'MISSING')}"
-        )
-    except KeyError as e:
-        logger.error(f"Missing required configuration key: {e}")
-        return pd.DataFrame()
-    except Exception as e:
-        logger.error(f"Error preparing to publish data: {e}")
-        return pd.DataFrame()
+    # Publish PV forecast
+    custom_pv_forecast_id = params["passed_data"]["custom_pv_forecast_id"]
+    #     logger.debug(
+    #         f"Publishing PV forecast data with entity_id: {custom_pv_forecast_id.get('entity_id', 'MISSING')}"
+    #     )
+    # except KeyError as e:
+    #     logger.error(f"Missing required configuration key: {e}")
+    #     return pd.DataFrame()
+    # except Exception as e:
+    #     logger.error(f"Error preparing to publish data: {e}")
+    #     return pd.DataFrame()
     await input_data_dict["rh"].post_data(
         opt_res_latest["P_PV"],
         idx_closest,
@@ -1335,7 +1331,6 @@ async def publish_data(
     cols_published = ["P_PV", "P_Load"]
     # Publish PV curtailment
     if input_data_dict["fcst"].plant_conf["compute_curtailment"]:
-        logger.debug("Publishing PV curtailment data...")
         custom_pv_curtailment_id = params["passed_data"]["custom_pv_curtailment_id"]
         await input_data_dict["rh"].post_data(
             opt_res_latest["P_PV_curtailment"],
@@ -1886,7 +1881,7 @@ async def main():
     elif args.action == "naive-mpc-optim":
         opt_res = await naive_mpc_optim(input_data_dict, logger, debug=args.debug)
     elif args.action == "forecast-model-fit":
-        df_fit_pred, df_fit_pred_backtest, mlf = forecast_model_fit(
+        df_fit_pred, df_fit_pred_backtest, mlf = await forecast_model_fit(
             input_data_dict, logger, debug=args.debug
         )
         opt_res = None
