@@ -64,7 +64,16 @@ package = true
 
 [project.optional-dependencies]
 docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
-test = ["requests-mock", "pytest", "pytz", "coverage", "snakeviz", "ruff", "tabulate", "hatchling"]
+test = [
+    "requests-mock",
+    "pytest",
+    "coverage",
+    "snakeviz",
+    "ruff",
+    "tabulate",
+    "hatchling",
+    "aioresponses"
+]
 dev = ["ruff"]
 
 [tool.hatch.build.targets.wheel]

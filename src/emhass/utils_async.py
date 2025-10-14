@@ -1499,7 +1499,7 @@ async def build_params(
             "Unable to obtain the associations file (associations.csv) in: "
             + str(emhass_conf["associations_path"])
         )
-        return {}
+        return False
 
     # Association file key reference
     # association[0] = config catagories
