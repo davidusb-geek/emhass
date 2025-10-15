@@ -484,6 +484,21 @@ def treat_runtimeparams(
                 target = runtimeparams["target"]
                 params["passed_data"]["target"] = target
 
+        # export-influxdb-to-csv
+        if set_type == "export-influxdb-to-csv":
+            if "sensor_list" in runtimeparams:
+                params["passed_data"]["sensor_list"] = runtimeparams["sensor_list"]
+            if "csv_filename" in runtimeparams:
+                params["passed_data"]["csv_filename"] = runtimeparams["csv_filename"]
+            if "start_time" in runtimeparams:
+                params["passed_data"]["start_time"] = runtimeparams["start_time"]
+            if "end_time" in runtimeparams:
+                params["passed_data"]["end_time"] = runtimeparams["end_time"]
+            if "resample_freq" in runtimeparams:
+                params["passed_data"]["resample_freq"] = runtimeparams["resample_freq"]
+            if "timestamp_col_name" in runtimeparams:
+                params["passed_data"]["timestamp_col_name"] = runtimeparams["timestamp_col_name"]
+
         # MPC control case
         if set_type == "naive-mpc-optim":
             if "prediction_horizon" not in runtimeparams.keys():
