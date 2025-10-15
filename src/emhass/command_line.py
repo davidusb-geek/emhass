@@ -513,6 +513,10 @@ def set_input_data_dict(
         df_input_data, df_input_data_dayahead = None, None
         P_PV_forecast, P_load_forecast = None, None
         days_list = None
+    elif set_type == "export-influxdb-to-csv":
+        df_input_data, df_input_data_dayahead = None, None
+        P_PV_forecast, P_load_forecast = None, None
+        days_list = None
     else:
         logger.error(
             "The passed action argument and hence the set_type parameter for setup is not valid",
@@ -1134,6 +1138,140 @@ def regressor_model_predict(
             type_var="mlregressor",
         )
     return prediction
+
+
+def export_influxdb_to_csv(
+    input_data_dict: dict, logger: logging.Logger
+) -> bool:
+    """Export data from InfluxDB to CSV file for ML regressor training.
+
+    :param input_data_dict: Dictionary containing configuration and parameters
+    :type input_data_dict: dict
+    :param logger: Logger object
+    :type logger: logging.Logger
+    :return: Success status
+    :rtype: bool
+    """
+    # Extract parameters
+    if "sensor_list" in input_data_dict["params"]["passed_data"]:
+        sensor_list = input_data_dict["params"]["passed_data"]["sensor_list"]
+    else:
+        logger.error("parameter: 'sensor_list' not passed")
+        return False
+
+    if "csv_filename" in input_data_dict["params"]["passed_data"]:
+        csv_filename = input_data_dict["params"]["passed_data"]["csv_filename"]
+    else:
+        logger.error("parameter: 'csv_filename' not passed")
+        return False
+
+    if "start_time" in input_data_dict["params"]["passed_data"]:
+        start_time = input_data_dict["params"]["passed_data"]["start_time"]
+    else:
+        logger.error("parameter: 'start_time' not passed")
+        return False
+
+    # Optional parameters
+    end_time = input_data_dict["params"]["passed_data"].get("end_time", None)
+    freq = input_data_dict["params"]["passed_data"].get("freq", "1h")
+    timestamp_col = input_data_dict["params"]["passed_data"].get("timestamp_col_name", "timestamp")
+
+    # Get RetrieveHass object from input_data_dict
+    rh = input_data_dict["rh"]
+
+    # Check if InfluxDB is enabled
+    if not rh.use_influxdb:
+        logger.error("InfluxDB is not enabled in configuration. Set use_influxdb: true in config.json")
+        return False
+
+    # Parse start_time
+    try:
+        start_dt = pd.to_datetime(start_time)
+    except Exception as e:
+        logger.error(f"Invalid start_time format: {start_time}. Error: {e}")
+        logger.error("Use format like '2024-01-01' or '2024-01-01 00:00:00'")
+        return False
+
+    # Parse end_time (default to now if not provided)
+    if end_time:
+        try:
+            end_dt = pd.to_datetime(end_time)
+        except Exception as e:
+            logger.error(f"Invalid end_time format: {end_time}. Error: {e}")
+            logger.error("Use format like '2024-01-01' or '2024-01-01 00:00:00'")
+            return False
+    else:
+        end_dt = pd.Timestamp.now(tz=rh.time_zone)
+        logger.info(f"No end_time specified, using current time: {end_dt}")
+
+    # Create days list for data retrieval
+    days_list = pd.date_range(start=start_dt.date(), end=end_dt.date(), freq='D', tz=rh.time_zone)
+
+    if len(days_list) == 0:
+        logger.error("No days to retrieve. Check start_time and end_time.")
+        return False
+
+    logger.info(f"Retrieving {len(sensor_list)} sensors from {start_dt} to {end_dt} ({len(days_list)} days)")
+    logger.info(f"Sensors: {sensor_list}")
+
+    # Retrieve data from InfluxDB
+    success = rh.get_data(days_list, sensor_list)
+
+    if not success or rh.df_final is None or rh.df_final.empty:
+        logger.error("Failed to retrieve data from InfluxDB")
+        return False
+
+    # Filter to exact time range
+    df_export = rh.df_final.copy()
+    df_export = df_export[(df_export.index >= start_dt) & (df_export.index <= end_dt)]
+
+    if df_export.empty:
+        logger.error("No data in the specified time range after filtering")
+        return False
+
+    logger.info(f"Retrieved {len(df_export)} data points")
+
+    # Resample to specified frequency
+    logger.info(f"Resampling data to frequency: {freq}")
+    try:
+        # Resample - use mean for most sensors
+        df_export = df_export.resample(freq).mean()
+
+        # Remove any rows with all NaN values
+        df_export = df_export.dropna(how='all')
+
+        if df_export.empty:
+            logger.error("No data after resampling. Check frequency and data availability.")
+            return False
+
+        logger.info(f"After resampling: {len(df_export)} data points")
+
+    except Exception as e:
+        logger.error(f"Error during resampling: {e}")
+        return False
+
+    # Reset index to make timestamp a column
+    df_export = df_export.reset_index()
+    df_export = df_export.rename(columns={'index': timestamp_col})
+
+    # Clean column names (remove 'sensor.' prefix if present)
+    column_mapping = {}
+    for col in df_export.columns:
+        if col != timestamp_col and col.startswith('sensor.'):
+            column_mapping[col] = col.replace('sensor.', '')
+    df_export = df_export.rename(columns=column_mapping)
+
+    # Save to CSV
+    csv_path = input_data_dict["emhass_conf"]["data_path"] / csv_filename
+    df_export.to_csv(csv_path, index=False)
+
+    logger.info(f"✓ Successfully exported to {csv_filename}")
+    logger.info(f"  Rows: {df_export.shape[0]}")
+    logger.info(f"  Columns: {list(df_export.columns)}")
+    logger.info(f"  Time range: {df_export[timestamp_col].min()} to {df_export[timestamp_col].max()}")
+    logger.info(f"  File location: {csv_path}")
+
+    return True
 
 
 def publish_data(
