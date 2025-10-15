@@ -42,16 +42,15 @@ RUN apt-get update \
     coinor-cbc \
     coinor-libcbc-dev \
     # glpk
-    glpk-utils
-
-# add build packadges (just in case wheel does not exist)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+    glpk-utils \
+    # build packages (just in case wheel does not exist)
     gcc \
     g++ \
     patchelf \
     cmake \
-    ninja-build
+    ninja-build \
+    && rm -rf /var/cache/apt/* \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install uv (pip alternative)
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh

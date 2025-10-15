@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import ast
@@ -421,10 +420,16 @@ def treat_runtimeparams(
                 try:
                     delta_forecast = int(delta_forecast)
                 except ValueError:
-                    logger.warning("Invalid delta_forecast_daily value (%s) so defaulting to 1 day", delta_forecast)
+                    logger.warning(
+                        "Invalid delta_forecast_daily value (%s) so defaulting to 1 day",
+                        delta_forecast,
+                    )
                     delta_forecast = 1
             if delta_forecast <= 0:
-                logger.warning("delta_forecast_daily is too low (%s) so defaulting to 1 day", delta_forecast)
+                logger.warning(
+                    "delta_forecast_daily is too low (%s) so defaulting to 1 day",
+                    delta_forecast,
+                )
                 delta_forecast = 1
             params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(
                 days=delta_forecast
@@ -588,19 +593,30 @@ def treat_runtimeparams(
             if forecast_key in runtimeparams.keys():
                 forecast_input = runtimeparams[forecast_key]
                 if isinstance(forecast_input, dict):
-                    forecast_data_df = pd.DataFrame.from_dict(forecast_input, orient="index").reset_index()
+                    forecast_data_df = pd.DataFrame.from_dict(
+                        forecast_input, orient="index"
+                    ).reset_index()
                     forecast_data_df.columns = ["time", "value"]
-                    forecast_data_df['time'] = pd.to_datetime(forecast_data_df['time'], format='ISO8601', utc=True).dt.tz_convert(time_zone)
+                    forecast_data_df["time"] = pd.to_datetime(
+                        forecast_data_df["time"], format="ISO8601", utc=True
+                    ).dt.tz_convert(time_zone)
 
                     # align index with forecast_dates
-                    forecast_data_df = (forecast_data_df
-                        .resample(pd.to_timedelta(optimization_time_step, "minutes"), on='time')
-                        .aggregate({'value': 'mean'})
-                        .reindex(forecast_dates, method='nearest')
+                    forecast_data_df = (
+                        forecast_data_df.resample(
+                            pd.to_timedelta(optimization_time_step, "minutes"),
+                            on="time",
+                        )
+                        .aggregate({"value": "mean"})
+                        .reindex(forecast_dates, method="nearest")
                     )
-                    forecast_data_df['value'] = forecast_data_df['value'].ffill().bfill()
-                    forecast_input = forecast_data_df['value'].tolist()
-                if isinstance(forecast_input, list) and len(forecast_input) >= len(forecast_dates):
+                    forecast_data_df["value"] = (
+                        forecast_data_df["value"].ffill().bfill()
+                    )
+                    forecast_input = forecast_data_df["value"].tolist()
+                if isinstance(forecast_input, list) and len(forecast_input) >= len(
+                    forecast_dates
+                ):
                     params["passed_data"][forecast_key] = forecast_input
                     params["optim_conf"][forecast_methods[method]] = "list"
                 else:
@@ -613,9 +629,7 @@ def treat_runtimeparams(
                 # Check if string contains list, if so extract
                 if isinstance(forecast_input, str):
                     if isinstance(ast.literal_eval(forecast_input), list):
-                        forecast_input = ast.literal_eval(
-                            forecast_input
-                        )
+                        forecast_input = ast.literal_eval(forecast_input)
                         runtimeparams[forecast_key] = forecast_input
                 list_non_digits = [
                     x
@@ -948,6 +962,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         template="presentation",
         line_shape="hv",
         color_discrete_sequence=colors,
+        render_mode="svg",
     )
     fig_0.update_layout(xaxis_title="Timestamp", yaxis_title="System powers (W)")
     if "SOC_opt" in df.columns.to_list():
@@ -957,6 +972,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
             template="presentation",
             line_shape="hv",
             color_discrete_sequence=colors,
+            render_mode="svg",
         )
         fig_1.update_layout(xaxis_title="Timestamp", yaxis_title="Battery SOC (%)")
     cols_cost = [i for i in df.columns.to_list() if "cost_" in i or "unit_" in i]
@@ -970,6 +986,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         template="presentation",
         line_shape="hv",
         color_discrete_sequence=colors,
+        render_mode="svg",
     )
     fig_2.update_layout(xaxis_title="Timestamp", yaxis_title="System costs (currency)")
     # Get full path to image
@@ -1663,6 +1680,7 @@ def build_params(
         "end_timesteps_of_each_deferrable_load": None,
         "alpha": None,
         "beta": None,
+        "ignore_pv_feedback_during_curtailment": None,
     }
 
     return params

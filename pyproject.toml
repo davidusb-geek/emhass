@@ -1,6 +1,6 @@
 [project]
 name = "emhass"
-version = "0.13.3"
+version = "0.13.5"
 description = "An Energy Management System for Home Assistant"
 readme = "README.md"
 requires-python = ">=3.10, <3.13"
@@ -45,6 +45,7 @@ dependencies = [
     "orjson",
     "websockets",
     "uvicorn>=0.30.0",
+    "influxdb>=5.3.1",
 ]
 [build-system]
 requires = ["hatchling"]

@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import bz2
 import copy
 import json
@@ -216,9 +214,7 @@ class Forecast:
                     ]
 
     def get_cached_open_meteo_forecast_json(
-        self,
-        max_age: int | None = 30,
-        forecast_days: int = 3
+        self, max_age: int | None = 30, forecast_days: int = 3
     ) -> dict:
         r"""
         Get weather forecast json from Open-Meteo and cache it for re-use.
@@ -247,16 +243,23 @@ class Forecast:
 
         # Ensure at least 3 weather forecast days (and 1 more than requested)
         if forecast_days is None:
-            self.logger.warning("Open-Meteo forecast_days is missing so defaulting to 3 days")
+            self.logger.debug(
+                "Open-Meteo forecast_days is missing so defaulting to 3 days"
+            )
             forecast_days = 3
         elif forecast_days < 3:
-            self.logger.warning("Open-Meteo forecast_days is too low (%s) so defaulting to 3 days", forecast_days)
+            self.logger.debug(
+                "Open-Meteo forecast_days is low (%s) so defaulting to 3 days",
+                forecast_days,
+            )
             forecast_days = 3
         else:
             forecast_days = forecast_days + 1
 
+        # The addition of -b.json file name suffix is because the time format
+        # has changed, and it avoids any attempt to use the old format file.
         json_path = os.path.abspath(
-            self.emhass_conf["data_path"] / "cached-open-meteo-forecast.json"
+            self.emhass_conf["data_path"] / "cached-open-meteo-forecast-b.json"
         )
         # The cached JSON file is always loaded, if it exists, as it is also a fallback
         # in case the REST API call to Open-Meteo fails - the cached JSON will continue to
@@ -288,6 +291,9 @@ class Forecast:
         if not use_cache:
             self.logger.info("Fetching a new weather forecast from Open-Meteo")
             headers = {"User-Agent": "EMHASS", "Accept": "application/json"}
+            # Open-Meteo has returned non-existent time over DST transitions,
+            # so we now return unix timestamps and convert to date/times locally
+            # instead.
             url = (
                 "https://api.open-meteo.com/v1/forecast?"
                 + "latitude="
@@ -303,9 +309,11 @@ class Forecast:
                 + "shortwave_radiation_instant,"
                 + "diffuse_radiation_instant,"
                 + "direct_normal_irradiance_instant"
-                + "&forecast_days=" + str(forecast_days)
+                + "&forecast_days="
+                + str(forecast_days)
                 + "&timezone="
                 + quote(str(self.time_zone), safe="")
+                + "&timeformat=unixtime"
             )
             try:
                 self.logger.debug("Fetching data from Open-Meteo using URL: %s", url)
@@ -368,12 +376,14 @@ class Forecast:
             if not os.path.isfile(w_forecast_cache_path):
                 data_raw = self.get_cached_open_meteo_forecast_json(
                     self.optim_conf["open_meteo_cache_max_age"],
-                    self.optim_conf["delta_forecast_daily"].days
+                    self.optim_conf["delta_forecast_daily"].days,
                 )
                 data_15min = pd.DataFrame.from_dict(data_raw["minutely_15"])
-                data_15min["time"] = pd.to_datetime(data_15min["time"])
+                # Date/times in the Open-Meteo JSON are now unix timestamps and need to
+                # be converted locally to DST/TimeZone aware date/times.
+                data_15min["time"] = pd.to_datetime(data_15min["time"], unit="s", utc=True)
+                data_15min["time"] = data_15min["time"].dt.tz_convert(self.time_zone)
                 data_15min.set_index("time", inplace=True)
-                data_15min.index = data_15min.index.tz_localize(self.time_zone)
 
                 data_15min = data_15min.rename(
                     columns={
@@ -387,6 +397,13 @@ class Forecast:
                         "direct_normal_irradiance_instant": "dni",
                     }
                 )
+
+                # Save a CSV copy of the Open Meteo weather data when debugging
+                if self.logger.isEnabledFor(logging.DEBUG):
+                    data_15min.to_csv(
+                        self.emhass_conf["data_path"]
+                        / "debug-weather-forecast-open-meteo.csv"
+                    )
 
                 data = data_15min.reindex(self.forecast_dates)
                 data.interpolate(
@@ -690,6 +707,7 @@ class Forecast:
         alpha: float,
         beta: float,
         col: str,
+        ignore_pv_feedback: bool = False,
     ) -> pd.DataFrame:
         """A simple correction method for forecasted data using the current real values of a variable.
 
@@ -703,9 +721,15 @@ class Forecast:
         :type beta: float
         :param col: The column variable name
         :type col: str
+        :param ignore_pv_feedback: If True, bypass mixing and return original forecast (used during curtailment)
+        :type ignore_pv_feedback: bool
         :return: The output DataFrame with the corrected values
         :rtype: pd.DataFrame
         """
+        # If ignoring PV feedback (e.g., during curtailment), return original forecast
+        if ignore_pv_feedback:
+            return df_forecast
+
         first_fcst = alpha * df_forecast.iloc[0] + beta * df_now[col].iloc[-1]
         df_forecast.iloc[0] = int(round(first_fcst))
         return df_forecast
@@ -806,12 +830,14 @@ class Forecast:
                     # Extracting results for AC power
                     P_PV_forecast = mc.results.ac
         if set_mix_forecast:
+            ignore_pv_feedback = self.params["passed_data"].get("ignore_pv_feedback_during_curtailment", False)
             P_PV_forecast = Forecast.get_mix_forecast(
                 df_now,
                 P_PV_forecast,
                 self.params["passed_data"]["alpha"],
                 self.params["passed_data"]["beta"],
                 self.var_PV,
+                ignore_pv_feedback,
             )
         P_PV_forecast[P_PV_forecast < 0] = 0  # replace any negative PV values with zero
         self.logger.debug("get_power_from_weather returning:\n%s", P_PV_forecast)
@@ -1429,14 +1455,22 @@ class Forecast:
             forecast_out.index.name = "ts"
             forecast_out = forecast_out.rename(columns={"load": "yhat"})
         elif method == "naive":  # using a naive approach
-            mask_forecast_out = (
-                df.index > days_list[-1] - self.optim_conf["delta_forecast_daily"]
+            # Old code logic (shifted timestamp problem)
+            # mask_forecast_out = (
+            #     df.index > days_list[-1] - self.optim_conf["delta_forecast_daily"]
+            # )
+            # forecast_out = df.copy().loc[mask_forecast_out]
+            # forecast_out = forecast_out.rename(columns={self.var_load_new: "yhat"})
+            # forecast_out = forecast_out.iloc[0 : len(self.forecast_dates)]
+            # forecast_out.index = self.forecast_dates
+            # New code logic
+            forecast_horizon = len(self.forecast_dates)
+            historical_values = df.iloc[-forecast_horizon:]
+            forecast_out = pd.DataFrame(
+                historical_values.values,
+                index=self.forecast_dates,
+                columns=["yhat"]
             )
-            forecast_out = df.copy().loc[mask_forecast_out]
-            forecast_out = forecast_out.rename(columns={self.var_load_new: "yhat"})
-            # Force forecast_out length to avoid mismatches
-            forecast_out = forecast_out.iloc[0 : len(self.forecast_dates)]
-            forecast_out.index = self.forecast_dates
         elif (
             method == "mlforecaster"
         ):  # using a custom forecast model with machine learning
@@ -1525,12 +1559,14 @@ class Forecast:
             return False
         P_Load_forecast = copy.deepcopy(forecast_out["yhat"])
         if set_mix_forecast:
+            # Load forecasts don't need curtailment protection - always use feedback
             P_Load_forecast = Forecast.get_mix_forecast(
                 df_now,
                 P_Load_forecast,
                 self.params["passed_data"]["alpha"],
                 self.params["passed_data"]["beta"],
                 self.var_load_new,
+                False,  # Never ignore feedback for load forecasts
             )
         self.logger.debug("get_load_forecast returning:\n%s", P_Load_forecast)
         return P_Load_forecast
