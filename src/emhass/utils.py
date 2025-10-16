@@ -498,6 +498,10 @@ def treat_runtimeparams(
                 params["passed_data"]["resample_freq"] = runtimeparams["resample_freq"]
             if "timestamp_col_name" in runtimeparams:
                 params["passed_data"]["timestamp_col_name"] = runtimeparams["timestamp_col_name"]
+            if "decimal_places" in runtimeparams:
+                params["passed_data"]["decimal_places"] = runtimeparams["decimal_places"]
+            if "handle_nan" in runtimeparams:
+                params["passed_data"]["handle_nan"] = runtimeparams["handle_nan"]
 
         # MPC control case
         if set_type == "naive-mpc-optim":

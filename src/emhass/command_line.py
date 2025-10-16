@@ -1203,6 +1203,8 @@ def export_influxdb_to_csv_direct(
     end_time = params["passed_data"].get("end_time", None)
     resample_freq = params["passed_data"].get("resample_freq", "1h")
     timestamp_col = params["passed_data"].get("timestamp_col_name", "timestamp")
+    decimal_places = params["passed_data"].get("decimal_places", 2)
+    handle_nan = params["passed_data"].get("handle_nan", "keep")  # Options: keep, drop, fill_zero, interpolate, forward_fill, backward_fill
 
     # Create RetrieveHass object with minimal config (just for InfluxDB)
     rh = RetrieveHass(
@@ -1220,18 +1222,22 @@ def export_influxdb_to_csv_direct(
         logger.error("InfluxDB is not enabled in configuration. Set use_influxdb: true in config.json")
         return False
 
-    # Parse start_time
+    # Parse start_time (make timezone-aware)
     try:
         start_dt = pd.to_datetime(start_time)
+        if start_dt.tz is None:
+            start_dt = start_dt.tz_localize(rh.time_zone)
     except Exception as e:
         logger.error(f"Invalid start_time format: {start_time}. Error: {e}")
         logger.error("Use format like '2024-01-01' or '2024-01-01 00:00:00'")
         return False
 
-    # Parse end_time (default to now if not provided)
+    # Parse end_time (default to now if not provided, make timezone-aware)
     if end_time:
         try:
             end_dt = pd.to_datetime(end_time)
+            if end_dt.tz is None:
+                end_dt = end_dt.tz_localize(rh.time_zone)
         except Exception as e:
             logger.error(f"Invalid end_time format: {end_time}. Error: {e}")
             return False
@@ -1295,6 +1301,39 @@ def export_influxdb_to_csv_direct(
         if col != timestamp_col and col.startswith('sensor.'):
             column_mapping[col] = col.replace('sensor.', '')
     df_export = df_export.rename(columns=column_mapping)
+
+    # Handle NaN values according to specified method
+    nan_count_before = df_export.isna().sum().sum()
+    if nan_count_before > 0:
+        logger.info(f"Found {nan_count_before} NaN values, applying handle_nan method: {handle_nan}")
+
+        if handle_nan == "drop":
+            df_export = df_export.dropna()
+            logger.info(f"Dropped rows with NaN. Remaining rows: {len(df_export)}")
+        elif handle_nan == "fill_zero":
+            df_export = df_export.fillna(0)
+            logger.info("Filled NaN values with 0")
+        elif handle_nan == "interpolate":
+            # Interpolate only numeric columns (not timestamp)
+            numeric_cols = df_export.select_dtypes(include=[np.number]).columns
+            df_export[numeric_cols] = df_export[numeric_cols].interpolate(method='linear', limit_direction='both')
+            # Fill any remaining NaN at edges with forward/backward fill
+            df_export[numeric_cols] = df_export[numeric_cols].ffill().bfill()
+            logger.info("Interpolated NaN values")
+        elif handle_nan == "forward_fill":
+            df_export = df_export.ffill()
+            logger.info("Forward filled NaN values")
+        elif handle_nan == "backward_fill":
+            df_export = df_export.bfill()
+            logger.info("Backward filled NaN values")
+        elif handle_nan == "keep":
+            logger.info("Keeping NaN values as-is")
+        else:
+            logger.warning(f"Unknown handle_nan option '{handle_nan}', keeping NaN values")
+
+    # Round numeric columns to specified decimal places
+    numeric_cols = df_export.select_dtypes(include=[np.number]).columns
+    df_export[numeric_cols] = df_export[numeric_cols].round(decimal_places)
 
     # Save to CSV
     csv_path = emhass_conf["data_path"] / csv_filename
