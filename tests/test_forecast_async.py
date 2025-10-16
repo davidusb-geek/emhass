@@ -216,9 +216,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         data_path = emhass_conf["data_path"] / str(model_type + ".pkl")
         async with aiofiles.open(data_path, "rb") as inp:
             content = await inp.read()
-            data, _, _, _ = (
-                pickle.loads(content)
-            )
+            data, _, _, _ = pickle.loads(content)
         # Clean nan's
         data = data.interpolate(method="linear", axis=0, limit=5)
         data = data.fillna(0.0)
@@ -258,9 +256,12 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         #     template='presentation'
         # )
         # fig.show()
+
     # Test output weather forecast using openmeteo with mock get request data
     async def test_get_weather_forecast_openmeteo_method_mock(self):
-        test_data_path = emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2"
+        test_data_path = (
+            emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2"
+        )
 
         async with aiofiles.open(test_data_path, "rb") as f:
             compressed = await f.read()
@@ -288,12 +289,13 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         )
         get_url = "https://api.open-meteo.com/v1/forecast"
 
-
         with aioresponses() as mocked:
             mocked.get(get_url, payload=data)
 
             # Test dataframe output from get weather forecast
-            df_weather_openmeteo = await self.fcst.get_weather_forecast(method="open-meteo")
+            df_weather_openmeteo = await self.fcst.get_weather_forecast(
+                method="open-meteo"
+            )
             self.assertIsInstance(df_weather_openmeteo, type(pd.DataFrame()))
             self.assertIsInstance(
                 df_weather_openmeteo.index, pd.core.indexes.datetimes.DatetimeIndex
@@ -378,8 +380,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 emhass_conf["data_path"] / "weather_forecast_data.pkl",
                 emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
             )
-        
-        test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2")
+
+        test_data_path = str(
+            emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2"
+        )
 
         async with aiofiles.open(test_data_path, "rb") as f:
             compressed = await f.read()
@@ -393,9 +397,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         with aioresponses() as mocked:
             mocked.get(get_url, payload=data)
 
-            df_weather_scrap = await self.fcst.get_weather_forecast(
-                    method="solcast"
-                )
+            df_weather_scrap = await self.fcst.get_weather_forecast(method="solcast")
 
             self.assertIsInstance(df_weather_scrap, type(pd.DataFrame()))
             self.assertIsInstance(
@@ -490,10 +492,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         )
         async with aiofiles.open(test_data_path, "rb") as f:
             compressed = await f.read()
-        
+
         data = bz2.decompress(compressed)
         data = cPickle.loads(data)
-        
+
         with aioresponses() as mocked:
             for i in range(len(self.plant_conf["pv_module_model"])):
                 get_url = (
@@ -540,7 +542,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # Load default params
         params = {}
         if emhass_conf["defaults_path"].exists():
-            async with aiofiles.open(emhass_conf["defaults_path"], "r") as data:
+            async with aiofiles.open(emhass_conf["defaults_path"]) as data:
                 content = await data.read()
                 defaults = orjson.loads(content)
                 updated_emhass_conf, built_secrets = await utils.build_secrets(
@@ -601,9 +603,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             data_path = emhass_conf["data_path"] / "test_df_final.pkl"
             async with aiofiles.open(data_path, "rb") as inp:
                 content = await inp.read()
-                rh.df_final, days_list, var_list, rh.ha_config = (
-                    pickle.loads(content)
-                )
+                rh.df_final, days_list, var_list, rh.ha_config = pickle.loads(content)
                 rh.var_list = var_list
             retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(self.var_list[0])
             retrieve_hass_conf["sensor_power_photovoltaics"] = str(self.var_list[1])
@@ -700,7 +700,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         params = {}
         set_type = "dayahead-optim"
         if emhass_conf["defaults_path"].exists():
-            async with aiofiles.open(emhass_conf["defaults_path"], "r") as data:
+            async with aiofiles.open(emhass_conf["defaults_path"]) as data:
                 content = await data.read()
                 defaults = orjson.loads(content)
                 updated_emhass_conf, built_secrets = await utils.build_secrets(
@@ -863,9 +863,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             data_path = emhass_conf["data_path"] / "test_df_final.pkl"
             async with aiofiles.open(data_path, "rb") as inp:
                 content = await inp.read()
-                rh.df_final, days_list, var_list, rh.ha_config = (
-                    pickle.loads(content)
-                )
+                rh.df_final, days_list, var_list, rh.ha_config = pickle.loads(content)
                 rh.var_list = var_list
             retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(self.var_list[0])
             retrieve_hass_conf["sensor_power_photovoltaics"] = str(self.var_list[1])
@@ -955,7 +953,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.plant_conf["surface_azimuth"] = [270, 90]
         self.plant_conf["modules_per_string"] = [8, 8]
         self.plant_conf["strings_per_inverter"] = [1, 1]
-        params = orjson.dumps({"passed_data": {"weather_forecast_cache": False}}).decode("utf-8")
+        params = orjson.dumps(
+            {"passed_data": {"weather_forecast_cache": False}}
+        ).decode("utf-8")
         self.fcst = Forecast(
             self.retrieve_hass_conf,
             self.optim_conf,
@@ -977,7 +977,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.df_weather_scrap), len(P_PV_forecast))
         # Test the mixed forecast
-        params = orjson.dumps({"passed_data": {"alpha": 0.5, "beta": 0.5}}).decode("utf-8")
+        params = orjson.dumps({"passed_data": {"alpha": 0.5, "beta": 0.5}}).decode(
+            "utf-8"
+        )
         df_input_data = self.input_data_dict["rh"].df_final.copy()
         self.fcst = Forecast(
             self.retrieve_hass_conf,

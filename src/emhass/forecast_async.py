@@ -1397,7 +1397,9 @@ class Forecast:
                 filename_path = self.emhass_conf["data_path"] / "test_df_final.pkl"
                 async with aiofiles.open(filename_path, "rb") as inp:
                     content = await inp.read()
-                    rh.df_final, days_list, var_list, rh.ha_config = pickle.loads(content)
+                    rh.df_final, days_list, var_list, rh.ha_config = pickle.loads(
+                        content
+                    )
                     self.var_load = var_list[0]
                     self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = (
                         self.var_load
@@ -1459,7 +1461,9 @@ class Forecast:
                     forecast = forecast_tmp
                 else:
                     forecast = pd.concat([forecast, forecast_tmp], axis=0)
-            forecast_out = forecast.loc[forecast.index.intersection(self.forecast_dates)]
+            forecast_out = forecast.loc[
+                forecast.index.intersection(self.forecast_dates)
+            ]
             forecast_out.index = self.forecast_dates
             forecast_out.index.name = "ts"
             forecast_out = forecast_out.rename(columns={"load": "yhat"})

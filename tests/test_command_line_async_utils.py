@@ -46,7 +46,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             config = await utils.build_config(
                 emhass_conf, logger, emhass_conf["defaults_path"]
             )
-            _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
+            _, secrets = await utils.build_secrets(
+                emhass_conf, logger, no_response=True
+            )
             params = await utils.build_params(emhass_conf, secrets, config, logger)
             if set_use_pv:
                 params["optim_conf"]["set_use_pv"] = True
@@ -420,7 +422,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        opt_res_first = await publish_data(input_data_dict, logger, opt_res_latest=opt_res)
+        opt_res_first = await publish_data(
+            input_data_dict, logger, opt_res_latest=opt_res
+        )
         self.assertTrue(len(opt_res_first) == 1)
         # test mpc and publish with method_ts_round=last and set_use_battery=true
         action = "naive-mpc-optim"
@@ -448,7 +452,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        opt_res_last = await publish_data(input_data_dict, logger, opt_res_latest=opt_res)
+        opt_res_last = await publish_data(
+            input_data_dict, logger, opt_res_latest=opt_res
+        )
         self.assertTrue(len(opt_res_last) == 1)
         # Reproduce when trying to publish data params=None and runtimeparams=None
         # action = 'publish-data'
@@ -587,7 +593,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(df_pred, pd.Series)
         self.assertTrue(df_pred.isnull().sum().sum() == 0)
         # Now a predict using last_window
-        df_pred = await forecast_model_predict(input_data_dict, logger, debug=True, mlf=mlf)
+        df_pred = await forecast_model_predict(
+            input_data_dict, logger, debug=True, mlf=mlf
+        )
         self.assertIsInstance(df_pred, pd.Series)
         self.assertTrue(df_pred.isnull().sum().sum() == 0)
         # Test the tune method

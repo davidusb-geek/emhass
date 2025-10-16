@@ -3,7 +3,7 @@
 import asyncio
 import pathlib
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from emhass import utils_async as utils
 from emhass.connection_manager import (
@@ -35,6 +35,7 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
 
         # Reset global client state before each test
         import emhass.connection_manager as cm
+
         cm._global_client = None
 
     async def asyncTearDown(self):
@@ -42,7 +43,7 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
         # Ensure global connection is closed
         await close_global_connection()
 
-    @patch('emhass.connection_manager.AsyncWebSocketClient')
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
     async def test_get_websocket_client_first_time(self, mock_client_class):
         """Test getting WebSocket client for the first time."""
         # Mock the AsyncWebSocketClient
@@ -57,13 +58,11 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
         # Verify client was created and started up
         self.assertEqual(client, mock_client)
         mock_client_class.assert_called_once_with(
-            hass_url=self.hass_url,
-            long_lived_token=self.token,
-            logger=logger
+            hass_url=self.hass_url, long_lived_token=self.token, logger=logger
         )
         mock_client.startup.assert_called_once()
 
-    @patch('emhass.connection_manager.AsyncWebSocketClient')
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
     async def test_get_websocket_client_reuse_existing(self, mock_client_class):
         """Test reusing existing WebSocket client."""
         # Mock the AsyncWebSocketClient
@@ -82,8 +81,10 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
         mock_client_class.assert_called_once()  # Should only be called once
         mock_client.startup.assert_called_once()  # Should only be called once
 
-    @patch('emhass.connection_manager.AsyncWebSocketClient')
-    async def test_get_websocket_client_reconnect_when_disconnected(self, mock_client_class):
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
+    async def test_get_websocket_client_reconnect_when_disconnected(
+        self, mock_client_class
+    ):
         """Test reconnecting when existing client is disconnected."""
         # Mock the AsyncWebSocketClient
         mock_client = AsyncMock(spec=AsyncWebSocketClient)
@@ -104,12 +105,12 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
         mock_client.startup.assert_called_once()
         mock_client.reconnect.assert_called_once()
 
-    @patch('emhass.connection_manager.AsyncWebSocketClient')
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
     async def test_get_websocket_client_startup_timeout(self, mock_client_class):
         """Test handling startup timeout."""
         # Mock the AsyncWebSocketClient with startup timeout
         mock_client = AsyncMock(spec=AsyncWebSocketClient)
-        mock_client.startup.side_effect = asyncio.TimeoutError()
+        mock_client.startup.side_effect = TimeoutError()
         mock_client_class.return_value = mock_client
 
         # Should raise ConnectionError due to timeout
@@ -118,7 +119,7 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("startup timed out", str(cm.exception))
 
-    @patch('emhass.connection_manager.AsyncWebSocketClient')
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
     async def test_get_websocket_client_startup_failure(self, mock_client_class):
         """Test handling startup failure."""
         # Mock the AsyncWebSocketClient with startup failure
@@ -132,13 +133,13 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Connection failed", str(cm.exception))
 
-    @patch('emhass.connection_manager.AsyncWebSocketClient')
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
     async def test_get_websocket_client_reconnect_timeout(self, mock_client_class):
         """Test handling reconnect timeout."""
         # Mock the AsyncWebSocketClient
         mock_client = AsyncMock(spec=AsyncWebSocketClient)
         mock_client.startup = AsyncMock()
-        mock_client.reconnect.side_effect = asyncio.TimeoutError()
+        mock_client.reconnect.side_effect = TimeoutError()
         mock_client_class.return_value = mock_client
 
         # First call - successful startup
@@ -152,7 +153,7 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("reconnect timed out", str(cm.exception))
 
-    @patch('emhass.connection_manager.AsyncWebSocketClient')
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
     async def test_get_websocket_client_reconnect_failure(self, mock_client_class):
         """Test handling reconnect failure."""
         # Mock the AsyncWebSocketClient
@@ -172,7 +173,7 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Reconnect failed", str(cm.exception))
 
-    @patch('emhass.connection_manager.AsyncWebSocketClient')
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
     async def test_close_global_connection(self, mock_client_class):
         """Test closing the global connection."""
         # Mock the AsyncWebSocketClient
@@ -193,6 +194,7 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
 
         # Verify global client is reset
         import emhass.connection_manager as cm
+
         self.assertIsNone(cm._global_client)
 
     async def test_close_global_connection_when_none(self):
@@ -202,18 +204,20 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
 
         # Verify global client is still None
         import emhass.connection_manager as cm
+
         self.assertIsNone(cm._global_client)
 
     def test_is_connected_no_client(self):
         """Test is_connected when no client exists."""
         # Reset global client
         import emhass.connection_manager as cm
+
         cm._global_client = None
 
         # Should return False
         self.assertFalse(is_connected())
 
-    @patch('emhass.connection_manager.AsyncWebSocketClient')
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
     async def test_is_connected_with_client(self, mock_client_class):
         """Test is_connected with existing client."""
         # Mock the AsyncWebSocketClient
@@ -230,7 +234,7 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
         mock_client.connected = False
         self.assertFalse(is_connected())
 
-    @patch('emhass.connection_manager.AsyncWebSocketClient')
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
     async def test_concurrent_client_access(self, mock_client_class):
         """Test concurrent access to get_websocket_client."""
         # Mock the AsyncWebSocketClient
@@ -254,7 +258,7 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
         mock_client_class.assert_called_once()
         mock_client.startup.assert_called_once()
 
-    @patch('emhass.connection_manager.AsyncWebSocketClient')
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
     async def test_get_websocket_client_without_logger(self, mock_client_class):
         """Test getting WebSocket client without logger."""
         # Mock the AsyncWebSocketClient
@@ -264,16 +268,14 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
         mock_client_class.return_value = mock_client
 
         # Get the client without logger
-        client = await get_websocket_client(self.hass_url, self.token)
+        await get_websocket_client(self.hass_url, self.token)
 
         # Verify client was created with None logger
         mock_client_class.assert_called_once_with(
-            hass_url=self.hass_url,
-            long_lived_token=self.token,
-            logger=None
+            hass_url=self.hass_url, long_lived_token=self.token, logger=None
         )
 
-    @patch('emhass.connection_manager.AsyncWebSocketClient')
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
     async def test_client_reset_after_startup_failure(self, mock_client_class):
         """Test that global client is reset after startup failure."""
         # Mock the AsyncWebSocketClient with startup failure
@@ -282,14 +284,15 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
         mock_client_class.return_value = mock_client
 
         # Should raise exception and reset global client
-        with self.assertRaises(Exception):
+        with self.assertRaises(Exception) as cm:
             await get_websocket_client(self.hass_url, self.token, logger)
 
         # Verify global client is reset
         import emhass.connection_manager as cm
+
         self.assertIsNone(cm._global_client)
 
-    @patch('emhass.connection_manager.AsyncWebSocketClient')
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
     async def test_client_reset_after_reconnect_failure(self, mock_client_class):
         """Test that global client is reset after reconnect failure."""
         # Mock the AsyncWebSocketClient
@@ -304,14 +307,15 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
 
         # Second call - reconnect fails
         mock_client.connected = False
-        with self.assertRaises(Exception):
+        with self.assertRaises(Exception) as cm:
             await get_websocket_client(self.hass_url, self.token, logger)
 
         # Verify global client is reset
         import emhass.connection_manager as cm
+
         self.assertIsNone(cm._global_client)
 
-    @patch('emhass.connection_manager.AsyncWebSocketClient')
+    @patch("emhass.connection_manager.AsyncWebSocketClient")
     async def test_lock_prevents_race_conditions(self, mock_client_class):
         """Test that the async lock prevents race conditions."""
         # Mock the AsyncWebSocketClient with slow startup
@@ -325,8 +329,12 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
         mock_client.startup = slow_startup
 
         # Start two concurrent requests
-        task1 = asyncio.create_task(get_websocket_client(self.hass_url, self.token, logger))
-        task2 = asyncio.create_task(get_websocket_client(self.hass_url, self.token, logger))
+        task1 = asyncio.create_task(
+            get_websocket_client(self.hass_url, self.token, logger)
+        )
+        task2 = asyncio.create_task(
+            get_websocket_client(self.hass_url, self.token, logger)
+        )
 
         clients = await asyncio.gather(task1, task2)
 
