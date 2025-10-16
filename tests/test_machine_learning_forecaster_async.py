@@ -1,11 +1,11 @@
 import copy
-import orjson
 import pathlib
 import pickle
 import unittest
-import aiofiles
 
+import aiofiles
 import numpy as np
+import orjson
 import pandas as pd
 from skforecast.recursive import ForecasterRecursive
 
@@ -26,6 +26,7 @@ emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations
 # create logger
 logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
+
 class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     async def get_test_params():
@@ -34,7 +35,9 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
             config = await utils.build_config(
                 emhass_conf, logger, emhass_conf["defaults_path"]
             )
-            _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
+            _, secrets = await utils.build_secrets(
+                emhass_conf, logger, no_response=True
+            )
             params = await utils.build_params(emhass_conf, secrets, config, logger)
         else:
             raise Exception(
@@ -95,9 +98,13 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
             get_data_from_file=get_data_from_file,
         )
         # Open and extract saved sensor data to test against
-        async with aiofiles.open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
+        async with aiofiles.open(
+            emhass_conf["data_path"] / "test_df_final.pkl", "rb"
+        ) as inp:
             content = await inp.read()
-            self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = pickle.loads(content)
+            self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = (
+                pickle.loads(content)
+            )
 
     async def test_fit(self):
         df_pred, df_pred_backtest = await self.mlf.fit()
@@ -167,6 +174,7 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         df_pred_optim = await self.mlf.tune(debug=True)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
         self.assertTrue(self.mlf.is_tuned is True)
+
 
 if __name__ == "__main__":
     unittest.main()

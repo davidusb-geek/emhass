@@ -1275,33 +1275,11 @@ async def publish_data(
             0
         ]
     # Publish the data
-    # try:
     publish_prefix = params["passed_data"]["publish_prefix"]
-        # logger.debug(f"Starting data publishing with prefix: {publish_prefix}")
-
-        # # Check if opt_res_latest has required columns
-        # required_columns = ["P_PV", "P_Load"]
-        # missing_columns = [
-        #     col for col in required_columns if col not in opt_res_latest.columns
-        # ]
-        # if missing_columns:
-        #     logger.error(
-        #         f"Missing required columns in opt_res_latest: {missing_columns}"
-        #     )
-        #     logger.debug(f"Available columns: {list(opt_res_latest.columns)}")
-        #     return pd.DataFrame()
 
     # Publish PV forecast
     custom_pv_forecast_id = params["passed_data"]["custom_pv_forecast_id"]
-    #     logger.debug(
-    #         f"Publishing PV forecast data with entity_id: {custom_pv_forecast_id.get('entity_id', 'MISSING')}"
-    #     )
-    # except KeyError as e:
-    #     logger.error(f"Missing required configuration key: {e}")
-    #     return pd.DataFrame()
-    # except Exception as e:
-    #     logger.error(f"Error preparing to publish data: {e}")
-    #     return pd.DataFrame()
+
     await input_data_dict["rh"].post_data(
         opt_res_latest["P_PV"],
         idx_closest,

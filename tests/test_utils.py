@@ -1038,16 +1038,17 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(params["retrieve_hass_conf"]["hass_url"] == "test.url")
         self.assertTrue(params["retrieve_hass_conf"]["long_lived_token"] == "test.key")
 
+
 class TestGetInjectionDict(unittest.TestCase):
     @staticmethod
     def _df_base(with_soc: bool = True) -> pd.DataFrame:
         idx = pd.date_range("2025-01-01", periods=3, freq="h")
         df = pd.DataFrame(
             {
-                "P_PV": [100.4, 200.6, 300.5],        # cast to int
-                "P_Load": [150.9, 175.1, 125.4],      # cast to int
+                "P_PV": [100.4, 200.6, 300.5],  # cast to int
+                "P_Load": [150.9, 175.1, 125.4],  # cast to int
                 "unit_price": [0.12345, 0.54321, 0.99999],  # round(3)
-                "cost_grid": [1.1111, 2.2222, 3.3333],      # round(3)
+                "cost_grid": [1.1111, 2.2222, 3.3333],  # round(3)
                 "optim_status": ["optimal", "optimal", "optimal"],
             },
             index=idx,
@@ -1109,7 +1110,7 @@ class TestGetInjectionDict(unittest.TestCase):
         idx = pd.date_range("2025-01-01", periods=3, freq="h")
         df = pd.DataFrame(
             {
-                "P_PV": [100, 200, 300],     # only one P_* column
+                "P_PV": [100, 200, 300],  # only one P_* column
                 "unit_price": [0.1, 0.2, 0.3],
                 "cost_grid": [1, 2, 3],
                 "optim_status": ["optimal", "optimal", "optimal"],

@@ -89,7 +89,7 @@ class RetrieveHass:
         )
         if self.use_websocket:
             self._client = None
-            self.logger.info(f"Websocket integration enabled")
+            self.logger.info("Websocket integration enabled")
         else:
             self.logger.debug(
                 "Websocket integration disabled, using Home Assistant API"
@@ -670,14 +670,14 @@ class RetrieveHass:
         end_time_str = end_time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         # Use FILL(previous) instead of FILL(linear) for compatibility with open-source InfluxDB
-        query = f'''
+        query = f"""
         SELECT mean("value") AS "mean_value"
         FROM "{self.influxdb_database}"."{self.influxdb_retention_policy}"."{measurement}"
         WHERE time >= '{start_time_str}'
         AND time < '{end_time_str}'
         AND "entity_id"='{entity_id}'
         GROUP BY time({interval}) FILL(previous)
-        '''
+        """
         return query
 
     def _build_influx_query(self, sensor: str, start_time, end_time) -> str:
