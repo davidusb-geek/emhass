@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 
-import json
 import pathlib
 import unittest
 
+import orjson
 import pandas as pd
 
-from emhass import utils
+from emhass import utils_async as utils
 
 # The root folder
 root = pathlib.Path(utils.get_root(__file__, num_parent=2))
@@ -27,19 +27,21 @@ emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations
 logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
 
-class TestCommandLineUtils(unittest.TestCase):
+class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
     @staticmethod
-    def get_test_params():
+    async def get_test_params():
         print(emhass_conf["legacy_config_path"])
         # Build params with default config and secrets
         if emhass_conf["defaults_path"].exists():
-            config = utils.build_config(
+            config = await utils.build_config(
                 emhass_conf, logger, emhass_conf["defaults_path"]
             )
-            _, secrets = utils.build_secrets(emhass_conf, logger, no_response=True)
+            _, secrets = await utils.build_secrets(
+                emhass_conf, logger, no_response=True
+            )
             # Add Altitude secret manually for testing get_yaml_parse
             secrets["Altitude"] = 8000.0
-            params = utils.build_params(emhass_conf, secrets, config, logger)
+            params = await utils.build_params(emhass_conf, secrets, config, logger)
         else:
             raise Exception(
                 "config_defaults. does not exist in path: "
@@ -48,8 +50,8 @@ class TestCommandLineUtils(unittest.TestCase):
 
         return params
 
-    def setUp(self):
-        params = TestCommandLineUtils.get_test_params()
+    async def asyncSetUp(self):
+        params = await TestCommandLineUtils.get_test_params()
         # Add runtime parameters for forecast lists
         runtimeparams = {
             "pv_power_forecast": [i + 1 for i in range(48)],
@@ -57,21 +59,23 @@ class TestCommandLineUtils(unittest.TestCase):
             "load_cost_forecast": [i + 1 for i in range(48)],
             "prod_price_forecast": [i + 1 for i in range(48)],
         }
-        self.runtimeparams_json = json.dumps(runtimeparams)
+        self.runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
         params["passed_data"] = runtimeparams
         params["optim_conf"]["weather_forecast_method"] = "list"
         params["optim_conf"]["load_forecast_method"] = "list"
         params["optim_conf"]["load_cost_forecast_method"] = "list"
         params["optim_conf"]["production_price_forecast_method"] = "list"
-        self.params_json = json.dumps(params)
+        self.params_json = orjson.dumps(params).decode("utf-8")
 
-    def test_build_config(self):
+    async def test_build_config(self):
         # Test building with the different config methods
         config = {}
         params = {}
         # Test with defaults
-        config = utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
-        params = utils.build_params(emhass_conf, {}, config, logger)
+        config = await utils.build_config(
+            emhass_conf, logger, emhass_conf["defaults_path"]
+        )
+        params = await utils.build_params(emhass_conf, {}, config, logger)
         self.assertTrue(params["optim_conf"]["lp_solver"] == "default")
         self.assertTrue(params["optim_conf"]["lp_solver_path"] == "empty")
         self.assertTrue(
@@ -86,23 +90,23 @@ class TestCommandLineUtils(unittest.TestCase):
             == ["sensor.power_photovoltaics", "sensor.p_pv_forecast"]
         )
         # Test with config.json
-        config = utils.build_config(
+        config = await utils.build_config(
             emhass_conf,
             logger,
             emhass_conf["defaults_path"],
             emhass_conf["config_path"],
         )
-        params = utils.build_params(emhass_conf, {}, config, logger)
+        params = await utils.build_params(emhass_conf, {}, config, logger)
         self.assertTrue(params["optim_conf"]["lp_solver"] == "default")
         self.assertTrue(params["optim_conf"]["lp_solver_path"] == "empty")
         # Test with legacy config_emhass yaml
-        config = utils.build_config(
+        config = await utils.build_config(
             emhass_conf,
             logger,
             emhass_conf["defaults_path"],
             legacy_config_path=emhass_conf["legacy_config_path"],
         )
-        params = utils.build_params(emhass_conf, {}, config, logger)
+        params = await utils.build_params(emhass_conf, {}, config, logger)
         self.assertTrue(
             params["retrieve_hass_conf"]["sensor_replace_zero"]
             == ["sensor.power_photovoltaics"]
@@ -116,14 +120,14 @@ class TestCommandLineUtils(unittest.TestCase):
         )
         self.assertTrue(params["plant_conf"]["battery_charge_efficiency"] == 0.95)
 
-    def test_get_yaml_parse(self):
+    async def test_get_yaml_parse(self):
         # Test get_yaml_parse with only secrets
         params = {}
-        updated_emhass_conf, secrets = utils.build_secrets(emhass_conf, logger)
+        updated_emhass_conf, secrets = await utils.build_secrets(emhass_conf, logger)
         emhass_conf.update(updated_emhass_conf)
-        params.update(utils.build_params(emhass_conf, secrets, {}, logger))
+        params.update(await utils.build_params(emhass_conf, secrets, {}, logger))
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            json.dumps(params), logger
+            orjson.dumps(params).decode("utf-8"), logger
         )
         self.assertIsInstance(retrieve_hass_conf, dict)
         self.assertIsInstance(optim_conf, dict)
@@ -135,7 +139,7 @@ class TestCommandLineUtils(unittest.TestCase):
         )
         self.assertTrue(retrieve_hass_conf["Altitude"] == 8000.0)
 
-    def test_get_forecast_dates(self):
+    async def test_get_forecast_dates(self):
         retrieve_hass_conf, optim_conf, _ = utils.get_yaml_parse(
             self.params_json, logger
         )
@@ -146,13 +150,18 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(forecast_dates, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertTrue(len(forecast_dates) == int(delta_forecast * 60 * 24 / freq))
 
-    def test_treat_runtimeparams(self):
+    async def test_treat_runtimeparams(self):
         # Test dayahead runtime params
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
             self.params_json, logger
         )
         set_type = "dayahead-optim"
-        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+        (
+            params,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+        ) = await utils.treat_runtimeparams(
             self.runtimeparams_json,
             self.params_json,
             retrieve_hass_conf,
@@ -163,7 +172,7 @@ class TestCommandLineUtils(unittest.TestCase):
             emhass_conf,
         )
         self.assertIsInstance(params, str)
-        params = json.loads(params)
+        params = orjson.loads(params)
         self.assertIsInstance(params["passed_data"]["pv_power_forecast"], list)
         self.assertIsInstance(params["passed_data"]["load_power_forecast"], list)
         self.assertIsInstance(params["passed_data"]["load_cost_forecast"], list)
@@ -174,7 +183,12 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(optim_conf["production_price_forecast_method"] == "list")
         # Test naive MPC runtime params
         set_type = "naive-mpc-optim"
-        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+        (
+            params,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+        ) = await utils.treat_runtimeparams(
             self.runtimeparams_json,
             self.params_json,
             retrieve_hass_conf,
@@ -185,7 +199,7 @@ class TestCommandLineUtils(unittest.TestCase):
             emhass_conf,
         )
         self.assertIsInstance(params, str)
-        params = json.loads(params)
+        params = orjson.loads(params)
         self.assertTrue(params["passed_data"]["prediction_horizon"] == 10)
         self.assertTrue(
             params["passed_data"]["soc_init"]
@@ -200,7 +214,7 @@ class TestCommandLineUtils(unittest.TestCase):
             == optim_conf["operating_hours_of_each_deferrable_load"]
         )
         # Test passing optimization and plant configuration parameters at runtime
-        runtimeparams = json.loads(self.runtimeparams_json)
+        runtimeparams = orjson.loads(self.runtimeparams_json)
         runtimeparams.update({"number_of_deferrable_loads": 3})
         runtimeparams.update(
             {"nominal_power_of_deferrable_loads": [3000.0, 750.0, 2500.0]}
@@ -239,7 +253,12 @@ class TestCommandLineUtils(unittest.TestCase):
             self.params_json, logger
         )
         set_type = "dayahead-optim"
-        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+        (
+            params,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+        ) = await utils.treat_runtimeparams(
             runtimeparams,
             self.params_json,
             retrieve_hass_conf,
@@ -250,7 +269,7 @@ class TestCommandLineUtils(unittest.TestCase):
             emhass_conf,
         )
         self.assertIsInstance(params, str)
-        params = json.loads(params)
+        params = orjson.loads(params)
         self.assertIsInstance(params["passed_data"]["pv_power_forecast"], list)
         self.assertIsInstance(params["passed_data"]["load_power_forecast"], list)
         self.assertIsInstance(params["passed_data"]["load_cost_forecast"], list)
@@ -316,9 +335,9 @@ class TestCommandLineUtils(unittest.TestCase):
             == "my_custom_deferrable_forecast_id"
         )
 
-    def test_treat_runtimeparams_failed(self):
+    async def test_treat_runtimeparams_failed(self):
         # Test treatment of nan values
-        params = TestCommandLineUtils.get_test_params()
+        params = await TestCommandLineUtils.get_test_params()
         runtimeparams = {
             "pv_power_forecast": [1, 2, 3, 4, 5, "nan", 7, 8, 9, 10],
             "load_power_forecast": [1, 2, "nan", 4, 5, 6, 7, 8, 9, 10],
@@ -334,7 +353,12 @@ class TestCommandLineUtils(unittest.TestCase):
             params, logger
         )
         set_type = "dayahead-optim"
-        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+        (
+            params,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+        ) = await utils.treat_runtimeparams(
             runtimeparams,
             params,
             retrieve_hass_conf,
@@ -376,7 +400,7 @@ class TestCommandLineUtils(unittest.TestCase):
             > 0
         )
         # Test list embedded into a string
-        params = TestCommandLineUtils.get_test_params()
+        params = await TestCommandLineUtils.get_test_params()
         runtimeparams = {
             "pv_power_forecast": "[1,2,3,4,5,6,7,8,9,10]",
             "load_power_forecast": "[1,2,3,4,5,6,7,8,9,10]",
@@ -392,7 +416,12 @@ class TestCommandLineUtils(unittest.TestCase):
             params, logger
         )
         set_type = "dayahead-optim"
-        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+        (
+            params,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+        ) = await utils.treat_runtimeparams(
             runtimeparams,
             params,
             retrieve_hass_conf,
@@ -407,7 +436,7 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(runtimeparams["load_cost_forecast"], list)
         self.assertIsInstance(runtimeparams["prod_price_forecast"], list)
         # Test string of numbers
-        params = TestCommandLineUtils.get_test_params()
+        params = await TestCommandLineUtils.get_test_params()
         runtimeparams = {
             "pv_power_forecast": "1,2,3,4,5,6,7,8,9,10",
             "load_power_forecast": "1,2,3,4,5,6,7,8,9,10",
@@ -423,7 +452,12 @@ class TestCommandLineUtils(unittest.TestCase):
             params, logger
         )
         set_type = "dayahead-optim"
-        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+        (
+            params,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+        ) = await utils.treat_runtimeparams(
             runtimeparams,
             params,
             retrieve_hass_conf,
@@ -438,13 +472,18 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertIsInstance(runtimeparams["load_cost_forecast"], str)
         self.assertIsInstance(runtimeparams["prod_price_forecast"], str)
 
-    def test_update_params_with_ha_config(self):
+    async def test_update_params_with_ha_config(self):
         # Test dayahead runtime params
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
             self.params_json, logger
         )
         set_type = "dayahead-optim"
-        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+        (
+            params,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+        ) = await utils.treat_runtimeparams(
             self.runtimeparams_json,
             self.params_json,
             retrieve_hass_conf,
@@ -459,7 +498,7 @@ class TestCommandLineUtils(unittest.TestCase):
             params,
             ha_config,
         )
-        params_with_ha_config = json.loads(params_with_ha_config_json)
+        params_with_ha_config = orjson.loads(params_with_ha_config_json)
         self.assertTrue(
             params_with_ha_config["passed_data"]["custom_cost_fun_id"][
                 "unit_of_measurement"
@@ -479,7 +518,7 @@ class TestCommandLineUtils(unittest.TestCase):
             == "$/kWh"
         )
 
-    def test_update_params_with_ha_config_special_case(self):
+    async def test_update_params_with_ha_config_special_case(self):
         # Test special passed runtime params
         runtimeparams = {
             "prediction_horizon": 28,
@@ -683,17 +722,22 @@ class TestCommandLineUtils(unittest.TestCase):
                 300,
             ],
         }
-        params_ = json.loads(self.params_json)
+        params_ = orjson.loads(self.params_json)
         params_["passed_data"].update(runtimeparams)
 
-        runtimeparams_json = json.dumps(runtimeparams)
-        params_json = json.dumps(params_)
+        runtimeparams_json = orjson.dumps(runtimeparams).decode()
+        params_json = orjson.dumps(params_).decode()
 
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
             params_json, logger
         )
         set_type = "dayahead-optim"
-        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+        (
+            params,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+        ) = await utils.treat_runtimeparams(
             runtimeparams_json,
             params_json,
             retrieve_hass_conf,
@@ -708,7 +752,7 @@ class TestCommandLineUtils(unittest.TestCase):
             params,
             ha_config,
         )
-        params_with_ha_config = json.loads(params_with_ha_config_json)
+        params_with_ha_config = orjson.loads(params_with_ha_config_json)
         self.assertTrue(
             params_with_ha_config["passed_data"]["custom_cost_fun_id"][
                 "unit_of_measurement"
@@ -926,15 +970,20 @@ class TestCommandLineUtils(unittest.TestCase):
                 300,
             ],
         }
-        params_ = json.loads(self.params_json)
+        params_ = orjson.loads(self.params_json)
         params_["passed_data"].update(runtimeparams)
-        runtimeparams_json = json.dumps(runtimeparams)
-        params_json = json.dumps(params_)
+        runtimeparams_json = orjson.dumps(runtimeparams).decode()
+        params_json = orjson.dumps(params_).decode()
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
             params_json, logger
         )
         set_type = "dayahead-optim"
-        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+        (
+            params,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+        ) = await utils.treat_runtimeparams(
             runtimeparams_json,
             params_json,
             retrieve_hass_conf,
@@ -949,7 +998,7 @@ class TestCommandLineUtils(unittest.TestCase):
             params,
             ha_config,
         )
-        params_with_ha_config = json.loads(params_with_ha_config_json)
+        params_with_ha_config = orjson.loads(params_with_ha_config_json)
         self.assertTrue(
             params_with_ha_config["passed_data"]["custom_cost_fun_id"][
                 "unit_of_measurement"
@@ -969,9 +1018,9 @@ class TestCommandLineUtils(unittest.TestCase):
             == "$/kWh"
         )
 
-    def test_build_secrets(self):
+    async def test_build_secrets(self):
         # Test the build_secrets defaults from get_test_params()
-        params = TestCommandLineUtils.get_test_params()
+        params = await TestCommandLineUtils.get_test_params()
         expected_keys = [
             "retrieve_hass_conf",
             "params_secrets",
@@ -991,14 +1040,14 @@ class TestCommandLineUtils(unittest.TestCase):
         # Test Secrets from options.json
         params = {}
         secrets = {}
-        _, secrets = utils.build_secrets(
+        _, secrets = await utils.build_secrets(
             emhass_conf,
             logger,
             options_path=emhass_conf["options_path"],
             secrets_path="",
             no_response=True,
         )
-        params = utils.build_params(emhass_conf, secrets, {}, logger)
+        params = await utils.build_params(emhass_conf, secrets, {}, logger)
         for key in expected_keys:
             self.assertTrue(key in params.keys())
         self.assertTrue(params["retrieve_hass_conf"]["time_zone"] == "Europe/Paris")
@@ -1011,10 +1060,10 @@ class TestCommandLineUtils(unittest.TestCase):
         # Test Secrets from secrets_emhass(example).yaml
         params = {}
         secrets = {}
-        _, secrets = utils.build_secrets(
+        _, secrets = await utils.build_secrets(
             emhass_conf, logger, secrets_path=emhass_conf["secrets_path"]
         )
-        params = utils.build_params(emhass_conf, secrets, {}, logger)
+        params = await utils.build_params(emhass_conf, secrets, {}, logger)
         for key in expected_keys:
             self.assertTrue(key in params.keys())
         self.assertTrue(params["retrieve_hass_conf"]["time_zone"] == "Europe/Paris")
@@ -1027,120 +1076,16 @@ class TestCommandLineUtils(unittest.TestCase):
         # Test Secrets from arguments (command_line cli)
         params = {}
         secrets = {}
-        _, secrets = utils.build_secrets(
+        _, secrets = await utils.build_secrets(
             emhass_conf, logger, {"url": "test.url", "key": "test.key"}, secrets_path=""
         )
         logger.debug("Obtaining long_lived_token from passed argument")
-        params = utils.build_params(emhass_conf, secrets, {}, logger)
+        params = await utils.build_params(emhass_conf, secrets, {}, logger)
         for key in expected_keys:
             self.assertTrue(key in params.keys())
         self.assertTrue(params["retrieve_hass_conf"]["time_zone"] == "Europe/Paris")
         self.assertTrue(params["retrieve_hass_conf"]["hass_url"] == "test.url")
         self.assertTrue(params["retrieve_hass_conf"]["long_lived_token"] == "test.key")
-
-
-class TestGetInjectionDict(unittest.TestCase):
-    @staticmethod
-    def _df_base(with_soc: bool = True) -> pd.DataFrame:
-        idx = pd.date_range("2025-01-01", periods=3, freq="h")
-        df = pd.DataFrame(
-            {
-                "P_PV": [100.4, 200.6, 300.5],  # cast to int
-                "P_Load": [150.9, 175.1, 125.4],  # cast to int
-                "unit_price": [0.12345, 0.54321, 0.99999],  # round(3)
-                "cost_grid": [1.1111, 2.2222, 3.3333],  # round(3)
-                "optim_status": ["optimal", "optimal", "optimal"],
-            },
-            index=idx,
-        )
-        if with_soc:
-            df["SOC_opt"] = [10.1234, 20.5555, 30.9999]  # round(3)
-        return df
-
-    def test_get_injection_with_soc(self):
-        df = self._df_base(with_soc=True)
-        res = utils.get_injection_dict(df.copy())
-
-        # expected keys
-        for k in ["title", "subsubtitle0", "figure_0", "figure_2", "table1", "table2"]:
-            self.assertIn(k, res)
-        self.assertIn("figure_1", res)  # SOC present -> figure_1 present
-
-        # minimal HTML sanity
-        self.assertIn("plotly", res["figure_0"].lower())
-        self.assertIn("mystyle", res["table1"])
-        self.assertIn("mystyle", res["table2"])
-
-        # rounding & coercion (use table1 HTML as a stable surface)
-        # P_* become ints
-        self.assertIn(">100<", res["table1"])  # 100.4 -> 100
-        # Non-P columns rounded to 3 decimals
-        for s in ["0.123", "0.543", "1.111", "2.222"]:
-            self.assertIn(s, res["table1"])
-
-        # table2: sums of numeric cost_* cols + optim_status echoed
-        # cost_grid: 1.111 + 2.222 + 3.333 = 6.666
-        self.assertIn("cost_grid", res["table2"])
-        self.assertIn("optim_status", res["table2"])
-        self.assertIn("6.666", res["table2"])
-        self.assertIn("optimal", res["table2"])
-        self.assertNotIn("unit_price", res["table2"])
-
-    def test_without_soc_omits_figure_1(self):
-        df = self._df_base(with_soc=False)
-        res = utils.get_injection_dict(df.copy())
-        self.assertIn("figure_0", res)
-        self.assertIn("figure_2", res)
-        self.assertNotIn("figure_1", res)
-
-    def test_multiple_cost_columns_summed(self):
-        df = self._df_base(with_soc=False)
-        df["cost_other"] = [0.1, 0.2, 0.3]  # -> 0.6 after round(3)
-        res = utils.get_injection_dict(df.copy())
-        self.assertIn("0.6", res["table2"])
-
-    def test_missing_optim_status_raises(self):
-        df = self._df_base(with_soc=False).drop(columns=["optim_status"])
-        with self.assertRaises(KeyError):
-            utils.get_injection_dict(df)
-
-    @unittest.expectedFailure
-    def test_single_power_series_color_scale(self):
-        """Documents current ZeroDivisionError when len(cols_p)==1."""
-        idx = pd.date_range("2025-01-01", periods=3, freq="h")
-        df = pd.DataFrame(
-            {
-                "P_PV": [100, 200, 300],  # only one P_* column
-                "unit_price": [0.1, 0.2, 0.3],
-                "cost_grid": [1, 2, 3],
-                "optim_status": ["optimal", "optimal", "optimal"],
-            },
-            index=idx,
-        )
-        res = utils.get_injection_dict(df.copy())
-        self.assertIn("figure_0", res)
-
-    def test_no_cost_columns_behavior(self):
-        """When no 'cost_' or 'unit_' columns exist, figure_2 still renders (empty)
-        and table2 contains only optim_status."""
-        idx = pd.date_range("2025-01-01", periods=3, freq="h")
-        df = pd.DataFrame(
-            {
-                "P_PV": [1, 2, 3],
-                "P_Load": [4, 5, 6],
-                "optim_status": ["ok", "ok", "ok"],
-            },
-            index=idx,
-        )
-        res = utils.get_injection_dict(df.copy())
-        # Plots exist
-        self.assertIn("figure_0", res)
-        self.assertIn("figure_2", res)  # plotly can render an empty df
-        # table2 should only include optim_status row
-        self.assertIn("table2", res)
-        self.assertIn("optim_status", res["table2"])
-        # No 'cost_' entries present
-        self.assertNotIn("cost_", res["table2"])
 
 
 if __name__ == "__main__":
