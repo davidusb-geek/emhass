@@ -1247,6 +1247,15 @@ class Forecast:
                         index=fcst_index,
                     )
                 forecast_out = pd.concat([forecast_out, forecast_tp], axis=0)
+        merged = pd.merge_asof(
+            df_final.sort_index(),
+            forecast_out.sort_index(),
+            left_index=True,
+            right_index=True,
+            direction='nearest'
+        )
+        # Keep only forecast_out columns
+        forecast_out = merged[forecast_out.columns]
         return forecast_out
 
     @staticmethod
