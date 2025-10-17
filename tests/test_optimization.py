@@ -525,7 +525,7 @@ class TestOptimization(unittest.TestCase):
                 self.assertTrue(
                     (non_zero_powers >= min_power_k).all(),
                     f"Deferrable load {k} has values below the minimum power of {min_power_k} W. "
-                    f"Invalid values found: {non_zero_powers[non_zero_powers < min_power_k].tolist()}"
+                    f"Invalid values found: {non_zero_powers[non_zero_powers < min_power_k].tolist()}",
                 )
 
     def test_perform_naive_mpc_optim(self):
@@ -896,7 +896,9 @@ class TestOptimization(unittest.TestCase):
         soc_final = 0.6
 
         # Get the actual timestep size from configuration
-        timestep_minutes = self.retrieve_hass_conf["optimization_time_step"].seconds / 60
+        timestep_minutes = (
+            self.retrieve_hass_conf["optimization_time_step"].seconds / 60
+        )
         timestep_hours = timestep_minutes / 60
 
         # Define test case: 4 timesteps for first deferrable load
@@ -935,17 +937,19 @@ class TestOptimization(unittest.TestCase):
         self.assertEqual(
             active_timesteps,
             requested_timesteps,
-            f"Expected exactly {requested_timesteps} active timesteps, got {active_timesteps}"
+            f"Expected exactly {requested_timesteps} active timesteps, got {active_timesteps}",
         )
 
         # Verify energy constraint: requested_timesteps * timestep_hours * nominal_power
         expected_energy = (
-            requested_timesteps * timestep_hours * self.optim_conf["nominal_power_of_deferrable_loads"][0]
+            requested_timesteps
+            * timestep_hours
+            * self.optim_conf["nominal_power_of_deferrable_loads"][0]
         )
         actual_energy = self.opt_res_dayahead["P_deferrable0"].sum() * timestep_hours
         self.assertTrue(
             np.abs(expected_energy - actual_energy) < 1e-3,
-            f"Energy mismatch: expected {expected_energy:.3f} Wh, got {actual_energy:.3f} Wh"
+            f"Energy mismatch: expected {expected_energy:.3f} Wh, got {actual_energy:.3f} Wh",
         )
 
     def test_perform_naive_mpc_optim_def_total_timestep_various_sizes(self):
@@ -963,7 +967,9 @@ class TestOptimization(unittest.TestCase):
             with self.subTest(timestep_minutes=timestep_min):
                 # Create fresh configuration for each test
                 test_retrieve_hass_conf = self.retrieve_hass_conf.copy()
-                test_retrieve_hass_conf["optimization_time_step"] = pd.Timedelta(f"{timestep_min}min")
+                test_retrieve_hass_conf["optimization_time_step"] = pd.Timedelta(
+                    f"{timestep_min}min"
+                )
 
                 test_optim_conf = self.optim_conf.copy()
                 test_optim_conf.update({"set_use_battery": True})
@@ -1003,7 +1009,7 @@ class TestOptimization(unittest.TestCase):
                 self.assertEqual(
                     self.opt.optim_status,
                     "Optimal",
-                    f"Timestep size {timestep_min}min: Optimization failed with status {self.opt.optim_status}"
+                    f"Timestep size {timestep_min}min: Optimization failed with status {self.opt.optim_status}",
                 )
 
                 # Count active timesteps (power > 0)
@@ -1012,7 +1018,11 @@ class TestOptimization(unittest.TestCase):
                 # For robust testing, verify the energy constraint is met
                 # rather than exact timestep count (which may vary due to optimization constraints)
                 total_energy = opt_res["P_deferrable0"].sum() * timestep_hours
-                expected_energy = requested_timesteps * timestep_hours * test_optim_conf["nominal_power_of_deferrable_loads"][0]
+                expected_energy = (
+                    requested_timesteps
+                    * timestep_hours
+                    * test_optim_conf["nominal_power_of_deferrable_loads"][0]
+                )
 
                 # The actual energy should match the energy that would be delivered
                 # by running for exactly the requested timesteps
@@ -1020,7 +1030,7 @@ class TestOptimization(unittest.TestCase):
                     np.abs(total_energy - expected_energy) < 1e-3,
                     f"Timestep {timestep_min}min: Energy constraint violated - "
                     f"expected {expected_energy:.3f} Wh, got {total_energy:.3f} Wh "
-                    f"({active_timesteps} active timesteps)"
+                    f"({active_timesteps} active timesteps)",
                 )
 
 
