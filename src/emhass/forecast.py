@@ -381,7 +381,9 @@ class Forecast:
                 data_15min = pd.DataFrame.from_dict(data_raw["minutely_15"])
                 # Date/times in the Open-Meteo JSON are now unix timestamps and need to
                 # be converted locally to DST/TimeZone aware date/times.
-                data_15min["time"] = pd.to_datetime(data_15min["time"], unit="s", utc=True)
+                data_15min["time"] = pd.to_datetime(
+                    data_15min["time"], unit="s", utc=True
+                )
                 data_15min["time"] = data_15min["time"].dt.tz_convert(self.time_zone)
                 data_15min.set_index("time", inplace=True)
 
@@ -830,7 +832,9 @@ class Forecast:
                     # Extracting results for AC power
                     P_PV_forecast = mc.results.ac
         if set_mix_forecast:
-            ignore_pv_feedback = self.params["passed_data"].get("ignore_pv_feedback_during_curtailment", False)
+            ignore_pv_feedback = self.params["passed_data"].get(
+                "ignore_pv_feedback_during_curtailment", False
+            )
             P_PV_forecast = Forecast.get_mix_forecast(
                 df_now,
                 P_PV_forecast,
@@ -1467,9 +1471,7 @@ class Forecast:
             forecast_horizon = len(self.forecast_dates)
             historical_values = df.iloc[-forecast_horizon:]
             forecast_out = pd.DataFrame(
-                historical_values.values,
-                index=self.forecast_dates,
-                columns=["yhat"]
+                historical_values.values, index=self.forecast_dates, columns=["yhat"]
             )
         elif (
             method == "mlforecaster"
