@@ -1103,6 +1103,128 @@ class TestForecast(unittest.TestCase):
         self.assertTrue(self.fcst.var_prod_price in df_input_data.columns)
         self.assertTrue(df_input_data.isnull().sum().sum() == 0)
 
+    # Test DST forward transition handling in forecast methods
+    def test_dst_forward_transition_handling(self):
+        """Test that forecast methods handle DST forward transitions without raising NonExistentTimeError."""
+        import pytz
+        from datetime import datetime
+        
+        # Test case 1: Australia/Sydney DST forward transition (October 2025)
+        # DST starts on October 5, 2025 at 2:00 AM -> 3:00 AM (2:00 AM doesn't exist)
+        sydney_tz = pytz.timezone("Australia/Sydney")
+        
+        # Create a forecast that spans the DST transition
+        dst_transition_params = copy.deepcopy(self.fcst.params)
+        dst_retrieve_hass_conf = copy.deepcopy(self.retrieve_hass_conf)
+        dst_retrieve_hass_conf["time_zone"] = sydney_tz
+        
+        # Set start time just before DST transition
+        dst_start = sydney_tz.localize(datetime(2025, 10, 4, 23, 0, 0))  # Oct 4, 11 PM
+        dst_end = dst_start + pd.Timedelta(hours=6)  # 6 hours later, crosses DST
+        
+        dst_fcst = Forecast(
+            dst_retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            dst_transition_params,
+            emhass_conf,
+            logger,
+            get_data_from_file=True,
+        )
+        # Override forecast dates to span DST transition
+        dst_fcst.start_forecast = dst_start
+        dst_fcst.end_forecast = dst_end
+        dst_fcst.forecast_dates = pd.date_range(
+            start=dst_start,
+            end=dst_end - dst_fcst.freq,
+            freq=dst_fcst.freq,
+            tz=sydney_tz,
+        ).tz_convert("utc").round(
+            dst_fcst.freq, ambiguous="infer", nonexistent="shift_forward"
+        ).tz_convert(sydney_tz)
+        
+        # Test naive load forecast during DST transition
+        # This should not raise NonExistentTimeError
+        try:
+            P_load_forecast_dst = dst_fcst.get_load_forecast(method="naive")
+            self.assertIsInstance(P_load_forecast_dst, pd.core.series.Series)
+            self.assertEqual(len(P_load_forecast_dst), len(dst_fcst.forecast_dates))
+            # Check that index is properly timezone-aware
+            self.assertEqual(P_load_forecast_dst.index.tz, sydney_tz)
+            logger.info("DST forward transition test for naive method: PASSED")
+        except Exception as e:
+            self.fail(f"Naive forecast failed during DST forward transition: {e}")
+        
+        # Test typical load forecast during DST transition
+        try:
+            P_load_forecast_typical = dst_fcst.get_load_forecast(method="typical")
+            self.assertIsInstance(P_load_forecast_typical, pd.core.series.Series)
+            self.assertEqual(len(P_load_forecast_typical), len(dst_fcst.forecast_dates))
+            self.assertEqual(P_load_forecast_typical.index.tz, sydney_tz)
+            logger.info("DST forward transition test for typical method: PASSED")
+        except Exception as e:
+            self.fail(f"Typical forecast failed during DST forward transition: {e}")
+        
+        # Test case 2: Test tz_localize with nonexistent times directly
+        # Create naive timestamps that include the nonexistent 2:00 AM on DST forward day
+        naive_times = pd.date_range(
+            start="2025-10-05 01:30:00",
+            end="2025-10-05 03:30:00", 
+            freq="30min"
+        )  # This includes 2:00 AM and 2:30 AM which don't exist in Sydney on Oct 5, 2025
+        
+        # This should not raise NonExistentTimeError with our fix
+        try:
+            localized_times = naive_times.tz_localize(
+                sydney_tz, ambiguous="infer", nonexistent="shift_forward"
+            )
+            # Verify that nonexistent times were shifted forward
+            self.assertTrue(len(localized_times) == len(naive_times))
+            # The 2:00 AM should become 3:00 AM (shifted forward)
+            for ts in localized_times:
+                self.assertNotEqual(ts.hour, 2, "No timestamp should have hour=2 after DST forward shift")
+            logger.info("Direct tz_localize DST forward transition test: PASSED")
+        except Exception as e:
+            self.fail(f"Direct tz_localize failed during DST forward transition: {e}")
+        
+        # Test case 3: US Eastern Time DST transition (March)
+        # DST starts on March 9, 2025 at 2:00 AM -> 3:00 AM
+        eastern_tz = pytz.timezone("US/Eastern")
+        us_dst_start = eastern_tz.localize(datetime(2025, 3, 9, 1, 0, 0))  # March 9, 1 AM
+        us_dst_end = us_dst_start + pd.Timedelta(hours=4)  # 4 hours later, crosses DST
+        
+        us_dst_retrieve_hass_conf = copy.deepcopy(self.retrieve_hass_conf)
+        us_dst_retrieve_hass_conf["time_zone"] = eastern_tz
+        
+        us_dst_fcst = Forecast(
+            us_dst_retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            dst_transition_params,
+            emhass_conf,
+            logger,
+            get_data_from_file=True,
+        )
+        us_dst_fcst.start_forecast = us_dst_start
+        us_dst_fcst.end_forecast = us_dst_end
+        us_dst_fcst.forecast_dates = pd.date_range(
+            start=us_dst_start,
+            end=us_dst_end - us_dst_fcst.freq,
+            freq=us_dst_fcst.freq,
+            tz=eastern_tz,
+        ).tz_convert("utc").round(
+            us_dst_fcst.freq, ambiguous="infer", nonexistent="shift_forward"
+        ).tz_convert(eastern_tz)
+        
+        try:
+            us_P_load_forecast = us_dst_fcst.get_load_forecast(method="naive")
+            self.assertIsInstance(us_P_load_forecast, pd.core.series.Series)
+            self.assertEqual(len(us_P_load_forecast), len(us_dst_fcst.forecast_dates))
+            self.assertEqual(us_P_load_forecast.index.tz, eastern_tz)
+            logger.info("US Eastern DST forward transition test: PASSED")
+        except Exception as e:
+            self.fail(f"US Eastern DST forecast failed during forward transition: {e}")
+
 
 if __name__ == "__main__":
     unittest.main()
