@@ -169,18 +169,16 @@ class Forecast:
             self.params = json.loads(params)
 
         if self.method_ts_round == "nearest":
-            self.start_forecast = pd.Timestamp(
-                datetime.now(), tz=self.time_zone
-            ).replace(microsecond=0)
+            self.start_forecast = pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0)
         elif self.method_ts_round == "first":
             self.start_forecast = (
-                pd.Timestamp(datetime.now(), tz=self.time_zone)
+                pd.Timestamp.now(tz=self.time_zone)
                 .replace(microsecond=0)
                 .floor(freq=self.freq)
             )
         elif self.method_ts_round == "last":
             self.start_forecast = (
-                pd.Timestamp(datetime.now(), tz=self.time_zone)
+                pd.Timestamp.now(tz=self.time_zone)
                 .replace(microsecond=0)
                 .ceil(freq=self.freq)
             )
@@ -1072,18 +1070,16 @@ class Forecast:
             microsecond=0
         )
         if self.method_ts_round == "nearest":
-            start_forecast_csv = pd.Timestamp(
-                datetime.now(), tz=self.time_zone
-            ).replace(microsecond=0)
+            start_forecast_csv = pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0)
         elif self.method_ts_round == "first":
             start_forecast_csv = (
-                pd.Timestamp(datetime.now(), tz=self.time_zone)
+                pd.Timestamp.now(tz=self.time_zone)
                 .replace(microsecond=0)
                 .floor(freq=self.freq)
             )
         elif self.method_ts_round == "last":
             start_forecast_csv = (
-                pd.Timestamp(datetime.now(), tz=self.time_zone)
+                pd.Timestamp.now(tz=self.time_zone)
                 .replace(microsecond=0)
                 .ceil(freq=self.freq)
             )
