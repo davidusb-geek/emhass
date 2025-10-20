@@ -1106,8 +1106,9 @@ class TestForecast(unittest.TestCase):
     # Test DST forward and backward transition handling in forecast methods
     def test_dst_forward_transition_handling(self):
         """Test that forecast methods handle DST forward transitions without raising NonExistentTimeError."""
-        import pytz
         from datetime import datetime
+
+        import pytz
 
         # Test case 1: Australia/Sydney DST forward transition (October 2025)
         # DST starts on October 5, 2025 at 2:00 AM -> 3:00 AM (2:00 AM doesn't exist)
@@ -1233,8 +1234,9 @@ class TestForecast(unittest.TestCase):
 
     def test_dst_backward_transition_handling(self):
         """Test that forecast methods handle DST backward transitions (fall back) with ambiguous times."""
-        import pytz
         from datetime import datetime
+
+        import pytz
 
         # Test case 1: Australia/Sydney DST backward transition (April 2025)
         # DST ends on April 6, 2025 at 3:00 AM -> 2:00 AM (2:00-3:00 AM happens twice)
