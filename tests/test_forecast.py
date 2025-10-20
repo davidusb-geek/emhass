@@ -1135,14 +1135,17 @@ class TestForecast(unittest.TestCase):
         # Override forecast dates to span DST transition
         dst_fcst.start_forecast = dst_start
         dst_fcst.end_forecast = dst_end
-        dst_fcst.forecast_dates = pd.date_range(
-            start=dst_start,
-            end=dst_end - dst_fcst.freq,
-            freq=dst_fcst.freq,
-            tz=sydney_tz,
-        ).tz_convert("utc").round(
-            dst_fcst.freq, ambiguous="infer", nonexistent="shift_forward"
-        ).tz_convert(sydney_tz)
+        dst_fcst.forecast_dates = (
+            pd.date_range(
+                start=dst_start,
+                end=dst_end - dst_fcst.freq,
+                freq=dst_fcst.freq,
+                tz=sydney_tz,
+            )
+            .tz_convert("utc")
+            .round(dst_fcst.freq, ambiguous="infer", nonexistent="shift_forward")
+            .tz_convert(sydney_tz)
+        )
 
         # Test naive load forecast during DST transition
         # This should not raise NonExistentTimeError
@@ -1169,9 +1172,7 @@ class TestForecast(unittest.TestCase):
         # Test case 2: Test tz_localize with nonexistent times directly
         # Create naive timestamps that include the nonexistent 2:00 AM on DST forward day
         naive_times = pd.date_range(
-            start="2025-10-05 01:30:00",
-            end="2025-10-05 02:30:00",
-            freq="30min"
+            start="2025-10-05 01:30:00", end="2025-10-05 02:30:00", freq="30min"
         )  # This includes 2:00 AM which doesn't exist in Sydney on Oct 5, 2025
 
         # This should not raise NonExistentTimeError with our fix
@@ -1183,21 +1184,36 @@ class TestForecast(unittest.TestCase):
             self.assertTrue(len(localized_times) == len(naive_times))
             # The 2:00 AM should become 3:00 AM (shifted forward)
             for ts in localized_times:
-                self.assertNotEqual(ts.hour, 2, "No timestamp should have hour=2 after DST forward shift")
+                self.assertNotEqual(
+                    ts.hour,
+                    2,
+                    "No timestamp should have hour=2 after DST forward shift",
+                )
 
             # Add explicit assertion for shifted timestamps
             # Check that 2:00 AM is replaced by 3:00 AM (shifted forward)
-            expected_hours = [1, 3, 3]  # 1:30 AM, 3:00 AM (shifted from 2:00), 3:30 AM (shifted from 2:30)
+            expected_hours = [
+                1,
+                3,
+                3,
+            ]  # 1:30 AM, 3:00 AM (shifted from 2:00), 3:30 AM (shifted from 2:30)
             actual_hours = [ts.hour for ts in localized_times]
-            self.assertEqual(actual_hours, expected_hours,
-                           "Expected nonexistent times to be shifted forward correctly")
+            self.assertEqual(
+                actual_hours,
+                expected_hours,
+                "Expected nonexistent times to be shifted forward correctly",
+            )
 
             logger.info("Direct tz_localize DST forward transition test: PASSED")
         except Exception as e:
-            self.fail(f"Direct tz_localize failed during DST forward transition: {e}")        # Test case 3: US Eastern Time DST transition (March)
+            self.fail(
+                f"Direct tz_localize failed during DST forward transition: {e}"
+            )  # Test case 3: US Eastern Time DST transition (March)
         # DST starts on March 9, 2025 at 2:00 AM -> 3:00 AM
         eastern_tz = pytz.timezone("US/Eastern")
-        us_dst_start = eastern_tz.localize(datetime(2025, 3, 9, 1, 0, 0))  # March 9, 1 AM
+        us_dst_start = eastern_tz.localize(
+            datetime(2025, 3, 9, 1, 0, 0)
+        )  # March 9, 1 AM
         us_dst_end = us_dst_start + pd.Timedelta(hours=4)  # 4 hours later, crosses DST
 
         us_dst_retrieve_hass_conf = copy.deepcopy(self.retrieve_hass_conf)
@@ -1214,14 +1230,17 @@ class TestForecast(unittest.TestCase):
         )
         us_dst_fcst.start_forecast = us_dst_start
         us_dst_fcst.end_forecast = us_dst_end
-        us_dst_fcst.forecast_dates = pd.date_range(
-            start=us_dst_start,
-            end=us_dst_end - us_dst_fcst.freq,
-            freq=us_dst_fcst.freq,
-            tz=eastern_tz,
-        ).tz_convert("utc").round(
-            us_dst_fcst.freq, ambiguous="infer", nonexistent="shift_forward"
-        ).tz_convert(eastern_tz)
+        us_dst_fcst.forecast_dates = (
+            pd.date_range(
+                start=us_dst_start,
+                end=us_dst_end - us_dst_fcst.freq,
+                freq=us_dst_fcst.freq,
+                tz=eastern_tz,
+            )
+            .tz_convert("utc")
+            .round(us_dst_fcst.freq, ambiguous="infer", nonexistent="shift_forward")
+            .tz_convert(eastern_tz)
+        )
 
         try:
             us_P_load_forecast = us_dst_fcst.get_load_forecast(method="naive")
@@ -1249,7 +1268,9 @@ class TestForecast(unittest.TestCase):
 
         # Set start time just before DST backward transition
         dst_start = sydney_tz.localize(datetime(2025, 4, 6, 1, 0, 0))  # April 6, 1 AM
-        dst_end = dst_start + pd.Timedelta(hours=5)  # 5 hours later, crosses DST backward
+        dst_end = dst_start + pd.Timedelta(
+            hours=5
+        )  # 5 hours later, crosses DST backward
 
         dst_fcst = Forecast(
             dst_retrieve_hass_conf,
@@ -1263,14 +1284,17 @@ class TestForecast(unittest.TestCase):
         # Override forecast dates to span DST backward transition
         dst_fcst.start_forecast = dst_start
         dst_fcst.end_forecast = dst_end
-        dst_fcst.forecast_dates = pd.date_range(
-            start=dst_start,
-            end=dst_end - dst_fcst.freq,
-            freq=dst_fcst.freq,
-            tz=sydney_tz,
-        ).tz_convert("utc").round(
-            dst_fcst.freq, ambiguous="infer", nonexistent="shift_forward"
-        ).tz_convert(sydney_tz)
+        dst_fcst.forecast_dates = (
+            pd.date_range(
+                start=dst_start,
+                end=dst_end - dst_fcst.freq,
+                freq=dst_fcst.freq,
+                tz=sydney_tz,
+            )
+            .tz_convert("utc")
+            .round(dst_fcst.freq, ambiguous="infer", nonexistent="shift_forward")
+            .tz_convert(sydney_tz)
+        )
 
         # Test naive load forecast during DST backward transition
         try:
@@ -1286,9 +1310,7 @@ class TestForecast(unittest.TestCase):
         # Test case 2: Test tz_localize with ambiguous times directly
         # Create naive timestamps that include the ambiguous 2:00-3:00 AM on DST backward day
         naive_times = pd.date_range(
-            start="2025-04-06 01:30:00",
-            end="2025-04-06 03:30:00",
-            freq="30min"
+            start="2025-04-06 01:30:00", end="2025-04-06 03:30:00", freq="30min"
         )  # This includes ambiguous 2:00, 2:30, 3:00 AM times in Sydney on April 6, 2025
 
         # This should handle ambiguous times with our fix
@@ -1300,33 +1322,51 @@ class TestForecast(unittest.TestCase):
             )
             # Verify that we got some valid results (non-NaT times)
             valid_times = localized_times.dropna()
-            self.assertGreater(len(valid_times), 0, "Should have some valid timestamps after handling ambiguous times")
+            self.assertGreater(
+                len(valid_times),
+                0,
+                "Should have some valid timestamps after handling ambiguous times",
+            )
             # Check that we got timezone-aware results for valid times
             for ts in valid_times:
-                self.assertIsNotNone(ts.tzinfo, "Valid timestamps should be timezone-aware")
+                self.assertIsNotNone(
+                    ts.tzinfo, "Valid timestamps should be timezone-aware"
+                )
 
             logger.info("Direct tz_localize DST backward transition test: PASSED")
         except Exception as e:
             # Try alternative approach with first occurrence of ambiguous times
             try:
                 localized_times = naive_times.tz_localize(
-                    sydney_tz, ambiguous=[True, True, True, True, False], nonexistent="shift_forward"
+                    sydney_tz,
+                    ambiguous=[True, True, True, True, False],
+                    nonexistent="shift_forward",
                 )
                 # Verify that ambiguous times were handled
                 self.assertTrue(len(localized_times) == len(naive_times))
                 # Check that we got reasonable results for ambiguous times
                 for ts in localized_times:
-                    self.assertIsNotNone(ts.tzinfo, "All timestamps should be timezone-aware")
+                    self.assertIsNotNone(
+                        ts.tzinfo, "All timestamps should be timezone-aware"
+                    )
 
-                logger.info("Direct tz_localize DST backward transition test (alternative): PASSED")
+                logger.info(
+                    "Direct tz_localize DST backward transition test (alternative): PASSED"
+                )
             except Exception as e2:
-                self.fail(f"Direct tz_localize failed during DST backward transition: {e} and {e2}")
+                self.fail(
+                    f"Direct tz_localize failed during DST backward transition: {e} and {e2}"
+                )
 
         # Test case 3: US Eastern Time DST backward transition (November)
         # DST ends on November 2, 2025 at 2:00 AM -> 1:00 AM
         eastern_tz = pytz.timezone("US/Eastern")
-        us_dst_start = eastern_tz.localize(datetime(2025, 11, 2, 0, 30, 0))  # Nov 2, 12:30 AM
-        us_dst_end = us_dst_start + pd.Timedelta(hours=4)  # 4 hours later, crosses DST backward
+        us_dst_start = eastern_tz.localize(
+            datetime(2025, 11, 2, 0, 30, 0)
+        )  # Nov 2, 12:30 AM
+        us_dst_end = us_dst_start + pd.Timedelta(
+            hours=4
+        )  # 4 hours later, crosses DST backward
 
         us_dst_retrieve_hass_conf = copy.deepcopy(self.retrieve_hass_conf)
         us_dst_retrieve_hass_conf["time_zone"] = eastern_tz
@@ -1342,14 +1382,17 @@ class TestForecast(unittest.TestCase):
         )
         us_dst_fcst.start_forecast = us_dst_start
         us_dst_fcst.end_forecast = us_dst_end
-        us_dst_fcst.forecast_dates = pd.date_range(
-            start=us_dst_start,
-            end=us_dst_end - us_dst_fcst.freq,
-            freq=us_dst_fcst.freq,
-            tz=eastern_tz,
-        ).tz_convert("utc").round(
-            us_dst_fcst.freq, ambiguous="infer", nonexistent="shift_forward"
-        ).tz_convert(eastern_tz)
+        us_dst_fcst.forecast_dates = (
+            pd.date_range(
+                start=us_dst_start,
+                end=us_dst_end - us_dst_fcst.freq,
+                freq=us_dst_fcst.freq,
+                tz=eastern_tz,
+            )
+            .tz_convert("utc")
+            .round(us_dst_fcst.freq, ambiguous="infer", nonexistent="shift_forward")
+            .tz_convert(eastern_tz)
+        )
 
         try:
             us_P_load_forecast = us_dst_fcst.get_load_forecast(method="naive")

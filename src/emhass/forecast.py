@@ -169,7 +169,9 @@ class Forecast:
             self.params = json.loads(params)
 
         if self.method_ts_round == "nearest":
-            self.start_forecast = pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0)
+            self.start_forecast = pd.Timestamp.now(tz=self.time_zone).replace(
+                microsecond=0
+            )
         elif self.method_ts_round == "first":
             self.start_forecast = (
                 pd.Timestamp.now(tz=self.time_zone)
@@ -604,7 +606,9 @@ class Forecast:
                     data_tmp.index = pd.to_datetime(data_tmp.index)
                     # Localize using explicit ambiguous/nonexistent handling to survive DST transitions
                     data_tmp = data_tmp.tz_localize(
-                        self.forecast_dates.tz, ambiguous="infer", nonexistent="shift_forward"
+                        self.forecast_dates.tz,
+                        ambiguous="infer",
+                        nonexistent="shift_forward",
                     )
                     data_tmp = data_tmp.reindex(index=self.forecast_dates)
                     mask_up_data_df = (
@@ -1070,7 +1074,9 @@ class Forecast:
             microsecond=0
         )
         if self.method_ts_round == "nearest":
-            start_forecast_csv = pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0)
+            start_forecast_csv = pd.Timestamp.now(tz=self.time_zone).replace(
+                microsecond=0
+            )
         elif self.method_ts_round == "first":
             start_forecast_csv = (
                 pd.Timestamp.now(tz=self.time_zone)
@@ -1251,7 +1257,7 @@ class Forecast:
             forecast_out.sort_index(),
             left_index=True,
             right_index=True,
-            direction="nearest"
+            direction="nearest",
         )
         # Keep only forecast_out columns
         forecast_out = merged[forecast_out.columns]
@@ -1432,7 +1438,9 @@ class Forecast:
             # DST forward transitions (skipped times) do not raise NonExistentTimeError.
             data.index = (
                 data.index.tz_localize(
-                    self.forecast_dates.tz, ambiguous="infer", nonexistent="shift_forward"
+                    self.forecast_dates.tz,
+                    ambiguous="infer",
+                    nonexistent="shift_forward",
                 )
                 if data.index.tz is None
                 else data.index.tz_convert(self.forecast_dates.tz)
