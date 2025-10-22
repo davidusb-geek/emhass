@@ -99,9 +99,11 @@ def get_logger(
 
     return logger, ch
 
+
 def _get_now() -> datetime:
     """Helper function to get the current time, for easier mocking."""
     return datetime.now()
+
 
 def get_forecast_dates(
     freq: int,

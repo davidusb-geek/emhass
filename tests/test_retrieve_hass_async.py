@@ -279,9 +279,9 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
 
     # Test negative load
     async def test_prepare_data_negative_load(self):
-        self.rh.df_final[self.retrieve_hass_conf["sensor_power_load_no_var_loads"]] = (
-            -self.rh.df_final[self.retrieve_hass_conf["sensor_power_load_no_var_loads"]]
-        )
+        self.rh.df_final[
+            self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
+        ] = -self.rh.df_final[self.retrieve_hass_conf["sensor_power_load_no_var_loads"]]
         self.rh.prepare_data(
             self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
             load_negative=True,
