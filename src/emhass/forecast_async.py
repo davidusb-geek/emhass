@@ -729,6 +729,7 @@ class Forecast:
         alpha: float,
         beta: float,
         col: str,
+        ignore_pv_feedback: bool = False,
     ) -> pd.DataFrame:
         """A simple correction method for forecasted data using the current real values of a variable.
 
@@ -742,9 +743,15 @@ class Forecast:
         :type beta: float
         :param col: The column variable name
         :type col: str
+        :param ignore_pv_feedback: If True, bypass mixing and return original forecast (used during curtailment)
+        :type ignore_pv_feedback: bool
         :return: The output DataFrame with the corrected values
         :rtype: pd.DataFrame
         """
+        # If ignoring PV feedback (e.g., during curtailment), return original forecast
+        if ignore_pv_feedback:
+            return df_forecast
+
         first_fcst = alpha * df_forecast.iloc[0] + beta * df_now[col].iloc[-1]
         df_forecast.iloc[0] = int(round(first_fcst))
         return df_forecast
@@ -845,12 +852,16 @@ class Forecast:
                     # Extracting results for AC power
                     P_PV_forecast = mc.results.ac
         if set_mix_forecast:
+            ignore_pv_feedback = self.params["passed_data"].get(
+                "ignore_pv_feedback_during_curtailment", False
+            )
             P_PV_forecast = Forecast.get_mix_forecast(
                 df_now,
                 P_PV_forecast,
                 self.params["passed_data"]["alpha"],
                 self.params["passed_data"]["beta"],
                 self.var_PV,
+                ignore_pv_feedback,
             )
         P_PV_forecast[P_PV_forecast < 0] = 0  # replace any negative PV values with zero
         self.logger.debug("get_power_from_weather returning:\n%s", P_PV_forecast)
@@ -1257,6 +1268,15 @@ class Forecast:
                         index=fcst_index,
                     )
                 forecast_out = pd.concat([forecast_out, forecast_tp], axis=0)
+        merged = pd.merge_asof(
+            df_final.sort_index(),
+            forecast_out.sort_index(),
+            left_index=True,
+            right_index=True,
+            direction='nearest'
+        )
+        # Keep only forecast_out columns
+        forecast_out = merged[forecast_out.columns]
         return forecast_out
 
     @staticmethod
@@ -1384,6 +1404,7 @@ class Forecast:
             var_replace_zero = None
             var_interp = [self.var_load]
             time_zone_load_foreacast = None
+            # We will need to retrieve a new set of load data according to the days_min_load_forecast parameter
             rh = RetrieveHass(
                 self.retrieve_hass_conf["hass_url"],
                 self.retrieve_hass_conf["long_lived_token"],
@@ -1412,7 +1433,6 @@ class Forecast:
                 days_list = get_days_list(days_min_load_forecast)
                 if not await rh.get_data(days_list, var_list):
                     return False
-
             if not rh.prepare_data(
                 self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
                 load_negative=self.retrieve_hass_conf["load_negative"],
@@ -1422,7 +1442,6 @@ class Forecast:
             ):
                 return False
             df = rh.df_final.copy()[[self.var_load_new]]
-        # return df
         if (
             method == "typical"
         ):  # using typical statistical data from a household power consumption
@@ -1432,11 +1451,13 @@ class Forecast:
             async with aiofiles.open(data_path, "rb") as fid:
                 content = await fid.read()
                 data, _, _, _ = pickle.loads(content)
+            # Ensure the data index is timezone-aware and matches self.forecast_dates' timezone
             data.index = (
                 data.index.tz_localize(self.forecast_dates.tz)
                 if data.index.tz is None
                 else data.index.tz_convert(self.forecast_dates.tz)
             )
+            # Generate forecast
             data = data[[self.var_load]]
             current_freq = pd.Timedelta("30min")
             if self.freq != current_freq:
@@ -1453,6 +1474,7 @@ class Forecast:
                 self.logger.debug(
                     f"Using {len(used_days)} days of data to generate the forecast."
                 )
+                # Normalize the forecast
                 forecast_tmp = (
                     forecast_tmp * self.plant_conf["maximum_power_from_grid"] / 9000
                 )
@@ -1467,14 +1489,21 @@ class Forecast:
             forecast_out.index = self.forecast_dates
             forecast_out.index.name = "ts"
             forecast_out = forecast_out.rename(columns={"load": "yhat"})
-        elif method == "naive":
-            mask_forecast_out = (
-                df.index > days_list[-1] - self.optim_conf["delta_forecast_daily"]
+        elif method == "naive":  # using a naive approach
+            # Old code logic (shifted timestamp problem)
+            # mask_forecast_out = (
+            #     df.index > days_list[-1] - self.optim_conf["delta_forecast_daily"]
+            # )
+            # forecast_out = df.copy().loc[mask_forecast_out]
+            # forecast_out = forecast_out.rename(columns={self.var_load_new: "yhat"})
+            # forecast_out = forecast_out.iloc[0 : len(self.forecast_dates)]
+            # forecast_out.index = self.forecast_dates
+            # New code logic
+            forecast_horizon = len(self.forecast_dates)
+            historical_values = df.iloc[-forecast_horizon:]
+            forecast_out = pd.DataFrame(
+                historical_values.values, index=self.forecast_dates, columns=["yhat"]
             )
-            forecast_out = df.copy().loc[mask_forecast_out]
-            forecast_out = forecast_out.rename(columns={self.var_load_new: "yhat"})
-            forecast_out = forecast_out.iloc[0 : len(self.forecast_dates)]
-            forecast_out.index = self.forecast_dates
         elif (
             method == "mlforecaster"
         ):  # using a custom forecast model with machine learning
@@ -1492,6 +1521,7 @@ class Forecast:
                         "The ML forecaster file was not found, please run a model fit method before this predict method"
                     )
                     return False
+            # Make predictions
             if use_last_window:
                 data_last_window = copy.deepcopy(df)
                 data_last_window = data_last_window.rename(
@@ -1532,13 +1562,16 @@ class Forecast:
             if len(df_csv) < len(self.forecast_dates):
                 self.logger.error("Passed data from CSV is not long enough")
             else:
+                # Ensure correct length
                 df_csv = df_csv.loc[df_csv.index[0 : len(self.forecast_dates)], :]
+                # Define index
                 df_csv.index = self.forecast_dates
                 df_csv.drop(["ts"], axis=1, inplace=True)
                 forecast_out = df_csv.copy().loc[self.forecast_dates]
         elif method == "list":  # reading a list of values
             # Loading data from passed list
             data_list = self.params["passed_data"]["load_power_forecast"]
+            # Check if the passed data has the correct length
             if (
                 len(data_list) < len(self.forecast_dates)
                 and self.params["passed_data"]["prediction_horizon"] is None
@@ -1559,12 +1592,14 @@ class Forecast:
             return False
         P_Load_forecast = copy.deepcopy(forecast_out["yhat"])
         if set_mix_forecast:
+            # Load forecasts don't need curtailment protection - always use feedback
             P_Load_forecast = Forecast.get_mix_forecast(
                 df_now,
                 P_Load_forecast,
                 self.params["passed_data"]["alpha"],
                 self.params["passed_data"]["beta"],
                 self.var_load_new,
+                False,  # Never ignore feedback for load forecasts
             )
         self.logger.debug("get_load_forecast returning:\n%s", P_Load_forecast)
         return P_Load_forecast
