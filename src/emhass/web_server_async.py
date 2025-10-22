@@ -610,7 +610,7 @@ async def action_call(action_name: str):
 
 
 async def initialize():
-    global emhass_conf, params_secrets, continual_publish_thread, injection_dict
+    global emhass_conf, params_secrets, continual_publish_thread, injection_dict, entity_path
 
     config = {}
     params = None
@@ -671,13 +671,7 @@ async def initialize():
     # Argument
     argument = {}
     no_response = False
-    # if args is not None:
-    #     if args.get("url", None):
-    #         argument["url"] = args["url"]
-    #     if args.get("key", None):
-    #         argument["key"] = args["key"]
-    #     if args.get("no_response", None):
-    #         no_response = args["no_response"]
+
     # Combine secrets from ENV, Arguments/ARG, Secrets file (secrets_emhass.yaml), options (options.json from addon configuration file) and/or Home Assistant Standalone API (if exist)
     emhass_conf, secrets = await build_secrets(
         emhass_conf,
