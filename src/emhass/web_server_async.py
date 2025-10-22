@@ -610,7 +610,12 @@ async def action_call(action_name: str):
 
 
 async def initialize():
-    global emhass_conf, params_secrets, continual_publish_thread, injection_dict, entity_path
+    global \
+        emhass_conf, \
+        params_secrets, \
+        continual_publish_thread, \
+        injection_dict, \
+        entity_path
 
     config = {}
     params = None

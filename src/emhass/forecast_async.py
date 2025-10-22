@@ -1273,7 +1273,7 @@ class Forecast:
             forecast_out.sort_index(),
             left_index=True,
             right_index=True,
-            direction='nearest'
+            direction="nearest",
         )
         # Keep only forecast_out columns
         forecast_out = merged[forecast_out.columns]
