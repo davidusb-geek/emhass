@@ -95,6 +95,8 @@ class RetrieveHass:
             self.influxdb_retention_policy = influx_conf.get(
                 "influxdb_retention_policy", "autogen"
             )
+            self.influxdb_use_ssl = influx_conf.get("influxdb_use_ssl", False)
+            self.influxdb_verify_ssl = influx_conf.get("influxdb_verify_ssl", False)
             self.logger.info(
                 f"InfluxDB integration enabled: {self.influxdb_host}:{self.influxdb_port}/{self.influxdb_database}"
             )
@@ -433,6 +435,8 @@ class RetrieveHass:
                 username=self.influxdb_username or None,
                 password=self.influxdb_password or None,
                 database=self.influxdb_database,
+                ssl=self.influxdb_use_ssl,
+                verify_ssl=self.influxdb_verify_ssl,
             )
             # Test connection
             client.ping()
