@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.13.6 - Unreleased
+
+### Improvement
+- Add InfluxDB integration for enhanced historical data retrieval (@scrusberghs)
+- Improvements to timezone handling and testing, use ISO8601 date format (@Crosenhain)
+- Reduce severity of logged Open Meteo `forecast_days` minimum override message (@paulhomes)
+### Fix
+- Fix InfluxDB future data query and `use_influxdb` parameter type (@scrusberghs)
+- Resolve time zone handling issues across daylight savings changes (@Squazel)
+- Fix `forecast.py` to align CSV data with prediction window (@nielskool)
+- Fix for `pytz.exceptions.NonExistentTimeError` with Open Meteo weather source during DST change (@paulhomes)
+- Fix decimal precision for `unit_load_cost` and `unit_prod_price` sensors (@scrusberghs)
+
 ## 0.13.5 - 2025-09-19
 ### Improvement
 - Use SVG render mode for Plotly figures (@Crosenhain)
