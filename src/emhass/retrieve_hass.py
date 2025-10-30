@@ -358,13 +358,21 @@ class RetrieveHass:
             return False
 
         start_time = days_list[0]
-        end_time = days_list[-1] + pd.Timedelta(days=1)
+
+        # Don't query into the future - cap end_time at current time
+        # This prevents FILL(previous) from creating fake future datapoints
+        now = pd.Timestamp.now(tz=self.time_zone)
+        requested_end = days_list[-1] + pd.Timedelta(days=1)
+        end_time = min(now, requested_end)
+
         total_days = (end_time - start_time).days
 
         self.logger.info(
             f"Retrieving {len(var_list)} sensors over {total_days} days from InfluxDB"
         )
         self.logger.debug(f"Time range: {start_time} to {end_time}")
+        if end_time < requested_end:
+            self.logger.debug(f"End time capped at current time (requested: {requested_end})")
 
         # Collect sensor dataframes
         sensor_dfs = []
