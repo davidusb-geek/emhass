@@ -16,7 +16,7 @@ window.onload = async function () {
 };
 
 //add listeners to buttons (based on page)
-function loadButtons(page) {
+async function loadButtons(page) {
   switch (page) {
     case "advanced":
       [
@@ -46,6 +46,9 @@ function loadButtons(page) {
       document
         .getElementById("input-clear")
         .addEventListener("click", () => ClearInputData());
+      
+      // Check if InfluxDB is enabled and show/hide export section
+      await checkInfluxDBAndShowExport();
       break;
     case "basic":
       document
@@ -442,3 +445,23 @@ async function ClearInputElements() {
 //         formAction("publish-data", "basic")
 //     }
 //}
+
+// Check if InfluxDB is enabled and show/hide export section
+async function checkInfluxDBAndShowExport() {
+  try {
+    const response = await fetch("/get-config");
+    if (response.ok) {
+      const config = await response.json();
+      const exportSection = document.getElementById("export-influxdb-section");
+      if (exportSection) {
+        if (config.use_influxdb === true) {
+          exportSection.style.display = "block";
+        } else {
+          exportSection.style.display = "none";
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Error checking InfluxDB configuration:", error);
+  }
+}
