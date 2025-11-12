@@ -446,7 +446,7 @@ async function ClearInputElements() {
 //     }
 //}
 
-// Check if InfluxDB is enabled and show/hide export section
+// Check if InfluxDB is configured and show/hide export section
 async function checkInfluxDBAndShowExport() {
   try {
     const response = await fetch("/get-config");
@@ -454,7 +454,14 @@ async function checkInfluxDBAndShowExport() {
       const config = await response.json();
       const exportSection = document.getElementById("export-influxdb-section");
       if (exportSection) {
-        if (config.use_influxdb === true) {
+        // Show export if InfluxDB is configured (has host and port)
+        // Users can export from InfluxDB even if use_influxdb is false for optimization
+        const isInfluxDBConfigured = 
+          config.influxdb_host && 
+          config.influxdb_host !== "" && 
+          config.influxdb_port;
+        
+        if (isInfluxDBConfigured) {
           exportSection.style.display = "block";
         } else {
           exportSection.style.display = "none";
