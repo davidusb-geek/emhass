@@ -26,6 +26,7 @@ function loadButtons(page) {
         "forecast-model-tune",
         "regressor-model-fit",
         "regressor-model-predict",
+        "export-influxdb-to-csv",
         "perfect-optim",
         "publish-data",
         "naive-mpc-optim",

@@ -489,6 +489,29 @@ def treat_runtimeparams(
                 target = runtimeparams["target"]
                 params["passed_data"]["target"] = target
 
+        # export-influxdb-to-csv
+        if set_type == "export-influxdb-to-csv":
+            if "sensor_list" in runtimeparams:
+                params["passed_data"]["sensor_list"] = runtimeparams["sensor_list"]
+            if "csv_filename" in runtimeparams:
+                params["passed_data"]["csv_filename"] = runtimeparams["csv_filename"]
+            if "start_time" in runtimeparams:
+                params["passed_data"]["start_time"] = runtimeparams["start_time"]
+            if "end_time" in runtimeparams:
+                params["passed_data"]["end_time"] = runtimeparams["end_time"]
+            if "resample_freq" in runtimeparams:
+                params["passed_data"]["resample_freq"] = runtimeparams["resample_freq"]
+            if "timestamp_col_name" in runtimeparams:
+                params["passed_data"]["timestamp_col_name"] = runtimeparams[
+                    "timestamp_col_name"
+                ]
+            if "decimal_places" in runtimeparams:
+                params["passed_data"]["decimal_places"] = runtimeparams[
+                    "decimal_places"
+                ]
+            if "handle_nan" in runtimeparams:
+                params["passed_data"]["handle_nan"] = runtimeparams["handle_nan"]
+
         # MPC control case
         if set_type == "naive-mpc-optim":
             if "prediction_horizon" not in runtimeparams.keys():
@@ -1810,3 +1833,172 @@ def set_df_index_freq(df: pd.DataFrame) -> pd.DataFrame:
     sampling = pd.to_timedelta(np.median(idx_diff))
     df = df[~df.index.duplicated()]
     return df.asfreq(sampling)
+
+
+def parse_export_time_range(
+    start_time: str,
+    end_time: str | None,
+    time_zone: pd.Timestamp.tz,
+    logger: logging.Logger,
+) -> tuple[pd.Timestamp, pd.Timestamp] | tuple[bool, bool]:
+    """
+    Parse and validate start_time and end_time for export operations.
+
+    :param start_time: Start time string in ISO format
+    :type start_time: str
+    :param end_time: End time string in ISO format (optional)
+    :type end_time: str | None
+    :param time_zone: Timezone for localization
+    :type time_zone: pd.Timestamp.tz
+    :param logger: Logger object
+    :type logger: logging.Logger
+    :return: Tuple of (start_dt, end_dt) or (False, False) on error
+    :rtype: tuple[pd.Timestamp, pd.Timestamp] | tuple[bool, bool]
+    """
+    try:
+        start_dt = pd.to_datetime(start_time)
+        if start_dt.tz is None:
+            start_dt = start_dt.tz_localize(time_zone)
+    except Exception as e:
+        logger.error(f"Invalid start_time format: {start_time}. Error: {e}")
+        logger.error("Use format like '2024-01-01' or '2024-01-01 00:00:00'")
+        return False, False
+
+    if end_time:
+        try:
+            end_dt = pd.to_datetime(end_time)
+            if end_dt.tz is None:
+                end_dt = end_dt.tz_localize(time_zone)
+        except Exception as e:
+            logger.error(f"Invalid end_time format: {end_time}. Error: {e}")
+            return False, False
+    else:
+        end_dt = pd.Timestamp.now(tz=time_zone)
+        logger.info(f"No end_time specified, using current time: {end_dt}")
+
+    return start_dt, end_dt
+
+
+def clean_sensor_column_names(df: pd.DataFrame, timestamp_col: str) -> pd.DataFrame:
+    """
+    Clean sensor column names by removing 'sensor.' prefix.
+
+    :param df: Input DataFrame with sensor columns
+    :type df: pd.DataFrame
+    :param timestamp_col: Name of timestamp column to preserve
+    :type timestamp_col: str
+    :return: DataFrame with cleaned column names
+    :rtype: pd.DataFrame
+    """
+    column_mapping = {}
+    for col in df.columns:
+        if col != timestamp_col and col.startswith("sensor."):
+            column_mapping[col] = col.replace("sensor.", "")
+    return df.rename(columns=column_mapping)
+
+
+def handle_nan_values(
+    df: pd.DataFrame,
+    handle_nan: str,
+    timestamp_col: str,
+    logger: logging.Logger,
+) -> pd.DataFrame:
+    """
+    Handle NaN values in DataFrame according to specified strategy.
+
+    :param df: Input DataFrame
+    :type df: pd.DataFrame
+    :param handle_nan: Strategy for handling NaN values
+    :type handle_nan: str
+    :param timestamp_col: Name of timestamp column to exclude from processing
+    :type timestamp_col: str
+    :param logger: Logger object
+    :type logger: logging.Logger
+    :return: DataFrame with NaN values handled
+    :rtype: pd.DataFrame
+    """
+    nan_count_before = df.isna().sum().sum()
+    if nan_count_before == 0:
+        return df
+
+    logger.info(
+        f"Found {nan_count_before} NaN values, applying handle_nan method: {handle_nan}"
+    )
+
+    if handle_nan == "drop":
+        df = df.dropna()
+        logger.info(f"Dropped rows with NaN. Remaining rows: {len(df)}")
+    elif handle_nan == "fill_zero":
+        df = df.fillna(0)
+        logger.info("Filled NaN values with 0")
+    elif handle_nan == "interpolate":
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        df[numeric_cols] = df[numeric_cols].interpolate(
+            method="linear", limit_direction="both"
+        )
+        df[numeric_cols] = df[numeric_cols].ffill().bfill()
+        logger.info("Interpolated NaN values")
+    elif handle_nan == "forward_fill":
+        df = df.ffill()
+        logger.info("Forward filled NaN values")
+    elif handle_nan == "backward_fill":
+        df = df.bfill()
+        logger.info("Backward filled NaN values")
+    elif handle_nan == "keep":
+        logger.info("Keeping NaN values as-is")
+    else:
+        logger.warning(f"Unknown handle_nan option '{handle_nan}', keeping NaN values")
+
+    return df
+
+
+def resample_and_filter_data(
+    df: pd.DataFrame,
+    start_dt: pd.Timestamp,
+    end_dt: pd.Timestamp,
+    resample_freq: str,
+    logger: logging.Logger,
+) -> pd.DataFrame | bool:
+    """
+    Filter DataFrame to time range and resample to specified frequency.
+
+    :param df: Input DataFrame with datetime index
+    :type df: pd.DataFrame
+    :param start_dt: Start datetime for filtering
+    :type start_dt: pd.Timestamp
+    :param end_dt: End datetime for filtering
+    :type end_dt: pd.Timestamp
+    :param resample_freq: Resampling frequency string (e.g., '1h', '30min')
+    :type resample_freq: str
+    :param logger: Logger object
+    :type logger: logging.Logger
+    :return: Resampled DataFrame or False on error
+    :rtype: pd.DataFrame | bool
+    """
+    # Filter to exact time range
+    df_filtered = df[(df.index >= start_dt) & (df.index <= end_dt)]
+
+    if df_filtered.empty:
+        logger.error("No data in the specified time range after filtering")
+        return False
+
+    logger.info(f"Retrieved {len(df_filtered)} data points")
+
+    # Resample to specified frequency
+    logger.info(f"Resampling data to frequency: {resample_freq}")
+    try:
+        df_resampled = df_filtered.resample(resample_freq).mean()
+        df_resampled = df_resampled.dropna(how="all")
+
+        if df_resampled.empty:
+            logger.error(
+                "No data after resampling. Check frequency and data availability."
+            )
+            return False
+
+        logger.info(f"After resampling: {len(df_resampled)} data points")
+        return df_resampled
+
+    except Exception as e:
+        logger.error(f"Error during resampling: {e}")
+        return False
