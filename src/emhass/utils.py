@@ -491,26 +491,22 @@ def treat_runtimeparams(
 
         # export-influxdb-to-csv
         if set_type == "export-influxdb-to-csv":
-            if "sensor_list" in runtimeparams:
-                params["passed_data"]["sensor_list"] = runtimeparams["sensor_list"]
-            if "csv_filename" in runtimeparams:
-                params["passed_data"]["csv_filename"] = runtimeparams["csv_filename"]
-            if "start_time" in runtimeparams:
-                params["passed_data"]["start_time"] = runtimeparams["start_time"]
-            if "end_time" in runtimeparams:
-                params["passed_data"]["end_time"] = runtimeparams["end_time"]
-            if "resample_freq" in runtimeparams:
-                params["passed_data"]["resample_freq"] = runtimeparams["resample_freq"]
-            if "timestamp_col_name" in runtimeparams:
-                params["passed_data"]["timestamp_col_name"] = runtimeparams[
-                    "timestamp_col_name"
-                ]
-            if "decimal_places" in runtimeparams:
-                params["passed_data"]["decimal_places"] = runtimeparams[
-                    "decimal_places"
-                ]
-            if "handle_nan" in runtimeparams:
-                params["passed_data"]["handle_nan"] = runtimeparams["handle_nan"]
+            # Use dictionary comprehension to simplify parameter assignment
+            export_keys = {
+                k: runtimeparams[k]
+                for k in (
+                    "sensor_list",
+                    "csv_filename",
+                    "start_time",
+                    "end_time",
+                    "resample_freq",
+                    "timestamp_col_name",
+                    "decimal_places",
+                    "handle_nan",
+                )
+                if k in runtimeparams
+            }
+            params["passed_data"].update(export_keys)
 
         # MPC control case
         if set_type == "naive-mpc-optim":
@@ -1929,21 +1925,29 @@ def handle_nan_values(
         df = df.dropna()
         logger.info(f"Dropped rows with NaN. Remaining rows: {len(df)}")
     elif handle_nan == "fill_zero":
-        df = df.fillna(0)
-        logger.info("Filled NaN values with 0")
+        # Exclude timestamp_col from fillna to avoid unintended changes
+        fill_cols = [col for col in df.columns if col != timestamp_col]
+        df[fill_cols] = df[fill_cols].fillna(0)
+        logger.info("Filled NaN values with 0 (excluding timestamp)")
     elif handle_nan == "interpolate":
         numeric_cols = df.select_dtypes(include=[np.number]).columns
-        df[numeric_cols] = df[numeric_cols].interpolate(
+        # Exclude timestamp_col from interpolation
+        interp_cols = [col for col in numeric_cols if col != timestamp_col]
+        df[interp_cols] = df[interp_cols].interpolate(
             method="linear", limit_direction="both"
         )
-        df[numeric_cols] = df[numeric_cols].ffill().bfill()
-        logger.info("Interpolated NaN values")
+        df[interp_cols] = df[interp_cols].ffill().bfill()
+        logger.info("Interpolated NaN values (excluding timestamp)")
     elif handle_nan == "forward_fill":
-        df = df.ffill()
-        logger.info("Forward filled NaN values")
+        # Exclude timestamp_col from forward fill
+        fill_cols = [col for col in df.columns if col != timestamp_col]
+        df[fill_cols] = df[fill_cols].ffill()
+        logger.info("Forward filled NaN values (excluding timestamp)")
     elif handle_nan == "backward_fill":
-        df = df.bfill()
-        logger.info("Backward filled NaN values")
+        # Exclude timestamp_col from backward fill
+        fill_cols = [col for col in df.columns if col != timestamp_col]
+        df[fill_cols] = df[fill_cols].bfill()
+        logger.info("Backward filled NaN values (excluding timestamp)")
     elif handle_nan == "keep":
         logger.info("Keeping NaN values as-is")
     else:
@@ -1975,6 +1979,27 @@ def resample_and_filter_data(
     :return: Resampled DataFrame or False on error
     :rtype: pd.DataFrame | bool
     """
+    # Validate that DataFrame index is datetime and properly localized
+    if not isinstance(df.index, pd.DatetimeIndex):
+        logger.error(
+            f"DataFrame index must be DatetimeIndex, got {type(df.index).__name__}"
+        )
+        return False
+
+    # Check if timezone aware and matches expected timezone
+    if df.index.tz is None:
+        logger.warning(
+            "DataFrame index is timezone-naive, localizing to match start/end times"
+        )
+        df = df.copy()
+        df.index = df.index.tz_localize(start_dt.tz)
+    elif df.index.tz != start_dt.tz:
+        logger.warning(
+            f"DataFrame timezone ({df.index.tz}) differs from filter timezone ({start_dt.tz}), converting"
+        )
+        df = df.copy()
+        df.index = df.index.tz_convert(start_dt.tz)
+
     # Filter to exact time range
     df_filtered = df[(df.index >= start_dt) & (df.index <= end_dt)]
 

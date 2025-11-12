@@ -1288,8 +1288,8 @@ def export_influxdb_to_csv(
         return False
 
     # Reset index to make timestamp a column
-    df_export = df_export.reset_index()
-    df_export = df_export.rename(columns={"index": timestamp_col})
+    # Handle custom index names by renaming the index first
+    df_export = df_export.rename_axis(timestamp_col).reset_index()
 
     # Clean column names
     df_export = utils.clean_sensor_column_names(df_export, timestamp_col)
@@ -1302,7 +1302,8 @@ def export_influxdb_to_csv(
     df_export[numeric_cols] = df_export[numeric_cols].round(decimal_places)
 
     # Save to CSV
-    csv_path = data_path / csv_filename
+    # Ensure data_path is a Path object for safe path joining
+    csv_path = pathlib.Path(data_path) / csv_filename
     df_export.to_csv(csv_path, index=False)
 
     logger.info(f"✓ Successfully exported to {csv_filename}")
