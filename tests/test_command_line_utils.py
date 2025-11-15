@@ -4,7 +4,7 @@ import copy
 import json
 import pathlib
 import unittest
-from unittest.mock import patch, Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pandas as pd
@@ -1008,7 +1008,7 @@ class TestCommandLineUtils(unittest.TestCase):
         df_final_mock = pd.DataFrame(data, index=index)
         # Add some NaNs to test handle_nan
         df_final_mock.iloc[5:10, 0] = np.nan
-        
+
         # Mock rh.get_data
         input_data_dict["rh"].get_data = Mock(return_value=True)
         input_data_dict["rh"].df_final = df_final_mock
@@ -1021,7 +1021,7 @@ class TestCommandLineUtils(unittest.TestCase):
             mock_to_csv.assert_called_once()
             # Check call args
             args, kwargs = mock_to_csv.call_args
-            self.assertEqual(kwargs['index'], False)
+            self.assertEqual(kwargs["index"], False)
             self.assertIsInstance(args[0], pathlib.Path)
             self.assertEqual(args[0].name, "test_export.csv")
 
@@ -1052,7 +1052,7 @@ class TestCommandLineUtils(unittest.TestCase):
         input_data_dict_no_sensors["rh"].use_influxdb = True
         # This should fail inside export_influxdb_to_csv due to missing 'sensor_list'
         success = export_influxdb_to_csv(input_data_dict_no_sensors, logger)
-        self.assertFalse(success) 
+        self.assertFalse(success)
 
         # Test rh.get_data fails
         input_data_dict["rh"].use_influxdb = True # Reset from test 2
