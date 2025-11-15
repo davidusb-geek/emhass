@@ -4,7 +4,7 @@ import copy
 import json
 import pathlib
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 import numpy as np
 import pandas as pd
@@ -12,6 +12,7 @@ import pandas as pd
 from emhass import utils
 from emhass.command_line import (
     dayahead_forecast_optim,
+    export_influxdb_to_csv,
     forecast_model_fit,
     forecast_model_predict,
     forecast_model_tune,
@@ -965,6 +966,101 @@ class TestCommandLineUtils(unittest.TestCase):
     def test_main_publish_data(self):
         opt_res = main()
         self.assertFalse(opt_res.empty)
+
+    # Test export_influxdb_to_csv
+    def test_export_influxdb_to_csv(self):
+        costfun = "profit"
+        action = "export-influxdb-to-csv"
+
+        # Test Success Case
+        params = copy.deepcopy(json.loads(self.params_json))
+        runtimeparams = {
+            "sensor_list": ["sensor.power_load_no_var_loads", "sensor.power_photovoltaics"],
+            "csv_filename": "test_export.csv",
+            "start_time": "2025-11-10",
+            "end_time": "2025-11-11",
+            "resample_freq": "30min",
+            "handle_nan": "interpolate"
+        }
+        runtimeparams_json = json.dumps(runtimeparams)
+        params["passed_data"] = runtimeparams
+        params_json = json.dumps(params)
+
+        input_data_dict = set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True, # Use True to avoid HA calls
+        )
+
+        # Mock rh.use_influxdb
+        input_data_dict["rh"].use_influxdb = True
+
+        # Create mock data
+        index = pd.date_range(start="2025-11-10", end="2025-11-12", freq="10min", tz=input_data_dict["rh"].time_zone)
+        data = {
+            "sensor.power_load_no_var_loads": np.random.rand(len(index)) * 1000,
+            "sensor.power_photovoltaics": np.random.rand(len(index)) * 5000
+        }
+        df_final_mock = pd.DataFrame(data, index=index)
+        # Add some NaNs to test handle_nan
+        df_final_mock.iloc[5:10, 0] = np.nan
+        
+        # Mock rh.get_data
+        input_data_dict["rh"].get_data = Mock(return_value=True)
+        input_data_dict["rh"].df_final = df_final_mock
+
+        # Mock the final to_csv call to avoid writing a file
+        with patch("pandas.DataFrame.to_csv") as mock_to_csv:
+            success = export_influxdb_to_csv(input_data_dict, logger)
+            self.assertTrue(success)
+            # Check if to_csv was called
+            mock_to_csv.assert_called_once()
+            # Check call args
+            args, kwargs = mock_to_csv.call_args
+            self.assertEqual(kwargs['index'], False)
+            self.assertIsInstance(args[0], pathlib.Path)
+            self.assertEqual(args[0].name, "test_export.csv")
+
+        # Test InfluxDB Disabled
+        input_data_dict["rh"].use_influxdb = False
+        success = export_influxdb_to_csv(input_data_dict, logger)
+        self.assertFalse(success)
+
+        # Test Missing Params (e.g., sensor_list)
+        params_no_sensors = copy.deepcopy(json.loads(self.params_json))
+        runtimeparams_no_sensors = {
+            "csv_filename": "test_export.csv",
+            "start_time": "2025-11-10",
+        }
+        runtimeparams_no_sensors_json = json.dumps(runtimeparams_no_sensors)
+        params_no_sensors["passed_data"] = runtimeparams_no_sensors
+        params_no_sensors_json = json.dumps(params_no_sensors)
+
+        input_data_dict_no_sensors = set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_no_sensors_json,
+            runtimeparams_no_sensors_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        input_data_dict_no_sensors["rh"].use_influxdb = True
+        # This should fail inside export_influxdb_to_csv due to missing 'sensor_list'
+        success = export_influxdb_to_csv(input_data_dict_no_sensors, logger)
+        self.assertFalse(success) 
+
+        # Test rh.get_data fails
+        input_data_dict["rh"].use_influxdb = True # Reset from test 2
+        input_data_dict["rh"].get_data = Mock(return_value=False) # Mock get_data to fail
+        input_data_dict["rh"].df_final = None
+
+        success = export_influxdb_to_csv(input_data_dict, logger)
+        self.assertFalse(success)
 
 
 if __name__ == "__main__":
