@@ -376,7 +376,7 @@ class RetrieveHass:
         self.logger.debug(f"Time range: {start_time} to {end_time}")
         if end_time < requested_end:
             self.logger.debug(
-            f"End time capped at current time (requested: {requested_end})"
+                f"End time capped at current time (requested: {requested_end})"
             )
 
         # Collect sensor dataframes
