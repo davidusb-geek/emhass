@@ -1,12 +1,14 @@
 # Changelog
 
-## 0.13.6 - Unreleased
-
+## 0.14.0 - Unreleased
 ### Improvement
 - Add InfluxDB integration for enhanced historical data retrieval (@scrusberghs)
+- Added SSL feature for InfluxDB (@sokorn)
+- Feature to export influxdb to csv file (@scrusberghs)
 - Improvements to timezone handling and testing, use ISO8601 date format (@Crosenhain)
 - Reduce severity of logged Open Meteo `forecast_days` minimum override message (@paulhomes)
 ### Fix
+- Fix to InfluxDB query to avoid TypeError: Cannot compare tz-naive and tz-aware timestamps (@Jahper)
 - Fix InfluxDB future data query and `use_influxdb` parameter type (@scrusberghs)
 - Resolve time zone handling issues across daylight savings changes (@Squazel)
 - Fix `forecast.py` to align CSV data with prediction window (@nielskool)
