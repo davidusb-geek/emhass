@@ -313,6 +313,25 @@ class Optimization:
         D = {(i): plp.LpVariable(cat="Binary", name=f"D_{i}") for i in set_I}
         E = {(i): plp.LpVariable(cat="Binary", name=f"E_{i}") for i in set_I}
         if self.optim_conf["set_use_battery"]:
+            # 1. Battery's internal DC limit
+            battery_dc_charge_limit = self.plant_conf["battery_charge_power_max"]
+            # 2. Inverter's AC input limit (if defined)
+            inverter_ac_input_limit = self.plant_conf.get("inverter_ac_input_max", None)
+            if inverter_ac_input_limit is not None and not self.plant_conf["inverter_is_hybrid"]:
+                # Convert AC input limit to an equivalent DC charge limit
+                eff_charge = self.plant_conf["battery_charge_efficiency"]
+                inverter_dc_charge_limit = inverter_ac_input_limit * eff_charge
+                # The true limit is the smaller of the two
+                effective_dc_charge_limit = min(battery_dc_charge_limit, inverter_dc_charge_limit)
+                self.logger.debug(f"Non-hybrid battery charger AC input limit ({inverter_ac_input_limit}W) is active.")
+                self.logger.debug(f"Effective DC charge limit set to: {effective_dc_charge_limit}W")
+            else:
+                # Use battery limit if no inverter limit is provided or if hybrid (hybrid logic handles it elsewhere)
+                effective_dc_charge_limit = battery_dc_charge_limit
+                if self.plant_conf["inverter_is_hybrid"]:
+                     self.logger.debug("Hybrid inverter: AC input limits are handled in hybrid constraints.")
+                else:
+                     self.logger.debug(f"No inverter_ac_input_max found, using battery_charge_power_max: {effective_dc_charge_limit}W")
             P_sto_pos = {
                 (i): plp.LpVariable(
                     cat="Continuous",
@@ -325,7 +344,7 @@ class Optimization:
             P_sto_neg = {
                 (i): plp.LpVariable(
                     cat="Continuous",
-                    lowBound=-self.plant_conf["battery_charge_power_max"],
+                    lowBound=-effective_dc_charge_limit,
                     upBound=0,
                     name=f"P_sto_neg_{i}",
                 )
