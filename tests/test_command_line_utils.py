@@ -975,12 +975,15 @@ class TestCommandLineUtils(unittest.TestCase):
         # Test Success Case
         params = copy.deepcopy(json.loads(self.params_json))
         runtimeparams = {
-            "sensor_list": ["sensor.power_load_no_var_loads", "sensor.power_photovoltaics"],
+            "sensor_list": [
+                "sensor.power_load_no_var_loads",
+                "sensor.power_photovoltaics",
+            ],
             "csv_filename": "test_export.csv",
             "start_time": "2025-11-10",
             "end_time": "2025-11-11",
             "resample_freq": "30min",
-            "handle_nan": "interpolate"
+            "handle_nan": "interpolate",
         }
         runtimeparams_json = json.dumps(runtimeparams)
         params["passed_data"] = runtimeparams
@@ -993,17 +996,22 @@ class TestCommandLineUtils(unittest.TestCase):
             runtimeparams_json,
             action,
             logger,
-            get_data_from_file=True, # Use True to avoid HA calls
+            get_data_from_file=True,  # Use True to avoid HA calls
         )
 
         # Mock rh.use_influxdb
         input_data_dict["rh"].use_influxdb = True
 
         # Create mock data
-        index = pd.date_range(start="2025-11-10", end="2025-11-12", freq="10min", tz=input_data_dict["rh"].time_zone)
+        index = pd.date_range(
+            start="2025-11-10",
+            end="2025-11-12",
+            freq="10min",
+            tz=input_data_dict["rh"].time_zone,
+        )
         data = {
             "sensor.power_load_no_var_loads": np.random.rand(len(index)) * 1000,
-            "sensor.power_photovoltaics": np.random.rand(len(index)) * 5000
+            "sensor.power_photovoltaics": np.random.rand(len(index)) * 5000,
         }
         df_final_mock = pd.DataFrame(data, index=index)
         # Add some NaNs to test handle_nan
@@ -1055,8 +1063,10 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertFalse(success)
 
         # Test rh.get_data fails
-        input_data_dict["rh"].use_influxdb = True # Reset from test 2
-        input_data_dict["rh"].get_data = Mock(return_value=False) # Mock get_data to fail
+        input_data_dict["rh"].use_influxdb = True  # Reset from test 2
+        input_data_dict["rh"].get_data = Mock(
+            return_value=False
+        )  # Mock get_data to fail
         input_data_dict["rh"].df_final = None
 
         success = export_influxdb_to_csv(input_data_dict, logger)
