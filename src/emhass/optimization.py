@@ -317,9 +317,10 @@ class Optimization:
             battery_dc_charge_limit = self.plant_conf["battery_charge_power_max"]
             # 2. Inverter AC input limit (if defined)
             inverter_ac_input_limit = self.plant_conf.get("inverter_ac_input_max")
-            if inverter_ac_input_limit is not None and not self.plant_conf[
-                "inverter_is_hybrid"
-            ]:
+            if (
+                inverter_ac_input_limit is not None
+                and not self.plant_conf["inverter_is_hybrid"]
+            ):
                 eff_charge = self.plant_conf["battery_charge_efficiency"]
                 inverter_dc_charge_limit = inverter_ac_input_limit * eff_charge
                 effective_dc_charge_limit = min(
