@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.14.0 - Unreleased
+## 0.14.0 - 2025-11-15
 ### Improvement
 - Add InfluxDB integration for enhanced historical data retrieval (@scrusberghs)
 - Added SSL feature for InfluxDB (@sokorn)
