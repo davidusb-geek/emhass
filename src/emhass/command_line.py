@@ -1000,7 +1000,8 @@ def forecast_model_tune(
             )
             return None, None
     # Tune the model
-    df_pred_optim = mlf.tune(debug=debug)
+    split_date_delta = input_data_dict["params"]["passed_data"]["split_date_delta"]
+    df_pred_optim = mlf.tune(split_date_delta=split_date_delta, debug=debug)
     # Save model
     if not debug:
         filename = model_type + default_pkl_suffix
