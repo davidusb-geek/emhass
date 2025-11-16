@@ -350,30 +350,40 @@ class MLForecaster:
                 - pd.Timedelta(split_date_delta)
                 + data_to_tune.index.freq
             )
-            initial_train_size = len(data_to_tune.loc[: date_split - data_to_tune.index.freq])
-        except (ValueError, TypeError):
-             self.logger.warning(f"Invalid split_date_delta: {split_date_delta}. Falling back to 5 days.")
-             date_split = (
-                data_to_tune.index[-1]
-                - pd.Timedelta("5days")
-                + data_to_tune.index.freq
+            initial_train_size = len(
+                data_to_tune.loc[: date_split - data_to_tune.index.freq]
             )
-             initial_train_size = len(data_to_tune.loc[: date_split - data_to_tune.index.freq])
+        except (ValueError, TypeError):
+            self.logger.warning(
+                f"Invalid split_date_delta: {split_date_delta}. Falling back to 5 days."
+            )
+            date_split = (
+                data_to_tune.index[-1] - pd.Timedelta("5days") + data_to_tune.index.freq
+            )
+            initial_train_size = len(
+                data_to_tune.loc[: date_split - data_to_tune.index.freq]
+            )
 
         # Check if the calculated initial_train_size is valid
-        window_size = num_lags # This is what skforecast will use as window_size
+        window_size = num_lags  # This is what skforecast will use as window_size
         if debug:
-            window_size = 3 # Match debug lags
+            window_size = 3  # Match debug lags
 
         if initial_train_size <= window_size:
-            self.logger.warning(f"Calculated initial_train_size ({initial_train_size}) is <= window_size ({window_size}).")
-            self.logger.warning("This is likely because split_date_delta is too large for the dataset.")
-            self.logger.warning(f"Adjusting initial_train_size to {window_size + 1} to attempt recovery.")
+            self.logger.warning(
+                f"Calculated initial_train_size ({initial_train_size}) is <= window_size ({window_size})."
+            )
+            self.logger.warning(
+                "This is likely because split_date_delta is too large for the dataset."
+            )
+            self.logger.warning(
+                f"Adjusting initial_train_size to {window_size + 1} to attempt recovery."
+            )
             initial_train_size = window_size + 1
 
         cv = TimeSeriesFold(
             steps=num_lags,
-            initial_train_size=initial_train_size, # Use the new calculated size
+            initial_train_size=initial_train_size,
             fixed_train_size=True,
             gap=0,
             skip_folds=None,
