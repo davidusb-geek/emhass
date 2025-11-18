@@ -23,6 +23,7 @@ from quart import logging as log
 from emhass.command_line_async import (
     continual_publish,
     dayahead_forecast_optim,
+    export_influxdb_to_csv,
     forecast_model_fit,
     forecast_model_predict,
     forecast_model_tune,
@@ -70,12 +71,12 @@ async def before_serving():
     # Initialize the application
     try:
         await initialize()
-        app.logger.info("✅ Full initialization completed")
+        app.logger.info("Full initialization completed")
     except Exception as e:
         app.logger.warning(
-            f"⚠️ Full initialization failed (this is normal in test environments): {e}"
+            f"Full initialization failed (this is normal in test environments): {e}"
         )
-        app.logger.info("🔄 Continuing without WebSocket connection...")
+        app.logger.info("Continuing without WebSocket connection...")
         # The initialize() function already sets up all necessary components except WebSocket
         # So we can continue serving requests even if WebSocket connection fails
 
@@ -87,12 +88,12 @@ async def after_serving():
         # Only close WebSocket connection if it was established
         if is_connected():
             await close_global_connection()
-            app.logger.info("✅ WebSocket connection closed")
+            app.logger.info("WebSocket connection closed")
         else:
             app.logger.info("No WebSocket connection to close")
     except Exception as e:
-        app.logger.warning(f"❌ WebSocket shutdown failed: {e}")
-    app.logger.info("✅ Quart shutdown complete")
+        app.logger.warning(f"WebSocket shutdown failed: {e}")
+    app.logger.info("Quart shutdown complete")
 
 
 async def checkFileLog(refString: str | None = None) -> bool:
@@ -449,6 +450,19 @@ async def action_call(action_name: str):
             return await make_response(msg, 201)
         return await make_response(await grabLog(ActionStr), 400)
 
+    # export-influxdb-to-csv (check before set_input_data_dict - doesn't need HA connection)
+    if action_name == "export-influxdb-to-csv":
+        ActionStr = " >> Exporting InfluxDB data to CSV..."
+        app.logger.info(ActionStr)
+        success = await export_influxdb_to_csv(
+            None, app.logger, emhass_conf, params, runtimeparams
+        )
+        if success:
+            msg = "EMHASS >> Action export-influxdb-to-csv executed successfully... \n"
+            if not await checkFileLog(ActionStr):
+                return await make_response(msg, 201)
+        return await make_response(await grabLog(ActionStr), 400)
+
     ActionStr = " >> Setting input data dict"
     app.logger.info(ActionStr)
     input_data_dict = await set_input_data_dict(
@@ -795,7 +809,7 @@ async def initialize():
                 token=params_secrets["long_lived_token"],
                 logger=app.logger,
             )
-            app.logger.info("✅ WebSocket connection established")
+            app.logger.info("WebSocket connection established")
 
             # WebSocket shutdown is already handled by @app.after_serving
             # No need for atexit handler
@@ -807,7 +821,7 @@ async def initialize():
     else:
         app.logger.info("WebSocket mode disabled - using REST API only")
 
-    app.logger.info("✅ Initialization complete")
+    app.logger.info("Initialization complete")
 
 
 async def setup_config_and_paths(args_dict: dict) -> tuple[str, int]:
@@ -836,7 +850,7 @@ async def main_with_server(args_dict: dict) -> None:
     )
 
     if waiter in done:
-        app.logger.info("🔒 Received shutdown signal – shutting down server")
+        app.logger.info("Received shutdown signal – shutting down server")
         serve_task.cancel()
         await serve_task
 

@@ -91,6 +91,18 @@
       "input": "string",
       "default_value": "autogen"
     },
+    "influxdb_use_ssl": {
+      "friendly_name": "Use HTTPS on InfluxDB connection",
+      "Description": "Enables HTTPS on InfluxDB connections. Defaults to 'false'.",
+      "input": "boolean",
+      "default_value": false
+    },
+    "influxdb_verify_ssl": {
+      "friendly_name": "Verify HTTPS on InfluxDB connection",
+      "Description": "Enables SSL verification of the certificate (e.g. Let's Encrypt) on InfluxDB connections. Defaults to 'false'.",
+      "input": "boolean",
+      "default_value": false
+    },
     "continual_publish": {
       "friendly_name": "Continually publish optimization results",
       "Description": "set to True to save entities to .json after an optimization run. Then automatically republish the saved entities (with updated current state value) every freq minutes. entity data saved to data_path/entities.",

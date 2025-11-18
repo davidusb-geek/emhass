@@ -439,6 +439,8 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             username="fake-user",
             password="fake-pass",
             database="fake-db",
+            ssl=False,
+            verify_ssl=False,
         )
         mock_client_instance.ping.assert_called_once()
         mock_client_instance.close.assert_called_once()

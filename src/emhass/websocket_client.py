@@ -130,7 +130,7 @@ class AsyncWebSocketClient:
         self._recv_task = asyncio.create_task(self._receiver())
         self._ping_task = asyncio.create_task(self._ping_loop())
         self._reconnects = 0
-        self.logger.info("🔌 Connected and authenticated")
+        self.logger.info("Connected and authenticated")
 
     async def _cleanup(self):
         """Stop tasks and close ws."""

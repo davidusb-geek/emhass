@@ -111,6 +111,8 @@ class RetrieveHass:
             self.influxdb_retention_policy = influx_conf.get(
                 "influxdb_retention_policy", "autogen"
             )
+            self.influxdb_use_ssl = influx_conf.get("influxdb_use_ssl", False)
+            self.influxdb_verify_ssl = influx_conf.get("influxdb_verify_ssl", False)
             self.logger.info(
                 f"InfluxDB integration enabled: {self.influxdb_host}:{self.influxdb_port}/{self.influxdb_database}"
             )
@@ -501,13 +503,21 @@ class RetrieveHass:
             return False
 
         start_time = days_list[0]
-        end_time = days_list[-1] + pd.Timedelta(days=1)
+        # Don't query into the future - cap end_time at current time
+        # This prevents FILL(previous) from creating fake future datapoints
+        now = pd.Timestamp.now(tz=self.time_zone)
+        requested_end = days_list[-1] + pd.Timedelta(days=1)
+        end_time = min(now, requested_end)
         total_days = (end_time - start_time).days
 
         self.logger.info(
             f"Retrieving {len(var_list)} sensors over {total_days} days from InfluxDB"
         )
         self.logger.debug(f"Time range: {start_time} to {end_time}")
+        if end_time < requested_end:
+            self.logger.debug(
+                f"End time capped at current time (requested: {requested_end})"
+            )
 
         # Collect sensor dataframes
         sensor_dfs = []
@@ -576,6 +586,8 @@ class RetrieveHass:
                 username=self.influxdb_username or None,
                 password=self.influxdb_password or None,
                 database=self.influxdb_database,
+                ssl=self.influxdb_use_ssl,
+                verify_ssl=self.influxdb_verify_ssl,
             )
             # Test connection
             client.ping()
