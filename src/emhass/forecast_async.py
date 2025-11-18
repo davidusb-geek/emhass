@@ -999,7 +999,7 @@ class Forecast:
         if not debug:
             filename = "adjust_pv_regressor.pkl"
             filename_path = self.emhass_conf["data_path"] / filename
-            with open(filename_path, "wb") as outp:
+            async with aiofiles.open(filename_path, "wb") as outp:
                 pickle.dump(self.model_adjust_pv, outp, pickle.HIGHEST_PROTOCOL)
 
     def adjust_pv_forecast_predict(
