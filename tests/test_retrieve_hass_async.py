@@ -147,7 +147,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             }
             # Check to save updated data to file
             if save_data_to_file:
-                with open(
+                async with aiofiles.open(
                     emhass_conf["data_path"] / str(model_type + ".pkl"), "wb"
                 ) as outp:
                     pickle.dump(
