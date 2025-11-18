@@ -17,6 +17,7 @@ import orjson
 import yaml
 from hypercorn.asyncio import serve
 from hypercorn.config import Config
+from markupsafe import Markup
 from quart import Quart, make_response, request
 from quart import logging as log
 
@@ -60,9 +61,20 @@ continual_publish_thread: list = []
 injection_dict: dict = {}
 
 templates = jinja2.Environment(
-    autoescape=False,
+    autoescape=True,
     loader=jinja2.PackageLoader("emhass", "templates"),
 )
+
+
+# Add custom filter for trusted HTML content
+def mark_safe(value):
+    """Mark pre-rendered HTML plots as safe (use only for trusted content)"""
+    if value is None:
+        return ""
+    return Markup(value)
+
+
+templates.filters["mark_safe"] = mark_safe
 
 
 # Register async startup and shutdown handlers
@@ -178,9 +190,9 @@ async def index():
     """
     Render initial index page and serve to web server.
     Appends plot tables saved from previous optimization into index.html, then serves.
-
     """
     app.logger.info("EMHASS server online, serving index.html...")
+
     # Load cached dict (if exists), to present generated plot tables
     if (emhass_conf["data_path"] / "injection_dict.pkl").exists():
         async with aiofiles.open(
@@ -194,10 +206,6 @@ async def index():
         )
         injection_dict = {}
 
-    # replace {{basename}} in html template html with path root
-    # basename = request.headers.get("X-Ingress-Path", "")
-    # return make_response(template.render(injection_dict=injection_dict, basename=basename))
-
     template = templates.get_template("index.html")
     return await make_response(template.render(injection_dict=injection_dict))
 
@@ -207,9 +215,9 @@ async def configuration():
     """
     Configuration page actions:
     Render and serve configuration page html
-
     """
     app.logger.info("serving configuration.html...")
+
     # get params
     if (emhass_conf["data_path"] / "params.pkl").exists():
         async with aiofiles.open(
@@ -227,9 +235,9 @@ async def template_action():
     """
     template page actions:
     Render and serve template html
-
     """
-    app.logger.info(" >> Sending rendered template table data")
+    app.logger.info(" >> Sending rendered template data")
+
     if (emhass_conf["data_path"] / "injection_dict.pkl").exists():
         async with aiofiles.open(
             str(emhass_conf["data_path"] / "injection_dict.pkl"), "rb"
