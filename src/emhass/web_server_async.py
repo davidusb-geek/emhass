@@ -60,6 +60,7 @@ continual_publish_thread: list = []
 injection_dict: dict = {}
 
 templates = jinja2.Environment(
+    autoescape=False,
     loader=jinja2.PackageLoader("emhass", "templates"),
 )
 
