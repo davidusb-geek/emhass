@@ -76,9 +76,11 @@ class AsyncWebSocketClient:
 
     def _get_ssl_context(self) -> ssl.SSLContext | None:
         if self.websocket_url.startswith("wss://"):
+            # Use secure default context with hostname verification and certificate validation
             ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+            # Ensure hostname verification and certificate validation are enabled
+            ctx.check_hostname = True
+            ctx.verify_mode = ssl.CERT_REQUIRED
             return ctx
         return None
 
