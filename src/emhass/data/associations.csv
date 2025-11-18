@@ -1,4 +1,4 @@
-config_categorie,legacy_parameter_name,parameter,list_name 
+config_categorie,legacy_parameter_name,parameter,list_name
 retrieve_hass_conf,freq,optimization_time_step
 retrieve_hass_conf,days_to_retrieve,historic_days_to_retrieve
 retrieve_hass_conf,var_PV,sensor_power_photovoltaics

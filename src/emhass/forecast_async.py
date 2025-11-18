@@ -164,18 +164,18 @@ class Forecast:
             self.params = orjson.loads(params)
 
         if self.method_ts_round == "nearest":
-            self.start_forecast = pd.Timestamp(
-                datetime.now(), tz=self.time_zone
-            ).replace(microsecond=0)
+            self.start_forecast = pd.Timestamp.now(tz=self.time_zone).replace(
+                microsecond=0
+            )
         elif self.method_ts_round == "first":
             self.start_forecast = (
-                pd.Timestamp(datetime.now(), tz=self.time_zone)
+                pd.Timestamp.now(tz=self.time_zone)
                 .replace(microsecond=0)
                 .floor(freq=self.freq)
             )
         elif self.method_ts_round == "last":
             self.start_forecast = (
-                pd.Timestamp(datetime.now(), tz=self.time_zone)
+                pd.Timestamp.now(tz=self.time_zone)
                 .replace(microsecond=0)
                 .ceil(freq=self.freq)
             )
@@ -622,7 +622,12 @@ class Forecast:
                             data_tmp = pd.DataFrame.from_dict(data_dict)
                             data_tmp.set_index("ts", inplace=True)
                             data_tmp.index = pd.to_datetime(data_tmp.index)
-                            data_tmp = data_tmp.tz_localize(self.forecast_dates.tz)
+                            # Localize using explicit ambiguous/nonexistent handling to survive DST transitions
+                            data_tmp = data_tmp.tz_localize(
+                                self.forecast_dates.tz,
+                                ambiguous="infer",
+                                nonexistent="shift_forward",
+                            )
                             data_tmp = data_tmp.reindex(index=self.forecast_dates)
                             mask_up_data_df = (
                                 data_tmp.copy(deep=True).fillna(method="ffill").isnull()
@@ -1088,18 +1093,18 @@ class Forecast:
             microsecond=0
         )
         if self.method_ts_round == "nearest":
-            start_forecast_csv = pd.Timestamp(
-                datetime.now(), tz=self.time_zone
-            ).replace(microsecond=0)
+            start_forecast_csv = pd.Timestamp.now(tz=self.time_zone).replace(
+                microsecond=0
+            )
         elif self.method_ts_round == "first":
             start_forecast_csv = (
-                pd.Timestamp(datetime.now(), tz=self.time_zone)
+                pd.Timestamp.now(tz=self.time_zone)
                 .replace(microsecond=0)
                 .floor(freq=self.freq)
             )
         elif self.method_ts_round == "last":
             start_forecast_csv = (
-                pd.Timestamp(datetime.now(), tz=self.time_zone)
+                pd.Timestamp.now(tz=self.time_zone)
                 .replace(microsecond=0)
                 .ceil(freq=self.freq)
             )
@@ -1452,8 +1457,14 @@ class Forecast:
                 content = await fid.read()
                 data, _, _, _ = pickle.loads(content)
             # Ensure the data index is timezone-aware and matches self.forecast_dates' timezone
+            # Use explicit ambiguous/nonexistent handling when localizing naive indexes so
+            # DST forward transitions (skipped times) do not raise NonExistentTimeError.
             data.index = (
-                data.index.tz_localize(self.forecast_dates.tz)
+                data.index.tz_localize(
+                    self.forecast_dates.tz,
+                    ambiguous="infer",
+                    nonexistent="shift_forward",
+                )
                 if data.index.tz is None
                 else data.index.tz_convert(self.forecast_dates.tz)
             )

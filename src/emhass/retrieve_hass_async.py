@@ -91,7 +91,33 @@ class RetrieveHass:
             self._client = None
             self.logger.info("Websocket integration enabled")
         else:
-            self.logger.debug("Websocket integration disabled, using Home Assistant API")
+            self.logger.debug(
+                "Websocket integration disabled, using Home Assistant API"
+            )
+        # Initialize InfluxDB configuration
+        self.use_influxdb = self.params.get("retrieve_hass_conf", {}).get(
+            "use_influxdb", False
+        )
+        if self.use_influxdb:
+            influx_conf = self.params.get("retrieve_hass_conf", {})
+            self.influxdb_host = influx_conf.get("influxdb_host", "localhost")
+            self.influxdb_port = influx_conf.get("influxdb_port", 8086)
+            self.influxdb_username = influx_conf.get("influxdb_username", "")
+            self.influxdb_password = influx_conf.get("influxdb_password", "")
+            self.influxdb_database = influx_conf.get(
+                "influxdb_database", "homeassistant"
+            )
+            self.influxdb_measurement = influx_conf.get("influxdb_measurement", "W")
+            self.influxdb_retention_policy = influx_conf.get(
+                "influxdb_retention_policy", "autogen"
+            )
+            self.influxdb_use_ssl = influx_conf.get("influxdb_use_ssl", False)
+            self.influxdb_verify_ssl = influx_conf.get("influxdb_verify_ssl", False)
+            self.logger.info(
+                f"InfluxDB integration enabled: {self.influxdb_host}:{self.influxdb_port}/{self.influxdb_database}"
+            )
+        else:
+            self.logger.debug("InfluxDB integration disabled, using Home Assistant API")
 
     async def get_ha_config(self):
         """
@@ -475,13 +501,21 @@ class RetrieveHass:
             return False
 
         start_time = days_list[0]
-        end_time = days_list[-1] + pd.Timedelta(days=1)
+        # Don't query into the future - cap end_time at current time
+        # This prevents FILL(previous) from creating fake future datapoints
+        now = pd.Timestamp.now(tz=self.time_zone)
+        requested_end = days_list[-1] + pd.Timedelta(days=1)
+        end_time = min(now, requested_end)
         total_days = (end_time - start_time).days
 
         self.logger.info(
             f"Retrieving {len(var_list)} sensors over {total_days} days from InfluxDB"
         )
         self.logger.debug(f"Time range: {start_time} to {end_time}")
+        if end_time < requested_end:
+            self.logger.debug(
+                f"End time capped at current time (requested: {requested_end})"
+            )
 
         # Collect sensor dataframes
         sensor_dfs = []
@@ -550,6 +584,8 @@ class RetrieveHass:
                 username=self.influxdb_username or None,
                 password=self.influxdb_password or None,
                 database=self.influxdb_database,
+                ssl=self.influxdb_use_ssl,
+                verify_ssl=self.influxdb_verify_ssl,
             )
             # Test connection
             client.ping()

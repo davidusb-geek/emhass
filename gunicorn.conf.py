@@ -43,14 +43,14 @@ worker_tmp_dir = "/dev/shm"  # Use memory for worker temp files if available
 
 def when_ready(server):
     """Called just after the server is started."""
-    server.log.info("🚀 EMHASS server is ready with %s workers", workers)
+    server.log.info("EMHASS server is ready with %s workers", workers)
 
 
 def worker_int(worker):
     """Called when a worker receives the SIGINT or SIGQUIT signal."""
-    worker.log.info("🔄 Worker %s received SIGINT/SIGQUIT", worker.pid)
+    worker.log.info("Worker %s received SIGINT/SIGQUIT", worker.pid)
 
 
 def on_exit(server):
     """Called just before exiting."""
-    server.log.info("🛑 EMHASS server is shutting down")
+    server.log.info("EMHASS server is shutting down")

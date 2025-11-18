@@ -33,12 +33,12 @@ async function loadButtons(page) {
       ].forEach((id) =>
         document
           .getElementById(id)
-          .addEventListener("click", () => formAction(id, "advanced"))
+          .addEventListener("click", () => formAction(id, "advanced")),
       );
       ["input-plus", "input-minus"].forEach((id) =>
         document
           .getElementById(id)
-          .addEventListener("click", () => dictInputs(id))
+          .addEventListener("click", () => dictInputs(id)),
       );
       document
         .getElementById("input-select")
@@ -46,7 +46,7 @@ async function loadButtons(page) {
       document
         .getElementById("input-clear")
         .addEventListener("click", () => ClearInputData());
-      
+
       // Check if InfluxDB is enabled and show/hide export section
       await checkInfluxDBAndShowExport();
       break;
@@ -63,7 +63,7 @@ async function loadBasicOrAdvanced(RequestedPage) {
   let basicFile = "basic.html";
   let advencedFile = "advanced.html";
   let formContainer = document.getElementById("TabSelection"); //container element to house basic or advanced data
-  let htmlData
+  let htmlData;
   //first check any function  arg
   if (arguments.length == 1) {
     switch (RequestedPage) {
@@ -141,7 +141,7 @@ async function getHTMLData(htmlFile) {
 
 //function pushing data via post, triggered by button action
 async function formAction(action, page) {
-  let data = {}
+  let data = {};
   if (page !== "basic") {
     //dont try to get input data in basic mode
     data = inputToJson();
@@ -157,7 +157,7 @@ async function formAction(action, page) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        'Transfer-Encoding': 'chunked'
+        "Transfer-Encoding": "chunked",
       },
       body: JSON.stringify(data), //note that post can only send data via strings
     });
@@ -252,19 +252,19 @@ function getSavedData() {
       if (selectElement.value == "Box") {
         //if Box is selected, show saved json data into box
         document.getElementById("text-area").value = localStorage.getItem(
-          "input_container_content"
+          "input_container_content",
         );
       }
       if (selectElement.value == "List") {
         //if List is selected, show saved json data into box
         let storedJson = JSON.parse(
-          localStorage.getItem("input_container_content")
+          localStorage.getItem("input_container_content"),
         );
         if (Object.keys(storedJson).length > 0) {
           input_container.innerHTML = "";
           for (const ikey in storedJson) {
             input_container.appendChild(
-              createInputListDiv(ikey, JSON.stringify(storedJson[ikey]))
+              createInputListDiv(ikey, JSON.stringify(storedJson[ikey])),
             ); //call function to present each key as an list div element (with saved values)
           }
         }
@@ -456,11 +456,11 @@ async function checkInfluxDBAndShowExport() {
       if (exportSection) {
         // Show export if InfluxDB is configured (has host and port)
         // Users can export from InfluxDB even if use_influxdb is false for optimization
-        const isInfluxDBConfigured = 
-          config.influxdb_host && 
-          config.influxdb_host !== "" && 
+        const isInfluxDBConfigured =
+          config.influxdb_host &&
+          config.influxdb_host !== "" &&
           config.influxdb_port;
-        
+
         if (isInfluxDBConfigured) {
           exportSection.style.display = "block";
         } else {

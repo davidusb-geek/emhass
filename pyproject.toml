@@ -67,6 +67,7 @@ docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
 test = [
     "requests-mock",
     "pytest",
+    "pytz",
     "coverage",
     "snakeviz",
     "ruff",
