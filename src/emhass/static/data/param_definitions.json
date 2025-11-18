@@ -414,7 +414,7 @@
     },
     "treat_deferrable_load_as_semi_cont": {
       "friendly_name": "Deferrable load as semi-continuous (on/off) variable",
-      "Description": "Semi-continuous variables (True) are variables that must take a value that can be either their maximum or minimum/zero (for example On = Maximum load, Off = 0 W). Non semi-continuous (which means continuous) variables (False) can take any values between their maximum and minimum",
+      "Description": "When configuring a deferrable load, set treat_deferrable_load_as_semi_cont = True if the device should only switch fully on or off (for example, a basic hot water heater), or set treat_deferrable_load_as_semi_cont = False if the device supports variable power control within its range (for example, an EV charger with adjustable charging rate).",
       "input": "array.boolean",
       "default_value": true
     },
