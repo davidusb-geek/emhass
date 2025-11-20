@@ -1547,10 +1547,12 @@ class Forecast:
                 + str(len(forecast_out.index))
             )
             self.logger.debug(
-                "Number of forcast dates obtained: " + str(len(self.forecast_dates))
+                "Number of forcast dates obtained (prediction_horizon): "
+                + str(len(self.forecast_dates))
             )
             if len(self.forecast_dates) < len(forecast_out.index):
                 forecast_out = forecast_out.iloc[0 : len(self.forecast_dates)]
+
             # To be removed once bug is fixed
             elif len(self.forecast_dates) > len(forecast_out.index):
                 self.logger.error(
