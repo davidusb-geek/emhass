@@ -144,9 +144,7 @@ class Forecast:
         self.timeStep = self.freq.seconds / 3600  # in hours
         self.time_delta = pd.to_timedelta(opt_time_delta, "hours")
         self.var_PV = self.retrieve_hass_conf["sensor_power_photovoltaics"]
-        self.var_PV_forecast = self.retrieve_hass_conf[
-            "sensor_power_photovoltaics_forecast"
-        ]
+        self.var_PV_forecast = self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
         self.var_load = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
         self.var_load_new = self.var_load + "_positive"
         self.lat = self.retrieve_hass_conf["Latitude"]
@@ -164,32 +162,20 @@ class Forecast:
             self.params = orjson.loads(params)
 
         if self.method_ts_round == "nearest":
-            self.start_forecast = pd.Timestamp.now(tz=self.time_zone).replace(
-                microsecond=0
-            )
+            self.start_forecast = pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0)
         elif self.method_ts_round == "first":
-            self.start_forecast = (
-                pd.Timestamp.now(tz=self.time_zone)
-                .replace(microsecond=0)
-                .floor(freq=self.freq)
-            )
+            self.start_forecast = pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0).floor(freq=self.freq)
         elif self.method_ts_round == "last":
-            self.start_forecast = (
-                pd.Timestamp.now(tz=self.time_zone)
-                .replace(microsecond=0)
-                .ceil(freq=self.freq)
-            )
+            self.start_forecast = pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0).ceil(freq=self.freq)
         else:
             self.logger.error("Wrong method_ts_round passed parameter")
         # check if weather_forecast_cache, if so get 2x the amount of forecast
         if self.params["passed_data"].get("weather_forecast_cache", False):
-            self.end_forecast = (
-                self.start_forecast + (self.optim_conf["delta_forecast_daily"] * 2)
-            ).replace(microsecond=0)
+            self.end_forecast = (self.start_forecast + (self.optim_conf["delta_forecast_daily"] * 2)).replace(
+                microsecond=0
+            )
         else:
-            self.end_forecast = (
-                self.start_forecast + self.optim_conf["delta_forecast_daily"]
-            ).replace(microsecond=0)
+            self.end_forecast = (self.start_forecast + self.optim_conf["delta_forecast_daily"]).replace(microsecond=0)
         self.forecast_dates = (
             pd.date_range(
                 start=self.start_forecast,
@@ -206,13 +192,9 @@ class Forecast:
             and "prediction_horizon" in list(self.params["passed_data"].keys())
             and self.params["passed_data"]["prediction_horizon"] is not None
         ):
-            self.forecast_dates = self.forecast_dates[
-                0 : self.params["passed_data"]["prediction_horizon"]
-            ]
+            self.forecast_dates = self.forecast_dates[0 : self.params["passed_data"]["prediction_horizon"]]
 
-    async def get_cached_open_meteo_forecast_json(
-        self, max_age: int | None = 30, forecast_days: int = 3
-    ) -> dict:
+    async def get_cached_open_meteo_forecast_json(self, max_age: int | None = 30, forecast_days: int = 3) -> dict:
         r"""
         Get weather forecast json from Open-Meteo and cache it for re-use.
         The response json is cached in the local file system and returned
@@ -240,9 +222,7 @@ class Forecast:
 
         # Ensure at least 3 weather forecast days (and 1 more than requested)
         if forecast_days is None:
-            self.logger.debug(
-                "Open-Meteo forecast_days is missing so defaulting to 3 days"
-            )
+            self.logger.debug("Open-Meteo forecast_days is missing so defaulting to 3 days")
             forecast_days = 3
         elif forecast_days < 3:
             self.logger.debug(
@@ -255,9 +235,7 @@ class Forecast:
 
         # The addition of -b.json file name suffix is because the time format
         # has changed, and it avoids any attempt to use the old format file.
-        json_path = os.path.abspath(
-            self.emhass_conf["data_path"] / "cached-open-meteo-forecast-b.json"
-        )
+        json_path = os.path.abspath(self.emhass_conf["data_path"] / "cached-open-meteo-forecast-b.json")
         # The cached JSON file is always loaded, if it exists, as it is also a fallback
         # in case the REST API call to Open-Meteo fails - the cached JSON will continue to
         # be used until it can successfully fetch a new version from Open-Meteo.
@@ -267,9 +245,7 @@ class Forecast:
             delta = datetime.now() - datetime.fromtimestamp(os.path.getmtime(json_path))
             json_age = int(delta / timedelta(seconds=60))
             use_cache = json_age < max_age
-            self.logger.info(
-                "Loading existing cached Open-Meteo JSON file: %s", json_path
-            )
+            self.logger.info("Loading existing cached Open-Meteo JSON file: %s", json_path)
             async with aiofiles.open(json_path) as json_file:
                 content = await json_file.read()
                 data = orjson.loads(content)
@@ -317,9 +293,7 @@ class Forecast:
                 self.logger.debug("Fetching data from Open-Meteo using URL: %s", url)
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url, headers=headers) as response:
-                        self.logger.debug(
-                            "Returned HTTP status code: %s", response.status
-                        )
+                        self.logger.debug("Returned HTTP status code: %s", response.status)
                         response.raise_for_status()
                         """import bz2 # Uncomment to save a serialized data for tests
                         import _pickle as cPickle
@@ -331,18 +305,12 @@ class Forecast:
                             json_path,
                         )
                         async with aiofiles.open(json_path, "w") as json_file:
-                            content = orjson.dumps(
-                                data, option=orjson.OPT_INDENT_2
-                            ).decode()
+                            content = orjson.dumps(data, option=orjson.OPT_INDENT_2).decode()
                             await json_file.write(content)
             except aiohttp.ClientError:
-                self.logger.error(
-                    "Failed to fetch weather forecast from Open-Meteo", exc_info=True
-                )
+                self.logger.error("Failed to fetch weather forecast from Open-Meteo", exc_info=True)
                 if data is not None:
-                    self.logger.warning(
-                        "Returning old cached data until next Open-Meteo attempt"
-                    )
+                    self.logger.warning("Returning old cached data until next Open-Meteo attempt")
 
         return data
 
@@ -363,18 +331,14 @@ class Forecast:
 
         """
         csv_path = self.emhass_conf["data_path"] / csv_path
-        w_forecast_cache_path = os.path.abspath(
-            self.emhass_conf["data_path"] / "weather_forecast_data.pkl"
-        )
+        w_forecast_cache_path = os.path.abspath(self.emhass_conf["data_path"] / "weather_forecast_data.pkl")
 
         self.logger.info("Retrieving weather forecast data using method = " + method)
         if method == "scrapper":
             self.logger.warning(
                 "The scrapper method has been deprecated and the keyword is accepted just for backward compatibility, please change the PV forecast method to open-meteo"
             )
-        self.weather_forecast_method = (
-            method  # Saving this attribute for later use to identify csv method usage
-        )
+        self.weather_forecast_method = method  # Saving this attribute for later use to identify csv method usage
         if (
             method == "open-meteo" or method == "scrapper"
         ):  # The scrapper option is being left here for backward compatibility
@@ -386,9 +350,7 @@ class Forecast:
                 data_15min = pd.DataFrame.from_dict(data_raw["minutely_15"])
                 # Date/times in the Open-Meteo JSON are now unix timestamps and need to
                 # be converted locally to DST/TimeZone aware date/times.
-                data_15min["time"] = pd.to_datetime(
-                    data_15min["time"], unit="s", utc=True
-                )
+                data_15min["time"] = pd.to_datetime(data_15min["time"], unit="s", utc=True)
                 data_15min["time"] = data_15min["time"].dt.tz_convert(self.time_zone)
                 data_15min.set_index("time", inplace=True)
 
@@ -407,10 +369,7 @@ class Forecast:
 
                 # Save a CSV copy of the Open Meteo weather data when debugging
                 if self.logger.isEnabledFor(logging.DEBUG):
-                    data_15min.to_csv(
-                        self.emhass_conf["data_path"]
-                        / "debug-weather-forecast-open-meteo.csv"
-                    )
+                    data_15min.to_csv(self.emhass_conf["data_path"] / "debug-weather-forecast-open-meteo.csv")
 
                 data = data_15min.reindex(self.forecast_dates)
                 data.interpolate(
@@ -429,9 +388,7 @@ class Forecast:
                 data = set_df_index_freq(data)
 
                 # Convert mm to cm and clip the minimum value to 0.1 cm as expected by PVLib
-                data["precipitable_water"] = (data["precipitable_water"] / 10).clip(
-                    lower=0.1
-                )
+                data["precipitable_water"] = (data["precipitable_water"] / 10).clip(lower=0.1)
 
                 if use_legacy_pvlib:
                     # Converting the cloud cover into Global Horizontal Irradiance with a PVLib method
@@ -443,9 +400,7 @@ class Forecast:
 
                 # If runtime weather_forecast_cache is true save forecast result to file as cache
                 if self.params["passed_data"].get("weather_forecast_cache", False):
-                    data = await self.set_cached_forecast_data(
-                        w_forecast_cache_path, data
-                    )
+                    data = await self.set_cached_forecast_data(w_forecast_cache_path, data)
             # Else, open stored weather_forecast_data.pkl file for previous forecast data (cached data)
             # Trim data to match the current required dates
             else:
@@ -460,9 +415,7 @@ class Forecast:
                 # Check if weather_forecast_cache_only is true, if so produce error for not finding cache file
                 if self.params["passed_data"].get("weather_forecast_cache_only", False):
                     self.logger.error("Unable to obtain Solcast cache file.")
-                    self.logger.error(
-                        "Try running optimization again with 'weather_forecast_cache_only': false"
-                    )
+                    self.logger.error("Try running optimization again with 'weather_forecast_cache_only': false")
                     self.logger.error(
                         "Optionally, obtain new Solcast cache with runtime parameter 'weather_forecast_cache': true in an optimization, or run the `weather-forecast-cache` action, to pull new data from Solcast and cache."
                     )
@@ -470,28 +423,19 @@ class Forecast:
                 else:
                     # Retrieve data from the Solcast API
                     if "solcast_api_key" not in self.retrieve_hass_conf:
-                        self.logger.error(
-                            "The solcast_api_key parameter was not defined"
-                        )
+                        self.logger.error("The solcast_api_key parameter was not defined")
                         return False
                     if "solcast_rooftop_id" not in self.retrieve_hass_conf:
-                        self.logger.error(
-                            "The solcast_rooftop_id parameter was not defined"
-                        )
+                        self.logger.error("The solcast_rooftop_id parameter was not defined")
                         return False
                     headers = {
                         "User-Agent": "EMHASS",
-                        "Authorization": "Bearer "
-                        + self.retrieve_hass_conf["solcast_api_key"],
+                        "Authorization": "Bearer " + self.retrieve_hass_conf["solcast_api_key"],
                         "content-type": "application/json",
                     }
-                    days_solcast = int(
-                        len(self.forecast_dates) * self.freq.seconds / 3600
-                    )
+                    days_solcast = int(len(self.forecast_dates) * self.freq.seconds / 3600)
                     # Split `roof_id` into a list (support comma or space as separator)
-                    roof_ids = re.split(
-                        r"[,\s]+", self.retrieve_hass_conf["solcast_rooftop_id"].strip()
-                    )
+                    roof_ids = re.split(r"[,\s]+", self.retrieve_hass_conf["solcast_rooftop_id"].strip())
                     # Summary list of data
                     total_data_list = [0] * len(self.forecast_dates)
                     # Iteration over individual `roof_id`
@@ -506,17 +450,11 @@ class Forecast:
                                 # Verify the request passed
                                 if int(response.status) == 200:
                                     data = await response.json()
-                                elif (
-                                    int(response.status) == 402
-                                    or int(response.status) == 429
-                                ):
-                                    self.logger.error(
-                                        "Solcast error: May have exceeded your subscription limit."
-                                    )
+                                elif int(response.status) == 402 or int(response.status) == 429:
+                                    self.logger.error("Solcast error: May have exceeded your subscription limit.")
                                     return False
                                 elif int(response.status) >= 400 or (
-                                    int(response.status) >= 202
-                                    and int(response.status) <= 299
+                                    int(response.status) >= 202 and int(response.status) <= 299
                                 ):
                                     self.logger.error(
                                         "Solcast error: There was a issue with the solcast request, check solcast API key and rooftop ID."
@@ -528,9 +466,7 @@ class Forecast:
                                 # Data processing for the current `roof_id`
                                 data_list = []
                                 for elm in data["forecasts"]:
-                                    data_list.append(
-                                        elm["pv_estimate"] * 1000
-                                    )  # Converting kW to W
+                                    data_list.append(elm["pv_estimate"] * 1000)  # Converting kW to W
                                 # Check if the retrieved data has the correct length
                                 if len(data_list) < len(self.forecast_dates):
                                     self.logger.error(
@@ -540,15 +476,11 @@ class Forecast:
                                 # Adding the data of the current `roof_id` to the total
                                 total_data_list = [
                                     total + current
-                                    for total, current in zip_longest(
-                                        total_data_list, data_list, fillvalue=0
-                                    )
+                                    for total, current in zip_longest(total_data_list, data_list, fillvalue=0)
                                 ]
 
                             # Trim request results to forecast_dates
-                            total_data_list = total_data_list[
-                                0 : len(self.forecast_dates)
-                            ]
+                            total_data_list = total_data_list[0 : len(self.forecast_dates)]
                             data_dict = {
                                 "ts": self.forecast_dates,
                                 "yhat": total_data_list,
@@ -559,12 +491,8 @@ class Forecast:
                             data.set_index("ts", inplace=True)
                             # If runtime weather_forecast_cache is true save forecast result to file as cache
                             # Trim data to match the current required dates
-                            if self.params["passed_data"].get(
-                                "weather_forecast_cache", False
-                            ):
-                                data = await self.set_cached_forecast_data(
-                                    w_forecast_cache_path, data
-                                )
+                            if self.params["passed_data"].get("weather_forecast_cache", False):
+                                data = await self.set_cached_forecast_data(w_forecast_cache_path, data)
 
         elif method == "solar.forecast":  # using the solar.forecast API
             # Retrieve data from the solar.forecast API
@@ -577,20 +505,14 @@ class Forecast:
                     )
                     self.retrieve_hass_conf["solar_forecast_kwp"] = 5
                 if self.retrieve_hass_conf["solar_forecast_kwp"] == 0:
-                    self.logger.warning(
-                        "The solar_forecast_kwp parameter is set to zero, setting to default 5"
-                    )
+                    self.logger.warning("The solar_forecast_kwp parameter is set to zero, setting to default 5")
                     self.retrieve_hass_conf["solar_forecast_kwp"] = 5
                 if self.optim_conf["delta_forecast_daily"].days > 1:
-                    self.logger.warning(
-                        "The free public tier for solar.forecast only provides one day forecasts"
-                    )
+                    self.logger.warning("The free public tier for solar.forecast only provides one day forecasts")
                     self.logger.warning(
                         "Continuing with just the first day of data, the other days are filled with 0.0."
                     )
-                    self.logger.warning(
-                        "Use the other available methods for delta_forecast_daily > 1"
-                    )
+                    self.logger.warning("Use the other available methods for delta_forecast_daily > 1")
                 headers = {"Accept": "application/json"}
                 data = pd.DataFrame()
 
@@ -629,12 +551,8 @@ class Forecast:
                                 nonexistent="shift_forward",
                             )
                             data_tmp = data_tmp.reindex(index=self.forecast_dates)
-                            mask_up_data_df = (
-                                data_tmp.copy(deep=True).fillna(method="ffill").isnull()
-                            )
-                            mask_down_data_df = (
-                                data_tmp.copy(deep=True).fillna(method="bfill").isnull()
-                            )
+                            mask_up_data_df = data_tmp.copy(deep=True).fillna(method="ffill").isnull()
+                            mask_down_data_df = data_tmp.copy(deep=True).fillna(method="bfill").isnull()
                             data_tmp.loc[mask_up_data_df["yhat"], :] = 0.0
                             data_tmp.loc[mask_down_data_df["yhat"], :] = 0.0
                             data_tmp.interpolate(inplace=True, limit=1)
@@ -645,12 +563,8 @@ class Forecast:
                                 data = data + data_tmp
                             # If runtime weather_forecast_cache is true save forecast result to file as cache.
                             # Trim data to match the current required dates
-                            if self.params["passed_data"].get(
-                                "weather_forecast_cache", False
-                            ):
-                                data = await self.set_cached_forecast_data(
-                                    w_forecast_cache_path, data
-                                )
+                            if self.params["passed_data"].get("weather_forecast_cache", False):
+                                data = await self.set_cached_forecast_data(w_forecast_cache_path, data)
         elif method == "csv":  # reading from a csv file
             weather_csv_file_path = csv_path
             # Loading the csv file, we will consider that this is the PV power in W
@@ -669,10 +583,7 @@ class Forecast:
             # Loading data from passed list
             data_list = self.params["passed_data"]["pv_power_forecast"]
             # Check if the passed data has the correct length
-            if (
-                len(data_list) < len(self.forecast_dates)
-                and self.params["passed_data"]["prediction_horizon"] is None
-            ):
+            if len(data_list) < len(self.forecast_dates) and self.params["passed_data"]["prediction_horizon"] is None:
                 self.logger.error("Passed data from passed list is not long enough")
             else:
                 # Ensure correct length
@@ -688,9 +599,7 @@ class Forecast:
         self.logger.debug("get_weather_forecast returning:\n%s", data)
         return data
 
-    def cloud_cover_to_irradiance(
-        self, cloud_cover: pd.Series, offset: int | None = 35
-    ) -> pd.DataFrame:
+    def cloud_cover_to_irradiance(self, cloud_cover: pd.Series, offset: int | None = 35) -> pd.DataFrame:
         """
         Estimates irradiance from cloud cover in the following steps.
 
@@ -714,9 +623,7 @@ class Forecast:
         """
         location = Location(latitude=self.lat, longitude=self.lon)
         solpos = location.get_solarposition(cloud_cover.index)
-        cs = location.get_clearsky(
-            cloud_cover.index, model="ineichen", solar_position=solpos
-        )
+        cs = location.get_clearsky(cloud_cover.index, model="ineichen", solar_position=solpos)
         # Using only the linear method
         offset = offset / 100.0
         cloud_cover_unit = copy.deepcopy(cloud_cover) / 100.0
@@ -801,25 +708,17 @@ class Forecast:
                 # Transform to power (Watts)
                 # Setting the main parameters of the PV plant
                 location = Location(latitude=self.lat, longitude=self.lon)
-                temp_params = TEMPERATURE_MODEL_PARAMETERS["sapm"][
-                    "close_mount_glass_glass"
-                ]
-                cec_modules = bz2.BZ2File(
-                    self.emhass_conf["root_path"] / "data" / "cec_modules.pbz2", "rb"
-                )
+                temp_params = TEMPERATURE_MODEL_PARAMETERS["sapm"]["close_mount_glass_glass"]
+                cec_modules = bz2.BZ2File(self.emhass_conf["root_path"] / "data" / "cec_modules.pbz2", "rb")
                 cec_modules = cPickle.load(cec_modules)
-                cec_inverters = bz2.BZ2File(
-                    self.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2", "rb"
-                )
+                cec_inverters = bz2.BZ2File(self.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2", "rb")
                 cec_inverters = cPickle.load(cec_inverters)
                 if isinstance(self.plant_conf["pv_module_model"], list):
                     P_PV_forecast = pd.Series(0, index=df_weather.index)
                     for i in range(len(self.plant_conf["pv_module_model"])):
                         # Selecting correct module and inverter
                         module = cec_modules[self.plant_conf["pv_module_model"][i]]
-                        inverter = cec_inverters[
-                            self.plant_conf["pv_inverter_model"][i]
-                        ]
+                        inverter = cec_inverters[self.plant_conf["pv_inverter_model"][i]]
                         # Building the PV system in PVLib
                         system = PVSystem(
                             surface_tilt=self.plant_conf["surface_tilt"][i],
@@ -828,9 +727,7 @@ class Forecast:
                             inverter_parameters=inverter,
                             temperature_model_parameters=temp_params,
                             modules_per_string=self.plant_conf["modules_per_string"][i],
-                            strings_per_inverter=self.plant_conf[
-                                "strings_per_inverter"
-                            ][i],
+                            strings_per_inverter=self.plant_conf["strings_per_inverter"][i],
                         )
                         mc = ModelChain(system, location, aoi_model="physical")
                         # Run the model on the weather DF indexes
@@ -857,9 +754,7 @@ class Forecast:
                     # Extracting results for AC power
                     P_PV_forecast = mc.results.ac
         if set_mix_forecast:
-            ignore_pv_feedback = self.params["passed_data"].get(
-                "ignore_pv_feedback_during_curtailment", False
-            )
+            ignore_pv_feedback = self.params["passed_data"].get("ignore_pv_feedback_during_curtailment", False)
             P_PV_forecast = Forecast.get_mix_forecast(
                 df_now,
                 P_PV_forecast,
@@ -873,9 +768,7 @@ class Forecast:
         return P_PV_forecast
 
     @staticmethod
-    def compute_solar_angles(
-        df: pd.DataFrame, latitude: float, longitude: float
-    ) -> pd.DataFrame:
+    def compute_solar_angles(df: pd.DataFrame, latitude: float, longitude: float) -> pd.DataFrame:
         """
         Compute solar angles (elevation, azimuth) based on timestamps and location.
 
@@ -905,17 +798,12 @@ class Forecast:
         # Extract target and predictor
         self.logger.debug("adjust_pv_forecast_data_prep using data:\n%s", data)
         if self.logger.isEnabledFor(logging.DEBUG):
-            data.to_csv(
-                self.emhass_conf["data_path"]
-                / "debug-adjust-pv-forecast-data-prep-input-data.csv"
-            )
+            data.to_csv(self.emhass_conf["data_path"] / "debug-adjust-pv-forecast-data-prep-input-data.csv")
         P_PV = data[self.var_PV]  # Actual PV production
         P_PV_forecast = data[self.var_PV_forecast]  # Forecasted PV production
         # Define time ranges
         last_day = data.index.max().normalize()  # Last available day
-        three_months_ago = last_day - pd.DateOffset(
-            days=self.retrieve_hass_conf["historic_days_to_retrieve"]
-        )
+        three_months_ago = last_day - pd.DateOffset(days=self.retrieve_hass_conf["historic_days_to_retrieve"])
         # Train/Test: Last historic_days_to_retrieve days (excluding the last day)
         train_test_mask = (data.index >= three_months_ago) & (data.index < last_day)
         self.P_PV_train_test = P_PV[train_test_mask]
@@ -925,24 +813,17 @@ class Forecast:
         self.P_PV_validation = P_PV[validation_mask]
         self.P_PV_forecast_validation = P_PV_forecast[validation_mask]
         # Ensure data is aligned
-        self.data_adjust_pv = pd.concat(
-            [P_PV.rename("actual"), P_PV_forecast.rename("forecast")], axis=1
-        ).dropna()
+        self.data_adjust_pv = pd.concat([P_PV.rename("actual"), P_PV_forecast.rename("forecast")], axis=1).dropna()
         # Add more features
         self.data_adjust_pv = add_date_features(self.data_adjust_pv)
-        self.data_adjust_pv = Forecast.compute_solar_angles(
-            self.data_adjust_pv, self.lat, self.lon
-        )
+        self.data_adjust_pv = Forecast.compute_solar_angles(self.data_adjust_pv, self.lat, self.lon)
         # Features (X) and target (y)
         self.X_adjust_pv = self.data_adjust_pv.drop(columns=["actual"])  # Predictors
         self.y_adjust_pv = self.data_adjust_pv["actual"]  # Target: actual PV production
-        self.logger.debug(
-            "adjust_pv_forecast_data_prep output data:\n%s", self.data_adjust_pv
-        )
+        self.logger.debug("adjust_pv_forecast_data_prep output data:\n%s", self.data_adjust_pv)
         if self.logger.isEnabledFor(logging.DEBUG):
             self.data_adjust_pv.to_csv(
-                self.emhass_conf["data_path"]
-                / "debug-adjust-pv-forecast-data-prep-output-data.csv"
+                self.emhass_conf["data_path"] / "debug-adjust-pv-forecast-data-prep-output-data.csv"
             )
 
     async def adjust_pv_forecast_fit(
@@ -981,9 +862,7 @@ class Forecast:
         pipeline, param_grid = mlr._get_model_and_params()
         # Time-series split
         tscv = TimeSeriesSplit(n_splits=n_splits)
-        grid_search = GridSearchCV(
-            pipeline, param_grid, cv=tscv, scoring="neg_mean_squared_error", verbose=0
-        )
+        grid_search = GridSearchCV(pipeline, param_grid, cv=tscv, scoring="neg_mean_squared_error", verbose=0)
         # Train model
         await asyncio.to_thread(grid_search.fit, self.X_adjust_pv, self.y_adjust_pv)
         self.model_adjust_pv = grid_search.best_estimator_
@@ -992,9 +871,7 @@ class Forecast:
         self.rmse = np.sqrt(mean_squared_error(self.y_adjust_pv, y_pred_train))
         self.r2 = r2_score(self.y_adjust_pv, y_pred_train)
         # Log the metrics
-        self.logger.info(
-            f"PV adjust Training metrics: RMSE = {self.rmse}, R2 = {self.r2}"
-        )
+        self.logger.info(f"PV adjust Training metrics: RMSE = {self.rmse}, R2 = {self.r2}")
         # Save model
         if not debug:
             filename = "adjust_pv_regressor.pkl"
@@ -1002,9 +879,7 @@ class Forecast:
             async with aiofiles.open(filename_path, "wb") as outp:
                 pickle.dump(self.model_adjust_pv, outp, pickle.HIGHEST_PROTOCOL)
 
-    def adjust_pv_forecast_predict(
-        self, forecasted_pv: pd.DataFrame | None = None
-    ) -> pd.DataFrame:
+    def adjust_pv_forecast_predict(self, forecasted_pv: pd.DataFrame | None = None) -> pd.DataFrame:
         """
         Predict the adjusted photovoltaic (PV) forecast.
 
@@ -1025,9 +900,7 @@ class Forecast:
         if forecasted_pv is not None:
             # Ensure the input DataFrame has the required structure
             if "forecast" not in forecasted_pv.columns:
-                raise ValueError(
-                    "The input DataFrame must contain a 'forecast' column."
-                )
+                raise ValueError("The input DataFrame must contain a 'forecast' column.")
             forecast_data = forecasted_pv.copy()
         else:
             # Use the validation data stored in `self`
@@ -1043,23 +916,17 @@ class Forecast:
             if row["solar_elevation"] <= 0:  # Nighttime or negative solar elevation
                 return 0
             elif (
-                row["solar_elevation"]
-                < self.optim_conf["adjusted_pv_solar_elevation_threshold"]
+                row["solar_elevation"] < self.optim_conf["adjusted_pv_solar_elevation_threshold"]
             ):  # Early morning or late evening
                 return max(
                     row["adjusted_forecast"]
-                    * (
-                        row["solar_elevation"]
-                        / self.optim_conf["adjusted_pv_solar_elevation_threshold"]
-                    ),
+                    * (row["solar_elevation"] / self.optim_conf["adjusted_pv_solar_elevation_threshold"]),
                     0,
                 )
             else:  # Daytime with sufficient solar elevation
                 return row["adjusted_forecast"]
 
-        forecast_data["adjusted_forecast"] = forecast_data.apply(
-            apply_weighting, axis=1
-        )
+        forecast_data["adjusted_forecast"] = forecast_data.apply(apply_weighting, axis=1)
         # If using validation data, calculate validation metrics
         if forecasted_pv is None:
             y_true = self.P_PV_validation.values
@@ -1067,17 +934,10 @@ class Forecast:
             self.validation_rmse = np.sqrt(mean_squared_error(y_true, y_pred))
             self.validation_r2 = r2_score(y_true, y_pred)
             # Log the validation metrics
-            self.logger.info(
-                f"PV adjust Validation metrics: RMSE = {self.validation_rmse}, R2 = {self.validation_r2}"
-            )
-        self.logger.debug(
-            "adjust_pv_forecast_predict forecast data:\n%s", forecast_data
-        )
+            self.logger.info(f"PV adjust Validation metrics: RMSE = {self.validation_rmse}, R2 = {self.validation_r2}")
+        self.logger.debug("adjust_pv_forecast_predict forecast data:\n%s", forecast_data)
         if self.logger.isEnabledFor(logging.DEBUG):
-            forecast_data.to_csv(
-                self.emhass_conf["data_path"]
-                / "debug-adjust-pv-forecast-predict-forecast-data.csv"
-            )
+            forecast_data.to_csv(self.emhass_conf["data_path"] / "debug-adjust-pv-forecast-predict-forecast-data.csv")
         # Return the DataFrame with the adjusted forecast
         return forecast_data
 
@@ -1089,30 +949,16 @@ class Forecast:
         :rtype: pd.date_range
 
         """
-        start_forecast_csv = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(
-            microsecond=0
-        )
+        start_forecast_csv = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(microsecond=0)
         if self.method_ts_round == "nearest":
-            start_forecast_csv = pd.Timestamp.now(tz=self.time_zone).replace(
-                microsecond=0
-            )
+            start_forecast_csv = pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0)
         elif self.method_ts_round == "first":
-            start_forecast_csv = (
-                pd.Timestamp.now(tz=self.time_zone)
-                .replace(microsecond=0)
-                .floor(freq=self.freq)
-            )
+            start_forecast_csv = pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0).floor(freq=self.freq)
         elif self.method_ts_round == "last":
-            start_forecast_csv = (
-                pd.Timestamp.now(tz=self.time_zone)
-                .replace(microsecond=0)
-                .ceil(freq=self.freq)
-            )
+            start_forecast_csv = pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0).ceil(freq=self.freq)
         else:
             self.logger.error("Wrong method_ts_round passed parameter")
-        end_forecast_csv = (
-            start_forecast_csv + self.optim_conf["delta_forecast_daily"]
-        ).replace(microsecond=0)
+        end_forecast_csv = (start_forecast_csv + self.optim_conf["delta_forecast_daily"]).replace(microsecond=0)
         forecast_dates_csv = (
             pd.date_range(
                 start=start_forecast_csv,
@@ -1129,9 +975,7 @@ class Forecast:
             and "prediction_horizon" in list(self.params["passed_data"].keys())
             and self.params["passed_data"]["prediction_horizon"] is not None
         ):
-            forecast_dates_csv = forecast_dates_csv[
-                0 : self.params["passed_data"]["prediction_horizon"]
-            ]
+            forecast_dates_csv = forecast_dates_csv[0 : self.params["passed_data"]["prediction_horizon"]]
         return forecast_dates_csv
 
     def get_forecast_out_from_csv_or_list(
@@ -1209,37 +1053,26 @@ class Forecast:
                 freq=df_tmp.index.freq,
             )
             first_hour = (
-                f"{df_tmp.index[first_elm_index].hour:02d}"
-                + ":"
-                + f"{df_tmp.index[first_elm_index].minute:02d}"
+                f"{df_tmp.index[first_elm_index].hour:02d}" + ":" + f"{df_tmp.index[first_elm_index].minute:02d}"
             )
-            last_hour = (
-                f"{df_tmp.index[last_elm_index].hour:02d}"
-                + ":"
-                + f"{df_tmp.index[last_elm_index].minute:02d}"
-            )
+            last_hour = f"{df_tmp.index[last_elm_index].hour:02d}" + ":" + f"{df_tmp.index[last_elm_index].minute:02d}"
             if len(forecast_out) == 0:
                 if csv_path is None:
                     if list_and_perfect:
                         values_array = df_csv.between_time(first_hour, last_hour).values
-                        fcst_index = fcst_index[
-                            0 : len(values_array)
-                        ]  # Fix for different lengths
+                        fcst_index = fcst_index[0 : len(values_array)]  # Fix for different lengths
                         forecast_out = pd.DataFrame(
                             values_array,
                             index=fcst_index,
                         )
                     else:
                         forecast_out = pd.DataFrame(
-                            df_csv.loc[fcst_index, :]
-                            .between_time(first_hour, last_hour)
-                            .values,
+                            df_csv.loc[fcst_index, :].between_time(first_hour, last_hour).values,
                             index=fcst_index,
                         )
                 else:
                     df_csv_filtered_date = df_csv.loc[
-                        df_csv.index.strftime("%Y-%m-%d")
-                        == fcst_index[0].date().strftime("%Y-%m-%d")
+                        df_csv.index.strftime("%Y-%m-%d") == fcst_index[0].date().strftime("%Y-%m-%d")
                     ]
                     forecast_out = pd.DataFrame(
                         df_csv_filtered_date.between_time(first_hour, last_hour).values,
@@ -1249,24 +1082,19 @@ class Forecast:
                 if csv_path is None:
                     if list_and_perfect:
                         values_array = df_csv.between_time(first_hour, last_hour).values
-                        fcst_index = fcst_index[
-                            0 : len(values_array)
-                        ]  # Fix for different lengths
+                        fcst_index = fcst_index[0 : len(values_array)]  # Fix for different lengths
                         forecast_tp = pd.DataFrame(
                             values_array,
                             index=fcst_index,
                         )
                     else:
                         forecast_tp = pd.DataFrame(
-                            df_csv.loc[fcst_index, :]
-                            .between_time(first_hour, last_hour)
-                            .values,
+                            df_csv.loc[fcst_index, :].between_time(first_hour, last_hour).values,
                             index=fcst_index,
                         )
                 else:
                     df_csv_filtered_date = df_csv.loc[
-                        df_csv.index.strftime("%Y-%m-%d")
-                        == fcst_index[0].date().strftime("%Y-%m-%d")
+                        df_csv.index.strftime("%Y-%m-%d") == fcst_index[0].date().strftime("%Y-%m-%d")
                     ]
                     forecast_tp = pd.DataFrame(
                         df_csv_filtered_date.between_time(first_hour, last_hour).values,
@@ -1330,9 +1158,7 @@ class Forecast:
         # Filter historic data for the same month and day of the week
         month = forecast_date.month
         day_of_week = forecast_date.dayofweek
-        historic_data = data[
-            (data.index.month == month) & (data.index.dayofweek == day_of_week)
-        ]
+        historic_data = data[(data.index.month == month) & (data.index.dayofweek == day_of_week)]
         used_days = np.unique(historic_data.index.date)
         # Align all historic data to the forecast day
         aligned_data = []
@@ -1402,9 +1228,7 @@ class Forecast:
         csv_path = self.emhass_conf["data_path"] / csv_path
 
         if method == "naive" or method == "mlforecaster":
-            self.logger.info(
-                f"Retrieving data from hass for load forecast using method = {method}"
-            )
+            self.logger.info(f"Retrieving data from hass for load forecast using method = {method}")
             var_list = [self.var_load]
             var_replace_zero = None
             var_interp = [self.var_load]
@@ -1423,13 +1247,9 @@ class Forecast:
                 filename_path = self.emhass_conf["data_path"] / "test_df_final.pkl"
                 async with aiofiles.open(filename_path, "rb") as inp:
                     content = await inp.read()
-                    rh.df_final, days_list, var_list, rh.ha_config = pickle.loads(
-                        content
-                    )
+                    rh.df_final, days_list, var_list, rh.ha_config = pickle.loads(content)
                     self.var_load = var_list[0]
-                    self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = (
-                        self.var_load
-                    )
+                    self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = self.var_load
                     var_interp = [var_list[0]]
                     self.var_list = [var_list[0]]
                     rh.var_list = self.var_list
@@ -1447,9 +1267,7 @@ class Forecast:
             ):
                 return False
             df = rh.df_final.copy()[[self.var_load_new]]
-        if (
-            method == "typical"
-        ):  # using typical statistical data from a household power consumption
+        if method == "typical":  # using typical statistical data from a household power consumption
             # Loading data from history file
             model_type = "long_train_data"
             data_path = self.emhass_conf["data_path"] / str(model_type + ".pkl")
@@ -1479,24 +1297,16 @@ class Forecast:
             for date in dates_list:
                 forecast_date = pd.Timestamp(date)
                 data.columns = ["load"]
-                forecast_tmp, used_days = Forecast.get_typical_load_forecast(
-                    data, forecast_date
-                )
-                self.logger.debug(
-                    f"Using {len(used_days)} days of data to generate the forecast."
-                )
+                forecast_tmp, used_days = Forecast.get_typical_load_forecast(data, forecast_date)
+                self.logger.debug(f"Using {len(used_days)} days of data to generate the forecast.")
                 # Normalize the forecast
-                forecast_tmp = (
-                    forecast_tmp * self.plant_conf["maximum_power_from_grid"] / 9000
-                )
+                forecast_tmp = forecast_tmp * self.plant_conf["maximum_power_from_grid"] / 9000
                 data_list.extend(forecast_tmp.values.ravel().tolist())
                 if len(forecast) == 0:
                     forecast = forecast_tmp
                 else:
                     forecast = pd.concat([forecast, forecast_tmp], axis=0)
-            forecast_out = forecast.loc[
-                forecast.index.intersection(self.forecast_dates)
-            ]
+            forecast_out = forecast.loc[forecast.index.intersection(self.forecast_dates)]
             forecast_out.index = self.forecast_dates
             forecast_out.index.name = "ts"
             forecast_out = forecast_out.rename(columns={"load": "yhat"})
@@ -1512,12 +1322,8 @@ class Forecast:
             # New code logic
             forecast_horizon = len(self.forecast_dates)
             historical_values = df.iloc[-forecast_horizon:]
-            forecast_out = pd.DataFrame(
-                historical_values.values, index=self.forecast_dates, columns=["yhat"]
-            )
-        elif (
-            method == "mlforecaster"
-        ):  # using a custom forecast model with machine learning
+            forecast_out = pd.DataFrame(historical_values.values, index=self.forecast_dates, columns=["yhat"])
+        elif method == "mlforecaster":  # using a custom forecast model with machine learning
             # Load model
             model_type = self.params["passed_data"]["model_type"]
             filename = model_type + "_mlf.pkl"
@@ -1535,21 +1341,13 @@ class Forecast:
             # Make predictions
             if use_last_window:
                 data_last_window = copy.deepcopy(df)
-                data_last_window = data_last_window.rename(
-                    columns={self.var_load_new: self.var_load}
-                )
+                data_last_window = data_last_window.rename(columns={self.var_load_new: self.var_load})
             else:
                 data_last_window = None
             forecast_out = await mlf.predict(data_last_window)
             # Force forecast length to avoid mismatches
-            self.logger.debug(
-                "Number of ML predict forcast data generated (lags_opt): "
-                + str(len(forecast_out.index))
-            )
-            self.logger.debug(
-                "Number of forcast dates obtained (prediction_horizon): "
-                + str(len(self.forecast_dates))
-            )
+            self.logger.debug("Number of ML predict forcast data generated (lags_opt): " + str(len(forecast_out.index)))
+            self.logger.debug("Number of forcast dates obtained (prediction_horizon): " + str(len(self.forecast_dates)))
             if len(self.forecast_dates) < len(forecast_out.index):
                 forecast_out = forecast_out.iloc[0 : len(self.forecast_dates)]
 
@@ -1585,10 +1383,7 @@ class Forecast:
             # Loading data from passed list
             data_list = self.params["passed_data"]["load_power_forecast"]
             # Check if the passed data has the correct length
-            if (
-                len(data_list) < len(self.forecast_dates)
-                and self.params["passed_data"]["prediction_horizon"] is None
-            ):
+            if len(data_list) < len(self.forecast_dates) and self.params["passed_data"]["prediction_horizon"] is None:
                 self.logger.error("Passed data from passed list is not long enough")
                 return False
             else:
@@ -1648,20 +1443,12 @@ class Forecast:
             df_final[self.var_load_cost] = self.optim_conf["load_offpeak_hours_cost"]
             list_df_hp = []
             for _key, period_hp in self.optim_conf["load_peak_hour_periods"].items():
-                list_df_hp.append(
-                    df_final[self.var_load_cost].between_time(
-                        period_hp[0]["start"], period_hp[1]["end"]
-                    )
-                )
+                list_df_hp.append(df_final[self.var_load_cost].between_time(period_hp[0]["start"], period_hp[1]["end"]))
             for df_hp in list_df_hp:
-                df_final.loc[df_hp.index, self.var_load_cost] = self.optim_conf[
-                    "load_peak_hours_cost"
-                ]
+                df_final.loc[df_hp.index, self.var_load_cost] = self.optim_conf["load_peak_hours_cost"]
         elif method == "csv":
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
-            forecast_out = self.get_forecast_out_from_csv_or_list(
-                df_final, forecast_dates_csv, csv_path
-            )
+            forecast_out = self.get_forecast_out_from_csv_or_list(df_final, forecast_dates_csv, csv_path)
             # Ensure correct length
             if not list_and_perfect:
                 forecast_out = forecast_out[0 : len(self.forecast_dates)]
@@ -1674,10 +1461,7 @@ class Forecast:
             # Loading data from passed list
             data_list = self.params["passed_data"]["load_cost_forecast"]
             # Check if the passed data has the correct length
-            if (
-                len(data_list) < len(self.forecast_dates)
-                and self.params["passed_data"]["prediction_horizon"] is None
-            ):
+            if len(data_list) < len(self.forecast_dates) and self.params["passed_data"]["prediction_horizon"] is None:
                 self.logger.error("Passed data from passed list is not long enough")
                 return False
             else:
@@ -1731,14 +1515,10 @@ class Forecast:
         """
         csv_path = self.emhass_conf["data_path"] / csv_path
         if method == "constant":
-            df_final[self.var_prod_price] = self.optim_conf[
-                "photovoltaic_production_sell_price"
-            ]
+            df_final[self.var_prod_price] = self.optim_conf["photovoltaic_production_sell_price"]
         elif method == "csv":
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
-            forecast_out = self.get_forecast_out_from_csv_or_list(
-                df_final, forecast_dates_csv, csv_path
-            )
+            forecast_out = self.get_forecast_out_from_csv_or_list(df_final, forecast_dates_csv, csv_path)
             # Ensure correct length
             if not list_and_perfect:
                 forecast_out = forecast_out[0 : len(self.forecast_dates)]
@@ -1751,10 +1531,7 @@ class Forecast:
             # Loading data from passed list
             data_list = self.params["passed_data"]["prod_price_forecast"]
             # Check if the passed data has the correct length
-            if (
-                len(data_list) < len(self.forecast_dates)
-                and self.params["passed_data"]["prediction_horizon"] is None
-            ):
+            if len(data_list) < len(self.forecast_dates) and self.params["passed_data"]["prediction_horizon"] is None:
                 self.logger.error("Passed data from passed list is not long enough")
                 return False
             else:
@@ -1792,12 +1569,8 @@ class Forecast:
         async with aiofiles.open(w_forecast_cache_path, "rb") as file:
             content = await file.read()
             data = pickle.loads(content)
-            if not isinstance(data, pd.DataFrame) or len(data) < len(
-                self.forecast_dates
-            ):
-                self.logger.error(
-                    "There has been a error obtaining cached forecast data."
-                )
+            if not isinstance(data, pd.DataFrame) or len(data) < len(self.forecast_dates):
+                self.logger.error("There has been a error obtaining cached forecast data.")
                 self.logger.error(
                     "Try running optimization again with 'weather_forecast_cache': true, or run action `weather-forecast-cache`, to pull new data from forecast API and cache."
                 )
@@ -1807,18 +1580,11 @@ class Forecast:
                 os.remove(w_forecast_cache_path)
                 return False
             # Filter cached forecast data to match current forecast_dates start-end range (reduce forecast Dataframe size to appropriate length)
-            if (
-                self.forecast_dates[0] in data.index
-                and self.forecast_dates[-1] in data.index
-            ):
+            if self.forecast_dates[0] in data.index and self.forecast_dates[-1] in data.index:
                 data = data.loc[self.forecast_dates[0] : self.forecast_dates[-1]]
-                self.logger.info(
-                    "Retrieved forecast data from the previously saved cache."
-                )
+                self.logger.info("Retrieved forecast data from the previously saved cache.")
             else:
-                self.logger.error(
-                    "Unable to obtain cached forecast data within the requested timeframe range."
-                )
+                self.logger.error("Unable to obtain cached forecast data within the requested timeframe range.")
                 self.logger.error(
                     "Try running optimization again (not using cache). Optionally, add runtime parameter 'weather_forecast_cache': true to pull new data from forecast API and cache."
                 )
@@ -1829,9 +1595,7 @@ class Forecast:
                 return False
             return data
 
-    async def set_cached_forecast_data(
-        self, w_forecast_cache_path, data
-    ) -> pd.DataFrame:
+    async def set_cached_forecast_data(self, w_forecast_cache_path, data) -> pd.DataFrame:
         r"""
         Set generated weather forecast data to file.
         Trim data to match the original requested forecast dates
@@ -1850,14 +1614,10 @@ class Forecast:
             if not os.path.isfile(w_forecast_cache_path):
                 self.logger.warning("forecast data could not be saved to file.")
             else:
-                self.logger.info(
-                    "Saved the forecast results to cache, for later reference."
-                )
+                self.logger.info("Saved the forecast results to cache, for later reference.")
 
         # Trim cached data to match requested dates
-        end_forecast = (
-            self.start_forecast + self.optim_conf["delta_forecast_daily"]
-        ).replace(microsecond=0)
+        end_forecast = (self.start_forecast + self.optim_conf["delta_forecast_daily"]).replace(microsecond=0)
         forecast_dates = (
             pd.date_range(
                 start=self.start_forecast,

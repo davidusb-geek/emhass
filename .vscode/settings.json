@@ -1,26 +1,32 @@
 {
-    "python.envFile": "${workspaceFolder}/.vscode/env.env",
-    "python.testing.unittestArgs": [
-        "-v",
-        "-rP",
-        "-s",
-        "./tests",
-        "-p",
-        "test_*.py"
-    ],
-    "python.testing.pytestEnabled": false,
-    "python.testing.unittestEnabled": true,
-    "python.defaultInterpreterPath": ".venv/bin/python",
-    "cSpell.words": [
-        "automations"
-    ],
-    "sonarlint.connectedMode.project": {
-        "connectionId": "emhass",
-        "projectKey": "davidusb-geek_emhass"
-    },
-    "sonarlint.disableTelemetry": true,
-    "sonarlint.focusOnNewCode": false,
-    "sonarlint.analyzerProperties": {},
-    "mypy-type-checker.reportingScope": "workspace",
-    "editor.defaultFormatter": "charliermarsh.ruff"
+  "python.envFile": "${workspaceFolder}/.vscode/env.env",
+  "python.testing.unittestArgs": [
+      "-v",
+      "-rP",
+      "-s",
+      "./tests",
+      "-p",
+      "test_*.py"
+  ],
+  "python.testing.pytestEnabled": false,
+  "python.testing.unittestEnabled": true,
+  "python.defaultInterpreterPath": ".venv/bin/python",
+  "cSpell.words": [
+      "automations"
+  ],
+  "sonarlint.connectedMode.project": {
+      "connectionId": "davidusb-geek",
+      "projectKey": "davidusb-geek_emhass"
+  },
+  "sonarlint.disableTelemetry": true,
+  "sonarlint.focusOnNewCode": false,
+  "sonarlint.analyzerProperties": {},
+  "mypy-type-checker.reportingScope": "workspace",
+  "editor.defaultFormatter": "charliermarsh.ruff",
+  "[python]": {
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll": "explicit",
+      "source.organizeImports": "explicit"
+    }
 }

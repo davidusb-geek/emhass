@@ -43,9 +43,7 @@ emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
 
-def get_forecast_optim_objects(
-    retrieve_hass_conf, optim_conf, plant_conf, params, get_data_from_file
-):
+def get_forecast_optim_objects(retrieve_hass_conf, optim_conf, plant_conf, params, get_data_from_file):
     fcst = Forecast(
         retrieve_hass_conf,
         optim_conf,
@@ -247,9 +245,7 @@ if __name__ == "__main__":
             retrieve_hass_conf["sensor_power_load_no_var_loads"],
             retrieve_hass_conf["sensor_power_photovoltaics"],
         ]
-        rh.get_data(
-            days_list, var_list, minimal_response=False, significant_changes_only=False
-        )
+        rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False)
         rh.prepare_data(
             retrieve_hass_conf["sensor_power_load_no_var_loads"],
             load_negative=retrieve_hass_conf["load_negative"],
@@ -258,10 +254,8 @@ if __name__ == "__main__":
             var_interp=retrieve_hass_conf["sensor_linear_interp"],
         )
         df_input_data = rh.df_final.copy()
-        fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt = (
-            get_forecast_optim_objects(
-                retrieve_hass_conf, optim_conf, plant_conf, params, get_data_from_file
-            )
+        fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt = get_forecast_optim_objects(
+            retrieve_hass_conf, optim_conf, plant_conf, params, get_data_from_file
         )
         df_input_data = fcst.get_load_cost_forecast(df_input_data)
         df_input_data = fcst.get_prod_price_forecast(df_input_data)

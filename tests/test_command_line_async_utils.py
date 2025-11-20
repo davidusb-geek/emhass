@@ -44,20 +44,13 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
     async def get_test_params(set_use_pv=False):
         # Build params with default config and secrets
         if emhass_conf["defaults_path"].exists():
-            config = await utils.build_config(
-                emhass_conf, logger, emhass_conf["defaults_path"]
-            )
-            _, secrets = await utils.build_secrets(
-                emhass_conf, logger, no_response=True
-            )
+            config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+            _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
             params = await utils.build_params(emhass_conf, secrets, config, logger)
             if set_use_pv:
                 params["optim_conf"]["set_use_pv"] = True
         else:
-            raise Exception(
-                "config_defaults. does not exist in path: "
-                + str(emhass_conf["defaults_path"])
-            )
+            raise Exception("config_defaults. does not exist in path: " + str(emhass_conf["defaults_path"]))
         return params
 
     async def asyncSetUp(self):
@@ -90,25 +83,12 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(input_data_dict, dict)
         self.assertTrue(input_data_dict["df_input_data"] is None)
         self.assertIsInstance(input_data_dict["df_input_data_dayahead"], pd.DataFrame)
-        self.assertTrue(
-            input_data_dict["df_input_data_dayahead"].index.freq is not None
-        )
-        self.assertTrue(
-            input_data_dict["df_input_data_dayahead"].isnull().sum().sum() == 0
-        )
-        self.assertTrue(
-            input_data_dict["fcst"].optim_conf["weather_forecast_method"] == "list"
-        )
-        self.assertTrue(
-            input_data_dict["fcst"].optim_conf["load_forecast_method"] == "list"
-        )
-        self.assertTrue(
-            input_data_dict["fcst"].optim_conf["load_cost_forecast_method"] == "list"
-        )
-        self.assertTrue(
-            input_data_dict["fcst"].optim_conf["production_price_forecast_method"]
-            == "list"
-        )
+        self.assertTrue(input_data_dict["df_input_data_dayahead"].index.freq is not None)
+        self.assertTrue(input_data_dict["df_input_data_dayahead"].isnull().sum().sum() == 0)
+        self.assertTrue(input_data_dict["fcst"].optim_conf["weather_forecast_method"] == "list")
+        self.assertTrue(input_data_dict["fcst"].optim_conf["load_forecast_method"] == "list")
+        self.assertTrue(input_data_dict["fcst"].optim_conf["load_cost_forecast_method"] == "list")
+        self.assertTrue(input_data_dict["fcst"].optim_conf["production_price_forecast_method"] == "list")
         # Test publish data
         action = "publish-data"
         input_data_dict = await set_input_data_dict(
@@ -137,12 +117,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(input_data_dict, dict)
         self.assertIsInstance(input_data_dict["df_input_data_dayahead"], pd.DataFrame)
-        self.assertTrue(
-            input_data_dict["df_input_data_dayahead"].index.freq is not None
-        )
-        self.assertTrue(
-            input_data_dict["df_input_data_dayahead"].isnull().sum().sum() == 0
-        )
+        self.assertTrue(input_data_dict["df_input_data_dayahead"].index.freq is not None)
+        self.assertTrue(input_data_dict["df_input_data_dayahead"].isnull().sum().sum() == 0)
         self.assertTrue(
             len(input_data_dict["df_input_data_dayahead"]) == 10
         )  # The default value for prediction_horizon
@@ -169,12 +145,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(input_data_dict, dict)
         self.assertIsInstance(input_data_dict["df_input_data_dayahead"], pd.DataFrame)
-        self.assertTrue(
-            input_data_dict["df_input_data_dayahead"].index.freq is not None
-        )
-        self.assertTrue(
-            input_data_dict["df_input_data_dayahead"].isnull().sum().sum() == 0
-        )
+        self.assertTrue(input_data_dict["df_input_data_dayahead"].index.freq is not None)
+        self.assertTrue(input_data_dict["df_input_data_dayahead"].isnull().sum().sum() == 0)
         self.assertTrue(
             len(input_data_dict["df_input_data_dayahead"]) == 10
         )  # The default value for prediction_horizon
@@ -196,15 +168,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(input_data_dict, dict)
         self.assertIsInstance(input_data_dict["df_input_data_dayahead"], pd.DataFrame)
-        self.assertTrue(
-            input_data_dict["df_input_data_dayahead"].index.freq is not None
-        )
-        self.assertTrue(
-            input_data_dict["df_input_data_dayahead"].isnull().sum().sum() == 0
-        )
-        self.assertTrue(
-            len(input_data_dict["df_input_data_dayahead"]) == 10
-        )  # The fixed value for prediction_horizon
+        self.assertTrue(input_data_dict["df_input_data_dayahead"].index.freq is not None)
+        self.assertTrue(input_data_dict["df_input_data_dayahead"].isnull().sum().sum() == 0)
+        self.assertTrue(len(input_data_dict["df_input_data_dayahead"]) == 10)  # The fixed value for prediction_horizon
         # Test passing just load cost and prod price as lists
         action = "dayahead-optim"
         params = await TestCommandLineAsyncUtils.get_test_params()
@@ -224,13 +190,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        self.assertTrue(
-            input_data_dict["fcst"].optim_conf["load_cost_forecast_method"] == "list"
-        )
-        self.assertTrue(
-            input_data_dict["fcst"].optim_conf["production_price_forecast_method"]
-            == "list"
-        )
+        self.assertTrue(input_data_dict["fcst"].optim_conf["load_cost_forecast_method"] == "list")
+        self.assertTrue(input_data_dict["fcst"].optim_conf["production_price_forecast_method"] == "list")
 
     # Test day-ahead optimization
     async def test_webserver_get_injection_dict(self):
@@ -292,13 +253,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         opt_res = await dayahead_forecast_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertTrue(opt_res.isnull().sum().sum() == 0)
-        self.assertTrue(
-            input_data_dict["fcst"].optim_conf["load_cost_forecast_method"] == "list"
-        )
-        self.assertTrue(
-            input_data_dict["fcst"].optim_conf["production_price_forecast_method"]
-            == "list"
-        )
+        self.assertTrue(input_data_dict["fcst"].optim_conf["load_cost_forecast_method"] == "list")
+        self.assertTrue(input_data_dict["fcst"].optim_conf["production_price_forecast_method"] == "list")
         self.assertEqual(
             opt_res["unit_load_cost"].values.tolist(),
             runtimeparams["load_cost_forecast"],
@@ -342,9 +298,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertTrue(opt_res.isnull().sum().sum() == 0)
         self.assertIsInstance(opt_res.index, pd.core.indexes.datetimes.DatetimeIndex)
-        self.assertIsInstance(
-            opt_res.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(opt_res.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertTrue("cost_fun_" + input_data_dict["costfun"] in opt_res.columns)
 
     # Test naive mpc optimization
@@ -423,9 +377,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        opt_res_first = await publish_data(
-            input_data_dict, logger, opt_res_latest=opt_res
-        )
+        opt_res_first = await publish_data(input_data_dict, logger, opt_res_latest=opt_res)
         self.assertTrue(len(opt_res_first) == 1)
         # test mpc and publish with method_ts_round=last and set_use_battery=true
         action = "naive-mpc-optim"
@@ -453,9 +405,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        opt_res_last = await publish_data(
-            input_data_dict, logger, opt_res_latest=opt_res
-        )
+        opt_res_last = await publish_data(input_data_dict, logger, opt_res_latest=opt_res)
         self.assertTrue(len(opt_res_last) == 1)
         # Reproduce when trying to publish data params=None and runtimeparams=None
         # action = 'publish-data'
@@ -466,9 +416,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         # Check if status is published
         from datetime import datetime
 
-        now_precise = datetime.now(
-            input_data_dict["retrieve_hass_conf"]["time_zone"]
-        ).replace(second=0, microsecond=0)
+        now_precise = datetime.now(input_data_dict["retrieve_hass_conf"]["time_zone"]).replace(second=0, microsecond=0)
         idx_closest = opt_res.index.get_indexer([now_precise], method="nearest")[0]
         custom_cost_fun_id = {
             "entity_id": "sensor.optim_status",
@@ -487,9 +435,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             publish_prefix=publish_prefix,
         )
         self.assertTrue(hasattr(response, "__class__"))
-        self.assertTrue(
-            data["attributes"]["friendly_name"] == "EMHASS optimization status"
-        )
+        self.assertTrue(data["attributes"]["friendly_name"] == "EMHASS optimization status")
         # When using set_use_adjusted_pv = True
         action = "naive-mpc-optim"
         params = copy.deepcopy(orjson.loads(self.params_json))
@@ -540,16 +486,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        self.assertTrue(
-            input_data_dict["params"]["passed_data"]["model_type"] == "long_train_data"
-        )
-        self.assertTrue(
-            input_data_dict["params"]["passed_data"]["sklearn_model"]
-            == "KNeighborsRegressor"
-        )
-        self.assertTrue(
-            input_data_dict["params"]["passed_data"]["perform_backtest"] is False
-        )
+        self.assertTrue(input_data_dict["params"]["passed_data"]["model_type"] == "long_train_data")
+        self.assertTrue(input_data_dict["params"]["passed_data"]["sklearn_model"] == "KNeighborsRegressor")
+        self.assertTrue(input_data_dict["params"]["passed_data"]["perform_backtest"] is False)
         # Check that the default params are loaded
         input_data_dict = await set_input_data_dict(
             emhass_conf,
@@ -560,18 +499,11 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        self.assertTrue(
-            input_data_dict["params"]["passed_data"]["model_type"] == "long_train_data"
-        )
-        self.assertTrue(
-            input_data_dict["params"]["passed_data"]["sklearn_model"]
-            == "KNeighborsRegressor"
-        )
+        self.assertTrue(input_data_dict["params"]["passed_data"]["model_type"] == "long_train_data")
+        self.assertTrue(input_data_dict["params"]["passed_data"]["sklearn_model"] == "KNeighborsRegressor")
         self.assertIsInstance(input_data_dict["df_input_data"], pd.DataFrame)
         # Test the fit method
-        df_fit_pred, df_fit_pred_backtest, mlf = await forecast_model_fit(
-            input_data_dict, logger, debug=True
-        )
+        df_fit_pred, df_fit_pred_backtest, mlf = await forecast_model_fit(input_data_dict, logger, debug=True)
         self.assertIsInstance(df_fit_pred, pd.DataFrame)
         self.assertTrue(df_fit_pred_backtest is None)
         # Test ijection_dict for fit method on webui
@@ -588,21 +520,15 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        df_pred = await forecast_model_predict(
-            input_data_dict, logger, use_last_window=False, debug=True, mlf=mlf
-        )
+        df_pred = await forecast_model_predict(input_data_dict, logger, use_last_window=False, debug=True, mlf=mlf)
         self.assertIsInstance(df_pred, pd.Series)
         self.assertTrue(df_pred.isnull().sum().sum() == 0)
         # Now a predict using last_window
-        df_pred = await forecast_model_predict(
-            input_data_dict, logger, debug=True, mlf=mlf
-        )
+        df_pred = await forecast_model_predict(input_data_dict, logger, debug=True, mlf=mlf)
         self.assertIsInstance(df_pred, pd.Series)
         self.assertTrue(df_pred.isnull().sum().sum() == 0)
         # Test the tune method
-        df_pred_optim, mlf = await forecast_model_tune(
-            input_data_dict, logger, debug=True, mlf=mlf
-        )
+        df_pred_optim, mlf = await forecast_model_tune(input_data_dict, logger, debug=True, mlf=mlf)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
         self.assertTrue(mlf.is_tuned is True)
         # Test injection_dict for tune method on webui
@@ -640,18 +566,15 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             get_data_from_file=True,
         )
         self.assertTrue(
-            input_data_dict["params"]["passed_data"]["model_type"]
-            == "heating_hours_degreeday",
+            input_data_dict["params"]["passed_data"]["model_type"] == "heating_hours_degreeday",
         )
         self.assertTrue(
-            input_data_dict["params"]["passed_data"]["regression_model"]
-            == "LassoRegression",
+            input_data_dict["params"]["passed_data"]["regression_model"] == "LassoRegression",
         )
         self.assertTrue(
-            input_data_dict["params"]["passed_data"]["csv_file"]
-            == "heating_prediction.csv",
+            input_data_dict["params"]["passed_data"]["csv_file"] == "heating_prediction.csv",
         )
-        mlr = regressor_model_fit(input_data_dict, logger, debug=True)
+        mlr = await regressor_model_fit(input_data_dict, logger, debug=True)
 
         # def test_regressor_model_predict(self):
         costfun = "profit"
@@ -684,15 +607,13 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             get_data_from_file=True,
         )
         self.assertTrue(
-            input_data_dict["params"]["passed_data"]["model_type"]
-            == "heating_hours_degreeday",
+            input_data_dict["params"]["passed_data"]["model_type"] == "heating_hours_degreeday",
         )
         self.assertTrue(
-            input_data_dict["params"]["passed_data"]["mlr_predict_friendly_name"]
-            == "Predicted hours",
+            input_data_dict["params"]["passed_data"]["mlr_predict_friendly_name"] == "Predicted hours",
         )
 
-        regressor_model_predict(input_data_dict, logger, debug=True, mlr=mlr)
+        await regressor_model_predict(input_data_dict, logger, debug=True, mlr=mlr)
 
     # CLI test action that does not exist
     async def test_main_wrong_action(self):
@@ -1054,9 +975,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             "csv_filename": "test_export.csv",
             "start_time": "2025-11-10",
         }
-        runtimeparams_no_sensors_json = orjson.dumps(runtimeparams_no_sensors).decode(
-            "utf-8"
-        )
+        runtimeparams_no_sensors_json = orjson.dumps(runtimeparams_no_sensors).decode("utf-8")
         params_no_sensors["passed_data"] = runtimeparams_no_sensors
         params_no_sensors_json = orjson.dumps(params_no_sensors).decode("utf-8")
 
@@ -1076,9 +995,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
 
         # Test rh.get_data fails
         input_data_dict["rh"].use_influxdb = True  # Reset from test 2
-        input_data_dict["rh"].get_data = Mock(
-            return_value=False
-        )  # Mock get_data to fail
+        input_data_dict["rh"].get_data = Mock(return_value=False)  # Mock get_data to fail
         input_data_dict["rh"].df_final = None
 
         success = await export_influxdb_to_csv(input_data_dict, logger)

@@ -49,9 +49,7 @@ def load_forecast(data, forecast_date, freq, template):
     # Filter historic data for the same month and day of the week
     month = forecast_date.month
     day_of_week = forecast_date.dayofweek
-    historic_data = data[
-        (data.index.month == month) & (data.index.dayofweek == day_of_week)
-    ]
+    historic_data = data[(data.index.month == month) & (data.index.dayofweek == day_of_week)]
     used_days = np.unique(historic_data.index.date)
 
     # Align all historic data to the forecast day

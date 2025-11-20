@@ -37,26 +37,14 @@ if __name__ == "__main__":
     cec_inverters_0 = pvlib.pvsystem.retrieve_sam("cecinverter")
 
     logger.info("Reading the downloaded database from SAM")
-    cec_modules = pvlib.pvsystem.retrieve_sam(
-        path=str(emhass_conf["data_path"] / "CEC Modules.csv")
-    )
-    cec_modules = cec_modules.loc[
-        :, ~cec_modules.columns.duplicated()
-    ]  # Drop column duplicates
-    cec_inverters = pvlib.pvsystem.retrieve_sam(
-        path=str(emhass_conf["data_path"] / "CEC Inverters.csv")
-    )
-    cec_inverters = cec_inverters.loc[
-        :, ~cec_inverters.columns.duplicated()
-    ]  # Drop column duplicates
+    cec_modules = pvlib.pvsystem.retrieve_sam(path=str(emhass_conf["data_path"] / "CEC Modules.csv"))
+    cec_modules = cec_modules.loc[:, ~cec_modules.columns.duplicated()]  # Drop column duplicates
+    cec_inverters = pvlib.pvsystem.retrieve_sam(path=str(emhass_conf["data_path"] / "CEC Inverters.csv"))
+    cec_inverters = cec_inverters.loc[:, ~cec_inverters.columns.duplicated()]  # Drop column duplicates
 
     logger.info("Reading custom EMHASS database")
-    cec_modules_emhass = pvlib.pvsystem.retrieve_sam(
-        path=str(emhass_conf["data_path"] / "emhass_modules.csv")
-    )
-    cec_inverters_emhass = pvlib.pvsystem.retrieve_sam(
-        path=str(emhass_conf["data_path"] / "emhass_inverters.csv")
-    )
+    cec_modules_emhass = pvlib.pvsystem.retrieve_sam(path=str(emhass_conf["data_path"] / "emhass_modules.csv"))
+    cec_inverters_emhass = pvlib.pvsystem.retrieve_sam(path=str(emhass_conf["data_path"] / "emhass_inverters.csv"))
     strait_str = "================="
     logger.info(strait_str)
     logger.info(strait_str)
@@ -64,23 +52,13 @@ if __name__ == "__main__":
     logger.info("Updating and saving databases")
 
     # Modules
-    cols_to_keep_modules = [
-        elem
-        for elem in list(cec_modules_0.columns)
-        if elem not in list(cec_modules.columns)
-    ]
+    cols_to_keep_modules = [elem for elem in list(cec_modules_0.columns) if elem not in list(cec_modules.columns)]
     cec_modules = pd.concat([cec_modules, cec_modules_0[cols_to_keep_modules]], axis=1)
     logger.info(
         f"Number of elements from old database copied in new database for modules = {len(cols_to_keep_modules)}:"
     )
-    cols_to_keep_modules = [
-        elem
-        for elem in list(cec_modules_emhass.columns)
-        if elem not in list(cec_modules.columns)
-    ]
-    cec_modules = pd.concat(
-        [cec_modules, cec_modules_emhass[cols_to_keep_modules]], axis=1
-    )
+    cols_to_keep_modules = [elem for elem in list(cec_modules_emhass.columns) if elem not in list(cec_modules.columns)]
+    cec_modules = pd.concat([cec_modules, cec_modules_emhass[cols_to_keep_modules]], axis=1)
     logger.info(
         f"Number of elements from custom EMHASS database copied in new database for modules = {len(cols_to_keep_modules)}:"
     )
@@ -95,25 +73,15 @@ if __name__ == "__main__":
     logger.info(strait_str)
 
     # Inverters
-    cols_to_keep_inverters = [
-        elem
-        for elem in list(cec_inverters_0.columns)
-        if elem not in list(cec_inverters.columns)
-    ]
-    cec_inverters = pd.concat(
-        [cec_inverters, cec_inverters_0[cols_to_keep_inverters]], axis=1
-    )
+    cols_to_keep_inverters = [elem for elem in list(cec_inverters_0.columns) if elem not in list(cec_inverters.columns)]
+    cec_inverters = pd.concat([cec_inverters, cec_inverters_0[cols_to_keep_inverters]], axis=1)
     logger.info(
         f"Number of elements from old database copied in new database for inverters = {len(cols_to_keep_inverters)}"
     )
     cols_to_keep_inverters = [
-        elem
-        for elem in list(cec_inverters_emhass.columns)
-        if elem not in list(cec_inverters.columns)
+        elem for elem in list(cec_inverters_emhass.columns) if elem not in list(cec_inverters.columns)
     ]
-    cec_inverters = pd.concat(
-        [cec_inverters, cec_inverters_emhass[cols_to_keep_inverters]], axis=1
-    )
+    cec_inverters = pd.concat([cec_inverters, cec_inverters_emhass[cols_to_keep_inverters]], axis=1)
     logger.info(
         f"Number of elements from custom EMHASS database copied in new database for inverters = {len(cols_to_keep_inverters)}"
     )

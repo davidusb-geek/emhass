@@ -41,16 +41,12 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         # Build params with default secrets (no config)
         if emhass_conf["defaults_path"].exists():
             if self.get_data_from_file:
-                _, secrets = await utils.build_secrets(
-                    emhass_conf, logger, no_response=True
-                )
+                _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
                 params = await utils.build_params(emhass_conf, secrets, {}, logger)
                 retrieve_hass_conf, _, _ = get_yaml_parse(params, logger)
             else:
                 emhass_conf["secrets_path"] = root / "secrets_emhass.yaml"
-                config = await utils.build_config(
-                    emhass_conf, logger, emhass_conf["defaults_path"]
-                )
+                config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
                 _, secrets = await utils.build_secrets(
                     emhass_conf,
                     logger,
@@ -61,20 +57,13 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
                 retrieve_hass_conf, _, _ = get_yaml_parse(params, logger)
                 params = None
         else:
-            raise Exception(
-                "config_defaults. does not exist in path: "
-                + str(emhass_conf["defaults_path"])
-            )
+            raise Exception("config_defaults. does not exist in path: " + str(emhass_conf["defaults_path"]))
 
         # Force config params for testing
         retrieve_hass_conf["optimization_time_step"] = pd.to_timedelta(30, "minutes")
         retrieve_hass_conf["sensor_power_photovoltaics"] = "sensor.power_photovoltaics"
-        retrieve_hass_conf["sensor_power_photovoltaics_forecast"] = (
-            "sensor.p_pv_forecast"
-        )
-        retrieve_hass_conf["sensor_power_load_no_var_loads"] = (
-            "sensor.power_load_no_var_loads"
-        )
+        retrieve_hass_conf["sensor_power_photovoltaics_forecast"] = "sensor.p_pv_forecast"
+        retrieve_hass_conf["sensor_power_load_no_var_loads"] = "sensor.power_load_no_var_loads"
         retrieve_hass_conf["sensor_replace_zero"] = [
             "sensor.power_photovoltaics",
             "sensor.p_pv_forecast",
@@ -100,13 +89,9 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         )
         # Obtain sensor values from saved file
         if self.get_data_from_file:
-            async with aiofiles.open(
-                emhass_conf["data_path"] / str(model_type + ".pkl"), "rb"
-            ) as f:
+            async with aiofiles.open(emhass_conf["data_path"] / str(model_type + ".pkl"), "rb") as f:
                 content = await f.read()
-                self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = (
-                    pickle.loads(content)
-                )
+                self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = pickle.loads(content)
                 self.rh.var_list = self.var_list
         # Else obtain sensor values from HA
         else:
@@ -147,9 +132,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             }
             # Check to save updated data to file
             if save_data_to_file:
-                async with aiofiles.open(
-                    emhass_conf["data_path"] / str(model_type + ".pkl"), "wb"
-                ) as outp:
+                async with aiofiles.open(emhass_conf["data_path"] / str(model_type + ".pkl"), "wb") as outp:
                     pickle.dump(
                         (
                             self.rh.df_final,
@@ -167,9 +150,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(self.retrieve_hass_conf, dict)
         self.assertTrue("hass_url" in self.retrieve_hass_conf.keys())
         if self.get_data_from_file:
-            self.assertTrue(
-                self.retrieve_hass_conf["hass_url"] == "https://myhass.duckdns.org/"
-            )
+            self.assertTrue(self.retrieve_hass_conf["hass_url"] == "https://myhass.duckdns.org/")
 
     # Check yaml parse worked
     async def test_yaml_parse_web_server(self):
@@ -178,9 +159,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             async with aiofiles.open(emhass_conf["defaults_path"]) as file:
                 data = await file.read()
                 defaults = orjson.loads(data)
-                params.update(
-                    await utils.build_params(emhass_conf, {}, defaults, logger)
-                )
+                params.update(await utils.build_params(emhass_conf, {}, defaults, logger))
         _, optim_conf, _ = get_yaml_parse(params, logger)
         # Just check forecast methods
         self.assertFalse(optim_conf.get("weather_forecast_method") is None)
@@ -201,9 +180,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
     # Test with html mock response
     async def test_get_data_mock(self):
         with aioresponses() as mocked:
-            test_data_path = (
-                emhass_conf["data_path"] / "test_response_get_data_get_method.pbz2"
-            )
+            test_data_path = emhass_conf["data_path"] / "test_response_get_data_get_method.pbz2"
 
             async with aiofiles.open(test_data_path, "rb") as f:
                 compressed = await f.read()
@@ -225,12 +202,8 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
                 test_url=self.retrieve_hass_conf["hass_url"],
             )
             self.assertIsInstance(self.rh.df_final, type(pd.DataFrame()))
-            self.assertIsInstance(
-                self.rh.df_final.index, pd.core.indexes.datetimes.DatetimeIndex
-            )
-            self.assertIsInstance(
-                self.rh.df_final.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-            )
+            self.assertIsInstance(self.rh.df_final.index, pd.core.indexes.datetimes.DatetimeIndex)
+            self.assertIsInstance(self.rh.df_final.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
             self.assertEqual(len(self.rh.df_final.columns), len(var_list))
             self.assertEqual(
                 self.rh.df_final.index.freq,
@@ -239,18 +212,12 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.rh.df_final.index.tz, datetime.UTC)
 
     # Check the dataframe was formatted correctly
-    async def test_prepare_data(self):
+    def test_prepare_data(self):
         self.assertIsInstance(self.rh.df_final, type(pd.DataFrame()))
-        self.assertIsInstance(
-            self.rh.df_final.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
-        self.assertIsInstance(
-            self.rh.df_final.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(self.rh.df_final.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(self.rh.df_final.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(len(self.rh.df_final.columns), len(self.var_list))
-        self.assertEqual(
-            self.rh.df_final.index.isin(self.days_list).sum(), len(self.days_list)
-        )
+        self.assertEqual(self.rh.df_final.index.isin(self.days_list).sum(), len(self.days_list))
         self.assertEqual(
             self.rh.df_final.index.freq,
             self.retrieve_hass_conf["optimization_time_step"],
@@ -273,15 +240,13 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             self.rh.df_final.index.freq,
             self.retrieve_hass_conf["optimization_time_step"],
         )
-        self.assertEqual(
-            self.rh.df_final.index.tz, self.retrieve_hass_conf["time_zone"]
-        )
+        self.assertEqual(self.rh.df_final.index.tz, self.retrieve_hass_conf["time_zone"])
 
     # Test negative load
-    async def test_prepare_data_negative_load(self):
-        self.rh.df_final[
+    def test_prepare_data_negative_load(self):
+        self.rh.df_final[self.retrieve_hass_conf["sensor_power_load_no_var_loads"]] = -self.rh.df_final[
             self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
-        ] = -self.rh.df_final[self.retrieve_hass_conf["sensor_power_load_no_var_loads"]]
+        ]
         self.rh.prepare_data(
             self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
             load_negative=True,
@@ -299,27 +264,19 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             self.rh.df_final.index.freq,
             self.retrieve_hass_conf["optimization_time_step"],
         )
-        self.assertEqual(
-            self.rh.df_final.index.tz, self.retrieve_hass_conf["time_zone"]
-        )
+        self.assertEqual(self.rh.df_final.index.tz, self.retrieve_hass_conf["time_zone"])
 
     # Tests that the prepare_data method does convert missing PV values to zero
     # and also ignores any missing sensor columns.
-    async def test_prepare_data_missing_pv(self):
+    def test_prepare_data_missing_pv(self):
         load_sensor = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
         actual_pv_sensor = self.retrieve_hass_conf["sensor_power_photovoltaics"]
-        forecast_pv_sensor = self.retrieve_hass_conf[
-            "sensor_power_photovoltaics_forecast"
-        ]
+        forecast_pv_sensor = self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
         var_replace_zero = [actual_pv_sensor, forecast_pv_sensor, "sensor.missing1"]
         var_interp = [actual_pv_sensor, load_sensor, "sensor.missing2"]
         # Replace actual and forecast PV zero values with NaN's (to test they get replaced back)
-        self.rh.df_final[actual_pv_sensor] = self.rh.df_final[actual_pv_sensor].replace(
-            0, np.nan
-        )
-        self.rh.df_final[forecast_pv_sensor] = self.rh.df_final[
-            forecast_pv_sensor
-        ].replace(0, np.nan)
+        self.rh.df_final[actual_pv_sensor] = self.rh.df_final[actual_pv_sensor].replace(0, np.nan)
+        self.rh.df_final[forecast_pv_sensor] = self.rh.df_final[forecast_pv_sensor].replace(0, np.nan)
         # Verify a non-zero number of missing values in the actual and forecast PV columns before prepare_data
         self.assertTrue(self.rh.df_final[actual_pv_sensor].isna().sum() > 0)
         self.assertTrue(self.rh.df_final[forecast_pv_sensor].isna().sum() > 0)
@@ -336,9 +293,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             self.df_raw.index.isin(self.days_list).sum(),
         )
         # Check the before and after actual and forecast PV columns have the same number of values
-        self.assertEqual(
-            len(self.df_raw[actual_pv_sensor]), len(self.rh.df_final[actual_pv_sensor])
-        )
+        self.assertEqual(len(self.df_raw[actual_pv_sensor]), len(self.rh.df_final[actual_pv_sensor]))
         self.assertEqual(
             len(self.df_raw[forecast_pv_sensor]),
             len(self.rh.df_final[forecast_pv_sensor]),
@@ -360,16 +315,12 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
                 "influxdb_host": "fake-host",
                 "influxdb_port": 8086,
                 "influxdb_username": "fake-user",
-                "influxdb_password": "fake-pass",
+                "influxdb_password": "fake-pass",  # pragma: allowlist secret
                 "influxdb_database": "fake-db",
                 "influxdb_measurement": "W",
                 # Add other necessary keys from the original conf
-                "sensor_power_photovoltaics": self.retrieve_hass_conf[
-                    "sensor_power_photovoltaics"
-                ],
-                "sensor_power_load_no_var_loads": self.retrieve_hass_conf[
-                    "sensor_power_load_no_var_loads"
-                ],
+                "sensor_power_photovoltaics": self.retrieve_hass_conf["sensor_power_photovoltaics"],
+                "sensor_power_load_no_var_loads": self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
             }
         }
 
@@ -437,7 +388,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             host="fake-host",
             port=8086,
             username="fake-user",
-            password="fake-pass",
+            password="fake-pass",  # pragma: allowlist secret
             database="fake-db",
             ssl=False,
             verify_ssl=False,
@@ -473,11 +424,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(
             data["state"]
-            == "{:.2f}".format(
-                np.round(
-                    self.df_raw.loc[self.df_raw.index[10], self.df_raw.columns[0]], 2
-                )
-            )
+            == "{:.2f}".format(np.round(self.df_raw.loc[self.df_raw.index[10], self.df_raw.columns[0]], 2))
         )
         self.assertTrue(data["attributes"]["unit_of_measurement"] == "Unit")
         self.assertTrue(data["attributes"]["friendly_name"] == "Variable")
@@ -496,9 +443,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             type_var="power",
         )
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(
-            data["state"] == f"{np.round(df.loc[df.index[10], df.columns[2]], 2):.2f}"
-        )
+        self.assertTrue(data["state"] == f"{np.round(df.loc[df.index[10], df.columns[2]], 2):.2f}")
         self.assertTrue(data["attributes"]["unit_of_measurement"] == "W")
         self.assertTrue(data["attributes"]["friendly_name"] == "PV Forecast")
         self.assertIsInstance(data["attributes"]["forecasts"], list)

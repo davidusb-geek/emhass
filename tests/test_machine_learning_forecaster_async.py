@@ -32,18 +32,11 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
     async def get_test_params():
         # Build params with default config and secrets
         if emhass_conf["defaults_path"].exists():
-            config = await utils.build_config(
-                emhass_conf, logger, emhass_conf["defaults_path"]
-            )
-            _, secrets = await utils.build_secrets(
-                emhass_conf, logger, no_response=True
-            )
+            config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+            _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
             params = await utils.build_params(emhass_conf, secrets, config, logger)
         else:
-            raise Exception(
-                "config_defaults. does not exist in path: "
-                + str(emhass_conf["defaults_path"])
-            )
+            raise Exception("config_defaults. does not exist in path: " + str(emhass_conf["defaults_path"]))
         return params
 
     async def asyncSetUp(self):
@@ -78,15 +71,11 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         var_model = self.input_data_dict["params"]["passed_data"]["var_model"]
         sklearn_model = self.input_data_dict["params"]["passed_data"]["sklearn_model"]
         num_lags = self.input_data_dict["params"]["passed_data"]["num_lags"]
-        self.mlf = MLForecaster(
-            data, model_type, var_model, sklearn_model, num_lags, emhass_conf, logger
-        )
+        self.mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, emhass_conf, logger)
         # Create RetrieveHass Object
         get_data_from_file = True
         params = None
-        self.retrieve_hass_conf, self.optim_conf, _ = utils.get_yaml_parse(
-            params_json, logger
-        )
+        self.retrieve_hass_conf, self.optim_conf, _ = utils.get_yaml_parse(params_json, logger)
         self.rh = RetrieveHass(
             self.retrieve_hass_conf["hass_url"],
             self.retrieve_hass_conf["long_lived_token"],
@@ -98,13 +87,9 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
             get_data_from_file=get_data_from_file,
         )
         # Open and extract saved sensor data to test against
-        async with aiofiles.open(
-            emhass_conf["data_path"] / "test_df_final.pkl", "rb"
-        ) as inp:
+        async with aiofiles.open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
             content = await inp.read()
-            self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = (
-                pickle.loads(content)
-            )
+            self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = pickle.loads(content)
 
     async def test_fit(self):
         df_pred, df_pred_backtest = await self.mlf.fit()
@@ -154,9 +139,7 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         var_model = self.input_data_dict["params"]["passed_data"]["var_model"]
         sklearn_model = "LinearRegression"
         num_lags = self.input_data_dict["params"]["passed_data"]["num_lags"]
-        self.mlf = MLForecaster(
-            data, model_type, var_model, sklearn_model, num_lags, emhass_conf, logger
-        )
+        self.mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, emhass_conf, logger)
         await self.mlf.fit()
         df_pred_optim = await self.mlf.tune(debug=True)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
@@ -167,9 +150,7 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         var_model = self.input_data_dict["params"]["passed_data"]["var_model"]
         sklearn_model = "ElasticNet"
         num_lags = self.input_data_dict["params"]["passed_data"]["num_lags"]
-        self.mlf = MLForecaster(
-            data, model_type, var_model, sklearn_model, num_lags, emhass_conf, logger
-        )
+        self.mlf = MLForecaster(data, model_type, var_model, sklearn_model, num_lags, emhass_conf, logger)
         await self.mlf.fit()
         df_pred_optim = await self.mlf.tune(debug=True)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
