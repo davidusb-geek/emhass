@@ -40,27 +40,18 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         params = {}
         # Build params with default config and secrets
         if emhass_conf["defaults_path"].exists():
-            config = await utils.build_config(
-                emhass_conf, logger, emhass_conf["defaults_path"]
-            )
-            _, secrets = await utils.build_secrets(
-                emhass_conf, logger, no_response=True
-            )
+            config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+            _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
             params = await utils.build_params(emhass_conf, secrets, config, logger)
         else:
-            raise Exception(
-                "config_defaults.json does not exist in path: "
-                + str(emhass_conf["defaults_path"])
-            )
+            raise Exception("config_defaults.json does not exist in path: " + str(emhass_conf["defaults_path"]))
         return params
 
     async def asyncSetUp(self):
         self.get_data_from_file = True
         params = await TestForecast.get_test_params()
         params_json = orjson.dumps(params).decode("utf-8")
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            params_json, logger
-        )
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
         self.retrieve_hass_conf, self.optim_conf, self.plant_conf = (
             retrieve_hass_conf,
             optim_conf,
@@ -81,19 +72,11 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             filename_path = emhass_conf["data_path"] / "test_df_final.pkl"
             async with aiofiles.open(filename_path, "rb") as inp:
                 content = await inp.read()
-                self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = (
-                    pickle.loads(content)
-                )
+                self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = pickle.loads(content)
                 self.rh.var_list = self.var_list
-            self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(
-                self.var_list[0]
-            )
-            self.retrieve_hass_conf["sensor_power_photovoltaics"] = str(
-                self.var_list[1]
-            )
-            self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"] = str(
-                self.var_list[2]
-            )
+            self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(self.var_list[0])
+            self.retrieve_hass_conf["sensor_power_photovoltaics"] = str(self.var_list[1])
+            self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"] = str(self.var_list[2])
             self.retrieve_hass_conf["sensor_linear_interp"] = [
                 retrieve_hass_conf["sensor_power_photovoltaics"],
                 retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
@@ -105,9 +88,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             ]
         # Else obtain sensor values from HA
         else:
-            self.days_list = utils.get_days_list(
-                self.retrieve_hass_conf["historic_days_to_retrieve"]
-            )
+            self.days_list = utils.get_days_list(self.retrieve_hass_conf["historic_days_to_retrieve"])
             self.var_list = [
                 self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
                 self.retrieve_hass_conf["sensor_power_photovoltaics"],
@@ -141,12 +122,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # The default for test is csv read
         self.df_weather_scrap = await self.fcst.get_weather_forecast(method="csv")
         self.P_PV_forecast = self.fcst.get_power_from_weather(self.df_weather_scrap)
-        self.P_load_forecast = await self.fcst.get_load_forecast(
-            method=optim_conf["load_forecast_method"]
-        )
-        self.df_input_data_dayahead = pd.concat(
-            [self.P_PV_forecast, self.P_load_forecast], axis=1
-        )
+        self.P_load_forecast = await self.fcst.get_load_forecast(method=optim_conf["load_forecast_method"])
+        self.df_input_data_dayahead = pd.concat([self.P_PV_forecast, self.P_load_forecast], axis=1)
         self.df_input_data_dayahead.columns = ["P_PV_forecast", "P_load_forecast"]
         self.opt = Optimization(
             self.retrieve_hass_conf,
@@ -178,33 +155,19 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.df_weather_csv = await self.fcst.get_weather_forecast(method="csv")
         self.assertEqual(self.fcst.weather_forecast_method, "csv")
         self.assertIsInstance(self.df_weather_csv, type(pd.DataFrame()))
-        self.assertIsInstance(
-            self.df_weather_csv.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
-        self.assertIsInstance(
-            self.df_weather_csv.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(self.df_weather_csv.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(self.df_weather_csv.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(self.df_weather_csv.index.tz, self.fcst.time_zone)
-        self.assertTrue(
-            self.fcst.start_forecast < ts for ts in self.df_weather_csv.index
-        )
+        self.assertTrue(self.fcst.start_forecast < ts for ts in self.df_weather_csv.index)
         self.assertEqual(
             len(self.df_weather_csv),
-            int(
-                self.optim_conf["delta_forecast_daily"].total_seconds()
-                / 3600
-                / self.fcst.timeStep
-            ),
+            int(self.optim_conf["delta_forecast_daily"].total_seconds() / 3600 / self.fcst.timeStep),
         )
         # Test dataframe from get power from weather
         P_PV_forecast = self.fcst.get_power_from_weather(self.df_weather_csv)
         self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
-        self.assertIsInstance(
-            P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
-        self.assertIsInstance(
-            P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.df_weather_csv), len(P_PV_forecast))
         df_weather_none = await self.fcst.get_weather_forecast(method="none")
@@ -226,24 +189,14 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(self.fcst.X_adjust_pv, pd.DataFrame)
         self.assertIsInstance(self.fcst.y_adjust_pv, pd.core.series.Series)
         # Call the fit method
-        await self.fcst.adjust_pv_forecast_fit(
-            n_splits=5, regression_model="LassoRegression", debug=False
-        )
+        await self.fcst.adjust_pv_forecast_fit(n_splits=5, regression_model="LassoRegression", debug=False)
         # Call the predict method
         P_PV_forecast = self.fcst.adjust_pv_forecast_predict()
         self.assertEqual(len(P_PV_forecast), len(self.fcst.P_PV_forecast_validation))
-        self.assertFalse(
-            P_PV_forecast.isna().any().any(), "Adjusted forecast contains NaN values"
-        )
-        self.assertGreaterEqual(
-            self.fcst.validation_rmse, 0.0, "RMSE should be non-negative"
-        )
-        self.assertLessEqual(
-            self.fcst.validation_r2, 1.0, "R² score should be at most 1"
-        )
-        self.assertGreaterEqual(
-            self.fcst.validation_r2, -1.0, "R² score should be at least -1"
-        )
+        self.assertFalse(P_PV_forecast.isna().any().any(), "Adjusted forecast contains NaN values")
+        self.assertGreaterEqual(self.fcst.validation_rmse, 0.0, "RMSE should be non-negative")
+        self.assertLessEqual(self.fcst.validation_r2, 1.0, "R² score should be at most 1")
+        self.assertGreaterEqual(self.fcst.validation_r2, -1.0, "R² score should be at least -1")
 
         # import plotly.express as px
         # data_to_plot = self.fcst.P_PV_forecast_validation[["forecast", "adjusted_forecast"]].reset_index()
@@ -259,9 +212,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
     # Test output weather forecast using openmeteo with mock get request data
     async def test_get_weather_forecast_openmeteo_method_mock(self):
-        test_data_path = (
-            emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2"
-        )
+        test_data_path = emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2"
 
         async with aiofiles.open(test_data_path, "rb") as f:
             compressed = await f.read()
@@ -293,39 +244,21 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             mocked.get(get_url, payload=data)
 
             # Test dataframe output from get weather forecast
-            df_weather_openmeteo = await self.fcst.get_weather_forecast(
-                method="open-meteo"
-            )
+            df_weather_openmeteo = await self.fcst.get_weather_forecast(method="open-meteo")
             self.assertIsInstance(df_weather_openmeteo, type(pd.DataFrame()))
-            self.assertIsInstance(
-                df_weather_openmeteo.index, pd.core.indexes.datetimes.DatetimeIndex
-            )
-            self.assertIsInstance(
-                df_weather_openmeteo.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-            )
+            self.assertIsInstance(df_weather_openmeteo.index, pd.core.indexes.datetimes.DatetimeIndex)
+            self.assertIsInstance(df_weather_openmeteo.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
             self.assertEqual(df_weather_openmeteo.index.tz, self.fcst.time_zone)
-            self.assertTrue(
-                self.fcst.start_forecast < ts for ts in df_weather_openmeteo.index
-            )
+            self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_openmeteo.index)
             self.assertEqual(
                 len(df_weather_openmeteo),
-                int(
-                    self.optim_conf["delta_forecast_daily"].total_seconds()
-                    / 3600
-                    / self.fcst.timeStep
-                ),
+                int(self.optim_conf["delta_forecast_daily"].total_seconds() / 3600 / self.fcst.timeStep),
             )
             # Test the legacy code using PVLib module methods
-            df_weather_openmeteo = await self.fcst.get_weather_forecast(
-                method="open-meteo", use_legacy_pvlib=False
-            )
+            df_weather_openmeteo = await self.fcst.get_weather_forecast(method="open-meteo", use_legacy_pvlib=False)
             self.assertIsInstance(df_weather_openmeteo, type(pd.DataFrame()))
-            self.assertIsInstance(
-                df_weather_openmeteo.index, pd.core.indexes.datetimes.DatetimeIndex
-            )
-            self.assertIsInstance(
-                df_weather_openmeteo.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-            )
+            self.assertIsInstance(df_weather_openmeteo.index, pd.core.indexes.datetimes.DatetimeIndex)
+            self.assertIsInstance(df_weather_openmeteo.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
             self.assertEqual(df_weather_openmeteo.index.tz, self.fcst.time_zone)
             self.assertTrue("ghi" in list(df_weather_openmeteo.columns))
             self.assertTrue("dhi" in list(df_weather_openmeteo.columns))
@@ -333,12 +266,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             # Test dataframe output from get power from weather forecast
             P_PV_forecast = self.fcst.get_power_from_weather(df_weather_openmeteo)
             self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
-            self.assertIsInstance(
-                P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-            )
-            self.assertIsInstance(
-                P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-            )
+            self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+            self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
             self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
             self.assertEqual(len(df_weather_openmeteo), len(P_PV_forecast))
             # Test dataframe output from get power from weather forecast (with 2 PV plant's)
@@ -356,12 +285,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             self.plant_conf["strings_per_inverter"] = [1, 1]
             P_PV_forecast = self.fcst.get_power_from_weather(df_weather_openmeteo)
             self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
-            self.assertIsInstance(
-                P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-            )
-            self.assertIsInstance(
-                P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-            )
+            self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+            self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
             self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
             self.assertEqual(len(df_weather_openmeteo), len(P_PV_forecast))
 
@@ -381,9 +306,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
             )
 
-        test_data_path = str(
-            emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2"
-        )
+        test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2")
 
         async with aiofiles.open(test_data_path, "rb") as f:
             compressed = await f.read()
@@ -400,27 +323,15 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             df_weather_scrap = await self.fcst.get_weather_forecast(method="solcast")
 
             self.assertIsInstance(df_weather_scrap, type(pd.DataFrame()))
-            self.assertIsInstance(
-                df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex
-            )
-            self.assertIsInstance(
-                df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-            )
+            self.assertIsInstance(df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex)
+            self.assertIsInstance(df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
             self.assertEqual(df_weather_scrap.index.tz, self.fcst.time_zone)
-            self.assertTrue(
-                self.fcst.start_forecast < ts for ts in df_weather_scrap.index
-            )
+            self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_scrap.index)
             self.assertEqual(
                 len(df_weather_scrap),
-                int(
-                    self.optim_conf["delta_forecast_daily"].total_seconds()
-                    / 3600
-                    / self.fcst.timeStep
-                ),
+                int(self.optim_conf["delta_forecast_daily"].total_seconds() / 3600 / self.fcst.timeStep),
             )
-            if os.path.isfile(
-                emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"
-            ):
+            if os.path.isfile(emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"):
                 os.rename(
                     emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
                     emhass_conf["data_path"] / "weather_forecast_data.pkl",
@@ -436,17 +347,13 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         }
         self.fcst.retrieve_hass_conf["solcast_api_key"] = "123456"
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "111111,222222,333333"
-        roof_ids = re.split(
-            r"[,\s]+", self.fcst.retrieve_hass_conf["solcast_rooftop_id"].strip()
-        )
+        roof_ids = re.split(r"[,\s]+", self.fcst.retrieve_hass_conf["solcast_rooftop_id"].strip())
         if os.path.isfile(emhass_conf["data_path"] / "weather_forecast_data.pkl"):
             os.rename(
                 emhass_conf["data_path"] / "weather_forecast_data.pkl",
                 emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
             )
-        test_data_path = str(
-            emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2"
-        )
+        test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2")
         async with aiofiles.open(test_data_path, "rb") as f:
             compressed = await f.read()
 
@@ -459,27 +366,15 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 mocked.get(get_url, payload=data)
             df_weather_scrap = await self.fcst.get_weather_forecast(method="solcast")
             self.assertIsInstance(df_weather_scrap, type(pd.DataFrame()))
-            self.assertIsInstance(
-                df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex
-            )
-            self.assertIsInstance(
-                df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-            )
+            self.assertIsInstance(df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex)
+            self.assertIsInstance(df_weather_scrap.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
             self.assertEqual(df_weather_scrap.index.tz, self.fcst.time_zone)
-            self.assertTrue(
-                self.fcst.start_forecast < ts for ts in df_weather_scrap.index
-            )
+            self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_scrap.index)
             self.assertEqual(
                 len(df_weather_scrap),
-                int(
-                    self.optim_conf["delta_forecast_daily"].total_seconds()
-                    / 3600
-                    / self.fcst.timeStep
-                ),
+                int(self.optim_conf["delta_forecast_daily"].total_seconds() / 3600 / self.fcst.timeStep),
             )
-            if os.path.isfile(
-                emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"
-            ):
+            if os.path.isfile(emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"):
                 os.rename(
                     emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
                     emhass_conf["data_path"] / "weather_forecast_data.pkl",
@@ -487,9 +382,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
     # Test output weather forecast using Forecast.Solar with mock get request data
     async def test_get_weather_forecast_solarforecast_method_mock(self):
-        test_data_path = str(
-            emhass_conf["data_path"] / "test_response_solarforecast_get_method.pbz2"
-        )
+        test_data_path = str(emhass_conf["data_path"] / "test_response_solarforecast_get_method.pbz2")
         async with aiofiles.open(test_data_path, "rb") as f:
             compressed = await f.read()
 
@@ -511,9 +404,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                     + str(5)
                 )
                 mocked.get(get_url, payload=data)
-                df_weather_solarforecast = await self.fcst.get_weather_forecast(
-                    method="solar.forecast"
-                )
+                df_weather_solarforecast = await self.fcst.get_weather_forecast(method="solar.forecast")
                 self.assertIsInstance(df_weather_solarforecast, type(pd.DataFrame()))
                 self.assertIsInstance(
                     df_weather_solarforecast.index,
@@ -524,17 +415,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                     pd.core.dtypes.dtypes.DatetimeTZDtype,
                 )
                 self.assertEqual(df_weather_solarforecast.index.tz, self.fcst.time_zone)
-                self.assertTrue(
-                    self.fcst.start_forecast < ts
-                    for ts in df_weather_solarforecast.index
-                )
+                self.assertTrue(self.fcst.start_forecast < ts for ts in df_weather_solarforecast.index)
                 self.assertEqual(
                     len(df_weather_solarforecast),
-                    int(
-                        self.optim_conf["delta_forecast_daily"].total_seconds()
-                        / 3600
-                        / self.fcst.timeStep
-                    ),
+                    int(self.optim_conf["delta_forecast_daily"].total_seconds() / 3600 / self.fcst.timeStep),
                 )
 
     #  Test output weather forecast using passed runtime lists
@@ -545,20 +429,11 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             async with aiofiles.open(emhass_conf["defaults_path"]) as data:
                 content = await data.read()
                 defaults = orjson.loads(content)
-                updated_emhass_conf, built_secrets = await utils.build_secrets(
-                    emhass_conf, logger
-                )
+                updated_emhass_conf, built_secrets = await utils.build_secrets(emhass_conf, logger)
                 emhass_conf.update(updated_emhass_conf)
-                params.update(
-                    await utils.build_params(
-                        emhass_conf, built_secrets, defaults, logger
-                    )
-                )
+                params.update(await utils.build_params(emhass_conf, built_secrets, defaults, logger))
         else:
-            raise Exception(
-                "config_defaults.json does not exist in path: "
-                + str(emhass_conf["defaults_path"])
-            )
+            raise Exception("config_defaults.json does not exist in path: " + str(emhass_conf["defaults_path"]))
         # Create 48 (1 day of data) long lists runtime forecasts parameters
         runtimeparams = {
             "pv_power_forecast": [i + 1 for i in range(48)],
@@ -569,9 +444,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
         params["passed_data"] = runtimeparams
         params_json = orjson.dumps(params).decode("utf-8")
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            params_json, logger
-        )
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
         set_type = "dayahead-optim"
         (
             params,
@@ -618,9 +491,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             ]
         # Else obtain sensor values from HA
         else:
-            days_list = utils.get_days_list(
-                retrieve_hass_conf["historic_days_to_retrieve"]
-            )
+            days_list = utils.get_days_list(retrieve_hass_conf["historic_days_to_retrieve"])
             var_list = [
                 retrieve_hass_conf["sensor_power_load_no_var_loads"],
                 retrieve_hass_conf["sensor_power_photovoltaics"],
@@ -658,12 +529,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         df_input_data.index = P_PV_forecast.index
         df_input_data.index.freq = rh.df_final.index.freq
         self.assertIsInstance(P_PV_forecast, type(pd.DataFrame()))
-        self.assertIsInstance(
-            P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
-        self.assertIsInstance(
-            P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_PV_forecast.index.tz, fcst.time_zone)
         self.assertTrue(fcst.start_forecast < ts for ts in P_PV_forecast.index)
         self.assertTrue(P_PV_forecast.values[0][0] == 1)
@@ -671,12 +538,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # Get load forecast with list, check dataframe output
         P_load_forecast = await fcst.get_load_forecast(method="list")
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
-        self.assertIsInstance(
-            P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
-        self.assertIsInstance(
-            P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_load_forecast.index.tz, fcst.time_zone)
         self.assertEqual(len(P_PV_forecast), len(P_load_forecast))
         self.assertTrue(P_load_forecast.values[0] == 1)
@@ -703,20 +566,11 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             async with aiofiles.open(emhass_conf["defaults_path"]) as data:
                 content = await data.read()
                 defaults = orjson.loads(content)
-                updated_emhass_conf, built_secrets = await utils.build_secrets(
-                    emhass_conf, logger
-                )
+                updated_emhass_conf, built_secrets = await utils.build_secrets(emhass_conf, logger)
                 emhass_conf.update(updated_emhass_conf)
-                params.update(
-                    await utils.build_params(
-                        emhass_conf, built_secrets, defaults, logger
-                    )
-                )
+                params.update(await utils.build_params(emhass_conf, built_secrets, defaults, logger))
         else:
-            raise Exception(
-                "config_defaults.json does not exist in path: "
-                + str(emhass_conf["defaults_path"])
-            )
+            raise Exception("config_defaults.json does not exist in path: " + str(emhass_conf["defaults_path"]))
 
         # Create 3*48 (3 days of data) long lists runtime forecasts parameters
         list_length = 3 * 48  # 3 days
@@ -729,9 +583,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
         params["passed_data"] = runtimeparams
         params_json = orjson.dumps(params).decode("utf-8")
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            params_json, logger
-        )
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
         optim_conf["delta_forecast_daily"] = pd.Timedelta(days=3)
         (
             params,
@@ -761,12 +613,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # Get weather forecast with list, check dataframe output
         P_PV_forecast = await fcst.get_weather_forecast(method="list")
         self.assertIsInstance(P_PV_forecast, type(pd.DataFrame()))
-        self.assertIsInstance(
-            P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
-        self.assertIsInstance(
-            P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_PV_forecast.index.tz, fcst.time_zone)
         self.assertTrue(fcst.start_forecast < ts for ts in P_PV_forecast.index)
         self.assertTrue(P_PV_forecast.values[0][0] == 1)
@@ -774,12 +622,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # Get load forecast with list, check dataframe output
         P_load_forecast = await fcst.get_load_forecast(method="list")
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
-        self.assertIsInstance(
-            P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
-        self.assertIsInstance(
-            P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_load_forecast.index.tz, fcst.time_zone)
         self.assertEqual(len(P_PV_forecast), len(P_load_forecast))
         self.assertTrue(P_load_forecast.values[0] == 1)
@@ -788,17 +632,13 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
         df_input_data_dayahead.columns = ["P_PV_forecast", "P_load_forecast"]
         # Get load cost forecast with list, check dataframe output
-        df_input_data_dayahead = fcst.get_load_cost_forecast(
-            df_input_data_dayahead, method="list"
-        )
+        df_input_data_dayahead = fcst.get_load_cost_forecast(df_input_data_dayahead, method="list")
         self.assertTrue(fcst.var_load_cost in df_input_data_dayahead.columns)
         self.assertTrue(df_input_data_dayahead.isnull().sum().sum() == 0)
         self.assertTrue(df_input_data_dayahead[fcst.var_load_cost].iloc[0] == 1)
         self.assertTrue(df_input_data_dayahead[fcst.var_load_cost].iloc[-1] == 3 * 48)
         # Get production price forecast with list, check dataframe output
-        df_input_data_dayahead = fcst.get_prod_price_forecast(
-            df_input_data_dayahead, method="list"
-        )
+        df_input_data_dayahead = fcst.get_prod_price_forecast(df_input_data_dayahead, method="list")
         self.assertTrue(fcst.var_prod_price in df_input_data_dayahead.columns)
         self.assertTrue(df_input_data_dayahead.isnull().sum().sum() == 0)
         self.assertTrue(df_input_data_dayahead[fcst.var_prod_price].iloc[0] == 1)
@@ -809,18 +649,11 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # Load default params
         params = {}
         if emhass_conf["defaults_path"].exists():
-            config = await utils.build_config(
-                emhass_conf, logger, emhass_conf["defaults_path"]
-            )
-            _, secrets = await utils.build_secrets(
-                emhass_conf, logger, no_response=True
-            )
+            config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+            _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
             params = await utils.build_params(emhass_conf, secrets, config, logger)
         else:
-            raise Exception(
-                "config_defaults.json does not exist in path: "
-                + str(emhass_conf["defaults_path"])
-            )
+            raise Exception("config_defaults.json does not exist in path: " + str(emhass_conf["defaults_path"]))
         # Create 48 (1 day of data) long lists runtime forecasts parameters
         runtimeparams = {
             "load_cost_forecast": [i + 1 for i in range(48)],
@@ -829,9 +662,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
         params["passed_data"] = runtimeparams
         params_json = orjson.dumps(params).decode("utf-8")
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            params_json, logger
-        )
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
         set_type = "dayahead-optim"
         (
             params,
@@ -878,9 +709,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             ]
         # Else obtain sensor values from HA
         else:
-            days_list = utils.get_days_list(
-                retrieve_hass_conf["historic_days_to_retrieve"]
-            )
+            days_list = utils.get_days_list(retrieve_hass_conf["historic_days_to_retrieve"])
             var_list = [
                 retrieve_hass_conf["sensor_power_load_no_var_loads"],
                 retrieve_hass_conf["sensor_power_photovoltaics"],
@@ -932,12 +761,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_power_from_weather(self):
         self.assertIsInstance(self.P_PV_forecast, pd.core.series.Series)
-        self.assertIsInstance(
-            self.P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
-        self.assertIsInstance(
-            self.P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(self.P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(self.P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(self.P_PV_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.df_weather_scrap), len(self.P_PV_forecast))
         # Test passing a lists of PV params
@@ -953,9 +778,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.plant_conf["surface_azimuth"] = [270, 90]
         self.plant_conf["modules_per_string"] = [8, 8]
         self.plant_conf["strings_per_inverter"] = [1, 1]
-        params = orjson.dumps(
-            {"passed_data": {"weather_forecast_cache": False}}
-        ).decode("utf-8")
+        params = orjson.dumps({"passed_data": {"weather_forecast_cache": False}}).decode("utf-8")
         self.fcst = Forecast(
             self.retrieve_hass_conf,
             self.optim_conf,
@@ -968,18 +791,12 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         df_weather_scrap = await self.fcst.get_weather_forecast(method="csv")
         P_PV_forecast = self.fcst.get_power_from_weather(df_weather_scrap)
         self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
-        self.assertIsInstance(
-            P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
-        self.assertIsInstance(
-            P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.df_weather_scrap), len(P_PV_forecast))
         # Test the mixed forecast
-        params = orjson.dumps({"passed_data": {"alpha": 0.5, "beta": 0.5}}).decode(
-            "utf-8"
-        )
+        params = orjson.dumps({"passed_data": {"alpha": 0.5, "beta": 0.5}}).decode("utf-8")
         df_input_data = self.input_data_dict["rh"].df_final.copy()
         self.fcst = Forecast(
             self.retrieve_hass_conf,
@@ -991,16 +808,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             get_data_from_file=self.get_data_from_file,
         )
         df_weather_scrap = await self.fcst.get_weather_forecast(method="csv")
-        P_PV_forecast = self.fcst.get_power_from_weather(
-            df_weather_scrap, set_mix_forecast=True, df_now=df_input_data
-        )
+        P_PV_forecast = self.fcst.get_power_from_weather(df_weather_scrap, set_mix_forecast=True, df_now=df_input_data)
         self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
-        self.assertIsInstance(
-            P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
-        self.assertIsInstance(
-            P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(P_PV_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.df_weather_scrap), len(P_PV_forecast))
 
@@ -1008,19 +819,13 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
     async def test_get_load_forecast(self):
         P_load_forecast = await self.fcst.get_load_forecast()
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
-        self.assertIsInstance(
-            P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
-        self.assertIsInstance(
-            P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
         print(">> The length of the load forecast = " + str(len(P_load_forecast)))
         # Test the mixed forecast
-        params_json = orjson.dumps({"passed_data": {"alpha": 0.5, "beta": 0.5}}).decode(
-            "utf-8"
-        )
+        params_json = orjson.dumps({"passed_data": {"alpha": 0.5, "beta": 0.5}}).decode("utf-8")
         df_input_data = self.input_data_dict["rh"].df_final.copy()
         self.fcst = Forecast(
             self.retrieve_hass_conf,
@@ -1031,27 +836,17 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=self.get_data_from_file,
         )
-        P_load_forecast = await self.fcst.get_load_forecast(
-            set_mix_forecast=True, df_now=df_input_data
-        )
+        P_load_forecast = await self.fcst.get_load_forecast(set_mix_forecast=True, df_now=df_input_data)
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
-        self.assertIsInstance(
-            P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
-        self.assertIsInstance(
-            P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
         # Test load forecast from csv
         P_load_forecast = await self.fcst.get_load_forecast(method="csv")
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
-        self.assertIsInstance(
-            P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
-        self.assertIsInstance(
-            P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
 
@@ -1106,12 +901,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             method="mlforecaster", use_last_window=False, debug=True, mlf=mlf
         )
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
-        self.assertIsInstance(
-            P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
-        self.assertIsInstance(
-            P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
         self.assertTrue((P_load_forecast.index == self.fcst.forecast_dates).all())
         self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
@@ -1120,12 +911,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
     async def test_get_load_forecast_typical(self):
         P_load_forecast = await self.fcst.get_load_forecast(method="typical")
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
-        self.assertIsInstance(
-            P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
-        self.assertIsInstance(
-            P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(P_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_load_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.P_PV_forecast), len(P_load_forecast))
         # Relaunch this test but changing the timestep to 1h
@@ -1242,9 +1029,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
         # This should not raise NonExistentTimeError with our fix
         try:
-            localized_times = naive_times.tz_localize(
-                sydney_tz, ambiguous="infer", nonexistent="shift_forward"
-            )
+            localized_times = naive_times.tz_localize(sydney_tz, ambiguous="infer", nonexistent="shift_forward")
             # Verify that nonexistent times were shifted forward
             self.assertTrue(len(localized_times) == len(naive_times))
             # The 2:00 AM should become 3:00 AM (shifted forward)
@@ -1276,9 +1061,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             )  # Test case 3: US Eastern Time DST transition (March)
         # DST starts on March 9, 2025 at 2:00 AM -> 3:00 AM
         eastern_tz = pytz.timezone("US/Eastern")
-        us_dst_start = eastern_tz.localize(
-            datetime(2025, 3, 9, 1, 0, 0)
-        )  # March 9, 1 AM
+        us_dst_start = eastern_tz.localize(datetime(2025, 3, 9, 1, 0, 0))  # March 9, 1 AM
         us_dst_end = us_dst_start + pd.Timedelta(hours=4)  # 4 hours later, crosses DST
 
         us_dst_retrieve_hass_conf = copy.deepcopy(self.retrieve_hass_conf)
@@ -1333,9 +1116,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
         # Set start time just before DST backward transition
         dst_start = sydney_tz.localize(datetime(2025, 4, 6, 1, 0, 0))  # April 6, 1 AM
-        dst_end = dst_start + pd.Timedelta(
-            hours=5
-        )  # 5 hours later, crosses DST backward
+        dst_end = dst_start + pd.Timedelta(hours=5)  # 5 hours later, crosses DST backward
 
         dst_fcst = Forecast(
             dst_retrieve_hass_conf,
@@ -1382,9 +1163,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # For ambiguous times, we'll use "NaT" to handle them gracefully, or specify the first occurrence
         try:
             # For backward transitions, ambiguous="infer" sometimes fails, so use explicit handling
-            localized_times = naive_times.tz_localize(
-                sydney_tz, ambiguous="NaT", nonexistent="shift_forward"
-            )
+            localized_times = naive_times.tz_localize(sydney_tz, ambiguous="NaT", nonexistent="shift_forward")
             # Verify that we got some valid results (non-NaT times)
             valid_times = localized_times.dropna()
             self.assertGreater(
@@ -1394,9 +1173,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             )
             # Check that we got timezone-aware results for valid times
             for ts in valid_times:
-                self.assertIsNotNone(
-                    ts.tzinfo, "Valid timestamps should be timezone-aware"
-                )
+                self.assertIsNotNone(ts.tzinfo, "Valid timestamps should be timezone-aware")
 
             logger.info("Direct tz_localize DST backward transition test: PASSED")
         except Exception as e:
@@ -1411,27 +1188,17 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(len(localized_times) == len(naive_times))
                 # Check that we got reasonable results for ambiguous times
                 for ts in localized_times:
-                    self.assertIsNotNone(
-                        ts.tzinfo, "All timestamps should be timezone-aware"
-                    )
+                    self.assertIsNotNone(ts.tzinfo, "All timestamps should be timezone-aware")
 
-                logger.info(
-                    "Direct tz_localize DST backward transition test (alternative): PASSED"
-                )
+                logger.info("Direct tz_localize DST backward transition test (alternative): PASSED")
             except Exception as e2:
-                self.fail(
-                    f"Direct tz_localize failed during DST backward transition: {e} and {e2}"
-                )
+                self.fail(f"Direct tz_localize failed during DST backward transition: {e} and {e2}")
 
         # Test case 3: US Eastern Time DST backward transition (November)
         # DST ends on November 2, 2025 at 2:00 AM -> 1:00 AM
         eastern_tz = pytz.timezone("US/Eastern")
-        us_dst_start = eastern_tz.localize(
-            datetime(2025, 11, 2, 0, 30, 0)
-        )  # Nov 2, 12:30 AM
-        us_dst_end = us_dst_start + pd.Timedelta(
-            hours=4
-        )  # 4 hours later, crosses DST backward
+        us_dst_start = eastern_tz.localize(datetime(2025, 11, 2, 0, 30, 0))  # Nov 2, 12:30 AM
+        us_dst_end = us_dst_start + pd.Timedelta(hours=4)  # 4 hours later, crosses DST backward
 
         us_dst_retrieve_hass_conf = copy.deepcopy(self.retrieve_hass_conf)
         us_dst_retrieve_hass_conf["time_zone"] = eastern_tz

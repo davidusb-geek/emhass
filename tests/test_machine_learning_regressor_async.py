@@ -31,18 +31,11 @@ class TestMLRegressorAsync(unittest.IsolatedAsyncioTestCase):
     async def get_test_params():
         # Build params with default config and secrets
         if emhass_conf["defaults_path"].exists():
-            config = await utils.build_config(
-                emhass_conf, logger, emhass_conf["defaults_path"]
-            )
-            _, secrets = await utils.build_secrets(
-                emhass_conf, logger, no_response=True
-            )
+            config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+            _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
             params = await utils.build_params(emhass_conf, secrets, config, logger)
         else:
-            raise Exception(
-                "config_defaults. does not exist in path: "
-                + str(emhass_conf["defaults_path"])
-            )
+            raise Exception("config_defaults. does not exist in path: " + str(emhass_conf["defaults_path"]))
         return params
 
     async def asyncSetUp(self):
@@ -81,14 +74,10 @@ class TestMLRegressorAsync(unittest.IsolatedAsyncioTestCase):
         self.csv_file = self.input_data_dict["params"]["passed_data"]["csv_file"]
         features = self.input_data_dict["params"]["passed_data"]["features"]
         target = self.input_data_dict["params"]["passed_data"]["target"]
-        regression_model = self.input_data_dict["params"]["passed_data"][
-            "regression_model"
-        ]
+        regression_model = self.input_data_dict["params"]["passed_data"]["regression_model"]
         model_type = self.input_data_dict["params"]["passed_data"]["model_type"]
         timestamp = self.input_data_dict["params"]["passed_data"]["timestamp"]
-        self.date_features = self.input_data_dict["params"]["passed_data"][
-            "date_features"
-        ]
+        self.date_features = self.input_data_dict["params"]["passed_data"]["date_features"]
         self.new_values = self.input_data_dict["params"]["passed_data"]["new_values"]
         self.mlr = MLRegressor(
             data,

@@ -64,18 +64,14 @@ if __name__ == "__main__":
             retrieve_hass_conf["sensor_power_photovoltaics"],
             retrieve_hass_conf["sensor_power_load_no_var_loads"],
         ]
-        retrieve_hass_conf["sensor_replace_zero"] = [
-            retrieve_hass_conf["sensor_power_photovoltaics"]
-        ]
+        retrieve_hass_conf["sensor_replace_zero"] = [retrieve_hass_conf["sensor_power_photovoltaics"]]
     else:
         days_list = get_days_list(retrieve_hass_conf["historic_days_to_retrieve"])
         var_list = [
             retrieve_hass_conf["sensor_power_load_no_var_loads"],
             retrieve_hass_conf["sensor_power_photovoltaics"],
         ]
-        rh.get_data(
-            days_list, var_list, minimal_response=False, significant_changes_only=False
-        )
+        rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False)
     rh.prepare_data(
         retrieve_hass_conf["sensor_power_load_no_var_loads"],
         load_negative=retrieve_hass_conf["load_negative"],
@@ -110,9 +106,7 @@ if __name__ == "__main__":
     optim_conf.update(
         {"lp_solver": "PULP_CBC_CMD"}
     )  # set the name of the linear programming solver that will be used. Options are 'PULP_CBC_CMD', 'GLPK_CMD', 'HiGHS', and 'COIN_CMD'.
-    optim_conf.update(
-        {"lp_solver_path": "empty"}
-    )  # set the path to the LP solver, COIN_CMD default is /usr/bin/cbc
+    optim_conf.update({"lp_solver_path": "empty"})  # set the path to the LP solver, COIN_CMD default is /usr/bin/cbc
 
     # Config for a single thermal model
     optim_conf.update({"number_of_deferrable_loads": 1})
@@ -125,9 +119,7 @@ if __name__ == "__main__":
     optim_conf.update({"set_deferrable_startup_penalty": [0.0]})
 
     # Thermal modeling
-    df_input_data["outdoor_temperature_forecast"] = [
-        random.normalvariate(10.0, 3.0) for _ in range(48)
-    ]
+    df_input_data["outdoor_temperature_forecast"] = [random.normalvariate(10.0, 3.0) for _ in range(48)]
 
     runtimeparams = {
         "def_load_config": [
@@ -159,9 +151,7 @@ if __name__ == "__main__":
     P_PV_forecast.loc[:] = 0
     P_load_forecast.loc[:] = 0
 
-    df_input_data.loc[df_input_data.index[25:30], "unit_load_cost"] = (
-        2.0  # A price peak
-    )
+    df_input_data.loc[df_input_data.index[25:30], "unit_load_cost"] = 2.0  # A price peak
     unit_load_cost = df_input_data[opt.var_load_cost].values  # €/kWh
     unit_prod_price = df_input_data[opt.var_prod_price].values  # €/kWh
 

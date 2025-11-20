@@ -122,3 +122,7 @@ dev = ["emhass"]
 [tool.ruff]
 target-version = "py311"
 src = ["src", "tests"]
+fix = true
+show-fixes = true
+
+line-length = 120

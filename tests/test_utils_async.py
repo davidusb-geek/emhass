@@ -20,9 +20,7 @@ emhass_conf["root_path"] = root / "src/emhass/"
 emhass_conf["options_path"] = root / "options.json"
 emhass_conf["config_path"] = root / "config.json"
 emhass_conf["secrets_path"] = root / "secrets_emhass(example).yaml"
-emhass_conf["legacy_config_path"] = (
-    pathlib.Path(utils.get_root(__file__, num_parent=1)) / "config_emhass.yaml"
-)
+emhass_conf["legacy_config_path"] = pathlib.Path(utils.get_root(__file__, num_parent=1)) / "config_emhass.yaml"
 emhass_conf["defaults_path"] = emhass_conf["root_path"] / "data/config_defaults.json"
 emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations.csv"
 
@@ -36,20 +34,13 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         print(emhass_conf["legacy_config_path"])
         # Build params with default config and secrets
         if emhass_conf["defaults_path"].exists():
-            config = await utils.build_config(
-                emhass_conf, logger, emhass_conf["defaults_path"]
-            )
-            _, secrets = await utils.build_secrets(
-                emhass_conf, logger, no_response=True
-            )
+            config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+            _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
             # Add Altitude secret manually for testing get_yaml_parse
             secrets["Altitude"] = 8000.0
             params = await utils.build_params(emhass_conf, secrets, config, logger)
         else:
-            raise Exception(
-                "config_defaults. does not exist in path: "
-                + str(emhass_conf["defaults_path"])
-            )
+            raise Exception("config_defaults. does not exist in path: " + str(emhass_conf["defaults_path"]))
 
         return params
 
@@ -75,9 +66,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         config = {}
         params = {}
         # Test with defaults
-        config = await utils.build_config(
-            emhass_conf, logger, emhass_conf["defaults_path"]
-        )
+        config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
         params = await utils.build_params(emhass_conf, {}, config, logger)
         self.assertTrue(params["optim_conf"]["lp_solver"] == "default")
         self.assertTrue(params["optim_conf"]["lp_solver_path"] == "empty")
@@ -110,10 +99,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
             legacy_config_path=emhass_conf["legacy_config_path"],
         )
         params = await utils.build_params(emhass_conf, {}, config, logger)
-        self.assertTrue(
-            params["retrieve_hass_conf"]["sensor_replace_zero"]
-            == ["sensor.power_photovoltaics"]
-        )
+        self.assertTrue(params["retrieve_hass_conf"]["sensor_replace_zero"] == ["sensor.power_photovoltaics"])
         self.assertTrue(
             config["load_peak_hour_periods"]
             == {
@@ -129,17 +115,13 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         updated_emhass_conf, secrets = await utils.build_secrets(emhass_conf, logger)
         emhass_conf.update(updated_emhass_conf)
         params.update(await utils.build_params(emhass_conf, secrets, {}, logger))
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            orjson.dumps(params).decode("utf-8"), logger
-        )
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(orjson.dumps(params).decode("utf-8"), logger)
         self.assertIsInstance(retrieve_hass_conf, dict)
         self.assertIsInstance(optim_conf, dict)
         self.assertIsInstance(plant_conf, dict)
         self.assertTrue(retrieve_hass_conf["Altitude"] == 4807.8)
         # Test get_yaml_parse with built params in get_test_params
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            self.params_json, logger
-        )
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
         self.assertTrue(retrieve_hass_conf["Altitude"] == 8000.0)
 
     @patch("emhass.utils_async._get_now")
@@ -156,9 +138,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         mock_now = datetime(2025, 10, 11, 7, 0, 0)
         expected_start = "2025-10-11T07:00:00"
         expected_end = "2025-10-12T06:00:00"
-        expected_range = pd.date_range(
-            start=expected_start, end=expected_end, freq=f"{freq}min", tz=time_zone
-        )
+        expected_range = pd.date_range(start=expected_start, end=expected_end, freq=f"{freq}min", tz=time_zone)
         expected_dates = [ts.isoformat() for ts in expected_range]
 
         # 3. Set the return value for the mock (which is now passed in as an argument)
@@ -185,9 +165,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         mock_now = datetime(2025, 10, 4, 23, 0, 0)
         expected_start = "2025-10-04T23:00:00"
         expected_end = "2025-10-05T22:00:00"
-        expected_range = pd.date_range(
-            start=expected_start, end=expected_end, freq=f"{freq}min", tz=time_zone
-        )
+        expected_range = pd.date_range(start=expected_start, end=expected_end, freq=f"{freq}min", tz=time_zone)
         expected_dates = [ts.isoformat() for ts in expected_range]
 
         # 3. Set the return value for the mock
@@ -203,9 +181,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
 
     async def test_treat_runtimeparams(self):
         # Test dayahead runtime params
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            self.params_json, logger
-        )
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
         set_type = "dayahead-optim"
         (
             params,
@@ -252,14 +228,8 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(params, str)
         params = orjson.loads(params)
         self.assertTrue(params["passed_data"]["prediction_horizon"] == 10)
-        self.assertTrue(
-            params["passed_data"]["soc_init"]
-            == plant_conf["battery_target_state_of_charge"]
-        )
-        self.assertTrue(
-            params["passed_data"]["soc_final"]
-            == plant_conf["battery_target_state_of_charge"]
-        )
+        self.assertTrue(params["passed_data"]["soc_init"] == plant_conf["battery_target_state_of_charge"])
+        self.assertTrue(params["passed_data"]["soc_final"] == plant_conf["battery_target_state_of_charge"])
         self.assertTrue(
             params["optim_conf"]["operating_hours_of_each_deferrable_load"]
             == optim_conf["operating_hours_of_each_deferrable_load"]
@@ -267,14 +237,10 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         # Test passing optimization and plant configuration parameters at runtime
         runtimeparams = orjson.loads(self.runtimeparams_json)
         runtimeparams.update({"number_of_deferrable_loads": 3})
-        runtimeparams.update(
-            {"nominal_power_of_deferrable_loads": [3000.0, 750.0, 2500.0]}
-        )
+        runtimeparams.update({"nominal_power_of_deferrable_loads": [3000.0, 750.0, 2500.0]})
         runtimeparams.update({"operating_hours_of_each_deferrable_load": [5, 8, 10]})
         runtimeparams.update({"treat_deferrable_load_as_semi_cont": [True, True, True]})
-        runtimeparams.update(
-            {"set_deferrable_load_single_constant": [False, False, False]}
-        )
+        runtimeparams.update({"set_deferrable_load_single_constant": [False, False, False]})
         runtimeparams.update({"weight_battery_discharge": 2.0})
         runtimeparams.update({"weight_battery_charge": 2.0})
         runtimeparams.update({"solcast_api_key": "yoursecretsolcastapikey"})
@@ -285,24 +251,14 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         runtimeparams.update({"custom_pv_forecast_id": "my_custom_pv_forecast_id"})
         runtimeparams.update({"custom_load_forecast_id": "my_custom_load_forecast_id"})
         runtimeparams.update({"custom_batt_forecast_id": "my_custom_batt_forecast_id"})
-        runtimeparams.update(
-            {"custom_batt_soc_forecast_id": "my_custom_batt_soc_forecast_id"}
-        )
+        runtimeparams.update({"custom_batt_soc_forecast_id": "my_custom_batt_soc_forecast_id"})
         runtimeparams.update({"custom_grid_forecast_id": "my_custom_grid_forecast_id"})
         runtimeparams.update({"custom_cost_fun_id": "my_custom_cost_fun_id"})
         runtimeparams.update({"custom_optim_status_id": "my_custom_optim_status_id"})
-        runtimeparams.update(
-            {"custom_unit_load_cost_id": "my_custom_unit_load_cost_id"}
-        )
-        runtimeparams.update(
-            {"custom_unit_prod_price_id": "my_custom_unit_prod_price_id"}
-        )
-        runtimeparams.update(
-            {"custom_deferrable_forecast_id": "my_custom_deferrable_forecast_id"}
-        )
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            self.params_json, logger
-        )
+        runtimeparams.update({"custom_unit_load_cost_id": "my_custom_unit_load_cost_id"})
+        runtimeparams.update({"custom_unit_prod_price_id": "my_custom_unit_prod_price_id"})
+        runtimeparams.update({"custom_deferrable_forecast_id": "my_custom_deferrable_forecast_id"})
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
         set_type = "dayahead-optim"
         (
             params,
@@ -326,65 +282,27 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(params["passed_data"]["load_cost_forecast"], list)
         self.assertIsInstance(params["passed_data"]["prod_price_forecast"], list)
         self.assertTrue(optim_conf["number_of_deferrable_loads"] == 3)
-        self.assertTrue(
-            optim_conf["nominal_power_of_deferrable_loads"] == [3000.0, 750.0, 2500.0]
-        )
-        self.assertTrue(
-            optim_conf["operating_hours_of_each_deferrable_load"] == [5, 8, 10]
-        )
-        self.assertTrue(
-            optim_conf["treat_deferrable_load_as_semi_cont"] == [True, True, True]
-        )
-        self.assertTrue(
-            optim_conf["set_deferrable_load_single_constant"] == [False, False, False]
-        )
+        self.assertTrue(optim_conf["nominal_power_of_deferrable_loads"] == [3000.0, 750.0, 2500.0])
+        self.assertTrue(optim_conf["operating_hours_of_each_deferrable_load"] == [5, 8, 10])
+        self.assertTrue(optim_conf["treat_deferrable_load_as_semi_cont"] == [True, True, True])
+        self.assertTrue(optim_conf["set_deferrable_load_single_constant"] == [False, False, False])
         self.assertTrue(optim_conf["weight_battery_discharge"] == 2.0)
         self.assertTrue(optim_conf["weight_battery_charge"] == 2.0)
-        self.assertTrue(
-            retrieve_hass_conf["solcast_api_key"] == "yoursecretsolcastapikey"
-        )
+        self.assertTrue(retrieve_hass_conf["solcast_api_key"] == "yoursecretsolcastapikey")
         self.assertTrue(retrieve_hass_conf["solcast_rooftop_id"] == "yourrooftopid")
         self.assertTrue(retrieve_hass_conf["solar_forecast_kwp"] == 5.0)
         self.assertTrue(plant_conf["battery_target_state_of_charge"] == 0.4)
         self.assertTrue(params["passed_data"]["publish_prefix"] == "emhass_")
-        self.assertTrue(
-            params["passed_data"]["custom_pv_forecast_id"] == "my_custom_pv_forecast_id"
-        )
-        self.assertTrue(
-            params["passed_data"]["custom_load_forecast_id"]
-            == "my_custom_load_forecast_id"
-        )
-        self.assertTrue(
-            params["passed_data"]["custom_batt_forecast_id"]
-            == "my_custom_batt_forecast_id"
-        )
-        self.assertTrue(
-            params["passed_data"]["custom_batt_soc_forecast_id"]
-            == "my_custom_batt_soc_forecast_id"
-        )
-        self.assertTrue(
-            params["passed_data"]["custom_grid_forecast_id"]
-            == "my_custom_grid_forecast_id"
-        )
-        self.assertTrue(
-            params["passed_data"]["custom_cost_fun_id"] == "my_custom_cost_fun_id"
-        )
-        self.assertTrue(
-            params["passed_data"]["custom_optim_status_id"]
-            == "my_custom_optim_status_id"
-        )
-        self.assertTrue(
-            params["passed_data"]["custom_unit_load_cost_id"]
-            == "my_custom_unit_load_cost_id"
-        )
-        self.assertTrue(
-            params["passed_data"]["custom_unit_prod_price_id"]
-            == "my_custom_unit_prod_price_id"
-        )
-        self.assertTrue(
-            params["passed_data"]["custom_deferrable_forecast_id"]
-            == "my_custom_deferrable_forecast_id"
-        )
+        self.assertTrue(params["passed_data"]["custom_pv_forecast_id"] == "my_custom_pv_forecast_id")
+        self.assertTrue(params["passed_data"]["custom_load_forecast_id"] == "my_custom_load_forecast_id")
+        self.assertTrue(params["passed_data"]["custom_batt_forecast_id"] == "my_custom_batt_forecast_id")
+        self.assertTrue(params["passed_data"]["custom_batt_soc_forecast_id"] == "my_custom_batt_soc_forecast_id")
+        self.assertTrue(params["passed_data"]["custom_grid_forecast_id"] == "my_custom_grid_forecast_id")
+        self.assertTrue(params["passed_data"]["custom_cost_fun_id"] == "my_custom_cost_fun_id")
+        self.assertTrue(params["passed_data"]["custom_optim_status_id"] == "my_custom_optim_status_id")
+        self.assertTrue(params["passed_data"]["custom_unit_load_cost_id"] == "my_custom_unit_load_cost_id")
+        self.assertTrue(params["passed_data"]["custom_unit_prod_price_id"] == "my_custom_unit_prod_price_id")
+        self.assertTrue(params["passed_data"]["custom_deferrable_forecast_id"] == "my_custom_deferrable_forecast_id")
 
     async def test_treat_runtimeparams_failed(self):
         # Test treatment of nan values
@@ -400,9 +318,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         params["optim_conf"]["load_forecast_method"] = "list"
         params["optim_conf"]["load_cost_forecast_method"] = "list"
         params["optim_conf"]["production_price_forecast_method"] = "list"
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            params, logger
-        )
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params, logger)
         set_type = "dayahead-optim"
         (
             params,
@@ -420,36 +336,10 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
             emhass_conf,
         )
 
-        self.assertTrue(
-            len([x for x in runtimeparams["pv_power_forecast"] if not str(x).isdigit()])
-            > 0
-        )
-        self.assertTrue(
-            len(
-                [
-                    x
-                    for x in runtimeparams["load_power_forecast"]
-                    if not str(x).isdigit()
-                ]
-            )
-            > 0
-        )
-        self.assertTrue(
-            len(
-                [x for x in runtimeparams["load_cost_forecast"] if not str(x).isdigit()]
-            )
-            > 0
-        )
-        self.assertTrue(
-            len(
-                [
-                    x
-                    for x in runtimeparams["prod_price_forecast"]
-                    if not str(x).isdigit()
-                ]
-            )
-            > 0
-        )
+        self.assertTrue(len([x for x in runtimeparams["pv_power_forecast"] if not str(x).isdigit()]) > 0)
+        self.assertTrue(len([x for x in runtimeparams["load_power_forecast"] if not str(x).isdigit()]) > 0)
+        self.assertTrue(len([x for x in runtimeparams["load_cost_forecast"] if not str(x).isdigit()]) > 0)
+        self.assertTrue(len([x for x in runtimeparams["prod_price_forecast"] if not str(x).isdigit()]) > 0)
         # Test list embedded into a string
         params = await TestCommandLineUtils.get_test_params()
         runtimeparams = {
@@ -463,9 +353,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         params["optim_conf"]["load_forecast_method"] = "list"
         params["optim_conf"]["load_cost_forecast_method"] = "list"
         params["optim_conf"]["production_price_forecast_method"] = "list"
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            params, logger
-        )
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params, logger)
         set_type = "dayahead-optim"
         (
             params,
@@ -499,9 +387,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         params["optim_conf"]["load_forecast_method"] = "list"
         params["optim_conf"]["load_cost_forecast_method"] = "list"
         params["optim_conf"]["production_price_forecast_method"] = "list"
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            params, logger
-        )
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params, logger)
         set_type = "dayahead-optim"
         (
             params,
@@ -525,9 +411,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
 
     async def test_update_params_with_ha_config(self):
         # Test dayahead runtime params
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            self.params_json, logger
-        )
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
         set_type = "dayahead-optim"
         (
             params,
@@ -550,23 +434,12 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
             ha_config,
         )
         params_with_ha_config = orjson.loads(params_with_ha_config_json)
+        self.assertTrue(params_with_ha_config["passed_data"]["custom_cost_fun_id"]["unit_of_measurement"] == "$")
         self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_cost_fun_id"][
-                "unit_of_measurement"
-            ]
-            == "$"
+            params_with_ha_config["passed_data"]["custom_unit_load_cost_id"]["unit_of_measurement"] == "$/kWh"
         )
         self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_unit_load_cost_id"][
-                "unit_of_measurement"
-            ]
-            == "$/kWh"
-        )
-        self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_unit_prod_price_id"][
-                "unit_of_measurement"
-            ]
-            == "$/kWh"
+            params_with_ha_config["passed_data"]["custom_unit_prod_price_id"]["unit_of_measurement"] == "$/kWh"
         )
 
     async def test_update_params_with_ha_config_special_case(self):
@@ -779,9 +652,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         runtimeparams_json = orjson.dumps(runtimeparams).decode()
         params_json = orjson.dumps(params_).decode()
 
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            params_json, logger
-        )
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
         set_type = "dayahead-optim"
         (
             params,
@@ -804,23 +675,12 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
             ha_config,
         )
         params_with_ha_config = orjson.loads(params_with_ha_config_json)
+        self.assertTrue(params_with_ha_config["passed_data"]["custom_cost_fun_id"]["unit_of_measurement"] == "$")
         self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_cost_fun_id"][
-                "unit_of_measurement"
-            ]
-            == "$"
+            params_with_ha_config["passed_data"]["custom_unit_load_cost_id"]["unit_of_measurement"] == "$/kWh"
         )
         self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_unit_load_cost_id"][
-                "unit_of_measurement"
-            ]
-            == "$/kWh"
-        )
-        self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_unit_prod_price_id"][
-                "unit_of_measurement"
-            ]
-            == "$/kWh"
+            params_with_ha_config["passed_data"]["custom_unit_prod_price_id"]["unit_of_measurement"] == "$/kWh"
         )
         # Test with 0 deferrable loads
         runtimeparams = {
@@ -1025,9 +885,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         params_["passed_data"].update(runtimeparams)
         runtimeparams_json = orjson.dumps(runtimeparams).decode()
         params_json = orjson.dumps(params_).decode()
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            params_json, logger
-        )
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
         set_type = "dayahead-optim"
         (
             params,
@@ -1050,23 +908,12 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
             ha_config,
         )
         params_with_ha_config = orjson.loads(params_with_ha_config_json)
+        self.assertTrue(params_with_ha_config["passed_data"]["custom_cost_fun_id"]["unit_of_measurement"] == "$")
         self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_cost_fun_id"][
-                "unit_of_measurement"
-            ]
-            == "$"
+            params_with_ha_config["passed_data"]["custom_unit_load_cost_id"]["unit_of_measurement"] == "$/kWh"
         )
         self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_unit_load_cost_id"][
-                "unit_of_measurement"
-            ]
-            == "$/kWh"
-        )
-        self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_unit_prod_price_id"][
-                "unit_of_measurement"
-            ]
-            == "$/kWh"
+            params_with_ha_config["passed_data"]["custom_unit_prod_price_id"]["unit_of_measurement"] == "$/kWh"
         )
 
     async def test_build_secrets(self):
@@ -1082,12 +929,8 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         for key in expected_keys:
             self.assertTrue(key in params.keys())
         self.assertTrue(params["retrieve_hass_conf"]["time_zone"] == "Europe/Paris")
-        self.assertTrue(
-            params["retrieve_hass_conf"]["hass_url"] == "https://myhass.duckdns.org/"
-        )
-        self.assertTrue(
-            params["retrieve_hass_conf"]["long_lived_token"] == "thatverylongtokenhere"
-        )
+        self.assertTrue(params["retrieve_hass_conf"]["hass_url"] == "https://myhass.duckdns.org/")
+        self.assertTrue(params["retrieve_hass_conf"]["long_lived_token"] == "thatverylongtokenhere")
         # Test Secrets from options.json
         params = {}
         secrets = {}
@@ -1102,28 +945,18 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         for key in expected_keys:
             self.assertTrue(key in params.keys())
         self.assertTrue(params["retrieve_hass_conf"]["time_zone"] == "Europe/Paris")
-        self.assertTrue(
-            params["retrieve_hass_conf"]["hass_url"] == "https://myhass.duckdns.org/"
-        )
-        self.assertTrue(
-            params["retrieve_hass_conf"]["long_lived_token"] == "thatverylongtokenhere"
-        )
+        self.assertTrue(params["retrieve_hass_conf"]["hass_url"] == "https://myhass.duckdns.org/")
+        self.assertTrue(params["retrieve_hass_conf"]["long_lived_token"] == "thatverylongtokenhere")
         # Test Secrets from secrets_emhass(example).yaml
         params = {}
         secrets = {}
-        _, secrets = await utils.build_secrets(
-            emhass_conf, logger, secrets_path=emhass_conf["secrets_path"]
-        )
+        _, secrets = await utils.build_secrets(emhass_conf, logger, secrets_path=emhass_conf["secrets_path"])
         params = await utils.build_params(emhass_conf, secrets, {}, logger)
         for key in expected_keys:
             self.assertTrue(key in params.keys())
         self.assertTrue(params["retrieve_hass_conf"]["time_zone"] == "Europe/Paris")
-        self.assertTrue(
-            params["retrieve_hass_conf"]["hass_url"] == "https://myhass.duckdns.org/"
-        )
-        self.assertTrue(
-            params["retrieve_hass_conf"]["long_lived_token"] == "thatverylongtokenhere"
-        )
+        self.assertTrue(params["retrieve_hass_conf"]["hass_url"] == "https://myhass.duckdns.org/")
+        self.assertTrue(params["retrieve_hass_conf"]["long_lived_token"] == "thatverylongtokenhere")
         # Test Secrets from arguments (command_line cli)
         params = {}
         secrets = {}
