@@ -7,7 +7,6 @@ import logging
 import os
 import pathlib
 import pickle
-import re
 from datetime import UTC, datetime
 from importlib.metadata import version
 
@@ -1983,23 +1982,34 @@ async def main():
     config = {}
     # Check if passed config file is yaml of json, build config accordingly
     if config_path.exists():
-        config_file_ending = re.findall(r"(?<=\.).*$", str(config_path))
-        if len(config_file_ending) > 0:
-            match config_file_ending[0]:
+        # Safe: Use pathlib's suffix instead of regex to avoid ReDoS
+        file_extension = config_path.suffix.lstrip(".").lower()
+
+        if file_extension:
+            match file_extension:
                 case "json":
                     config = await utils.build_config(
                         emhass_conf, logger, defaults_path, config_path
                     )
-                case "yaml":
+                case "yaml" | "yml":
                     config = await utils.build_config(
                         emhass_conf, logger, defaults_path, config_path=config_path
                     )
-                case "yml":
-                    config = await utils.build_config(
-                        emhass_conf, logger, defaults_path, config_path=config_path
+                case _:
+                    logger.warning(
+                        f"Unsupported config file format: .{file_extension}, "
+                        "building parameters with only defaults"
                     )
-    # If unable to find config file, use only defaults_config.json
+                    config = await utils.build_config(
+                        emhass_conf, logger, defaults_path
+                    )
+        else:
+            logger.warning(
+                "Config file has no extension, building parameters with only defaults"
+            )
+            config = await utils.build_config(emhass_conf, logger, defaults_path)
     else:
+        # If unable to find config file, use only defaults_config.json
         logger.warning(
             "Unable to obtain config.json file, building parameters with only defaults"
         )
