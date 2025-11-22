@@ -19,7 +19,6 @@ WORKDIR /app
 COPY pyproject.toml /app/
 COPY .python-version /app/
 COPY gunicorn.conf.py /app/
-COPY docker-entrypoint.sh /app/
 
 RUN apt-get update && apt-get install -y gnupg && rm -rf /var/lib/apt/lists/*
 
@@ -121,13 +120,28 @@ RUN apt-get remove --purge -y --auto-remove \
     && rm -rf /var/lib/apt/lists/*
 
 # Environment variables for flexibility
-ENV EMHASS_SERVER_TYPE=async
 ENV WORKER_CLASS=uvicorn.workers.UvicornWorker
+ENV PORT=5000
+ENV IP=0.0.0.0
 
-# Make startup script executable
-RUN chmod +x /app/docker-entrypoint.sh
-
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+# Entrypoint script inline - async only
+ENTRYPOINT ["/bin/bash", "-c", "set -e && \
+WORKER_CLASS=${WORKER_CLASS:-uvicorn.workers.UvicornWorker} && \
+PORT=${PORT:-5000} && \
+IP=${IP:-0.0.0.0} && \
+echo '==================================================' && \
+echo '   Starting EMHASS Energy Management System' && \
+echo '==================================================' && \
+echo '   Configuration:' && \
+echo '   Server Type: async (Quart with gunicorn + uvicorn workers)' && \
+echo \"   Worker Class: $WORKER_CLASS\" && \
+echo \"   Bind Address: $IP:$PORT\" && \
+echo '   Python Path: $(which python3 2>/dev/null || echo N/A)' && \
+echo '   UV Version: $(uv --version 2>/dev/null || echo N/A)' && \
+echo '==================================================' && \
+echo 'Using asynchronous Quart server with gunicorn + uvicorn workers' && \
+echo \"Starting gunicorn with $WORKER_CLASS workers...\" && \
+exec uv run --frozen gunicorn emhass.web_server_async:app -c gunicorn.conf.py -k \"$WORKER_CLASS\""]
 
 # for running Unittest
 #COPY tests/ /app/tests

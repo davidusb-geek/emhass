@@ -30,17 +30,11 @@ case "$EMHASS_SERVER_TYPE" in
         echo "Starting gunicorn with $WORKER_CLASS workers..."
         exec uv run --frozen gunicorn emhass.web_server_async:app -c gunicorn.conf.py -k "$WORKER_CLASS"
         ;;
-    hypercorn)
-        echo "Using Hypercorn ASGI server (legacy mode)"
-        echo "Starting hypercorn server..."
-        exec uv run --frozen hypercorn emhass.web_server_async:app --bind "$IP:$PORT" --workers 1 --access-logfile - --error-logfile -
-        ;;
     *)
         echo "  ERROR: Unknown server type '$EMHASS_SERVER_TYPE'"
         echo "  Valid options:"
         echo "   - sync: Flask with gunicorn WSGI workers"
         echo "   - async: Quart with gunicorn + uvicorn ASGI workers (recommended)"
-        echo "   - hypercorn: Quart with hypercorn ASGI server (legacy)"
         echo ""
         echo "  Example: docker run -e EMHASS_SERVER_TYPE=async your-image"
         exit 1
