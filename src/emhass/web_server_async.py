@@ -15,8 +15,6 @@ import aiofiles
 import jinja2
 import orjson
 import yaml
-from hypercorn.asyncio import serve
-from hypercorn.config import Config
 from markupsafe import Markup
 from quart import Quart, make_response, request
 from quart import logging as log
@@ -752,39 +750,13 @@ async def initialize():
     app.logger.info("Initialization complete")
 
 
-async def setup_config_and_paths(args_dict: dict) -> tuple[str, int]:
-    """Rebuild minimal config to pass into hypercorn."""
-    host = params_secrets.get("server_ip", "0.0.0.0")
-    port = int(os.getenv("PORT", 5000))
-    return host, port
-
-
-async def main_with_server(args_dict: dict) -> None:
-    host, port = await setup_config_and_paths(args_dict)
-    config = Config()
-    config.bind = [f"{host}:{port}"]
-    config.use_reloader = False
-
-    stop_event = asyncio.Event()
-    loop = asyncio.get_event_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop_event.set)
-
-    serve_task = asyncio.create_task(serve(app, config))
-    waiter = asyncio.create_task(stop_event.wait())
-
-    done, _ = await asyncio.wait({serve_task, waiter}, return_when=asyncio.FIRST_COMPLETED)
-
-    if waiter in done:
-        app.logger.info("Received shutdown signal – shutting down server")
-        serve_task.cancel()
-        await serve_task
-
-    app.logger.info("Server event loop complete, exiting...")
-
-
 async def main() -> None:
-    """Main function to handle command line arguments and start server."""
+    """
+    Main function to handle command line arguments.
+
+    Note: In production, the app should be run via gunicorn with uvicorn workers:
+    gunicorn emhass.web_server_async:app -c gunicorn.conf.py -k uvicorn.workers.UvicornWorker
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", type=str, help="HA URL")
     parser.add_argument("--key", type=str, help="HA long‑lived token")
@@ -792,7 +764,21 @@ async def main() -> None:
     args = parser.parse_args()
     args_dict = {k: v for k, v in vars(args).items() if v is not None}
 
-    await main_with_server(args_dict)
+    # Initialize the app before starting server
+    await initialize()
+
+    # For direct execution (development/testing), use uvicorn programmatically
+    import uvicorn
+
+    host = params_secrets.get("server_ip", "0.0.0.0")
+    port = int(os.getenv("PORT", 5000))
+
+    app.logger.info(f"Starting server directly on {host}:{port}")
+
+    # Use uvicorn.Server to run within existing event loop
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    await server.serve()
 
 
 if __name__ == "__main__":
