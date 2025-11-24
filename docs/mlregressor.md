@@ -85,7 +85,9 @@ The list of parameters needed to set the data publish task is:
 
 - `mlr_predict_entity_id`: The unique `entity_id` to be used.
 
-- `mlr_predict_unit_of_measurement`: The `unit_of_measurement` to be used.
+- `mlr_predict_unit_of_measurement`: The `unit_of_measurement` to be used. (Defaults to `W`)
+
+- `mlr_predict_device_class`: The `device_class` for the sensor to be used. (Defaults to `power`). See the Home Assistant documentation [here](https://www.home-assistant.io/integrations/sensor#device-class) for a list of available device_classes.
 
 - `mlr_predict_friendly_name`: The `friendly_name` to be used.
 
@@ -110,7 +112,7 @@ curl -i -H "Content-Type:application/json" -X POST -d '{"new_values": [8.2, 7.23
 ```
 or
 ```bash
-curl -i -H "Content-Type:application/json" -X POST -d  '{"mlr_predict_entity_id": "sensor.mlr_predict", "mlr_predict_unit_of_measurement": "h", "mlr_predict_friendly_name": "mlr predictor", "new_values": [8.2, 7.23, 2, 6], "model_type": "heating_hours_degreeday" }' http://localhost:5000/action/regressor-model-predict
+curl -i -H "Content-Type:application/json" -X POST -d  '{"mlr_predict_entity_id": "sensor.mlr_predict", "mlr_predict_unit_of_measurement": "h", "mlr_predict_device_class": "duration","mlr_predict_friendly_name": "mlr predictor", "new_values": [8.2, 7.23, 2, 6], "model_type": "heating_hours_degreeday" }' http://localhost:5000/action/regressor-model-predict
 ```
 
 A Home Assistant `rest_command` can look like this:
@@ -125,6 +127,7 @@ predict_heating_hours:
    {
     "mlr_predict_entity_id": "sensor.predicted_hours",
     "mlr_predict_unit_of_measurement": "h",
+    "mlr_predict_device_class": "duration",
     "mlr_predict_friendly_name": "Predicted hours",
     "new_values": [8.2, 7.23, 2, 6],
     "model_type": "heating_hours_degreeday"
