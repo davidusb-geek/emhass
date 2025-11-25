@@ -60,9 +60,7 @@ async def main():
         logger,
     )
     if get_data_from_file:
-        async with aiofiles.open(
-            emhass_conf["data_path"] / "test_df_final.pkl", "rb"
-        ) as inp:
+        async with aiofiles.open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
             contents = await inp.read()
             rh.df_final, days_list, var_list = pickle.loads(contents)
         retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
@@ -103,9 +101,7 @@ async def main():
     )
     df_weather = await fcst.get_weather_forecast(method="csv")
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
-    P_load_forecast = await fcst.get_load_forecast(
-        method=optim_conf["load_forecast_method"]
-    )
+    P_load_forecast = await fcst.get_load_forecast(method=optim_conf["load_forecast_method"])
     df_input_data = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
     df_input_data.columns = ["P_PV_forecast", "P_load_forecast"]
 

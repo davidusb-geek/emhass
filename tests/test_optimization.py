@@ -44,16 +44,13 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         params = {}
         # Build params with default config and secrets
         if emhass_conf["defaults_path"].exists():
-            config = await build_config(
-                emhass_conf, logger, emhass_conf["defaults_path"]
-            )
+            config = await build_config(emhass_conf, logger, emhass_conf["defaults_path"])
             _, secrets = await build_secrets(emhass_conf, logger, no_response=True)
             params = await build_params(emhass_conf, secrets, config, logger)
             params["optim_conf"]["set_use_pv"] = True
         else:
             raise Exception(
-                "config_defaults. does not exist in path: "
-                + str(emhass_conf["defaults_path"])
+                "config_defaults. does not exist in path: " + str(emhass_conf["defaults_path"])
             )
         params_json = orjson.dumps(params).decode("utf-8")
         retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(params_json, logger)
@@ -74,20 +71,14 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         # Obtain sensor values from saved file
         if get_data_from_file:
-            async with aiofiles.open(
-                emhass_conf["data_path"] / "test_df_final.pkl", "rb"
-            ) as inp:
+            async with aiofiles.open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
                 contents = await inp.read()
-                self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = (
-                    pickle.loads(contents)
+                self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = pickle.loads(
+                    contents
                 )
                 self.rh.var_list = self.var_list
-            self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(
-                self.var_list[0]
-            )
-            self.retrieve_hass_conf["sensor_power_photovoltaics"] = str(
-                self.var_list[1]
-            )
+            self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(self.var_list[0])
+            self.retrieve_hass_conf["sensor_power_photovoltaics"] = str(self.var_list[1])
             self.retrieve_hass_conf["sensor_linear_interp"] = [
                 retrieve_hass_conf["sensor_power_photovoltaics"],
                 retrieve_hass_conf["sensor_power_load_no_var_loads"],
@@ -97,9 +88,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             ]
         # Else obtain sensor values from HA
         else:
-            self.days_list = get_days_list(
-                self.retrieve_hass_conf["historic_days_to_retrieve"]
-            )
+            self.days_list = get_days_list(self.retrieve_hass_conf["historic_days_to_retrieve"])
             self.var_list = [
                 self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
                 self.retrieve_hass_conf["sensor_power_photovoltaics"],
@@ -134,9 +123,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.P_load_forecast = await self.fcst.get_load_forecast(
             method=optim_conf["load_forecast_method"]
         )
-        self.df_input_data_dayahead = pd.concat(
-            [self.P_PV_forecast, self.P_load_forecast], axis=1
-        )
+        self.df_input_data_dayahead = pd.concat([self.P_PV_forecast, self.P_load_forecast], axis=1)
         self.df_input_data_dayahead.columns = ["P_PV_forecast", "P_load_forecast"]
         # Build Optimization object
         self.costfun = "profit"
@@ -158,33 +145,21 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     # Check formatting of output from perfect optimization
     def test_perform_perfect_forecast_optim(self):
-        self.opt_res = self.opt.perform_perfect_forecast_optim(
-            self.df_input_data, self.days_list
-        )
+        self.opt_res = self.opt.perform_perfect_forecast_optim(self.df_input_data, self.days_list)
         self.assertIsInstance(self.opt_res, type(pd.DataFrame()))
-        self.assertIsInstance(
-            self.opt_res.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
-        self.assertIsInstance(
-            self.opt_res.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
+        self.assertIsInstance(self.opt_res.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(self.opt_res.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertTrue("cost_fun_" + self.costfun in self.opt_res.columns)
 
     def test_perform_dayahead_forecast_optim(self):
         # Check formatting of output from dayahead optimization
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
-            self.df_input_data_dayahead
-        )
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(
-            self.df_input_data_dayahead
-        )
+        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertIsInstance(
-            self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
+        self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
@@ -348,9 +323,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             debug=True,
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertIsInstance(
-            self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
+        self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
@@ -370,19 +343,13 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             emhass_conf,
             logger,
         )
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
-            self.df_input_data_dayahead
-        )
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(
-            self.df_input_data_dayahead
-        )
+        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertIsInstance(
-            self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
+        self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
@@ -401,19 +368,13 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             emhass_conf,
             logger,
         )
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
-            self.df_input_data_dayahead
-        )
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(
-            self.df_input_data_dayahead
-        )
+        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertIsInstance(
-            self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
+        self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
@@ -434,19 +395,13 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             emhass_conf,
             logger,
         )
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
-            self.df_input_data_dayahead
-        )
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(
-            self.df_input_data_dayahead
-        )
+        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertIsInstance(
-            self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
+        self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
@@ -457,9 +412,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         for solver in solver_list:
             self.optim_conf["lp_solver"] = solver
             if os.getenv("lp_solver_path", default=None) is None:
-                self.optim_conf["lp_solver_path"] = os.getenv(
-                    "lp_solver_path", default=None
-                )
+                self.optim_conf["lp_solver_path"] = os.getenv("lp_solver_path", default=None)
             self.opt = Optimization(
                 self.retrieve_hass_conf,
                 self.optim_conf,
@@ -500,19 +453,13 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             emhass_conf,
             logger,
         )
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
-            self.df_input_data_dayahead
-        )
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(
-            self.df_input_data_dayahead
-        )
+        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertIsInstance(
-            self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
+        self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
@@ -534,12 +481,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 )
 
     def test_perform_naive_mpc_optim(self):
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
-            self.df_input_data_dayahead
-        )
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(
-            self.df_input_data_dayahead
-        )
+        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
         # Test the battery
         self.optim_conf.update({"set_use_battery": True})
         self.opt = Optimization(
@@ -575,14 +518,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertTrue("SOC_opt" in self.opt_res_dayahead.columns)
         self.assertTrue(
             np.abs(
-                self.opt_res_dayahead.loc[self.opt_res_dayahead.index[-1], "SOC_opt"]
-                - soc_final
+                self.opt_res_dayahead.loc[self.opt_res_dayahead.index[-1], "SOC_opt"] - soc_final
             )
             < 1e-3
         )
-        term1 = (
-            self.optim_conf["nominal_power_of_deferrable_loads"][0] * def_total_hours[0]
-        )
+        term1 = self.optim_conf["nominal_power_of_deferrable_loads"][0] * def_total_hours[0]
         term2 = self.opt_res_dayahead["P_deferrable0"].sum() * (
             self.retrieve_hass_conf["optimization_time_step"].seconds / 3600
         )
@@ -609,12 +549,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     # Test format output of dayahead optimization with a thermal deferrable load
     def test_thermal_load_optim(self):
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
-            self.df_input_data_dayahead
-        )
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(
-            self.df_input_data_dayahead
-        )
+        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
             random.normalvariate(10.0, 3.0) for _ in range(48)
         ]
@@ -643,12 +579,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             emhass_conf,
             logger,
         )
-        unit_load_cost = self.df_input_data_dayahead[
-            self.opt.var_load_cost
-        ].values  # €/kWh
-        unit_prod_price = self.df_input_data_dayahead[
-            self.opt.var_prod_price
-        ].values  # €/kWh
+        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values  # €/kWh
+        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values  # €/kWh
         self.opt_res_dayahead = self.opt.perform_optimization(
             self.df_input_data_dayahead,
             self.P_PV_forecast.values.ravel(),
@@ -657,9 +589,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             unit_prod_price,
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertIsInstance(
-            self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex
-        )
+        self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
@@ -678,9 +608,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             emhass_conf,
             logger,
         )
-        def_total_hours = [
-            5 * self.retrieve_hass_conf["optimization_time_step"].seconds / 3600.0
-        ]
+        def_total_hours = [5 * self.retrieve_hass_conf["optimization_time_step"].seconds / 3600.0]
         def_start_timestep = [0]
         def_end_timestep = [0]
         prediction_horizon = 10
@@ -745,9 +673,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         assert_series_equal(
             self.opt_res_dayahead["P_deferrable0"],
             self.optim_conf["nominal_power_of_deferrable_loads"][0]
-            * pd.Series(
-                [0, 1, 1, 1, 1, 1, 0, 0, 0, 0], index=self.opt_res_dayahead.index
-            ),
+            * pd.Series([0, 1, 1, 1, 1, 1, 0, 0, 0, 0], index=self.opt_res_dayahead.index),
             check_names=False,
         )
 
@@ -772,9 +698,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         assert_series_equal(
             self.opt_res_dayahead["P_deferrable0"],
             self.optim_conf["nominal_power_of_deferrable_loads"][0]
-            * pd.Series(
-                [0, 1, 1, 1, 1, 1, 0, 0, 0, 0], index=self.opt_res_dayahead.index
-            ),
+            * pd.Series([0, 1, 1, 1, 1, 1, 0, 0, 0, 0], index=self.opt_res_dayahead.index),
             check_names=False,
         )
 
@@ -800,9 +724,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         assert_series_equal(
             self.opt_res_dayahead["P_deferrable0"],
             self.optim_conf["nominal_power_of_deferrable_loads"][0]
-            * pd.Series(
-                [0, 1, 1, 1, 1, 0, 1, 0, 0, 0], index=self.opt_res_dayahead.index
-            ),
+            * pd.Series([0, 1, 1, 1, 1, 0, 1, 0, 0, 0], index=self.opt_res_dayahead.index),
             check_names=False,
         )
 
@@ -833,9 +755,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         assert_series_equal(
             self.opt_res_dayahead["P_deferrable0"],
             self.optim_conf["nominal_power_of_deferrable_loads"][0]
-            * pd.Series(
-                [1, 1, 1, 1, 1, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index
-            ),
+            * pd.Series([1, 1, 1, 1, 1, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index),
             check_names=False,
         )
 
@@ -866,9 +786,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         assert_series_equal(
             self.opt_res_dayahead["P_deferrable0"],
             self.optim_conf["nominal_power_of_deferrable_loads"][0]
-            * pd.Series(
-                [0, 1, 1, 1, 1, 1, 0, 0, 0, 0], index=self.opt_res_dayahead.index
-            ),
+            * pd.Series([0, 1, 1, 1, 1, 1, 0, 0, 0, 0], index=self.opt_res_dayahead.index),
             check_names=False,
         )
 
@@ -878,12 +796,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         This test verifies that operating_timesteps_of_each_deferrable_load works correctly
         and produces the exact number of timesteps requested, regardless of timestep size.
         """
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
-            self.df_input_data_dayahead
-        )
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(
-            self.df_input_data_dayahead
-        )
+        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
         # Test the battery
         self.optim_conf.update({"set_use_battery": True})
         self.opt = Optimization(
@@ -901,9 +815,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         soc_final = 0.6
 
         # Get the actual timestep size from configuration
-        timestep_minutes = (
-            self.retrieve_hass_conf["optimization_time_step"].seconds / 60
-        )
+        timestep_minutes = self.retrieve_hass_conf["optimization_time_step"].seconds / 60
         timestep_hours = timestep_minutes / 60
 
         # Define test case: 4 timesteps for first deferrable load
@@ -930,8 +842,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertTrue("SOC_opt" in self.opt_res_dayahead.columns)
         self.assertTrue(
             np.abs(
-                self.opt_res_dayahead.loc[self.opt_res_dayahead.index[-1], "SOC_opt"]
-                - soc_final
+                self.opt_res_dayahead.loc[self.opt_res_dayahead.index[-1], "SOC_opt"] - soc_final
             )
             < 1e-3
         )
@@ -959,12 +870,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     def test_perform_naive_mpc_optim_def_total_timestep_various_sizes(self):
         """Test operating_timesteps_of_each_deferrable_load with various timestep sizes."""
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
-            self.df_input_data_dayahead
-        )
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(
-            self.df_input_data_dayahead
-        )
+        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
 
         # Test with common timestep sizes that should work reliably
         timestep_sizes = [15, 30]  # minutes - stick to known working sizes

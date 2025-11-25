@@ -82,9 +82,7 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
         mock_client.startup.assert_called_once()  # Should only be called once
 
     @patch("emhass.connection_manager.AsyncWebSocketClient")
-    async def test_get_websocket_client_reconnect_when_disconnected(
-        self, mock_client_class
-    ):
+    async def test_get_websocket_client_reconnect_when_disconnected(self, mock_client_class):
         """Test reconnecting when existing client is disconnected."""
         # Mock the AsyncWebSocketClient
         mock_client = AsyncMock(spec=AsyncWebSocketClient)
@@ -329,12 +327,8 @@ class TestConnectionManager(unittest.IsolatedAsyncioTestCase):
         mock_client.startup = slow_startup
 
         # Start two concurrent requests
-        task1 = asyncio.create_task(
-            get_websocket_client(self.hass_url, self.token, logger)
-        )
-        task2 = asyncio.create_task(
-            get_websocket_client(self.hass_url, self.token, logger)
-        )
+        task1 = asyncio.create_task(get_websocket_client(self.hass_url, self.token, logger))
+        task2 = asyncio.create_task(get_websocket_client(self.hass_url, self.token, logger))
 
         clients = await asyncio.gather(task1, task2)
 

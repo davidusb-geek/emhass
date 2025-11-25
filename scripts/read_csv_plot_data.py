@@ -61,8 +61,12 @@ if __name__ == "__main__":
     data["P_PV"] = data_cost["P_PV"]
     data["P_Load"] = data_cost["P_Load"]
     data["P_def_sum_cost"] = (data_cost["P_deferrable0"] + data_cost["P_deferrable1"]).clip(lower=0)
-    data["P_def_sum_profit"] = (data_profit["P_deferrable0"] + data_profit["P_deferrable1"]).clip(lower=0)
-    data["P_def_sum_selfcons"] = (data_selfcons["P_deferrable0"] + data_selfcons["P_deferrable1"]).clip(lower=0)
+    data["P_def_sum_profit"] = (data_profit["P_deferrable0"] + data_profit["P_deferrable1"]).clip(
+        lower=0
+    )
+    data["P_def_sum_selfcons"] = (
+        data_selfcons["P_deferrable0"] + data_selfcons["P_deferrable1"]
+    ).clip(lower=0)
     data["gain_cost"] = data_cost["cost_profit"]
     data["gain_profit"] = data_profit["cost_profit"]
     data["gain_selfcons"] = data_selfcons["cost_profit"]
@@ -169,7 +173,10 @@ if __name__ == "__main__":
     fig_bar = px.bar(
         np.arange(len(cf)),
         x=[
-            c + " (+" + "{:.2f}".format(np.sum(data["gain_" + c]) * 100 / np.sum(data["gain_profit"]) - 100) + "%)"
+            c
+            + " (+"
+            + "{:.2f}".format(np.sum(data["gain_" + c]) * 100 / np.sum(data["gain_profit"]) - 100)
+            + "%)"
             for c in cf
         ],
         y=[np.sum(data["gain_" + c]) for c in cf],

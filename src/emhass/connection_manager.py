@@ -7,7 +7,9 @@ _global_client: AsyncWebSocketClient | None = None
 _lock = asyncio.Lock()
 
 
-async def get_websocket_client(hass_url: str, token: str, logger: logging.Logger | None = None) -> AsyncWebSocketClient:
+async def get_websocket_client(
+    hass_url: str, token: str, logger: logging.Logger | None = None
+) -> AsyncWebSocketClient:
     """
     Get or create a global WebSocket client connection.
 
@@ -27,7 +29,9 @@ async def get_websocket_client(hass_url: str, token: str, logger: logging.Logger
         if _global_client is None:
             if logger:
                 logger.debug(f"Creating new WebSocket client for {hass_url}")
-            _global_client = AsyncWebSocketClient(hass_url=hass_url, long_lived_token=token, logger=logger)
+            _global_client = AsyncWebSocketClient(
+                hass_url=hass_url, long_lived_token=token, logger=logger
+            )
             try:
                 await asyncio.wait_for(_global_client.startup(), timeout=15.0)
                 if logger:

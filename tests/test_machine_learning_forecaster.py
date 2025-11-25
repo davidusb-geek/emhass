@@ -32,17 +32,12 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
     async def get_test_params():
         # Build params with default config and secrets
         if emhass_conf["defaults_path"].exists():
-            config = await utils.build_config(
-                emhass_conf, logger, emhass_conf["defaults_path"]
-            )
-            _, secrets = await utils.build_secrets(
-                emhass_conf, logger, no_response=True
-            )
+            config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+            _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
             params = await utils.build_params(emhass_conf, secrets, config, logger)
         else:
             raise Exception(
-                "config_defaults. does not exist in path: "
-                + str(emhass_conf["defaults_path"])
+                "config_defaults. does not exist in path: " + str(emhass_conf["defaults_path"])
             )
         return params
 
@@ -84,9 +79,7 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         # Create RetrieveHass Object
         get_data_from_file = True
         params = None
-        self.retrieve_hass_conf, self.optim_conf, _ = utils.get_yaml_parse(
-            params_json, logger
-        )
+        self.retrieve_hass_conf, self.optim_conf, _ = utils.get_yaml_parse(params_json, logger)
         self.rh = RetrieveHass(
             self.retrieve_hass_conf["hass_url"],
             self.retrieve_hass_conf["long_lived_token"],
@@ -98,12 +91,10 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
             get_data_from_file=get_data_from_file,
         )
         # Open and extract saved sensor data to test against
-        async with aiofiles.open(
-            emhass_conf["data_path"] / "test_df_final.pkl", "rb"
-        ) as inp:
+        async with aiofiles.open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
             content = await inp.read()
-            self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = (
-                pickle.loads(content)
+            self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = pickle.loads(
+                content
             )
 
     async def test_fit(self):

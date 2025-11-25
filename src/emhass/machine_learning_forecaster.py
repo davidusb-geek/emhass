@@ -98,9 +98,7 @@ class MLForecaster:
     @staticmethod
     async def interpolate_async(data: pd.DataFrame) -> pd.DataFrame:
         """Interpolate missing values asynchronously."""
-        return await asyncio.to_thread(
-            data.interpolate, method="linear", axis=0, limit=None
-        )
+        return await asyncio.to_thread(data.interpolate, method="linear", axis=0, limit=None)
 
     @staticmethod
     async def generate_exog(data_last_window, periods, var_name):
@@ -164,18 +162,12 @@ class MLForecaster:
 
             # train/test split
             self.date_train = (
-                self.data_exo.index[-1]
-                - pd.Timedelta("5days")
-                + self.data_exo.index.freq
+                self.data_exo.index[-1] - pd.Timedelta("5days") + self.data_exo.index.freq
             )  # The last 5 days
             self.date_split = (
-                self.data_exo.index[-1]
-                - pd.Timedelta(split_date_delta)
-                + self.data_exo.index.freq
+                self.data_exo.index[-1] - pd.Timedelta(split_date_delta) + self.data_exo.index.freq
             )  # The last 48h
-            self.data_train = self.data_exo.loc[
-                : self.date_split - self.data_exo.index.freq, :
-            ]
+            self.data_train = self.data_exo.loc[: self.date_split - self.data_exo.index.freq, :]
             self.data_test = self.data_exo.loc[self.date_split :, :]
             self.steps = len(self.data_test)
 
@@ -183,9 +175,7 @@ class MLForecaster:
             base_model = self._get_sklearn_model(self.sklearn_model)
 
             # Define the forecaster object
-            self.forecaster = ForecasterRecursive(
-                regressor=base_model, lags=self.num_lags
-            )
+            self.forecaster = ForecasterRecursive(regressor=base_model, lags=self.num_lags)
 
             # Fit and time it
             self.logger.info("Training a " + self.sklearn_model + " model")
@@ -210,14 +200,10 @@ class MLForecaster:
             pred_metric = await asyncio.to_thread(
                 r2_score, self.data_test[self.var_model], predictions
             )
-            self.logger.info(
-                f"Prediction R2 score of fitted model on test data: {pred_metric}"
-            )
+            self.logger.info(f"Prediction R2 score of fitted model on test data: {pred_metric}")
 
             # Packing results in a DataFrame
-            df_pred = pd.DataFrame(
-                index=self.data_exo.index, columns=["train", "test", "pred"]
-            )
+            df_pred = pd.DataFrame(index=self.data_exo.index, columns=["train", "test", "pred"])
 
             df_pred["train"] = self.data_train[self.var_model]
             df_pred["test"] = self.data_test[self.var_model]
@@ -309,9 +295,7 @@ class MLForecaster:
                 data_last_window = await self.interpolate_async(data_last_window)
 
                 if self.is_tuned:
-                    exog = await self.generate_exog(
-                        data_last_window, self.lags_opt, self.var_model
-                    )
+                    exog = await self.generate_exog(data_last_window, self.lags_opt, self.var_model)
 
                     predictions = await asyncio.to_thread(
                         self.forecaster.predict,
@@ -320,9 +304,7 @@ class MLForecaster:
                         exog=exog.drop(self.var_model, axis=1),
                     )
                 else:
-                    exog = await self.generate_exog(
-                        data_last_window, self.num_lags, self.var_model
-                    )
+                    exog = await self.generate_exog(data_last_window, self.num_lags, self.var_model)
 
                     predictions = await asyncio.to_thread(
                         self.forecaster.predict,
@@ -347,9 +329,7 @@ class MLForecaster:
 
                 def search_space(trial):
                     return {
-                        "fit_intercept": trial.suggest_categorical(
-                            "fit_intercept", [True]
-                        ),
+                        "fit_intercept": trial.suggest_categorical("fit_intercept", [True]),
                         "lags": trial.suggest_categorical("lags", [3]),
                     }
 
@@ -357,12 +337,8 @@ class MLForecaster:
 
                 def search_space(trial):
                     return {
-                        "fit_intercept": trial.suggest_categorical(
-                            "fit_intercept", [True, False]
-                        ),
-                        "lags": trial.suggest_categorical(
-                            "lags", [6, 12, 24, 36, 48, 60, 72]
-                        ),
+                        "fit_intercept": trial.suggest_categorical("fit_intercept", [True, False]),
+                        "lags": trial.suggest_categorical("lags", [6, 12, 24, 36, 48, 60, 72]),
                     }
 
         elif self.sklearn_model == "ElasticNet":
@@ -380,12 +356,8 @@ class MLForecaster:
                     return {
                         "alpha": trial.suggest_float("alpha", 0.0, 2.0),
                         "l1_ratio": trial.suggest_float("l1_ratio", 0.0, 1.0),
-                        "selection": trial.suggest_categorical(
-                            "selection", ["cyclic", "random"]
-                        ),
-                        "lags": trial.suggest_categorical(
-                            "lags", [6, 12, 24, 36, 48, 60, 72]
-                        ),
+                        "selection": trial.suggest_categorical("selection", ["cyclic", "random"]),
+                        "lags": trial.suggest_categorical("lags", [6, 12, 24, 36, 48, 60, 72]),
                     }
 
         elif self.sklearn_model == "KNeighborsRegressor":
@@ -403,12 +375,8 @@ class MLForecaster:
                     return {
                         "n_neighbors": trial.suggest_int("n_neighbors", 2, 20),
                         "leaf_size": trial.suggest_int("leaf_size", 20, 40),
-                        "weights": trial.suggest_categorical(
-                            "weights", ["uniform", "distance"]
-                        ),
-                        "lags": trial.suggest_categorical(
-                            "lags", [6, 12, 24, 36, 48, 60, 72]
-                        ),
+                        "weights": trial.suggest_categorical("weights", ["uniform", "distance"]),
+                        "lags": trial.suggest_categorical("lags", [6, 12, 24, 36, 48, 60, 72]),
                     }
 
         else:
@@ -458,21 +426,15 @@ class MLForecaster:
                     - pd.Timedelta(split_date_delta)
                     + data_to_tune.index.freq
                 )
-                initial_train_size = len(
-                    data_to_tune.loc[: date_split - data_to_tune.index.freq]
-                )
+                initial_train_size = len(data_to_tune.loc[: date_split - data_to_tune.index.freq])
             except (ValueError, TypeError):
                 self.logger.warning(
                     f"Invalid split_date_delta: {split_date_delta}. Falling back to 5 days."
                 )
                 date_split = (
-                    data_to_tune.index[-1]
-                    - pd.Timedelta("5days")
-                    + data_to_tune.index.freq
+                    data_to_tune.index[-1] - pd.Timedelta("5days") + data_to_tune.index.freq
                 )
-                initial_train_size = len(
-                    data_to_tune.loc[: date_split - data_to_tune.index.freq]
-                )
+                initial_train_size = len(data_to_tune.loc[: date_split - data_to_tune.index.freq])
 
             # Check if the calculated initial_train_size is valid
             window_size = num_lags  # This is what skforecast will use as window_size

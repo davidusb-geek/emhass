@@ -126,9 +126,7 @@ class MLRegressor:
         self.model = None
         self.grid_search: GridSearchCV | None = None
 
-    def _prepare_data(
-        self, date_features: list[str] | None
-    ) -> tuple[pd.DataFrame, pd.Series]:
+    def _prepare_data(self, date_features: list[str] | None) -> tuple[pd.DataFrame, pd.Series]:
         self.data_exo = self.data.copy()
         self.data_exo[self.features] = self.data[self.features]
         self.data_exo[self.target] = self.data[self.target]
@@ -144,9 +142,7 @@ class MLRegressor:
                 self.data_exo, timestamp=self.timestamp, date_features=date_features
             )
         elif date_features:
-            self.logger.warning(
-                "Timestamp is required for date_features. Skipping date features."
-            )
+            self.logger.warning("Timestamp is required for date_features. Skipping date features.")
 
         y = self.data_exo[self.target]
         X = self.data_exo.drop(
@@ -186,9 +182,7 @@ class MLRegressor:
         self.logger.info("Fitting MLRegressor model for %s", self.model_type)
 
         X, y = self._prepare_data(date_features)
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         self.steps = len(X_test)
 
         model_pipeline, param_grid = self._get_model_and_params()

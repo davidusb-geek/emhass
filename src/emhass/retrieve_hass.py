@@ -84,33 +84,23 @@ class RetrieveHass:
         self.logger = logger
         self.get_data_from_file = get_data_from_file
         self.var_list = []
-        self.use_websocket = self.params.get("retrieve_hass_conf", {}).get(
-            "use_websocket", False
-        )
+        self.use_websocket = self.params.get("retrieve_hass_conf", {}).get("use_websocket", False)
         if self.use_websocket:
             self._client = None
             self.logger.info("Websocket integration enabled")
         else:
-            self.logger.debug(
-                "Websocket integration disabled, using Home Assistant API"
-            )
+            self.logger.debug("Websocket integration disabled, using Home Assistant API")
         # Initialize InfluxDB configuration
-        self.use_influxdb = self.params.get("retrieve_hass_conf", {}).get(
-            "use_influxdb", False
-        )
+        self.use_influxdb = self.params.get("retrieve_hass_conf", {}).get("use_influxdb", False)
         if self.use_influxdb:
             influx_conf = self.params.get("retrieve_hass_conf", {})
             self.influxdb_host = influx_conf.get("influxdb_host", "localhost")
             self.influxdb_port = influx_conf.get("influxdb_port", 8086)
             self.influxdb_username = influx_conf.get("influxdb_username", "")
             self.influxdb_password = influx_conf.get("influxdb_password", "")
-            self.influxdb_database = influx_conf.get(
-                "influxdb_database", "homeassistant"
-            )
+            self.influxdb_database = influx_conf.get("influxdb_database", "homeassistant")
             self.influxdb_measurement = influx_conf.get("influxdb_measurement", "W")
-            self.influxdb_retention_policy = influx_conf.get(
-                "influxdb_retention_policy", "autogen"
-            )
+            self.influxdb_retention_policy = influx_conf.get("influxdb_retention_policy", "autogen")
             self.influxdb_use_ssl = influx_conf.get("influxdb_use_ssl", False)
             self.influxdb_verify_ssl = influx_conf.get("influxdb_verify_ssl", False)
             self.logger.info(
@@ -153,9 +143,7 @@ class RetrieveHass:
         try:
             self.ha_config = orjson.loads(data)
         except Exception:
-            self.logger.error(
-                "EMHASS was unable to obtain configuration data from Home Assistant"
-            )
+            self.logger.error("EMHASS was unable to obtain configuration data from Home Assistant")
             return False
 
     async def get_ha_config_websocket(self) -> dict[str, Any]:
@@ -208,9 +196,7 @@ class RetrieveHass:
             self.logger.info("Using WebSocket connection for data retrieval")
             success = await self.get_data_websocket(days_list, var_list)
             if not success:
-                self.logger.warning(
-                    "WebSocket data retrieval failed, falling back to REST API"
-                )
+                self.logger.warning("WebSocket data retrieval failed, falling back to REST API")
                 # Fall back to REST API if websocket fails
                 return await self._get_data_rest_api(
                     days_list,
@@ -292,21 +278,13 @@ class RetrieveHass:
                             data = await response.read()
                             data_list = orjson.loads(data)
                 except Exception:
-                    self.logger.error(
-                        "Unable to access Home Assistant instance, check URL"
-                    )
-                    self.logger.error(
-                        "If using addon, try setting url and token to 'empty'"
-                    )
+                    self.logger.error("Unable to access Home Assistant instance, check URL")
+                    self.logger.error("If using addon, try setting url and token to 'empty'")
                     return False
                 else:
                     if response.status == 401:
-                        self.logger.error(
-                            "Unable to access Home Assistant instance, TOKEN/KEY"
-                        )
-                        self.logger.error(
-                            "If using addon, try setting url and token to 'empty'"
-                        )
+                        self.logger.error("Unable to access Home Assistant instance, TOKEN/KEY")
+                        self.logger.error("If using addon, try setting url and token to 'empty'")
                         return False
                     if response.status > 299:
                         self.logger.error(
@@ -356,8 +334,7 @@ class RetrieveHass:
                     return False
 
                 if (
-                    len(df_raw) < ((60 / (self.freq.seconds / 60)) * 24)
-                    and x != len(days_list) - 1
+                    len(df_raw) < ((60 / (self.freq.seconds / 60)) * 24) and x != len(days_list) - 1
                 ):  # check if there is enough Dataframes for passed frequency per day (not inc current day)
                     self.logger.debug(
                         "sensor:"
@@ -371,12 +348,8 @@ class RetrieveHass:
                     )
 
                 if i == 0:  # Defining the DataFrame container
-                    from_date = pd.to_datetime(
-                        df_raw["last_changed"], format="ISO8601"
-                    ).min()
-                    to_date = pd.to_datetime(
-                        df_raw["last_changed"], format="ISO8601"
-                    ).max()
+                    from_date = pd.to_datetime(df_raw["last_changed"], format="ISO8601").min()
+                    to_date = pd.to_datetime(df_raw["last_changed"], format="ISO8601").max()
                     ts = pd.to_datetime(
                         pd.date_range(start=from_date, end=to_date, freq=self.freq),
                         format="%Y-%d-%m %H:%M",
@@ -512,14 +485,10 @@ class RetrieveHass:
         end_time = min(now, requested_end)
         total_days = (end_time - start_time).days
 
-        self.logger.info(
-            f"Retrieving {len(var_list)} sensors over {total_days} days from InfluxDB"
-        )
+        self.logger.info(f"Retrieving {len(var_list)} sensors over {total_days} days from InfluxDB")
         self.logger.debug(f"Time range: {start_time} to {end_time}")
         if end_time < requested_end:
-            self.logger.debug(
-                f"End time capped at current time (requested: {requested_end})"
-            )
+            self.logger.debug(f"End time capped at current time (requested: {requested_end})")
 
         # Collect sensor dataframes
         sensor_dfs = []
@@ -557,9 +526,7 @@ class RetrieveHass:
         try:
             self.df_final = set_df_index_freq(self.df_final)
         except Exception as e:
-            self.logger.error(
-                f"Exception occurred while setting DataFrame index frequency: {e}"
-            )
+            self.logger.error(f"Exception occurred while setting DataFrame index frequency: {e}")
             return False
 
         if self.df_final.index.freq != self.freq:
@@ -576,9 +543,7 @@ class RetrieveHass:
         try:
             from influxdb import InfluxDBClient
         except ImportError:
-            self.logger.error(
-                "InfluxDB client not installed. Install with: pip install influxdb"
-            )
+            self.logger.error("InfluxDB client not installed. Install with: pip install influxdb")
             return None
 
         try:
@@ -635,9 +600,7 @@ class RetrieveHass:
 
                 try:
                     # Use SHOW TAG VALUES to get all entity_ids in this measurement
-                    tag_query = (
-                        f'SHOW TAG VALUES FROM "{measurement}" WITH KEY = "entity_id"'
-                    )
+                    tag_query = f'SHOW TAG VALUES FROM "{measurement}" WITH KEY = "entity_id"'
                     self.logger.debug(
                         f"Checking measurement '{measurement}' with tag query: {tag_query}"
                     )
@@ -661,9 +624,7 @@ class RetrieveHass:
                     continue
 
         except Exception as e:
-            self.logger.error(
-                f"Error discovering measurement for entity {entity_id}: {e}"
-            )
+            self.logger.error(f"Error discovering measurement for entity {entity_id}: {e}")
 
         # Fallback to default measurement if not found
         self.logger.warning(
@@ -697,9 +658,7 @@ class RetrieveHass:
     def _build_influx_query(self, sensor: str, start_time, end_time) -> str:
         """Build InfluxQL query for sensor data retrieval (legacy method)."""
         # Convert sensor name: sensor.sec_pac_solar -> sec_pac_solar
-        entity_id = (
-            sensor.replace("sensor.", "") if sensor.startswith("sensor.") else sensor
-        )
+        entity_id = sensor.replace("sensor.", "") if sensor.startswith("sensor.") else sensor
 
         # Use default measurement (for backward compatibility)
         return self._build_influx_query_for_measurement(
@@ -711,16 +670,12 @@ class RetrieveHass:
         self.logger.debug(f"Retrieving sensor: {sensor}")
 
         # Clean sensor name (remove sensor. prefix if present)
-        entity_id = (
-            sensor.replace("sensor.", "") if sensor.startswith("sensor.") else sensor
-        )
+        entity_id = sensor.replace("sensor.", "") if sensor.startswith("sensor.") else sensor
 
         # Auto-discover which measurement contains this entity
         measurement = self._discover_entity_measurement(client, entity_id)
         if not measurement:
-            self.logger.warning(
-                f"Entity '{entity_id}' not found in any InfluxDB measurement"
-            )
+            self.logger.warning(f"Entity '{entity_id}' not found in any InfluxDB measurement")
             return None
 
         try:
@@ -750,9 +705,7 @@ class RetrieveHass:
 
             # Rename value column to original sensor name
             if "mean_value" in df_sensor.columns:
-                df_sensor = df_sensor[["mean_value"]].rename(
-                    columns={"mean_value": sensor}
-                )
+                df_sensor = df_sensor[["mean_value"]].rename(columns={"mean_value": sensor})
             else:
                 self.logger.error(
                     f"Expected 'mean_value' column not found for {sensor} in measurement {measurement}"
@@ -840,9 +793,7 @@ class RetrieveHass:
         # Confirm var_replace_zero & var_interp contain only sensors contained in var_list
         if isinstance(var_replace_zero, list):
             original_list = var_replace_zero[:]
-            var_replace_zero = [
-                item for item in var_replace_zero if item in self.var_list
-            ]
+            var_replace_zero = [item for item in var_replace_zero if item in self.var_list]
             removed = set(original_list) - set(var_replace_zero)
             for item in removed:
                 self.logger.warning(
@@ -872,9 +823,7 @@ class RetrieveHass:
                 new_string = string.replace(var_load, var_load + "_positive")
                 new_var_replace_zero.append(new_string)
         else:
-            self.logger.warning(
-                "Unable to find all the sensors in sensor_replace_zero parameter"
-            )
+            self.logger.warning("Unable to find all the sensors in sensor_replace_zero parameter")
             self.logger.warning(
                 "Confirm sure all sensors in sensor_replace_zero are sensor_power_photovoltaics and/or ensor_power_load_no_var_loads "
             )
@@ -885,17 +834,13 @@ class RetrieveHass:
                 new_var_interp.append(new_string)
         else:
             new_var_interp = None
-            self.logger.warning(
-                "Unable to find all the sensors in sensor_linear_interp parameter"
-            )
+            self.logger.warning("Unable to find all the sensors in sensor_linear_interp parameter")
             self.logger.warning(
                 "Confirm all sensors in sensor_linear_interp are sensor_power_photovoltaics and/or ensor_power_load_no_var_loads "
             )
         # Treating NaN replacement: either by zeros or by linear interpolation
         if new_var_replace_zero is not None:
-            self.df_final[new_var_replace_zero] = self.df_final[
-                new_var_replace_zero
-            ].fillna(0.0)
+            self.df_final[new_var_replace_zero] = self.df_final[new_var_replace_zero].fillna(0.0)
         if new_var_interp is not None:
             self.df_final[new_var_interp] = self.df_final[new_var_interp].interpolate(
                 method="linear", axis=0, limit=None
@@ -992,9 +937,7 @@ class RetrieveHass:
         # Add a possible prefix to the entity ID
         entity_id = entity_id.replace("sensor.", "sensor." + publish_prefix)
         # Set the URL
-        if (
-            self.hass_url == "http://supervisor/core/api"
-        ):  # If we are using the supervisor API
+        if self.hass_url == "http://supervisor/core/api":  # If we are using the supervisor API
             url = self.hass_url + "/states/" + entity_id
         else:  # Otherwise the Home Assistant Core API it is
             url = self.hass_url + "api/states/" + entity_id
@@ -1162,13 +1105,9 @@ class RetrieveHass:
         # Treating the response status and posting them on the logger
         if response_ok:
             if logger_levels == "DEBUG" or dont_post:
-                self.logger.debug(
-                    "Successfully posted to " + entity_id + " = " + str(state)
-                )
+                self.logger.debug("Successfully posted to " + entity_id + " = " + str(state))
             else:
-                self.logger.info(
-                    "Successfully posted to " + entity_id + " = " + str(state)
-                )
+                self.logger.info("Successfully posted to " + entity_id + " = " + str(state))
 
             # If save entities is set, save entity data to /data_path/entities
             if save_entities:
@@ -1182,12 +1121,8 @@ class RetrieveHass:
                     index="timestamp", orient="index", date_unit="s", date_format="iso"
                 )
                 parsed = orjson.loads(result)
-                async with aiofiles.open(
-                    entities_path / (entity_id + ".json"), "w"
-                ) as file:
-                    await file.write(
-                        orjson.dumps(parsed, option=orjson.OPT_INDENT_2).decode()
-                    )
+                async with aiofiles.open(entities_path / (entity_id + ".json"), "w") as file:
+                    await file.write(orjson.dumps(parsed, option=orjson.OPT_INDENT_2).decode())
 
                 # Save the required metadata to json file
                 metadata_path = entities_path / "metadata.json"
@@ -1214,9 +1149,7 @@ class RetrieveHass:
                         "lowest_time_step"
                     ] > int(self.freq.seconds / 60):
                         metadata["lowest_time_step"] = int(self.freq.seconds / 60)
-                    await file.write(
-                        orjson.dumps(metadata, option=orjson.OPT_INDENT_2).decode()
-                    )
+                    await file.write(orjson.dumps(metadata, option=orjson.OPT_INDENT_2).decode())
 
                     self.logger.debug("Saved " + entity_id + " to json file")
 
@@ -1283,18 +1216,12 @@ class RetrieveHass:
                     if value is not None:
                         try:
                             value = float(value)
-                            entity_data.append(
-                                {"timestamp": timestamp, entity_id: value}
-                            )
+                            entity_data.append({"timestamp": timestamp, entity_id: value})
                         except (ValueError, TypeError):
-                            self.logger.debug(
-                                f"Could not convert value to float: {value}"
-                            )
+                            self.logger.debug(f"Could not convert value to float: {value}")
 
                 except (KeyError, ValueError, TypeError) as e:
-                    self.logger.debug(
-                        f"Skipping invalid statistic for {entity_id}: {e}"
-                    )
+                    self.logger.debug(f"Skipping invalid statistic for {entity_id}: {e}")
                     continue
 
             if entity_data:
@@ -1311,9 +1238,7 @@ class RetrieveHass:
             # Ensure timezone awareness - timestamps should already be UTC from conversion above
             if df_final.index.tz is None:
                 # If somehow still naive, localize as UTC first then convert
-                df_final.index = df_final.index.tz_localize("UTC").tz_convert(
-                    self.time_zone
-                )
+                df_final.index = df_final.index.tz_localize("UTC").tz_convert(self.time_zone)
             else:
                 # Convert from existing timezone to target timezone
                 df_final.index = df_final.index.tz_convert(self.time_zone)
