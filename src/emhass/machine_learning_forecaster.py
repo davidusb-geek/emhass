@@ -87,6 +87,32 @@ class MLForecaster:
         return -r2_score(y_true, y_pred)
 
     @staticmethod
+    def get_lags_list_from_frequency(freq: pd.Timedelta) -> list[int]:
+        """Calculate appropriate lag values based on data frequency.
+
+        The lags represent different time horizons (6h, 12h, 1d, 1.5d, 2d, 2.5d, 3d).
+        This method scales these horizons according to the actual data frequency.
+
+        :param freq: The frequency of the data as a pandas Timedelta
+        :type freq: pd.Timedelta
+        :return: A list of lag values appropriate for the data frequency
+        :rtype: list[int]
+        """
+        # Define target time horizons in hours
+        target_horizons_hours = [6, 12, 24, 36, 48, 60, 72]
+
+        # Calculate frequency in hours
+        freq_hours = freq.total_seconds() / 3600
+
+        # Calculate lags for each horizon
+        lags = [int(round(horizon / freq_hours)) for horizon in target_horizons_hours]
+
+        # Remove duplicates and ensure minimum value of 1
+        lags = sorted({max(1, lag) for lag in lags})
+
+        return lags
+
+    @staticmethod
     def generate_exog(data_last_window, periods, var_name):
         """Generate the exogenous data for future timestamps."""
         forecast_dates = pd.date_range(
@@ -257,6 +283,13 @@ class MLForecaster:
         :return: The DataFrame with the forecasts using the optimized model.
         :rtype: pd.DataFrame
         """
+        # Calculate appropriate lags based on data frequency
+        freq_timedelta = pd.Timedelta(self.data_exo.index.freq)
+        lags_list = MLForecaster.get_lags_list_from_frequency(freq_timedelta)
+        self.logger.info(
+            f"Using lags list based on data frequency ({self.data_exo.index.freq}): {lags_list}"
+        )
+
         # Regressor hyperparameters search space
         if self.sklearn_model == "LinearRegression":
             if debug:
@@ -276,9 +309,7 @@ class MLForecaster:
                         "fit_intercept": trial.suggest_categorical(
                             "fit_intercept", [True, False]
                         ),
-                        "lags": trial.suggest_categorical(
-                            "lags", [6, 12, 24, 36, 48, 60, 72]
-                        ),
+                        "lags": trial.suggest_categorical("lags", lags_list),
                     }
                     return search_space
         elif self.sklearn_model == "ElasticNet":
@@ -299,9 +330,7 @@ class MLForecaster:
                         "selection": trial.suggest_categorical(
                             "selection", ["cyclic", "random"]
                         ),
-                        "lags": trial.suggest_categorical(
-                            "lags", [6, 12, 24, 36, 48, 60, 72]
-                        ),
+                        "lags": trial.suggest_categorical("lags", lags_list),
                     }
                     return search_space
         elif self.sklearn_model == "KNeighborsRegressor":
@@ -322,9 +351,7 @@ class MLForecaster:
                         "weights": trial.suggest_categorical(
                             "weights", ["uniform", "distance"]
                         ),
-                        "lags": trial.suggest_categorical(
-                            "lags", [6, 12, 24, 36, 48, 60, 72]
-                        ),
+                        "lags": trial.suggest_categorical("lags", lags_list),
                     }
                     return search_space
 
