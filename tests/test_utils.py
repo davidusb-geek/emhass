@@ -72,18 +72,18 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         # Test with defaults
         config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
         params = await utils.build_params(emhass_conf, {}, config, logger)
-        self.assertTrue(params["optim_conf"]["lp_solver"] == "default")
-        self.assertTrue(params["optim_conf"]["lp_solver_path"] == "empty")
-        self.assertTrue(
-            config["load_peak_hour_periods"]
-            == {
+        self.assertEqual(params["optim_conf"]["lp_solver"], "default")
+        self.assertEqual(params["optim_conf"]["lp_solver_path"], "empty")
+        self.assertEqual(
+            config["load_peak_hour_periods"],
+            {
                 "period_hp_1": [{"start": "02:54"}, {"end": "15:24"}],
                 "period_hp_2": [{"start": "17:24"}, {"end": "20:24"}],
-            }
+            },
         )
-        self.assertTrue(
-            params["retrieve_hass_conf"]["sensor_replace_zero"]
-            == ["sensor.power_photovoltaics", "sensor.p_pv_forecast"]
+        self.assertEqual(
+            params["retrieve_hass_conf"]["sensor_replace_zero"],
+            ["sensor.power_photovoltaics", "sensor.p_pv_forecast"],
         )
         # Test with config.json
         config = await utils.build_config(
@@ -93,8 +93,8 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
             emhass_conf["config_path"],
         )
         params = await utils.build_params(emhass_conf, {}, config, logger)
-        self.assertTrue(params["optim_conf"]["lp_solver"] == "default")
-        self.assertTrue(params["optim_conf"]["lp_solver_path"] == "empty")
+        self.assertEqual(params["optim_conf"]["lp_solver"], "default")
+        self.assertEqual(params["optim_conf"]["lp_solver_path"], "empty")
         # Test with legacy config_emhass yaml
         config = await utils.build_config(
             emhass_conf,
@@ -103,17 +103,17 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
             legacy_config_path=emhass_conf["legacy_config_path"],
         )
         params = await utils.build_params(emhass_conf, {}, config, logger)
-        self.assertTrue(
-            params["retrieve_hass_conf"]["sensor_replace_zero"] == ["sensor.power_photovoltaics"]
+        self.assertEqual(
+            params["retrieve_hass_conf"]["sensor_replace_zero"], ["sensor.power_photovoltaics"]
         )
-        self.assertTrue(
-            config["load_peak_hour_periods"]
-            == {
+        self.assertEqual(
+            config["load_peak_hour_periods"],
+            {
                 "period_hp_1": [{"start": "02:54"}, {"end": "15:24"}],
                 "period_hp_2": [{"start": "17:24"}, {"end": "20:24"}],
-            }
+            },
         )
-        self.assertTrue(params["plant_conf"]["battery_charge_efficiency"] == 0.95)
+        self.assertEqual(params["plant_conf"]["battery_charge_efficiency"], 0.95)
 
     async def test_get_yaml_parse(self):
         # Test get_yaml_parse with only secrets
@@ -127,10 +127,10 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(retrieve_hass_conf, dict)
         self.assertIsInstance(optim_conf, dict)
         self.assertIsInstance(plant_conf, dict)
-        self.assertTrue(retrieve_hass_conf["Altitude"] == 4807.8)
+        self.assertEqual(retrieve_hass_conf["Altitude"], 4807.8)
         # Test get_yaml_parse with built params in get_test_params
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
-        self.assertTrue(retrieve_hass_conf["Altitude"] == 8000.0)
+        self.assertEqual(retrieve_hass_conf["Altitude"], 8000.0)
 
     @patch("emhass.utils._get_now")
     def test_get_forecast_dates_standard_day(self, mock_ts_now):
@@ -216,10 +216,10 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(params["passed_data"]["load_power_forecast"], list)
         self.assertIsInstance(params["passed_data"]["load_cost_forecast"], list)
         self.assertIsInstance(params["passed_data"]["prod_price_forecast"], list)
-        self.assertTrue(optim_conf["weather_forecast_method"] == "list")
-        self.assertTrue(optim_conf["load_forecast_method"] == "list")
-        self.assertTrue(optim_conf["load_cost_forecast_method"] == "list")
-        self.assertTrue(optim_conf["production_price_forecast_method"] == "list")
+        self.assertEqual(optim_conf["weather_forecast_method"], "list")
+        self.assertEqual(optim_conf["load_forecast_method"], "list")
+        self.assertEqual(optim_conf["load_cost_forecast_method"], "list")
+        self.assertEqual(optim_conf["production_price_forecast_method"], "list")
         # Test naive MPC runtime params
         set_type = "naive-mpc-optim"
         (
@@ -239,16 +239,16 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(params, str)
         params = orjson.loads(params)
-        self.assertTrue(params["passed_data"]["prediction_horizon"] == 10)
-        self.assertTrue(
-            params["passed_data"]["soc_init"] == plant_conf["battery_target_state_of_charge"]
+        self.assertEqual(params["passed_data"]["prediction_horizon"], 10)
+        self.assertEqual(
+            params["passed_data"]["soc_init"], plant_conf["battery_target_state_of_charge"]
         )
-        self.assertTrue(
-            params["passed_data"]["soc_final"] == plant_conf["battery_target_state_of_charge"]
+        self.assertEqual(
+            params["passed_data"]["soc_final"], plant_conf["battery_target_state_of_charge"]
         )
-        self.assertTrue(
-            params["optim_conf"]["operating_hours_of_each_deferrable_load"]
-            == optim_conf["operating_hours_of_each_deferrable_load"]
+        self.assertEqual(
+            params["optim_conf"]["operating_hours_of_each_deferrable_load"],
+            optim_conf["operating_hours_of_each_deferrable_load"],
         )
         # Test passing optimization and plant configuration parameters at runtime
         runtimeparams = orjson.loads(self.runtimeparams_json)
@@ -297,46 +297,44 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(params["passed_data"]["load_power_forecast"], list)
         self.assertIsInstance(params["passed_data"]["load_cost_forecast"], list)
         self.assertIsInstance(params["passed_data"]["prod_price_forecast"], list)
-        self.assertTrue(optim_conf["number_of_deferrable_loads"] == 3)
-        self.assertTrue(optim_conf["nominal_power_of_deferrable_loads"] == [3000.0, 750.0, 2500.0])
-        self.assertTrue(optim_conf["operating_hours_of_each_deferrable_load"] == [5, 8, 10])
-        self.assertTrue(optim_conf["treat_deferrable_load_as_semi_cont"] == [True, True, True])
-        self.assertTrue(optim_conf["set_deferrable_load_single_constant"] == [False, False, False])
-        self.assertTrue(optim_conf["weight_battery_discharge"] == 2.0)
-        self.assertTrue(optim_conf["weight_battery_charge"] == 2.0)
-        self.assertTrue(retrieve_hass_conf["solcast_api_key"] == "yoursecretsolcastapikey")
-        self.assertTrue(retrieve_hass_conf["solcast_rooftop_id"] == "yourrooftopid")
-        self.assertTrue(retrieve_hass_conf["solar_forecast_kwp"] == 5.0)
-        self.assertTrue(plant_conf["battery_target_state_of_charge"] == 0.4)
-        self.assertTrue(params["passed_data"]["publish_prefix"] == "emhass_")
-        self.assertTrue(
-            params["passed_data"]["custom_pv_forecast_id"] == "my_custom_pv_forecast_id"
+        self.assertEqual(optim_conf["number_of_deferrable_loads"], 3)
+        self.assertEqual(optim_conf["nominal_power_of_deferrable_loads"], [3000.0, 750.0, 2500.0])
+        self.assertEqual(optim_conf["operating_hours_of_each_deferrable_load"], [5, 8, 10])
+        self.assertEqual(optim_conf["treat_deferrable_load_as_semi_cont"], [True, True, True])
+        self.assertEqual(optim_conf["set_deferrable_load_single_constant"], [False, False, False])
+        self.assertEqual(optim_conf["weight_battery_discharge"], 2.0)
+        self.assertEqual(optim_conf["weight_battery_charge"], 2.0)
+        self.assertEqual(retrieve_hass_conf["solcast_api_key"], "yoursecretsolcastapikey")
+        self.assertEqual(retrieve_hass_conf["solcast_rooftop_id"], "yourrooftopid")
+        self.assertEqual(retrieve_hass_conf["solar_forecast_kwp"], 5.0)
+        self.assertEqual(plant_conf["battery_target_state_of_charge"], 0.4)
+        self.assertEqual(params["passed_data"]["publish_prefix"], "emhass_")
+        self.assertEqual(params["passed_data"]["custom_pv_forecast_id"], "my_custom_pv_forecast_id")
+        self.assertEqual(
+            params["passed_data"]["custom_load_forecast_id"], "my_custom_load_forecast_id"
         )
-        self.assertTrue(
-            params["passed_data"]["custom_load_forecast_id"] == "my_custom_load_forecast_id"
+        self.assertEqual(
+            params["passed_data"]["custom_batt_forecast_id"], "my_custom_batt_forecast_id"
         )
-        self.assertTrue(
-            params["passed_data"]["custom_batt_forecast_id"] == "my_custom_batt_forecast_id"
+        self.assertEqual(
+            params["passed_data"]["custom_batt_soc_forecast_id"], "my_custom_batt_soc_forecast_id"
         )
-        self.assertTrue(
-            params["passed_data"]["custom_batt_soc_forecast_id"] == "my_custom_batt_soc_forecast_id"
+        self.assertEqual(
+            params["passed_data"]["custom_grid_forecast_id"], "my_custom_grid_forecast_id"
         )
-        self.assertTrue(
-            params["passed_data"]["custom_grid_forecast_id"] == "my_custom_grid_forecast_id"
+        self.assertEqual(params["passed_data"]["custom_cost_fun_id"], "my_custom_cost_fun_id")
+        self.assertEqual(
+            params["passed_data"]["custom_optim_status_id"], "my_custom_optim_status_id"
         )
-        self.assertTrue(params["passed_data"]["custom_cost_fun_id"] == "my_custom_cost_fun_id")
-        self.assertTrue(
-            params["passed_data"]["custom_optim_status_id"] == "my_custom_optim_status_id"
+        self.assertEqual(
+            params["passed_data"]["custom_unit_load_cost_id"], "my_custom_unit_load_cost_id"
         )
-        self.assertTrue(
-            params["passed_data"]["custom_unit_load_cost_id"] == "my_custom_unit_load_cost_id"
+        self.assertEqual(
+            params["passed_data"]["custom_unit_prod_price_id"], "my_custom_unit_prod_price_id"
         )
-        self.assertTrue(
-            params["passed_data"]["custom_unit_prod_price_id"] == "my_custom_unit_prod_price_id"
-        )
-        self.assertTrue(
-            params["passed_data"]["custom_deferrable_forecast_id"]
-            == "my_custom_deferrable_forecast_id"
+        self.assertEqual(
+            params["passed_data"]["custom_deferrable_forecast_id"],
+            "my_custom_deferrable_forecast_id",
         )
 
     async def test_treat_runtimeparams_failed(self):
@@ -477,16 +475,18 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
             ha_config,
         )
         params_with_ha_config = orjson.loads(params_with_ha_config_json)
-        self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_cost_fun_id"]["unit_of_measurement"] == "$"
+        self.assertEqual(
+            params_with_ha_config["passed_data"]["custom_cost_fun_id"]["unit_of_measurement"], "$"
         )
-        self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_unit_load_cost_id"]["unit_of_measurement"]
-            == "$/kWh"
+        self.assertEqual(
+            params_with_ha_config["passed_data"]["custom_unit_load_cost_id"]["unit_of_measurement"],
+            "$/kWh",
         )
-        self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_unit_prod_price_id"]["unit_of_measurement"]
-            == "$/kWh"
+        self.assertEqual(
+            params_with_ha_config["passed_data"]["custom_unit_prod_price_id"][
+                "unit_of_measurement"
+            ],
+            "$/kWh",
         )
 
     async def test_update_params_with_ha_config_special_case(self):
@@ -722,16 +722,18 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
             ha_config,
         )
         params_with_ha_config = orjson.loads(params_with_ha_config_json)
-        self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_cost_fun_id"]["unit_of_measurement"] == "$"
+        self.assertEqual(
+            params_with_ha_config["passed_data"]["custom_cost_fun_id"]["unit_of_measurement"], "$"
         )
-        self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_unit_load_cost_id"]["unit_of_measurement"]
-            == "$/kWh"
+        self.assertEqual(
+            params_with_ha_config["passed_data"]["custom_unit_load_cost_id"]["unit_of_measurement"],
+            "$/kWh",
         )
-        self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_unit_prod_price_id"]["unit_of_measurement"]
-            == "$/kWh"
+        self.assertEqual(
+            params_with_ha_config["passed_data"]["custom_unit_prod_price_id"][
+                "unit_of_measurement"
+            ],
+            "$/kWh",
         )
         # Test with 0 deferrable loads
         runtimeparams = {
@@ -959,16 +961,18 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
             ha_config,
         )
         params_with_ha_config = orjson.loads(params_with_ha_config_json)
-        self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_cost_fun_id"]["unit_of_measurement"] == "$"
+        self.assertEqual(
+            params_with_ha_config["passed_data"]["custom_cost_fun_id"]["unit_of_measurement"], "$"
         )
-        self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_unit_load_cost_id"]["unit_of_measurement"]
-            == "$/kWh"
+        self.assertEqual(
+            params_with_ha_config["passed_data"]["custom_unit_load_cost_id"]["unit_of_measurement"],
+            "$/kWh",
         )
-        self.assertTrue(
-            params_with_ha_config["passed_data"]["custom_unit_prod_price_id"]["unit_of_measurement"]
-            == "$/kWh"
+        self.assertEqual(
+            params_with_ha_config["passed_data"]["custom_unit_prod_price_id"][
+                "unit_of_measurement"
+            ],
+            "$/kWh",
         )
 
     async def test_build_secrets(self):
@@ -983,9 +987,9 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         ]
         for key in expected_keys:
             self.assertTrue(key in params.keys())
-        self.assertTrue(params["retrieve_hass_conf"]["time_zone"] == "Europe/Paris")
-        self.assertTrue(params["retrieve_hass_conf"]["hass_url"] == "https://myhass.duckdns.org/")
-        self.assertTrue(params["retrieve_hass_conf"]["long_lived_token"] == "thatverylongtokenhere")
+        self.assertEqual(params["retrieve_hass_conf"]["time_zone"], "Europe/Paris")
+        self.assertEqual(params["retrieve_hass_conf"]["hass_url"], "https://myhass.duckdns.org/")
+        self.assertEqual(params["retrieve_hass_conf"]["long_lived_token"], "thatverylongtokenhere")
         # Test Secrets from options.json
         params = {}
         secrets = {}
@@ -999,9 +1003,9 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         params = await utils.build_params(emhass_conf, secrets, {}, logger)
         for key in expected_keys:
             self.assertTrue(key in params.keys())
-        self.assertTrue(params["retrieve_hass_conf"]["time_zone"] == "Europe/Paris")
-        self.assertTrue(params["retrieve_hass_conf"]["hass_url"] == "https://myhass.duckdns.org/")
-        self.assertTrue(params["retrieve_hass_conf"]["long_lived_token"] == "thatverylongtokenhere")
+        self.assertEqual(params["retrieve_hass_conf"]["time_zone"], "Europe/Paris")
+        self.assertEqual(params["retrieve_hass_conf"]["hass_url"], "https://myhass.duckdns.org/")
+        self.assertEqual(params["retrieve_hass_conf"]["long_lived_token"], "thatverylongtokenhere")
         # Test Secrets from secrets_emhass(example).yaml
         params = {}
         secrets = {}
@@ -1011,9 +1015,9 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         params = await utils.build_params(emhass_conf, secrets, {}, logger)
         for key in expected_keys:
             self.assertTrue(key in params.keys())
-        self.assertTrue(params["retrieve_hass_conf"]["time_zone"] == "Europe/Paris")
-        self.assertTrue(params["retrieve_hass_conf"]["hass_url"] == "https://myhass.duckdns.org/")
-        self.assertTrue(params["retrieve_hass_conf"]["long_lived_token"] == "thatverylongtokenhere")
+        self.assertEqual(params["retrieve_hass_conf"]["time_zone"], "Europe/Paris")
+        self.assertEqual(params["retrieve_hass_conf"]["hass_url"], "https://myhass.duckdns.org/")
+        self.assertEqual(params["retrieve_hass_conf"]["long_lived_token"], "thatverylongtokenhere")
         # Test Secrets from arguments (command_line cli)
         params = {}
         secrets = {}
@@ -1024,9 +1028,9 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         params = await utils.build_params(emhass_conf, secrets, {}, logger)
         for key in expected_keys:
             self.assertTrue(key in params.keys())
-        self.assertTrue(params["retrieve_hass_conf"]["time_zone"] == "Europe/Paris")
-        self.assertTrue(params["retrieve_hass_conf"]["hass_url"] == "test.url")
-        self.assertTrue(params["retrieve_hass_conf"]["long_lived_token"] == "test.key")
+        self.assertEqual(params["retrieve_hass_conf"]["time_zone"], "Europe/Paris")
+        self.assertEqual(params["retrieve_hass_conf"]["hass_url"], "test.url")
+        self.assertEqual(params["retrieve_hass_conf"]["long_lived_token"], "test.key")
 
 
 if __name__ == "__main__":

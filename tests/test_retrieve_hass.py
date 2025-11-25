@@ -158,7 +158,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(self.retrieve_hass_conf, dict)
         self.assertTrue("hass_url" in self.retrieve_hass_conf.keys())
         if self.get_data_from_file:
-            self.assertTrue(self.retrieve_hass_conf["hass_url"] == "https://myhass.duckdns.org/")
+            self.assertEqual(self.retrieve_hass_conf["hass_url"], "https://myhass.duckdns.org/")
 
     # Check yaml parse worked
     async def test_yaml_parse_web_server(self):
@@ -313,8 +313,8 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             len(self.rh.df_final[forecast_pv_sensor]),
         )
         # Verify no missing values in the actual and forecast PV columns after prepare_data
-        self.assertTrue(self.rh.df_final[actual_pv_sensor].isna().sum() == 0)
-        self.assertTrue(self.rh.df_final[forecast_pv_sensor].isna().sum() == 0)
+        self.assertEqual(self.rh.df_final[actual_pv_sensor].isna().sum(), 0)
+        self.assertEqual(self.rh.df_final[forecast_pv_sensor].isna().sum(), 0)
 
     # Proposed new test method for InfluxDB
     @patch("influxdb.InfluxDBClient", autospec=True)
@@ -438,12 +438,12 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             type_var="power",
         )
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(
-            data["state"]
-            == f"{np.round(self.df_raw.loc[self.df_raw.index[10], self.df_raw.columns[0]], 2):.2f}"
+        self.assertEqual(
+            data["state"],
+            f"{np.round(self.df_raw.loc[self.df_raw.index[10], self.df_raw.columns[0]], 2):.2f}",
         )
-        self.assertTrue(data["attributes"]["unit_of_measurement"] == "Unit")
-        self.assertTrue(data["attributes"]["friendly_name"] == "Variable")
+        self.assertEqual(data["attributes"]["unit_of_measurement"], "Unit")
+        self.assertEqual(data["attributes"]["friendly_name"], "Variable")
         # Lets test publishing a forecast with more added attributes
         df = copy.deepcopy(self.df_raw.iloc[0:30])
         df.columns = ["P_Load", "P_PV", "P_PV_forecast"]
@@ -459,9 +459,9 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             type_var="power",
         )
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(data["state"] == f"{np.round(df.loc[df.index[10], df.columns[2]], 2):.2f}")
-        self.assertTrue(data["attributes"]["unit_of_measurement"] == "W")
-        self.assertTrue(data["attributes"]["friendly_name"] == "PV Forecast")
+        self.assertEqual(data["state"], f"{np.round(df.loc[df.index[10], df.columns[2]], 2):.2f}")
+        self.assertEqual(data["attributes"]["unit_of_measurement"], "W")
+        self.assertEqual(data["attributes"]["friendly_name"], "PV Forecast")
         self.assertIsInstance(data["attributes"]["forecasts"], list)
         response, data = await self.rh.post_data(
             df["P_batt"],
@@ -473,8 +473,8 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             type_var="batt",
         )
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(data["attributes"]["unit_of_measurement"] == "W")
-        self.assertTrue(data["attributes"]["friendly_name"] == "Battery Power Forecast")
+        self.assertEqual(data["attributes"]["unit_of_measurement"], "W")
+        self.assertEqual(data["attributes"]["friendly_name"], "Battery Power Forecast")
         response, data = await self.rh.post_data(
             df["SOC_opt"],
             25,
@@ -485,8 +485,8 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             type_var="SOC",
         )
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(data["attributes"]["unit_of_measurement"] == "%")
-        self.assertTrue(data["attributes"]["friendly_name"] == "Battery SOC Forecast")
+        self.assertEqual(data["attributes"]["unit_of_measurement"], "%")
+        self.assertEqual(data["attributes"]["friendly_name"], "Battery SOC Forecast")
 
 
 if __name__ == "__main__":

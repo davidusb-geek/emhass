@@ -86,12 +86,12 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(input_data_dict["df_input_data"] is None)
         self.assertIsInstance(input_data_dict["df_input_data_dayahead"], pd.DataFrame)
         self.assertTrue(input_data_dict["df_input_data_dayahead"].index.freq is not None)
-        self.assertTrue(input_data_dict["df_input_data_dayahead"].isnull().sum().sum() == 0)
-        self.assertTrue(input_data_dict["fcst"].optim_conf["weather_forecast_method"] == "list")
-        self.assertTrue(input_data_dict["fcst"].optim_conf["load_forecast_method"] == "list")
-        self.assertTrue(input_data_dict["fcst"].optim_conf["load_cost_forecast_method"] == "list")
-        self.assertTrue(
-            input_data_dict["fcst"].optim_conf["production_price_forecast_method"] == "list"
+        self.assertEqual(input_data_dict["df_input_data_dayahead"].isnull().sum().sum(), 0)
+        self.assertEqual(input_data_dict["fcst"].optim_conf["weather_forecast_method"], "list")
+        self.assertEqual(input_data_dict["fcst"].optim_conf["load_forecast_method"], "list")
+        self.assertEqual(input_data_dict["fcst"].optim_conf["load_cost_forecast_method"], "list")
+        self.assertEqual(
+            input_data_dict["fcst"].optim_conf["production_price_forecast_method"], "list"
         )
         # Test publish data
         action = "publish-data"
@@ -122,9 +122,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(input_data_dict, dict)
         self.assertIsInstance(input_data_dict["df_input_data_dayahead"], pd.DataFrame)
         self.assertTrue(input_data_dict["df_input_data_dayahead"].index.freq is not None)
-        self.assertTrue(input_data_dict["df_input_data_dayahead"].isnull().sum().sum() == 0)
-        self.assertTrue(
-            len(input_data_dict["df_input_data_dayahead"]) == 10
+        self.assertEqual(input_data_dict["df_input_data_dayahead"].isnull().sum().sum(), 0)
+        self.assertEqual(
+            len(input_data_dict["df_input_data_dayahead"]), 10
         )  # The default value for prediction_horizon
         # Test Naive mpc with a shorter forecast =
         runtimeparams = {
@@ -150,9 +150,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(input_data_dict, dict)
         self.assertIsInstance(input_data_dict["df_input_data_dayahead"], pd.DataFrame)
         self.assertTrue(input_data_dict["df_input_data_dayahead"].index.freq is not None)
-        self.assertTrue(input_data_dict["df_input_data_dayahead"].isnull().sum().sum() == 0)
-        self.assertTrue(
-            len(input_data_dict["df_input_data_dayahead"]) == 10
+        self.assertEqual(input_data_dict["df_input_data_dayahead"].isnull().sum().sum(), 0)
+        self.assertEqual(
+            len(input_data_dict["df_input_data_dayahead"]), 10
         )  # The default value for prediction_horizon
         # Test naive mpc with a shorter forecast and prediction horizon = 10
         action = "naive-mpc-optim"
@@ -173,9 +173,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(input_data_dict, dict)
         self.assertIsInstance(input_data_dict["df_input_data_dayahead"], pd.DataFrame)
         self.assertTrue(input_data_dict["df_input_data_dayahead"].index.freq is not None)
-        self.assertTrue(input_data_dict["df_input_data_dayahead"].isnull().sum().sum() == 0)
-        self.assertTrue(
-            len(input_data_dict["df_input_data_dayahead"]) == 10
+        self.assertEqual(input_data_dict["df_input_data_dayahead"].isnull().sum().sum(), 0)
+        self.assertEqual(
+            len(input_data_dict["df_input_data_dayahead"]), 10
         )  # The fixed value for prediction_horizon
         # Test passing just load cost and prod price as lists
         action = "dayahead-optim"
@@ -196,9 +196,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        self.assertTrue(input_data_dict["fcst"].optim_conf["load_cost_forecast_method"] == "list")
-        self.assertTrue(
-            input_data_dict["fcst"].optim_conf["production_price_forecast_method"] == "list"
+        self.assertEqual(input_data_dict["fcst"].optim_conf["load_cost_forecast_method"], "list")
+        self.assertEqual(
+            input_data_dict["fcst"].optim_conf["production_price_forecast_method"], "list"
         )
 
     # Test day-ahead optimization
@@ -237,8 +237,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         opt_res = await dayahead_forecast_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(opt_res.isnull().sum().sum() == 0)
-        self.assertTrue(len(opt_res) == len(params["passed_data"]["pv_power_forecast"]))
+        self.assertEqual(opt_res.isnull().sum().sum(), 0)
+        self.assertEqual(len(opt_res), len(params["passed_data"]["pv_power_forecast"]))
         # Test dayahead output, passing just load cost and prod price as runtime lists (costfun=profit)
         action = "dayahead-optim"
         params = await TestCommandLineAsyncUtils.get_test_params()
@@ -260,10 +260,10 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         opt_res = await dayahead_forecast_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(opt_res.isnull().sum().sum() == 0)
-        self.assertTrue(input_data_dict["fcst"].optim_conf["load_cost_forecast_method"] == "list")
-        self.assertTrue(
-            input_data_dict["fcst"].optim_conf["production_price_forecast_method"] == "list"
+        self.assertEqual(opt_res.isnull().sum().sum(), 0)
+        self.assertEqual(input_data_dict["fcst"].optim_conf["load_cost_forecast_method"], "list")
+        self.assertEqual(
+            input_data_dict["fcst"].optim_conf["production_price_forecast_method"], "list"
         )
         self.assertEqual(
             opt_res["unit_load_cost"].values.tolist(),
@@ -289,7 +289,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         opt_res = await dayahead_forecast_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(opt_res.isnull().sum().sum() == 0)
+        self.assertEqual(opt_res.isnull().sum().sum(), 0)
 
     # Test dataframe output of perfect forecast optimization
     async def test_perfect_forecast_optim(self):
@@ -306,7 +306,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         opt_res = await perfect_forecast_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(opt_res.isnull().sum().sum() == 0)
+        self.assertEqual(opt_res.isnull().sum().sum(), 0)
         self.assertIsInstance(opt_res.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(opt_res.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertTrue("cost_fun_" + input_data_dict["costfun"] in opt_res.columns)
@@ -328,8 +328,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         opt_res = await naive_mpc_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(opt_res.isnull().sum().sum() == 0)
-        self.assertTrue(len(opt_res) == 10)
+        self.assertEqual(opt_res.isnull().sum().sum(), 0)
+        self.assertEqual(len(opt_res), 10)
         # Test mpc optimization with runtime parameters similar to the documentation
         runtimeparams = {
             "pv_power_forecast": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
@@ -358,8 +358,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         opt_res = await naive_mpc_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(opt_res.isnull().sum().sum() == 0)
-        self.assertTrue(len(opt_res) == 10)
+        self.assertEqual(opt_res.isnull().sum().sum(), 0)
+        self.assertEqual(len(opt_res), 10)
         # Test publish after passing the forecast as list
         # with method_ts_round=first
         costfun = "profit"
@@ -388,7 +388,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             get_data_from_file=True,
         )
         opt_res_first = await publish_data(input_data_dict, logger, opt_res_latest=opt_res)
-        self.assertTrue(len(opt_res_first) == 1)
+        self.assertEqual(len(opt_res_first), 1)
         # test mpc and publish with method_ts_round=last and set_use_battery=true
         action = "naive-mpc-optim"
         params = copy.deepcopy(orjson.loads(self.params_json))
@@ -416,7 +416,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             get_data_from_file=True,
         )
         opt_res_last = await publish_data(input_data_dict, logger, opt_res_latest=opt_res)
-        self.assertTrue(len(opt_res_last) == 1)
+        self.assertEqual(len(opt_res_last), 1)
         # Reproduce when trying to publish data params=None and runtimeparams=None
         # action = 'publish-data'
         # input_data_dict = await set_input_data_dict(emhass_conf, costfun, None, None,
@@ -447,7 +447,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             publish_prefix=publish_prefix,
         )
         self.assertTrue(hasattr(response, "__class__"))
-        self.assertTrue(data["attributes"]["friendly_name"] == "EMHASS optimization status")
+        self.assertEqual(data["attributes"]["friendly_name"], "EMHASS optimization status")
         # When using set_use_adjusted_pv = True
         action = "naive-mpc-optim"
         params = copy.deepcopy(orjson.loads(self.params_json))
@@ -465,8 +465,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         opt_res = await naive_mpc_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(opt_res.isnull().sum().sum() == 0)
-        self.assertTrue(len(opt_res) == 10)
+        self.assertEqual(opt_res.isnull().sum().sum(), 0)
+        self.assertEqual(len(opt_res), 10)
 
     # Test outputs of fit, predict and tune
     async def test_forecast_model_fit_predict_tune(self):
@@ -498,9 +498,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        self.assertTrue(input_data_dict["params"]["passed_data"]["model_type"] == "long_train_data")
-        self.assertTrue(
-            input_data_dict["params"]["passed_data"]["sklearn_model"] == "KNeighborsRegressor"
+        self.assertEqual(input_data_dict["params"]["passed_data"]["model_type"], "long_train_data")
+        self.assertEqual(
+            input_data_dict["params"]["passed_data"]["sklearn_model"], "KNeighborsRegressor"
         )
         self.assertTrue(input_data_dict["params"]["passed_data"]["perform_backtest"] is False)
         # Check that the default params are loaded
@@ -513,9 +513,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        self.assertTrue(input_data_dict["params"]["passed_data"]["model_type"] == "long_train_data")
-        self.assertTrue(
-            input_data_dict["params"]["passed_data"]["sklearn_model"] == "KNeighborsRegressor"
+        self.assertEqual(input_data_dict["params"]["passed_data"]["model_type"], "long_train_data")
+        self.assertEqual(
+            input_data_dict["params"]["passed_data"]["sklearn_model"], "KNeighborsRegressor"
         )
         self.assertIsInstance(input_data_dict["df_input_data"], pd.DataFrame)
         # Test the fit method
@@ -542,11 +542,11 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             input_data_dict, logger, use_last_window=False, debug=True, mlf=mlf
         )
         self.assertIsInstance(df_pred, pd.Series)
-        self.assertTrue(df_pred.isnull().sum().sum() == 0)
+        self.assertEqual(df_pred.isnull().sum().sum(), 0)
         # Now a predict using last_window
         df_pred = await forecast_model_predict(input_data_dict, logger, debug=True, mlf=mlf)
         self.assertIsInstance(df_pred, pd.Series)
-        self.assertTrue(df_pred.isnull().sum().sum() == 0)
+        self.assertEqual(df_pred.isnull().sum().sum(), 0)
         # Test the tune method
         df_pred_optim, mlf = await forecast_model_tune(input_data_dict, logger, debug=True, mlf=mlf)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
@@ -585,14 +585,17 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        self.assertTrue(
-            input_data_dict["params"]["passed_data"]["model_type"] == "heating_hours_degreeday",
+        self.assertEqual(
+            input_data_dict["params"]["passed_data"]["model_type"],
+            "heating_hours_degreeday",
         )
-        self.assertTrue(
-            input_data_dict["params"]["passed_data"]["regression_model"] == "LassoRegression",
+        self.assertEqual(
+            input_data_dict["params"]["passed_data"]["regression_model"],
+            "LassoRegression",
         )
-        self.assertTrue(
-            input_data_dict["params"]["passed_data"]["csv_file"] == "heating_prediction.csv",
+        self.assertEqual(
+            input_data_dict["params"]["passed_data"]["csv_file"],
+            "heating_prediction.csv",
         )
         mlr = await regressor_model_fit(input_data_dict, logger, debug=True)
 
@@ -626,12 +629,13 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        self.assertTrue(
-            input_data_dict["params"]["passed_data"]["model_type"] == "heating_hours_degreeday",
+        self.assertEqual(
+            input_data_dict["params"]["passed_data"]["model_type"],
+            "heating_hours_degreeday",
         )
-        self.assertTrue(
-            input_data_dict["params"]["passed_data"]["mlr_predict_friendly_name"]
-            == "Predicted hours",
+        self.assertEqual(
+            input_data_dict["params"]["passed_data"]["mlr_predict_friendly_name"],
+            "Predicted hours",
         )
 
         await regressor_model_predict(input_data_dict, logger, debug=True, mlr=mlr)
@@ -672,7 +676,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         ):
             opt_res = await main()
         self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(opt_res.isnull().sum().sum() == 0)
+        self.assertEqual(opt_res.isnull().sum().sum(), 0)
         self.assertIsInstance(opt_res.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(
             opt_res.index.dtype,
@@ -699,7 +703,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         ):
             opt_res = await main()
         self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(opt_res.isnull().sum().sum() == 0)
+        self.assertEqual(opt_res.isnull().sum().sum(), 0)
 
     # CLI test naive mpc optimzation action
     async def test_main_naive_mpc_optim(self):
@@ -721,8 +725,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         ):
             opt_res = await main()
         self.assertIsInstance(opt_res, pd.DataFrame)
-        self.assertTrue(opt_res.isnull().sum().sum() == 0)
-        self.assertTrue(len(opt_res) == 10)
+        self.assertEqual(opt_res.isnull().sum().sum(), 0)
+        self.assertEqual(len(opt_res), 10)
 
     # CLI test forecast model fit action
     async def test_main_forecast_model_fit(self):
@@ -794,7 +798,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         ):
             df_pred = await main()
         self.assertIsInstance(df_pred, pd.Series)
-        self.assertTrue(df_pred.isnull().sum().sum() == 0)
+        self.assertEqual(df_pred.isnull().sum().sum(), 0)
 
     # CLI test forecast model tune action
     async def test_main_forecast_model_tune(self):

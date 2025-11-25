@@ -164,11 +164,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
         self.assertTrue("cost_fun_" + self.costfun in self.opt_res_dayahead.columns)
-        self.assertTrue(
+        self.assertEqual(
             self.opt_res_dayahead["P_deferrable0"].sum()
-            * (self.retrieve_hass_conf["optimization_time_step"].seconds / 3600)
-            == self.optim_conf["nominal_power_of_deferrable_loads"][0]
-            * self.optim_conf["operating_hours_of_each_deferrable_load"][0]
+            * (self.retrieve_hass_conf["optimization_time_step"].seconds / 3600),
+            self.optim_conf["nominal_power_of_deferrable_loads"][0]
+            * self.optim_conf["operating_hours_of_each_deferrable_load"][0],
         )
         # Test the battery, dynamics and grid exchange contraints
         self.optim_conf.update({"set_use_battery": True})
@@ -207,8 +207,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             .to_frame(name="Cost Totals")
             .reset_index()
         )
-        self.assertTrue(table.columns[0] == "index")
-        self.assertTrue(table.columns[1] == "Cost Totals")
+        self.assertEqual(table.columns[0], "index")
+        self.assertEqual(table.columns[1], "Cost Totals")
         # Check status
         self.assertTrue("optim_status" in self.opt_res_dayahead.columns)
         # Test treat_def_as_semi_cont and set_def_constant constraints
@@ -227,7 +227,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast
         )
-        self.assertTrue(self.opt.optim_status == "Optimal")
+        self.assertEqual(self.opt.optim_status, "Optimal")
         self.optim_conf.update({"treat_deferrable_load_as_semi_cont": [False, True]})
         self.optim_conf.update({"set_deferrable_load_single_constant": [True, True]})
         self.opt = Optimization(
@@ -243,7 +243,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast
         )
-        self.assertTrue(self.opt.optim_status == "Optimal")
+        self.assertEqual(self.opt.optim_status, "Optimal")
         self.optim_conf.update({"treat_deferrable_load_as_semi_cont": [False, True]})
         self.optim_conf.update({"set_deferrable_load_single_constant": [False, True]})
         self.opt = Optimization(
@@ -259,7 +259,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast
         )
-        self.assertTrue(self.opt.optim_status == "Optimal")
+        self.assertEqual(self.opt.optim_status, "Optimal")
         self.optim_conf.update({"treat_deferrable_load_as_semi_cont": [False, False]})
         self.optim_conf.update({"set_deferrable_load_single_constant": [False, True]})
         self.opt = Optimization(
@@ -275,7 +275,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast
         )
-        self.assertTrue(self.opt.optim_status == "Optimal")
+        self.assertEqual(self.opt.optim_status, "Optimal")
         self.optim_conf.update({"treat_deferrable_load_as_semi_cont": [False, False]})
         self.optim_conf.update({"set_deferrable_load_single_constant": [False, False]})
         self.opt = Optimization(
@@ -291,7 +291,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast
         )
-        self.assertTrue(self.opt.optim_status == "Optimal")
+        self.assertEqual(self.opt.optim_status, "Optimal")
         # Test with different default solver, debug mode and batt SOC conditions
         del self.optim_conf["lp_solver"]
         del self.optim_conf["lp_solver_path"]
@@ -328,7 +328,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
         self.assertTrue("cost_fun_" + self.costfun in self.opt_res_dayahead.columns)
-        self.assertTrue(self.opt.optim_status == "Optimal")
+        self.assertEqual(self.opt.optim_status, "Optimal")
 
     # Check formatting of output from dayahead optimization in self-consumption
     def test_perform_dayahead_forecast_optim_costfun_selfconsumption(self):
@@ -594,7 +594,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
         self.assertTrue("cost_fun_" + self.costfun in self.opt_res_dayahead.columns)
-        self.assertTrue(self.opt.optim_status == "Optimal")
+        self.assertEqual(self.opt.optim_status, "Optimal")
 
     # Setup function to run dayahead optimization for the following tests
     def run_penalty_test_forecast(self):

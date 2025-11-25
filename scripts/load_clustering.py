@@ -128,7 +128,7 @@ async def main():
         logger.info("Loading a previous data file")
         async with aiofiles.open(data_path, "rb") as fid:
             content = await fid.read()
-            data, var_model = pickle.loads(content)
+            data, _ = pickle.loads(content)
     else:
         error_msg = f"Data file {model_type}.pkl does not exist. Use the test_retrieve_hass.py to save a data file."
         logger.error(error_msg)
