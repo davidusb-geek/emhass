@@ -347,7 +347,7 @@ class TestRetrieveHass(unittest.TestCase):
                 "influxdb_host": "fake-host",
                 "influxdb_port": 8086,
                 "influxdb_username": "fake-user",
-                "influxdb_password": None,
+                "influxdb_password": "fake-pass",
                 "influxdb_database": "fake-db",
                 "influxdb_measurement": "W",
                 # Add other necessary keys from the original conf

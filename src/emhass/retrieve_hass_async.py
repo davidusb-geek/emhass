@@ -205,6 +205,10 @@ class RetrieveHass:
                 )
             return success
 
+        # Use InfluxDB if configured, otherwise use Home Assistant API
+        if self.use_influxdb:
+            return self.get_data_influxdb(days_list, var_list)
+
         self.logger.info("Using REST API for data retrieval")
         return await self._get_data_rest_api(days_list, var_list, minimal_response, significant_changes_only, test_url)
 
@@ -329,9 +333,7 @@ class RetrieveHass:
                     ts = pd.to_datetime(
                         pd.date_range(start=from_date, end=to_date, freq=self.freq),
                         format="%Y-%d-%m %H:%M",
-                    ).round(
-                        self.freq, ambiguous="infer", nonexistent="shift_forward"
-                    )
+                    ).round(self.freq, ambiguous="infer", nonexistent="shift_forward")
                     df_day = pd.DataFrame(index=ts)
 
                 # Caution with undefined string data: unknown, unavailable, etc.
