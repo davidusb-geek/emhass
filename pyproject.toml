@@ -122,4 +122,4 @@ src = ["src", "tests"]
 fix = true
 show-fixes = true
 
-line-length = 120
+line-length = 100
