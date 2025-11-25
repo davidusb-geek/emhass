@@ -150,7 +150,7 @@ async def main():
 
     # Call the forecasting method
     data.columns = ["load"]
-    forecast, used_days = load_forecast(data, forecast_date, freq, template)
+    _, _ = load_forecast(data, forecast_date, freq, template)
 
 
 if __name__ == "__main__":

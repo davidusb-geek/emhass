@@ -32,7 +32,7 @@ from emhass.utils import add_date_features, get_days_list, set_df_index_freq
 
 class Forecast:
     r"""
-    Generate weather, load and costs forecasts needed as inputs to the optimization (async version).
+    Generate weather, load and costs forecasts needed as inputs to the optimization.
 
     In EMHASS we have basically 4 forecasts to deal with:
 
