@@ -32,7 +32,6 @@ dependencies = [
     "pyyaml>=6.0.2",
     "tables>=3.10.0",
     "skforecast>=0.18.0,<0.19.0",
-    "flask>=3.1.0",
     "waitress>=3.0.2",
     "plotly>=6.0.0",
     "gunicorn>=23.0.0",
@@ -45,14 +44,6 @@ dependencies = [
     "websockets",
     "uvicorn>=0.30.0",
     "influxdb>=5.3.1",
-    "quart",
-    "aiofiles",
-    "jinja2",
-    "asyncio",
-    "aiohttp",
-    "orjson",
-    "websockets",
-    "uvicorn>=0.30.0",
 ]
 [build-system]
 requires = ["hatchling"]
@@ -109,8 +100,7 @@ include = [
 ]
 
 [project.scripts]
-emhass = "emhass.command_line:main"
-emhass-async = "emhass.command_line_async:main_sync"
+emhass = "emhass.command_line:main_sync"
 
 [project.urls]
 Homepage = "https://github.com/davidusb-geek/emhass"

@@ -141,7 +141,7 @@ echo "   UV Version: $(uv --version 2>/dev/null || echo 'N/A')"\
 echo "=================================================="\
 echo 'Using asynchronous Quart server with gunicorn + uvicorn workers' && \
 echo \"Starting gunicorn with $WORKER_CLASS workers...\" && \
-exec uv run --frozen gunicorn emhass.web_server_async:app -c gunicorn.conf.py -k \"$WORKER_CLASS\""]
+exec uv run --frozen gunicorn emhass.web_server:app -c gunicorn.conf.py -k \"$WORKER_CLASS\""]
 
 # for running Unittest
 #COPY tests/ /app/tests

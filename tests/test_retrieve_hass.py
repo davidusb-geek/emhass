@@ -1,18 +1,17 @@
-#!/usr/bin/env python
-
+import _pickle as cPickle
 import bz2
 import copy
 import datetime
-import json
 import pathlib
 import pickle
-import pickle as cPickle
 import unittest
 from unittest.mock import MagicMock, patch
 
+import aiofiles
 import numpy as np
+import orjson
 import pandas as pd
-import requests_mock
+from aioresponses import aioresponses
 
 from emhass import utils
 from emhass.retrieve_hass import RetrieveHass
@@ -33,8 +32,8 @@ emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
 
-class TestRetrieveHass(unittest.TestCase):
-    def setUp(self):
+class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
         self.get_data_from_file = True
         save_data_to_file = False
         model_type = "test_df_final"  # Options: "test_df_final" or "long_train_data"
@@ -42,21 +41,23 @@ class TestRetrieveHass(unittest.TestCase):
         # Build params with default secrets (no config)
         if emhass_conf["defaults_path"].exists():
             if self.get_data_from_file:
-                _, secrets = utils.build_secrets(emhass_conf, logger, no_response=True)
-                params = utils.build_params(emhass_conf, secrets, {}, logger)
+                _, secrets = await utils.build_secrets(
+                    emhass_conf, logger, no_response=True
+                )
+                params = await utils.build_params(emhass_conf, secrets, {}, logger)
                 retrieve_hass_conf, _, _ = get_yaml_parse(params, logger)
             else:
                 emhass_conf["secrets_path"] = root / "secrets_emhass.yaml"
-                config = utils.build_config(
+                config = await utils.build_config(
                     emhass_conf, logger, emhass_conf["defaults_path"]
                 )
-                _, secrets = utils.build_secrets(
+                _, secrets = await utils.build_secrets(
                     emhass_conf,
                     logger,
                     secrets_path=emhass_conf["secrets_path"],
                     no_response=True,
                 )
-                params = utils.build_params(emhass_conf, secrets, config, logger)
+                params = await utils.build_params(emhass_conf, secrets, config, logger)
                 retrieve_hass_conf, _, _ = get_yaml_parse(params, logger)
                 params = None
         else:
@@ -99,9 +100,12 @@ class TestRetrieveHass(unittest.TestCase):
         )
         # Obtain sensor values from saved file
         if self.get_data_from_file:
-            with open(emhass_conf["data_path"] / str(model_type + ".pkl"), "rb") as inp:
+            async with aiofiles.open(
+                emhass_conf["data_path"] / str(model_type + ".pkl"), "rb"
+            ) as f:
+                content = await f.read()
                 self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = (
-                    pickle.load(inp)
+                    pickle.loads(content)
                 )
                 self.rh.var_list = self.var_list
         # Else obtain sensor values from HA
@@ -116,7 +120,7 @@ class TestRetrieveHass(unittest.TestCase):
                 self.retrieve_hass_conf["sensor_power_photovoltaics"],
                 self.retrieve_hass_conf["sensor_power_photovoltaics_forecast"],
             ]
-            self.rh.get_data(
+            await self.rh.get_data(
                 self.days_list,
                 self.var_list,
                 minimal_response=False,
@@ -143,7 +147,7 @@ class TestRetrieveHass(unittest.TestCase):
             }
             # Check to save updated data to file
             if save_data_to_file:
-                with open(
+                async with aiofiles.open(
                     emhass_conf["data_path"] / str(model_type + ".pkl"), "wb"
                 ) as outp:
                     pickle.dump(
@@ -168,12 +172,15 @@ class TestRetrieveHass(unittest.TestCase):
             )
 
     # Check yaml parse worked
-    def test_yaml_parse_web_server(self):
+    async def test_yaml_parse_web_server(self):
         params = {}
         if emhass_conf["defaults_path"].exists():
-            with emhass_conf["defaults_path"].open("r") as data:
-                defaults = json.load(data)
-                params.update(utils.build_params(emhass_conf, {}, defaults, logger))
+            async with aiofiles.open(emhass_conf["defaults_path"]) as file:
+                data = await file.read()
+                defaults = orjson.loads(data)
+                params.update(
+                    await utils.build_params(emhass_conf, {}, defaults, logger)
+                )
         _, optim_conf, _ = get_yaml_parse(params, logger)
         # Just check forecast methods
         self.assertFalse(optim_conf.get("weather_forecast_method") is None)
@@ -182,29 +189,35 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertFalse(optim_conf.get("production_price_forecast_method") is None)
 
     # Assume get_data to HA fails
-    def test_get_data_failed(self):
+    async def test_get_data_failed(self):
         days_list = get_days_list(1)
         var_list = [self.retrieve_hass_conf["sensor_power_load_no_var_loads"]]
-        response = self.rh.get_data(days_list, var_list)
+        response = await self.rh.get_data(days_list, var_list)
         if self.get_data_from_file:
             self.assertFalse(response)
         else:
             self.assertTrue(response)
 
     # Test with html mock response
-    def test_get_data_mock(self):
-        with requests_mock.mock() as m:
+    async def test_get_data_mock(self):
+        with aioresponses() as mocked:
+            test_data_path = (
+                emhass_conf["data_path"] / "test_response_get_data_get_method.pbz2"
+            )
+
+            async with aiofiles.open(test_data_path, "rb") as f:
+                compressed = await f.read()
+
+            data = bz2.decompress(compressed)
+            data = cPickle.loads(data)
+            data = orjson.loads(data.content)
             days_list = get_days_list(1)
             var_list = [self.retrieve_hass_conf["sensor_power_load_no_var_loads"]]
-            data = bz2.BZ2File(
-                str(
-                    emhass_conf["data_path"] / "test_response_get_data_get_method.pbz2"
-                ),
-                "rb",
-            )
-            data = cPickle.load(data)
-            m.get(self.retrieve_hass_conf["hass_url"], json=data.json())
-            self.rh.get_data(
+            get_url = self.retrieve_hass_conf["hass_url"]
+            # with aioresponses() as mocked:
+            get_url = self.retrieve_hass_conf["hass_url"]
+            mocked.get(get_url, payload=data, repeat=True)
+            await self.rh.get_data(
                 days_list,
                 var_list,
                 minimal_response=False,
@@ -266,9 +279,9 @@ class TestRetrieveHass(unittest.TestCase):
 
     # Test negative load
     def test_prepare_data_negative_load(self):
-        self.rh.df_final[
-            self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
-        ] = -self.rh.df_final[self.retrieve_hass_conf["sensor_power_load_no_var_loads"]]
+        self.rh.df_final[self.retrieve_hass_conf["sensor_power_load_no_var_loads"]] = (
+            -self.rh.df_final[self.retrieve_hass_conf["sensor_power_load_no_var_loads"]]
+        )
         self.rh.prepare_data(
             self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
             load_negative=True,
@@ -336,7 +349,7 @@ class TestRetrieveHass(unittest.TestCase):
 
     # Proposed new test method for InfluxDB
     @patch("influxdb.InfluxDBClient", autospec=True)
-    def test_get_data_influxdb_mock(self, mock_influx_client_class):
+    async def test_get_data_influxdb_mock(self, mock_influx_client_class):
         """
         Test the get_data_influxdb method by mocking the InfluxDB client.
         """
@@ -347,7 +360,7 @@ class TestRetrieveHass(unittest.TestCase):
                 "influxdb_host": "fake-host",
                 "influxdb_port": 8086,
                 "influxdb_username": "fake-user",
-                "influxdb_password": "fake-pass",
+                "influxdb_password": "fake-pass",  # pragma: allowlist secret
                 "influxdb_database": "fake-db",
                 "influxdb_measurement": "W",
                 # Add other necessary keys from the original conf
@@ -414,7 +427,7 @@ class TestRetrieveHass(unittest.TestCase):
         ]
 
         # Call the method to be tested
-        success = rh_influx.get_data(days_list, var_list)
+        success = await rh_influx.get_data(days_list, var_list)
 
         # Verify the outcomes
         self.assertTrue(success)  # Check if the method reports success
@@ -424,7 +437,7 @@ class TestRetrieveHass(unittest.TestCase):
             host="fake-host",
             port=8086,
             username="fake-user",
-            password=None,
+            password="fake-pass",  # pragma: allowlist secret
             database="fake-db",
             ssl=False,
             verify_ssl=False,
@@ -438,15 +451,17 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertEqual(len(df.index), 2)
         self.assertEqual(list(df.columns), var_list)
         self.assertEqual(
-            df.loc["2023-04-01 10:00:00+00:00"]["sensor.power_photovoltaics"], 1500.0
+            df.loc["2023-04-01 10:00:00+00:00"]["sensor.power_photovoltaics"],
+            1500.0,
         )
         self.assertEqual(
-            df.loc["2023-04-01 10:30:00+00:00"]["sensor.power_load_no_var_loads"], 450.0
+            df.loc["2023-04-01 10:30:00+00:00"]["sensor.power_load_no_var_loads"],
+            450.0,
         )
 
     # Test publish data
-    def test_publish_data(self):
-        response, data = self.rh.post_data(
+    async def test_publish_data(self):
+        response, data = await self.rh.post_data(
             self.df_raw[self.df_raw.columns[0]],
             10,
             "sensor.p_pv_forecast",
@@ -458,11 +473,7 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(
             data["state"]
-            == "{:.2f}".format(
-                np.round(
-                    self.df_raw.loc[self.df_raw.index[10], self.df_raw.columns[0]], 2
-                )
-            )
+            == f"{np.round(self.df_raw.loc[self.df_raw.index[10], self.df_raw.columns[0]], 2):.2f}"
         )
         self.assertTrue(data["attributes"]["unit_of_measurement"] == "Unit")
         self.assertTrue(data["attributes"]["friendly_name"] == "Variable")
@@ -471,7 +482,7 @@ class TestRetrieveHass(unittest.TestCase):
         df.columns = ["P_Load", "P_PV", "P_PV_forecast"]
         df["P_batt"] = 1000.0
         df["SOC_opt"] = 0.5
-        response, data = self.rh.post_data(
+        response, data = await self.rh.post_data(
             df["P_PV_forecast"],
             10,
             "sensor.p_pv_forecast",
@@ -487,7 +498,7 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertTrue(data["attributes"]["unit_of_measurement"] == "W")
         self.assertTrue(data["attributes"]["friendly_name"] == "PV Forecast")
         self.assertIsInstance(data["attributes"]["forecasts"], list)
-        response, data = self.rh.post_data(
+        response, data = await self.rh.post_data(
             df["P_batt"],
             25,
             "sensor.p_batt_forecast",
@@ -499,7 +510,7 @@ class TestRetrieveHass(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(data["attributes"]["unit_of_measurement"] == "W")
         self.assertTrue(data["attributes"]["friendly_name"] == "Battery Power Forecast")
-        response, data = self.rh.post_data(
+        response, data = await self.rh.post_data(
             df["SOC_opt"],
             25,
             "sensor.SOC_forecast",
