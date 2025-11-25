@@ -178,7 +178,6 @@ async def main():
     # Bayesian search hyperparameter and lags with Skopt
 
     # Lags used as predictors
-    lags_grid = [6, 12, 24, 36, 48, 60, 72]
 
     # Regressor hyperparameters search space
     def search_space(trial):
@@ -218,7 +217,7 @@ async def main():
 
     save_forecaster(forecaster, file_name="forecaster.py", verbose=False)
 
-    forecaster_loaded = load_forecaster("forecaster.py", verbose=False)
+    load_forecaster("forecaster.py", verbose=False)
     predictions_loaded = forecaster.predict(steps=steps, exog=data_train.drop(var_model, axis=1))
 
     df = pd.DataFrame(
@@ -227,7 +226,7 @@ async def main():
     )
     freq_hours = df.index.freq.delta.seconds / 3600
     lags_opt = int(np.round(len(results.iloc[0]["lags"])))
-    days_needed = int(np.round(lags_opt * freq_hours / 24))
+    int(np.round(lags_opt * freq_hours / 24))
     shift = int(24 / freq_hours)
     P_load_forecast_naive = pd.concat([data_exo.iloc[-shift:], data_exo.iloc[:-shift]])
     df["train"] = data_train[var_model]

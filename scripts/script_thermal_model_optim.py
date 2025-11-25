@@ -107,7 +107,6 @@ async def main():
 
     df_input_data = fcst.get_load_cost_forecast(df_input_data)
     df_input_data = fcst.get_prod_price_forecast(df_input_data)
-    input_data_dict = {"retrieve_hass_conf": retrieve_hass_conf}
 
     # Set special debug cases
 

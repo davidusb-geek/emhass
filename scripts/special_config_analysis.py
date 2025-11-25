@@ -85,7 +85,7 @@ async def main():
         emhass_conf["defaults_path"],
         emhass_conf["scripts_path"] / "special_options.json",
     )
-    emhass_conf, secrets = await build_secrets(
+    _, secrets = await build_secrets(
         emhass_conf,
         logger,
         options_path=emhass_conf["scripts_path"] / "special_options.json",
