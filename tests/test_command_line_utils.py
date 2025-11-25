@@ -1072,6 +1072,96 @@ class TestCommandLineUtils(unittest.TestCase):
         success = export_influxdb_to_csv(input_data_dict, logger)
         self.assertFalse(success)
 
+    # Test that runtime costfun parameter overrides config costfun parameter
+    def test_costfun_runtime_override(self):
+        """Test that runtime costfun parameter correctly overrides config costfun parameter."""
+        # Build params with default config
+        params = TestCommandLineUtils.get_test_params(set_use_pv=True)
+
+        # Set costfun in config to 'profit'
+        params["optim_conf"]["costfun"] = "profit"
+
+        # Add runtime parameters with costfun override
+        runtimeparams = {
+            "pv_power_forecast": [i + 1 for i in range(48)],
+            "load_power_forecast": [i + 1 for i in range(48)],
+            "load_cost_forecast": [i + 1 for i in range(48)],
+            "prod_price_forecast": [i + 1 for i in range(48)],
+            "costfun": "cost",  # Override to 'cost'
+        }
+
+        params_json = json.dumps(params)
+        runtimeparams_json = json.dumps(runtimeparams)
+
+        # The costfun passed to set_input_data_dict is from the config (before runtime params)
+        costfun_from_config = "profit"
+        action = "dayahead-optim"
+
+        # Call set_input_data_dict
+        input_data_dict = set_input_data_dict(
+            emhass_conf,
+            costfun_from_config,  # This is 'profit' from config
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+
+        # Check that the costfun in input_data_dict is the runtime parameter value ('cost')
+        self.assertEqual(
+            input_data_dict["costfun"],
+            "cost",
+            "Runtime parameter 'costfun' should override config parameter",
+        )
+
+        # Also test with 'self-consumption' as another option
+        runtimeparams["costfun"] = "self-consumption"
+        runtimeparams_json = json.dumps(runtimeparams)
+
+        input_data_dict = set_input_data_dict(
+            emhass_conf,
+            costfun_from_config,  # Still 'profit' from config
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+
+        self.assertEqual(
+            input_data_dict["costfun"],
+            "self-consumption",
+            "Runtime parameter 'costfun' should override config parameter for self-consumption",
+        )
+
+        # Also test when costfun is NOT provided as runtime parameter
+        runtimeparams_no_costfun = {
+            "pv_power_forecast": [i + 1 for i in range(48)],
+            "load_power_forecast": [i + 1 for i in range(48)],
+            "load_cost_forecast": [i + 1 for i in range(48)],
+            "prod_price_forecast": [i + 1 for i in range(48)],
+            # No costfun parameter
+        }
+        runtimeparams_no_costfun_json = json.dumps(runtimeparams_no_costfun)
+
+        input_data_dict = set_input_data_dict(
+            emhass_conf,
+            costfun_from_config,  # 'profit' from config
+            params_json,
+            runtimeparams_no_costfun_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+
+        # When no runtime costfun is provided, should use config value
+        self.assertEqual(
+            input_data_dict["costfun"],
+            "profit",
+            "Should use config parameter when runtime parameter is not provided",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
