@@ -1,6 +1,8 @@
+import asyncio
 import pathlib
 import pickle
 
+import aiofiles
 import pandas as pd
 import plotly.io as pio
 
@@ -31,14 +33,15 @@ emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations
 # create logger
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
-if __name__ == "__main__":
+
+async def main():
     get_data_from_file = True
     show_figures = True
     template = "presentation"
 
     # Build params with default config (no secrets)
-    config = build_config(emhass_conf, logger, emhass_conf["defaults_path"])
-    params = build_params(emhass_conf, {}, config, logger)
+    config = await build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+    params = await build_params(emhass_conf, {}, config, logger)
     retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(params, logger)
     retrieve_hass_conf, optim_conf, plant_conf = (
         retrieve_hass_conf,
@@ -55,22 +58,29 @@ if __name__ == "__main__":
         logger,
     )
     if get_data_from_file:
-        with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
-            rh.df_final, days_list, var_list = pickle.load(inp)
+        async with aiofiles.open(
+            emhass_conf["data_path"] / "test_df_final.pkl", "rb"
+        ) as inp:
+            contents = await inp.read()
+            rh.df_final, days_list, var_list = pickle.loads(contents)
         retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
         retrieve_hass_conf["sensor_power_photovoltaics"] = str(var_list[1])
         retrieve_hass_conf["sensor_linear_interp"] = [
             retrieve_hass_conf["sensor_power_photovoltaics"],
             retrieve_hass_conf["sensor_power_load_no_var_loads"],
         ]
-        retrieve_hass_conf["sensor_replace_zero"] = [retrieve_hass_conf["sensor_power_photovoltaics"]]
+        retrieve_hass_conf["sensor_replace_zero"] = [
+            retrieve_hass_conf["sensor_power_photovoltaics"]
+        ]
     else:
         days_list = get_days_list(retrieve_hass_conf["historic_days_to_retrieve"])
         var_list = [
             retrieve_hass_conf["sensor_power_load_no_var_loads"],
             retrieve_hass_conf["sensor_power_photovoltaics"],
         ]
-        rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False)
+        await rh.get_data(
+            days_list, var_list, minimal_response=False, significant_changes_only=False
+        )
     rh.prepare_data(
         retrieve_hass_conf["sensor_power_load_no_var_loads"],
         load_negative=retrieve_hass_conf["load_negative"],
@@ -89,9 +99,11 @@ if __name__ == "__main__":
         logger,
         get_data_from_file=get_data_from_file,
     )
-    df_weather = fcst.get_weather_forecast(method="csv")
+    df_weather = await fcst.get_weather_forecast(method="csv")
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
-    P_load_forecast = fcst.get_load_forecast(method=optim_conf["load_forecast_method"])
+    P_load_forecast = await fcst.get_load_forecast(
+        method=optim_conf["load_forecast_method"]
+    )
     df_input_data = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
     df_input_data.columns = ["P_PV_forecast", "P_load_forecast"]
 
@@ -105,7 +117,9 @@ if __name__ == "__main__":
     optim_conf.update(
         {"lp_solver": "PULP_CBC_CMD"}
     )  # set the name of the linear programming solver that will be used. Options are 'PULP_CBC_CMD', 'GLPK_CMD', 'HiGHS' and 'COIN_CMD'.
-    optim_conf.update({"lp_solver_path": "empty"})  # set the path to the LP solver, COIN_CMD default is /usr/bin/cbc
+    optim_conf.update(
+        {"lp_solver_path": "empty"}
+    )  # set the path to the LP solver, COIN_CMD default is /usr/bin/cbc
 
     # Semi continuous and constant values
     optim_conf.update({"treat_deferrable_load_as_semi_cont": [True, False]})
@@ -139,7 +153,9 @@ if __name__ == "__main__":
         emhass_conf,
         logger,
     )
-    opt_res_dayahead = opt.perform_dayahead_forecast_optim(df_input_data, P_PV_forecast, P_load_forecast)
+    opt_res_dayahead = opt.perform_dayahead_forecast_optim(
+        df_input_data, P_PV_forecast, P_load_forecast
+    )
 
     # Let's plot the input data
     fig_inputs_dah = df_input_data.plot()
@@ -173,3 +189,7 @@ if __name__ == "__main__":
     )
 
     print(opt_res_dayahead[vars_to_plot])
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

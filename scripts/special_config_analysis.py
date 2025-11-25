@@ -7,9 +7,11 @@ Before running this script you should perform a perfect optimization for each ty
 profit, cost and self-consumption
 """
 
+import asyncio
 import pathlib
 import pickle
 
+import aiofiles
 import pandas as pd
 import plotly.io as pio
 
@@ -43,7 +45,9 @@ emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
 
-def get_forecast_optim_objects(retrieve_hass_conf, optim_conf, plant_conf, params, get_data_from_file):
+async def get_forecast_optim_objects(
+    retrieve_hass_conf, optim_conf, plant_conf, params, get_data_from_file
+):
     fcst = Forecast(
         retrieve_hass_conf,
         optim_conf,
@@ -53,9 +57,11 @@ def get_forecast_optim_objects(retrieve_hass_conf, optim_conf, plant_conf, param
         logger,
         get_data_from_file=get_data_from_file,
     )
-    df_weather = fcst.get_weather_forecast(method="solar.forecast")
+    df_weather = await fcst.get_weather_forecast(method="solar.forecast")
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
-    P_load_forecast = fcst.get_load_forecast(method=optim_conf["load_forecast_method"])
+    P_load_forecast = await fcst.get_load_forecast(
+        method=optim_conf["load_forecast_method"]
+    )
     df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
     df_input_data_dayahead.columns = ["P_PV_forecast", "P_load_forecast"]
     opt = Optimization(
@@ -71,24 +77,24 @@ def get_forecast_optim_objects(retrieve_hass_conf, optim_conf, plant_conf, param
     return fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt
 
 
-if __name__ == "__main__":
+async def main():
     get_data_from_file = False
 
     # Build params with defaults, secret file, and added special config and secrets
-    config = build_config(
+    config = await build_config(
         emhass_conf,
         logger,
         emhass_conf["defaults_path"],
         emhass_conf["scripts_path"] / "special_options.json",
     )
-    emhass_conf, secrets = build_secrets(
+    emhass_conf, secrets = await build_secrets(
         emhass_conf,
         logger,
         options_path=emhass_conf["scripts_path"] / "special_options.json",
         secrets_path=emhass_conf["secrets_path"],
         no_response=True,
     )
-    params = build_params(emhass_conf, secrets, config, logger)
+    params = await build_params(emhass_conf, secrets, config, logger)
 
     pv_power_forecast = [
         0,
@@ -221,7 +227,8 @@ if __name__ == "__main__":
 
     if data_path.is_file():
         logger.info("Loading a previous data file")
-        with open(data_path, "rb") as fid:
+        async with aiofiles.open(data_path, "rb") as fid:
+            contents = await fid.read()
             (
                 fcst,
                 P_PV_forecast,
@@ -229,7 +236,7 @@ if __name__ == "__main__":
                 df_input_data_dayahead,
                 opt,
                 df_input_data,
-            ) = pickle.load(fid)
+            ) = pickle.loads(contents)
     else:
         rh = RetrieveHass(
             retrieve_hass_conf["hass_url"],
@@ -245,7 +252,9 @@ if __name__ == "__main__":
             retrieve_hass_conf["sensor_power_load_no_var_loads"],
             retrieve_hass_conf["sensor_power_photovoltaics"],
         ]
-        rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False)
+        await rh.get_data(
+            days_list, var_list, minimal_response=False, significant_changes_only=False
+        )
         rh.prepare_data(
             retrieve_hass_conf["sensor_power_load_no_var_loads"],
             load_negative=retrieve_hass_conf["load_negative"],
@@ -254,14 +263,16 @@ if __name__ == "__main__":
             var_interp=retrieve_hass_conf["sensor_linear_interp"],
         )
         df_input_data = rh.df_final.copy()
-        fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt = get_forecast_optim_objects(
-            retrieve_hass_conf, optim_conf, plant_conf, params, get_data_from_file
+        fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt = (
+            await get_forecast_optim_objects(
+                retrieve_hass_conf, optim_conf, plant_conf, params, get_data_from_file
+            )
         )
         df_input_data = fcst.get_load_cost_forecast(df_input_data)
         df_input_data = fcst.get_prod_price_forecast(df_input_data)
 
-        with open(data_path, "wb") as fid:
-            pickle.dump(
+        async with aiofiles.open(data_path, "wb") as fid:
+            contents = pickle.dumps(
                 (
                     fcst,
                     P_PV_forecast,
@@ -270,9 +281,9 @@ if __name__ == "__main__":
                     opt,
                     df_input_data,
                 ),
-                fid,
                 pickle.HIGHEST_PROTOCOL,
             )
+            await fid.write(contents)
 
     template = "presentation"
     y_axis_title = "Power (W)"
@@ -348,3 +359,7 @@ if __name__ == "__main__":
     fig_res_mpc.update_yaxes(title_text=y_axis_title)
     fig_res_mpc.update_xaxes(title_text="Time")
     fig_res_mpc.show()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

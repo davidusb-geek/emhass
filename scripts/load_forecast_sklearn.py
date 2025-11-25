@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
+import asyncio
 import copy
 import pathlib
 import pickle
 import time
 
+import aiofiles
 import numpy as np
 import pandas as pd
 import plotly.io as pio
@@ -56,7 +58,7 @@ def neg_r2_score(y_true, y_pred):
     return -r2_score(y_true, y_pred)
 
 
-if __name__ == "__main__":
+async def main():
     model_type = "long_train_data"
     sklearn_model = "KNeighborsRegressor"
     num_lags = 48
@@ -65,8 +67,9 @@ if __name__ == "__main__":
 
     if data_path.is_file():
         logger.info("Loading a previous data file")
-        with open(data_path, "rb") as fid:
-            data, var_model = pickle.load(fid)
+        async with aiofiles.open(data_path, "rb") as fid:
+            content = await fid.read()
+            data, var_model = pickle.loads(content)
     else:
         error_msg = f"Data file {model_type}.pkl does not exist. Use the test_retrieve_hass.py to save a data file."
         logger.error(error_msg)
@@ -96,8 +99,12 @@ if __name__ == "__main__":
     data_exo[var_model] = data[var_model]
     data_exo = data_exo.interpolate(method="linear", axis=0, limit=None)
 
-    date_train = data_exo.index[-1] - pd.Timedelta("15days") + data_exo.index.freq  # The last 15 days
-    date_split = data_exo.index[-1] - pd.Timedelta("48h") + data_exo.index.freq  # The last 48h
+    date_train = (
+        data_exo.index[-1] - pd.Timedelta("15days") + data_exo.index.freq
+    )  # The last 15 days
+    date_split = (
+        data_exo.index[-1] - pd.Timedelta("48h") + data_exo.index.freq
+    )  # The last 48h
     data_train = data_exo.loc[:date_split, :]
     data_test = data_exo.loc[date_split:, :]
     steps = len(data_test)
@@ -119,7 +126,9 @@ if __name__ == "__main__":
     logger.info(f"Elapsed time: {time.time() - start_time}")
 
     # Predictions
-    predictions = forecaster.predict(steps=steps, exog=data_train.drop(var_model, axis=1))
+    predictions = forecaster.predict(
+        steps=steps, exog=data_train.drop(var_model, axis=1)
+    )
     pred_metric = r2_score(data_test[var_model], predictions)
     logger.info(f"Prediction R2 score: {pred_metric}")
 
@@ -214,7 +223,9 @@ if __name__ == "__main__":
     save_forecaster(forecaster, file_name="forecaster.py", verbose=False)
 
     forecaster_loaded = load_forecaster("forecaster.py", verbose=False)
-    predictions_loaded = forecaster.predict(steps=steps, exog=data_train.drop(var_model, axis=1))
+    predictions_loaded = forecaster.predict(
+        steps=steps, exog=data_train.drop(var_model, axis=1)
+    )
 
     df = pd.DataFrame(
         index=data_exo.index,
@@ -242,25 +253,47 @@ if __name__ == "__main__":
         height=0.8 * 1080,
     )
 
-    logger.info("######################## Train/Test R2 score comparison ######################## ")
-    pred_naive_metric_train = r2_score(df.loc[data_train.index, "train"], df.loc[data_train.index, "pred_naive"])
-    logger.info(f"R2 score for naive prediction in train period (backtest): {pred_naive_metric_train}")
+    logger.info(
+        "######################## Train/Test R2 score comparison ######################## "
+    )
+    pred_naive_metric_train = r2_score(
+        df.loc[data_train.index, "train"], df.loc[data_train.index, "pred_naive"]
+    )
+    logger.info(
+        f"R2 score for naive prediction in train period (backtest): {pred_naive_metric_train}"
+    )
     pred_optim_metric_train = -results.iloc[0]["neg_r2_score"]
-    logger.info(f"R2 score for optimized prediction in train period: {pred_optim_metric_train}")
+    logger.info(
+        f"R2 score for optimized prediction in train period: {pred_optim_metric_train}"
+    )
 
-    pred_metric_test = r2_score(df.loc[data_test.index[1:-1], "test"], df.loc[data_test[1:-1].index, "pred"])
-    logger.info(f"R2 score for non-optimized prediction in test period: {pred_metric_test}")
+    pred_metric_test = r2_score(
+        df.loc[data_test.index[1:-1], "test"], df.loc[data_test[1:-1].index, "pred"]
+    )
+    logger.info(
+        f"R2 score for non-optimized prediction in test period: {pred_metric_test}"
+    )
     pred_naive_metric_test = r2_score(
         df.loc[data_test.index[1:-1], "test"],
         df.loc[data_test[1:-1].index, "pred_naive"],
     )
-    logger.info(f"R2 score for naive persistance forecast in test period: {pred_naive_metric_test}")
+    logger.info(
+        f"R2 score for naive persistance forecast in test period: {pred_naive_metric_test}"
+    )
     pred_optim_metric_test = r2_score(
         df.loc[data_test.index[1:-1], "test"],
         df.loc[data_test[1:-1].index, "pred_optim"],
     )
-    logger.info(f"R2 score for optimized prediction in test period: {pred_optim_metric_test}")
-    logger.info("################################################################################ ")
+    logger.info(
+        f"R2 score for optimized prediction in test period: {pred_optim_metric_test}"
+    )
+    logger.info(
+        "################################################################################ "
+    )
 
     logger.info("Number of optimal lags obtained: " + str(lags_opt))
     logger.info("Prediction in production using last_window")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
