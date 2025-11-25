@@ -5,10 +5,7 @@ bind = f"{os.getenv('IP', '0.0.0.0')}:{os.getenv('PORT', '5000')}"
 
 # Worker configuration
 workers = int(os.getenv("WEB_CONCURRENCY", 1))
-threads = int(os.getenv("PYTHON_MAX_THREADS", 8))
-
-# Worker class for async support
-worker_class = os.getenv("WORKER_CLASS", "uvicorn.workers.UvicornWorker")
+# Note: threads is not used with async workers (uvicorn), only for sync workers
 
 # Worker connections (only for async workers)
 worker_connections = int(os.getenv("WORKER_CONNECTIONS", 1000))
@@ -27,10 +24,8 @@ graceful_timeout = 60
 keepalive = 2
 
 # Logging
-accesslog = "-"
 errorlog = "-"
-loglevel = os.getenv("LOG_LEVEL", "info")
-access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s" %(D)s'
+loglevel = os.getenv("LOG_LEVEL", "warning")
 
 # Security
 limit_request_line = 4094

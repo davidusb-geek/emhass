@@ -38,7 +38,6 @@ dependencies = [
     "gunicorn>=23.0.0",
     "quart",
     "aiofiles",
-    "hypercorn",
     "jinja2",
     "asyncio",
     "aiohttp",
