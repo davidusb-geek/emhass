@@ -124,23 +124,11 @@ ENV WORKER_CLASS=uvicorn.workers.UvicornWorker
 ENV PORT=5000
 ENV IP=0.0.0.0
 
-# Entrypoint script inline - async only
+# Entrypoint script inline
 ENTRYPOINT ["/bin/bash", "-c", "set -e && \
 WORKER_CLASS=${WORKER_CLASS:-uvicorn.workers.UvicornWorker} && \
 PORT=${PORT:-5000} && \
 IP=${IP:-0.0.0.0} && \
-echo "=================================================="\
-echo "   Starting EMHASS Energy Management System"\
-echo "=================================================="\
-echo "   Configuration:"\
-echo "   Server Type: $EMHASS_SERVER_TYPE"\
-echo "   Worker Class: $WORKER_CLASS"\
-echo "   Bind Address: $IP:$PORT"\
-echo "   Python Path: $(which python3 2>/dev/null || echo 'N/A')"\
-echo "   UV Version: $(uv --version 2>/dev/null || echo 'N/A')"\
-echo "=================================================="\
-echo 'Using asynchronous Quart server with gunicorn + uvicorn workers' && \
-echo \"Starting gunicorn with $WORKER_CLASS workers...\" && \
 exec uv run --frozen gunicorn emhass.web_server:app -c gunicorn.conf.py -k \"$WORKER_CLASS\""]
 
 # for running Unittest
