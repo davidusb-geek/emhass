@@ -9,7 +9,7 @@ import pathlib
 import pickle
 import re
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
 
 import numpy as np
@@ -89,6 +89,49 @@ def retrieve_home_assistant_data(
     return True, rh.df_final.copy(), days_list
 
 
+def is_model_outdated(
+    model_path: pathlib.Path, max_age_hours: int, logger: logging.Logger
+) -> bool:
+    """
+    Check if the saved model file is outdated based on its modification time.
+
+    :param model_path: Path to the saved model file.
+    :type model_path: pathlib.Path
+    :param max_age_hours: Maximum age in hours before model is considered outdated.
+    :type max_age_hours: int
+    :param logger: Logger object for logging information.
+    :type logger: logging.Logger
+    :return: True if model is outdated or doesn't exist, False otherwise.
+    :rtype: bool
+    """
+    if not model_path.exists():
+        logger.info("Adjusted PV model file does not exist, will train new model")
+        return True
+
+    if max_age_hours <= 0:
+        logger.info(
+            "adjusted_pv_model_max_age is set to 0, forcing model re-fit"
+        )
+        return True
+
+    model_mtime = datetime.fromtimestamp(model_path.stat().st_mtime)
+    model_age = datetime.now() - model_mtime
+    max_age = timedelta(hours=max_age_hours)
+
+    if model_age > max_age:
+        logger.info(
+            f"Adjusted PV model is outdated (age: {model_age.total_seconds() / 3600:.1f}h, "
+            f"max: {max_age_hours}h), will train new model"
+        )
+        return True
+    else:
+        logger.info(
+            f"Using existing adjusted PV model (age: {model_age.total_seconds() / 3600:.1f}h, "
+            f"max: {max_age_hours}h)"
+        )
+        return False
+
+
 def adjust_pv_forecast(
     logger: logging.Logger,
     fcst: Forecast,
@@ -127,26 +170,76 @@ def adjust_pv_forecast(
     :return: The adjusted PV forecast as a pandas Series.
     :rtype: pd.Series
     """
-    logger.info("Adjusting PV forecast, retrieving history data for model fit")
-    # Retrieve data from Home Assistant
-    success, df_input_data, _ = retrieve_home_assistant_data(
-        "adjust_pv",
-        get_data_from_file,
-        retrieve_hass_conf,
-        optim_conf,
-        rh,
-        emhass_conf,
-        test_df_literal,
-    )
-    if not success:
-        return False
-    # Call data preparation method
-    fcst.adjust_pv_forecast_data_prep(df_input_data)
-    # Call the fit method
-    fcst.adjust_pv_forecast_fit(
-        n_splits=5,
-        regression_model=optim_conf["adjusted_pv_regression_model"],
-    )
+    # Check if we need to fit a new model or can use existing one
+    model_filename = "adjust_pv_regressor.pkl"
+    model_path = emhass_conf["data_path"] / model_filename
+    max_age_hours = optim_conf.get("adjusted_pv_model_max_age", 24)
+
+    # Check if model needs to be re-fitted
+    need_fit = is_model_outdated(model_path, max_age_hours, logger)
+
+    if need_fit:
+        logger.info("Adjusting PV forecast, retrieving history data for model fit")
+        # Retrieve data from Home Assistant
+        success, df_input_data, _ = retrieve_home_assistant_data(
+            "adjust_pv",
+            get_data_from_file,
+            retrieve_hass_conf,
+            optim_conf,
+            rh,
+            emhass_conf,
+            test_df_literal,
+        )
+        if not success:
+            return False
+        # Call data preparation method
+        fcst.adjust_pv_forecast_data_prep(df_input_data)
+        # Call the fit method
+        fcst.adjust_pv_forecast_fit(
+            n_splits=5,
+            regression_model=optim_conf["adjusted_pv_regression_model"],
+        )
+    else:
+        # Load existing model
+        logger.info("Loading existing adjusted PV model from file")
+        try:
+            with open(model_path, "rb") as inp:
+                fcst.model_adjust_pv = pickle.load(inp)
+        except (pickle.UnpicklingError, EOFError, AttributeError, ImportError, ModuleNotFoundError) as e:
+            logger.error(
+                f"Failed to load existing adjusted PV model: {type(e).__name__}: {str(e)}"
+            )
+            logger.warning(
+                "Model file may be corrupted or incompatible. Falling back to re-fitting the model."
+            )
+            # Retrieve data from Home Assistant for re-fit
+            success, df_input_data, _ = retrieve_home_assistant_data(
+                "adjust_pv",
+                get_data_from_file,
+                retrieve_hass_conf,
+                optim_conf,
+                rh,
+                emhass_conf,
+                test_df_literal,
+            )
+            if not success:
+                logger.error("Failed to retrieve data for model re-fit after load error")
+                return False
+            # Call data preparation method
+            fcst.adjust_pv_forecast_data_prep(df_input_data)
+            # Call the fit method to create new model
+            fcst.adjust_pv_forecast_fit(
+                n_splits=5,
+                regression_model=optim_conf["adjusted_pv_regression_model"],
+            )
+            logger.info("Successfully re-fitted model after load failure")
+        except Exception as e:
+            logger.error(
+                f"Unexpected error loading adjusted PV model: {type(e).__name__}: {str(e)}"
+            )
+            logger.error("Cannot recover from this error")
+            return False
+
     # Call the predict method
     P_PV_forecast = P_PV_forecast.rename("forecast").to_frame()
     P_PV_forecast = fcst.adjust_pv_forecast_predict(forecasted_pv=P_PV_forecast)
