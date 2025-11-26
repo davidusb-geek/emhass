@@ -19,6 +19,7 @@ from waitress import serve
 from emhass.command_line import (
     continual_publish,
     dayahead_forecast_optim,
+    export_influxdb_to_csv,
     forecast_model_fit,
     forecast_model_predict,
     forecast_model_tune,
@@ -386,6 +387,19 @@ def action_call(action_name):
         msg = "EMHASS >> Weather Forecast has run and results possibly cached... \n"
         if not checkFileLog(ActionStr):
             return make_response(msg, 201)
+        return make_response(grabLog(ActionStr), 400)
+
+    # export-influxdb-to-csv (check before set_input_data_dict - doesn't need HA connection)
+    if action_name == "export-influxdb-to-csv":
+        ActionStr = " >> Exporting InfluxDB data to CSV..."
+        app.logger.info(ActionStr)
+        success = export_influxdb_to_csv(
+            None, app.logger, emhass_conf, params, runtimeparams
+        )
+        if success:
+            msg = "EMHASS >> Action export-influxdb-to-csv executed successfully... \n"
+            if not checkFileLog(ActionStr):
+                return make_response(msg, 201)
         return make_response(grabLog(ActionStr), 400)
 
     ActionStr = " >> Setting input data dict"

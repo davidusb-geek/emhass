@@ -41,6 +41,66 @@
       "input": "array.string",
       "default_value": "sensor.power_photovoltaics"
     },
+    "use_influxdb": {
+      "friendly_name": "Use InfluxDB for data retrieval",
+      "Description": "Enable InfluxDB as data source instead of Home Assistant API. This allows for longer historical data retention and better performance for machine learning models.",
+      "input": "boolean",
+      "default_value": false
+    },
+    "influxdb_host": {
+      "friendly_name": "InfluxDB host",
+      "Description": "The IP address or hostname of your InfluxDB instance. Defaults to localhost.",
+      "input": "string",
+      "default_value": "localhost"
+    },
+    "influxdb_port": {
+      "friendly_name": "InfluxDB port",
+      "Description": "The port number for your InfluxDB instance. Defaults to 8086.",
+      "input": "int",
+      "default_value": 8086
+    },
+    "influxdb_username": {
+      "friendly_name": "InfluxDB username",
+      "Description": "Username for authenticating with InfluxDB. Leave empty if no authentication is required.",
+      "input": "secrets.string",
+      "default_value": ""
+    },
+    "influxdb_password": {
+      "friendly_name": "InfluxDB password",
+      "Description": "Password for authenticating with InfluxDB. Leave empty if no authentication is required.",
+      "input": "secrets.string",
+      "default_value": ""
+    },
+    "influxdb_database": {
+      "friendly_name": "InfluxDB database name",
+      "Description": "The name of the InfluxDB database containing your Home Assistant data. Defaults to 'homeassistant'.",
+      "input": "string",
+      "default_value": "homeassistant"
+    },
+    "influxdb_measurement": {
+      "friendly_name": "InfluxDB measurement name",
+      "Description": "The measurement name where your sensor data is stored. Defaults to 'W' for the Home Assistant integration.",
+      "input": "string",
+      "default_value": "W"
+    },
+    "influxdb_retention_policy": {
+      "friendly_name": "InfluxDB retention policy",
+      "Description": "The retention policy to use for InfluxDB queries. Defaults to 'autogen'.",
+      "input": "string",
+      "default_value": "autogen"
+    },
+    "influxdb_use_ssl": {
+      "friendly_name": "Use HTTPS on InfluxDB connection",
+      "Description": "Enables HTTPS on InfluxDB connections. Defaults to 'false'.",
+      "input": "boolean",
+      "default_value": false
+    },
+    "influxdb_verify_ssl": {
+      "friendly_name": "Verify HTTPS on InfluxDB connection",
+      "Description": "Enables SSL verification of the certificate (e.g. Let's Encrypt) on InfluxDB connections. Defaults to 'false'.",
+      "input": "boolean",
+      "default_value": false
+    },
     "continual_publish": {
       "friendly_name": "Continually publish optimization results",
       "Description": "set to True to save entities to .json after an optimization run. Then automatically republish the saved entities (with updated current state value) every freq minutes. entity data saved to data_path/entities.",
@@ -186,6 +246,30 @@
       "Description": "Set to True to consider that the installation inverter is hybrid for PV and batteries (Default False)",
       "input": "boolean",
       "default_value": false
+    },
+    "inverter_ac_output_max": {
+      "friendly_name": "Max hybrid inverter AC output power",
+      "Description": "Maximum hybrid inverter output power from combined PV and battery discharge.",
+      "input": "int",
+      "default_value": 0
+    },
+    "inverter_ac_input_max": {
+      "friendly_name": "Max hybrid inverter AC input power",
+      "Description": "Maximum hybrid inverter input power from grid to charge battery.",
+      "input": "int",
+      "default_value": 0
+    },
+    "inverter_efficiency_dc_ac": {
+      "friendly_name": "Hybrid inverter efficency DC to AC",
+      "Description": "Hybrid inverter efficiency from the DC bus to AC output. (percentage/100)",
+      "input": "float",
+      "default_value": 1.0
+    },
+    "inverter_efficiency_ac_dc": {
+      "friendly_name": "Hybrid inverter efficency AC to DC",
+      "Description": "Hybrid inverter efficiency when charging from the AC input to DC bus. (percentage/100)",
+      "input": "float",
+      "default_value": 1.0
     },
     "compute_curtailment": {
       "friendly_name": "Set compute curtailment (grid export limit)",
@@ -353,7 +437,7 @@
     },
     "treat_deferrable_load_as_semi_cont": {
       "friendly_name": "Deferrable load as semi-continuous (on/off) variable",
-      "Description": "Semi-continuous variables (True) are variables that must take a value that can be either their maximum or minimum/zero (for example On = Maximum load, Off = 0 W). Non semi-continuous (which means continuous) variables (False) can take any values between their maximum and minimum",
+      "Description": "When configuring a deferrable load, set treat_deferrable_load_as_semi_cont = True if the device should only switch fully on or off (for example, a basic hot water heater), or set treat_deferrable_load_as_semi_cont = False if the device supports variable power control within its range (for example, an EV charger with adjustable charging rate).",
       "input": "array.boolean",
       "default_value": true
     },
@@ -484,6 +568,12 @@
       "Description": "The desired battery state of charge at the end of each optimization cycle. (percentage/100)",
       "input": "float",
       "default_value": 0.6
+    },
+    "ignore_pv_feedback_during_curtailment": {
+      "friendly_name": "Ignore PV feedback during curtailment",
+      "Description": "When set to true, prevents PV forecast from being updated with real PV data, avoiding flip-flop behavior during curtailment operations",
+      "input": "bool",
+      "default_value": false
     }
   }
 }

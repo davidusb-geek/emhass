@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.14.0 - 2025-11-15
+### Improvement
+- Add InfluxDB integration for enhanced historical data retrieval (@scrusberghs)
+- Added SSL feature for InfluxDB (@sokorn)
+- Feature to export influxdb to csv file (@scrusberghs)
+- Improvements to timezone handling and testing, use ISO8601 date format (@Crosenhain)
+- Reduce severity of logged Open Meteo `forecast_days` minimum override message (@paulhomes)
+### Fix
+- Fix to InfluxDB query to avoid TypeError: Cannot compare tz-naive and tz-aware timestamps (@Jahper)
+- Fix InfluxDB future data query and `use_influxdb` parameter type (@scrusberghs)
+- Resolve time zone handling issues across daylight savings changes (@Squazel)
+- Fix `forecast.py` to align CSV data with prediction window (@nielskool)
+- Fix for `pytz.exceptions.NonExistentTimeError` with Open Meteo weather source during DST change (@paulhomes)
+- Fix decimal precision for `unit_load_cost` and `unit_prod_price` sensors (@scrusberghs)
+
+## 0.13.5 - 2025-09-19
+### Improvement
+- Use SVG render mode for Plotly figures (@Crosenhain)
+- Constrain PV curtailment of hybrid inverter (@rmounce)
+### Fix
+- Fix operating_timesteps_of_each_deferrable_load validation formula (@scruysberghs)
+
+## 0.13.4 - 2025-08-25
+### Improvement
+- Added support for minimum power value for each deferrable load
+- Add configuration for hybrid inverter input power limit and efficiency (@rmounce)
+- Add runtime parameter to prevent PV forecast feedback loop during curtailment (@scruysberghs)
+- Update Docker documentation for volume mounting of config.json (@cabberley)
+- Apply ruff formatting for improved code consistency (@polyfloyd)
+- Set executable permissions for `__main__` entrypoints and remove unused shebangs (@polyfloyd)
+- Correct minor typos in README documentation (@Ultimation)
+### Fix
+- Fixed naive load power forecast shifted timestamp issue #516
+- Fix Docker build for aarch64 architecture (@polyfloyd)
+
 ## 0.13.3 - 2025-05-02
 ### Improvement
 - Enhance optimization solver capabilities by adding HiGHS solver, improving thread configuration, and updating solver support across the project (@Crosenhain)

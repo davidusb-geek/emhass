@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import ast
@@ -100,6 +99,11 @@ def get_logger(
     return logger, ch
 
 
+def _get_now() -> datetime:
+    """Helper function to get the current time, for easier mocking."""
+    return datetime.now()
+
+
 def get_forecast_dates(
     freq: int,
     delta_forecast: int,
@@ -120,24 +124,24 @@ def get_forecast_dates(
 
     """
     freq = pd.to_timedelta(freq, "minutes")
+    start_time = _get_now()
+
     start_forecast = (
-        pd.Timestamp(datetime.now(), tz=time_zone)
-        .replace(microsecond=0)
-        .floor(freq=freq)
+        pd.Timestamp(start_time, tz=time_zone).replace(microsecond=0).floor(freq=freq)
     )
-    end_forecast = start_forecast + pd.Timedelta(days=delta_forecast)
-    forecast_dates = (
-        pd.date_range(
-            start=start_forecast,
-            end=end_forecast + timedelta(days=timedelta_days) - freq,
-            freq=freq,
-            tz=time_zone,
-        )
-        .tz_convert("utc")
-        .round(freq, ambiguous="infer", nonexistent="shift_forward")
-        .tz_convert(time_zone)
+    end_forecast = start_forecast + pd.tseries.offsets.DateOffset(days=delta_forecast)
+    final_end_date = (
+        end_forecast + pd.tseries.offsets.DateOffset(days=timedelta_days) - freq
     )
-    return forecast_dates
+
+    forecast_dates = pd.date_range(
+        start=start_forecast,
+        end=final_end_date,
+        freq=freq,
+        tz=time_zone,
+    )
+
+    return [ts.isoformat() for ts in forecast_dates]
 
 
 def update_params_with_ha_config(
@@ -421,10 +425,16 @@ def treat_runtimeparams(
                 try:
                     delta_forecast = int(delta_forecast)
                 except ValueError:
-                    logger.warning("Invalid delta_forecast_daily value (%s) so defaulting to 1 day", delta_forecast)
+                    logger.warning(
+                        "Invalid delta_forecast_daily value (%s) so defaulting to 1 day",
+                        delta_forecast,
+                    )
                     delta_forecast = 1
             if delta_forecast <= 0:
-                logger.warning("delta_forecast_daily is too low (%s) so defaulting to 1 day", delta_forecast)
+                logger.warning(
+                    "delta_forecast_daily is too low (%s) so defaulting to 1 day",
+                    delta_forecast,
+                )
                 delta_forecast = 1
             params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(
                 days=delta_forecast
@@ -478,6 +488,25 @@ def treat_runtimeparams(
             if "target" in runtimeparams:
                 target = runtimeparams["target"]
                 params["passed_data"]["target"] = target
+
+        # export-influxdb-to-csv
+        if set_type == "export-influxdb-to-csv":
+            # Use dictionary comprehension to simplify parameter assignment
+            export_keys = {
+                k: runtimeparams[k]
+                for k in (
+                    "sensor_list",
+                    "csv_filename",
+                    "start_time",
+                    "end_time",
+                    "resample_freq",
+                    "timestamp_col_name",
+                    "decimal_places",
+                    "handle_nan",
+                )
+                if k in runtimeparams
+            }
+            params["passed_data"].update(export_keys)
 
         # MPC control case
         if set_type == "naive-mpc-optim":
@@ -588,19 +617,30 @@ def treat_runtimeparams(
             if forecast_key in runtimeparams.keys():
                 forecast_input = runtimeparams[forecast_key]
                 if isinstance(forecast_input, dict):
-                    forecast_data_df = pd.DataFrame.from_dict(forecast_input, orient="index").reset_index()
+                    forecast_data_df = pd.DataFrame.from_dict(
+                        forecast_input, orient="index"
+                    ).reset_index()
                     forecast_data_df.columns = ["time", "value"]
-                    forecast_data_df['time'] = pd.to_datetime(forecast_data_df['time'], format='ISO8601', utc=True).dt.tz_convert(time_zone)
+                    forecast_data_df["time"] = pd.to_datetime(
+                        forecast_data_df["time"], format="ISO8601", utc=True
+                    ).dt.tz_convert(time_zone)
 
                     # align index with forecast_dates
-                    forecast_data_df = (forecast_data_df
-                        .resample(pd.to_timedelta(optimization_time_step, "minutes"), on='time')
-                        .aggregate({'value': 'mean'})
-                        .reindex(forecast_dates, method='nearest')
+                    forecast_data_df = (
+                        forecast_data_df.resample(
+                            pd.to_timedelta(optimization_time_step, "minutes"),
+                            on="time",
+                        )
+                        .aggregate({"value": "mean"})
+                        .reindex(forecast_dates, method="nearest")
                     )
-                    forecast_data_df['value'] = forecast_data_df['value'].ffill().bfill()
-                    forecast_input = forecast_data_df['value'].tolist()
-                if isinstance(forecast_input, list) and len(forecast_input) >= len(forecast_dates):
+                    forecast_data_df["value"] = (
+                        forecast_data_df["value"].ffill().bfill()
+                    )
+                    forecast_input = forecast_data_df["value"].tolist()
+                if isinstance(forecast_input, list) and len(forecast_input) >= len(
+                    forecast_dates
+                ):
                     params["passed_data"][forecast_key] = forecast_input
                     params["optim_conf"][forecast_methods[method]] = "list"
                 else:
@@ -613,9 +653,7 @@ def treat_runtimeparams(
                 # Check if string contains list, if so extract
                 if isinstance(forecast_input, str):
                     if isinstance(ast.literal_eval(forecast_input), list):
-                        forecast_input = ast.literal_eval(
-                            forecast_input
-                        )
+                        forecast_input = ast.literal_eval(forecast_input)
                         runtimeparams[forecast_key] = forecast_input
                 list_non_digits = [
                     x
@@ -948,6 +986,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         template="presentation",
         line_shape="hv",
         color_discrete_sequence=colors,
+        render_mode="svg",
     )
     fig_0.update_layout(xaxis_title="Timestamp", yaxis_title="System powers (W)")
     if "SOC_opt" in df.columns.to_list():
@@ -957,6 +996,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
             template="presentation",
             line_shape="hv",
             color_discrete_sequence=colors,
+            render_mode="svg",
         )
         fig_1.update_layout(xaxis_title="Timestamp", yaxis_title="Battery SOC (%)")
     cols_cost = [i for i in df.columns.to_list() if "cost_" in i or "unit_" in i]
@@ -970,6 +1010,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         template="presentation",
         line_shape="hv",
         color_discrete_sequence=colors,
+        render_mode="svg",
     )
     fig_2.update_layout(xaxis_title="Timestamp", yaxis_title="System costs (currency)")
     # Get full path to image
@@ -1663,6 +1704,7 @@ def build_params(
         "end_timesteps_of_each_deferrable_load": None,
         "alpha": None,
         "beta": None,
+        "ignore_pv_feedback_during_curtailment": None,
     }
 
     return params
@@ -1787,3 +1829,201 @@ def set_df_index_freq(df: pd.DataFrame) -> pd.DataFrame:
     sampling = pd.to_timedelta(np.median(idx_diff))
     df = df[~df.index.duplicated()]
     return df.asfreq(sampling)
+
+
+def parse_export_time_range(
+    start_time: str,
+    end_time: str | None,
+    time_zone: pd.Timestamp.tz,
+    logger: logging.Logger,
+) -> tuple[pd.Timestamp, pd.Timestamp] | tuple[bool, bool]:
+    """
+    Parse and validate start_time and end_time for export operations.
+
+    :param start_time: Start time string in ISO format
+    :type start_time: str
+    :param end_time: End time string in ISO format (optional)
+    :type end_time: str | None
+    :param time_zone: Timezone for localization
+    :type time_zone: pd.Timestamp.tz
+    :param logger: Logger object
+    :type logger: logging.Logger
+    :return: Tuple of (start_dt, end_dt) or (False, False) on error
+    :rtype: tuple[pd.Timestamp, pd.Timestamp] | tuple[bool, bool]
+    """
+    try:
+        start_dt = pd.to_datetime(start_time)
+        if start_dt.tz is None:
+            start_dt = start_dt.tz_localize(time_zone)
+    except Exception as e:
+        logger.error(f"Invalid start_time format: {start_time}. Error: {e}")
+        logger.error("Use format like '2024-01-01' or '2024-01-01 00:00:00'")
+        return False, False
+
+    if end_time:
+        try:
+            end_dt = pd.to_datetime(end_time)
+            if end_dt.tz is None:
+                end_dt = end_dt.tz_localize(time_zone)
+        except Exception as e:
+            logger.error(f"Invalid end_time format: {end_time}. Error: {e}")
+            return False, False
+    else:
+        end_dt = pd.Timestamp.now(tz=time_zone)
+        logger.info(f"No end_time specified, using current time: {end_dt}")
+
+    return start_dt, end_dt
+
+
+def clean_sensor_column_names(df: pd.DataFrame, timestamp_col: str) -> pd.DataFrame:
+    """
+    Clean sensor column names by removing 'sensor.' prefix.
+
+    :param df: Input DataFrame with sensor columns
+    :type df: pd.DataFrame
+    :param timestamp_col: Name of timestamp column to preserve
+    :type timestamp_col: str
+    :return: DataFrame with cleaned column names
+    :rtype: pd.DataFrame
+    """
+    column_mapping = {}
+    for col in df.columns:
+        if col != timestamp_col and col.startswith("sensor."):
+            column_mapping[col] = col.replace("sensor.", "")
+    return df.rename(columns=column_mapping)
+
+
+def handle_nan_values(
+    df: pd.DataFrame,
+    handle_nan: str,
+    timestamp_col: str,
+    logger: logging.Logger,
+) -> pd.DataFrame:
+    """
+    Handle NaN values in DataFrame according to specified strategy.
+
+    :param df: Input DataFrame
+    :type df: pd.DataFrame
+    :param handle_nan: Strategy for handling NaN values
+    :type handle_nan: str
+    :param timestamp_col: Name of timestamp column to exclude from processing
+    :type timestamp_col: str
+    :param logger: Logger object
+    :type logger: logging.Logger
+    :return: DataFrame with NaN values handled
+    :rtype: pd.DataFrame
+    """
+    nan_count_before = df.isna().sum().sum()
+    if nan_count_before == 0:
+        return df
+
+    logger.info(
+        f"Found {nan_count_before} NaN values, applying handle_nan method: {handle_nan}"
+    )
+
+    if handle_nan == "drop":
+        df = df.dropna()
+        logger.info(f"Dropped rows with NaN. Remaining rows: {len(df)}")
+    elif handle_nan == "fill_zero":
+        # Exclude timestamp_col from fillna to avoid unintended changes
+        fill_cols = [col for col in df.columns if col != timestamp_col]
+        df[fill_cols] = df[fill_cols].fillna(0)
+        logger.info("Filled NaN values with 0 (excluding timestamp)")
+    elif handle_nan == "interpolate":
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        # Exclude timestamp_col from interpolation
+        interp_cols = [col for col in numeric_cols if col != timestamp_col]
+        df[interp_cols] = df[interp_cols].interpolate(
+            method="linear", limit_direction="both"
+        )
+        df[interp_cols] = df[interp_cols].ffill().bfill()
+        logger.info("Interpolated NaN values (excluding timestamp)")
+    elif handle_nan == "forward_fill":
+        # Exclude timestamp_col from forward fill
+        fill_cols = [col for col in df.columns if col != timestamp_col]
+        df[fill_cols] = df[fill_cols].ffill()
+        logger.info("Forward filled NaN values (excluding timestamp)")
+    elif handle_nan == "backward_fill":
+        # Exclude timestamp_col from backward fill
+        fill_cols = [col for col in df.columns if col != timestamp_col]
+        df[fill_cols] = df[fill_cols].bfill()
+        logger.info("Backward filled NaN values (excluding timestamp)")
+    elif handle_nan == "keep":
+        logger.info("Keeping NaN values as-is")
+    else:
+        logger.warning(f"Unknown handle_nan option '{handle_nan}', keeping NaN values")
+
+    return df
+
+
+def resample_and_filter_data(
+    df: pd.DataFrame,
+    start_dt: pd.Timestamp,
+    end_dt: pd.Timestamp,
+    resample_freq: str,
+    logger: logging.Logger,
+) -> pd.DataFrame | bool:
+    """
+    Filter DataFrame to time range and resample to specified frequency.
+
+    :param df: Input DataFrame with datetime index
+    :type df: pd.DataFrame
+    :param start_dt: Start datetime for filtering
+    :type start_dt: pd.Timestamp
+    :param end_dt: End datetime for filtering
+    :type end_dt: pd.Timestamp
+    :param resample_freq: Resampling frequency string (e.g., '1h', '30min')
+    :type resample_freq: str
+    :param logger: Logger object
+    :type logger: logging.Logger
+    :return: Resampled DataFrame or False on error
+    :rtype: pd.DataFrame | bool
+    """
+    # Validate that DataFrame index is datetime and properly localized
+    if not isinstance(df.index, pd.DatetimeIndex):
+        logger.error(
+            f"DataFrame index must be DatetimeIndex, got {type(df.index).__name__}"
+        )
+        return False
+
+    # Check if timezone aware and matches expected timezone
+    if df.index.tz is None:
+        logger.warning(
+            "DataFrame index is timezone-naive, localizing to match start/end times"
+        )
+        df = df.copy()
+        df.index = df.index.tz_localize(start_dt.tz)
+    elif df.index.tz != start_dt.tz:
+        logger.warning(
+            f"DataFrame timezone ({df.index.tz}) differs from filter timezone ({start_dt.tz}), converting"
+        )
+        df = df.copy()
+        df.index = df.index.tz_convert(start_dt.tz)
+
+    # Filter to exact time range
+    df_filtered = df[(df.index >= start_dt) & (df.index <= end_dt)]
+
+    if df_filtered.empty:
+        logger.error("No data in the specified time range after filtering")
+        return False
+
+    logger.info(f"Retrieved {len(df_filtered)} data points")
+
+    # Resample to specified frequency
+    logger.info(f"Resampling data to frequency: {resample_freq}")
+    try:
+        df_resampled = df_filtered.resample(resample_freq).mean()
+        df_resampled = df_resampled.dropna(how="all")
+
+        if df_resampled.empty:
+            logger.error(
+                "No data after resampling. Check frequency and data availability."
+            )
+            return False
+
+        logger.info(f"After resampling: {len(df_resampled)} data points")
+        return df_resampled
+
+    except Exception as e:
+        logger.error(f"Error during resampling: {e}")
+        return False

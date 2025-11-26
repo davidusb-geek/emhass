@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import logging
 import time
 import warnings
@@ -203,7 +201,7 @@ class MLForecaster:
                 index=self.data_exo.index, columns=["train", "pred"]
             )
             df_pred_backtest["train"] = self.data_exo[self.var_model]
-            df_pred_backtest["pred"] = predictions_backtest
+            df_pred_backtest["pred"] = predictions_backtest["pred"]
         return df_pred, df_pred_backtest
 
     def predict(self, data_last_window: pd.DataFrame | None = None) -> pd.Series:
@@ -245,9 +243,15 @@ class MLForecaster:
                 )
         return predictions
 
-    def tune(self, debug: bool | None = False) -> pd.DataFrame:
+    def tune(
+        self, split_date_delta: str | None = "48h", debug: bool | None = False
+    ) -> pd.DataFrame:
         """Tuning a previously fitted model using bayesian optimization.
 
+        :param split_date_delta: The delta from now to `split_date_delta` that will be used \
+            as the test period to evaluate the model, defaults to '48h'.\
+            This define the training/validation split for the tuning process.
+        :type split_date_delta: Optional[str], optional
         :param debug: Set to True for testing and faster optimizations, defaults to False
         :type debug: Optional[bool], optional
         :return: The DataFrame with the forecasts using the optimized model.
@@ -335,15 +339,58 @@ class MLForecaster:
         # The optimization routine call
         self.logger.info("Bayesian hyperparameter optimization with backtesting")
         start_time = time.time()
+
+        # Use the 'y' data that will be passed to the optimizer
+        data_to_tune = self.data_train[self.var_model]
+
+        # Calculate the new split date and initial_train_size based on the passed split_date_delta
+        try:
+            date_split = (
+                data_to_tune.index[-1]
+                - pd.Timedelta(split_date_delta)
+                + data_to_tune.index.freq
+            )
+            initial_train_size = len(
+                data_to_tune.loc[: date_split - data_to_tune.index.freq]
+            )
+        except (ValueError, TypeError):
+            self.logger.warning(
+                f"Invalid split_date_delta: {split_date_delta}. Falling back to 5 days."
+            )
+            date_split = (
+                data_to_tune.index[-1] - pd.Timedelta("5days") + data_to_tune.index.freq
+            )
+            initial_train_size = len(
+                data_to_tune.loc[: date_split - data_to_tune.index.freq]
+            )
+
+        # Check if the calculated initial_train_size is valid
+        window_size = num_lags  # This is what skforecast will use as window_size
+        if debug:
+            window_size = 3  # Match debug lags
+
+        if initial_train_size <= window_size:
+            self.logger.warning(
+                f"Calculated initial_train_size ({initial_train_size}) is <= window_size ({window_size})."
+            )
+            self.logger.warning(
+                "This is likely because split_date_delta is too large for the dataset."
+            )
+            self.logger.warning(
+                f"Adjusting initial_train_size to {window_size + 1} to attempt recovery."
+            )
+            initial_train_size = window_size + 1
+
         cv = TimeSeriesFold(
             steps=num_lags,
-            initial_train_size=len(self.data_exo.loc[: self.date_train]),
+            initial_train_size=initial_train_size,
             fixed_train_size=True,
             gap=0,
             skip_folds=None,
             allow_incomplete_fold=True,
             refit=refit,
         )
+
         self.optimize_results, self.optimize_results_object = (
             bayesian_search_forecaster(
                 forecaster=self.forecaster,
