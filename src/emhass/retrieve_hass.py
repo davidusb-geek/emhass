@@ -87,7 +87,6 @@ class RetrieveHass:
         self.use_websocket = self.params.get("retrieve_hass_conf", {}).get("use_websocket", False)
         if self.use_websocket:
             self._client = None
-            self.logger.info("Websocket integration enabled")
         else:
             self.logger.debug("Websocket integration disabled, using Home Assistant API")
         # Initialize InfluxDB configuration
@@ -193,7 +192,6 @@ class RetrieveHass:
         """
         # Use WebSockets if configured, otherwise use Home Assistant REST API
         if self.use_websocket:
-            self.logger.info("Using WebSocket connection for data retrieval")
             success = await self.get_data_websocket(days_list, var_list)
             if not success:
                 self.logger.warning("WebSocket data retrieval failed, falling back to REST API")
@@ -403,7 +401,6 @@ class RetrieveHass:
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
         """
-        self.logger.info("Retrieve hass websocket get data method initiated...")
         try:
             self._client = await asyncio.wait_for(
                 get_websocket_client(self.hass_url, self.long_lived_token, self.logger),
@@ -413,7 +410,7 @@ class RetrieveHass:
             self.logger.error("WebSocket connection timed out")
             return False
         except Exception as e:
-            self.logger.error(f"Fout bij connectie opzetten: {e}")
+            self.logger.error(f"Websocket connection error: {e}")
             return False
 
         self.var_list = var_list
