@@ -25,7 +25,6 @@ dependencies = [
     "pvlib>=0.11.0",
     "protobuf>=5.29.3",
     "pytz>=2024.2",
-    "requests>=2.32.2",
     "h5py>=3.12.1",
     "highspy>=1.10.0",
     "pulp>=2.8.0",
@@ -63,7 +62,6 @@ package = true
 [project.optional-dependencies]
 docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
 test = [
-    "requests-mock",
     "pytest",
     "pytz",
     "coverage",
