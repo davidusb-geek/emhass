@@ -1,15 +1,22 @@
+import asyncio
 import copy
-import datetime
-import json
 import logging
 import os
 import pathlib
+import time
+from datetime import datetime, timezone
+from typing import Any
 
+import aiofiles
+import aiohttp
 import numpy as np
+import orjson
 import pandas as pd
-from requests import get, post
 
+from emhass.connection_manager import get_websocket_client
 from emhass.utils import set_df_index_freq
+
+logger = logging.getLogger(__name__)
 
 
 class RetrieveHass:
@@ -34,7 +41,7 @@ class RetrieveHass:
         hass_url: str,
         long_lived_token: str,
         freq: pd.Timedelta,
-        time_zone: datetime.timezone,
+        time_zone: timezone,
         params: str,
         emhass_conf: dict,
         logger: logging.Logger,
@@ -72,29 +79,28 @@ class RetrieveHass:
         elif type(params) is dict:
             self.params = params
         else:
-            self.params = json.loads(params)
+            self.params = orjson.loads(params)
         self.emhass_conf = emhass_conf
         self.logger = logger
         self.get_data_from_file = get_data_from_file
         self.var_list = []
-
+        self.use_websocket = self.params.get("retrieve_hass_conf", {}).get("use_websocket", False)
+        if self.use_websocket:
+            self._client = None
+            self.logger.info("Websocket integration enabled")
+        else:
+            self.logger.debug("Websocket integration disabled, using Home Assistant API")
         # Initialize InfluxDB configuration
-        self.use_influxdb = self.params.get("retrieve_hass_conf", {}).get(
-            "use_influxdb", False
-        )
+        self.use_influxdb = self.params.get("retrieve_hass_conf", {}).get("use_influxdb", False)
         if self.use_influxdb:
             influx_conf = self.params.get("retrieve_hass_conf", {})
             self.influxdb_host = influx_conf.get("influxdb_host", "localhost")
             self.influxdb_port = influx_conf.get("influxdb_port", 8086)
             self.influxdb_username = influx_conf.get("influxdb_username", "")
             self.influxdb_password = influx_conf.get("influxdb_password", "")
-            self.influxdb_database = influx_conf.get(
-                "influxdb_database", "homeassistant"
-            )
+            self.influxdb_database = influx_conf.get("influxdb_database", "homeassistant")
             self.influxdb_measurement = influx_conf.get("influxdb_measurement", "W")
-            self.influxdb_retention_policy = influx_conf.get(
-                "influxdb_retention_policy", "autogen"
-            )
+            self.influxdb_retention_policy = influx_conf.get("influxdb_retention_policy", "autogen")
             self.influxdb_use_ssl = influx_conf.get("influxdb_use_ssl", False)
             self.influxdb_verify_ssl = influx_conf.get("influxdb_verify_ssl", False)
             self.logger.info(
@@ -103,11 +109,14 @@ class RetrieveHass:
         else:
             self.logger.debug("InfluxDB integration disabled, using Home Assistant API")
 
-    def get_ha_config(self):
+    async def get_ha_config(self):
         """
         Extract some configuration data from HA.
 
         """
+        if self.use_websocket:
+            return await self.get_ha_config_websocket()
+        self.logger.info("get HA config from rest api.")
         headers = {
             "Authorization": "Bearer " + self.long_lived_token,
             "content-type": "application/json",
@@ -123,21 +132,36 @@ class RetrieveHass:
             url = self.hass_url + "api/config"
 
         try:
-            response_config = get(url, headers=headers)
-        except Exception:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as response:
+                    response.raise_for_status()
+                    data = await response.read()
+        except aiohttp.ClientError:
             self.logger.error("Unable to access Home Assistant instance, check URL")
             self.logger.error("If using addon, try setting url and token to 'empty'")
             return False
-
         try:
-            self.ha_config = response_config.json()
+            self.ha_config = orjson.loads(data)
         except Exception:
-            self.logger.error(
-                "EMHASS was unable to obtain configuration data from Home Assistant"
-            )
+            self.logger.error("EMHASS was unable to obtain configuration data from Home Assistant")
             return False
 
-    def get_data(
+    async def get_ha_config_websocket(self) -> dict[str, Any]:
+        """Get Home Assistant configuration."""
+        self.logger.info("get HA config from websocket")
+        try:
+            self._client = await get_websocket_client(
+                self.hass_url, self.long_lived_token, self.logger
+            )
+            self.ha_config = await self._client.get_config()
+            return self.ha_config
+        except Exception as e:
+            self.logger.error(
+                f"EMHASS was unable to obtain configuration data from Home Assistant through websocket: {e}"
+            )
+            raise
+
+    async def get_data(
         self,
         days_list: pd.date_range,
         var_list: list,
@@ -167,10 +191,40 @@ class RetrieveHass:
         .. warning:: The minimal_response and significant_changes_only options \
             are experimental
         """
+        # Use WebSockets if configured, otherwise use Home Assistant REST API
+        if self.use_websocket:
+            self.logger.info("Using WebSocket connection for data retrieval")
+            success = await self.get_data_websocket(days_list, var_list)
+            if not success:
+                self.logger.warning("WebSocket data retrieval failed, falling back to REST API")
+                # Fall back to REST API if websocket fails
+                return await self._get_data_rest_api(
+                    days_list,
+                    var_list,
+                    minimal_response,
+                    significant_changes_only,
+                    test_url,
+                )
+            return success
+
         # Use InfluxDB if configured, otherwise use Home Assistant API
         if self.use_influxdb:
             return self.get_data_influxdb(days_list, var_list)
 
+        self.logger.info("Using REST API for data retrieval")
+        return await self._get_data_rest_api(
+            days_list, var_list, minimal_response, significant_changes_only, test_url
+        )
+
+    async def _get_data_rest_api(
+        self,
+        days_list: pd.date_range,
+        var_list: list,
+        minimal_response: bool | None = False,
+        significant_changes_only: bool | None = False,
+        test_url: str | None = "empty",
+    ) -> None:
+        """Internal method to handle REST API data retrieval."""
         self.logger.info("Retrieve hass get data method initiated...")
         headers = {
             "Authorization": "Bearer " + self.long_lived_token,
@@ -181,6 +235,7 @@ class RetrieveHass:
         # Looping on each day from days list
         self.df_final = pd.DataFrame()
         x = 0  # iterate based on days
+
         for day in days_list:
             for i, var in enumerate(var_list):
                 if test_url == "empty":
@@ -209,40 +264,40 @@ class RetrieveHass:
                         )
                     if minimal_response:  # A support for minimal response
                         url = url + "?minimal_response"
-                    if significant_changes_only:  # And for signicant changes only (check the HASS restful API for more info)
+                    if (
+                        significant_changes_only
+                    ):  # And for signicant changes only (check the HASS restful API for more info)
                         url = url + "?significant_changes_only"
                 else:
                     url = test_url
+
                 try:
-                    response = get(url, headers=headers)
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(url, headers=headers) as response:
+                            response.raise_for_status()
+                            data = await response.read()
+                            data_list = orjson.loads(data)
                 except Exception:
-                    self.logger.error(
-                        "Unable to access Home Assistant instance, check URL"
-                    )
-                    self.logger.error(
-                        "If using addon, try setting url and token to 'empty'"
-                    )
+                    self.logger.error("Unable to access Home Assistant instance, check URL")
+                    self.logger.error("If using addon, try setting url and token to 'empty'")
                     return False
                 else:
-                    if response.status_code == 401:
-                        self.logger.error(
-                            "Unable to access Home Assistant instance, TOKEN/KEY"
-                        )
-                        self.logger.error(
-                            "If using addon, try setting url and token to 'empty'"
-                        )
+                    if response.status == 401:
+                        self.logger.error("Unable to access Home Assistant instance, TOKEN/KEY")
+                        self.logger.error("If using addon, try setting url and token to 'empty'")
                         return False
-                    if response.status_code > 299:
+                    if response.status > 299:
                         self.logger.error(
-                            f"Home assistant request GET error: {response.status_code} for var {var}"
+                            f"Home assistant request GET error: {response.status} for var {var}"
                         )
                         return False
                 """import bz2 # Uncomment to save a serialized data for tests
                 import _pickle as cPickle
                 with bz2.BZ2File("data/test_response_get_data_get_method.pbz2", "w") as f:
                     cPickle.dump(response, f)"""
+
                 try:  # Sometimes when there are connection problems we need to catch empty retrieved json
-                    data = response.json()[0]
+                    data = data_list[0]
                 except IndexError:
                     if x == 0:
                         self.logger.error(
@@ -259,6 +314,7 @@ class RetrieveHass:
                             + " (check your recorder settings)"
                         )
                     return False
+
                 df_raw = pd.DataFrame.from_dict(data)
                 if len(df_raw) == 0:
                     if x == 0:
@@ -276,9 +332,9 @@ class RetrieveHass:
                             + " (check your recorder settings)"
                         )
                     return False
+
                 if (
-                    len(df_raw) < ((60 / (self.freq.seconds / 60)) * 24)
-                    and x != len(days_list) - 1
+                    len(df_raw) < ((60 / (self.freq.seconds / 60)) * 24) and x != len(days_list) - 1
                 ):  # check if there is enough Dataframes for passed frequency per day (not inc current day)
                     self.logger.debug(
                         "sensor:"
@@ -290,18 +346,16 @@ class RetrieveHass:
                         + ". This is less than freq value passed: "
                         + str(self.freq)
                     )
+
                 if i == 0:  # Defining the DataFrame container
-                    from_date = pd.to_datetime(
-                        df_raw["last_changed"], format="ISO8601"
-                    ).min()
-                    to_date = pd.to_datetime(
-                        df_raw["last_changed"], format="ISO8601"
-                    ).max()
+                    from_date = pd.to_datetime(df_raw["last_changed"], format="ISO8601").min()
+                    to_date = pd.to_datetime(df_raw["last_changed"], format="ISO8601").max()
                     ts = pd.to_datetime(
                         pd.date_range(start=from_date, end=to_date, freq=self.freq),
                         format="%Y-%d-%m %H:%M",
                     ).round(self.freq, ambiguous="infer", nonexistent="shift_forward")
                     df_day = pd.DataFrame(index=ts)
+
                 # Caution with undefined string data: unknown, unavailable, etc.
                 df_tp = (
                     df_raw.copy()[["state"]]
@@ -318,6 +372,7 @@ class RetrieveHass:
                 df_day = pd.concat([df_day, df_tp], axis=1)
             self.df_final = pd.concat([self.df_final, df_day], axis=0)
             x += 1
+
         self.df_final = set_df_index_freq(self.df_final)
         if self.df_final.index.freq != self.freq:
             self.logger.error(
@@ -329,6 +384,69 @@ class RetrieveHass:
             return False
         self.var_list = var_list
         return True
+
+    async def get_data_websocket(
+        self,
+        days_list: pd.date_range,
+        var_list: list[str],
+    ) -> bool:
+        r"""
+        Retrieve the actual data from hass.
+
+        :param days_list: A list of days to retrieve. The ISO format should be used \
+            and the timezone is UTC. The frequency of the data_range should be freq='D'
+        :type days_list: pandas.date_range
+        :param var_list: The list of variables to retrive from hass. These should \
+            be the exact name of the sensor in Home Assistant. \
+            For example: ['sensor.home_load', 'sensor.home_pv']
+        :type var_list: list
+        :return: The DataFrame populated with the retrieved data from hass
+        :rtype: pandas.DataFrame
+        """
+        self.logger.info("Retrieve hass websocket get data method initiated...")
+        try:
+            self._client = await asyncio.wait_for(
+                get_websocket_client(self.hass_url, self.long_lived_token, self.logger),
+                timeout=20.0,
+            )
+        except TimeoutError:
+            self.logger.error("WebSocket connection timed out")
+            return False
+        except Exception as e:
+            self.logger.error(f"Fout bij connectie opzetten: {e}")
+            return False
+
+        self.var_list = var_list
+
+        # Calculate time range
+        start_time = min(days_list).to_pydatetime()
+        end_time = datetime.now()
+
+        # Try to get statistics data (which contains the actual historical data)
+        try:
+            # Get statistics data with 5-minute period for good resolution
+            t0 = time.time()
+            stats_data = await asyncio.wait_for(
+                self._client.get_statistics(
+                    start_time=start_time,
+                    end_time=end_time,
+                    statistic_ids=var_list,
+                    period="5minute",
+                ),
+                timeout=30.0,
+            )
+
+            # Convert statistics data to DataFrame
+            self.df_final = self._convert_statistics_to_dataframe(stats_data, var_list)
+
+            t1 = time.time()
+            self.logger.info(f"Statistics data retrieval took {t1 - t0:.2f} seconds")
+
+            return not self.df_final.empty
+
+        except Exception as e:
+            self.logger.error(f"Failed to get data via WebSocket: {e}")
+            return False
 
     def get_data_influxdb(
         self,
@@ -359,25 +477,18 @@ class RetrieveHass:
         if not client:
             return False
 
-        start_time = days_list[0].tz_localize(None)
-
+        start_time = days_list[0]
         # Don't query into the future - cap end_time at current time
         # This prevents FILL(previous) from creating fake future datapoints
-        # Use tz_localize(None) to to match timezone format to naive while preserving local time
-        now = pd.Timestamp.now(tz=self.time_zone).tz_localize(None)
-        requested_end = (days_list[-1] + pd.Timedelta(days=1)).tz_localize(None)
+        now = pd.Timestamp.now(tz=self.time_zone)
+        requested_end = days_list[-1] + pd.Timedelta(days=1)
         end_time = min(now, requested_end)
-
         total_days = (end_time - start_time).days
 
-        self.logger.info(
-            f"Retrieving {len(var_list)} sensors over {total_days} days from InfluxDB"
-        )
+        self.logger.info(f"Retrieving {len(var_list)} sensors over {total_days} days from InfluxDB")
         self.logger.debug(f"Time range: {start_time} to {end_time}")
         if end_time < requested_end:
-            self.logger.debug(
-                f"End time capped at current time (requested: {requested_end})"
-            )
+            self.logger.debug(f"End time capped at current time (requested: {requested_end})")
 
         # Collect sensor dataframes
         sensor_dfs = []
@@ -415,9 +526,7 @@ class RetrieveHass:
         try:
             self.df_final = set_df_index_freq(self.df_final)
         except Exception as e:
-            self.logger.error(
-                f"Exception occurred while setting DataFrame index frequency: {e}"
-            )
+            self.logger.error(f"Exception occurred while setting DataFrame index frequency: {e}")
             return False
 
         if self.df_final.index.freq != self.freq:
@@ -434,9 +543,7 @@ class RetrieveHass:
         try:
             from influxdb import InfluxDBClient
         except ImportError:
-            self.logger.error(
-                "InfluxDB client not installed. Install with: pip install influxdb"
-            )
+            self.logger.error("InfluxDB client not installed. Install with: pip install influxdb")
             return None
 
         try:
@@ -493,9 +600,7 @@ class RetrieveHass:
 
                 try:
                     # Use SHOW TAG VALUES to get all entity_ids in this measurement
-                    tag_query = (
-                        f'SHOW TAG VALUES FROM "{measurement}" WITH KEY = "entity_id"'
-                    )
+                    tag_query = f'SHOW TAG VALUES FROM "{measurement}" WITH KEY = "entity_id"'
                     self.logger.debug(
                         f"Checking measurement '{measurement}' with tag query: {tag_query}"
                     )
@@ -519,9 +624,7 @@ class RetrieveHass:
                     continue
 
         except Exception as e:
-            self.logger.error(
-                f"Error discovering measurement for entity {entity_id}: {e}"
-            )
+            self.logger.error(f"Error discovering measurement for entity {entity_id}: {e}")
 
         # Fallback to default measurement if not found
         self.logger.warning(
@@ -555,9 +658,7 @@ class RetrieveHass:
     def _build_influx_query(self, sensor: str, start_time, end_time) -> str:
         """Build InfluxQL query for sensor data retrieval (legacy method)."""
         # Convert sensor name: sensor.sec_pac_solar -> sec_pac_solar
-        entity_id = (
-            sensor.replace("sensor.", "") if sensor.startswith("sensor.") else sensor
-        )
+        entity_id = sensor.replace("sensor.", "") if sensor.startswith("sensor.") else sensor
 
         # Use default measurement (for backward compatibility)
         return self._build_influx_query_for_measurement(
@@ -569,16 +670,12 @@ class RetrieveHass:
         self.logger.debug(f"Retrieving sensor: {sensor}")
 
         # Clean sensor name (remove sensor. prefix if present)
-        entity_id = (
-            sensor.replace("sensor.", "") if sensor.startswith("sensor.") else sensor
-        )
+        entity_id = sensor.replace("sensor.", "") if sensor.startswith("sensor.") else sensor
 
         # Auto-discover which measurement contains this entity
         measurement = self._discover_entity_measurement(client, entity_id)
         if not measurement:
-            self.logger.warning(
-                f"Entity '{entity_id}' not found in any InfluxDB measurement"
-            )
+            self.logger.warning(f"Entity '{entity_id}' not found in any InfluxDB measurement")
             return None
 
         try:
@@ -608,9 +705,7 @@ class RetrieveHass:
 
             # Rename value column to original sensor name
             if "mean_value" in df_sensor.columns:
-                df_sensor = df_sensor[["mean_value"]].rename(
-                    columns={"mean_value": sensor}
-                )
+                df_sensor = df_sensor[["mean_value"]].rename(columns={"mean_value": sensor})
             else:
                 self.logger.error(
                     f"Expected 'mean_value' column not found for {sensor} in measurement {measurement}"
@@ -644,11 +739,11 @@ class RetrieveHass:
     def prepare_data(
         self,
         var_load: str,
-        load_negative: bool | None = False,
-        set_zero_min: bool | None = True,
-        var_replace_zero: list | None = None,
-        var_interp: list | None = None,
-    ) -> None:
+        load_negative: bool,
+        set_zero_min: bool,
+        var_replace_zero: list[str],
+        var_interp: list[str],
+    ) -> bool:
         r"""
         Apply some data treatment in preparation for the optimization task.
 
@@ -698,9 +793,7 @@ class RetrieveHass:
         # Confirm var_replace_zero & var_interp contain only sensors contained in var_list
         if isinstance(var_replace_zero, list):
             original_list = var_replace_zero[:]
-            var_replace_zero = [
-                item for item in var_replace_zero if item in self.var_list
-            ]
+            var_replace_zero = [item for item in var_replace_zero if item in self.var_list]
             removed = set(original_list) - set(var_replace_zero)
             for item in removed:
                 self.logger.warning(
@@ -730,9 +823,7 @@ class RetrieveHass:
                 new_string = string.replace(var_load, var_load + "_positive")
                 new_var_replace_zero.append(new_string)
         else:
-            self.logger.warning(
-                "Unable to find all the sensors in sensor_replace_zero parameter"
-            )
+            self.logger.warning("Unable to find all the sensors in sensor_replace_zero parameter")
             self.logger.warning(
                 "Confirm sure all sensors in sensor_replace_zero are sensor_power_photovoltaics and/or ensor_power_load_no_var_loads "
             )
@@ -743,17 +834,13 @@ class RetrieveHass:
                 new_var_interp.append(new_string)
         else:
             new_var_interp = None
-            self.logger.warning(
-                "Unable to find all the sensors in sensor_linear_interp parameter"
-            )
+            self.logger.warning("Unable to find all the sensors in sensor_linear_interp parameter")
             self.logger.warning(
                 "Confirm all sensors in sensor_linear_interp are sensor_power_photovoltaics and/or ensor_power_load_no_var_loads "
             )
         # Treating NaN replacement: either by zeros or by linear interpolation
         if new_var_replace_zero is not None:
-            self.df_final[new_var_replace_zero] = self.df_final[
-                new_var_replace_zero
-            ].fillna(0.0)
+            self.df_final[new_var_replace_zero] = self.df_final[new_var_replace_zero].fillna(0.0)
         if new_var_interp is not None:
             self.df_final[new_var_interp] = self.df_final[new_var_interp].interpolate(
                 method="linear", axis=0, limit=None
@@ -799,7 +886,7 @@ class RetrieveHass:
         }
         return data
 
-    def post_data(
+    async def post_data(
         self,
         data_df: pd.DataFrame,
         idx: int,
@@ -815,7 +902,11 @@ class RetrieveHass:
         dont_post: bool | None = False,
     ) -> None:
         r"""
-        Post passed data to hass.
+        Post passed data to hass using REST API.
+
+        .. note:: This method ALWAYS uses the REST API for posting data to Home Assistant,
+                  regardless of the use_websocket setting. WebSocket is only used for
+                  data retrieval, not for publishing/posting data.
 
         :param data_df: The DataFrame containing the data that will be posted \
             to hass. This should be a one columns DF or a series.
@@ -846,9 +937,7 @@ class RetrieveHass:
         # Add a possible prefix to the entity ID
         entity_id = entity_id.replace("sensor.", "sensor." + publish_prefix)
         # Set the URL
-        if (
-            self.hass_url == "http://supervisor/core/api"
-        ):  # If we are using the supervisor API
+        if self.hass_url == "http://supervisor/core/api":  # If we are using the supervisor API
             url = self.hass_url + "/states/" + entity_id
         else:  # Otherwise the Home Assistant Core API it is
             url = self.hass_url + "api/states/" + entity_id
@@ -866,7 +955,7 @@ class RetrieveHass:
         elif type_var == "optim_status":
             state = data_df.loc[data_df.index[idx]]
         elif type_var == "mlregressor":
-            state = data_df[idx]
+            state = float(data_df[idx])
         else:
             state = np.round(data_df.loc[data_df.index[idx]], 2)
         if type_var == "power":
@@ -988,25 +1077,37 @@ class RetrieveHass:
             }
         # Actually post the data
         if self.get_data_from_file or dont_post:
-
-            class response:
-                pass
-
-            response.status_code = 200
-            response.ok = True
+            # Create mock response for file mode or dont_post mode
+            self.logger.debug(
+                f"Skipping actual POST (get_data_from_file={self.get_data_from_file}, dont_post={dont_post})"
+            )
+            response_ok = True
+            response_status_code = 200
         else:
-            response = post(url, headers=headers, data=json.dumps(data))
+            # Always use REST API for posting data, regardless of use_websocket setting
+            self.logger.debug(f"Posting data to URL: {url}")
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        url, headers=headers, data=orjson.dumps(data).decode("utf-8")
+                    ) as response:
+                        # Store response data since we need to access it after the context manager
+                        response_ok = response.ok
+                        response_status_code = response.status
+                        self.logger.debug(
+                            f"HTTP POST response: ok={response_ok}, status={response_status_code}"
+                        )
+            except Exception as e:
+                self.logger.error(f"Failed to post data to {entity_id}: {e}")
+                response_ok = False
+                response_status_code = 500
 
         # Treating the response status and posting them on the logger
-        if response.ok:
-            if logger_levels == "DEBUG":
-                self.logger.debug(
-                    "Successfully posted to " + entity_id + " = " + str(state)
-                )
+        if response_ok:
+            if logger_levels == "DEBUG" or dont_post:
+                self.logger.debug("Successfully posted to " + entity_id + " = " + str(state))
             else:
-                self.logger.info(
-                    "Successfully posted to " + entity_id + " = " + str(state)
-                )
+                self.logger.info("Successfully posted to " + entity_id + " = " + str(state))
 
             # If save entities is set, save entity data to /data_path/entities
             if save_entities:
@@ -1019,17 +1120,20 @@ class RetrieveHass:
                 result = data_df.to_json(
                     index="timestamp", orient="index", date_unit="s", date_format="iso"
                 )
-                parsed = json.loads(result)
-                with open(entities_path / (entity_id + ".json"), "w") as file:
-                    json.dump(parsed, file, indent=4)
+                parsed = orjson.loads(result)
+                async with aiofiles.open(entities_path / (entity_id + ".json"), "w") as file:
+                    await file.write(orjson.dumps(parsed, option=orjson.OPT_INDENT_2).decode())
 
                 # Save the required metadata to json file
-                if os.path.isfile(entities_path / "metadata.json"):
-                    with open(entities_path / "metadata.json") as file:
-                        metadata = json.load(file)
+                metadata_path = entities_path / "metadata.json"
+                if os.path.isfile(metadata_path):
+                    async with aiofiles.open(metadata_path) as file:
+                        content = await file.read()
+                        metadata = orjson.loads(content)
                 else:
                     metadata = {}
-                with open(entities_path / "metadata.json", "w") as file:
+
+                async with aiofiles.open(metadata_path, "w") as file:
                     # Save entity metadata, key = entity_id
                     metadata[entity_id] = {
                         "name": data_df.name,
@@ -1041,17 +1145,117 @@ class RetrieveHass:
                     }
 
                     # Find lowest frequency to set for continual loop freq
-                    if metadata.get("lowest_time_step", None) is None or metadata[
+                    if metadata.get("lowest_time_step") is None or metadata[
                         "lowest_time_step"
                     ] > int(self.freq.seconds / 60):
                         metadata["lowest_time_step"] = int(self.freq.seconds / 60)
-                    json.dump(metadata, file, indent=4)
+                    await file.write(orjson.dumps(metadata, option=orjson.OPT_INDENT_2).decode())
 
                     self.logger.debug("Saved " + entity_id + " to json file")
 
         else:
             self.logger.warning(
-                "The status code for received curl command response is: "
-                + str(response.status_code)
+                f"Failed to post data to {entity_id}. Status code: {response_status_code}"
             )
-        return response, data
+
+        # Create a response object to maintain compatibility
+        class MockResponse:
+            def __init__(self, ok, status_code):
+                self.ok = ok
+                self.status_code = status_code
+
+        mock_response = MockResponse(response_ok, response_status_code)
+        self.logger.debug(f"Completed post_data for {entity_id}")
+        return mock_response, data
+
+    def _convert_statistics_to_dataframe(
+        self, stats_data: dict[str, Any], var_list: list[str]
+    ) -> pd.DataFrame:
+        """Convert WebSocket statistics data to DataFrame."""
+        import pandas as pd
+
+        # Initialize empty DataFrame
+        df_final = pd.DataFrame()
+
+        # The websocket manager already extracts the 'result' portion
+        # so stats_data should be directly the entity data dictionary
+
+        for entity_id in var_list:
+            if entity_id not in stats_data:
+                self.logger.warning(f"No statistics data for {entity_id}")
+                continue
+
+            entity_stats = stats_data[entity_id]
+
+            if not entity_stats:
+                continue
+
+            # Convert statistics to DataFrame
+            entity_data = []
+            for _i, stat in enumerate(entity_stats):
+                try:
+                    # Handle timestamp from start time (milliseconds or ISO string)
+                    if isinstance(stat["start"], int | float):
+                        # Convert from milliseconds to datetime with UTC timezone
+                        timestamp = pd.to_datetime(stat["start"], unit="ms", utc=True)
+                    else:
+                        # Assume ISO string
+                        timestamp = pd.to_datetime(stat["start"], utc=True)
+
+                    # Use mean, max, min or sum depending on what's available
+                    value = None
+                    if "mean" in stat and stat["mean"] is not None:
+                        value = stat["mean"]
+                    elif "sum" in stat and stat["sum"] is not None:
+                        value = stat["sum"]
+                    elif "max" in stat and stat["max"] is not None:
+                        value = stat["max"]
+                    elif "min" in stat and stat["min"] is not None:
+                        value = stat["min"]
+
+                    if value is not None:
+                        try:
+                            value = float(value)
+                            entity_data.append({"timestamp": timestamp, entity_id: value})
+                        except (ValueError, TypeError):
+                            self.logger.debug(f"Could not convert value to float: {value}")
+
+                except (KeyError, ValueError, TypeError) as e:
+                    self.logger.debug(f"Skipping invalid statistic for {entity_id}: {e}")
+                    continue
+
+            if entity_data:
+                entity_df = pd.DataFrame(entity_data)
+                entity_df.set_index("timestamp", inplace=True)
+
+                if df_final.empty:
+                    df_final = entity_df
+                else:
+                    df_final = df_final.join(entity_df, how="outer")
+
+        # Process the final DataFrame
+        if not df_final.empty:
+            # Ensure timezone awareness - timestamps should already be UTC from conversion above
+            if df_final.index.tz is None:
+                # If somehow still naive, localize as UTC first then convert
+                df_final.index = df_final.index.tz_localize("UTC").tz_convert(self.time_zone)
+            else:
+                # Convert from existing timezone to target timezone
+                df_final.index = df_final.index.tz_convert(self.time_zone)
+
+            # Sort by index
+            df_final = df_final.sort_index()
+
+            # Resample to frequency if needed
+            try:
+                df_final = df_final.resample(self.freq).mean()
+            except Exception as e:
+                self.logger.warning(f"Could not resample data to {self.freq}: {e}")
+
+            # Forward fill missing values
+            df_final = df_final.ffill()
+
+            # Set frequency for the DataFrame index
+            df_final = set_df_index_freq(df_final)
+
+        return df_final
