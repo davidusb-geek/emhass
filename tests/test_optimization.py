@@ -149,7 +149,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(self.opt_res, type(pd.DataFrame()))
         self.assertIsInstance(self.opt_res.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(self.opt_res.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-        self.assertTrue("cost_fun_" + self.costfun in self.opt_res.columns)
+        self.assertIn("cost_fun_" + self.costfun, self.opt_res.columns)
 
     def test_perform_dayahead_forecast_optim(self):
         # Check formatting of output from dayahead optimization
@@ -163,7 +163,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
-        self.assertTrue("cost_fun_" + self.costfun in self.opt_res_dayahead.columns)
+        self.assertIn("cost_fun_" + self.costfun, self.opt_res_dayahead.columns)
         self.assertEqual(
             self.opt_res_dayahead["P_deferrable0"].sum()
             * (self.retrieve_hass_conf["optimization_time_step"].seconds / 3600),
@@ -189,8 +189,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.df_input_data_dayahead, self.P_PV_forecast, self.P_load_forecast
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertTrue("P_batt" in self.opt_res_dayahead.columns)
-        self.assertTrue("SOC_opt" in self.opt_res_dayahead.columns)
+        self.assertIn("P_batt", self.opt_res_dayahead.columns)
+        self.assertIn("SOC_opt", self.opt_res_dayahead.columns)
         self.assertAlmostEqual(
             self.opt_res_dayahead.loc[self.opt_res_dayahead.index[-1], "SOC_opt"],
             self.plant_conf["battery_target_state_of_charge"],
@@ -210,7 +210,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(table.columns[0], "index")
         self.assertEqual(table.columns[1], "Cost Totals")
         # Check status
-        self.assertTrue("optim_status" in self.opt_res_dayahead.columns)
+        self.assertIn("optim_status", self.opt_res_dayahead.columns)
         # Test treat_def_as_semi_cont and set_def_constant constraints
         self.optim_conf.update({"treat_deferrable_load_as_semi_cont": [True, True]})
         self.optim_conf.update({"set_deferrable_load_single_constant": [True, True]})
@@ -327,7 +327,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
-        self.assertTrue("cost_fun_" + self.costfun in self.opt_res_dayahead.columns)
+        self.assertIn("cost_fun_" + self.costfun, self.opt_res_dayahead.columns)
         self.assertEqual(self.opt.optim_status, "Optimal")
 
     # Check formatting of output from dayahead optimization in self-consumption
@@ -353,7 +353,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
-        self.assertTrue("cost_fun_selfcons" in self.opt_res_dayahead.columns)
+        self.assertIn("cost_fun_selfcons", self.opt_res_dayahead.columns)
 
     # Check formatting of output from dayahead optimization in cost
     def test_perform_dayahead_forecast_optim_costfun_cost(self):
@@ -378,7 +378,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
-        self.assertTrue("cost_fun_cost" in self.opt_res_dayahead.columns)
+        self.assertIn("cost_fun_cost", self.opt_res_dayahead.columns)
 
     # Test with total PV sell and different solvers
     def test_perform_dayahead_forecast_optim_aux(self):
@@ -514,19 +514,19 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             def_end_timestep=def_end_timestep,
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertTrue("P_batt" in self.opt_res_dayahead.columns)
-        self.assertTrue("SOC_opt" in self.opt_res_dayahead.columns)
-        self.assertTrue(
+        self.assertIn("P_batt", self.opt_res_dayahead.columns)
+        self.assertIn("SOC_opt", self.opt_res_dayahead.columns)
+        self.assertLess(
             np.abs(
                 self.opt_res_dayahead.loc[self.opt_res_dayahead.index[-1], "SOC_opt"] - soc_final
-            )
-            < 1e-3
+            ),
+            1e-3,
         )
         term1 = self.optim_conf["nominal_power_of_deferrable_loads"][0] * def_total_hours[0]
         term2 = self.opt_res_dayahead["P_deferrable0"].sum() * (
             self.retrieve_hass_conf["optimization_time_step"].seconds / 3600
         )
-        self.assertTrue(np.abs(term1 - term2) < 1e-3)
+        self.assertLess(np.abs(term1 - term2), 1e-3)
         #
         soc_init = 0.8
         soc_final = 0.5
@@ -593,7 +593,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
-        self.assertTrue("cost_fun_" + self.costfun in self.opt_res_dayahead.columns)
+        self.assertIn("cost_fun_" + self.costfun, self.opt_res_dayahead.columns)
         self.assertEqual(self.opt.optim_status, "Optimal")
 
     # Setup function to run dayahead optimization for the following tests
@@ -617,10 +617,10 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         attributes = vars(self.fcst).copy()
 
         attributes["params"]["passed_data"]["prod_price_forecast"] = [
-            0 for i in range(prediction_horizon)
+            0 for _ in range(prediction_horizon)
         ]
         attributes["params"]["passed_data"]["solar_forecast_kwp"] = [
-            0 for i in range(prediction_horizon)
+            0 for _ in range(prediction_horizon)
         ]
         attributes["params"]["passed_data"]["prediction_horizon"] = prediction_horizon
 
@@ -838,13 +838,13 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             def_end_timestep=def_end_timestep,
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertTrue("P_batt" in self.opt_res_dayahead.columns)
-        self.assertTrue("SOC_opt" in self.opt_res_dayahead.columns)
-        self.assertTrue(
+        self.assertIn("P_batt", self.opt_res_dayahead.columns)
+        self.assertIn("SOC_opt", self.opt_res_dayahead.columns)
+        self.assertLess(
             np.abs(
                 self.opt_res_dayahead.loc[self.opt_res_dayahead.index[-1], "SOC_opt"] - soc_final
-            )
-            < 1e-3
+            ),
+            1e-3,
         )
 
         # Numerical verification that exactly the requested timesteps were used
@@ -863,8 +863,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             * self.optim_conf["nominal_power_of_deferrable_loads"][0]
         )
         actual_energy = self.opt_res_dayahead["P_deferrable0"].sum() * timestep_hours
-        self.assertTrue(
-            np.abs(expected_energy - actual_energy) < 1e-3,
+        self.assertLess(
+            np.abs(expected_energy - actual_energy),
+            1e-3,
             f"Energy mismatch: expected {expected_energy:.3f} Wh, got {actual_energy:.3f} Wh",
         )
 
@@ -938,8 +939,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
                 # The actual energy should match the energy that would be delivered
                 # by running for exactly the requested timesteps
-                self.assertTrue(
-                    np.abs(total_energy - expected_energy) < 1e-3,
+                self.assertLess(
+                    np.abs(total_energy - expected_energy),
+                    1e-3,
                     f"Timestep {timestep_min}min: Energy constraint violated - "
                     f"expected {expected_energy:.3f} Wh, got {total_energy:.3f} Wh "
                     f"({active_timesteps} active timesteps)",

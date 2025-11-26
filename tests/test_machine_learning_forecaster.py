@@ -101,7 +101,7 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         df_pred, df_pred_backtest = await self.mlf.fit()
         self.assertIsInstance(self.mlf.forecaster, ForecasterRecursive)
         self.assertIsInstance(df_pred, pd.DataFrame)
-        self.assertTrue(df_pred_backtest is None)
+        self.assertIs(df_pred_backtest, None)
         # Refit with backtest evaluation
         df_pred, df_pred_backtest = await self.mlf.fit(perform_backtest=True)
         self.assertIsInstance(self.mlf.forecaster, ForecasterRecursive)
@@ -138,7 +138,7 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         await self.mlf.fit()
         df_pred_optim = await self.mlf.tune(debug=True)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
-        self.assertTrue(self.mlf.is_tuned is True)
+        self.assertIs(self.mlf.is_tuned, True)
         # Test LinearRegression
         data = copy.deepcopy(self.input_data_dict["df_input_data"])
         model_type = self.input_data_dict["params"]["passed_data"]["model_type"]
@@ -151,7 +151,7 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         await self.mlf.fit()
         df_pred_optim = await self.mlf.tune(debug=True)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
-        self.assertTrue(self.mlf.is_tuned is True)
+        self.assertIs(self.mlf.is_tuned, True)
         # Test ElasticNet
         data = copy.deepcopy(self.input_data_dict["df_input_data"])
         model_type = self.input_data_dict["params"]["passed_data"]["model_type"]
@@ -164,7 +164,7 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         await self.mlf.fit()
         df_pred_optim = await self.mlf.tune(debug=True)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
-        self.assertTrue(self.mlf.is_tuned is True)
+        self.assertIs(self.mlf.is_tuned, True)
 
 
 if __name__ == "__main__":

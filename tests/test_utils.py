@@ -188,8 +188,8 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(actual_dates, list)
         self.assertEqual(len(actual_dates), 23)  # This day correctly has 23 hours
         self.assertListEqual(actual_dates, expected_dates)
-        self.assertTrue("+10:00" in actual_dates[2])
-        self.assertTrue("+11:00" in actual_dates[3])
+        self.assertIn("+10:00", actual_dates[2])
+        self.assertIn("+11:00", actual_dates[3])
 
     async def test_treat_runtimeparams(self):
         # Test dayahead runtime params
@@ -369,17 +369,17 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
             emhass_conf,
         )
 
-        self.assertTrue(
-            len([x for x in runtimeparams["pv_power_forecast"] if not str(x).isdigit()]) > 0
+        self.assertGreater(
+            len([x for x in runtimeparams["pv_power_forecast"] if not str(x).isdigit()]), 0
         )
-        self.assertTrue(
-            len([x for x in runtimeparams["load_power_forecast"] if not str(x).isdigit()]) > 0
+        self.assertGreater(
+            len([x for x in runtimeparams["load_power_forecast"] if not str(x).isdigit()]), 0
         )
-        self.assertTrue(
-            len([x for x in runtimeparams["load_cost_forecast"] if not str(x).isdigit()]) > 0
+        self.assertGreater(
+            len([x for x in runtimeparams["load_cost_forecast"] if not str(x).isdigit()]), 0
         )
-        self.assertTrue(
-            len([x for x in runtimeparams["prod_price_forecast"] if not str(x).isdigit()]) > 0
+        self.assertGreater(
+            len([x for x in runtimeparams["prod_price_forecast"] if not str(x).isdigit()]), 0
         )
         # Test list embedded into a string
         params = await TestCommandLineUtils.get_test_params()
@@ -986,7 +986,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
             "passed_data",
         ]
         for key in expected_keys:
-            self.assertTrue(key in params.keys())
+            self.assertIn(key, params.keys())
         self.assertEqual(params["retrieve_hass_conf"]["time_zone"], "Europe/Paris")
         self.assertEqual(params["retrieve_hass_conf"]["hass_url"], "https://myhass.duckdns.org/")
         self.assertEqual(params["retrieve_hass_conf"]["long_lived_token"], "thatverylongtokenhere")
@@ -1002,7 +1002,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         )
         params = await utils.build_params(emhass_conf, secrets, {}, logger)
         for key in expected_keys:
-            self.assertTrue(key in params.keys())
+            self.assertIn(key, params.keys())
         self.assertEqual(params["retrieve_hass_conf"]["time_zone"], "Europe/Paris")
         self.assertEqual(params["retrieve_hass_conf"]["hass_url"], "https://myhass.duckdns.org/")
         self.assertEqual(params["retrieve_hass_conf"]["long_lived_token"], "thatverylongtokenhere")
@@ -1014,7 +1014,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         )
         params = await utils.build_params(emhass_conf, secrets, {}, logger)
         for key in expected_keys:
-            self.assertTrue(key in params.keys())
+            self.assertIn(key, params.keys())
         self.assertEqual(params["retrieve_hass_conf"]["time_zone"], "Europe/Paris")
         self.assertEqual(params["retrieve_hass_conf"]["hass_url"], "https://myhass.duckdns.org/")
         self.assertEqual(params["retrieve_hass_conf"]["long_lived_token"], "thatverylongtokenhere")
@@ -1027,7 +1027,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         logger.debug("Obtaining long_lived_token from passed argument")
         params = await utils.build_params(emhass_conf, secrets, {}, logger)
         for key in expected_keys:
-            self.assertTrue(key in params.keys())
+            self.assertIn(key, params.keys())
         self.assertEqual(params["retrieve_hass_conf"]["time_zone"], "Europe/Paris")
         self.assertEqual(params["retrieve_hass_conf"]["hass_url"], "test.url")
         self.assertEqual(params["retrieve_hass_conf"]["long_lived_token"], "test.key")

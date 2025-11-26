@@ -183,7 +183,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(P_PV_forecast.index.tz, self.fcst.time_zone)
         self.assertEqual(len(self.df_weather_csv), len(P_PV_forecast))
         df_weather_none = await self.fcst.get_weather_forecast(method="none")
-        self.assertTrue(df_weather_none is None)
+        self.assertIs(df_weather_none, None)
 
     # Test PV forecast adjustment
     async def test_pv_forecast_adjust(self):
@@ -288,9 +288,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 df_weather_openmeteo.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
             )
             self.assertEqual(df_weather_openmeteo.index.tz, self.fcst.time_zone)
-            self.assertTrue("ghi" in list(df_weather_openmeteo.columns))
-            self.assertTrue("dhi" in list(df_weather_openmeteo.columns))
-            self.assertTrue("dni" in list(df_weather_openmeteo.columns))
+            self.assertIn("ghi", list(df_weather_openmeteo.columns))
+            self.assertIn("dhi", list(df_weather_openmeteo.columns))
+            self.assertIn("dni", list(df_weather_openmeteo.columns))
             # Test dataframe output from get power from weather forecast
             P_PV_forecast = self.fcst.get_power_from_weather(df_weather_openmeteo)
             self.assertIsInstance(P_PV_forecast, pd.core.series.Series)
@@ -587,8 +587,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_PV_forecast.index.tz, fcst.time_zone)
         self.assertTrue(fcst.start_forecast < ts for ts in P_PV_forecast.index)
-        self.assertTrue(P_PV_forecast.values[0][0] == 1)
-        self.assertTrue(P_PV_forecast.values[-1][0] == 48)
+        self.assertEqual(P_PV_forecast.values[0][0], 1)
+        self.assertEqual(P_PV_forecast.values[-1][0], 48)
         # Get load forecast with list, check dataframe output
         P_load_forecast = await fcst.get_load_forecast(method="list")
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
@@ -596,20 +596,20 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_load_forecast.index.tz, fcst.time_zone)
         self.assertEqual(len(P_PV_forecast), len(P_load_forecast))
-        self.assertTrue(P_load_forecast.values[0] == 1)
-        self.assertTrue(P_load_forecast.values[-1] == 48)
+        self.assertEqual(P_load_forecast.values[0], 1)
+        self.assertEqual(P_load_forecast.values[-1], 48)
         # Get load cost forecast with list, check dataframe output
         df_input_data = fcst.get_load_cost_forecast(df_input_data, method="list")
-        self.assertTrue(fcst.var_load_cost in df_input_data.columns)
-        self.assertTrue(df_input_data.isnull().sum().sum() == 0)
-        self.assertTrue(df_input_data["unit_load_cost"].values[0] == 1)
-        self.assertTrue(df_input_data["unit_load_cost"].values[-1] == 48)
+        self.assertIn(fcst.var_load_cost, df_input_data.columns)
+        self.assertEqual(df_input_data.isnull().sum().sum(), 0)
+        self.assertEqual(df_input_data["unit_load_cost"].values[0], 1)
+        self.assertEqual(df_input_data["unit_load_cost"].values[-1], 48)
         # Get production price forecast with list, check dataframe output
         df_input_data = fcst.get_prod_price_forecast(df_input_data, method="list")
-        self.assertTrue(fcst.var_prod_price in df_input_data.columns)
-        self.assertTrue(df_input_data.isnull().sum().sum() == 0)
-        self.assertTrue(df_input_data["unit_prod_price"].values[0] == 1)
-        self.assertTrue(df_input_data["unit_prod_price"].values[-1] == 48)
+        self.assertIn(fcst.var_prod_price, df_input_data.columns)
+        self.assertEqual(df_input_data.isnull().sum().sum(), 0)
+        self.assertEqual(df_input_data["unit_prod_price"].values[0], 1)
+        self.assertEqual(df_input_data["unit_prod_price"].values[-1], 48)
 
     # Test output weather forecast using longer passed runtime lists
     async def test_get_forecasts_with_longer_lists(self):
@@ -675,8 +675,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(P_PV_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_PV_forecast.index.tz, fcst.time_zone)
         self.assertTrue(fcst.start_forecast < ts for ts in P_PV_forecast.index)
-        self.assertTrue(P_PV_forecast.values[0][0] == 1)
-        self.assertTrue(P_PV_forecast.values[-1][0] == 3 * 48)
+        self.assertEqual(P_PV_forecast.values[0][0], 1)
+        self.assertEqual(P_PV_forecast.values[-1][0], 3 * 48)
         # Get load forecast with list, check dataframe output
         P_load_forecast = await fcst.get_load_forecast(method="list")
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
@@ -684,23 +684,23 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(P_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(P_load_forecast.index.tz, fcst.time_zone)
         self.assertEqual(len(P_PV_forecast), len(P_load_forecast))
-        self.assertTrue(P_load_forecast.values[0] == 1)
-        self.assertTrue(P_load_forecast.values[-1] == 3 * 48)
+        self.assertEqual(P_load_forecast.values[0], 1)
+        self.assertEqual(P_load_forecast.values[-1], 3 * 48)
         df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
         df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
         df_input_data_dayahead.columns = ["P_PV_forecast", "P_load_forecast"]
         # Get load cost forecast with list, check dataframe output
         df_input_data_dayahead = fcst.get_load_cost_forecast(df_input_data_dayahead, method="list")
-        self.assertTrue(fcst.var_load_cost in df_input_data_dayahead.columns)
-        self.assertTrue(df_input_data_dayahead.isnull().sum().sum() == 0)
-        self.assertTrue(df_input_data_dayahead[fcst.var_load_cost].iloc[0] == 1)
-        self.assertTrue(df_input_data_dayahead[fcst.var_load_cost].iloc[-1] == 3 * 48)
+        self.assertIn(fcst.var_load_cost, df_input_data_dayahead.columns)
+        self.assertEqual(df_input_data_dayahead.isnull().sum().sum(), 0)
+        self.assertEqual(df_input_data_dayahead[fcst.var_load_cost].iloc[0], 1)
+        self.assertEqual(df_input_data_dayahead[fcst.var_load_cost].iloc[-1], 3 * 48)
         # Get production price forecast with list, check dataframe output
         df_input_data_dayahead = fcst.get_prod_price_forecast(df_input_data_dayahead, method="list")
-        self.assertTrue(fcst.var_prod_price in df_input_data_dayahead.columns)
-        self.assertTrue(df_input_data_dayahead.isnull().sum().sum() == 0)
-        self.assertTrue(df_input_data_dayahead[fcst.var_prod_price].iloc[0] == 1)
-        self.assertTrue(df_input_data_dayahead[fcst.var_prod_price].iloc[-1] == 3 * 48)
+        self.assertIn(fcst.var_prod_price, df_input_data_dayahead.columns)
+        self.assertEqual(df_input_data_dayahead.isnull().sum().sum(), 0)
+        self.assertEqual(df_input_data_dayahead[fcst.var_prod_price].iloc[0], 1)
+        self.assertEqual(df_input_data_dayahead[fcst.var_prod_price].iloc[-1], 3 * 48)
 
     # Test output values of weather forecast using passed runtime lists and saved sensor datalf):
     async def test_get_forecasts_with_lists_special_case(self):
@@ -808,16 +808,16 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         df_input_data.index.freq = rh.df_final.index.freq
         # Get load cost forecast with list, check values from output
         df_input_data = fcst.get_load_cost_forecast(df_input_data, method="list")
-        self.assertTrue(fcst.var_load_cost in df_input_data.columns)
-        self.assertTrue(df_input_data.isnull().sum().sum() == 0)
-        self.assertTrue(df_input_data["unit_load_cost"].values[0] == 1)
-        self.assertTrue(df_input_data["unit_load_cost"].values[-1] == 48)
+        self.assertIn(fcst.var_load_cost, df_input_data.columns)
+        self.assertEqual(df_input_data.isnull().sum().sum(), 0)
+        self.assertEqual(df_input_data["unit_load_cost"].values[0], 1)
+        self.assertEqual(df_input_data["unit_load_cost"].values[-1], 48)
         # Get production price forecast with list, check values from output
         df_input_data = fcst.get_prod_price_forecast(df_input_data, method="list")
-        self.assertTrue(fcst.var_prod_price in df_input_data.columns)
-        self.assertTrue(df_input_data.isnull().sum().sum() == 0)
-        self.assertTrue(df_input_data["unit_prod_price"].values[0] == 1)
-        self.assertTrue(df_input_data["unit_prod_price"].values[-1] == 48)
+        self.assertIn(fcst.var_prod_price, df_input_data.columns)
+        self.assertEqual(df_input_data.isnull().sum().sum(), 0)
+        self.assertEqual(df_input_data["unit_prod_price"].values[0], 1)
+        self.assertEqual(df_input_data["unit_prod_price"].values[-1], 48)
 
     async def test_get_power_from_weather(self):
         self.assertIsInstance(self.P_PV_forecast, pd.core.series.Series)
@@ -992,32 +992,32 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=self.get_data_from_file,
         )
-        self.assertTrue(len(fcst.forecast_dates) == 24)
+        self.assertEqual(len(fcst.forecast_dates), 24)
         P_load_forecast = await fcst.get_load_forecast(method="typical")
         self.assertIsInstance(P_load_forecast, pd.core.series.Series)
-        self.assertTrue(len(P_load_forecast) == len(fcst.forecast_dates))
+        self.assertEqual(len(P_load_forecast), len(fcst.forecast_dates))
 
     # Test load cost forecast dataframe output using saved csv referece file
     def test_get_load_cost_forecast(self):
         df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data)
-        self.assertTrue(self.fcst.var_load_cost in df_input_data.columns)
-        self.assertTrue(df_input_data.isnull().sum().sum() == 0)
+        self.assertIn(self.fcst.var_load_cost, df_input_data.columns)
+        self.assertEqual(df_input_data.isnull().sum().sum(), 0)
         df_input_data = self.fcst.get_load_cost_forecast(
             self.df_input_data, method="csv", csv_path="data_load_cost_forecast.csv"
         )
-        self.assertTrue(self.fcst.var_load_cost in df_input_data.columns)
-        self.assertTrue(df_input_data.isnull().sum().sum() == 0)
+        self.assertIn(self.fcst.var_load_cost, df_input_data.columns)
+        self.assertEqual(df_input_data.isnull().sum().sum(), 0)
 
     # Test production price forecast dataframe output using saved csv referece file
     def test_get_prod_price_forecast(self):
         df_input_data = self.fcst.get_prod_price_forecast(self.df_input_data)
-        self.assertTrue(self.fcst.var_prod_price in df_input_data.columns)
-        self.assertTrue(df_input_data.isnull().sum().sum() == 0)
+        self.assertIn(self.fcst.var_prod_price, df_input_data.columns)
+        self.assertEqual(df_input_data.isnull().sum().sum(), 0)
         df_input_data = self.fcst.get_prod_price_forecast(
             self.df_input_data, method="csv", csv_path="data_prod_price_forecast.csv"
         )
-        self.assertTrue(self.fcst.var_prod_price in df_input_data.columns)
-        self.assertTrue(df_input_data.isnull().sum().sum() == 0)
+        self.assertIn(self.fcst.var_prod_price, df_input_data.columns)
+        self.assertEqual(df_input_data.isnull().sum().sum(), 0)
 
     # Test DST forward and backward transition handling in forecast methods
     async def test_dst_forward_transition_handling(self):
@@ -1097,7 +1097,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 sydney_tz, ambiguous="infer", nonexistent="shift_forward"
             )
             # Verify that nonexistent times were shifted forward
-            self.assertTrue(len(localized_times) == len(naive_times))
+            self.assertEqual(len(localized_times), len(naive_times))
             # The 2:00 AM should become 3:00 AM (shifted forward)
             for ts in localized_times:
                 self.assertNotEqual(
@@ -1253,7 +1253,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                     nonexistent="shift_forward",
                 )
                 # Verify that ambiguous times were handled
-                self.assertTrue(len(localized_times) == len(naive_times))
+                self.assertEqual(len(localized_times), len(naive_times))
                 # Check that we got reasonable results for ambiguous times
                 for ts in localized_times:
                     self.assertIsNotNone(ts.tzinfo, "All timestamps should be timezone-aware")

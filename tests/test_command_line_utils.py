@@ -83,9 +83,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             get_data_from_file=True,
         )
         self.assertIsInstance(input_data_dict, dict)
-        self.assertTrue(input_data_dict["df_input_data"] is None)
+        self.assertIs(input_data_dict["df_input_data"], None)
         self.assertIsInstance(input_data_dict["df_input_data_dayahead"], pd.DataFrame)
-        self.assertTrue(input_data_dict["df_input_data_dayahead"].index.freq is not None)
+        self.assertIsNot(input_data_dict["df_input_data_dayahead"].index.freq, None)
         self.assertEqual(input_data_dict["df_input_data_dayahead"].isnull().sum().sum(), 0)
         self.assertEqual(input_data_dict["fcst"].optim_conf["weather_forecast_method"], "list")
         self.assertEqual(input_data_dict["fcst"].optim_conf["load_forecast_method"], "list")
@@ -104,10 +104,10 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        self.assertTrue(input_data_dict["df_input_data"] is None)
-        self.assertTrue(input_data_dict["df_input_data_dayahead"] is None)
-        self.assertTrue(input_data_dict["P_PV_forecast"] is None)
-        self.assertTrue(input_data_dict["P_load_forecast"] is None)
+        self.assertIs(input_data_dict["df_input_data"], None)
+        self.assertIs(input_data_dict["df_input_data_dayahead"], None)
+        self.assertIs(input_data_dict["P_PV_forecast"], None)
+        self.assertIs(input_data_dict["P_load_forecast"], None)
         # Test naive mpc
         action = "naive-mpc-optim"
         input_data_dict = await set_input_data_dict(
@@ -121,7 +121,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(input_data_dict, dict)
         self.assertIsInstance(input_data_dict["df_input_data_dayahead"], pd.DataFrame)
-        self.assertTrue(input_data_dict["df_input_data_dayahead"].index.freq is not None)
+        self.assertIsNot(input_data_dict["df_input_data_dayahead"].index.freq, None)
         self.assertEqual(input_data_dict["df_input_data_dayahead"].isnull().sum().sum(), 0)
         self.assertEqual(
             len(input_data_dict["df_input_data_dayahead"]), 10
@@ -149,7 +149,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(input_data_dict, dict)
         self.assertIsInstance(input_data_dict["df_input_data_dayahead"], pd.DataFrame)
-        self.assertTrue(input_data_dict["df_input_data_dayahead"].index.freq is not None)
+        self.assertIsNot(input_data_dict["df_input_data_dayahead"].index.freq, None)
         self.assertEqual(input_data_dict["df_input_data_dayahead"].isnull().sum().sum(), 0)
         self.assertEqual(
             len(input_data_dict["df_input_data_dayahead"]), 10
@@ -172,7 +172,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(input_data_dict, dict)
         self.assertIsInstance(input_data_dict["df_input_data_dayahead"], pd.DataFrame)
-        self.assertTrue(input_data_dict["df_input_data_dayahead"].index.freq is not None)
+        self.assertIsNot(input_data_dict["df_input_data_dayahead"].index.freq, None)
         self.assertEqual(input_data_dict["df_input_data_dayahead"].isnull().sum().sum(), 0)
         self.assertEqual(
             len(input_data_dict["df_input_data_dayahead"]), 10
@@ -309,7 +309,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(opt_res.isnull().sum().sum(), 0)
         self.assertIsInstance(opt_res.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(opt_res.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-        self.assertTrue("cost_fun_" + input_data_dict["costfun"] in opt_res.columns)
+        self.assertIn("cost_fun_" + input_data_dict["costfun"], opt_res.columns)
 
     # Test naive mpc optimization
     async def test_naive_mpc_optim(self):
@@ -502,7 +502,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             input_data_dict["params"]["passed_data"]["sklearn_model"], "KNeighborsRegressor"
         )
-        self.assertTrue(input_data_dict["params"]["passed_data"]["perform_backtest"] is False)
+        self.assertIs(input_data_dict["params"]["passed_data"]["perform_backtest"], False)
         # Check that the default params are loaded
         input_data_dict = await set_input_data_dict(
             emhass_conf,
@@ -523,7 +523,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             input_data_dict, logger, debug=True
         )
         self.assertIsInstance(df_fit_pred, pd.DataFrame)
-        self.assertTrue(df_fit_pred_backtest is None)
+        self.assertIs(df_fit_pred_backtest, None)
         # Test ijection_dict for fit method on webui
         injection_dict = utils.get_injection_dict_forecast_model_fit(df_fit_pred, mlf)
         self.assertIsInstance(injection_dict, dict)
@@ -550,7 +550,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         # Test the tune method
         df_pred_optim, mlf = await forecast_model_tune(input_data_dict, logger, debug=True, mlf=mlf)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
-        self.assertTrue(mlf.is_tuned is True)
+        self.assertIs(mlf.is_tuned, True)
         # Test injection_dict for tune method on webui
         injection_dict = utils.get_injection_dict_forecast_model_tune(df_fit_pred, mlf)
         self.assertIsInstance(injection_dict, dict)
@@ -655,7 +655,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             ],
         ):
             opt_res = await main()
-            self.assertEqual(opt_res, None)
+            self.assertIsNone(opt_res)
 
     # CLI test action perfect-optim action
     async def test_main_perfect_forecast_optim(self):
@@ -760,9 +760,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 "True",
             ],
         ):
-            df_fit_pred, df_fit_pred_backtest, mlf = await main()
+            df_fit_pred, df_fit_pred_backtest, _ = await main()
         self.assertIsInstance(df_fit_pred, pd.DataFrame)
-        self.assertTrue(df_fit_pred_backtest is None)
+        self.assertIs(df_fit_pred_backtest, None)
 
     # CLI test forecast model predict action
     async def test_main_forecast_model_predict(self):
@@ -835,7 +835,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         ):
             df_pred_optim, mlf = await main()
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
-        self.assertTrue(mlf.is_tuned is True)
+        self.assertIs(mlf.is_tuned, True)
 
     # CLI test regressor model fit action
     async def test_main_regressor_model_fit(self):
@@ -985,7 +985,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             mock_to_csv.assert_called_once()
             # Check call args
             args, kwargs = mock_to_csv.call_args
-            self.assertEqual(kwargs["index"], False)
+            self.assertFalse(kwargs["index"], False)
             self.assertIsInstance(args[0], pathlib.Path)
             self.assertEqual(args[0].name, "test_export.csv")
 

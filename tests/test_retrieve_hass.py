@@ -156,7 +156,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
     # Check yaml parse in setUp worked
     def test_get_yaml_parse(self):
         self.assertIsInstance(self.retrieve_hass_conf, dict)
-        self.assertTrue("hass_url" in self.retrieve_hass_conf.keys())
+        self.assertIn("hass_url", self.retrieve_hass_conf.keys())
         if self.get_data_from_file:
             self.assertEqual(self.retrieve_hass_conf["hass_url"], "https://myhass.duckdns.org/")
 
@@ -170,10 +170,10 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
                 params.update(await utils.build_params(emhass_conf, {}, defaults, logger))
         _, optim_conf, _ = get_yaml_parse(params, logger)
         # Just check forecast methods
-        self.assertFalse(optim_conf.get("weather_forecast_method") is None)
-        self.assertFalse(optim_conf.get("load_forecast_method") is None)
-        self.assertFalse(optim_conf.get("load_cost_forecast_method") is None)
-        self.assertFalse(optim_conf.get("production_price_forecast_method") is None)
+        self.assertIsNot(optim_conf.get("weather_forecast_method"), None)
+        self.assertIsNot(optim_conf.get("load_forecast_method"), None)
+        self.assertIsNot(optim_conf.get("load_cost_forecast_method"), None)
+        self.assertIsNot(optim_conf.get("production_price_forecast_method"), None)
 
     # Assume get_data to HA fails
     async def test_get_data_failed(self):
@@ -290,8 +290,8 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             0, np.nan
         )
         # Verify a non-zero number of missing values in the actual and forecast PV columns before prepare_data
-        self.assertTrue(self.rh.df_final[actual_pv_sensor].isna().sum() > 0)
-        self.assertTrue(self.rh.df_final[forecast_pv_sensor].isna().sum() > 0)
+        self.assertGreater(self.rh.df_final[actual_pv_sensor].isna().sum(), 0)
+        self.assertGreater(self.rh.df_final[forecast_pv_sensor].isna().sum(), 0)
         self.rh.prepare_data(
             load_sensor,
             load_negative=False,
