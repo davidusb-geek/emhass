@@ -1,6 +1,6 @@
 [project]
 name = "emhass"
-version = "0.13.3"
+version = "0.14.0"
 description = "An Energy Management System for Home Assistant"
 readme = "README.md"
 requires-python = ">=3.10, <3.13"
@@ -38,6 +38,7 @@ dependencies = [
     "waitress>=3.0.2",
     "plotly>=6.0.0",
     "gunicorn>=23.0.0",
+    "influxdb>=5.3.1",
 ]
 [build-system]
 requires = ["hatchling"]
@@ -56,7 +57,7 @@ package = true
 
 [project.optional-dependencies]
 docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
-test = ["requests-mock", "pytest", "coverage", "snakeviz", "ruff", "tabulate", "hatchling"]
+test = ["requests-mock", "pytest", "pytz", "coverage", "snakeviz", "ruff", "tabulate", "hatchling"]
 dev = ["ruff"]
 
 [tool.hatch.build.targets.wheel]

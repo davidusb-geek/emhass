@@ -72,7 +72,9 @@ def retrieve_home_assistant_data(
         if optim_conf.get("set_use_pv", True):
             var_list.append(retrieve_hass_conf["sensor_power_photovoltaics"])
             if optim_conf.get("set_use_adjusted_pv", True):
-                var_list.append(retrieve_hass_conf["sensor_power_photovoltaics_forecast"])
+                var_list.append(
+                    retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
+                )
         if not rh.get_data(
             days_list, var_list, minimal_response=False, significant_changes_only=False
         ):
@@ -303,7 +305,7 @@ def set_input_data_dict(
             P_PV_forecast = pd.Series(0, index=fcst.forecast_dates)
         P_load_forecast = fcst.get_load_forecast(
             days_min_load_forecast=optim_conf["delta_forecast_daily"].days,
-            method=optim_conf["load_forecast_method"]
+            method=optim_conf["load_forecast_method"],
         )
         if isinstance(P_load_forecast, bool) and not P_load_forecast:
             logger.error(
@@ -998,7 +1000,8 @@ def forecast_model_tune(
             )
             return None, None
     # Tune the model
-    df_pred_optim = mlf.tune(debug=debug)
+    split_date_delta = input_data_dict["params"]["passed_data"]["split_date_delta"]
+    df_pred_optim = mlf.tune(split_date_delta=split_date_delta, debug=debug)
     # Save model
     if not debug:
         filename = model_type + default_pkl_suffix
@@ -1132,6 +1135,187 @@ def regressor_model_predict(
             type_var="mlregressor",
         )
     return prediction
+
+
+def export_influxdb_to_csv(
+    input_data_dict: dict | None,
+    logger: logging.Logger,
+    emhass_conf: dict | None = None,
+    params: str | None = None,
+    runtimeparams: str | None = None,
+) -> bool:
+    """Export data from InfluxDB to CSV file.
+
+    This function can be called in two ways:
+    1. With input_data_dict (from web_server via set_input_data_dict)
+    2. Without input_data_dict (direct call from command line or web_server before set_input_data_dict)
+
+    :param input_data_dict: Dictionary containing configuration and parameters (optional)
+    :type input_data_dict: dict | None
+    :param logger: Logger object
+    :type logger: logging.Logger
+    :param emhass_conf: Dictionary containing EMHASS configuration paths (used when input_data_dict is None)
+    :type emhass_conf: dict | None
+    :param params: JSON string of params (used when input_data_dict is None)
+    :type params: str | None
+    :param runtimeparams: JSON string of runtime parameters (used when input_data_dict is None)
+    :type runtimeparams: str | None
+    :return: Success status
+    :rtype: bool
+    """
+    # Handle two calling modes
+    if input_data_dict is None:
+        # Direct mode: parse params and create RetrieveHass
+        if emhass_conf is None or params is None:
+            logger.error(
+                "emhass_conf and params are required when input_data_dict is None"
+            )
+            return False
+
+        # Parse params
+        if isinstance(params, str):
+            params = json.loads(params)
+        if isinstance(runtimeparams, str):
+            runtimeparams = json.loads(runtimeparams)
+
+        # Get configuration
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
+            params, logger
+        )
+        if isinstance(retrieve_hass_conf, bool):
+            return False
+
+        # Treat runtime params
+        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+            json.dumps(runtimeparams) if runtimeparams else "{}",
+            params,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "export-influxdb-to-csv",
+            logger,
+            emhass_conf,
+        )
+
+        # Parse params again if it's a string
+        if isinstance(params, str):
+            params = json.loads(params)
+
+        # Create RetrieveHass object
+        rh = RetrieveHass(
+            retrieve_hass_conf["hass_url"],
+            retrieve_hass_conf["long_lived_token"],
+            retrieve_hass_conf["optimization_time_step"],
+            retrieve_hass_conf["time_zone"],
+            params,
+            emhass_conf,
+            logger,
+        )
+        time_zone = rh.time_zone
+        data_path = emhass_conf["data_path"]
+    else:
+        # Standard mode: use input_data_dict
+        params = input_data_dict["params"]
+        if isinstance(params, str):
+            params = json.loads(params)
+
+        rh = input_data_dict["rh"]
+        time_zone = rh.time_zone
+        data_path = input_data_dict["emhass_conf"]["data_path"]
+
+    # Extract parameters from passed_data
+    if "sensor_list" not in params.get("passed_data", {}):
+        logger.error("parameter: 'sensor_list' not passed")
+        return False
+    sensor_list = params["passed_data"]["sensor_list"]
+
+    if "csv_filename" not in params.get("passed_data", {}):
+        logger.error("parameter: 'csv_filename' not passed")
+        return False
+    csv_filename = params["passed_data"]["csv_filename"]
+
+    if "start_time" not in params.get("passed_data", {}):
+        logger.error("parameter: 'start_time' not passed")
+        return False
+    start_time = params["passed_data"]["start_time"]
+
+    # Optional parameters with defaults
+    end_time = params["passed_data"].get("end_time", None)
+    resample_freq = params["passed_data"].get("resample_freq", "1h")
+    timestamp_col = params["passed_data"].get("timestamp_col_name", "timestamp")
+    decimal_places = params["passed_data"].get("decimal_places", 2)
+    handle_nan = params["passed_data"].get("handle_nan", "keep")
+
+    # Check if InfluxDB is enabled
+    if not rh.use_influxdb:
+        logger.error(
+            "InfluxDB is not enabled in configuration. Set use_influxdb: true in config.json"
+        )
+        return False
+
+    # Parse time range
+    start_dt, end_dt = utils.parse_export_time_range(
+        start_time, end_time, time_zone, logger
+    )
+    if start_dt is False:
+        return False
+
+    # Create days list for data retrieval
+    days_list = pd.date_range(
+        start=start_dt.date(), end=end_dt.date(), freq="D", tz=time_zone
+    )
+
+    if len(days_list) == 0:
+        logger.error("No days to retrieve. Check start_time and end_time.")
+        return False
+
+    logger.info(
+        f"Retrieving {len(sensor_list)} sensors from {start_dt} to {end_dt} ({len(days_list)} days)"
+    )
+    logger.info(f"Sensors: {sensor_list}")
+
+    # Retrieve data from InfluxDB
+    success = rh.get_data(days_list, sensor_list)
+
+    if not success or rh.df_final is None or rh.df_final.empty:
+        logger.error("Failed to retrieve data from InfluxDB")
+        return False
+
+    # Filter and resample data
+    df_export = utils.resample_and_filter_data(
+        rh.df_final, start_dt, end_dt, resample_freq, logger
+    )
+    if df_export is False:
+        return False
+
+    # Reset index to make timestamp a column
+    # Handle custom index names by renaming the index first
+    df_export = df_export.rename_axis(timestamp_col).reset_index()
+
+    # Clean column names
+    df_export = utils.clean_sensor_column_names(df_export, timestamp_col)
+
+    # Handle NaN values
+    df_export = utils.handle_nan_values(df_export, handle_nan, timestamp_col, logger)
+
+    # Round numeric columns to specified decimal places
+    numeric_cols = df_export.select_dtypes(include=[np.number]).columns
+    df_export[numeric_cols] = df_export[numeric_cols].round(decimal_places)
+
+    # Save to CSV
+    # Ensure data_path is a Path object for safe path joining
+    csv_path = pathlib.Path(data_path) / csv_filename
+    df_export.to_csv(csv_path, index=False)
+
+    logger.info(f"✓ Successfully exported to {csv_filename}")
+    logger.info(f"  Rows: {df_export.shape[0]}")
+    logger.info(f"  Columns: {list(df_export.columns)}")
+    logger.info(
+        f"  Time range: {df_export[timestamp_col].min()} to {df_export[timestamp_col].max()}"
+    )
+    logger.info(f"  File location: {csv_path}")
+
+    return True
 
 
 def publish_data(
@@ -1856,12 +2040,15 @@ def main():
             input_data_dict, logger, debug=args.debug, mlr=mlr
         )
         opt_res = None
+    elif args.action == "export-influxdb-to-csv":
+        success = export_influxdb_to_csv(input_data_dict, logger)
+        opt_res = None
     elif args.action == "publish-data":
         opt_res = publish_data(input_data_dict, logger)
     else:
         logger.error("The passed action argument is not valid")
         logger.error(
-            "Try setting --action: perfect-optim, dayahead-optim, naive-mpc-optim, forecast-model-fit, forecast-model-predict, forecast-model-tune or publish-data"
+            "Try setting --action: perfect-optim, dayahead-optim, naive-mpc-optim, forecast-model-fit, forecast-model-predict, forecast-model-tune, export-influxdb-to-csv or publish-data"
         )
         opt_res = None
     logger.info(opt_res)
@@ -1883,6 +2070,8 @@ def main():
         return mlr
     elif args.action == "regressor-model-predict":
         return prediction
+    elif args.action == "export-influxdb-to-csv":
+        return success
     elif args.action == "forecast-model-tune":
         return df_pred_optim, mlf
     else:

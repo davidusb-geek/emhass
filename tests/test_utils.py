@@ -3,8 +3,11 @@
 import json
 import pathlib
 import unittest
+from datetime import datetime
+from unittest.mock import patch
 
 import pandas as pd
+import pytz
 
 from emhass import utils
 
@@ -135,16 +138,64 @@ class TestCommandLineUtils(unittest.TestCase):
         )
         self.assertTrue(retrieve_hass_conf["Altitude"] == 8000.0)
 
-    def test_get_forecast_dates(self):
-        retrieve_hass_conf, optim_conf, _ = utils.get_yaml_parse(
-            self.params_json, logger
+    @patch("emhass.utils._get_now")
+    def test_get_forecast_dates_standard_day(self, mock_ts_now):
+        """
+        Tests the forecast date generation on a standard 24-hour day.
+        """
+        # 1. Define parameters for this specific test
+        time_zone = pytz.timezone("Australia/Sydney")
+        freq = 60  # in minutes
+        delta_forecast = 1  # in days
+
+        # 2. Define the mock 'now' and the expected results
+        mock_now = datetime(2025, 10, 11, 7, 0, 0)
+        expected_start = "2025-10-11T07:00:00"
+        expected_end = "2025-10-12T06:00:00"
+        expected_range = pd.date_range(
+            start=expected_start, end=expected_end, freq=f"{freq}min", tz=time_zone
         )
-        freq = int(retrieve_hass_conf["optimization_time_step"].seconds / 60.0)
-        delta_forecast = int(optim_conf["delta_forecast_daily"].days)
-        time_zone = retrieve_hass_conf["time_zone"]
-        forecast_dates = utils.get_forecast_dates(freq, delta_forecast, time_zone)
-        self.assertIsInstance(forecast_dates, pd.core.indexes.datetimes.DatetimeIndex)
-        self.assertTrue(len(forecast_dates) == int(delta_forecast * 60 * 24 / freq))
+        expected_dates = [ts.isoformat() for ts in expected_range]
+
+        # 3. Set the return value for the mock (which is now passed in as an argument)
+        mock_ts_now.return_value = mock_now
+
+        actual_dates = utils.get_forecast_dates(freq, delta_forecast, time_zone)
+
+        # 4. Perform assertions
+        self.assertIsInstance(actual_dates, list)
+        self.assertEqual(len(actual_dates), 24)
+        self.assertListEqual(actual_dates, expected_dates)
+
+    @patch("emhass.utils._get_now")
+    def test_get_forecast_dates_dst_crossing(self, mock_ts_now):
+        """
+        Tests the forecast date generation on a day with a DST transition (23 hours).
+        """
+        # 1. Define parameters for this specific test
+        time_zone = pytz.timezone("Australia/Sydney")
+        freq = 60  # in minutes
+        delta_forecast = 1  # in days
+
+        # 2. Define mock 'now' and expected results
+        mock_now = datetime(2025, 10, 4, 23, 0, 0)
+        expected_start = "2025-10-04T23:00:00"
+        expected_end = "2025-10-05T22:00:00"
+        expected_range = pd.date_range(
+            start=expected_start, end=expected_end, freq=f"{freq}min", tz=time_zone
+        )
+        expected_dates = [ts.isoformat() for ts in expected_range]
+
+        # 3. Set the return value for the mock
+        mock_ts_now.return_value = mock_now
+
+        actual_dates = utils.get_forecast_dates(freq, delta_forecast, time_zone)
+        # 4. Perform assertions
+        self.assertIsInstance(actual_dates, list)
+        self.assertEqual(len(actual_dates), 23)  # This day correctly has 23 hours
+        self.assertListEqual(actual_dates, expected_dates)
+        self.assertTrue("+10:00" in actual_dates[2])
+        self.assertTrue("+11:00" in actual_dates[3])
 
     def test_treat_runtimeparams(self):
         # Test dayahead runtime params
@@ -1037,6 +1088,110 @@ class TestCommandLineUtils(unittest.TestCase):
         self.assertTrue(params["retrieve_hass_conf"]["time_zone"] == "Europe/Paris")
         self.assertTrue(params["retrieve_hass_conf"]["hass_url"] == "test.url")
         self.assertTrue(params["retrieve_hass_conf"]["long_lived_token"] == "test.key")
+
+
+class TestGetInjectionDict(unittest.TestCase):
+    @staticmethod
+    def _df_base(with_soc: bool = True) -> pd.DataFrame:
+        idx = pd.date_range("2025-01-01", periods=3, freq="h")
+        df = pd.DataFrame(
+            {
+                "P_PV": [100.4, 200.6, 300.5],  # cast to int
+                "P_Load": [150.9, 175.1, 125.4],  # cast to int
+                "unit_price": [0.12345, 0.54321, 0.99999],  # round(3)
+                "cost_grid": [1.1111, 2.2222, 3.3333],  # round(3)
+                "optim_status": ["optimal", "optimal", "optimal"],
+            },
+            index=idx,
+        )
+        if with_soc:
+            df["SOC_opt"] = [10.1234, 20.5555, 30.9999]  # round(3)
+        return df
+
+    def test_get_injection_with_soc(self):
+        df = self._df_base(with_soc=True)
+        res = utils.get_injection_dict(df.copy())
+
+        # expected keys
+        for k in ["title", "subsubtitle0", "figure_0", "figure_2", "table1", "table2"]:
+            self.assertIn(k, res)
+        self.assertIn("figure_1", res)  # SOC present -> figure_1 present
+
+        # minimal HTML sanity
+        self.assertIn("plotly", res["figure_0"].lower())
+        self.assertIn("mystyle", res["table1"])
+        self.assertIn("mystyle", res["table2"])
+
+        # rounding & coercion (use table1 HTML as a stable surface)
+        # P_* become ints
+        self.assertIn(">100<", res["table1"])  # 100.4 -> 100
+        # Non-P columns rounded to 3 decimals
+        for s in ["0.123", "0.543", "1.111", "2.222"]:
+            self.assertIn(s, res["table1"])
+
+        # table2: sums of numeric cost_* cols + optim_status echoed
+        # cost_grid: 1.111 + 2.222 + 3.333 = 6.666
+        self.assertIn("cost_grid", res["table2"])
+        self.assertIn("optim_status", res["table2"])
+        self.assertIn("6.666", res["table2"])
+        self.assertIn("optimal", res["table2"])
+        self.assertNotIn("unit_price", res["table2"])
+
+    def test_without_soc_omits_figure_1(self):
+        df = self._df_base(with_soc=False)
+        res = utils.get_injection_dict(df.copy())
+        self.assertIn("figure_0", res)
+        self.assertIn("figure_2", res)
+        self.assertNotIn("figure_1", res)
+
+    def test_multiple_cost_columns_summed(self):
+        df = self._df_base(with_soc=False)
+        df["cost_other"] = [0.1, 0.2, 0.3]  # -> 0.6 after round(3)
+        res = utils.get_injection_dict(df.copy())
+        self.assertIn("0.6", res["table2"])
+
+    def test_missing_optim_status_raises(self):
+        df = self._df_base(with_soc=False).drop(columns=["optim_status"])
+        with self.assertRaises(KeyError):
+            utils.get_injection_dict(df)
+
+    @unittest.expectedFailure
+    def test_single_power_series_color_scale(self):
+        """Documents current ZeroDivisionError when len(cols_p)==1."""
+        idx = pd.date_range("2025-01-01", periods=3, freq="h")
+        df = pd.DataFrame(
+            {
+                "P_PV": [100, 200, 300],  # only one P_* column
+                "unit_price": [0.1, 0.2, 0.3],
+                "cost_grid": [1, 2, 3],
+                "optim_status": ["optimal", "optimal", "optimal"],
+            },
+            index=idx,
+        )
+        res = utils.get_injection_dict(df.copy())
+        self.assertIn("figure_0", res)
+
+    def test_no_cost_columns_behavior(self):
+        """When no 'cost_' or 'unit_' columns exist, figure_2 still renders (empty)
+        and table2 contains only optim_status."""
+        idx = pd.date_range("2025-01-01", periods=3, freq="h")
+        df = pd.DataFrame(
+            {
+                "P_PV": [1, 2, 3],
+                "P_Load": [4, 5, 6],
+                "optim_status": ["ok", "ok", "ok"],
+            },
+            index=idx,
+        )
+        res = utils.get_injection_dict(df.copy())
+        # Plots exist
+        self.assertIn("figure_0", res)
+        self.assertIn("figure_2", res)  # plotly can render an empty df
+        # table2 should only include optim_status row
+        self.assertIn("table2", res)
+        self.assertIn("optim_status", res["table2"])
+        # No 'cost_' entries present
+        self.assertNotIn("cost_", res["table2"])
 
 
 if __name__ == "__main__":
