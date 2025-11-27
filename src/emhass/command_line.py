@@ -238,8 +238,6 @@ def set_input_data_dict(
                 rh.ha_config,
             )
 
-
-
     # Define the forecast and optimization objects
     fcst = Forecast(
         retrieve_hass_conf,
