@@ -229,9 +229,9 @@ def set_input_data_dict(
             _, _, _, rh.ha_config = pickle.load(inp)
     else:
         response = rh.get_ha_config()
-        if type(response) is False:
+        if response is False:
             return False
-        elif type(response) is not bool:
+        elif response is True:
             # Update the params dict using data from the HA configuration
             params = utils.update_params_with_ha_config(
                 params,
