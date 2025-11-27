@@ -107,6 +107,7 @@ class RetrieveHass:
         """
         Extract some configuration data from HA.
 
+        :rtype: bool | None, if None then using addon configuration or no Home Assistant configuration
         """
         if not self.hass_url or not self.long_lived_token:
             self.logger.info(
