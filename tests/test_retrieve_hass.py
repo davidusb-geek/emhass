@@ -122,7 +122,6 @@ class TestRetrieveHass(unittest.TestCase):
                 minimal_response=False,
                 significant_changes_only=False,
             )
-            
             # Check to save updated data to file
             if save_data_to_file:
                 with open(

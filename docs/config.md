@@ -40,6 +40,8 @@ The parameters in the `secrets_emhass.yaml` file are:
 - `hass_url`: The URL to your Home Assistant instance. For example: https://myhass.duckdns.org/
 - `long_lived_token`: A Long-Lived Access Token from the Lovelace profile page.
 - `time_zone`: The time zone of your system. For example: Europe/Paris.
+- `currency`: The ISO 4217 code for the currency of your country/region. For example: EUR.
+- `temperature`: The unit of measurement for temperature. For example: °C.
 - `lat`: The latitude. For example: 45.0.
 - `lon`: The longitude. For example: 6.0
 - `alt`: The altitude in meters. For example: 100.0
