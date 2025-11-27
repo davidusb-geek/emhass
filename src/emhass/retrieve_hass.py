@@ -108,6 +108,12 @@ class RetrieveHass:
         Extract some configuration data from HA.
 
         """
+        if self.hass_url is "empty" or self.long_lived_token is"empty":
+            self.logger.info(
+                "Using addon configuration, not retrieving Home Assistant configuration"
+            )
+            return True
+
         headers = {
             "Authorization": "Bearer " + self.long_lived_token,
             "content-type": "application/json",
