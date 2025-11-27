@@ -122,25 +122,7 @@ class TestRetrieveHass(unittest.TestCase):
                 minimal_response=False,
                 significant_changes_only=False,
             )
-            # Mocking retrieve of ha_config using: self.rh.get_ha_config()
-            self.rh.ha_config = {
-                "country": "FR",
-                "currency": "EUR",
-                "elevation": 4807,
-                "latitude": 48.83,
-                "longitude": 6.86,
-                "time_zone": "Europe/Paris",
-                "unit_system": {
-                    "length": "km",
-                    "accumulated_precipitation": "mm",
-                    "area": "m²",
-                    "mass": "g",
-                    "pressure": "Pa",
-                    "temperature": "°C",
-                    "volume": "L",
-                    "wind_speed": "m/s",
-                },
-            }
+            
             # Check to save updated data to file
             if save_data_to_file:
                 with open(

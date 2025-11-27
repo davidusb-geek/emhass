@@ -103,40 +103,6 @@ class RetrieveHass:
         else:
             self.logger.debug("InfluxDB integration disabled, using Home Assistant API")
 
-    def get_ha_config(self):
-        """
-        Extract some configuration data from HA.
-
-        """
-        headers = {
-            "Authorization": "Bearer " + self.long_lived_token,
-            "content-type": "application/json",
-        }
-        if self.hass_url == "http://supervisor/core/api":
-            url = self.hass_url + "/config"
-        else:
-            if self.hass_url[-1] != "/":
-                self.logger.warning(
-                    "Missing slash </> at the end of the defined URL, appending a slash but please fix your URL"
-                )
-                self.hass_url = self.hass_url + "/"
-            url = self.hass_url + "api/config"
-
-        try:
-            response_config = get(url, headers=headers)
-        except Exception:
-            self.logger.error("Unable to access Home Assistant instance, check URL")
-            self.logger.error("If using addon, try setting url and token to 'empty'")
-            return False
-
-        try:
-            self.ha_config = response_config.json()
-        except Exception:
-            self.logger.error(
-                "EMHASS was unable to obtain configuration data from Home Assistant"
-            )
-            return False
-
     def get_data(
         self,
         days_list: pd.date_range,

@@ -5,6 +5,8 @@
   "solcast_rooftop_id": "empty",
   "solar_forecast_kwp": 0,
   "time_zone": "Europe/Paris",
+  "currency": "EUR",
+  "temperature": "°C",
   "Latitude": 0,
   "Longitude": 0,
   "Altitude": 0,
