@@ -27,17 +27,23 @@ dependencies = [
     "pvlib>=0.11.0",
     "protobuf>=5.29.3",
     "pytz>=2024.2",
-    "requests>=2.32.2",
     "h5py>=3.12.1",
     "highspy>=1.10.0",
     "pulp>=2.8.0",
     "pyyaml>=6.0.2",
     "tables>=3.10.0",
-    "skforecast>=0.14.0",
-    "flask>=3.1.0",
+    "skforecast>=0.18.0,<0.19.0",
     "waitress>=3.0.2",
     "plotly>=6.0.0",
     "gunicorn>=23.0.0",
+    "quart",
+    "aiofiles",
+    "jinja2",
+    "asyncio",
+    "aiohttp",
+    "orjson",
+    "websockets",
+    "uvicorn>=0.30.0",
     "influxdb>=5.3.1",
 ]
 [build-system]
@@ -57,7 +63,16 @@ package = true
 
 [project.optional-dependencies]
 docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
-test = ["requests-mock", "pytest", "pytz", "coverage", "snakeviz", "ruff", "tabulate", "hatchling"]
+test = [
+    "pytest",
+    "pytz",
+    "coverage",
+    "snakeviz",
+    "ruff",
+    "tabulate",
+    "hatchling",
+    "aioresponses"
+]
 dev = ["ruff"]
 
 [tool.hatch.build.targets.wheel]
@@ -84,7 +99,7 @@ include = [
 ]
 
 [project.scripts]
-emhass = "emhass.command_line:main"
+emhass = "emhass.command_line:main_sync"
 
 [project.urls]
 Homepage = "https://github.com/davidusb-geek/emhass"
@@ -105,3 +120,7 @@ dev = [
 [tool.ruff]
 target-version = "py311" 
 src = ["src", "tests"]
+fix = true
+show-fixes = true
+
+line-length = 100

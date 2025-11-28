@@ -20,8 +20,10 @@ COPY pyproject.toml /app/
 COPY .python-version /app/
 COPY gunicorn.conf.py /app/
 
-RUN apt update \
-    && apt install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y gnupg && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
     # Numpy
     libgfortran5 \
     libopenblas0-pthread \
@@ -108,7 +110,26 @@ RUN [[ "${TARGETARCH}" == "aarch64" ]] && uv pip install --verbose ndindex || ec
 RUN uv pip install --verbose .
 RUN uv lock
 
-ENTRYPOINT [ "uv", "run", "--frozen", "gunicorn", "emhass.web_server:create_app()" ]
+# remove build only packages
+RUN apt-get remove --purge -y --auto-remove \
+    gcc \
+    g++ \
+    patchelf \
+    cmake \
+    ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+# Environment variables for flexibility
+ENV WORKER_CLASS=uvicorn.workers.UvicornWorker
+ENV PORT=5000
+ENV IP=0.0.0.0
+
+# Entrypoint script inline
+ENTRYPOINT ["/bin/bash", "-c", "set -e && \
+WORKER_CLASS=${WORKER_CLASS:-uvicorn.workers.UvicornWorker} && \
+PORT=${PORT:-5000} && \
+IP=${IP:-0.0.0.0} && \
+exec uv run --frozen gunicorn emhass.web_server:app -c gunicorn.conf.py -k \"$WORKER_CLASS\""]
 
 # for running Unittest
 #COPY tests/ /app/tests

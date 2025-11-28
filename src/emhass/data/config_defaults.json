@@ -29,6 +29,7 @@
     "sensor.power_photovoltaics",
     "sensor.power_load_no_var_loads"
   ],
+  "use_websocket": false,
   "use_influxdb": false,
   "influxdb_host": "localhost",
   "influxdb_port": 8086,
