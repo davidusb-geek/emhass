@@ -112,9 +112,9 @@ class RetrieveHass:
         # Initialize empty config immediately for safety
         self.ha_config = {}
 
-        # Check if we have credentials
-        if not self.hass_url or not self.long_lived_token:
-            # Neutral log message suitable for both Add-on and standalone Docker
+        # Check if variables are None, empty strings, or explicitly set to "empty"
+        if (not self.hass_url or self.hass_url == "empty" or 
+            not self.long_lived_token or self.long_lived_token == "empty"):
             self.logger.info("No Home Assistant URL or Long Lived Token found. Using only local configuration file.")
             return True
 
