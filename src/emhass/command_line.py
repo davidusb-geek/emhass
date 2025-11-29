@@ -227,16 +227,19 @@ def set_input_data_dict(
     if get_data_from_file:
         with open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
             _, _, _, rh.ha_config = pickle.load(inp)
+    # Call to get HA configuration
     else:
         response = rh.get_ha_config()
-        if type(response) is bool:
+        if response is False:
             return False
-
-    # Update the params dict using data from the HA configuration
-    params = utils.update_params_with_ha_config(
-        params,
-        rh.ha_config,
-    )
+        elif response is True:
+            # Update the params dict using data from the HA configuration
+            params = utils.update_params_with_ha_config(
+                params,
+                rh.ha_config,
+            )
+        elif response is None:
+            rh.ha_config = {}
 
     # Define the forecast and optimization objects
     fcst = Forecast(
