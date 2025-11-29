@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.14.1 - 2025-11-29
+### Improvement
+- Improved InfluxDB version support documentation
+- Adjust ML forecast tune lags with optizimation_time_step (@sokorn)
+- Improved documentation for MLRegressor (@sokorn)
+### Fix
+- Refactored proposed changes for HA independent configuration
+- Fixed behavior to run EMHASS independently from HA (@Jahper)
+
 ## 0.14.0 - 2025-11-15
 ### Improvement
 - Add InfluxDB integration for enhanced historical data retrieval (@scrusberghs)
