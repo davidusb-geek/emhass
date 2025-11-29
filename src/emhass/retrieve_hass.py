@@ -107,43 +107,53 @@ class RetrieveHass:
         """
         Extract some configuration data from HA.
 
-        :rtype: bool | None, if None then using addon configuration or no Home Assistant configuration
+        :rtype: bool
         """
-        if not self.hass_url or not self.long_lived_token:
-            self.logger.info(
-                "Using addon configuration, not retrieving Home Assistant configuration"
-            )
-            return None
+        # Initialize empty config immediately for safety
+        self.ha_config = {}
 
+        # Check if we have credentials
+        if not self.hass_url or not self.long_lived_token:
+            # Neutral log message suitable for both Add-on and standalone Docker
+            self.logger.info("No Home Assistant URL or Long Lived Token found. Using only local configuration file.")
+            return True
+
+        # Set up headers
         headers = {
             "Authorization": "Bearer " + self.long_lived_token,
             "content-type": "application/json",
         }
+
+        # Construct the URL (incorporating the PR's helpful checks)
+        # The Supervisor API sometimes uses a different path structure
         if self.hass_url == "http://supervisor/core/api":
             url = self.hass_url + "/config"
         else:
-            if self.hass_url[-1] != "/":
-                self.logger.warning(
-                    "Missing slash </> at the end of the defined URL, appending a slash but please fix your URL"
-                )
+            # Helpful check for users who forget the trailing slash
+            if not self.hass_url.endswith("/"):
+                self.logger.warning("The defined HA URL is missing a trailing slash </>. Appending it, but please fix your configuration.")
                 self.hass_url = self.hass_url + "/"
             url = self.hass_url + "api/config"
 
+        # 5. Attempt the connection
         try:
-            response_config = get(url, headers=headers)
-        except Exception:
-            self.logger.error("Unable to access Home Assistant instance, check URL")
-            self.logger.error("If using addon, try setting url and token to 'empty'")
-            return False
+            response = get(url, headers=headers)
+            # Check for HTTP errors (404, 401, 500) before trying to parse JSON
+            response.raise_for_status() 
+            self.ha_config = response.json()
+            return True
 
-        try:
-            self.ha_config = response_config.json()
-        except Exception:
-            self.logger.error(
-                "EMHASS was unable to obtain configuration data from Home Assistant"
-            )
+        except Exception as e:
+            # 6. Granular Error Logging
+            # We log the specific error 'e' so the user knows if it's a Timeout, Connection Refused, or 401 Auth error
+            self.logger.error(f"Unable to obtain configuration from Home Assistant at: {url}")
+            self.logger.error(f"Error details: {e}")
+
+            # Helpful hint for Add-on users without confusing Docker users
+            if "supervisor" in self.hass_url:
+                self.logger.error("If using the add-on, try setting url and token to 'empty' to force local config.")
+
             return False
-        return True
 
     def get_data(
         self,
