@@ -107,7 +107,14 @@ class RetrieveHass:
         """
         Extract some configuration data from HA.
 
+        :rtype: bool | None, if None then using addon configuration or no Home Assistant configuration
         """
+        if not self.hass_url or not self.long_lived_token:
+            self.logger.info(
+                "Using addon configuration, not retrieving Home Assistant configuration"
+            )
+            return None
+
         headers = {
             "Authorization": "Bearer " + self.long_lived_token,
             "content-type": "application/json",
@@ -136,6 +143,7 @@ class RetrieveHass:
                 "EMHASS was unable to obtain configuration data from Home Assistant"
             )
             return False
+        return True
 
     def get_data(
         self,
