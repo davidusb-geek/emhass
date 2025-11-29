@@ -237,6 +237,10 @@ def set_input_data_dict(
         rh.ha_config,
     )
 
+    # Override costfun with the updated value from optim_conf (after treat_runtimeparams)
+    # This ensures runtime parameters take precedence over config file values
+    costfun = optim_conf.get("costfun", costfun)
+
     # Define the forecast and optimization objects
     fcst = Forecast(
         retrieve_hass_conf,
