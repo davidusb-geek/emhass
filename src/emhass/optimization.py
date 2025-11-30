@@ -781,7 +781,7 @@ class Optimization:
                     )
                 self.logger.debug(f"Load {k}: Sequence-based constraints set.")
 
-            # --- Thermal deferrable load logic first ---
+            # Thermal deferrable load logic first
             elif (
                 "def_load_config" in self.optim_conf.keys()
                 and len(self.optim_conf["def_load_config"]) > k
@@ -892,10 +892,29 @@ class Optimization:
                             )
                             opt_model.setObjective(opt_model.objective + penalty_var)
 
+                    # Force thermal load to be semi-continuous (On/Off).
+                    # This ensures the solver creates solid heating blocks instead of fractional power.
+                    constraints.update(
+                        {
+                            f"constraint_thermal_semicont_{k}_{i}": plp.LpConstraint(
+                                e=P_deferrable[k][i]
+                                - (
+                                    P_def_bin2[k][i]
+                                    * self.optim_conf[
+                                        "nominal_power_of_deferrable_loads"
+                                    ][k]
+                                ),
+                                sense=plp.LpConstraintEQ,
+                                rhs=0,
+                            )
+                            for i in set_I
+                        }
+                    )
+
                     predicted_temps[k] = predicted_temp
                     self.logger.debug(f"Load {k}: Thermal constraints set.")
 
-            # --- Standard/non-thermal deferrable load logic comes after thermal ---
+            # Standard/non-thermal deferrable load logic comes after thermal
             elif (def_total_timestep and def_total_timestep[k] > 0) or (
                 len(def_total_hours) > k and def_total_hours[k] > 0
             ):

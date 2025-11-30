@@ -113,7 +113,7 @@ class RetrieveHass:
         self.ha_config = {}
 
         # Check if variables are None, empty strings, or explicitly set to "empty"
-        if (not self.hass_url or self.hass_url == "empty" or 
+        if (not self.hass_url or self.hass_url == "empty" or
             not self.long_lived_token or self.long_lived_token == "empty"):
             self.logger.info("No Home Assistant URL or Long Lived Token found. Using only local configuration file.")
             return True
@@ -139,7 +139,7 @@ class RetrieveHass:
         try:
             response = get(url, headers=headers)
             # Check for HTTP errors (404, 401, 500) before trying to parse JSON
-            response.raise_for_status() 
+            response.raise_for_status()
             self.ha_config = response.json()
             return True
 
