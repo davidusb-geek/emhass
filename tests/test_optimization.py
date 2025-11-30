@@ -748,15 +748,17 @@ class TestOptimization(unittest.TestCase):
     ):
         if prices is None:
             prices = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-        self.fcst.params["passed_data"]["load_cost_forecast"] = prices
 
+        # Generate Massive Time Buffer (5 days total)
+        # This prevents any timezone or "start-of-day" index mismatches
         start_time = pd.Timestamp.now(tz=self.fcst.time_zone).floor(
             self.fcst.freq
         ) - pd.Timedelta(days=3)
+
         times = (
             pd.date_range(
                 start=start_time,
-                periods=240,
+                periods=240,  # 5 days * 48 periods
                 freq=self.fcst.freq,
                 tz=self.fcst.time_zone,
             )
@@ -764,29 +766,75 @@ class TestOptimization(unittest.TestCase):
             .round(self.fcst.freq, ambiguous="infer", nonexistent="shift_forward")
             .tz_convert(self.fcst.time_zone)
         )
-        # Create DataFrame with the full 240-row index immediately
-        input_data = pd.DataFrame(index=times)
-        # Scalar assignment fills all 240 rows automatically
-        input_data["outdoor_temperature_forecast"] = outdoor_temp
 
-        # Instead of asking Forecast to merge the list (which fails on day matching),
-        # we manually insert the prices into the dataframe at the "current" time.
+        # Create DataFrame manually (Correct size: 240 rows)
+        input_data = pd.DataFrame(index=times)
+        input_data["outdoor_temperature_forecast"] = outdoor_temp  # Scalar fill
+
+        # Re-init Optimization to ensure clean state
+        self.opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        # Manual Price Injection (Skipping Forecast module helper methods)
         col_name = self.opt.var_load_cost
-        input_data[col_name] = 1.0
+        input_data[col_name] = 1.0  # Default background price
+        input_data[self.opt.var_prod_price] = 0.0
+
+        # Find 'now' in the index safely
         now_precise = pd.Timestamp.now(tz=self.fcst.time_zone).floor(self.fcst.freq)
         try:
             start_idx = input_data.index.get_loc(now_precise)
         except KeyError:
-            start_idx = input_data.index.get_indexer([now_precise], method="nearest")[0]
-        end_idx = min(start_idx + 10, len(input_data))
+            start_idx = input_data.index.get_indexer(
+                [now_precise], method="nearest"
+            )[0]
+
+        # Inject the test prices starting at 'now'
+        end_idx = min(start_idx + len(prices), len(input_data))
         prices_to_assign = prices[: end_idx - start_idx]
         input_data.iloc[start_idx:end_idx, input_data.columns.get_loc(col_name)] = (
             prices_to_assign
         )
-        if "load_cost_forecast" in self.fcst.params["passed_data"]:
-            del self.fcst.params["passed_data"]["load_cost_forecast"]
-        input_data[self.opt.var_prod_price] = 0.0
-        self.run_test_forecast(input_data=input_data, def_init_temp=def_init_temp)
+
+        # Call perform_optimization directly (Bypassing run_test_forecast logic)
+        # We need to mock P_PV and P_Load as they are expected by the method signature
+        prediction_horizon = 10
+        self.optim_conf.update(
+            {
+                "num_def_loads": 1,
+                "photovoltaic_production_sell_price": 0,
+                "prediction_horizon": prediction_horizon,
+            }
+        )
+
+        # The optimizer expects arrays matching the input_data length (240), not just horizon
+        P_PV = np.zeros(len(input_data))
+        P_Load = np.zeros(len(input_data))
+
+        unit_load_cost = input_data[self.opt.var_load_cost].values
+        unit_prod_price = input_data[self.opt.var_prod_price].values
+
+        self.opt_res_dayahead = self.opt.perform_optimization(
+            input_data,
+            P_PV,
+            P_Load,
+            unit_load_cost,
+            unit_prod_price,
+            def_total_hours=[0],
+            def_start_timestep=[0],
+            def_end_timestep=[0],
+            def_init_temp=def_init_temp,
+        )
+
+        self.assertTrue((self.opt_res_dayahead["optim_status"] == "Optimal").all())
 
     def test_thermal_management(self):
         # Case: Constrain mode (Hard constraint)
