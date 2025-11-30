@@ -321,8 +321,7 @@ def set_input_data_dict(
         with open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
             _, _, _, rh.ha_config = pickle.load(inp)
     else:
-        response = rh.get_ha_config()
-        if type(response) is bool:
+        if not rh.get_ha_config():
             return False
 
     # Update the params dict using data from the HA configuration
