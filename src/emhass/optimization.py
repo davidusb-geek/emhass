@@ -806,7 +806,7 @@ class Optimization:
 
                     cooling_constant = hc["cooling_constant"]
                     heating_rate = hc["heating_rate"]
-                    overshoot_temperature = hc["overshoot_temperature"]
+                    overshoot_temperature = hc.get("overshoot_temperature", None)
                     outdoor_temperature_forecast = data_opt[
                         "outdoor_temperature_forecast"
                     ]
@@ -864,9 +864,7 @@ class Optimization:
                                 {
                                     f"constraint_defload{k}_min_temp_{Id}": plp.LpConstraint(
                                         e=predicted_temp[Id],
-                                        sense=plp.LpConstraintGE
-                                        if sense == "heat"
-                                        else plp.LpConstraintLE,
+                                        sense=plp.LpConstraintGE,
                                         rhs=min_temperatures[Id],
                                     )
                                 }
@@ -880,17 +878,15 @@ class Optimization:
                                 {
                                     f"constraint_defload{k}_max_temp_{Id}": plp.LpConstraint(
                                         e=predicted_temp[Id],
-                                        sense=plp.LpConstraintLE
-                                        if sense == "heat"
-                                        else plp.LpConstraintGE,
-                                        rhs=max_temperatures[Id],
+                                        sense=plp.LpConstraintLE,
+                                        rhs=max_temperatures[Id]
                                     )
                                 }
                             )
 
                         # Legacy "Overshoot" logic (Keep for backward compatibility)
-                        # Only added if desired_temperatures is present AND min/max are NOT fully defining the problem
-                        if desired_temperatures:
+                        # Only added if desired_temperatures is present AND overshoot_temperature is defined
+                        if desired_temperatures and overshoot_temperature is not None:
                             is_overshoot = plp.LpVariable(f"defload_{k}_overshoot_{Id}")
                             constraints.update(
                                 {
@@ -1539,6 +1535,7 @@ class Optimization:
             for k in range(self.optim_conf["number_of_deferrable_loads"]):
                 opt_tp[f"P_def_start_{k}"] = [P_def_start[k][i].varValue for i in set_I]
                 opt_tp[f"P_def_bin2_{k}"] = [P_def_bin2[k][i].varValue for i in set_I]
+
         for i, predicted_temp in predicted_temps.items():
             opt_tp[f"predicted_temp_heater{i}"] = pd.Series(
                 [
@@ -1549,12 +1546,20 @@ class Optimization:
                 ],
                 index=opt_tp.index,
             )
-            opt_tp[f"target_temp_heater{i}"] = pd.Series(
-                self.optim_conf["def_load_config"][i]["thermal_config"][
-                    "desired_temperatures"
-                ],
-                index=opt_tp.index,
-            )
+            # Try desired, then min, then max, else empty list
+            thermal_config = self.optim_conf["def_load_config"][i]["thermal_config"]
+            target_temps = thermal_config.get("desired_temperatures")
+            # If desired_temperatures is missing, try to fallback to min or max for visualization
+            if not target_temps:
+                target_temps = thermal_config.get("min_temperatures")
+            if not target_temps:
+                target_temps = thermal_config.get("max_temperatures")
+            # If we found something, add it to the DF
+            if target_temps:
+                opt_tp[f"target_temp_heater{i}"] = pd.Series(
+                    target_temps,
+                    index=opt_tp.index,
+                )
 
         # Battery initialization logging
         if self.optim_conf["set_use_battery"]:

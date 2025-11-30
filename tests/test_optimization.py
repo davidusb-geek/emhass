@@ -735,7 +735,7 @@ class TestOptimization(unittest.TestCase):
             def_total_hours=def_total_hours,
             def_start_timestep=def_start_timestep,
             def_end_timestep=def_end_timestep,
-            def_init_temp=def_init_temp
+            def_init_temp=def_init_temp,
         )
 
         self.assertTrue((self.opt_res_dayahead["optim_status"] == "Optimal").all())
@@ -749,17 +749,20 @@ class TestOptimization(unittest.TestCase):
         if prices is None:
             prices = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
         self.fcst.params["passed_data"]["load_cost_forecast"] = prices
-        start_time = pd.Timestamp.now(tz=self.fcst.time_zone).floor(
-            self.fcst.freq
-        ) - pd.Timedelta(hours=12)
+
         times = pd.date_range(
-            start=start_time,
-            periods=192,
+            start=datetime.now(),
+            periods=10,
             freq=self.fcst.freq,
             tz=self.fcst.time_zone,
+        ).tz_convert("utc").round(
+            self.fcst.freq, ambiguous="infer", nonexistent="shift_forward"
+        ).tz_convert(self.fcst.time_zone)
+        input_data = pd.DataFrame.from_dict(
+            {"outdoor_temperature_forecast": [outdoor_temp] * 10}
         )
-        input_data = pd.DataFrame(index=times)
-        input_data["outdoor_temperature_forecast"] = outdoor_temp
+        input_data.set_index(times, inplace=True)
+
         self.run_test_forecast(input_data=input_data, def_init_temp=def_init_temp)
 
     def test_thermal_management(self):
@@ -780,7 +783,8 @@ class TestOptimization(unittest.TestCase):
                 ]
             }
         )
-        self.run_thermal_forecast()
+        prices = [2, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+        self.run_thermal_forecast(prices=prices)
         # Verify heater turned on at index 1 to meet 21 degrees at index 2
         assert_series_equal(
             self.opt_res_dayahead["P_deferrable0"],
@@ -802,7 +806,7 @@ class TestOptimization(unittest.TestCase):
                         "thermal_config": {
                             "start_temperature": 20,
                             "cooling_constant": 0.2,
-                            "heating_rate": 10,
+                            "heating_rate": 4.0,
                             "max_temperatures": [22] * 10,
                             "min_temperatures": [0, 0, 21, 0, 0, 0, 0, 0, 0, 0],
                             "sense": "heat",
@@ -834,16 +838,16 @@ class TestOptimization(unittest.TestCase):
                             "heating_rate": -10,  # Negative for cooling capacity
                             "min_temperatures": [0] * 10,  # No min constraint
                             "max_temperatures": [
-                                0,
-                                0,
+                                None,
+                                None,
                                 20,
-                                0,
-                                0,
-                                0,
-                                0,
-                                0,
-                                0,
-                                0,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
                             ],  # Max temp constraint for cooling
                             "sense": "cool",
                         }
@@ -851,7 +855,10 @@ class TestOptimization(unittest.TestCase):
                 ]
             }
         )
-        self.run_thermal_forecast(outdoor_temp=20)
+        self.run_thermal_forecast(
+            outdoor_temp=20,
+            prices=[2, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        )
         # Should turn on to cool down to 20
         assert_series_equal(
             self.opt_res_dayahead["P_deferrable0"],
