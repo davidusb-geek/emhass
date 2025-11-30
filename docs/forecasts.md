@@ -127,29 +127,6 @@ The caching behavior is controlled by the `adjusted_pv_model_max_age` parameter 
 - **Set to 0**: Forces re-fitting on every call (preserves original behavior without caching)
 - **Custom values**: Set any value in hours based on your needs (e.g., 6, 12, 48, etc.)
 
-**How it works:**
-
-1. When `adjust_pv_forecast` is called, EMHASS checks if a saved model file exists
-2. If the model file exists and is newer than `adjusted_pv_model_max_age` hours, it loads the existing model
-3. If the model is outdated or doesn't exist, EMHASS retrieves historical data and trains a new model
-4. The trained model is automatically saved for future use
-
-**Benefits:**
-
-- Significantly reduces API calls to Home Assistant for historical data retrieval
-- Faster forecast adjustments during MPC runs when the model is still valid
-- Configurable freshness threshold to balance performance vs accuracy based on your needs
-
-**Configuration example:**
-
-```yaml
-optim_conf:
-  set_use_adjusted_pv: true
-  adjusted_pv_regression_model: 'LassoRegression'
-  adjusted_pv_solar_elevation_threshold: 10
-  adjusted_pv_model_max_age: 24  # Re-fit model if older than 24 hours
-```
-
 **Runtime parameter override:**
 
 You can also override the `adjusted_pv_model_max_age` parameter at runtime using the API:
@@ -160,10 +137,6 @@ curl -i -H "Content-Type: application/json" -X POST -d '{
   "pv_power_forecast": [0, 0, 50, 150, ...]
 }' http://localhost:5000/action/naive-mpc-optim
 ```
-
-**Error handling:**
-
-If the saved model file becomes corrupted or incompatible (e.g., after a Python package update), EMHASS will automatically detect the issue, log a warning, and fall back to re-fitting a fresh model using historical data. This ensures reliability even when cached models become invalid. 
 
 ## Load power forecast
 
