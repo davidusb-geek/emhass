@@ -1,10 +1,8 @@
-import pickle
 import pathlib
+import pickle
 import sys
 
-from emhass.utils import (
-    get_root,
-)
+from emhass.utils import get_root
 
 # Define the path to test data file
 root = pathlib.Path(str(get_root(__file__, num_parent=2)))
