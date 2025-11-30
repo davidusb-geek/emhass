@@ -242,7 +242,7 @@ class Optimization:
 
         n = len(data_opt.index)
         set_I = range(n)
-        M = 10e10
+        M = 100000
 
         ## Add decision variables
         P_grid_neg = {
@@ -879,7 +879,7 @@ class Optimization:
                                     f"constraint_defload{k}_max_temp_{Id}": plp.LpConstraint(
                                         e=predicted_temp[Id],
                                         sense=plp.LpConstraintLE,
-                                        rhs=max_temperatures[Id]
+                                        rhs=max_temperatures[Id],
                                     )
                                 }
                             )
