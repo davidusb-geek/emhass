@@ -691,27 +691,31 @@ class TestOptimization(unittest.TestCase):
         def_start_timestep = [0]
         def_end_timestep = [0]
         passed_data["prediction_horizon"] = prediction_horizon
-        self.optim_conf.update({
-            "num_def_loads": 1,
-            "photovoltaic_production_sell_price": 0,
-            "prediction_horizon": prediction_horizon
-        })
+        self.optim_conf.update(
+            {
+                "num_def_loads": 1,
+                "photovoltaic_production_sell_price": 0,
+                "prediction_horizon": prediction_horizon,
+            }
+        )
         self.fcst.params["passed_data"].update(passed_data)
 
         # Prepare input data
         if input_data.empty:
             # If no input data provided, generate dummy data
             dates = pd.date_range(
-            start=datetime.now(),
-            periods=prediction_horizon,
-            freq=self.retrieve_hass_conf["optimization_time_step"],
+                start=datetime.now(),
+                periods=prediction_horizon,
+                freq=self.retrieve_hass_conf["optimization_time_step"],
             )
             input_data = pd.DataFrame(index=dates)
             input_data["outdoor_temperature_forecast"] = 10.0  # constant temp
 
         input_data = self.fcst.get_load_cost_forecast(
             input_data,
-            method="list" if "load_cost_forecast" in self.fcst.params["passed_data"] else "constant",
+            method="list"
+            if "load_cost_forecast" in self.fcst.params["passed_data"]
+            else "constant",
         )
         input_data = self.fcst.get_prod_price_forecast(input_data, method="constant")
 
@@ -723,7 +727,11 @@ class TestOptimization(unittest.TestCase):
         unit_prod_price = input_data[self.opt.var_prod_price].values
 
         self.opt_res_dayahead = self.opt.perform_optimization(
-            input_data, P_PV, P_Load, unit_load_cost, unit_prod_price,
+            input_data,
+            P_PV,
+            P_Load,
+            unit_load_cost,
+            unit_prod_price,
             def_total_hours=def_total_hours,
             def_start_timestep=def_start_timestep,
             def_end_timestep=def_end_timestep,
@@ -741,19 +749,17 @@ class TestOptimization(unittest.TestCase):
         if prices is None:
             prices = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
         self.fcst.params["passed_data"]["load_cost_forecast"] = prices
-        start_time = (
-            pd.Timestamp.now(tz=self.fcst.time_zone).floor(self.fcst.freq)
-            - pd.Timedelta(hours=12)
-        )
+        start_time = pd.Timestamp.now(tz=self.fcst.time_zone).floor(
+            self.fcst.freq
+        ) - pd.Timedelta(hours=12)
         times = pd.date_range(
             start=start_time,
-            periods=48,
+            periods=192,
             freq=self.fcst.freq,
             tz=self.fcst.time_zone,
         )
         input_data = pd.DataFrame(index=times)
         input_data["outdoor_temperature_forecast"] = outdoor_temp
-
         self.run_test_forecast(input_data=input_data, def_init_temp=def_init_temp)
 
     def test_thermal_management(self):
@@ -797,12 +803,12 @@ class TestOptimization(unittest.TestCase):
                             "start_temperature": 20,
                             "cooling_constant": 0.2,
                             "heating_rate": 10,
-                            "max_temperatures": [22]*10,
+                            "max_temperatures": [22] * 10,
                             "min_temperatures": [0, 0, 21, 0, 0, 0, 0, 0, 0, 0],
                             "sense": "heat",
                         }
                     }
-                ]
+                ],
             }
         )
         # High prices to discourage heating, but constraint should force it
@@ -812,7 +818,9 @@ class TestOptimization(unittest.TestCase):
         # Ensure max constraint is respected
         self.assertFalse((predicted_temps > 22).any(), "Overshot in some timesteps.")
         # Ensure min constraint is respected
-        self.assertTrue(predicted_temps.iloc[2] >= 21, "Failed to meet temperature requirement")
+        self.assertTrue(
+            predicted_temps.iloc[2] >= 21, "Failed to meet temperature requirement"
+        )
 
     def test_thermal_management_cooling(self):
         # Case: Cooling
@@ -823,9 +831,20 @@ class TestOptimization(unittest.TestCase):
                         "thermal_config": {
                             "start_temperature": 25,
                             "cooling_constant": 0.1,
-                            "heating_rate": -10, # Negative for cooling capacity
-                            "min_temperatures": [0]*10, # No min constraint
-                            "max_temperatures": [0, 0, 20, 0, 0, 0, 0, 0, 0, 0], # Max temp constraint for cooling
+                            "heating_rate": -10,  # Negative for cooling capacity
+                            "min_temperatures": [0] * 10,  # No min constraint
+                            "max_temperatures": [
+                                0,
+                                0,
+                                20,
+                                0,
+                                0,
+                                0,
+                                0,
+                                0,
+                                0,
+                                0,
+                            ],  # Max temp constraint for cooling
                             "sense": "cool",
                         }
                     }
@@ -856,7 +875,7 @@ class TestOptimization(unittest.TestCase):
                             "heating_rate": 10,
                             "overshoot_temperature": 50,
                             "desired_temperatures": [0, 0, 40, 0, 0, 0, 0, 0, 0, 0],
-                            "penalty_factor": 1000, # High penalty to force action
+                            "penalty_factor": 1000,  # High penalty to force action
                             "sense": "heat",
                         }
                     }
@@ -880,7 +899,7 @@ class TestOptimization(unittest.TestCase):
                 "def_load_config": [
                     {
                         "thermal_config": {
-                            "start_temperature": 20, # Config says 20
+                            "start_temperature": 20,  # Config says 20
                             "cooling_constant": 0.1,
                             "heating_rate": 10,
                             "min_temperatures": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
