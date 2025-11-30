@@ -749,8 +749,7 @@ class TestOptimization(unittest.TestCase):
         if prices is None:
             prices = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
-        # Generate Massive Time Buffer (5 days total)
-        # This prevents any timezone or "start-of-day" index mismatches
+        # Generate Massive Time Buffer (5 days total) to handle timezone safety
         start_time = pd.Timestamp.now(tz=self.fcst.time_zone).floor(
             self.fcst.freq
         ) - pd.Timedelta(days=3)
@@ -758,7 +757,7 @@ class TestOptimization(unittest.TestCase):
         times = (
             pd.date_range(
                 start=start_time,
-                periods=240,  # 5 days * 48 periods
+                periods=240,
                 freq=self.fcst.freq,
                 tz=self.fcst.time_zone,
             )
@@ -767,11 +766,43 @@ class TestOptimization(unittest.TestCase):
             .tz_convert(self.fcst.time_zone)
         )
 
-        # Create DataFrame manually (Correct size: 240 rows)
-        input_data = pd.DataFrame(index=times)
-        input_data["outdoor_temperature_forecast"] = outdoor_temp  # Scalar fill
+        # Create the full buffer DataFrame
+        input_data_full = pd.DataFrame(index=times)
+        input_data_full["outdoor_temperature_forecast"] = outdoor_temp
+        input_data_full[self.opt.var_load_cost] = 1.0
+        input_data_full[self.opt.var_prod_price] = 0.0
 
-        # Re-init Optimization to ensure clean state
+        # Find 'now' and Slice the DataFrame to the specific horizon (10 steps)
+        # This aligns 'Index 0' of the optimization with 'Now', matching your test constraints.
+        now_precise = pd.Timestamp.now(tz=self.fcst.time_zone).floor(self.fcst.freq)
+        try:
+            start_idx = input_data_full.index.get_loc(now_precise)
+        except KeyError:
+            start_idx = input_data_full.index.get_indexer([now_precise], method="nearest")[0]
+
+        horizon = len(prices)
+        input_data = input_data_full.iloc[start_idx : start_idx + horizon].copy()
+
+        # Inject prices into the sliced dataframe
+        input_data[self.opt.var_load_cost] = prices
+
+        # Setup and Run Optimization on the sliced data
+        # Update config to match the horizon length
+        self.optim_conf.update(
+            {
+                "num_def_loads": 1,
+                "photovoltaic_production_sell_price": 0,
+                "prediction_horizon": horizon,
+            }
+        )
+
+        # Create vectors matching the slice length (10)
+        P_PV = np.zeros(horizon)
+        P_Load = np.zeros(horizon)
+        unit_load_cost = input_data[self.opt.var_load_cost].values
+        unit_prod_price = input_data[self.opt.var_prod_price].values
+
+        # Re-init optimization to ensure clean state
         self.opt = Optimization(
             self.retrieve_hass_conf,
             self.optim_conf,
@@ -782,45 +813,6 @@ class TestOptimization(unittest.TestCase):
             emhass_conf,
             logger,
         )
-
-        # Manual Price Injection (Skipping Forecast module helper methods)
-        col_name = self.opt.var_load_cost
-        input_data[col_name] = 1.0  # Default background price
-        input_data[self.opt.var_prod_price] = 0.0
-
-        # Find 'now' in the index safely
-        now_precise = pd.Timestamp.now(tz=self.fcst.time_zone).floor(self.fcst.freq)
-        try:
-            start_idx = input_data.index.get_loc(now_precise)
-        except KeyError:
-            start_idx = input_data.index.get_indexer(
-                [now_precise], method="nearest"
-            )[0]
-
-        # Inject the test prices starting at 'now'
-        end_idx = min(start_idx + len(prices), len(input_data))
-        prices_to_assign = prices[: end_idx - start_idx]
-        input_data.iloc[start_idx:end_idx, input_data.columns.get_loc(col_name)] = (
-            prices_to_assign
-        )
-
-        # Call perform_optimization directly (Bypassing run_test_forecast logic)
-        # We need to mock P_PV and P_Load as they are expected by the method signature
-        prediction_horizon = 10
-        self.optim_conf.update(
-            {
-                "num_def_loads": 1,
-                "photovoltaic_production_sell_price": 0,
-                "prediction_horizon": prediction_horizon,
-            }
-        )
-
-        # The optimizer expects arrays matching the input_data length (240), not just horizon
-        P_PV = np.zeros(len(input_data))
-        P_Load = np.zeros(len(input_data))
-
-        unit_load_cost = input_data[self.opt.var_load_cost].values
-        unit_prod_price = input_data[self.opt.var_prod_price].values
 
         self.opt_res_dayahead = self.opt.perform_optimization(
             input_data,
