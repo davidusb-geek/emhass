@@ -764,10 +764,11 @@ class TestOptimization(unittest.TestCase):
             .round(self.fcst.freq, ambiguous="infer", nonexistent="shift_forward")
             .tz_convert(self.fcst.time_zone)
         )
-        input_data = pd.DataFrame.from_dict(
-            {"outdoor_temperature_forecast": [outdoor_temp] * 10}
-        )
-        input_data.set_index(times, inplace=True)
+        # Create DataFrame with the full 240-row index immediately
+        input_data = pd.DataFrame(index=times)
+        # Scalar assignment fills all 240 rows automatically
+        input_data["outdoor_temperature_forecast"] = outdoor_temp
+
         # Instead of asking Forecast to merge the list (which fails on day matching),
         # we manually insert the prices into the dataframe at the "current" time.
         col_name = self.opt.var_load_cost
@@ -779,9 +780,9 @@ class TestOptimization(unittest.TestCase):
             start_idx = input_data.index.get_indexer([now_precise], method="nearest")[0]
         end_idx = min(start_idx + 10, len(input_data))
         prices_to_assign = prices[: end_idx - start_idx]
-        input_data.iloc[
-            start_idx:end_idx, input_data.columns.get_loc(col_name)
-        ] = prices_to_assign
+        input_data.iloc[start_idx:end_idx, input_data.columns.get_loc(col_name)] = (
+            prices_to_assign
+        )
         if "load_cost_forecast" in self.fcst.params["passed_data"]:
             del self.fcst.params["passed_data"]["load_cost_forecast"]
         input_data[self.opt.var_prod_price] = 0.0
