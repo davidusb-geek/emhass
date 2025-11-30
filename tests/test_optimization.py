@@ -750,14 +750,17 @@ class TestOptimization(unittest.TestCase):
             prices = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
         self.fcst.params["passed_data"]["load_cost_forecast"] = prices
 
-        times = pd.date_range(
-            start=datetime.now(),
-            periods=10,
-            freq=self.fcst.freq,
-            tz=self.fcst.time_zone,
-        ).tz_convert("utc").round(
-            self.fcst.freq, ambiguous="infer", nonexistent="shift_forward"
-        ).tz_convert(self.fcst.time_zone)
+        times = (
+            pd.date_range(
+                start=datetime.now(),
+                periods=10,
+                freq=self.fcst.freq,
+                tz=self.fcst.time_zone,
+            )
+            .tz_convert("utc")
+            .round(self.fcst.freq, ambiguous="infer", nonexistent="shift_forward")
+            .tz_convert(self.fcst.time_zone)
+        )
         input_data = pd.DataFrame.from_dict(
             {"outdoor_temperature_forecast": [outdoor_temp] * 10}
         )
