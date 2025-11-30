@@ -1171,9 +1171,10 @@ class TestCommandLineUtils(unittest.TestCase):
         from datetime import datetime, timedelta
 
         # Test 1: Non-existent file should return True
-        non_existent_path = pathlib.Path("/tmp/nonexistent_model.pkl")
-        result = is_model_outdated(non_existent_path, 24, logger)
-        self.assertTrue(result, "Should return True for non-existent file")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            non_existent_path = pathlib.Path(tmpdir) / "nonexistent_model.pkl"
+            result = is_model_outdated(non_existent_path, 24, logger)
+            self.assertTrue(result, "Should return True for non-existent file")
 
         # Test 2: max_age_hours = 0 should force refit (return True)
         with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:

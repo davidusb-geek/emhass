@@ -109,9 +109,7 @@ def is_model_outdated(
         return True
 
     if max_age_hours <= 0:
-        logger.info(
-            "adjusted_pv_model_max_age is set to 0, forcing model re-fit"
-        )
+        logger.info("adjusted_pv_model_max_age is set to 0, forcing model re-fit")
         return True
 
     model_mtime = datetime.fromtimestamp(model_path.stat().st_mtime)
@@ -176,9 +174,7 @@ def adjust_pv_forecast(
     max_age_hours = optim_conf.get("adjusted_pv_model_max_age", 24)
 
     # Check if model needs to be re-fitted
-    need_fit = is_model_outdated(model_path, max_age_hours, logger)
-
-    if need_fit:
+    if is_model_outdated(model_path, max_age_hours, logger):
         logger.info("Adjusting PV forecast, retrieving history data for model fit")
         # Retrieve data from Home Assistant
         success, df_input_data, _ = retrieve_home_assistant_data(
@@ -205,7 +201,7 @@ def adjust_pv_forecast(
         try:
             with open(model_path, "rb") as inp:
                 fcst.model_adjust_pv = pickle.load(inp)
-        except (pickle.UnpicklingError, EOFError, AttributeError, ImportError, ModuleNotFoundError) as e:
+        except (pickle.UnpicklingError, EOFError, AttributeError, ImportError) as e:
             logger.error(
                 f"Failed to load existing adjusted PV model: {type(e).__name__}: {str(e)}"
             )
@@ -223,7 +219,9 @@ def adjust_pv_forecast(
                 test_df_literal,
             )
             if not success:
-                logger.error("Failed to retrieve data for model re-fit after load error")
+                logger.error(
+                    "Failed to retrieve data for model re-fit after load error"
+                )
                 return False
             # Call data preparation method
             fcst.adjust_pv_forecast_data_prep(df_input_data)
