@@ -750,9 +750,13 @@ class TestOptimization(unittest.TestCase):
             prices = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
         self.fcst.params["passed_data"]["load_cost_forecast"] = prices
 
+        start_time = (
+            pd.Timestamp.now(tz=self.fcst.time_zone).floor(self.fcst.freq)
+            - pd.Timedelta(days=3)
+        )
         times = (
             pd.date_range(
-                start=datetime.now(),
+                start=start_time,
                 periods=10,
                 freq=self.fcst.freq,
                 tz=self.fcst.time_zone,
