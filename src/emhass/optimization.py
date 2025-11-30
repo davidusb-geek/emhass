@@ -213,7 +213,7 @@ class Optimization:
 
         # Initialize deferrable initial temperatures if not provided
         if def_init_temp is None:
-             def_init_temp = [None] * self.optim_conf["number_of_deferrable_loads"]
+            def_init_temp = [None] * self.optim_conf["number_of_deferrable_loads"]
 
         type_self_conso = "bigm"  # maxmin
 
@@ -856,23 +856,37 @@ class Optimization:
                         # Constraint Logic: Comfort Range (Min/Max)
                         # If min/max temps are provided, we enforce them.
                         # This avoids the "penalty" method and ensures feasibility within a range.
-                        if len(min_temperatures) > Id and min_temperatures[Id] is not None:
-                            constraints.update({
-                                f"constraint_defload{k}_min_temp_{Id}": plp.LpConstraint(
-                                    e=predicted_temp[Id],
-                                    sense=plp.LpConstraintGE if sense == "heat" else plp.LpConstraintLE,
-                                    rhs=min_temperatures[Id]
-                                )
-                            })
+                        if (
+                            len(min_temperatures) > Id
+                            and min_temperatures[Id] is not None
+                        ):
+                            constraints.update(
+                                {
+                                    f"constraint_defload{k}_min_temp_{Id}": plp.LpConstraint(
+                                        e=predicted_temp[Id],
+                                        sense=plp.LpConstraintGE
+                                        if sense == "heat"
+                                        else plp.LpConstraintLE,
+                                        rhs=min_temperatures[Id],
+                                    )
+                                }
+                            )
 
-                        if len(max_temperatures) > Id and max_temperatures[Id] is not None:
-                            constraints.update({
-                                f"constraint_defload{k}_max_temp_{Id}": plp.LpConstraint(
-                                    e=predicted_temp[Id],
-                                    sense=plp.LpConstraintLE if sense == "heat" else plp.LpConstraintGE,
-                                    rhs=max_temperatures[Id]
-                                )
-                            })
+                        if (
+                            len(max_temperatures) > Id
+                            and max_temperatures[Id] is not None
+                        ):
+                            constraints.update(
+                                {
+                                    f"constraint_defload{k}_max_temp_{Id}": plp.LpConstraint(
+                                        e=predicted_temp[Id],
+                                        sense=plp.LpConstraintLE
+                                        if sense == "heat"
+                                        else plp.LpConstraintGE,
+                                        rhs=max_temperatures[Id],
+                                    )
+                                }
+                            )
 
                         # Legacy "Overshoot" logic (Keep for backward compatibility)
                         # Only added if desired_temperatures is present AND min/max are NOT fully defining the problem
@@ -906,7 +920,10 @@ class Optimization:
                                 }
                             )
 
-                            if len(desired_temperatures) > Id and desired_temperatures[Id]:
+                            if (
+                                len(desired_temperatures) > Id
+                                and desired_temperatures[Id]
+                            ):
                                 penalty_factor = hc.get("penalty_factor", 10)
                                 if penalty_factor < 0:
                                     raise ValueError(
@@ -931,7 +948,9 @@ class Optimization:
                                         )
                                     }
                                 )
-                                opt_model.setObjective(opt_model.objective + penalty_var)
+                                opt_model.setObjective(
+                                    opt_model.objective + penalty_var
+                                )
 
                     # Force thermal load to be semi-continuous (On/Off).
                     # This ensures the solver creates solid heating blocks instead of fractional power.
