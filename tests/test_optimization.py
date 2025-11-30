@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 
-from datetime import datetime
 import json
 import os
 import pathlib
 import pickle
 import random
 import unittest
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -741,16 +741,19 @@ class TestOptimization(unittest.TestCase):
         if prices is None:
             prices = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
         self.fcst.params["passed_data"]["load_cost_forecast"] = prices
-        start = pd.Timestamp.now(tz=self.fcst.time_zone)
-        start = start.floor(self.fcst.freq) - pd.Timedelta(hours=2)
+        start_time = (
+            pd.Timestamp.now(tz=self.fcst.time_zone).floor(self.fcst.freq)
+            - pd.Timedelta(hours=12)
+        )
         times = pd.date_range(
-            start=start,
-            periods=20,
+            start=start_time,
+            periods=48,
             freq=self.fcst.freq,
             tz=self.fcst.time_zone,
         )
         input_data = pd.DataFrame(index=times)
         input_data["outdoor_temperature_forecast"] = outdoor_temp
+
         self.run_test_forecast(input_data=input_data, def_init_temp=def_init_temp)
 
     def test_thermal_management(self):
