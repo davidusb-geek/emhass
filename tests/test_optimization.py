@@ -750,14 +750,13 @@ class TestOptimization(unittest.TestCase):
             prices = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
         self.fcst.params["passed_data"]["load_cost_forecast"] = prices
 
-        start_time = (
-            pd.Timestamp.now(tz=self.fcst.time_zone).floor(self.fcst.freq)
-            - pd.Timedelta(days=3)
-        )
+        start_time = pd.Timestamp.now(tz=self.fcst.time_zone).floor(
+            self.fcst.freq
+        ) - pd.Timedelta(days=3)
         times = (
             pd.date_range(
                 start=start_time,
-                periods=10,
+                periods=240,
                 freq=self.fcst.freq,
                 tz=self.fcst.time_zone,
             )
@@ -769,7 +768,23 @@ class TestOptimization(unittest.TestCase):
             {"outdoor_temperature_forecast": [outdoor_temp] * 10}
         )
         input_data.set_index(times, inplace=True)
-
+        # Instead of asking Forecast to merge the list (which fails on day matching),
+        # we manually insert the prices into the dataframe at the "current" time.
+        col_name = self.opt.var_load_cost
+        input_data[col_name] = 1.0
+        now_precise = pd.Timestamp.now(tz=self.fcst.time_zone).floor(self.fcst.freq)
+        try:
+            start_idx = input_data.index.get_loc(now_precise)
+        except KeyError:
+            start_idx = input_data.index.get_indexer([now_precise], method="nearest")[0]
+        end_idx = min(start_idx + 10, len(input_data))
+        prices_to_assign = prices[: end_idx - start_idx]
+        input_data.iloc[
+            start_idx:end_idx, input_data.columns.get_loc(col_name)
+        ] = prices_to_assign
+        if "load_cost_forecast" in self.fcst.params["passed_data"]:
+            del self.fcst.params["passed_data"]["load_cost_forecast"]
+        input_data[self.opt.var_prod_price] = 0.0
         self.run_test_forecast(input_data=input_data, def_init_temp=def_init_temp)
 
     def test_thermal_management(self):
