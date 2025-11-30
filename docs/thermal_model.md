@@ -36,8 +36,20 @@ To implement this model we need to provide a configuration for the discussed par
 We will control this by using data passed at runtime.
 The first step will be to define a new entry `def_load_config`, this will be used as a dictionary to store any needed special configuration for each deferrable load.
 
-For example, if we have just **two** deferrable loads and the **second** load is a **thermal load** then we will define `def_load_config` as:
-```
+### Configuration Parameters
+
+You can define the following parameters inside the `thermal_config` dictionary:
+
+* **heating_rate**: The rate at which the temperature changes per hour.
+* **cooling_constant**: The rate at which temperature is lost to the environment.
+* **overshoot_temperature**: The maximum allowed temperature above the target.
+* **start_temperature**: The initial room temperature.
+* **sense**: Defines the operation mode of the thermal load.
+    * `'heat'`: (Default) The device adds heat to the system (e.g., a heater). Temperature increases when power is applied.
+    * `'cool'`: The device removes heat from the system (e.g., an AC). Temperature decreases when power is applied.
+
+For example, if we have just **two** deferrable loads and the **second** load is a **thermal load** (functioning as a heater) then we will define `def_load_config` as:
+```json
 'def_load_config': {
     {},
     {'thermal_config': {
@@ -45,12 +57,11 @@ For example, if we have just **two** deferrable loads and the **second** load is
         'cooling_constant': 0.1,
         'overshoot_temperature': 24.0,
         'start_temperature': 20,
+        'sense': 'heat',
         'desired_temperatures': [...]
     }}
 }
-```
-
-Here the `desired_temperatures` is a list of float values for each time step.
+Here the desired_temperatures is a list of float values for each time step.
 
 Now we also need to define the other needed input, the `outdoor_temperature_forecast`, which is a list of float values. The list of floats for `desired_temperatures` and the list in `outdoor_temperature_forecast` should have proper lengths, if using MPC the length should be at least equal to the prediction horizon.
 
@@ -90,6 +101,7 @@ rest_command:
             "cooling_constant": 0.1,
             "overshoot_temperature": {{ (states('sensor.my_room_temperature') | float) + 3.0 }},
             "start_temperature": {{ states('sensor.my_room_temperature') }},
+            "sense": "heat",
             "desired_temperatures": [
               {%- set comma = joiner(", ") -%}
               {%- for i in range(horizon) -%}
