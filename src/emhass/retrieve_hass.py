@@ -113,9 +113,15 @@ class RetrieveHass:
         self.ha_config = {}
 
         # Check if variables are None, empty strings, or explicitly set to "empty"
-        if (not self.hass_url or self.hass_url == "empty" or 
-            not self.long_lived_token or self.long_lived_token == "empty"):
-            self.logger.info("No Home Assistant URL or Long Lived Token found. Using only local configuration file.")
+        if (
+            not self.hass_url
+            or self.hass_url == "empty"
+            or not self.long_lived_token
+            or self.long_lived_token == "empty"
+        ):
+            self.logger.info(
+                "No Home Assistant URL or Long Lived Token found. Using only local configuration file."
+            )
             return True
 
         # Set up headers
@@ -131,7 +137,9 @@ class RetrieveHass:
         else:
             # Helpful check for users who forget the trailing slash
             if not self.hass_url.endswith("/"):
-                self.logger.warning("The defined HA URL is missing a trailing slash </>. Appending it, but please fix your configuration.")
+                self.logger.warning(
+                    "The defined HA URL is missing a trailing slash </>. Appending it, but please fix your configuration."
+                )
                 self.hass_url = self.hass_url + "/"
             url = self.hass_url + "api/config"
 
@@ -139,19 +147,23 @@ class RetrieveHass:
         try:
             response = get(url, headers=headers)
             # Check for HTTP errors (404, 401, 500) before trying to parse JSON
-            response.raise_for_status() 
+            response.raise_for_status()
             self.ha_config = response.json()
             return True
 
         except Exception as e:
-            # 6. Granular Error Logging
+            # Granular Error Logging
             # We log the specific error 'e' so the user knows if it's a Timeout, Connection Refused, or 401 Auth error
-            self.logger.error(f"Unable to obtain configuration from Home Assistant at: {url}")
+            self.logger.error(
+                f"Unable to obtain configuration from Home Assistant at: {url}"
+            )
             self.logger.error(f"Error details: {e}")
 
             # Helpful hint for Add-on users without confusing Docker users
             if "supervisor" in self.hass_url:
-                self.logger.error("If using the add-on, try setting url and token to 'empty' to force local config.")
+                self.logger.error(
+                    "If using the add-on, try setting url and token to 'empty' to force local config."
+                )
 
             return False
 
