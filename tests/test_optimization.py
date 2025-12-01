@@ -778,7 +778,9 @@ class TestOptimization(unittest.TestCase):
         try:
             start_idx = input_data_full.index.get_loc(now_precise)
         except KeyError:
-            start_idx = input_data_full.index.get_indexer([now_precise], method="nearest")[0]
+            start_idx = input_data_full.index.get_indexer(
+                [now_precise], method="nearest"
+            )[0]
 
         horizon = len(prices)
         input_data = input_data_full.iloc[start_idx : start_idx + horizon].copy()
