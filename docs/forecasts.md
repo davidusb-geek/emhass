@@ -115,7 +115,28 @@ To activate this option all that is needed is to set `set_use_adjusted_pv` to `T
 
 The **Model Training** uses the `adjust_pv_forecast_fit` method in the `Forecast` class. This method fits a regression model to adjust the PV forecast. It uses historical forecasted and actual PV production data as training input, incorporating additional features such as time of day and solar angles. The model is trained using time-series cross-validation, with hyperparameter tuning performed via grid search. The best model is selected based on mean squared error scoring. The historical data retrieved depends on the `historic_days_to_retrieve` parameter in the configuration. By default, the method uses `LassoRegression`, but other models can also be specified using parameter `adjusted_pv_regression_model`. Once the model is trained, it computes root mean squared error (RMSE) and R² metrics to assess performance. These metrics are logged for reference. If debugging is disabled, the trained model is saved for future use.
 
-The actual **Forecast Adjustment** is perfomed by the `adjust_pv_forecast_predict` method. This method applies the trained regression model to adjust PV forecast data. Before making predictions, the method enhances the data by adding date-based and solar-related features. It then uses the trained model to predict the adjusted forecast. A correction is applied based on solar elevation to prevent negative or unrealistic values, ensuring that the adjusted forecast remains physically meaningful. The correction based on solar elevation can be parametrized using a treshold value with parameter `adjusted_pv_solar_elevation_threshold` from the configuration. 
+The actual **Forecast Adjustment** is performed by the `adjust_pv_forecast_predict` method. This method applies the trained regression model to adjust PV forecast data. Before making predictions, the method enhances the data by adding date-based and solar-related features. It then uses the trained model to predict the adjusted forecast. A correction is applied based on solar elevation to prevent negative or unrealistic values, ensuring that the adjusted forecast remains physically meaningful. The correction based on solar elevation can be parametrized using a threshold value with parameter `adjusted_pv_solar_elevation_threshold` from the configuration.
+
+#### Model Caching for Performance Optimization
+
+To improve performance and reduce unnecessary Home Assistant API calls, EMHASS implements a model caching mechanism for the adjusted PV forecast regression model. Instead of re-training the model on every optimization run, EMHASS saves the trained model to disk and reuses it if it's still fresh.
+
+The caching behavior is controlled by the `adjusted_pv_model_max_age` parameter in the optimization configuration:
+
+- **Default value**: 24 hours - The model will be re-fitted if it's older than 24 hours
+- **Set to 0**: Forces re-fitting on every call (preserves original behavior without caching)
+- **Custom values**: Set any value in hours based on your needs (e.g., 6, 12, 48, etc.)
+
+**Runtime parameter override:**
+
+You can also override the `adjusted_pv_model_max_age` parameter at runtime using the API:
+
+```bash
+curl -i -H "Content-Type: application/json" -X POST -d '{
+  "adjusted_pv_model_max_age": 6,
+  "pv_power_forecast": [0, 0, 50, 150, ...]
+}' http://localhost:5000/action/naive-mpc-optim
+```
 
 ## Load power forecast
 

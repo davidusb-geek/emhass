@@ -371,6 +371,12 @@
       "input": "int",
       "default_value": 10
     },
+    "adjusted_pv_model_max_age": {
+      "friendly_name": "Adjusted PV model maximum age",
+      "Description": "Maximum age in hours before the adjusted PV regression model is re-fitted. If the saved model is older than this value, a new model will be trained using fresh historical data. Set to 0 to force re-fitting on every call. Defaults to 24 hours (1 day).",
+      "input": "int",
+      "default_value": 24
+    },
     "pv_module_model": {
       "friendly_name": "PV module model name",
       "Description": "The PV module model. This parameter can be a list of items to enable the simulation of mixed orientation systems.",
