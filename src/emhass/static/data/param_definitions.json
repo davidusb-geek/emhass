@@ -449,7 +449,7 @@
     },
     "set_deferrable_startup_penalty": {
       "friendly_name": "Set deferrable startup penalty",
-      "Description": "For penalty P, each time the deferrable load turns on will incur an additional cost of P * number_of_deferrable_loads * cost_of_electricity * time step at that time",
+      "Description": "For penalty P, each time the deferrable load turns on will incur an additional cost of nominal_power (kW) * cost_of_electricity * time step at that time",
       "input": "array.float",
       "default_value": 0.0
     },
