@@ -101,6 +101,32 @@ class MLForecaster:
         return await asyncio.to_thread(data.interpolate, method="linear", axis=0, limit=None)
 
     @staticmethod
+    def get_lags_list_from_frequency(freq: pd.Timedelta) -> list[int]:
+        """Calculate appropriate lag values based on data frequency.
+
+        The lags represent different time horizons (6h, 12h, 1d, 1.5d, 2d, 2.5d, 3d).
+        This method scales these horizons according to the actual data frequency.
+
+        :param freq: The frequency of the data as a pandas Timedelta
+        :type freq: pd.Timedelta
+        :return: A list of lag values appropriate for the data frequency
+        :rtype: list[int]
+        """
+        # Define target time horizons in hours
+        target_horizons_hours = [6, 12, 24, 36, 48, 60, 72]
+
+        # Calculate frequency in hours
+        freq_hours = freq.total_seconds() / 3600
+
+        # Calculate lags for each horizon
+        lags = [int(round(horizon / freq_hours)) for horizon in target_horizons_hours]
+
+        # Remove duplicates and ensure minimum value of 1
+        lags = sorted({max(1, lag) for lag in lags})
+
+        return lags
+
+    @staticmethod
     async def generate_exog(data_last_window, periods, var_name):
         """Generate the exogenous data for future timestamps."""
         forecast_dates = pd.date_range(
@@ -322,8 +348,18 @@ class MLForecaster:
             self.logger.error(f"Error during prediction: {e}")
             raise
 
-    def _get_search_space(self, debug: bool):
-        """Get the hyperparameter search space for the given model."""
+    def _get_search_space(self, debug: bool, lags_list: list[int] | None = None):
+        """Get the hyperparameter search space for the given model.
+        
+        :param debug: If True, use simplified search space for faster testing
+        :type debug: bool
+        :param lags_list: List of lag values to use. If None, uses default values
+        :type lags_list: list[int] | None
+        """
+        if lags_list is None:
+            # Default lags for backward compatibility (hardcoded values)
+            lags_list = [6, 12, 24, 36, 48, 60, 72]
+            
         if self.sklearn_model == "LinearRegression":
             if debug:
 
@@ -338,7 +374,7 @@ class MLForecaster:
                 def search_space(trial):
                     return {
                         "fit_intercept": trial.suggest_categorical("fit_intercept", [True, False]),
-                        "lags": trial.suggest_categorical("lags", [6, 12, 24, 36, 48, 60, 72]),
+                        "lags": trial.suggest_categorical("lags", lags_list),
                     }
 
         elif self.sklearn_model == "ElasticNet":
@@ -357,7 +393,7 @@ class MLForecaster:
                         "alpha": trial.suggest_float("alpha", 0.0, 2.0),
                         "l1_ratio": trial.suggest_float("l1_ratio", 0.0, 1.0),
                         "selection": trial.suggest_categorical("selection", ["cyclic", "random"]),
-                        "lags": trial.suggest_categorical("lags", [6, 12, 24, 36, 48, 60, 72]),
+                        "lags": trial.suggest_categorical("lags", lags_list),
                     }
 
         elif self.sklearn_model == "KNeighborsRegressor":
@@ -376,7 +412,7 @@ class MLForecaster:
                         "n_neighbors": trial.suggest_int("n_neighbors", 2, 20),
                         "leaf_size": trial.suggest_int("leaf_size", 20, 40),
                         "weights": trial.suggest_categorical("weights", ["uniform", "distance"]),
-                        "lags": trial.suggest_categorical("lags", [6, 12, 24, 36, 48, 60, 72]),
+                        "lags": trial.suggest_categorical("lags", lags_list),
                     }
 
         else:
@@ -399,11 +435,17 @@ class MLForecaster:
         :rtype: pd.DataFrame
         """
         try:
+            # Calculate appropriate lags based on data frequency
+            freq_timedelta = pd.Timedelta(self.data_exo.index.freq)
+            lags_list = MLForecaster.get_lags_list_from_frequency(freq_timedelta)
+            self.logger.info(
+                f"Using lags list based on data frequency ({self.data_exo.index.freq}): {lags_list}"
+            )
             if self.forecaster is None:
                 raise ValueError("Model has not been fitted yet. Call fit() first.")
 
             # Get the search space for this model
-            search_space = self._get_search_space(debug)
+            search_space = self._get_search_space(debug, lags_list)
 
             # Bayesian search hyperparameter and lags with skforecast/optuna
             if debug:

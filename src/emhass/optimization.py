@@ -131,6 +131,7 @@ class Optimization:
         def_total_timestep: list | None = None,
         def_start_timestep: list | None = None,
         def_end_timestep: list | None = None,
+        def_init_temp: list | None = None,
         debug: bool | None = False,
     ) -> pd.DataFrame:
         r"""
@@ -201,6 +202,11 @@ class Optimization:
             def_start_timestep = self.optim_conf["start_timesteps_of_each_deferrable_load"]
         if def_end_timestep is None:
             def_end_timestep = self.optim_conf["end_timesteps_of_each_deferrable_load"]
+
+        # Initialize deferrable initial temperatures if not provided
+        if def_init_temp is None:
+            def_init_temp = [None] * self.optim_conf["number_of_deferrable_loads"]
+
         type_self_conso = "bigm"  # maxmin
 
         num_deferrable_loads = self.optim_conf["number_of_deferrable_loads"]
@@ -224,7 +230,7 @@ class Optimization:
 
         n = len(data_opt.index)
         set_I = range(n)
-        M = 10e10
+        M = 100000
 
         ## Add decision variables
         P_grid_neg = {
@@ -716,7 +722,7 @@ class Optimization:
                     )
                 self.logger.debug(f"Load {k}: Sequence-based constraints set.")
 
-            # --- Thermal deferrable load logic first ---
+            # Thermal deferrable load logic first
             elif (
                 "def_load_config" in self.optim_conf.keys()
                 and len(self.optim_conf["def_load_config"]) > k
@@ -726,28 +732,39 @@ class Optimization:
                 def_load_config = self.optim_conf["def_load_config"][k]
                 if def_load_config and "thermal_config" in def_load_config:
                     hc = def_load_config["thermal_config"]
-                    start_temperature = hc["start_temperature"]
+
+                    # Use passed runtime value (def_init_temp) if available, else config
+                    if def_init_temp[k] is not None:
+                        start_temperature = def_init_temp[k]
+                    else:
+                        start_temperature = hc["start_temperature"]
+
                     cooling_constant = hc["cooling_constant"]
                     heating_rate = hc["heating_rate"]
-                    overshoot_temperature = hc["overshoot_temperature"]
-                    outdoor_temperature_forecast = data_opt["outdoor_temperature_forecast"]
-                    desired_temperatures = hc["desired_temperatures"]
+                    overshoot_temperature = hc.get("overshoot_temperature", None)
+                    outdoor_temperature_forecast = data_opt[
+                        "outdoor_temperature_forecast"
+                    ]
+                    # Support for both single desired temperature (legacy) and min/max range (new)
+                    desired_temperatures = hc.get("desired_temperatures", [])
+                    min_temperatures = hc.get("min_temperatures", [])
+                    max_temperatures = hc.get("max_temperatures", [])
                     sense = hc.get("sense", "heat")
                     sense_coeff = 1 if sense == "heat" else -1
 
                     self.logger.debug(
-                        "Load %s: Thermal parameters: start_temperature=%s, cooling_constant=%s, heating_rate=%s, overshoot_temperature=%s",
+                        "Load %s: Thermal parameters: start_temperature=%s, cooling_constant=%s, heating_rate=%s",
                         k,
                         start_temperature,
                         cooling_constant,
                         heating_rate,
-                        overshoot_temperature,
                     )
 
                     predicted_temp = [start_temperature]
                     for Id in set_I:
                         if Id == 0:
                             continue
+
                         predicted_temp.append(
                             predicted_temp[Id - 1]
                             + (
@@ -760,6 +777,7 @@ class Optimization:
                             )
                             - (
                                 cooling_constant
+                                * self.timeStep
                                 * (
                                     predicted_temp[Id - 1]
                                     - outdoor_temperature_forecast.iloc[Id - 1]
@@ -767,66 +785,124 @@ class Optimization:
                             )
                         )
 
-                        is_overshoot = plp.LpVariable(f"defload_{k}_overshoot_{Id}")
-                        constraints.update(
-                            {
-                                f"constraint_defload{k}_overshoot_{Id}_1": plp.LpConstraint(
-                                    predicted_temp[Id]
-                                    - overshoot_temperature
-                                    - (100 * sense_coeff * is_overshoot),
-                                    sense=plp.LpConstraintLE
-                                    if sense == "heat"
-                                    else plp.LpConstraintGE,
-                                    rhs=0,
-                                ),
-                                f"constraint_defload{k}_overshoot_{Id}_2": plp.LpConstraint(
-                                    predicted_temp[Id]
-                                    - overshoot_temperature
-                                    + (100 * sense_coeff * (1 - is_overshoot)),
-                                    sense=plp.LpConstraintGE
-                                    if sense == "heat"
-                                    else plp.LpConstraintLE,
-                                    rhs=0,
-                                ),
-                                f"constraint_defload{k}_overshoot_temp_{Id}": plp.LpConstraint(
-                                    e=is_overshoot + P_def_bin2[k][Id - 1],
-                                    sense=plp.LpConstraintLE,
-                                    rhs=1,
-                                ),
-                            }
-                        )
-
-                        if len(desired_temperatures) > Id and desired_temperatures[Id]:
-                            penalty_factor = hc.get("penalty_factor", 10)
-                            if penalty_factor < 0:
-                                raise ValueError(
-                                    "penalty_factor must be positive, otherwise the problem will become unsolvable"
-                                )
-                            penalty_value = (
-                                (predicted_temp[Id] - desired_temperatures[Id])
-                                * penalty_factor
-                                * sense_coeff
-                            )
-                            penalty_var = plp.LpVariable(
-                                f"defload_{k}_thermal_penalty_{Id}",
-                                cat="Continuous",
-                                upBound=0,
-                            )
+                        # Constraint Logic: Comfort Range (Min/Max)
+                        # If min/max temps are provided, we enforce them.
+                        # This avoids the "penalty" method and ensures feasibility within a range.
+                        if (
+                            len(min_temperatures) > Id
+                            and min_temperatures[Id] is not None
+                        ):
                             constraints.update(
                                 {
-                                    f"constraint_defload{k}_penalty_{Id}": plp.LpConstraint(
-                                        e=penalty_var - penalty_value,
-                                        sense=plp.LpConstraintLE,
-                                        rhs=0,
+                                    f"constraint_defload{k}_min_temp_{Id}": plp.LpConstraint(
+                                        e=predicted_temp[Id],
+                                        sense=plp.LpConstraintGE,
+                                        rhs=min_temperatures[Id],
                                     )
                                 }
                             )
-                            opt_model.setObjective(opt_model.objective + penalty_var)
+
+                        if (
+                            len(max_temperatures) > Id
+                            and max_temperatures[Id] is not None
+                        ):
+                            constraints.update(
+                                {
+                                    f"constraint_defload{k}_max_temp_{Id}": plp.LpConstraint(
+                                        e=predicted_temp[Id],
+                                        sense=plp.LpConstraintLE,
+                                        rhs=max_temperatures[Id],
+                                    )
+                                }
+                            )
+
+                        # Legacy "Overshoot" logic (Keep for backward compatibility)
+                        # Only added if desired_temperatures is present AND overshoot_temperature is defined
+                        if desired_temperatures and overshoot_temperature is not None:
+                            is_overshoot = plp.LpVariable(f"defload_{k}_overshoot_{Id}")
+                            constraints.update(
+                                {
+                                    f"constraint_defload{k}_overshoot_{Id}_1": plp.LpConstraint(
+                                        e=predicted_temp[Id]
+                                        - overshoot_temperature
+                                        - (100 * sense_coeff * is_overshoot),
+                                        sense=plp.LpConstraintLE
+                                        if sense == "heat"
+                                        else plp.LpConstraintGE,
+                                        rhs=0,
+                                    ),
+                                    f"constraint_defload{k}_overshoot_{Id}_2": plp.LpConstraint(
+                                        e=predicted_temp[Id]
+                                        - overshoot_temperature
+                                        + (100 * sense_coeff * (1 - is_overshoot)),
+                                        sense=plp.LpConstraintGE
+                                        if sense == "heat"
+                                        else plp.LpConstraintLE,
+                                        rhs=0,
+                                    ),
+                                    f"constraint_defload{k}_overshoot_temp_{Id}": plp.LpConstraint(
+                                        e=is_overshoot + P_def_bin2[k][Id - 1],
+                                        sense=plp.LpConstraintLE,
+                                        rhs=1,
+                                    ),
+                                }
+                            )
+
+                            if (
+                                len(desired_temperatures) > Id
+                                and desired_temperatures[Id]
+                            ):
+                                penalty_factor = hc.get("penalty_factor", 10)
+                                if penalty_factor < 0:
+                                    raise ValueError(
+                                        "penalty_factor must be positive, otherwise the problem will become unsolvable"
+                                    )
+                                penalty_value = (
+                                    (predicted_temp[Id] - desired_temperatures[Id])
+                                    * penalty_factor
+                                    * sense_coeff
+                                )
+                                penalty_var = plp.LpVariable(
+                                    f"defload_{k}_thermal_penalty_{Id}",
+                                    cat="Continuous",
+                                    upBound=0,
+                                )
+                                constraints.update(
+                                    {
+                                        f"constraint_defload{k}_penalty_{Id}": plp.LpConstraint(
+                                            e=penalty_var - penalty_value,
+                                            sense=plp.LpConstraintLE,
+                                            rhs=0,
+                                        )
+                                    }
+                                )
+                                opt_model.setObjective(
+                                    opt_model.objective + penalty_var
+                                )
+
+                    # Force thermal load to be semi-continuous (On/Off).
+                    # This ensures the solver creates solid heating blocks instead of fractional power.
+                    constraints.update(
+                        {
+                            f"constraint_thermal_semicont_{k}_{i}": plp.LpConstraint(
+                                e=P_deferrable[k][i]
+                                - (
+                                    P_def_bin2[k][i]
+                                    * self.optim_conf[
+                                        "nominal_power_of_deferrable_loads"
+                                    ][k]
+                                ),
+                                sense=plp.LpConstraintEQ,
+                                rhs=0,
+                            )
+                            for i in set_I
+                        }
+                    )
 
                     predicted_temps[k] = predicted_temp
                     self.logger.debug(f"Load {k}: Thermal constraints set.")
 
-            # --- Standard/non-thermal deferrable load logic comes after thermal ---
+            # Standard/non-thermal deferrable load logic comes after thermal
             elif (def_total_timestep and def_total_timestep[k] > 0) or (
                 len(def_total_hours) > k and def_total_hours[k] > 0
             ):
@@ -1348,6 +1424,7 @@ class Optimization:
             for k in range(self.optim_conf["number_of_deferrable_loads"]):
                 opt_tp[f"P_def_start_{k}"] = [P_def_start[k][i].varValue for i in set_I]
                 opt_tp[f"P_def_bin2_{k}"] = [P_def_bin2[k][i].varValue for i in set_I]
+
         for i, predicted_temp in predicted_temps.items():
             opt_tp[f"predicted_temp_heater{i}"] = pd.Series(
                 [
@@ -1356,10 +1433,20 @@ class Optimization:
                 ],
                 index=opt_tp.index,
             )
-            opt_tp[f"target_temp_heater{i}"] = pd.Series(
-                self.optim_conf["def_load_config"][i]["thermal_config"]["desired_temperatures"],
-                index=opt_tp.index,
-            )
+            # Try desired, then min, then max, else empty list
+            thermal_config = self.optim_conf["def_load_config"][i]["thermal_config"]
+            target_temps = thermal_config.get("desired_temperatures")
+            # If desired_temperatures is missing, try to fallback to min or max for visualization
+            if not target_temps:
+                target_temps = thermal_config.get("min_temperatures")
+            if not target_temps:
+                target_temps = thermal_config.get("max_temperatures")
+            # If we found something, add it to the DF
+            if target_temps:
+                opt_tp[f"target_temp_heater{i}"] = pd.Series(
+                    target_temps,
+                    index=opt_tp.index,
+                )
 
         # Battery initialization logging
         if self.optim_conf["set_use_battery"]:

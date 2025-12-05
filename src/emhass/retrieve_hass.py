@@ -112,37 +112,72 @@ class RetrieveHass:
         """
         Extract some configuration data from HA.
 
+        :rtype: bool
         """
+        # Initialize empty config immediately for safety
+        self.ha_config = {}
+
+        # Check if variables are None, empty strings, or explicitly set to "empty"
+        if (
+            not self.hass_url
+            or self.hass_url == "empty"
+            or not self.long_lived_token
+            or self.long_lived_token == "empty"
+        ):
+            self.logger.info(
+                "No Home Assistant URL or Long Lived Token found. Using only local configuration file."
+            )
+            return True
+
+        # Use WebSocket if configured
         if self.use_websocket:
             return await self.get_ha_config_websocket()
+
         self.logger.info("get HA config from rest api.")
+
+        # Set up headers
         headers = {
             "Authorization": "Bearer " + self.long_lived_token,
             "content-type": "application/json",
         }
+
+        # Construct the URL (incorporating the PR's helpful checks)
+        # The Supervisor API sometimes uses a different path structure
         if self.hass_url == "http://supervisor/core/api":
             url = self.hass_url + "/config"
         else:
-            if self.hass_url[-1] != "/":
+            # Helpful check for users who forget the trailing slash
+            if not self.hass_url.endswith("/"):
                 self.logger.warning(
-                    "Missing slash </> at the end of the defined URL, appending a slash but please fix your URL"
+                    "The defined HA URL is missing a trailing slash </>. Appending it, but please fix your configuration."
                 )
                 self.hass_url = self.hass_url + "/"
             url = self.hass_url + "api/config"
 
+        # Attempt the connection
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as response:
+                    # Check for HTTP errors (404, 401, 500) before trying to parse JSON
                     response.raise_for_status()
                     data = await response.read()
-        except aiohttp.ClientError:
-            self.logger.error("Unable to access Home Assistant instance, check URL")
-            self.logger.error("If using addon, try setting url and token to 'empty'")
-            return False
-        try:
-            self.ha_config = orjson.loads(data)
-        except Exception:
-            self.logger.error("EMHASS was unable to obtain configuration data from Home Assistant")
+                    self.ha_config = orjson.loads(data)
+                    return True
+
+        except Exception as e:
+            # Granular Error Logging
+            # We log the specific error 'e' so the user knows if it's a Timeout, Connection Refused, or 401 Auth error
+            self.logger.error(
+                f"Unable to obtain configuration from Home Assistant at: {url}"
+            )
+            self.logger.error(f"Error details: {e}")
+
+            # Helpful hint for Add-on users without confusing Docker users
+            if "supervisor" in self.hass_url:
+                self.logger.error(
+                    "If using the add-on, try setting url and token to 'empty' to force local config."
+                )
+
             return False
 
     async def get_ha_config_websocket(self) -> dict[str, Any]:

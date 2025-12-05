@@ -236,7 +236,7 @@ async def set_input_data_dict(
             _, _, _, rh.ha_config = pickle.loads(content)
     else:
         response = await rh.get_ha_config()
-        if type(response) is bool:
+        if type(response) is bool and not response:
             return False
 
     # Update the params dict using data from the HA configuration
@@ -244,6 +244,10 @@ async def set_input_data_dict(
         params,
         rh.ha_config,
     )
+
+    # Override costfun with the updated value from optim_conf (after treat_runtimeparams)
+    # This ensures runtime parameters take precedence over config file values
+    costfun = optim_conf.get("costfun", costfun)
 
     # Define the forecast and optimization objects
     fcst = Forecast(

@@ -5,6 +5,7 @@ import pathlib
 import pickle
 import random
 import unittest
+from datetime import datetime
 
 import aiofiles
 import numpy as np
@@ -595,6 +596,341 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("cost_fun_" + self.costfun, self.opt_res_dayahead.columns)
         self.assertEqual(self.opt.optim_status, "Optimal")
+
+    # Setup function to run forecast for thermal tests
+    def run_test_forecast(
+        self,
+        prediction_horizon: int = 10,
+        def_total_hours: list[int] = None,
+        passed_data: dict = None,
+        input_data: pd.DataFrame = None,
+        def_init_temp=None,
+    ):
+        if def_total_hours is None:
+            def_total_hours = [0]
+        if passed_data is None:
+            passed_data = {}
+        if input_data is None:
+            input_data = pd.DataFrame()
+
+        self.opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+        def_start_timestep = [0]
+        def_end_timestep = [0]
+        passed_data["prediction_horizon"] = prediction_horizon
+        self.optim_conf.update(
+            {
+                "num_def_loads": 1,
+                "photovoltaic_production_sell_price": 0,
+                "prediction_horizon": prediction_horizon,
+            }
+        )
+        self.fcst.params["passed_data"].update(passed_data)
+
+        # Prepare input data
+        if input_data.empty:
+            # If no input data provided, generate dummy data
+            dates = pd.date_range(
+                start=datetime.now(),
+                periods=prediction_horizon,
+                freq=self.retrieve_hass_conf["optimization_time_step"],
+            )
+            input_data = pd.DataFrame(index=dates)
+            input_data["outdoor_temperature_forecast"] = 10.0  # constant temp
+
+        input_data = self.fcst.get_load_cost_forecast(
+            input_data,
+            method="list"
+            if "load_cost_forecast" in self.fcst.params["passed_data"]
+            else "constant",
+        )
+        input_data = self.fcst.get_prod_price_forecast(input_data, method="constant")
+
+        # Mock P_PV and P_Load as they are needed by perform_naive_mpc_optim
+        P_PV = np.zeros(prediction_horizon)
+        P_Load = np.zeros(prediction_horizon)
+
+        unit_load_cost = input_data[self.opt.var_load_cost].values
+        unit_prod_price = input_data[self.opt.var_prod_price].values
+
+        self.opt_res_dayahead = self.opt.perform_optimization(
+            input_data,
+            P_PV,
+            P_Load,
+            unit_load_cost,
+            unit_prod_price,
+            def_total_hours=def_total_hours,
+            def_start_timestep=def_start_timestep,
+            def_end_timestep=def_end_timestep,
+            def_init_temp=def_init_temp,
+        )
+
+        self.assertTrue((self.opt_res_dayahead["optim_status"] == "Optimal").all())
+
+    def run_thermal_forecast(
+        self,
+        outdoor_temp=10,
+        prices=None,
+        def_init_temp=None,
+    ):
+        if prices is None:
+            prices = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+        # Generate Massive Time Buffer (5 days total) to handle timezone safety
+        start_time = pd.Timestamp.now(tz=self.fcst.time_zone).floor(
+            self.fcst.freq
+        ) - pd.Timedelta(days=3)
+
+        times = (
+            pd.date_range(
+                start=start_time,
+                periods=240,
+                freq=self.fcst.freq,
+                tz=self.fcst.time_zone,
+            )
+            .tz_convert("utc")
+            .round(self.fcst.freq, ambiguous="infer", nonexistent="shift_forward")
+            .tz_convert(self.fcst.time_zone)
+        )
+
+        # Create the full buffer DataFrame
+        input_data_full = pd.DataFrame(index=times)
+        input_data_full["outdoor_temperature_forecast"] = outdoor_temp
+        input_data_full[self.opt.var_load_cost] = 1.0
+        input_data_full[self.opt.var_prod_price] = 0.0
+
+        # Find 'now' and Slice the DataFrame to the specific horizon (10 steps)
+        # This aligns 'Index 0' of the optimization with 'Now', matching your test constraints.
+        now_precise = pd.Timestamp.now(tz=self.fcst.time_zone).floor(self.fcst.freq)
+        try:
+            start_idx = input_data_full.index.get_loc(now_precise)
+        except KeyError:
+            start_idx = input_data_full.index.get_indexer(
+                [now_precise], method="nearest"
+            )[0]
+
+        horizon = len(prices)
+        input_data = input_data_full.iloc[start_idx : start_idx + horizon].copy()
+
+        # Inject prices into the sliced dataframe
+        input_data[self.opt.var_load_cost] = prices
+
+        # Setup and Run Optimization on the sliced data
+        # Update config to match the horizon length
+        self.optim_conf.update(
+            {
+                "num_def_loads": 1,
+                "photovoltaic_production_sell_price": 0,
+                "prediction_horizon": horizon,
+            }
+        )
+
+        # Create vectors matching the slice length (10)
+        P_PV = np.zeros(horizon)
+        P_Load = np.zeros(horizon)
+        unit_load_cost = input_data[self.opt.var_load_cost].values
+        unit_prod_price = input_data[self.opt.var_prod_price].values
+
+        # Re-init optimization to ensure clean state
+        self.opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        self.opt_res_dayahead = self.opt.perform_optimization(
+            input_data,
+            P_PV,
+            P_Load,
+            unit_load_cost,
+            unit_prod_price,
+            def_total_hours=[0],
+            def_start_timestep=[0],
+            def_end_timestep=[0],
+            def_init_temp=def_init_temp,
+        )
+
+        self.assertTrue((self.opt_res_dayahead["optim_status"] == "Optimal").all())
+
+    def test_thermal_management(self):
+        # Case: Constrain mode (Hard constraint)
+        self.optim_conf.update(
+            {
+                "def_load_config": [
+                    {
+                        "thermal_config": {
+                            "start_temperature": 20,
+                            "cooling_constant": 0.1,
+                            "heating_rate": 10,
+                            "overshoot_temperature": 25,
+                            "min_temperatures": [0, 0, 21, 0, 0, 0, 0, 0, 0, 0],
+                            "sense": "heat",
+                        }
+                    }
+                ]
+            }
+        )
+        prices = [2, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+        self.run_thermal_forecast(prices=prices)
+        # Verify heater turned on at index 1 to meet 21 degrees at index 2
+        assert_series_equal(
+            self.opt_res_dayahead["P_deferrable0"],
+            self.optim_conf["nominal_power_of_deferrable_loads"][0]
+            * pd.Series(
+                [0, 1, 0, 0, 0, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index
+            ),
+            check_names=False,
+        )
+
+    def test_thermal_management_overshoot(self):
+        # Case: Overshoot limit
+        # Adapted: Map overshoot_temperature to max_temperatures
+        self.optim_conf.update(
+            {
+                "treat_deferrable_load_as_semi_cont": [False, False],
+                "def_load_config": [
+                    {
+                        "thermal_config": {
+                            "start_temperature": 20,
+                            "cooling_constant": 0.2,
+                            "heating_rate": 4.0,
+                            "max_temperatures": [22] * 10,
+                            "min_temperatures": [0, 0, 21, 0, 0, 0, 0, 0, 0, 0],
+                            "sense": "heat",
+                        }
+                    }
+                ],
+            }
+        )
+        # High prices to discourage heating, but constraint should force it
+        self.run_thermal_forecast(prices=[1, 2000, 2000, 1, 1, 1, 1, 1, 1, 1])
+
+        predicted_temps = self.opt_res_dayahead["predicted_temp_heater0"]
+        # Ensure max constraint is respected
+        self.assertFalse((predicted_temps > 22).any(), "Overshot in some timesteps.")
+        # Ensure min constraint is respected
+        self.assertTrue(
+            predicted_temps.iloc[2] >= 21, "Failed to meet temperature requirement"
+        )
+
+    def test_thermal_management_cooling(self):
+        # Case: Cooling
+        self.optim_conf.update(
+            {
+                "def_load_config": [
+                    {
+                        "thermal_config": {
+                            "start_temperature": 25,
+                            "cooling_constant": 0.1,
+                            "heating_rate": -10,  # Negative for cooling capacity
+                            "min_temperatures": [0] * 10,  # No min constraint
+                            "max_temperatures": [
+                                None,
+                                None,
+                                20,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                            ],  # Max temp constraint for cooling
+                            "sense": "cool",
+                        }
+                    }
+                ]
+            }
+        )
+        self.run_thermal_forecast(
+            outdoor_temp=20,
+            prices=[2, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        )
+        # Should turn on to cool down to 20
+        assert_series_equal(
+            self.opt_res_dayahead["P_deferrable0"],
+            self.optim_conf["nominal_power_of_deferrable_loads"][0]
+            * pd.Series(
+                [0, 1, 0, 0, 0, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index
+            ),
+            check_names=False,
+        )
+
+    def test_thermal_management_penalty(self):
+        # Case: Penalize mode (Legacy behavior)
+        # We use desired_temperatures, which triggers the penalty logic
+        self.optim_conf.update(
+            {
+                "def_load_config": [
+                    {
+                        "thermal_config": {
+                            "start_temperature": 20,
+                            "cooling_constant": 0.1,
+                            "heating_rate": 10,
+                            "overshoot_temperature": 50,
+                            "desired_temperatures": [0, 0, 40, 0, 0, 0, 0, 0, 0, 0],
+                            "penalty_factor": 1000,  # High penalty to force action
+                            "sense": "heat",
+                        }
+                    }
+                ]
+            }
+        )
+        self.run_thermal_forecast()
+        # Should turn on to try and reach 40 (or get close)
+        assert_series_equal(
+            self.opt_res_dayahead["P_deferrable0"],
+            self.optim_conf["nominal_power_of_deferrable_loads"][0]
+            * pd.Series(
+                [1, 1, 0, 0, 0, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index
+            ),
+            check_names=False,
+        )
+
+    def test_thermal_runtime_initial_temp(self):
+        self.optim_conf.update(
+            {
+                "def_load_config": [
+                    {
+                        "thermal_config": {
+                            "start_temperature": 20,  # Config says 20
+                            "cooling_constant": 0.1,
+                            "heating_rate": 10,
+                            "min_temperatures": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                            "sense": "heat",
+                        }
+                    }
+                ]
+            }
+        )
+        # We pass 22 at runtime.
+        # With Outdoor=10, cooling=0.1.
+        # Next temp should be: 22 - (0.1 * (22-10)) = 22 - 1.2 = 20.8
+        # If it used config (20), next temp would be 19.
+        passed_init_temp = [22.0]
+        self.run_thermal_forecast(outdoor_temp=10.0, def_init_temp=passed_init_temp)
+
+        predicted = self.opt_res_dayahead["predicted_temp_heater0"]
+        # Check first step is the passed value
+        self.assertAlmostEqual(predicted.iloc[0], 22.0)
+        # Check second step follows physics from 22.0
+        # Time step is 30min (0.5h) in default config usually, but let's check config
+        ts = self.retrieve_hass_conf["optimization_time_step"].seconds / 3600
+        expected_next = 22.0 - (0.1 * ts * (22.0 - 10.0))
+        self.assertAlmostEqual(predicted.iloc[1], expected_next)
 
     # Setup function to run dayahead optimization for the following tests
     def run_penalty_test_forecast(self):
