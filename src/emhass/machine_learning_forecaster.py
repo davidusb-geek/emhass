@@ -350,7 +350,7 @@ class MLForecaster:
 
     def _get_search_space(self, debug: bool, lags_list: list[int] | None = None):
         """Get the hyperparameter search space for the given model.
-        
+
         :param debug: If True, use simplified search space for faster testing
         :type debug: bool
         :param lags_list: List of lag values to use. If None, uses default values
@@ -359,7 +359,7 @@ class MLForecaster:
         if lags_list is None:
             # Default lags for backward compatibility (hardcoded values)
             lags_list = [6, 12, 24, 36, 48, 60, 72]
-            
+
         if self.sklearn_model == "LinearRegression":
             if debug:
 
