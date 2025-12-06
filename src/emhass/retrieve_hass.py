@@ -167,9 +167,7 @@ class RetrieveHass:
         except Exception as e:
             # Granular Error Logging
             # We log the specific error 'e' so the user knows if it's a Timeout, Connection Refused, or 401 Auth error
-            self.logger.error(
-                f"Unable to obtain configuration from Home Assistant at: {url}"
-            )
+            self.logger.error(f"Unable to obtain configuration from Home Assistant at: {url}")
             self.logger.error(f"Error details: {e}")
 
             # Helpful hint for Add-on users without confusing Docker users
@@ -182,7 +180,6 @@ class RetrieveHass:
 
     async def get_ha_config_websocket(self) -> dict[str, Any]:
         """Get Home Assistant configuration."""
-        self.logger.info("get HA config from websocket")
         try:
             self._client = await get_websocket_client(
                 self.hass_url, self.long_lived_token, self.logger
