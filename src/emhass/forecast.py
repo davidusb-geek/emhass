@@ -236,7 +236,7 @@ class Forecast:
             forecast_days = 3
         elif forecast_days < 3:
             self.logger.debug(
-                "Open-Meteo forecast_days is too low (%s) so defaulting to 3 days",
+                "Open-Meteo forecast_days is low (%s) so defaulting to 3 days",
                 forecast_days,
             )
             forecast_days = 3

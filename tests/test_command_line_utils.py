@@ -1027,10 +1027,10 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(success)
 
     # Test that runtime costfun parameter overrides config costfun parameter
-    def test_costfun_runtime_override(self):
+    async def test_costfun_runtime_override(self):
         """Test that runtime costfun parameter correctly overrides config costfun parameter."""
         # Build params with default config
-        params = TestCommandLineUtils.get_test_params(set_use_pv=True)
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
 
         # Set costfun in config to 'profit'
         params["optim_conf"]["costfun"] = "profit"
@@ -1044,15 +1044,15 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             "costfun": "cost",  # Override to 'cost'
         }
 
-        params_json = json.dumps(params)
-        runtimeparams_json = json.dumps(runtimeparams)
+        params_json = orjson.dumps(params).decode("utf-8")
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
 
         # The costfun passed to set_input_data_dict is from the config (before runtime params)
         costfun_from_config = "profit"
         action = "dayahead-optim"
 
         # Call set_input_data_dict
-        input_data_dict = set_input_data_dict(
+        input_data_dict = await set_input_data_dict(
             emhass_conf,
             costfun_from_config,  # This is 'profit' from config
             params_json,
@@ -1071,9 +1071,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
 
         # Also test with 'self-consumption' as another option
         runtimeparams["costfun"] = "self-consumption"
-        runtimeparams_json = json.dumps(runtimeparams)
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
 
-        input_data_dict = set_input_data_dict(
+        input_data_dict = await set_input_data_dict(
             emhass_conf,
             costfun_from_config,  # Still 'profit' from config
             params_json,
@@ -1097,9 +1097,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             "prod_price_forecast": [i + 1 for i in range(48)],
             # No costfun parameter
         }
-        runtimeparams_no_costfun_json = json.dumps(runtimeparams_no_costfun)
+        runtimeparams_no_costfun_json = orjson.dumps(runtimeparams_no_costfun).decode("utf-8")
 
-        input_data_dict = set_input_data_dict(
+        input_data_dict = await set_input_data_dict(
             emhass_conf,
             costfun_from_config,  # 'profit' from config
             params_json,
