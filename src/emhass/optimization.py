@@ -742,9 +742,7 @@ class Optimization:
                     cooling_constant = hc["cooling_constant"]
                     heating_rate = hc["heating_rate"]
                     overshoot_temperature = hc.get("overshoot_temperature", None)
-                    outdoor_temperature_forecast = data_opt[
-                        "outdoor_temperature_forecast"
-                    ]
+                    outdoor_temperature_forecast = data_opt["outdoor_temperature_forecast"]
                     # Support for both single desired temperature (legacy) and min/max range (new)
                     desired_temperatures = hc.get("desired_temperatures", [])
                     min_temperatures = hc.get("min_temperatures", [])
@@ -788,10 +786,7 @@ class Optimization:
                         # Constraint Logic: Comfort Range (Min/Max)
                         # If min/max temps are provided, we enforce them.
                         # This avoids the "penalty" method and ensures feasibility within a range.
-                        if (
-                            len(min_temperatures) > Id
-                            and min_temperatures[Id] is not None
-                        ):
+                        if len(min_temperatures) > Id and min_temperatures[Id] is not None:
                             constraints.update(
                                 {
                                     f"constraint_defload{k}_min_temp_{Id}": plp.LpConstraint(
@@ -802,10 +797,7 @@ class Optimization:
                                 }
                             )
 
-                        if (
-                            len(max_temperatures) > Id
-                            and max_temperatures[Id] is not None
-                        ):
+                        if len(max_temperatures) > Id and max_temperatures[Id] is not None:
                             constraints.update(
                                 {
                                     f"constraint_defload{k}_max_temp_{Id}": plp.LpConstraint(
@@ -848,10 +840,7 @@ class Optimization:
                                 }
                             )
 
-                            if (
-                                len(desired_temperatures) > Id
-                                and desired_temperatures[Id]
-                            ):
+                            if len(desired_temperatures) > Id and desired_temperatures[Id]:
                                 penalty_factor = hc.get("penalty_factor", 10)
                                 if penalty_factor < 0:
                                     raise ValueError(
@@ -876,9 +865,7 @@ class Optimization:
                                         )
                                     }
                                 )
-                                opt_model.setObjective(
-                                    opt_model.objective + penalty_var
-                                )
+                                opt_model.setObjective(opt_model.objective + penalty_var)
 
                     # Force thermal load to be semi-continuous (On/Off).
                     # This ensures the solver creates solid heating blocks instead of fractional power.
@@ -888,9 +875,7 @@ class Optimization:
                                 e=P_deferrable[k][i]
                                 - (
                                     P_def_bin2[k][i]
-                                    * self.optim_conf[
-                                        "nominal_power_of_deferrable_loads"
-                                    ][k]
+                                    * self.optim_conf["nominal_power_of_deferrable_loads"][k]
                                 ),
                                 sense=plp.LpConstraintEQ,
                                 rhs=0,

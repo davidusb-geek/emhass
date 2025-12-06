@@ -685,9 +685,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             prices = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
         # Generate Massive Time Buffer (5 days total) to handle timezone safety
-        start_time = pd.Timestamp.now(tz=self.fcst.time_zone).floor(
-            self.fcst.freq
-        ) - pd.Timedelta(days=3)
+        start_time = pd.Timestamp.now(tz=self.fcst.time_zone).floor(self.fcst.freq) - pd.Timedelta(
+            days=3
+        )
 
         times = (
             pd.date_range(
@@ -713,9 +713,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         try:
             start_idx = input_data_full.index.get_loc(now_precise)
         except KeyError:
-            start_idx = input_data_full.index.get_indexer(
-                [now_precise], method="nearest"
-            )[0]
+            start_idx = input_data_full.index.get_indexer([now_precise], method="nearest")[0]
 
         horizon = len(prices)
         input_data = input_data_full.iloc[start_idx : start_idx + horizon].copy()
@@ -789,9 +787,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         assert_series_equal(
             self.opt_res_dayahead["P_deferrable0"],
             self.optim_conf["nominal_power_of_deferrable_loads"][0]
-            * pd.Series(
-                [0, 1, 0, 0, 0, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index
-            ),
+            * pd.Series([0, 1, 0, 0, 0, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index),
             check_names=False,
         )
 
@@ -822,9 +818,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # Ensure max constraint is respected
         self.assertFalse((predicted_temps > 22).any(), "Overshot in some timesteps.")
         # Ensure min constraint is respected
-        self.assertTrue(
-            predicted_temps.iloc[2] >= 21, "Failed to meet temperature requirement"
-        )
+        self.assertTrue(predicted_temps.iloc[2] >= 21, "Failed to meet temperature requirement")
 
     def test_thermal_management_cooling(self):
         # Case: Cooling
@@ -863,9 +857,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         assert_series_equal(
             self.opt_res_dayahead["P_deferrable0"],
             self.optim_conf["nominal_power_of_deferrable_loads"][0]
-            * pd.Series(
-                [0, 1, 0, 0, 0, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index
-            ),
+            * pd.Series([0, 1, 0, 0, 0, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index),
             check_names=False,
         )
 
@@ -894,9 +886,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         assert_series_equal(
             self.opt_res_dayahead["P_deferrable0"],
             self.optim_conf["nominal_power_of_deferrable_loads"][0]
-            * pd.Series(
-                [1, 1, 0, 0, 0, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index
-            ),
+            * pd.Series([1, 1, 0, 0, 0, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index),
             check_names=False,
         )
 
