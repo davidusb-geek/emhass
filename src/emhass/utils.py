@@ -387,10 +387,14 @@ async def treat_runtimeparams(
             )
 
         # Generate forecast_dates
-        if "optimization_time_step" in runtimeparams.keys() or "freq" in runtimeparams.keys():
-            optimization_time_step = int(
-                runtimeparams.get("optimization_time_step", runtimeparams.get("freq"))
+        # Force update optimization_time_step if present in runtimeparams
+        if "optimization_time_step" in runtimeparams:
+            optimization_time_step = int(runtimeparams["optimization_time_step"])
+            params["retrieve_hass_conf"]["optimization_time_step"] = pd.to_timedelta(
+                optimization_time_step, "minutes"
             )
+        elif "freq" in runtimeparams:
+            optimization_time_step = int(runtimeparams["freq"])
             params["retrieve_hass_conf"]["optimization_time_step"] = pd.to_timedelta(
                 optimization_time_step, "minutes"
             )
@@ -398,6 +402,7 @@ async def treat_runtimeparams(
             optimization_time_step = int(
                 params["retrieve_hass_conf"]["optimization_time_step"].seconds / 60.0
             )
+
         if (
             runtimeparams.get("delta_forecast_daily", None) is not None
             or runtimeparams.get("delta_forecast", None) is not None
@@ -1032,9 +1037,13 @@ def get_injection_dict_forecast_model_tune(df_pred_optim: pd.DataFrame, mlf: MLF
     injection_dict = {}
     injection_dict["title"] = "<h2>Custom machine learning forecast model tune</h2>"
     injection_dict["subsubtitle0"] = (
-        "<h4>Performed a tuning routine using bayesian optimization for " + mlf.model_type + "</h4>"
+        "<h4>Performed a tuning routine using bayesian optimization for "
+        + mlf.model_type
+        + "<br>"
+        + "Forecasting variable "
+        + mlf.var_model
+        + "</h4>"
     )
-    injection_dict["subsubtitle0"] = "<h4>Forecasting variable " + mlf.var_model + "</h4>"
     injection_dict["figure_0"] = image_path_0
     return injection_dict
 

@@ -104,7 +104,7 @@ async def after_serving():
     app.logger.info("Quart shutdown complete")
 
 
-async def checkFileLog(refString: str | None = None) -> bool:
+async def check_file_log(refString: str | None = None) -> bool:
     """
     Check logfile for error, anything after string match if provided.
 
@@ -114,22 +114,22 @@ async def checkFileLog(refString: str | None = None) -> bool:
     :rtype: bool
 
     """
-    logArray: list[str] = []
+    log_array: list[str] = []
 
     if refString is not None:
-        logArray = await grabLog(
+        log_array = await grabLog(
             refString
         )  # grab reduced log array (everything after string match)
     else:
         if (emhass_conf["data_path"] / "actionLogs.txt").exists():
             async with aiofiles.open(str(emhass_conf["data_path"] / "actionLogs.txt")) as fp:
                 content = await fp.read()
-                logArray = content.splitlines()
+                log_array = content.splitlines()
         else:
             app.logger.debug("Unable to obtain actionLogs.txt")
             return False
 
-    for logString in logArray:
+    for logString in log_array:
         if logString.split(" ", 1)[0] == "ERROR":
             return True
     return False
@@ -150,20 +150,20 @@ async def grabLog(refString: str | None = None) -> list[str]:
     if (emhass_conf["data_path"] / "actionLogs.txt").exists():
         async with aiofiles.open(str(emhass_conf["data_path"] / "actionLogs.txt")) as fp:
             content = await fp.read()
-            logArray = content.splitlines()
+            log_array = content.splitlines()
         # Find all string matches, log key (line Number) in isFound
-        for x in range(len(logArray) - 1):
-            if re.search(refString, logArray[x]):
+        for x in range(len(log_array) - 1):
+            if re.search(refString, log_array[x]):
                 isFound.append(x)
         if len(isFound) != 0:
             # Use last item in isFound to extract action logs
-            for x in range(isFound[-1], len(logArray)):
-                output.append(logArray[x])
+            for x in range(isFound[-1], len(log_array)):
+                output.append(log_array[x])
     return output
 
 
 # Clear the log file
-async def clearFileLog():
+async def clear_file_log():
     """
     Clear the contents of the log file (actionLogs.txt)
 
@@ -381,77 +381,208 @@ async def parameter_set():
     return await make_response({}, 201)
 
 
+async def _load_params_and_runtime(request, emhass_conf, logger):
+    """
+    Loads configuration parameters from pickle and runtime parameters from the request.
+    Returns a tuple (params, costfun, runtimeparams) or raises an exception/returns None on failure.
+    """
+    action_str = " >> Obtaining params: "
+    logger.info(action_str)
+
+    # Load params.pkl
+    params = None
+    costfun = "profit"
+    params_path = emhass_conf["data_path"] / "params.pkl"
+
+    if params_path.exists():
+        async with aiofiles.open(str(params_path), "rb") as fid:
+            content = await fid.read()
+            emhass_conf["config_path"], params = pickle.loads(content)
+            # Set local costfun variable
+            if params.get("optim_conf") is not None:
+                costfun = params["optim_conf"].get("costfun", "profit")
+            params = orjson.dumps(params).decode()
+    else:
+        logger.error("Unable to find params.pkl file")
+        return None, None, None
+
+    # Load runtime params
+    runtimeparams = await request.get_json(force=True, silent=True)
+    if runtimeparams and runtimeparams != "{}":
+        logger.info("Passed runtime parameters: " + str(runtimeparams))
+    else:
+        logger.warning("Unable to parse runtime parameters")
+        runtimeparams = {}
+
+    runtimeparams = orjson.dumps(runtimeparams).decode()
+
+    return params, costfun, runtimeparams
+
+
+async def _handle_action_dispatch(
+    action_name, input_data_dict, emhass_conf, params, runtimeparams, logger
+):
+    """
+    Dispatches the specific logic based on the action_name.
+    Returns (response_msg, status_code).
+    """
+    # Actions that don't require input_data_dict or have specific flows
+    if action_name == "weather-forecast-cache":
+        action_str = " >> Performing weather forecast, try to caching result"
+        logger.info(action_str)
+        await weather_forecast_cache(emhass_conf, params, runtimeparams, logger)
+        return "EMHASS >> Weather Forecast has run and results possibly cached... \n", 201
+
+    if action_name == "export-influxdb-to-csv":
+        action_str = " >> Exporting InfluxDB data to CSV..."
+        logger.info(action_str)
+        success = await export_influxdb_to_csv(None, logger, emhass_conf, params, runtimeparams)
+        if success:
+            return "EMHASS >> Action export-influxdb-to-csv executed successfully... \n", 201
+        return await grabLog(action_str), 400
+
+    # Actions requiring input_data_dict
+    if action_name == "publish-data":
+        action_str = " >> Publishing data..."
+        logger.info(action_str)
+        _ = await publish_data(input_data_dict, logger)
+        return "EMHASS >> Action publish-data executed... \n", 201
+
+    # Mapping for optimization actions to their functions
+    optim_actions = {
+        "perfect-optim": perfect_forecast_optim,
+        "dayahead-optim": dayahead_forecast_optim,
+        "naive-mpc-optim": naive_mpc_optim,
+    }
+
+    if action_name in optim_actions:
+        action_str = f" >> Performing {action_name}..."
+        logger.info(action_str)
+        opt_res = await optim_actions[action_name](input_data_dict, logger)
+        injection_dict = get_injection_dict(opt_res)
+        await _save_injection_dict(injection_dict, emhass_conf["data_path"])
+        return f"EMHASS >> Action {action_name} executed... \n", 201
+
+    # Delegate Machine Learning actions to helper
+    ml_response = await _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger)
+    if ml_response:
+        return ml_response
+
+    # Fallback for invalid action
+    logger.error("ERROR: passed action is not valid")
+    return "EMHASS >> ERROR: Passed action is not valid... \n", 400
+
+
+async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
+    """
+    Helper function to handle Machine Learning specific actions.
+    Returns (msg, status) if action is handled, otherwise None.
+    """
+    # forecast-model-fit
+    if action_name == "forecast-model-fit":
+        action_str = " >> Performing a machine learning forecast model fit..."
+        logger.info(action_str)
+        df_fit_pred, _, mlf = await forecast_model_fit(input_data_dict, logger)
+        injection_dict = get_injection_dict_forecast_model_fit(df_fit_pred, mlf)
+        await _save_injection_dict(injection_dict, emhass_conf["data_path"])
+        return "EMHASS >> Action forecast-model-fit executed... \n", 201
+
+    # forecast-model-predict
+    if action_name == "forecast-model-predict":
+        action_str = " >> Performing a machine learning forecast model predict..."
+        logger.info(action_str)
+        df_pred = await forecast_model_predict(input_data_dict, logger)
+        if df_pred is None:
+            return await grabLog(action_str), 400
+
+        table1 = df_pred.reset_index().to_html(classes="mystyle", index=False)
+        injection_dict = {
+            "title": "<h2>Custom machine learning forecast model predict</h2>",
+            "subsubtitle0": "<h4>Performed a prediction using a pre-trained model</h4>",
+            "table1": table1,
+        }
+        await _save_injection_dict(injection_dict, emhass_conf["data_path"])
+        return "EMHASS >> Action forecast-model-predict executed... \n", 201
+
+    # forecast-model-tune
+    if action_name == "forecast-model-tune":
+        action_str = " >> Performing a machine learning forecast model tune..."
+        logger.info(action_str)
+        df_pred_optim, mlf = await forecast_model_tune(input_data_dict, logger)
+        if df_pred_optim is None or mlf is None:
+            return await grabLog(action_str), 400
+
+        injection_dict = get_injection_dict_forecast_model_tune(df_pred_optim, mlf)
+        await _save_injection_dict(injection_dict, emhass_conf["data_path"])
+        return "EMHASS >> Action forecast-model-tune executed... \n", 201
+
+    # regressor-model-fit
+    if action_name == "regressor-model-fit":
+        action_str = " >> Performing a machine learning regressor fit..."
+        logger.info(action_str)
+        await regressor_model_fit(input_data_dict, logger)
+        return "EMHASS >> Action regressor-model-fit executed... \n", 201
+
+    # regressor-model-predict
+    if action_name == "regressor-model-predict":
+        action_str = " >> Performing a machine learning regressor predict..."
+        logger.info(action_str)
+        await regressor_model_predict(input_data_dict, logger)
+        return "EMHASS >> Action regressor-model-predict executed... \n", 201
+
+    return None
+
+
+async def _save_injection_dict(injection_dict, data_path):
+    """Helper to save injection dict to pickle."""
+    async with aiofiles.open(str(data_path / "injection_dict.pkl"), "wb") as fid:
+        content = pickle.dumps(injection_dict)
+        await fid.write(content)
+
+
 @app.route("/action/<action_name>", methods=["POST"])
 async def action_call(action_name: str):
     """
-    Receive Post action, run action according to passed slug(action_name) (e.g. /action/publish-data)
-
-    :param action_name: Slug/Action string corresponding to which action to take
-    :type action_name: String
-
+    Receive Post action, run action according to passed slug(action_name)
     """
     global continual_publish_thread
     global injection_dict
 
-    # Setting up parameters
-    # Params
-    ActionStr = " >> Obtaining params: "
-    app.logger.info(ActionStr)
-    if (emhass_conf["data_path"] / "params.pkl").exists():
-        async with aiofiles.open(str(emhass_conf["data_path"] / "params.pkl"), "rb") as fid:
-            content = await fid.read()
-            emhass_conf["config_path"], params = pickle.loads(content)
-            # Set local costfun variable
-            if params.get("optim_conf", None) is not None:
-                costfun = params["optim_conf"].get("costfun", "profit")
-            params = orjson.dumps(params).decode()
-    else:
-        app.logger.error("Unable to find params.pkl file")
-        return await make_response(await grabLog(ActionStr), 400)
-    # Runtime
-    runtimeparams = await request.get_json(force=True, silent=True)
-    if runtimeparams is not None:
-        if runtimeparams != "{}":
-            app.logger.info("Passed runtime parameters: " + str(runtimeparams))
-    else:
-        app.logger.warning("Unable to parse runtime parameters")
-        runtimeparams = {}
-    runtimeparams = orjson.dumps(runtimeparams).decode()
+    # Load Parameters
+    params, costfun, runtimeparams = await _load_params_and_runtime(
+        request, emhass_conf, app.logger
+    )
+    if params is None:
+        return await make_response(await grabLog(" >> Obtaining params: "), 400)
 
-    # weather-forecast-cache (check before set_input_data_dict)
-    if action_name == "weather-forecast-cache":
-        ActionStr = " >> Performing weather forecast, try to caching result"
-        app.logger.info(ActionStr)
-        await weather_forecast_cache(emhass_conf, params, runtimeparams, app.logger)
-        msg = "EMHASS >> Weather Forecast has run and results possibly cached... \n"
-        if not await checkFileLog(ActionStr):
-            return await make_response(msg, 201)
-        return await make_response(await grabLog(ActionStr), 400)
+    # Check for actions that do not need input_data_dict
+    if action_name in ["weather-forecast-cache", "export-influxdb-to-csv"]:
+        msg, status = await _handle_action_dispatch(
+            action_name, None, emhass_conf, params, runtimeparams, app.logger
+        )
+        if status == 400:
+            return await make_response(msg, status)
 
-    # export-influxdb-to-csv (check before set_input_data_dict - doesn't need HA connection)
-    if action_name == "export-influxdb-to-csv":
-        ActionStr = " >> Exporting InfluxDB data to CSV..."
-        app.logger.info(ActionStr)
-        success = await export_influxdb_to_csv(None, app.logger, emhass_conf, params, runtimeparams)
-        if success:
-            msg = "EMHASS >> Action export-influxdb-to-csv executed successfully... \n"
-            if not await checkFileLog(ActionStr):
-                return await make_response(msg, 201)
-        return await make_response(await grabLog(ActionStr), 400)
+        # Check logs for these specific actions
+        action_str = f" >> Performing {action_name}..."
+        if not await check_file_log(action_str):
+            return await make_response(msg, status)
+        return await make_response(await grabLog(action_str), 400)
 
-    ActionStr = " >> Setting input data dict"
-    app.logger.info(ActionStr)
+    # Set Input Data Dict (Common for all other actions)
+    action_str = " >> Setting input data dict"
+    app.logger.info(action_str)
     input_data_dict = await set_input_data_dict(
         emhass_conf, costfun, params, runtimeparams, action_name, app.logger
     )
-    if not input_data_dict:
-        return await make_response(await grabLog(ActionStr), 400)
 
-    # If continual_publish is True, start thread with loop function
+    if not input_data_dict:
+        return await make_response(await grabLog(action_str), 400)
+
+    # Handle Continual Publish Threading
     if len(continual_publish_thread) == 0 and input_data_dict["retrieve_hass_conf"].get(
         "continual_publish", False
     ):
-        # Start Thread
         continualLoop = threading.Thread(
             name="continual_publish",
             target=lambda: asyncio.run(continual_publish(input_data_dict, entity_path, app.logger)),
@@ -459,126 +590,18 @@ async def action_call(action_name: str):
         continualLoop.start()
         continual_publish_thread.append(continualLoop)
 
-    # Run action based on POST request
-    # If error in log when running action, return actions log (list) as response. (Using ActionStr as a reference of the action start in the log)
-    # publish-data
-    if action_name == "publish-data":
-        ActionStr = " >> Publishing data..."
-        app.logger.info(ActionStr)
-        _ = await publish_data(input_data_dict, app.logger)
-        msg = "EMHASS >> Action publish-data executed... \n"
-        if not await checkFileLog(ActionStr):
+    # Execute Action
+    msg, status = await _handle_action_dispatch(
+        action_name, input_data_dict, emhass_conf, params, runtimeparams, app.logger
+    )
+
+    # Final Log Check & Response
+    if status == 201:
+        if not await check_file_log(" >> "):
             return await make_response(msg, 201)
-        return await make_response(await grabLog(ActionStr), 400)
-    # perfect-optim
-    elif action_name == "perfect-optim":
-        ActionStr = " >> Performing perfect optimization..."
-        app.logger.info(ActionStr)
-        opt_res = await perfect_forecast_optim(input_data_dict, app.logger)
-        injection_dict = get_injection_dict(opt_res)
-        async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
-            content = pickle.dumps(injection_dict)
-            await fid.write(content)
-        msg = "EMHASS >> Action perfect-optim executed... \n"
-        if not await checkFileLog(ActionStr):
-            return await make_response(msg, 201)
-        return await make_response(await grabLog(ActionStr), 400)
-    # dayahead-optim
-    elif action_name == "dayahead-optim":
-        ActionStr = " >> Performing dayahead optimization..."
-        app.logger.info(ActionStr)
-        opt_res = await dayahead_forecast_optim(input_data_dict, app.logger)
-        injection_dict = get_injection_dict(opt_res)
-        async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
-            content = pickle.dumps(injection_dict)
-            await fid.write(content)
-        msg = "EMHASS >> Action dayahead-optim executed... \n"
-        if not await checkFileLog(ActionStr):
-            return await make_response(msg, 201)
-        return await make_response(await grabLog(ActionStr), 400)
-    # naive-mpc-optim
-    elif action_name == "naive-mpc-optim":
-        ActionStr = " >> Performing naive MPC optimization..."
-        app.logger.info(ActionStr)
-        opt_res = await naive_mpc_optim(input_data_dict, app.logger)
-        injection_dict = get_injection_dict(opt_res)
-        async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
-            content = pickle.dumps(injection_dict)
-            await fid.write(content)
-        msg = "EMHASS >> Action naive-mpc-optim executed... \n"
-        if not await checkFileLog(ActionStr):
-            return await make_response(msg, 201)
-        return await make_response(await grabLog(ActionStr), 400)
-    # forecast-model-fit
-    elif action_name == "forecast-model-fit":
-        ActionStr = " >> Performing a machine learning forecast model fit..."
-        app.logger.info(ActionStr)
-        df_fit_pred, _, mlf = await forecast_model_fit(input_data_dict, app.logger)
-        injection_dict = get_injection_dict_forecast_model_fit(df_fit_pred, mlf)
-        async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
-            content = pickle.dumps(injection_dict)
-            await fid.write(content)
-        msg = "EMHASS >> Action forecast-model-fit executed... \n"
-        if not await checkFileLog(ActionStr):
-            return await make_response(msg, 201)
-        return await make_response(await grabLog(ActionStr), 400)
-    # forecast-model-predict
-    elif action_name == "forecast-model-predict":
-        ActionStr = " >> Performing a machine learning forecast model predict..."
-        app.logger.info(ActionStr)
-        df_pred = await forecast_model_predict(input_data_dict, app.logger)
-        if df_pred is None:
-            return await make_response(await grabLog(ActionStr), 400)
-        table1 = df_pred.reset_index().to_html(classes="mystyle", index=False)
-        injection_dict = {}
-        injection_dict["title"] = "<h2>Custom machine learning forecast model predict</h2>"
-        injection_dict["subsubtitle0"] = "<h4>Performed a prediction using a pre-trained model</h4>"
-        injection_dict["table1"] = table1
-        async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
-            content = pickle.dumps(injection_dict)
-            await fid.write(content)
-        msg = "EMHASS >> Action forecast-model-predict executed... \n"
-        if not await checkFileLog(ActionStr):
-            return await make_response(msg, 201)
-        return await make_response(await grabLog(ActionStr), 400)
-    # forecast-model-tune
-    elif action_name == "forecast-model-tune":
-        ActionStr = " >> Performing a machine learning forecast model tune..."
-        app.logger.info(ActionStr)
-        df_pred_optim, mlf = await forecast_model_tune(input_data_dict, app.logger)
-        if df_pred_optim is None or mlf is None:
-            return await make_response(await grabLog(ActionStr), 400)
-        injection_dict = get_injection_dict_forecast_model_tune(df_pred_optim, mlf)
-        async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
-            content = pickle.dumps(injection_dict)
-            await fid.write(content)
-        msg = "EMHASS >> Action forecast-model-tune executed... \n"
-        if not await checkFileLog(ActionStr):
-            return await make_response(msg, 201)
-        return await make_response(await grabLog(ActionStr), 400)
-    # regressor-model-fit
-    elif action_name == "regressor-model-fit":
-        ActionStr = " >> Performing a machine learning regressor fit..."
-        app.logger.info(ActionStr)
-        await regressor_model_fit(input_data_dict, app.logger)
-        msg = "EMHASS >> Action regressor-model-fit executed... \n"
-        if not await checkFileLog(ActionStr):
-            return await make_response(msg, 201)
-        return await make_response(await grabLog(ActionStr), 400)
-    # regressor-model-predict
-    elif action_name == "regressor-model-predict":
-        ActionStr = " >> Performing a machine learning regressor predict..."
-        app.logger.info(ActionStr)
-        await regressor_model_predict(input_data_dict, app.logger)
-        msg = "EMHASS >> Action regressor-model-predict executed... \n"
-        if not await checkFileLog(ActionStr):
-            return await make_response(msg, 201)
-        return await make_response(await grabLog(ActionStr), 400)
-    # Else return error
-    else:
-        app.logger.error("ERROR: passed action is not valid")
-        msg = "EMHASS >> ERROR: Passed action is not valid... \n"
-        return await make_response(msg, 400)
+        return await make_response(await grabLog(" >> "), 400)
+
+    return await make_response(msg, status)
 
 
 async def initialize(args: dict | None = None):
@@ -717,7 +740,7 @@ async def initialize(args: dict | None = None):
     app.logger.propagate = False
     app.logger.addHandler(fileLogger)
     # Clear Action File logger file, ready for new instance
-    await clearFileLog()
+    await clear_file_log()
 
     # If entity_path exists, remove any entity/metadata files
     entity_path = emhass_conf["data_path"] / "entities"
