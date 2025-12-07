@@ -1504,23 +1504,40 @@ async def publish_data(
             )
             cols_published = cols_published + [f"P_deferrable{k}"]
     # Publish thermal model data (predicted temperature)
-    custom_predicted_temperature_id = params["passed_data"]["custom_predicted_temperature_id"]
-    for k in range(input_data_dict["opt"].optim_conf["number_of_deferrable_loads"]):
-        if "def_load_config" in input_data_dict["opt"].optim_conf.keys():
-            if "thermal_config" in input_data_dict["opt"].optim_conf["def_load_config"][k]:
-                await input_data_dict["rh"].post_data(
-                    opt_res_latest[f"predicted_temp_heater{k}"],
-                    idx_closest,
-                    custom_predicted_temperature_id[k]["entity_id"],
-                    "temperature",
-                    custom_predicted_temperature_id[k]["unit_of_measurement"],
-                    custom_predicted_temperature_id[k]["friendly_name"],
-                    type_var="temperature",
-                    publish_prefix=publish_prefix,
-                    save_entities=entity_save,
-                    dont_post=dont_post,
-                )
-                cols_published = cols_published + [f"predicted_temp_heater{k}"]
+    if "custom_predicted_temperature_id" in params["passed_data"]:
+        custom_predicted_temperature_id = params["passed_data"]["custom_predicted_temperature_id"]
+        # Safety: Ensure def_load_config exists and is a list
+        def_load_config = input_data_dict["opt"].optim_conf.get("def_load_config", [])
+        if not isinstance(def_load_config, list):
+             def_load_config = []
+        for k in range(input_data_dict["opt"].optim_conf["number_of_deferrable_loads"]):
+            # Check 1: Ensure k is within bounds of def_load_config
+            if k < len(def_load_config):
+                if "thermal_config" in def_load_config[k]:
+                    # Check 2: Ensure k is within bounds of custom_predicted_temperature_id
+                    if k < len(custom_predicted_temperature_id):
+                        # Check 3: Ensure the column exists in the DataFrame
+                        if f"predicted_temp_heater{k}" in opt_res_latest.columns:
+                            await input_data_dict["rh"].post_data(
+                                opt_res_latest[f"predicted_temp_heater{k}"],
+                                idx_closest,
+                                custom_predicted_temperature_id[k]["entity_id"],
+                                "temperature",
+                                custom_predicted_temperature_id[k]["unit_of_measurement"],
+                                custom_predicted_temperature_id[k]["friendly_name"],
+                                type_var="temperature",
+                                publish_prefix=publish_prefix,
+                                save_entities=entity_save,
+                                dont_post=dont_post,
+                            )
+                            cols_published = cols_published + [f"predicted_temp_heater{k}"]
+                        else:
+                            logger.debug(f"predicted_temp_heater{k} not found in results, skipping.")
+                    else:
+                        logger.warning(f"custom_predicted_temperature_id missing for index {k}, skipping.")
+            else:
+                 # If def_load_config is shorter than k, just stop checking thermal for this index
+                 pass
     # Publish battery power
     if input_data_dict["opt"].optim_conf["set_use_battery"]:
         if "P_batt" not in opt_res_latest.columns:
