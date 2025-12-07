@@ -1655,50 +1655,55 @@ async def continual_publish(
     :type entity_path: Path
     :param logger: The passed logger object
     :type logger: logging.Logger
-
     """
     logger.info("Continual publish thread service started")
     freq = input_data_dict["retrieve_hass_conf"].get(
         "optimization_time_step", pd.to_timedelta(1, "minutes")
     )
-    entity_path_contents = []
     while True:
         # Sleep for x seconds (using current time as a reference for time left)
-        await asyncio.sleep(
-            max(
-                0,
-                freq.total_seconds()
-                - (
-                    datetime.now(input_data_dict["retrieve_hass_conf"]["time_zone"]).timestamp()
-                    % 60
-                ),
-            )
+        time_zone = input_data_dict["retrieve_hass_conf"]["time_zone"]
+        sleep_seconds = max(
+            0,
+            freq.total_seconds() - (datetime.now(time_zone).timestamp() % 60)
         )
-        # Loop through all saved entity files
-        if os.path.exists(entity_path) and len(os.listdir(entity_path)) > 0:
-            entity_path_contents = os.listdir(entity_path)
-            for entity in entity_path_contents:
-                if entity != default_metadata_json:
-                    # Call publish_json with entity file, build entity, and publish
-                    await publish_json(
-                        entity,
-                        input_data_dict,
-                        entity_path,
-                        logger,
-                        "continual_publish",
-                    )
-            # Retrieve entity metadata from file
-            if os.path.isfile(entity_path / default_metadata_json):
-                async with aiofiles.open(entity_path / default_metadata_json) as file:
-                    content = await file.read()
-                    metadata = orjson.loads(content)
-                    # Check if freq should be shorter
-                    if metadata.get("lowest_time_step", None) is not None:
-                        freq = pd.to_timedelta(metadata["lowest_time_step"], "minutes")
-        pass
-    # This function should never return
+        await asyncio.sleep(sleep_seconds)
+        # Delegate processing to helper function to reduce complexity
+        freq = await _publish_and_update_freq(input_data_dict, entity_path, logger, freq)
     return False
 
+async def _publish_and_update_freq(input_data_dict, entity_path, logger, current_freq):
+    """
+    Helper to process entity publishing and frequency updates.
+    Returns the (potentially updated) frequency.
+    """
+    # Guard clause: if path doesn't exist, do nothing and return current freq
+    if not os.path.exists(entity_path):
+        return current_freq
+    entity_path_contents = os.listdir(entity_path)
+    # Guard clause: if directory is empty, do nothing
+    if not entity_path_contents:
+        return current_freq
+    # Loop through all saved entity files
+    for entity in entity_path_contents:
+        if entity != default_metadata_json:
+            await publish_json(
+                entity,
+                input_data_dict,
+                entity_path,
+                logger,
+                "continual_publish",
+            )
+    # Retrieve entity metadata from file
+    metadata_file = entity_path / default_metadata_json
+    if os.path.isfile(metadata_file):
+        async with aiofiles.open(metadata_file) as file:
+            content = await file.read()
+            metadata = orjson.loads(content)
+            # Check if freq should be shorter
+            if metadata.get("lowest_time_step") is not None:
+                return pd.to_timedelta(metadata["lowest_time_step"], "minutes")
+    return current_freq
 
 async def publish_json(
     entity: dict,

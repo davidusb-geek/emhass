@@ -63,14 +63,14 @@ if __name__ == "__main__":
 
     # Modules
     cols_to_keep_modules = [
-        elem for elem in list(cec_modules_0.columns) if elem not in list(cec_modules.columns)
+        elem for elem in cec_modules_0.columns if elem not in cec_modules.columns
     ]
     cec_modules = pd.concat([cec_modules, cec_modules_0[cols_to_keep_modules]], axis=1)
     logger.info(
         f"Number of elements from old database copied in new database for modules = {len(cols_to_keep_modules)}:"
     )
     cols_to_keep_modules = [
-        elem for elem in list(cec_modules_emhass.columns) if elem not in list(cec_modules.columns)
+        elem for elem in cec_modules_emhass.columns if elem not in cec_modules.columns
     ]
     cec_modules = pd.concat([cec_modules, cec_modules_emhass[cols_to_keep_modules]], axis=1)
     logger.info(
@@ -88,7 +88,7 @@ if __name__ == "__main__":
 
     # Inverters
     cols_to_keep_inverters = [
-        elem for elem in list(cec_inverters_0.columns) if elem not in list(cec_inverters.columns)
+        elem for elem in cec_inverters_0.columns if elem not in cec_inverters.columns
     ]
     cec_inverters = pd.concat([cec_inverters, cec_inverters_0[cols_to_keep_inverters]], axis=1)
     logger.info(
@@ -96,8 +96,8 @@ if __name__ == "__main__":
     )
     cols_to_keep_inverters = [
         elem
-        for elem in list(cec_inverters_emhass.columns)
-        if elem not in list(cec_inverters.columns)
+        for elem in cec_inverters_emhass.columns
+        if elem not in cec_inverters.columns
     ]
     cec_inverters = pd.concat([cec_inverters, cec_inverters_emhass[cols_to_keep_inverters]], axis=1)
     logger.info(

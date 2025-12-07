@@ -1032,9 +1032,13 @@ def get_injection_dict_forecast_model_tune(df_pred_optim: pd.DataFrame, mlf: MLF
     injection_dict = {}
     injection_dict["title"] = "<h2>Custom machine learning forecast model tune</h2>"
     injection_dict["subsubtitle0"] = (
-        "<h4>Performed a tuning routine using bayesian optimization for " + mlf.model_type + "</h4>"
+        "<h4>Performed a tuning routine using bayesian optimization for "
+        + mlf.model_type
+        + "<br>"
+        + "Forecasting variable "
+        + mlf.var_model
+        + "</h4>"
     )
-    injection_dict["subsubtitle0"] = "<h4>Forecasting variable " + mlf.var_model + "</h4>"
     injection_dict["figure_0"] = image_path_0
     return injection_dict
 
