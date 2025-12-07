@@ -741,7 +741,7 @@ class Forecast:
             "solar_forecast_kwp" in self.retrieve_hass_conf.keys()
             and self.retrieve_hass_conf["solar_forecast_kwp"] == 0
         ):
-            P_PV_forecast = pd.Series(0, index=df_weather.index)
+            p_pv_forecast = pd.Series(0, index=df_weather.index)
         else:
             if (
                 self.weather_forecast_method == "solcast"
@@ -749,8 +749,8 @@ class Forecast:
                 or self.weather_forecast_method == "csv"
                 or self.weather_forecast_method == "list"
             ):
-                P_PV_forecast = df_weather["yhat"]
-                P_PV_forecast.name = None
+                p_pv_forecast = df_weather["yhat"]
+                p_pv_forecast.name = None
             else:  # We will transform the weather data into electrical power
                 # Transform to power (Watts)
                 # Setting the main parameters of the PV plant
@@ -765,7 +765,7 @@ class Forecast:
                 )
                 cec_inverters = cPickle.load(cec_inverters)
                 if isinstance(self.plant_conf["pv_module_model"], list):
-                    P_PV_forecast = pd.Series(0, index=df_weather.index)
+                    p_pv_forecast = pd.Series(0, index=df_weather.index)
                     for i in range(len(self.plant_conf["pv_module_model"])):
                         # Selecting correct module and inverter
                         module = cec_modules[self.plant_conf["pv_module_model"][i]]
@@ -784,7 +784,7 @@ class Forecast:
                         # Run the model on the weather DF indexes
                         mc.run_model(df_weather)
                         # Extracting results for AC power
-                        P_PV_forecast = P_PV_forecast + mc.results.ac
+                        p_pv_forecast = p_pv_forecast + mc.results.ac
                 else:
                     # Selecting correct module and inverter
                     module = cec_modules[self.plant_conf["pv_module_model"]]
@@ -803,22 +803,22 @@ class Forecast:
                     # Run the model on the weather DF indexes
                     mc.run_model(df_weather)
                     # Extracting results for AC power
-                    P_PV_forecast = mc.results.ac
+                    p_pv_forecast = mc.results.ac
         if set_mix_forecast:
             ignore_pv_feedback = self.params["passed_data"].get(
                 "ignore_pv_feedback_during_curtailment", False
             )
-            P_PV_forecast = Forecast.get_mix_forecast(
+            p_pv_forecast = Forecast.get_mix_forecast(
                 df_now,
-                P_PV_forecast,
+                p_pv_forecast,
                 self.params["passed_data"]["alpha"],
                 self.params["passed_data"]["beta"],
                 self.var_PV,
                 ignore_pv_feedback,
             )
-        P_PV_forecast[P_PV_forecast < 0] = 0  # replace any negative PV values with zero
-        self.logger.debug("get_power_from_weather returning:\n%s", P_PV_forecast)
-        return P_PV_forecast
+        p_pv_forecast[p_pv_forecast < 0] = 0  # replace any negative PV values with zero
+        self.logger.debug("get_power_from_weather returning:\n%s", p_pv_forecast)
+        return p_pv_forecast
 
     @staticmethod
     def compute_solar_angles(df: pd.DataFrame, latitude: float, longitude: float) -> pd.DataFrame:
@@ -855,7 +855,7 @@ class Forecast:
                 self.emhass_conf["data_path"] / "debug-adjust-pv-forecast-data-prep-input-data.csv"
             )
         P_PV = data[self.var_PV]  # Actual PV production
-        P_PV_forecast = data[self.var_PV_forecast]  # Forecasted PV production
+        p_pv_forecast = data[self.var_PV_forecast]  # Forecasted PV production
         # Define time ranges
         last_day = data.index.max().normalize()  # Last available day
         three_months_ago = last_day - pd.DateOffset(
@@ -864,14 +864,14 @@ class Forecast:
         # Train/Test: Last historic_days_to_retrieve days (excluding the last day)
         train_test_mask = (data.index >= three_months_ago) & (data.index < last_day)
         self.P_PV_train_test = P_PV[train_test_mask]
-        self.P_PV_forecast_train_test = P_PV_forecast[train_test_mask]
+        self.P_PV_forecast_train_test = p_pv_forecast[train_test_mask]
         # Validation: Last day only
         validation_mask = data.index >= last_day
         self.P_PV_validation = P_PV[validation_mask]
-        self.P_PV_forecast_validation = P_PV_forecast[validation_mask]
+        self.P_PV_forecast_validation = p_pv_forecast[validation_mask]
         # Ensure data is aligned
         self.data_adjust_pv = pd.concat(
-            [P_PV.rename("actual"), P_PV_forecast.rename("forecast")], axis=1
+            [P_PV.rename("actual"), p_pv_forecast.rename("forecast")], axis=1
         ).dropna()
         # Add more features
         self.data_adjust_pv = add_date_features(self.data_adjust_pv)
@@ -1495,19 +1495,19 @@ class Forecast:
         else:
             self.logger.error("Passed method is not valid")
             return False
-        P_Load_forecast = copy.deepcopy(forecast_out["yhat"])
+        p_load_forecast = copy.deepcopy(forecast_out["yhat"])
         if set_mix_forecast:
             # Load forecasts don't need curtailment protection - always use feedback
-            P_Load_forecast = Forecast.get_mix_forecast(
+            p_load_forecast = Forecast.get_mix_forecast(
                 df_now,
-                P_Load_forecast,
+                p_load_forecast,
                 self.params["passed_data"]["alpha"],
                 self.params["passed_data"]["beta"],
                 self.var_load_new,
                 False,  # Never ignore feedback for load forecasts
             )
-        self.logger.debug("get_load_forecast returning:\n%s", P_Load_forecast)
-        return P_Load_forecast
+        self.logger.debug("get_load_forecast returning:\n%s", p_load_forecast)
+        return p_load_forecast
 
     def get_load_cost_forecast(
         self,
