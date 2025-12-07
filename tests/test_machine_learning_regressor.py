@@ -1,11 +1,11 @@
 """Machine learning regressor test module."""
 
 import copy
-import json
 import pathlib
 import unittest
 
 import numpy as np
+import orjson
 import pandas as pd
 from sklearn.pipeline import Pipeline
 
@@ -22,31 +22,27 @@ emhass_conf["root_path"] = root / "src/emhass/"
 emhass_conf["defaults_path"] = emhass_conf["root_path"] / "data/config_defaults.json"
 emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations.csv"
 
-
 # create logger
 logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
 
-class TestMLRegressor(unittest.TestCase):
+class TestMLRegressorAsync(unittest.IsolatedAsyncioTestCase):
     @staticmethod
-    def get_test_params():
+    async def get_test_params():
         # Build params with default config and secrets
         if emhass_conf["defaults_path"].exists():
-            config = utils.build_config(
-                emhass_conf, logger, emhass_conf["defaults_path"]
-            )
-            _, secrets = utils.build_secrets(emhass_conf, logger, no_response=True)
-            params = utils.build_params(emhass_conf, secrets, config, logger)
+            config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+            _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
+            params = await utils.build_params(emhass_conf, secrets, config, logger)
         else:
             raise Exception(
-                "config_defaults. does not exist in path: "
-                + str(emhass_conf["defaults_path"])
+                "config_defaults. does not exist in path: " + str(emhass_conf["defaults_path"])
             )
         return params
 
-    def setUp(self):
+    async def asyncSetUp(self):
         # parameters
-        params = TestMLRegressor.get_test_params()
+        params = await TestMLRegressorAsync.get_test_params()
         costfun = "profit"
         action = "regressor-model-fit"  # fit and predict methods
         params["optim_conf"]["load_forecast_method"] = "skforecast"
@@ -62,10 +58,10 @@ class TestMLRegressor(unittest.TestCase):
             "new_values": [12.79, 4.766, 1, 2],
         }
         params["passed_data"] = runtimeparams
-        runtimeparams_json = json.dumps(runtimeparams)
-        params_json = json.dumps(params)
+        runtimeparams_json = orjson.dumps(runtimeparams).decode()
+        params_json = orjson.dumps(params).decode()
         # build data dictionary
-        self.input_data_dict = set_input_data_dict(
+        self.input_data_dict = await set_input_data_dict(
             emhass_conf,
             costfun,
             params_json,
@@ -80,14 +76,10 @@ class TestMLRegressor(unittest.TestCase):
         self.csv_file = self.input_data_dict["params"]["passed_data"]["csv_file"]
         features = self.input_data_dict["params"]["passed_data"]["features"]
         target = self.input_data_dict["params"]["passed_data"]["target"]
-        regression_model = self.input_data_dict["params"]["passed_data"][
-            "regression_model"
-        ]
+        regression_model = self.input_data_dict["params"]["passed_data"]["regression_model"]
         model_type = self.input_data_dict["params"]["passed_data"]["model_type"]
         timestamp = self.input_data_dict["params"]["passed_data"]["timestamp"]
-        self.date_features = self.input_data_dict["params"]["passed_data"][
-            "date_features"
-        ]
+        self.date_features = self.input_data_dict["params"]["passed_data"]["date_features"]
         self.new_values = self.input_data_dict["params"]["passed_data"]["new_values"]
         self.mlr = MLRegressor(
             data,
@@ -100,14 +92,14 @@ class TestMLRegressor(unittest.TestCase):
         )
 
     # Test Regressor fit
-    def test_fit(self):
-        self.mlr.fit(self.date_features)
+    async def test_fit(self):
+        await self.mlr.fit(self.date_features)
         self.assertIsInstance(self.mlr.model, Pipeline)
 
     # Test Regressor tune
-    def test_predict(self):
-        self.mlr.fit(self.date_features)
-        predictions = self.mlr.predict(self.new_values)
+    async def test_predict(self):
+        await self.mlr.fit(self.date_features)
+        predictions = await self.mlr.predict(self.new_values)
         self.assertIsInstance(predictions, np.ndarray)
 
 

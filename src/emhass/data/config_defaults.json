@@ -21,14 +21,12 @@
   "sensor_power_photovoltaics": "sensor.power_photovoltaics",
   "sensor_power_photovoltaics_forecast": "sensor.p_pv_forecast",
   "sensor_power_load_no_var_loads": "sensor.power_load_no_var_loads",
-  "sensor_replace_zero": [
-    "sensor.power_photovoltaics",
-    "sensor.p_pv_forecast"
-  ],
+  "sensor_replace_zero": ["sensor.power_photovoltaics", "sensor.p_pv_forecast"],
   "sensor_linear_interp": [
     "sensor.power_photovoltaics",
     "sensor.power_load_no_var_loads"
   ],
+  "use_websocket": false,
   "use_influxdb": false,
   "influxdb_host": "localhost",
   "influxdb_port": 8086,
@@ -42,31 +40,16 @@
   "load_negative": false,
   "set_zero_min": true,
   "number_of_deferrable_loads": 2,
-  "nominal_power_of_deferrable_loads": [
-    3000.0,
-    750.0
-  ],
-  "minimum_power_of_deferrable_loads": [
-    0.0,
-    0.0
-  ],
-  "operating_hours_of_each_deferrable_load": [
-    4,
-    0
-  ],
+  "nominal_power_of_deferrable_loads": [3000.0, 750.0],
+  "minimum_power_of_deferrable_loads": [0.0, 0.0],
+  "operating_hours_of_each_deferrable_load": [4, 0],
   "weather_forecast_method": "open-meteo",
   "open_meteo_cache_max_age": 30,
   "load_forecast_method": "naive",
   "delta_forecast_daily": 1,
   "load_cost_forecast_method": "hp_hc_periods",
-  "start_timesteps_of_each_deferrable_load": [
-    0,
-    0
-  ],
-  "end_timesteps_of_each_deferrable_load": [
-    0,
-    0
-  ],
+  "start_timesteps_of_each_deferrable_load": [0, 0],
+  "end_timesteps_of_each_deferrable_load": [0, 0],
   "load_peak_hour_periods": {
     "period_hp_1": [
       {
@@ -85,18 +68,9 @@
       }
     ]
   },
-  "treat_deferrable_load_as_semi_cont": [
-    true,
-    true
-  ],
-  "set_deferrable_load_single_constant": [
-    false,
-    false
-  ],
-  "set_deferrable_startup_penalty": [
-    0.0,
-    0.0
-  ],
+  "treat_deferrable_load_as_semi_cont": [true, true],
+  "set_deferrable_load_single_constant": [false, false],
+  "set_deferrable_startup_penalty": [0.0, 0.0],
   "load_peak_hours_cost": 0.1907,
   "load_offpeak_hours_cost": 0.1419,
   "production_price_forecast_method": "constant",
@@ -114,18 +88,10 @@
   "pv_inverter_model": [
     "Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_"
   ],
-  "surface_tilt": [
-    30
-  ],
-  "surface_azimuth": [
-    205
-  ],
-  "modules_per_string": [
-    16
-  ],
-  "strings_per_inverter": [
-    1
-  ],
+  "surface_tilt": [30],
+  "surface_azimuth": [205],
+  "modules_per_string": [16],
+  "strings_per_inverter": [1],
   "inverter_is_hybrid": false,
   "inverter_ac_output_max": 1000,
   "inverter_ac_input_max": 1000,

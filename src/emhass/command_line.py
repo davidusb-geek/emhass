@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
 import argparse
+import asyncio
 import copy
-import json
 import logging
 import os
 import pathlib
@@ -12,7 +12,9 @@ import time
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
 
+import aiofiles
 import numpy as np
+import orjson
 import pandas as pd
 
 from emhass import utils
@@ -27,7 +29,7 @@ default_pkl_suffix = "_mlf.pkl"
 default_metadata_json = "metadata.json"
 
 
-def retrieve_home_assistant_data(
+async def retrieve_home_assistant_data(
     set_type: str,
     get_data_from_file: bool,
     retrieve_hass_conf: dict,
@@ -35,11 +37,13 @@ def retrieve_home_assistant_data(
     rh: RetrieveHass,
     emhass_conf: dict,
     test_df_literal: pd.DataFrame,
+    logger: logging.Logger | None = None,
 ) -> dict:
     """Retrieve data from Home Assistant or file and prepare it for optimization."""
     if get_data_from_file:
-        with open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
-            rh.df_final, days_list, var_list, rh.ha_config = pickle.load(inp)
+        async with aiofiles.open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
+            content = await inp.read()
+            rh.df_final, days_list, var_list, rh.ha_config = pickle.loads(content)
             rh.var_list = var_list
         # Assign variables based on set_type
         retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
@@ -61,9 +65,7 @@ def retrieve_home_assistant_data(
     else:
         # Determine days_list based on set_type
         if set_type == "perfect-optim" or set_type == "adjust_pv":
-            days_list = utils.get_days_list(
-                retrieve_hass_conf["historic_days_to_retrieve"]
-            )
+            days_list = utils.get_days_list(retrieve_hass_conf["historic_days_to_retrieve"])
         elif set_type == "naive-mpc-optim":
             days_list = utils.get_days_list(1)
         else:
@@ -72,10 +74,10 @@ def retrieve_home_assistant_data(
         if optim_conf.get("set_use_pv", True):
             var_list.append(retrieve_hass_conf["sensor_power_photovoltaics"])
             if optim_conf.get("set_use_adjusted_pv", True):
-                var_list.append(
-                    retrieve_hass_conf["sensor_power_photovoltaics_forecast"]
-                )
-        if not rh.get_data(
+                var_list.append(retrieve_hass_conf["sensor_power_photovoltaics_forecast"])
+                if logger:
+                    logger.debug(f"Variable list for data retrieval: {var_list}")
+        if not await rh.get_data(
             days_list, var_list, minimal_response=False, significant_changes_only=False
         ):
             return False, None, days_list
@@ -130,7 +132,7 @@ def is_model_outdated(
         return False
 
 
-def adjust_pv_forecast(
+async def adjust_pv_forecast(
     logger: logging.Logger,
     fcst: Forecast,
     P_PV_forecast: pd.Series,
@@ -245,7 +247,7 @@ def adjust_pv_forecast(
     return P_PV_forecast["adjusted_forecast"].rename(None)
 
 
-def set_input_data_dict(
+async def set_input_data_dict(
     emhass_conf: dict,
     costfun: str,
     params: str,
@@ -280,7 +282,7 @@ def set_input_data_dict(
     # check if passed params is a dict
     if (params is not None) and (params != "null"):
         if type(params) is str:
-            params = json.loads(params)
+            params = dict(orjson.loads(params))
     else:
         params = {}
 
@@ -290,7 +292,12 @@ def set_input_data_dict(
         return False
 
     # Treat runtimeparams
-    params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+    (
+        params,
+        retrieve_hass_conf,
+        optim_conf,
+        plant_conf,
+    ) = await utils.treat_runtimeparams(
         runtimeparams,
         params,
         retrieve_hass_conf,
@@ -316,10 +323,11 @@ def set_input_data_dict(
     # Retrieve basic configuration data from hass
     test_df_literal = "test_df_final.pkl"
     if get_data_from_file:
-        with open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
-            _, _, _, rh.ha_config = pickle.load(inp)
+        async with aiofiles.open(emhass_conf["data_path"] / test_df_literal, "rb") as inp:
+            content = await inp.read()
+            _, _, _, rh.ha_config = pickle.loads(content)
     else:
-        if not rh.get_ha_config():
+        if not await rh.get_ha_config():
             return False
 
     # Update the params dict using data from the HA configuration
@@ -356,7 +364,7 @@ def set_input_data_dict(
     # Perform setup based on type of action
     if set_type == "perfect-optim":
         # Retrieve data from hass
-        success, df_input_data, days_list = retrieve_home_assistant_data(
+        success, df_input_data, days_list = await retrieve_home_assistant_data(
             set_type,
             get_data_from_file,
             retrieve_hass_conf,
@@ -364,6 +372,7 @@ def set_input_data_dict(
             rh,
             emhass_conf,
             test_df_literal,
+            logger,
         )
         if not success:
             return False
@@ -371,11 +380,8 @@ def set_input_data_dict(
         P_PV_forecast, P_load_forecast, df_input_data_dayahead = None, None, None
     elif set_type == "dayahead-optim":
         # Get PV and load forecasts
-        if (
-            optim_conf["set_use_pv"]
-            or optim_conf.get("weather_forecast_method", None) == "list"
-        ):
-            df_weather = fcst.get_weather_forecast(
+        if optim_conf["set_use_pv"] or optim_conf.get("weather_forecast_method", None) == "list":
+            df_weather = await fcst.get_weather_forecast(
                 method=optim_conf["weather_forecast_method"]
             )
             if isinstance(df_weather, bool) and not df_weather:
@@ -384,7 +390,7 @@ def set_input_data_dict(
             # Adjust PV forecast
             if optim_conf["set_use_adjusted_pv"]:
                 # Update the PV forecast
-                P_PV_forecast = adjust_pv_forecast(
+                P_PV_forecast = await adjust_pv_forecast(
                     logger,
                     fcst,
                     P_PV_forecast,
@@ -397,7 +403,7 @@ def set_input_data_dict(
                 )
         else:
             P_PV_forecast = pd.Series(0, index=fcst.forecast_dates)
-        P_load_forecast = fcst.get_load_forecast(
+        P_load_forecast = await fcst.get_load_forecast(
             days_min_load_forecast=optim_conf["delta_forecast_daily"].days,
             method=optim_conf["load_forecast_method"],
         )
@@ -424,12 +430,10 @@ def set_input_data_dict(
                 )
             else:
                 optimization_time_step = retrieve_hass_conf["optimization_time_step"]
-            df_input_data_dayahead = df_input_data_dayahead.asfreq(
-                optimization_time_step
-            )
+            df_input_data_dayahead = df_input_data_dayahead.asfreq(optimization_time_step)
         else:
             df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
-        params = json.loads(params)
+        params = orjson.loads(params)
         if (
             "prediction_horizon" in params["passed_data"]
             and params["passed_data"]["prediction_horizon"] is not None
@@ -455,7 +459,7 @@ def set_input_data_dict(
             df_input_data = None
         else:
             # Retrieve data from hass
-            success, df_input_data, days_list = retrieve_home_assistant_data(
+            success, df_input_data, days_list = await retrieve_home_assistant_data(
                 set_type,
                 get_data_from_file,
                 retrieve_hass_conf,
@@ -463,16 +467,14 @@ def set_input_data_dict(
                 rh,
                 emhass_conf,
                 test_df_literal,
+                logger,
             )
             if not success:
                 return False
             set_mix_forecast = True
         # Get PV and load forecasts
-        if (
-            optim_conf["set_use_pv"]
-            or optim_conf.get("weather_forecast_method", None) == "list"
-        ):
-            df_weather = fcst.get_weather_forecast(
+        if optim_conf["set_use_pv"] or optim_conf.get("weather_forecast_method", None) == "list":
+            df_weather = await fcst.get_weather_forecast(
                 method=optim_conf["weather_forecast_method"]
             )
             if isinstance(df_weather, bool) and not df_weather:
@@ -483,7 +485,7 @@ def set_input_data_dict(
             # Adjust PV forecast
             if optim_conf["set_use_adjusted_pv"]:
                 # Update the PV forecast
-                P_PV_forecast = adjust_pv_forecast(
+                P_PV_forecast = await adjust_pv_forecast(
                     logger,
                     fcst,
                     P_PV_forecast,
@@ -496,7 +498,7 @@ def set_input_data_dict(
                 )
         else:
             P_PV_forecast = pd.Series(0, index=fcst.forecast_dates)
-        P_load_forecast = fcst.get_load_forecast(
+        P_load_forecast = await fcst.get_load_forecast(
             days_min_load_forecast=optim_conf["delta_forecast_daily"].days,
             method=optim_conf["load_forecast_method"],
             set_mix_forecast=set_mix_forecast,
@@ -521,13 +523,11 @@ def set_input_data_dict(
                 )
             else:
                 optimization_time_step = retrieve_hass_conf["optimization_time_step"]
-            df_input_data_dayahead = df_input_data_dayahead.asfreq(
-                optimization_time_step
-            )
+            df_input_data_dayahead = df_input_data_dayahead.asfreq(optimization_time_step)
         else:
             df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
         df_input_data_dayahead.columns = ["P_PV_forecast", "P_load_forecast"]
-        params = json.loads(params)
+        params = orjson.loads(params)
         if (
             "prediction_horizon" in params["passed_data"]
             and params["passed_data"]["prediction_horizon"] is not None
@@ -545,7 +545,7 @@ def set_input_data_dict(
     ):
         df_input_data_dayahead = None
         P_PV_forecast, P_load_forecast = None, None
-        params = json.loads(params)
+        params = orjson.loads(params)
         # Retrieve data from hass
         days_to_retrieve = params["passed_data"]["historic_days_to_retrieve"]
         model_type = params["passed_data"]["model_type"]
@@ -554,21 +554,22 @@ def set_input_data_dict(
             days_list = None
             filename = model_type + ".pkl"
             filename_path = emhass_conf["data_path"] / filename
-            with open(filename_path, "rb") as inp:
-                df_input_data, _, _, _ = pickle.load(inp)
+            async with aiofiles.open(filename_path, "rb") as inp:
+                content = await inp.read()
+                df_input_data, _, _, _ = pickle.loads(content)
             df_input_data = df_input_data[
                 df_input_data.index[-1] - pd.offsets.Day(days_to_retrieve) :
             ]
         else:
             days_list = utils.get_days_list(days_to_retrieve)
             var_list = [var_model]
-            if not rh.get_data(days_list, var_list):
+            if not await rh.get_data(days_list, var_list):
                 return False
             df_input_data = rh.df_final.copy()
     elif set_type == "regressor-model-fit" or set_type == "regressor-model-predict":
         df_input_data, df_input_data_dayahead = None, None
         P_PV_forecast, P_load_forecast = None, None
-        params = json.loads(params)
+        params = orjson.loads(params)
         days_list = None
         csv_file = params["passed_data"].get("csv_file", None)
         if "features" in params["passed_data"]:
@@ -600,7 +601,9 @@ def set_input_data_dict(
                 required_columns.append(timestamp)
             if not set(required_columns).issubset(df_input_data.columns):
                 logger.error("The cvs file does not contain the required columns.")
-                msg = f"CSV file should contain the following columns: {', '.join(required_columns)}"
+                msg = (
+                    f"CSV file should contain the following columns: {', '.join(required_columns)}"
+                )
                 logger.error(msg)
                 return False
     elif set_type == "publish-data":
@@ -632,7 +635,7 @@ def set_input_data_dict(
     return input_data_dict
 
 
-def weather_forecast_cache(
+async def weather_forecast_cache(
     emhass_conf: dict, params: str, runtimeparams: str, logger: logging.Logger
 ) -> bool:
     """
@@ -653,7 +656,12 @@ def weather_forecast_cache(
     # Parsing yaml
     retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params, logger)
     # Treat runtimeparams
-    params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
+    (
+        params,
+        retrieve_hass_conf,
+        optim_conf,
+        plant_conf,
+    ) = await utils.treat_runtimeparams(
         runtimeparams,
         params,
         retrieve_hass_conf,
@@ -665,23 +673,21 @@ def weather_forecast_cache(
     )
     # Make sure weather_forecast_cache is true
     if (params is not None) and (params != "null"):
-        params = json.loads(params)
+        params = orjson.loads(params)
     else:
         params = {}
     params["passed_data"]["weather_forecast_cache"] = True
-    params = json.dumps(params)
+    params = orjson.dumps(params).decode("utf-8")
     # Create Forecast object
-    fcst = Forecast(
-        retrieve_hass_conf, optim_conf, plant_conf, params, emhass_conf, logger
-    )
-    result = fcst.get_weather_forecast(optim_conf["weather_forecast_method"])
+    fcst = Forecast(retrieve_hass_conf, optim_conf, plant_conf, params, emhass_conf, logger)
+    result = await fcst.get_weather_forecast(optim_conf["weather_forecast_method"])
     if isinstance(result, bool) and not result:
         return False
 
     return True
 
 
-def perfect_forecast_optim(
+async def perfect_forecast_optim(
     input_data_dict: dict,
     logger: logging.Logger,
     save_data_to_file: bool | None = True,
@@ -732,7 +738,7 @@ def perfect_forecast_optim(
             index_label="timestamp",
         )
     if not isinstance(input_data_dict["params"], dict):
-        params = json.loads(input_data_dict["params"])
+        params = orjson.loads(input_data_dict["params"])
     else:
         params = input_data_dict["params"]
 
@@ -741,12 +747,12 @@ def perfect_forecast_optim(
         "passed_data"
     ].get("entity_save", False):
         # Trigger the publish function, save entity data and not post to HA
-        publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
+        await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     return opt_res
 
 
-def dayahead_forecast_optim(
+async def dayahead_forecast_optim(
     input_data_dict: dict,
     logger: logging.Logger,
     save_data_to_file: bool | None = False,
@@ -782,9 +788,9 @@ def dayahead_forecast_optim(
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
     if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
-        df_input_data_dayahead["outdoor_temperature_forecast"] = input_data_dict[
-            "params"
-        ]["passed_data"]["outdoor_temperature_forecast"]
+        df_input_data_dayahead["outdoor_temperature_forecast"] = input_data_dict["params"][
+            "passed_data"
+        ]["outdoor_temperature_forecast"]
     opt_res_dayahead = input_data_dict["opt"].perform_dayahead_forecast_optim(
         df_input_data_dayahead,
         input_data_dict["P_PV_forecast"],
@@ -803,7 +809,7 @@ def dayahead_forecast_optim(
         )
 
     if not isinstance(input_data_dict["params"], dict):
-        params = json.loads(input_data_dict["params"])
+        params = orjson.loads(input_data_dict["params"])
     else:
         params = input_data_dict["params"]
 
@@ -812,12 +818,12 @@ def dayahead_forecast_optim(
         "passed_data"
     ].get("entity_save", False):
         # Trigger the publish function, save entity data and not post to HA
-        publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
+        await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     return opt_res_dayahead
 
 
-def naive_mpc_optim(
+async def naive_mpc_optim(
     input_data_dict: dict,
     logger: logging.Logger,
     save_data_to_file: bool | None = False,
@@ -853,9 +859,9 @@ def naive_mpc_optim(
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
     if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
-        df_input_data_dayahead["outdoor_temperature_forecast"] = input_data_dict[
-            "params"
-        ]["passed_data"]["outdoor_temperature_forecast"]
+        df_input_data_dayahead["outdoor_temperature_forecast"] = input_data_dict["params"][
+            "passed_data"
+        ]["outdoor_temperature_forecast"]
     # The specifics params for the MPC at runtime
     prediction_horizon = input_data_dict["params"]["passed_data"]["prediction_horizon"]
     soc_init = input_data_dict["params"]["passed_data"]["soc_init"]
@@ -897,7 +903,7 @@ def naive_mpc_optim(
         )
 
     if not isinstance(input_data_dict["params"], dict):
-        params = json.loads(input_data_dict["params"])
+        params = orjson.loads(input_data_dict["params"])
     else:
         params = input_data_dict["params"]
 
@@ -906,12 +912,12 @@ def naive_mpc_optim(
         "passed_data"
     ].get("entity_save", False):
         # Trigger the publish function, save entity data and not post to HA
-        publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
+        await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     return opt_res_naive_mpc
 
 
-def forecast_model_fit(
+async def forecast_model_fit(
     input_data_dict: dict, logger: logging.Logger, debug: bool | None = False
 ) -> tuple[pd.DataFrame, pd.DataFrame, MLForecaster]:
     """Perform a forecast model fit from training data retrieved from Home Assistant.
@@ -943,20 +949,20 @@ def forecast_model_fit(
         logger,
     )
     # Fit the ML model
-    df_pred, df_pred_backtest = mlf.fit(
+    df_pred, df_pred_backtest = await mlf.fit(
         split_date_delta=split_date_delta, perform_backtest=perform_backtest
     )
     # Save model
     if not debug:
         filename = model_type + default_pkl_suffix
         filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
-        with open(filename_path, "wb") as outp:
-            pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
+        async with aiofiles.open(filename_path, "wb") as outp:
+            await outp.write(pickle.dumps(mlf, pickle.HIGHEST_PROTOCOL))
             logger.debug("saved model to " + str(filename_path))
     return df_pred, df_pred_backtest, mlf
 
 
-def forecast_model_predict(
+async def forecast_model_predict(
     input_data_dict: dict,
     logger: logging.Logger,
     use_last_window: bool | None = True,
@@ -989,8 +995,9 @@ def forecast_model_predict(
     filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
     if not debug:
         if filename_path.is_file():
-            with open(filename_path, "rb") as inp:
-                mlf = pickle.load(inp)
+            async with aiofiles.open(filename_path, "rb") as inp:
+                content = await inp.read()
+                mlf = pickle.loads(content)
                 logger.debug("loaded saved model from " + str(filename_path))
         else:
             logger.error(
@@ -1004,14 +1011,10 @@ def forecast_model_predict(
         data_last_window = copy.deepcopy(input_data_dict["df_input_data"])
     else:
         data_last_window = None
-    predictions = mlf.predict(data_last_window)
+    predictions = await mlf.predict(data_last_window)
     # Publish data to a Home Assistant sensor
-    model_predict_publish = input_data_dict["params"]["passed_data"][
-        "model_predict_publish"
-    ]
-    model_predict_entity_id = input_data_dict["params"]["passed_data"][
-        "model_predict_entity_id"
-    ]
+    model_predict_publish = input_data_dict["params"]["passed_data"]["model_predict_publish"]
+    model_predict_entity_id = input_data_dict["params"]["passed_data"]["model_predict_entity_id"]
     model_predict_device_class = input_data_dict["params"]["passed_data"][
         "model_predict_device_class"
     ]
@@ -1024,27 +1027,19 @@ def forecast_model_predict(
     publish_prefix = input_data_dict["params"]["passed_data"]["publish_prefix"]
     if model_predict_publish is True:
         # Estimate the current index
-        now_precise = datetime.now(
-            input_data_dict["retrieve_hass_conf"]["time_zone"]
-        ).replace(second=0, microsecond=0)
+        now_precise = datetime.now(input_data_dict["retrieve_hass_conf"]["time_zone"]).replace(
+            second=0, microsecond=0
+        )
         if input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "nearest":
-            idx_closest = predictions.index.get_indexer(
-                [now_precise], method="nearest"
-            )[0]
+            idx_closest = predictions.index.get_indexer([now_precise], method="nearest")[0]
         elif input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "first":
-            idx_closest = predictions.index.get_indexer([now_precise], method="ffill")[
-                0
-            ]
+            idx_closest = predictions.index.get_indexer([now_precise], method="ffill")[0]
         elif input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "last":
-            idx_closest = predictions.index.get_indexer([now_precise], method="bfill")[
-                0
-            ]
+            idx_closest = predictions.index.get_indexer([now_precise], method="bfill")[0]
         if idx_closest == -1:
-            idx_closest = predictions.index.get_indexer(
-                [now_precise], method="nearest"
-            )[0]
+            idx_closest = predictions.index.get_indexer([now_precise], method="nearest")[0]
         # Publish Load forecast
-        input_data_dict["rh"].post_data(
+        await input_data_dict["rh"].post_data(
             predictions,
             idx_closest,
             model_predict_entity_id,
@@ -1057,7 +1052,7 @@ def forecast_model_predict(
     return predictions
 
 
-def forecast_model_tune(
+async def forecast_model_tune(
     input_data_dict: dict,
     logger: logging.Logger,
     debug: bool | None = False,
@@ -1083,8 +1078,9 @@ def forecast_model_tune(
     filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
     if not debug:
         if filename_path.is_file():
-            with open(filename_path, "rb") as inp:
-                mlf = pickle.load(inp)
+            async with aiofiles.open(filename_path, "rb") as inp:
+                content = await inp.read()
+                mlf = pickle.loads(content)
                 logger.debug("loaded saved model from " + str(filename_path))
         else:
             logger.error(
@@ -1095,18 +1091,18 @@ def forecast_model_tune(
             return None, None
     # Tune the model
     split_date_delta = input_data_dict["params"]["passed_data"]["split_date_delta"]
-    df_pred_optim = mlf.tune(split_date_delta=split_date_delta, debug=debug)
+    df_pred_optim = await mlf.tune(split_date_delta=split_date_delta, debug=debug)
     # Save model
     if not debug:
         filename = model_type + default_pkl_suffix
         filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
-        with open(filename_path, "wb") as outp:
-            pickle.dump(mlf, outp, pickle.HIGHEST_PROTOCOL)
+        async with aiofiles.open(filename_path, "wb") as outp:
+            await outp.write(pickle.dumps(mlf, pickle.HIGHEST_PROTOCOL))
             logger.debug("Saved model to " + str(filename_path))
     return df_pred_optim, mlf
 
 
-def regressor_model_fit(
+async def regressor_model_fit(
     input_data_dict: dict, logger: logging.Logger, debug: bool | None = False
 ) -> MLRegressor:
     """Perform a forecast model fit from training data retrieved from Home Assistant.
@@ -1150,23 +1146,21 @@ def regressor_model_fit(
         logger.error("parameter: 'date_features' not passed")
         return False
     # The MLRegressor object
-    mlr = MLRegressor(
-        data, model_type, regression_model, features, target, timestamp, logger
-    )
+    mlr = MLRegressor(data, model_type, regression_model, features, target, timestamp, logger)
     # Fit the ML model
-    fit = mlr.fit(date_features=date_features)
+    fit = await mlr.fit(date_features=date_features)
     if not fit:
         return False
     # Save model
     if not debug:
         filename = model_type + "_mlr.pkl"
         filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
-        with open(filename_path, "wb") as outp:
-            pickle.dump(mlr, outp, pickle.HIGHEST_PROTOCOL)
+        async with aiofiles.open(filename_path, "wb") as outp:
+            await outp.write(pickle.dumps(mlr, pickle.HIGHEST_PROTOCOL))
     return mlr
 
 
-def regressor_model_predict(
+async def regressor_model_predict(
     input_data_dict: dict,
     logger: logging.Logger,
     debug: bool | None = False,
@@ -1190,8 +1184,9 @@ def regressor_model_predict(
     filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
     if not debug:
         if filename_path.is_file():
-            with open(filename_path, "rb") as inp:
-                mlr = pickle.load(inp)
+            async with aiofiles.open(filename_path, "rb") as inp:
+                content = await inp.read()
+                mlr = pickle.loads(content)
         else:
             logger.error(
                 "The ML forecaster file was not found, please run a model fit method before this predict method",
@@ -1203,7 +1198,7 @@ def regressor_model_predict(
         logger.error("parameter: 'new_values' not passed")
         return False
     # Predict from csv file
-    prediction = mlr.predict(new_values)
+    prediction = await mlr.predict(new_values)
     mlr_predict_entity_id = input_data_dict["params"]["passed_data"].get(
         "mlr_predict_entity_id", "sensor.mlr_predict"
     )
@@ -1219,7 +1214,7 @@ def regressor_model_predict(
     # Publish prediction
     idx = 0
     if not debug:
-        input_data_dict["rh"].post_data(
+        await input_data_dict["rh"].post_data(
             prediction,
             idx,
             mlr_predict_entity_id,
@@ -1231,7 +1226,7 @@ def regressor_model_predict(
     return prediction
 
 
-def export_influxdb_to_csv(
+async def export_influxdb_to_csv(
     input_data_dict: dict | None,
     logger: logging.Logger,
     emhass_conf: dict | None = None,
@@ -1261,27 +1256,28 @@ def export_influxdb_to_csv(
     if input_data_dict is None:
         # Direct mode: parse params and create RetrieveHass
         if emhass_conf is None or params is None:
-            logger.error(
-                "emhass_conf and params are required when input_data_dict is None"
-            )
+            logger.error("emhass_conf and params are required when input_data_dict is None")
             return False
 
         # Parse params
         if isinstance(params, str):
-            params = json.loads(params)
+            params = orjson.loads(params)
         if isinstance(runtimeparams, str):
-            runtimeparams = json.loads(runtimeparams)
+            runtimeparams = orjson.loads(runtimeparams)
 
         # Get configuration
-        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(
-            params, logger
-        )
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params, logger)
         if isinstance(retrieve_hass_conf, bool):
             return False
 
         # Treat runtime params
-        params, retrieve_hass_conf, optim_conf, plant_conf = utils.treat_runtimeparams(
-            json.dumps(runtimeparams) if runtimeparams else "{}",
+        (
+            params,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+        ) = await utils.treat_runtimeparams(
+            orjson.dumps(runtimeparams).decode("utf-8") if runtimeparams else "{}",
             params,
             retrieve_hass_conf,
             optim_conf,
@@ -1293,7 +1289,7 @@ def export_influxdb_to_csv(
 
         # Parse params again if it's a string
         if isinstance(params, str):
-            params = json.loads(params)
+            params = orjson.loads(params)
 
         # Create RetrieveHass object
         rh = RetrieveHass(
@@ -1311,7 +1307,7 @@ def export_influxdb_to_csv(
         # Standard mode: use input_data_dict
         params = input_data_dict["params"]
         if isinstance(params, str):
-            params = json.loads(params)
+            params = orjson.loads(params)
 
         rh = input_data_dict["rh"]
         time_zone = rh.time_zone
@@ -1348,16 +1344,12 @@ def export_influxdb_to_csv(
         return False
 
     # Parse time range
-    start_dt, end_dt = utils.parse_export_time_range(
-        start_time, end_time, time_zone, logger
-    )
+    start_dt, end_dt = utils.parse_export_time_range(start_time, end_time, time_zone, logger)
     if start_dt is False:
         return False
 
     # Create days list for data retrieval
-    days_list = pd.date_range(
-        start=start_dt.date(), end=end_dt.date(), freq="D", tz=time_zone
-    )
+    days_list = pd.date_range(start=start_dt.date(), end=end_dt.date(), freq="D", tz=time_zone)
 
     if len(days_list) == 0:
         logger.error("No days to retrieve. Check start_time and end_time.")
@@ -1376,9 +1368,7 @@ def export_influxdb_to_csv(
         return False
 
     # Filter and resample data
-    df_export = utils.resample_and_filter_data(
-        rh.df_final, start_dt, end_dt, resample_freq, logger
-    )
+    df_export = utils.resample_and_filter_data(rh.df_final, start_dt, end_dt, resample_freq, logger)
     if df_export is False:
         return False
 
@@ -1412,7 +1402,7 @@ def export_influxdb_to_csv(
     return True
 
 
-def publish_data(
+async def publish_data(
     input_data_dict: dict,
     logger: logging.Logger,
     save_data_to_file: bool | None = False,
@@ -1440,7 +1430,7 @@ def publish_data(
     logger.info("Publishing data to HASS instance")
     if input_data_dict:
         if not isinstance(input_data_dict.get("params", {}), dict):
-            params = json.loads(input_data_dict["params"])
+            params = orjson.loads(input_data_dict["params"])
         else:
             params = input_data_dict.get("params", {})
 
@@ -1470,7 +1460,7 @@ def publish_data(
                     if entity != default_metadata_json and (
                         publish_prefix in entity or publish_prefix == "all"
                     ):
-                        entity_data = publish_json(
+                        entity_data = await publish_json(
                             entity, input_data_dict, entity_path, logger
                         )
                         if not isinstance(entity_data, bool):
@@ -1484,8 +1474,7 @@ def publish_data(
                 return opt_res
             else:
                 logger.warning(
-                    "No saved entity json files that match prefix: "
-                    + str(publish_prefix)
+                    "No saved entity json files that match prefix: " + str(publish_prefix)
                 )
                 logger.warning("Falling back to opt_res_latest")
         else:
@@ -1508,26 +1497,24 @@ def publish_data(
                 "optimization_time_step"
             ]
     # Estimate the current index
-    now_precise = datetime.now(
-        input_data_dict["retrieve_hass_conf"]["time_zone"]
-    ).replace(second=0, microsecond=0)
+    now_precise = datetime.now(input_data_dict["retrieve_hass_conf"]["time_zone"]).replace(
+        second=0, microsecond=0
+    )
     if input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "nearest":
-        idx_closest = opt_res_latest.index.get_indexer([now_precise], method="nearest")[
-            0
-        ]
+        idx_closest = opt_res_latest.index.get_indexer([now_precise], method="nearest")[0]
     elif input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "first":
         idx_closest = opt_res_latest.index.get_indexer([now_precise], method="ffill")[0]
     elif input_data_dict["retrieve_hass_conf"]["method_ts_round"] == "last":
         idx_closest = opt_res_latest.index.get_indexer([now_precise], method="bfill")[0]
     if idx_closest == -1:
-        idx_closest = opt_res_latest.index.get_indexer([now_precise], method="nearest")[
-            0
-        ]
+        idx_closest = opt_res_latest.index.get_indexer([now_precise], method="nearest")[0]
     # Publish the data
     publish_prefix = params["passed_data"]["publish_prefix"]
+
     # Publish PV forecast
     custom_pv_forecast_id = params["passed_data"]["custom_pv_forecast_id"]
-    input_data_dict["rh"].post_data(
+
+    await input_data_dict["rh"].post_data(
         opt_res_latest["P_PV"],
         idx_closest,
         custom_pv_forecast_id["entity_id"],
@@ -1541,7 +1528,7 @@ def publish_data(
     )
     # Publish Load forecast
     custom_load_forecast_id = params["passed_data"]["custom_load_forecast_id"]
-    input_data_dict["rh"].post_data(
+    await input_data_dict["rh"].post_data(
         opt_res_latest["P_Load"],
         idx_closest,
         custom_load_forecast_id["entity_id"],
@@ -1557,7 +1544,7 @@ def publish_data(
     # Publish PV curtailment
     if input_data_dict["fcst"].plant_conf["compute_curtailment"]:
         custom_pv_curtailment_id = params["passed_data"]["custom_pv_curtailment_id"]
-        input_data_dict["rh"].post_data(
+        await input_data_dict["rh"].post_data(
             opt_res_latest["P_PV_curtailment"],
             idx_closest,
             custom_pv_curtailment_id["entity_id"],
@@ -1573,7 +1560,7 @@ def publish_data(
     # Publish P_hybrid_inverter
     if input_data_dict["fcst"].plant_conf["inverter_is_hybrid"]:
         custom_hybrid_inverter_id = params["passed_data"]["custom_hybrid_inverter_id"]
-        input_data_dict["rh"].post_data(
+        await input_data_dict["rh"].post_data(
             opt_res_latest["P_hybrid_inverter"],
             idx_closest,
             custom_hybrid_inverter_id["entity_id"],
@@ -1587,9 +1574,7 @@ def publish_data(
         )
         cols_published = cols_published + ["P_hybrid_inverter"]
     # Publish deferrable loads
-    custom_deferrable_forecast_id = params["passed_data"][
-        "custom_deferrable_forecast_id"
-    ]
+    custom_deferrable_forecast_id = params["passed_data"]["custom_deferrable_forecast_id"]
     for k in range(input_data_dict["opt"].optim_conf["number_of_deferrable_loads"]):
         if f"P_deferrable{k}" not in opt_res_latest.columns:
             logger.error(
@@ -1597,7 +1582,7 @@ def publish_data(
                 + " was not found in results DataFrame. Optimization task may need to be relaunched or it did not converge to a solution.",
             )
         else:
-            input_data_dict["rh"].post_data(
+            await input_data_dict["rh"].post_data(
                 opt_res_latest[f"P_deferrable{k}"],
                 idx_closest,
                 custom_deferrable_forecast_id[k]["entity_id"],
@@ -1611,16 +1596,11 @@ def publish_data(
             )
             cols_published = cols_published + [f"P_deferrable{k}"]
     # Publish thermal model data (predicted temperature)
-    custom_predicted_temperature_id = params["passed_data"][
-        "custom_predicted_temperature_id"
-    ]
+    custom_predicted_temperature_id = params["passed_data"]["custom_predicted_temperature_id"]
     for k in range(input_data_dict["opt"].optim_conf["number_of_deferrable_loads"]):
         if "def_load_config" in input_data_dict["opt"].optim_conf.keys():
-            if (
-                "thermal_config"
-                in input_data_dict["opt"].optim_conf["def_load_config"][k]
-            ):
-                input_data_dict["rh"].post_data(
+            if "thermal_config" in input_data_dict["opt"].optim_conf["def_load_config"][k]:
+                await input_data_dict["rh"].post_data(
                     opt_res_latest[f"predicted_temp_heater{k}"],
                     idx_closest,
                     custom_predicted_temperature_id[k]["entity_id"],
@@ -1641,7 +1621,7 @@ def publish_data(
             )
         else:
             custom_batt_forecast_id = params["passed_data"]["custom_batt_forecast_id"]
-            input_data_dict["rh"].post_data(
+            await input_data_dict["rh"].post_data(
                 opt_res_latest["P_batt"],
                 idx_closest,
                 custom_batt_forecast_id["entity_id"],
@@ -1654,10 +1634,8 @@ def publish_data(
                 dont_post=dont_post,
             )
             cols_published = cols_published + ["P_batt"]
-            custom_batt_soc_forecast_id = params["passed_data"][
-                "custom_batt_soc_forecast_id"
-            ]
-            input_data_dict["rh"].post_data(
+            custom_batt_soc_forecast_id = params["passed_data"]["custom_batt_soc_forecast_id"]
+            await input_data_dict["rh"].post_data(
                 opt_res_latest["SOC_opt"] * 100,
                 idx_closest,
                 custom_batt_soc_forecast_id["entity_id"],
@@ -1672,7 +1650,7 @@ def publish_data(
             cols_published = cols_published + ["SOC_opt"]
     # Publish grid power
     custom_grid_forecast_id = params["passed_data"]["custom_grid_forecast_id"]
-    input_data_dict["rh"].post_data(
+    await input_data_dict["rh"].post_data(
         opt_res_latest["P_grid"],
         idx_closest,
         custom_grid_forecast_id["entity_id"],
@@ -1688,7 +1666,7 @@ def publish_data(
     # Publish total value of cost function
     custom_cost_fun_id = params["passed_data"]["custom_cost_fun_id"]
     col_cost_fun = [i for i in opt_res_latest.columns if "cost_fun_" in i]
-    input_data_dict["rh"].post_data(
+    await input_data_dict["rh"].post_data(
         opt_res_latest[col_cost_fun],
         idx_closest,
         custom_cost_fun_id["entity_id"],
@@ -1702,20 +1680,20 @@ def publish_data(
     )
     # cols_published = cols_published + col_cost_fun
     # Publish the optimization status
-    custom_cost_fun_id = params["passed_data"]["custom_optim_status_id"]
+    custom_optim_status_id = params["passed_data"]["custom_optim_status_id"]
     if "optim_status" not in opt_res_latest:
         opt_res_latest["optim_status"] = "Optimal"
         logger.warning(
             "no optim_status in opt_res_latest, run an optimization task first",
         )
     else:
-        input_data_dict["rh"].post_data(
+        await input_data_dict["rh"].post_data(
             opt_res_latest["optim_status"],
             idx_closest,
-            custom_cost_fun_id["entity_id"],
+            custom_optim_status_id["entity_id"],
             "",
-            custom_cost_fun_id["unit_of_measurement"],
-            custom_cost_fun_id["friendly_name"],
+            "",
+            custom_optim_status_id["friendly_name"],
             type_var="optim_status",
             publish_prefix=publish_prefix,
             save_entities=entity_save,
@@ -1724,7 +1702,7 @@ def publish_data(
         cols_published = cols_published + ["optim_status"]
     # Publish unit_load_cost
     custom_unit_load_cost_id = params["passed_data"]["custom_unit_load_cost_id"]
-    input_data_dict["rh"].post_data(
+    await input_data_dict["rh"].post_data(
         opt_res_latest["unit_load_cost"],
         idx_closest,
         custom_unit_load_cost_id["entity_id"],
@@ -1739,7 +1717,7 @@ def publish_data(
     cols_published = cols_published + ["unit_load_cost"]
     # Publish unit_prod_price
     custom_unit_prod_price_id = params["passed_data"]["custom_unit_prod_price_id"]
-    input_data_dict["rh"].post_data(
+    await input_data_dict["rh"].post_data(
         opt_res_latest["unit_prod_price"],
         idx_closest,
         custom_unit_prod_price_id["entity_id"],
@@ -1757,7 +1735,7 @@ def publish_data(
     return opt_res
 
 
-def continual_publish(
+async def continual_publish(
     input_data_dict: dict, entity_path: pathlib.Path, logger: logging.Logger
 ):
     """
@@ -1778,14 +1756,12 @@ def continual_publish(
     entity_path_contents = []
     while True:
         # Sleep for x seconds (using current time as a reference for time left)
-        time.sleep(
+        await asyncio.sleep(
             max(
                 0,
                 freq.total_seconds()
                 - (
-                    datetime.now(
-                        input_data_dict["retrieve_hass_conf"]["time_zone"]
-                    ).timestamp()
+                    datetime.now(input_data_dict["retrieve_hass_conf"]["time_zone"]).timestamp()
                     % 60
                 ),
             )
@@ -1796,7 +1772,7 @@ def continual_publish(
             for entity in entity_path_contents:
                 if entity != default_metadata_json:
                     # Call publish_json with entity file, build entity, and publish
-                    publish_json(
+                    await publish_json(
                         entity,
                         input_data_dict,
                         entity_path,
@@ -1805,8 +1781,9 @@ def continual_publish(
                     )
             # Retrieve entity metadata from file
             if os.path.isfile(entity_path / default_metadata_json):
-                with open(entity_path / default_metadata_json) as file:
-                    metadata = json.load(file)
+                async with aiofiles.open(entity_path / default_metadata_json) as file:
+                    content = await file.read()
+                    metadata = orjson.loads(content)
                     # Check if freq should be shorter
                     if metadata.get("lowest_time_step", None) is not None:
                         freq = pd.to_timedelta(metadata["lowest_time_step"], "minutes")
@@ -1815,7 +1792,7 @@ def continual_publish(
     return False
 
 
-def publish_json(
+async def publish_json(
     entity: dict,
     input_data_dict: dict,
     entity_path: pathlib.Path,
@@ -1839,15 +1816,16 @@ def publish_json(
     """
     # Retrieve entity metadata from file
     if os.path.isfile(entity_path / default_metadata_json):
-        with open(entity_path / default_metadata_json) as file:
-            metadata = json.load(file)
+        async with aiofiles.open(entity_path / default_metadata_json) as file:
+            content = await file.read()
+            metadata = orjson.loads(content)
     else:
         logger.error("unable to located metadata.json in:" + entity_path)
         return False
     # Round current timecode (now)
-    now_precise = datetime.now(
-        input_data_dict["retrieve_hass_conf"]["time_zone"]
-    ).replace(second=0, microsecond=0)
+    now_precise = datetime.now(input_data_dict["retrieve_hass_conf"]["time_zone"]).replace(
+        second=0, microsecond=0
+    )
     # Retrieve entity data from file
     entity_data = pd.read_json(entity_path / entity, orient="index")
     # Remove ".json" from string for entity_id
@@ -1877,7 +1855,7 @@ def publish_json(
     else:
         logger_levels = "INFO"
     # post/save entity
-    input_data_dict["rh"].post_data(
+    await input_data_dict["rh"].post_data(
         data_df=entity_data[metadata[entity_id]["name"]],
         idx=idx_closest,
         entity_id=entity_id,
@@ -1891,7 +1869,7 @@ def publish_json(
     return entity_data[metadata[entity_id]["name"]]
 
 
-def main():
+async def main():
     r"""Define the main command line entry function.
 
     This function may take several arguments as inputs. You can type `emhass --help` to see the list of options:
@@ -1929,9 +1907,7 @@ def main():
         default=None,
         help="String of configuration parameters passed",
     )
-    parser.add_argument(
-        "--data", type=str, help="Define path to the Data files (.csv & .pkl)"
-    )
+    parser.add_argument("--data", type=str, help="Define path to the Data files (.csv & .pkl)")
     parser.add_argument("--root", type=str, help="Define path emhass root")
     parser.add_argument(
         "--costfun",
@@ -1969,9 +1945,7 @@ def main():
     if args.config is not None:
         config_path = pathlib.Path(args.config)
     else:
-        config_path = pathlib.Path(
-            str(utils.get_root(__file__, num_parent=3) / "config.json")
-        )
+        config_path = pathlib.Path(str(utils.get_root(__file__, num_parent=3) / "config.json"))
     if args.data is not None:
         data_path = pathlib.Path(args.data)
     else:
@@ -1995,18 +1969,14 @@ def main():
     emhass_conf["associations_path"] = associations_path
     emhass_conf["defaults_path"] = defaults_path
     # create logger
-    logger, ch = utils.get_logger(
-        __name__, emhass_conf, save_to_file=bool(args.log2file)
-    )
+    logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=bool(args.log2file))
 
     # Check paths
     logger.debug("config path: " + str(config_path))
     logger.debug("data path: " + str(data_path))
     logger.debug("root path: " + str(root_path))
     if not associations_path.exists():
-        logger.error(
-            "Could not find associations.csv file in: " + str(associations_path)
-        )
+        logger.error("Could not find associations.csv file in: " + str(associations_path))
         logger.error("Try setting config file path with --associations")
         return False
     if not config_path.exists():
@@ -2041,49 +2011,53 @@ def main():
     config = {}
     # Check if passed config file is yaml of json, build config accordingly
     if config_path.exists():
-        config_file_ending = re.findall(r"(?<=\.).*$", str(config_path))
-        if len(config_file_ending) > 0:
-            match config_file_ending[0]:
+        # Safe: Use pathlib's suffix instead of regex to avoid ReDoS
+        file_extension = config_path.suffix.lstrip(".").lower()
+
+        if file_extension:
+            match file_extension:
                 case "json":
-                    config = utils.build_config(
+                    config = await utils.build_config(
                         emhass_conf, logger, defaults_path, config_path
                     )
-                case "yaml":
-                    config = utils.build_config(
+                case "yaml" | "yml":
+                    config = await utils.build_config(
                         emhass_conf, logger, defaults_path, config_path=config_path
                     )
-                case "yml":
-                    config = utils.build_config(
-                        emhass_conf, logger, defaults_path, config_path=config_path
+                case _:
+                    logger.warning(
+                        f"Unsupported config file format: .{file_extension}, building parameters with only defaults"
                     )
-    # If unable to find config file, use only defaults_config.json
+                    config = await utils.build_config(emhass_conf, logger, defaults_path)
+        else:
+            logger.warning("Config file has no extension, building parameters with only defaults")
+            config = await utils.build_config(emhass_conf, logger, defaults_path)
     else:
-        logger.warning(
-            "Unable to obtain config.json file, building parameters with only defaults"
-        )
-        config = utils.build_config(emhass_conf, logger, defaults_path)
+        # If unable to find config file, use only defaults_config.json
+        logger.warning("Unable to obtain config.json file, building parameters with only defaults")
+        config = await utils.build_config(emhass_conf, logger, defaults_path)
     if type(config) is bool and not config:
         raise Exception("Failed to find default config")
 
     # Obtain secrets from secrets_emhass.yaml?
     params_secrets = {}
-    emhass_conf, built_secrets = utils.build_secrets(
+    emhass_conf, built_secrets = await utils.build_secrets(
         emhass_conf, logger, secrets_path=secrets_path
     )
     params_secrets.update(built_secrets)
 
     # Build params
-    params = utils.build_params(emhass_conf, params_secrets, config, logger)
+    params = await utils.build_params(emhass_conf, params_secrets, config, logger)
     if type(params) is bool:
         raise Exception("A error has occurred while building parameters")
     # Add any passed params from args to params
     if args.params:
-        params.update(json.loads(args.params))
+        params.update(orjson.loads(args.params))
 
-    input_data_dict = set_input_data_dict(
+    input_data_dict = await set_input_data_dict(
         emhass_conf,
         args.costfun,
-        json.dumps(params),
+        orjson.dumps(params).decode("utf-8"),
         args.runtimeparams,
         args.action,
         logger,
@@ -2094,51 +2068,49 @@ def main():
 
     # Perform selected action
     if args.action == "perfect-optim":
-        opt_res = perfect_forecast_optim(input_data_dict, logger, debug=args.debug)
+        opt_res = await perfect_forecast_optim(input_data_dict, logger, debug=args.debug)
     elif args.action == "dayahead-optim":
-        opt_res = dayahead_forecast_optim(input_data_dict, logger, debug=args.debug)
+        opt_res = await dayahead_forecast_optim(input_data_dict, logger, debug=args.debug)
     elif args.action == "naive-mpc-optim":
-        opt_res = naive_mpc_optim(input_data_dict, logger, debug=args.debug)
+        opt_res = await naive_mpc_optim(input_data_dict, logger, debug=args.debug)
     elif args.action == "forecast-model-fit":
-        df_fit_pred, df_fit_pred_backtest, mlf = forecast_model_fit(
+        df_fit_pred, df_fit_pred_backtest, mlf = await forecast_model_fit(
             input_data_dict, logger, debug=args.debug
         )
         opt_res = None
     elif args.action == "forecast-model-predict":
         if args.debug:
-            _, _, mlf = forecast_model_fit(input_data_dict, logger, debug=args.debug)
+            _, _, mlf = await forecast_model_fit(input_data_dict, logger, debug=args.debug)
         else:
             mlf = None
-        df_pred = forecast_model_predict(
-            input_data_dict, logger, debug=args.debug, mlf=mlf
-        )
+        df_pred = await forecast_model_predict(input_data_dict, logger, debug=args.debug, mlf=mlf)
         opt_res = None
     elif args.action == "forecast-model-tune":
         if args.debug:
-            _, _, mlf = forecast_model_fit(input_data_dict, logger, debug=args.debug)
+            _, _, mlf = await forecast_model_fit(input_data_dict, logger, debug=args.debug)
         else:
             mlf = None
-        df_pred_optim, mlf = forecast_model_tune(
+        df_pred_optim, mlf = await forecast_model_tune(
             input_data_dict, logger, debug=args.debug, mlf=mlf
         )
         opt_res = None
     elif args.action == "regressor-model-fit":
-        mlr = regressor_model_fit(input_data_dict, logger, debug=args.debug)
+        mlr = await regressor_model_fit(input_data_dict, logger, debug=args.debug)
         opt_res = None
     elif args.action == "regressor-model-predict":
         if args.debug:
-            mlr = regressor_model_fit(input_data_dict, logger, debug=args.debug)
+            mlr = await regressor_model_fit(input_data_dict, logger, debug=args.debug)
         else:
             mlr = None
-        prediction = regressor_model_predict(
+        prediction = await regressor_model_predict(
             input_data_dict, logger, debug=args.debug, mlr=mlr
         )
         opt_res = None
     elif args.action == "export-influxdb-to-csv":
-        success = export_influxdb_to_csv(input_data_dict, logger)
+        success = await export_influxdb_to_csv(input_data_dict, logger)
         opt_res = None
     elif args.action == "publish-data":
-        opt_res = publish_data(input_data_dict, logger)
+        opt_res = await publish_data(input_data_dict, logger)
     else:
         logger.error("The passed action argument is not valid")
         logger.error(
@@ -2172,5 +2144,10 @@ def main():
         return opt_res
 
 
+def main_sync():
+    """Sync wrapper for async main function - used as CLI entry point."""
+    asyncio.run(main())
+
+
 if __name__ == "__main__":
-    main()
+    main_sync()
