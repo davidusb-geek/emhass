@@ -63,7 +63,7 @@
     <div id="template"> <!-- table/diagram container element  -->
         {% for plot in injection_dict %} <!-- diagrams/tables elements will be added here -->
         <div class="table_div">
-            {{injection_dict[plot]}}
+            {{injection_dict[plot] | mark_safe}}
         </div>
         {% endfor %}
         <div>
