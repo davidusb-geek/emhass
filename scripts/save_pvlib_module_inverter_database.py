@@ -95,9 +95,7 @@ if __name__ == "__main__":
         f"Number of elements from old database copied in new database for inverters = {len(cols_to_keep_inverters)}"
     )
     cols_to_keep_inverters = [
-        elem
-        for elem in cec_inverters_emhass.columns
-        if elem not in cec_inverters.columns
+        elem for elem in cec_inverters_emhass.columns if elem not in cec_inverters.columns
     ]
     cec_inverters = pd.concat([cec_inverters, cec_inverters_emhass[cols_to_keep_inverters]], axis=1)
     logger.info(

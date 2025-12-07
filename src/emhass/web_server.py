@@ -499,7 +499,7 @@ async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
         injection_dict = {
             "title": "<h2>Custom machine learning forecast model predict</h2>",
             "subsubtitle0": "<h4>Performed a prediction using a pre-trained model</h4>",
-            "table1": table1
+            "table1": table1,
         }
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
         return "EMHASS >> Action forecast-model-predict executed... \n", 201
@@ -549,7 +549,9 @@ async def action_call(action_name: str):
     global injection_dict
 
     # Load Parameters
-    params, costfun, runtimeparams = await _load_params_and_runtime(request, emhass_conf, app.logger)
+    params, costfun, runtimeparams = await _load_params_and_runtime(
+        request, emhass_conf, app.logger
+    )
     if params is None:
         return await make_response(await grabLog(" >> Obtaining params: "), 400)
 
@@ -559,14 +561,13 @@ async def action_call(action_name: str):
             action_name, None, emhass_conf, params, runtimeparams, app.logger
         )
         if status == 400:
-             return await make_response(msg, status)
+            return await make_response(msg, status)
 
         # Check logs for these specific actions
         ActionStr = f" >> Performing {action_name}..."
         if not await check_file_log(ActionStr):
-             return await make_response(msg, status)
+            return await make_response(msg, status)
         return await make_response(await grabLog(ActionStr), 400)
-
 
     # Set Input Data Dict (Common for all other actions)
     ActionStr = " >> Setting input data dict"
