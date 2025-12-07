@@ -654,9 +654,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         input_data = self.fcst.get_prod_price_forecast(input_data, method="constant")
 
-        # Mock P_PV and p_load as they are needed by perform_naive_mpc_optim
+        # Mock P_PV and P_Load as they are needed by perform_naive_mpc_optim
         P_PV = np.zeros(prediction_horizon)
-        p_load = np.zeros(prediction_horizon)
+        P_Load = np.zeros(prediction_horizon)
 
         unit_load_cost = input_data[self.opt.var_load_cost].values
         unit_prod_price = input_data[self.opt.var_prod_price].values
@@ -664,7 +664,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.opt_res_dayahead = self.opt.perform_optimization(
             input_data,
             P_PV,
-            p_load,
+            P_Load,
             unit_load_cost,
             unit_prod_price,
             def_total_hours=def_total_hours,
@@ -733,7 +733,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
         # Create vectors matching the slice length (10)
         P_PV = np.zeros(horizon)
-        p_load = np.zeros(horizon)
+        P_Load = np.zeros(horizon)
         unit_load_cost = input_data[self.opt.var_load_cost].values
         unit_prod_price = input_data[self.opt.var_prod_price].values
 
@@ -752,7 +752,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.opt_res_dayahead = self.opt.perform_optimization(
             input_data,
             P_PV,
-            p_load,
+            P_Load,
             unit_load_cost,
             unit_prod_price,
             def_total_hours=[0],

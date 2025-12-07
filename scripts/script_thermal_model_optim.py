@@ -100,10 +100,10 @@ async def main():
         get_data_from_file=get_data_from_file,
     )
     df_weather = await fcst.get_weather_forecast(method="csv")
-    P_PV_forecast = fcst.get_power_from_weather(df_weather)
+    p_pv_forecast = fcst.get_power_from_weather(df_weather)
     P_load_forecast = await fcst.get_load_forecast(method=optim_conf["load_forecast_method"])
-    df_input_data = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
-    df_input_data.columns = ["P_PV_forecast", "P_load_forecast"]
+    df_input_data = pd.concat([p_pv_forecast, P_load_forecast], axis=1)
+    df_input_data.columns = ["p_pv_forecast", "P_load_forecast"]
 
     df_input_data = fcst.get_load_cost_forecast(df_input_data)
     df_input_data = fcst.get_prod_price_forecast(df_input_data)
@@ -156,12 +156,12 @@ async def main():
         logger,
     )
     # opt_res_dayahead = opt.perform_dayahead_forecast_optim(
-    #     df_input_data, P_PV_forecast, P_load_forecast)
+    #     df_input_data, p_pv_forecast, P_load_forecast)
     unit_load_cost = df_input_data[opt.var_load_cost].values  # €/kWh
     unit_prod_price = df_input_data[opt.var_prod_price].values  # €/kWh
     opt_res_dayahead = opt.perform_optimization(
         df_input_data,
-        P_PV_forecast.values.ravel(),
+        p_pv_forecast.values.ravel(),
         P_load_forecast.values.ravel(),
         unit_load_cost,
         unit_prod_price,
