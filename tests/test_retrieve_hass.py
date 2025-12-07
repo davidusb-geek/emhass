@@ -446,11 +446,11 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["attributes"]["friendly_name"], "Variable")
         # Lets test publishing a forecast with more added attributes
         df = copy.deepcopy(self.df_raw.iloc[0:30])
-        df.columns = ["P_Load", "P_PV", "P_PV_forecast"]
+        df.columns = ["P_Load", "P_PV", "p_pv_forecast"]
         df["P_batt"] = 1000.0
         df["SOC_opt"] = 0.5
         response, data = await self.rh.post_data(
-            df["P_PV_forecast"],
+            df["p_pv_forecast"],
             10,
             "sensor.p_pv_forecast",
             "power",
