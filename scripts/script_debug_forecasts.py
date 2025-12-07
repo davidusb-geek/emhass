@@ -61,12 +61,12 @@ async def main():
             get_data_from_file=get_data_from_file,
         )
         df_weather = await fcst.get_weather_forecast(method=method)
-        P_PV_forecast = fcst.get_power_from_weather(df_weather)
-        P_PV_forecast = P_PV_forecast.to_frame(name=f"PV_forecast {method}")
+        p_pv_forecast = fcst.get_power_from_weather(df_weather)
+        p_pv_forecast = p_pv_forecast.to_frame(name=f"PV_forecast {method}")
         if k == 0:
-            res_df = P_PV_forecast
+            res_df = p_pv_forecast
         else:
-            res_df = pd.concat([res_df, P_PV_forecast], axis=1)
+            res_df = pd.concat([res_df, p_pv_forecast], axis=1)
 
     # Plot the PV data
     fig = res_df.plot()

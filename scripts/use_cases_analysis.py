@@ -57,10 +57,10 @@ async def get_forecast_optim_objects(
         get_data_from_file=get_data_from_file,
     )
     df_weather = await fcst.get_weather_forecast(method="solar.forecast")
-    P_PV_forecast = fcst.get_power_from_weather(df_weather)
+    p_pv_forecast = fcst.get_power_from_weather(df_weather)
     P_load_forecast = await fcst.get_load_forecast(method=optim_conf["load_forecast_method"])
-    df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
-    df_input_data_dayahead.columns = ["P_PV_forecast", "P_load_forecast"]
+    df_input_data_dayahead = pd.concat([p_pv_forecast, P_load_forecast], axis=1)
+    df_input_data_dayahead.columns = ["p_pv_forecast", "P_load_forecast"]
     opt = Optimization(
         retrieve_hass_conf,
         optim_conf,
@@ -71,7 +71,7 @@ async def get_forecast_optim_objects(
         emhass_conf,
         logger,
     )
-    return fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt
+    return fcst, p_pv_forecast, P_load_forecast, df_input_data_dayahead, opt
 
 
 async def main():
@@ -110,7 +110,7 @@ async def main():
     df_input_data = rh.df_final.copy()
     (
         fcst,
-        P_PV_forecast,
+        p_pv_forecast,
         P_load_forecast,
         df_input_data_dayahead,
         opt,
@@ -188,7 +188,7 @@ async def main():
     df_input_data_dayahead = fcst.get_load_cost_forecast(df_input_data_dayahead)
     df_input_data_dayahead = fcst.get_prod_price_forecast(df_input_data_dayahead)
     opt_res_dah = opt.perform_dayahead_forecast_optim(
-        df_input_data_dayahead, P_PV_forecast, P_load_forecast
+        df_input_data_dayahead, p_pv_forecast, P_load_forecast
     )
     fig_res_dah = opt_res_dah[["P_deferrable0", "P_deferrable1", "P_grid"]].plot()
     fig_res_dah.layout.template = template
@@ -211,7 +211,7 @@ async def main():
     retrieve_hass_conf["solar_forecast_kwp"] = 0
     (
         fcst,
-        P_PV_forecast,
+        p_pv_forecast,
         P_load_forecast,
         df_input_data_dayahead,
         opt,
@@ -221,7 +221,7 @@ async def main():
     df_input_data_dayahead = fcst.get_load_cost_forecast(df_input_data_dayahead)
     df_input_data_dayahead = fcst.get_prod_price_forecast(df_input_data_dayahead)
     opt_res_dah = opt.perform_dayahead_forecast_optim(
-        df_input_data_dayahead, P_PV_forecast, P_load_forecast
+        df_input_data_dayahead, p_pv_forecast, P_load_forecast
     )
     fig_res_dah = opt_res_dah[["P_deferrable0", "P_deferrable1", "P_grid"]].plot()
     fig_res_dah.layout.template = template
@@ -245,7 +245,7 @@ async def main():
     optim_conf["set_use_battery"] = True
     (
         fcst,
-        P_PV_forecast,
+        p_pv_forecast,
         P_load_forecast,
         df_input_data_dayahead,
         opt,
@@ -255,7 +255,7 @@ async def main():
     df_input_data_dayahead = fcst.get_load_cost_forecast(df_input_data_dayahead)
     df_input_data_dayahead = fcst.get_prod_price_forecast(df_input_data_dayahead)
     opt_res_dah = opt.perform_dayahead_forecast_optim(
-        df_input_data_dayahead, P_PV_forecast, P_load_forecast
+        df_input_data_dayahead, p_pv_forecast, P_load_forecast
     )
     fig_res_dah = opt_res_dah[["P_deferrable0", "P_deferrable1", "P_grid", "P_batt"]].plot()
     fig_res_dah.layout.template = template
