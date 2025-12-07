@@ -644,7 +644,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
         optim_conf["delta_forecast_daily"] = pd.Timedelta(days=3)
         (
-            params,
+            _,
             retrieve_hass_conf,
             optim_conf,
             plant_conf,

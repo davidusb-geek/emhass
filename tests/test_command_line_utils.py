@@ -417,12 +417,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         opt_res_last = await publish_data(input_data_dict, logger, opt_res_latest=opt_res)
         self.assertEqual(len(opt_res_last), 1)
-        # Reproduce when trying to publish data params=None and runtimeparams=None
-        # action = 'publish-data'
-        # input_data_dict = await set_input_data_dict(emhass_conf, costfun, None, None,
-        #                                       action, logger, get_data_from_file=True)
-        # opt_res_last = await publish_data(input_data_dict, logger, opt_res_latest=opt_res)
-        # self.assertTrue(len(opt_res_last)==1)
+
         # Check if status is published
         from datetime import datetime
 
