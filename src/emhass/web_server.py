@@ -386,8 +386,8 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
     Loads configuration parameters from pickle and runtime parameters from the request.
     Returns a tuple (params, costfun, runtimeparams) or raises an exception/returns None on failure.
     """
-    ActionStr = " >> Obtaining params: "
-    logger.info(ActionStr)
+    action_str = " >> Obtaining params: "
+    logger.info(action_str)
 
     # Load params.pkl
     params = None
@@ -428,23 +428,23 @@ async def _handle_action_dispatch(
     """
     # Actions that don't require input_data_dict or have specific flows
     if action_name == "weather-forecast-cache":
-        ActionStr = " >> Performing weather forecast, try to caching result"
-        logger.info(ActionStr)
+        action_str = " >> Performing weather forecast, try to caching result"
+        logger.info(action_str)
         await weather_forecast_cache(emhass_conf, params, runtimeparams, logger)
         return "EMHASS >> Weather Forecast has run and results possibly cached... \n", 201
 
     if action_name == "export-influxdb-to-csv":
-        ActionStr = " >> Exporting InfluxDB data to CSV..."
-        logger.info(ActionStr)
+        action_str = " >> Exporting InfluxDB data to CSV..."
+        logger.info(action_str)
         success = await export_influxdb_to_csv(None, logger, emhass_conf, params, runtimeparams)
         if success:
             return "EMHASS >> Action export-influxdb-to-csv executed successfully... \n", 201
-        return await grabLog(ActionStr), 400
+        return await grabLog(action_str), 400
 
     # Actions requiring input_data_dict
     if action_name == "publish-data":
-        ActionStr = " >> Publishing data..."
-        logger.info(ActionStr)
+        action_str = " >> Publishing data..."
+        logger.info(action_str)
         _ = await publish_data(input_data_dict, logger)
         return "EMHASS >> Action publish-data executed... \n", 201
 
@@ -456,8 +456,8 @@ async def _handle_action_dispatch(
     }
 
     if action_name in optim_actions:
-        ActionStr = f" >> Performing {action_name}..."
-        logger.info(ActionStr)
+        action_str = f" >> Performing {action_name}..."
+        logger.info(action_str)
         opt_res = await optim_actions[action_name](input_data_dict, logger)
         injection_dict = get_injection_dict(opt_res)
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
@@ -480,8 +480,8 @@ async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
     """
     # forecast-model-fit
     if action_name == "forecast-model-fit":
-        ActionStr = " >> Performing a machine learning forecast model fit..."
-        logger.info(ActionStr)
+        action_str = " >> Performing a machine learning forecast model fit..."
+        logger.info(action_str)
         df_fit_pred, _, mlf = await forecast_model_fit(input_data_dict, logger)
         injection_dict = get_injection_dict_forecast_model_fit(df_fit_pred, mlf)
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
@@ -489,11 +489,11 @@ async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
 
     # forecast-model-predict
     if action_name == "forecast-model-predict":
-        ActionStr = " >> Performing a machine learning forecast model predict..."
-        logger.info(ActionStr)
+        action_str = " >> Performing a machine learning forecast model predict..."
+        logger.info(action_str)
         df_pred = await forecast_model_predict(input_data_dict, logger)
         if df_pred is None:
-            return await grabLog(ActionStr), 400
+            return await grabLog(action_str), 400
 
         table1 = df_pred.reset_index().to_html(classes="mystyle", index=False)
         injection_dict = {
@@ -506,11 +506,11 @@ async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
 
     # forecast-model-tune
     if action_name == "forecast-model-tune":
-        ActionStr = " >> Performing a machine learning forecast model tune..."
-        logger.info(ActionStr)
+        action_str = " >> Performing a machine learning forecast model tune..."
+        logger.info(action_str)
         df_pred_optim, mlf = await forecast_model_tune(input_data_dict, logger)
         if df_pred_optim is None or mlf is None:
-            return await grabLog(ActionStr), 400
+            return await grabLog(action_str), 400
 
         injection_dict = get_injection_dict_forecast_model_tune(df_pred_optim, mlf)
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
@@ -518,15 +518,15 @@ async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
 
     # regressor-model-fit
     if action_name == "regressor-model-fit":
-        ActionStr = " >> Performing a machine learning regressor fit..."
-        logger.info(ActionStr)
+        action_str = " >> Performing a machine learning regressor fit..."
+        logger.info(action_str)
         await regressor_model_fit(input_data_dict, logger)
         return "EMHASS >> Action regressor-model-fit executed... \n", 201
 
     # regressor-model-predict
     if action_name == "regressor-model-predict":
-        ActionStr = " >> Performing a machine learning regressor predict..."
-        logger.info(ActionStr)
+        action_str = " >> Performing a machine learning regressor predict..."
+        logger.info(action_str)
         await regressor_model_predict(input_data_dict, logger)
         return "EMHASS >> Action regressor-model-predict executed... \n", 201
 
@@ -564,20 +564,20 @@ async def action_call(action_name: str):
             return await make_response(msg, status)
 
         # Check logs for these specific actions
-        ActionStr = f" >> Performing {action_name}..."
-        if not await check_file_log(ActionStr):
+        action_str = f" >> Performing {action_name}..."
+        if not await check_file_log(action_str):
             return await make_response(msg, status)
-        return await make_response(await grabLog(ActionStr), 400)
+        return await make_response(await grabLog(action_str), 400)
 
     # Set Input Data Dict (Common for all other actions)
-    ActionStr = " >> Setting input data dict"
-    app.logger.info(ActionStr)
+    action_str = " >> Setting input data dict"
+    app.logger.info(action_str)
     input_data_dict = await set_input_data_dict(
         emhass_conf, costfun, params, runtimeparams, action_name, app.logger
     )
 
     if not input_data_dict:
-        return await make_response(await grabLog(ActionStr), 400)
+        return await make_response(await grabLog(action_str), 400)
 
     # Handle Continual Publish Threading
     if len(continual_publish_thread) == 0 and input_data_dict["retrieve_hass_conf"].get(
@@ -598,7 +598,7 @@ async def action_call(action_name: str):
     # Final Log Check & Response
     if status == 201:
         if not await check_file_log(" >> "):
-             return await make_response(msg, 201)
+            return await make_response(msg, 201)
         return await make_response(await grabLog(" >> "), 400)
 
     return await make_response(msg, status)
