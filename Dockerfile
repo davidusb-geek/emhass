@@ -20,17 +20,19 @@ COPY pyproject.toml /app/
 COPY .python-version /app/
 COPY gunicorn.conf.py /app/
 
-RUN apt-get update && apt-get install -y gnupg && rm -rf /var/lib/apt/lists/*
-
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-    # Numpy
+    # Basic utilities
+    gnupg \
+    curl \
+    ca-certificates \
+    # Numpy dependencies
     libgfortran5 \
     libopenblas0-pthread \
     libopenblas-dev \
     libatlas3-base \
     libatlas-base-dev \
-    # h5py / tables
+    # h5py / tables dependencies
     libsz2 \
     libaec0 \
     libhdf5-hl-100 \
@@ -42,28 +44,24 @@ RUN apt-get update \
     coinor-libcbc-dev \
     # glpk
     glpk-utils \
-    # build packages (just in case wheel does not exist)
+    # build packages
     gcc \
     g++ \
     patchelf \
     cmake \
     ninja-build \
+    # Cleanup apt caches to reduce image size
     && rm -rf /var/cache/apt/* \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install uv (pip alternative)
-RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
-# Install python (version based on .python-version)
-RUN uv python install
-
-# specify hdf5
-RUN ln -s /usr/include/hdf5/serial /usr/include/hdf5/include && export HDF5_DIR=/usr/include/hdf5
-
-# make sure data directory exists
-RUN mkdir -p /data/
-
-# make sure emhass share directory exists
-RUN mkdir -p /share/emhass/
+    && rm -rf /var/lib/apt/lists/* \
+    # Install uv
+    && curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh \
+    # Install python
+    && uv python install \
+    # Setup HDF5 symlinks
+    && ln -s /usr/include/hdf5/serial /usr/include/hdf5/include \
+    # Create directories
+    && mkdir -p /data/ \
+    && mkdir -p /share/emhass/
 
 # copy required EMHASS files
 COPY src/emhass/ /app/src/emhass/
