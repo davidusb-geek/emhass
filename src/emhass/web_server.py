@@ -463,7 +463,22 @@ async def _handle_action_dispatch(
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
         return f"EMHASS >> Action {action_name} executed... \n", 201
 
-    # Machine Learning actions
+    # Delegate Machine Learning actions to helper
+    ml_response = await _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger)
+    if ml_response:
+        return ml_response
+
+    # Fallback for invalid action
+    logger.error("ERROR: passed action is not valid")
+    return "EMHASS >> ERROR: Passed action is not valid... \n", 400
+
+
+async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
+    """
+    Helper function to handle Machine Learning specific actions.
+    Returns (msg, status) if action is handled, otherwise None.
+    """
+    # forecast-model-fit
     if action_name == "forecast-model-fit":
         ActionStr = " >> Performing a machine learning forecast model fit..."
         logger.info(ActionStr)
@@ -472,6 +487,7 @@ async def _handle_action_dispatch(
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
         return "EMHASS >> Action forecast-model-fit executed... \n", 201
 
+    # forecast-model-predict
     if action_name == "forecast-model-predict":
         ActionStr = " >> Performing a machine learning forecast model predict..."
         logger.info(ActionStr)
@@ -488,6 +504,7 @@ async def _handle_action_dispatch(
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
         return "EMHASS >> Action forecast-model-predict executed... \n", 201
 
+    # forecast-model-tune
     if action_name == "forecast-model-tune":
         ActionStr = " >> Performing a machine learning forecast model tune..."
         logger.info(ActionStr)
@@ -499,21 +516,21 @@ async def _handle_action_dispatch(
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
         return "EMHASS >> Action forecast-model-tune executed... \n", 201
 
+    # regressor-model-fit
     if action_name == "regressor-model-fit":
         ActionStr = " >> Performing a machine learning regressor fit..."
         logger.info(ActionStr)
         await regressor_model_fit(input_data_dict, logger)
         return "EMHASS >> Action regressor-model-fit executed... \n", 201
 
+    # regressor-model-predict
     if action_name == "regressor-model-predict":
         ActionStr = " >> Performing a machine learning regressor predict..."
         logger.info(ActionStr)
         await regressor_model_predict(input_data_dict, logger)
         return "EMHASS >> Action regressor-model-predict executed... \n", 201
 
-    # Fallback for invalid action
-    logger.error("ERROR: passed action is not valid")
-    return "EMHASS >> ERROR: Passed action is not valid... \n", 400
+    return None
 
 
 async def _save_injection_dict(injection_dict, data_path):
