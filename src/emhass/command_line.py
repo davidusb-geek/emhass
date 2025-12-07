@@ -1509,7 +1509,7 @@ async def publish_data(
         # Safety: Ensure def_load_config exists and is a list
         def_load_config = input_data_dict["opt"].optim_conf.get("def_load_config", [])
         if not isinstance(def_load_config, list):
-             def_load_config = []
+            def_load_config = []
         for k in range(input_data_dict["opt"].optim_conf["number_of_deferrable_loads"]):
             # Check 1: Ensure k is within bounds of def_load_config
             if k < len(def_load_config):
@@ -1532,12 +1532,16 @@ async def publish_data(
                             )
                             cols_published = cols_published + [f"predicted_temp_heater{k}"]
                         else:
-                            logger.debug(f"predicted_temp_heater{k} not found in results, skipping.")
+                            logger.debug(
+                                f"predicted_temp_heater{k} not found in results, skipping."
+                            )
                     else:
-                        logger.warning(f"custom_predicted_temperature_id missing for index {k}, skipping.")
+                        logger.warning(
+                            f"custom_predicted_temperature_id missing for index {k}, skipping."
+                        )
             else:
-                 # If def_load_config is shorter than k, just stop checking thermal for this index
-                 pass
+                # If def_load_config is shorter than k, just stop checking thermal for this index
+                pass
     # Publish battery power
     if input_data_dict["opt"].optim_conf["set_use_battery"]:
         if "P_batt" not in opt_res_latest.columns:
