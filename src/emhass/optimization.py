@@ -679,7 +679,7 @@ class Optimization:
                     return matrix
 
                 matrix = create_matrix(power_sequence, n - sequence_length)
-                y = plp.LpVariable.dicts(f"y{k}", (i for i in range(len(matrix))), cat="Binary")
+                y = plp.LpVariable.dicts(f"y{k}", range(len(matrix)), cat="Binary")
                 self.logger.debug(
                     f"Load {k}: Created binary variables for sequence placement: y = {list(y.keys())}"
                 )

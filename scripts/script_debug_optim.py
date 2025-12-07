@@ -99,10 +99,10 @@ async def main():
         get_data_from_file=get_data_from_file,
     )
     df_weather = await fcst.get_weather_forecast(method="csv")
-    P_PV_forecast = fcst.get_power_from_weather(df_weather)
+    p_pv_forecast = fcst.get_power_from_weather(df_weather)
     P_load_forecast = await fcst.get_load_forecast(method=optim_conf["load_forecast_method"])
-    df_input_data = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
-    df_input_data.columns = ["P_PV_forecast", "P_load_forecast"]
+    df_input_data = pd.concat([p_pv_forecast, P_load_forecast], axis=1)
+    df_input_data.columns = ["p_pv_forecast", "P_load_forecast"]
 
     df_input_data = fcst.get_load_cost_forecast(df_input_data)
     df_input_data = fcst.get_prod_price_forecast(df_input_data)
@@ -135,8 +135,8 @@ async def main():
 
     # Setting some negative values on production prices
     df_input_data.loc[df_input_data.index[25:30], "unit_prod_price"] = -0.07
-    df_input_data["P_PV_forecast"] = df_input_data["P_PV_forecast"] * 2
-    P_PV_forecast = P_PV_forecast * 2
+    df_input_data["p_pv_forecast"] = df_input_data["p_pv_forecast"] * 2
+    p_pv_forecast = p_pv_forecast * 2
 
     costfun = "profit"
     opt = Optimization(
@@ -150,7 +150,7 @@ async def main():
         logger,
     )
     opt_res_dayahead = opt.perform_dayahead_forecast_optim(
-        df_input_data, P_PV_forecast, P_load_forecast
+        df_input_data, p_pv_forecast, P_load_forecast
     )
 
     # Let's plot the input data
