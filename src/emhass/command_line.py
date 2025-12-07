@@ -1663,14 +1663,12 @@ async def continual_publish(
     while True:
         # Sleep for x seconds (using current time as a reference for time left)
         time_zone = input_data_dict["retrieve_hass_conf"]["time_zone"]
-        sleep_seconds = max(
-            0,
-            freq.total_seconds() - (datetime.now(time_zone).timestamp() % 60)
-        )
+        sleep_seconds = max(0, freq.total_seconds() - (datetime.now(time_zone).timestamp() % 60))
         await asyncio.sleep(sleep_seconds)
         # Delegate processing to helper function to reduce complexity
         freq = await _publish_and_update_freq(input_data_dict, entity_path, logger, freq)
     return False
+
 
 async def _publish_and_update_freq(input_data_dict, entity_path, logger, current_freq):
     """
@@ -1704,6 +1702,7 @@ async def _publish_and_update_freq(input_data_dict, entity_path, logger, current
             if metadata.get("lowest_time_step") is not None:
                 return pd.to_timedelta(metadata["lowest_time_step"], "minutes")
     return current_freq
+
 
 async def publish_json(
     entity: dict,
