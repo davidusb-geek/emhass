@@ -106,8 +106,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIs(input_data_dict["df_input_data"], None)
         self.assertIs(input_data_dict["df_input_data_dayahead"], None)
-        self.assertIs(input_data_dict["P_PV_forecast"], None)
-        self.assertIs(input_data_dict["P_load_forecast"], None)
+        self.assertIs(input_data_dict["p_pv_forecast"], None)
+        self.assertIs(input_data_dict["p_load_forecast"], None)
         # Test naive mpc
         action = "naive-mpc-optim"
         input_data_dict = await set_input_data_dict(
