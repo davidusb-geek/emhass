@@ -7,6 +7,7 @@ Before running this script you should perform a perfect optimization for each ty
 profit, cost and self-consumption
 """
 
+import asyncio
 import pathlib
 
 import pandas as pd
@@ -43,7 +44,7 @@ emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
 
-def get_forecast_optim_objects(
+async def get_forecast_optim_objects(
     retrieve_hass_conf, optim_conf, plant_conf, params, get_data_from_file
 ):
     fcst = Forecast(
@@ -55,9 +56,9 @@ def get_forecast_optim_objects(
         logger,
         get_data_from_file=get_data_from_file,
     )
-    df_weather = fcst.get_weather_forecast(method="solar.forecast")
+    df_weather = await fcst.get_weather_forecast(method="solar.forecast")
     P_PV_forecast = fcst.get_power_from_weather(df_weather)
-    P_load_forecast = fcst.get_load_forecast(method=optim_conf["load_forecast_method"])
+    P_load_forecast = await fcst.get_load_forecast(method=optim_conf["load_forecast_method"])
     df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
     df_input_data_dayahead.columns = ["P_PV_forecast", "P_load_forecast"]
     opt = Optimization(
@@ -73,16 +74,16 @@ def get_forecast_optim_objects(
     return fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt
 
 
-if __name__ == "__main__":
+async def main():
     get_data_from_file = False
     params = None
     save_figures = False
     # Build params with default config and secrets file
-    config = build_config(emhass_conf, logger, emhass_conf["defaults_path"])
-    _, secrets = build_secrets(
+    config = await build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+    _, secrets = await build_secrets(
         emhass_conf, logger, secrets_path=emhass_conf["secrets_path"], no_response=True
     )
-    params = build_params(emhass_conf, secrets, config, logger)
+    params = await build_params(emhass_conf, secrets, config, logger)
     retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(params, logger)
     rh = RetrieveHass(
         retrieve_hass_conf["hass_url"],
@@ -98,9 +99,7 @@ if __name__ == "__main__":
         retrieve_hass_conf["sensor_power_load_no_var_loads"],
         retrieve_hass_conf["sensor_power_photovoltaics"],
     ]
-    rh.get_data(
-        days_list, var_list, minimal_response=False, significant_changes_only=False
-    )
+    await rh.get_data(days_list, var_list, minimal_response=False, significant_changes_only=False)
     rh.prepare_data(
         retrieve_hass_conf["sensor_power_load_no_var_loads"],
         load_negative=retrieve_hass_conf["load_negative"],
@@ -109,10 +108,14 @@ if __name__ == "__main__":
         var_interp=retrieve_hass_conf["sensor_linear_interp"],
     )
     df_input_data = rh.df_final.copy()
-    fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt = (
-        get_forecast_optim_objects(
-            retrieve_hass_conf, optim_conf, plant_conf, params, get_data_from_file
-        )
+    (
+        fcst,
+        P_PV_forecast,
+        P_load_forecast,
+        df_input_data_dayahead,
+        opt,
+    ) = await get_forecast_optim_objects(
+        retrieve_hass_conf, optim_conf, plant_conf, params, get_data_from_file
     )
     df_input_data = fcst.get_load_cost_forecast(df_input_data)
     df_input_data = fcst.get_prod_price_forecast(df_input_data)
@@ -171,8 +174,7 @@ if __name__ == "__main__":
     fig_res.show()
     if save_figures:
         fig_res.write_image(
-            emhass_conf["docs_path"]
-            / "images/optim_results_PV_defLoads_perfectOptim.svg",
+            emhass_conf["docs_path"] / "images/optim_results_PV_defLoads_perfectOptim.svg",
             width=1080,
             height=0.8 * 1080,
         )
@@ -195,8 +197,7 @@ if __name__ == "__main__":
     fig_res_dah.show()
     if save_figures:
         fig_res_dah.write_image(
-            emhass_conf["docs_path"]
-            / "images/optim_results_PV_defLoads_dayaheadOptim.svg",
+            emhass_conf["docs_path"] / "images/optim_results_PV_defLoads_dayaheadOptim.svg",
             width=1080,
             height=0.8 * 1080,
         )
@@ -208,10 +209,14 @@ if __name__ == "__main__":
 
     # Let's simplify to a system with only two deferrable loads, no PV installation
     retrieve_hass_conf["solar_forecast_kwp"] = 0
-    fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt = (
-        get_forecast_optim_objects(
-            retrieve_hass_conf, optim_conf, plant_conf, params, get_data_from_file
-        )
+    (
+        fcst,
+        P_PV_forecast,
+        P_load_forecast,
+        df_input_data_dayahead,
+        opt,
+    ) = await get_forecast_optim_objects(
+        retrieve_hass_conf, optim_conf, plant_conf, params, get_data_from_file
     )
     df_input_data_dayahead = fcst.get_load_cost_forecast(df_input_data_dayahead)
     df_input_data_dayahead = fcst.get_prod_price_forecast(df_input_data_dayahead)
@@ -225,8 +230,7 @@ if __name__ == "__main__":
     fig_res_dah.show()
     if save_figures:
         fig_res_dah.write_image(
-            emhass_conf["docs_path"]
-            / "images/optim_results_defLoads_dayaheadOptim.svg",
+            emhass_conf["docs_path"] / "images/optim_results_defLoads_dayaheadOptim.svg",
             width=1080,
             height=0.8 * 1080,
         )
@@ -239,27 +243,28 @@ if __name__ == "__main__":
     # Now a complete system with PV, Battery and two deferrable loads
     retrieve_hass_conf["solar_forecast_kwp"] = 5
     optim_conf["set_use_battery"] = True
-    fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt = (
-        get_forecast_optim_objects(
-            retrieve_hass_conf, optim_conf, plant_conf, params, get_data_from_file
-        )
+    (
+        fcst,
+        P_PV_forecast,
+        P_load_forecast,
+        df_input_data_dayahead,
+        opt,
+    ) = await get_forecast_optim_objects(
+        retrieve_hass_conf, optim_conf, plant_conf, params, get_data_from_file
     )
     df_input_data_dayahead = fcst.get_load_cost_forecast(df_input_data_dayahead)
     df_input_data_dayahead = fcst.get_prod_price_forecast(df_input_data_dayahead)
     opt_res_dah = opt.perform_dayahead_forecast_optim(
         df_input_data_dayahead, P_PV_forecast, P_load_forecast
     )
-    fig_res_dah = opt_res_dah[
-        ["P_deferrable0", "P_deferrable1", "P_grid", "P_batt"]
-    ].plot()
+    fig_res_dah = opt_res_dah[["P_deferrable0", "P_deferrable1", "P_grid", "P_batt"]].plot()
     fig_res_dah.layout.template = template
     fig_res_dah.update_yaxes(title_text=y_axis_title)
     fig_res_dah.update_xaxes(title_text="Time")
     fig_res_dah.show()
     if save_figures:
         fig_res_dah.write_image(
-            emhass_conf["docs_path"]
-            / "images/optim_results_PV_Batt_defLoads_dayaheadOptim.svg",
+            emhass_conf["docs_path"] / "images/optim_results_PV_Batt_defLoads_dayaheadOptim.svg",
             width=1080,
             height=0.8 * 1080,
         )
@@ -280,3 +285,7 @@ if __name__ == "__main__":
         "System with: PV, Battery, two deferrable loads, dayahead optimization, profit >> total cost function sum: "
         + str(opt_res_dah["cost_profit"].sum())
     )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

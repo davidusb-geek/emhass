@@ -1,8 +1,8 @@
 ## EMHASS Docker
 ## Docker run addon testing example:
-    ## docker build -t emhass .
-    ## OR docker build --build-arg TARGETARCH=amd64 -t emhass .
-    ## docker run --rm -it -p 5000:5000 --name emhass-container -v ./config.json:/share/config.json -v ./secrets_emhass.yaml:/app/secrets_emhass.yaml emhass
+## docker build -t emhass .
+## OR docker build --build-arg TARGETARCH=amd64 -t emhass .
+## docker run --rm -it -p 5000:5000 --name emhass-container -v ./config.json:/share/config.json -v ./secrets_emhass.yaml:/app/secrets_emhass.yaml emhass
 
 # armhf,amd64,armv7,aarch64
 ARG TARGETARCH
@@ -20,8 +20,10 @@ COPY pyproject.toml /app/
 COPY .python-version /app/
 COPY gunicorn.conf.py /app/
 
-RUN apt update \
-    && apt install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y gnupg && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
     # Numpy
     libgfortran5 \
     libopenblas0-pthread \
@@ -72,10 +74,10 @@ COPY src/emhass/static/ /app/src/emhass/static/
 COPY src/emhass/static/data/ /app/src/emhass/static/data/
 COPY src/emhass/static/img/ /app/src/emhass/static/img/
 
-# emhass extra packadge data 
+# emhass extra packadge data
 COPY src/emhass/data/ /app/src/emhass/data/
 
-# pre generated optimization results 
+# pre generated optimization results
 COPY data/opt_res_latest.csv /data/
 COPY data/long_train_data.pkl /data/
 COPY README.md /app/
@@ -108,7 +110,26 @@ RUN [[ "${TARGETARCH}" == "aarch64" ]] && uv pip install --verbose ndindex || ec
 RUN uv pip install --verbose .
 RUN uv lock
 
-ENTRYPOINT [ "uv", "run", "--frozen", "gunicorn", "emhass.web_server:create_app()" ]
+# remove build only packages
+RUN apt-get remove --purge -y --auto-remove \
+    gcc \
+    g++ \
+    patchelf \
+    cmake \
+    ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+# Environment variables for flexibility
+ENV WORKER_CLASS=uvicorn.workers.UvicornWorker
+ENV PORT=5000
+ENV IP=0.0.0.0
+
+# Entrypoint script inline
+ENTRYPOINT ["/bin/bash", "-c", "set -e && \
+WORKER_CLASS=${WORKER_CLASS:-uvicorn.workers.UvicornWorker} && \
+PORT=${PORT:-5000} && \
+IP=${IP:-0.0.0.0} && \
+exec uv run --frozen gunicorn emhass.web_server:app -c gunicorn.conf.py -k \"$WORKER_CLASS\""]
 
 # for running Unittest
 #COPY tests/ /app/tests
@@ -116,6 +137,6 @@ ENTRYPOINT [ "uv", "run", "--frozen", "gunicorn", "emhass.web_server:create_app(
 #COPY data/ /app/data/
 #ENTRYPOINT ["uv","run","unittest","discover","-s","./tests","-p","test_*.py"]
 
-# Example of 32 bit specific 
+# Example of 32 bit specific
 # try, symlink apt cbc, to pulp cbc, in python directory (for 32bit)
 #RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7"  ]] &&  ln -sf /usr/bin/cbc /usr/local/lib/python3.11/dist-packages/pulp/solverdir/cbc/linux/32/cbc || echo "cbc symlink didnt work/not required"

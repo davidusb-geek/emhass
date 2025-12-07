@@ -24,6 +24,7 @@ See below for a list of associations between the parameters from `config_emhass.
 | retrieve_hass_conf |  set_zero_min |  set_zero_min | |
 | retrieve_hass_conf |  method_ts_round |  method_ts_round | |
 | retrieve_hass_conf |  continual_publish |  continual_publish | |
+| retrieve_hass_conf | | use_websocket | |
 | retrieve_hass_conf | | use_influxdb | |
 | retrieve_hass_conf | | influxdb_host | |
 | retrieve_hass_conf | | influxdb_port | |
@@ -130,6 +131,5 @@ Secret Parameters such as: `solcast_api_key`, `solcast_rooftop_id` and `solar_fo
 
 Secret Parameters such as: `time_zone`, `lon`, `lat` and `alt` are also automatically passed in via the Home Assistants `Supervisor API`. _(Values set in the Home Assistants config/general page)_  
 _Note: Local currency could also be obtained via the Home Assistant environment, however as of writing, this functionality has not yet been developed._
-
 
 

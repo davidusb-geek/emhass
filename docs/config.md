@@ -24,6 +24,7 @@ We will need to define these parameters to retrieve data from Home Assistant. Th
 	- 'sensor.power_load_no_var_loads'
 - `method_ts_round`: Set the method for timestamp rounding, options are: first, last and nearest.
 - `continual_publish`: set to True to save entities to .json after an optimization run. Then automatically republish the saved entities *(with updated current state value)* every `optimization_time_step` minutes. *entity data saved to data_path/entities.*
+- `use_websocket`: Enable WebSocket as a data source instead of the Home Assistant API. This allows for longer historical data retention and better performance for machine learning models.
 - `use_influxdb`: Enable InfluxDB (version 1.x) as a data source instead of the Home Assistant API. This allows for longer historical data retention and better performance for machine learning models. InfluxDB v2 is not currently supported.
 - `influxdb_host`: The IP address or hostname of your InfluxDB instance. Defaults to `localhost`.
 - `influxdb_port`: The port number for your InfluxDB instance. Defaults to 8086.

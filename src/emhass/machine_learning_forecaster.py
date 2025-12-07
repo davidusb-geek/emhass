@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 import warnings
@@ -76,7 +77,15 @@ class MLForecaster:
         self.emhass_conf = emhass_conf
         self.logger = logger
         self.is_tuned = False
+        self.forecaster: ForecasterRecursive | None = None
+        self.optimize_results: pd.DataFrame | None = None
+        self.optimize_results_object = None
+
         # A quick data preparation
+        self._prepare_data()
+
+    def _prepare_data(self):
+        """Prepare the input data by cleaning and sorting."""
         self.data.index = pd.to_datetime(self.data.index)
         self.data.sort_index(inplace=True)
         self.data = self.data[~self.data.index.duplicated(keep="first")]
@@ -85,6 +94,11 @@ class MLForecaster:
     def neg_r2_score(y_true, y_pred):
         """The negative of the r2 score."""
         return -r2_score(y_true, y_pred)
+
+    @staticmethod
+    async def interpolate_async(data: pd.DataFrame) -> pd.DataFrame:
+        """Interpolate missing values asynchronously."""
+        return await asyncio.to_thread(data.interpolate, method="linear", axis=0, limit=None)
 
     @staticmethod
     def get_lags_list_from_frequency(freq: pd.Timedelta) -> list[int]:
@@ -113,7 +127,7 @@ class MLForecaster:
         return lags
 
     @staticmethod
-    def generate_exog(data_last_window, periods, var_name):
+    async def generate_exog(data_last_window, periods, var_name):
         """Generate the exogenous data for future timestamps."""
         forecast_dates = pd.date_range(
             start=data_last_window.index[-1] + data_last_window.index.freq,
@@ -124,7 +138,23 @@ class MLForecaster:
         exog = utils.add_date_features(exog)
         return exog
 
-    def fit(
+    def _get_sklearn_model(self, model_name: str):
+        """Get the sklearn model instance based on the model name."""
+        models = {
+            "LinearRegression": LinearRegression(),
+            "ElasticNet": ElasticNet(),
+            "KNeighborsRegressor": KNeighborsRegressor(),
+        }
+
+        if model_name not in models:
+            self.logger.error(
+                f"Passed sklearn model {model_name} is not valid. Defaulting to KNeighborsRegressor"
+            )
+            return KNeighborsRegressor()
+
+        return models[model_name]
+
+    async def fit(
         self,
         split_date_delta: str | None = "48h",
         perform_backtest: bool | None = False,
@@ -140,97 +170,133 @@ class MLForecaster:
         :return: The DataFrame containing the forecast data results without and with backtest
         :rtype: Tuple[pd.DataFrame, pd.DataFrame]
         """
-        self.logger.info("Performing a forecast model fit for " + self.model_type)
-        # Preparing the data: adding exogenous features
-        self.data_exo = pd.DataFrame(index=self.data.index)
-        self.data_exo = utils.add_date_features(self.data_exo)
-        self.data_exo[self.var_model] = self.data[self.var_model]
-        self.data_exo = self.data_exo.interpolate(method="linear", axis=0, limit=None)
-        # train/test split
-        self.date_train = (
-            self.data_exo.index[-1] - pd.Timedelta("5days") + self.data_exo.index.freq
-        )  # The last 5 days
-        self.date_split = (
-            self.data_exo.index[-1]
-            - pd.Timedelta(split_date_delta)
-            + self.data_exo.index.freq
-        )  # The last 48h
-        self.data_train = self.data_exo.loc[
-            : self.date_split - self.data_exo.index.freq, :
-        ]
-        self.data_test = self.data_exo.loc[self.date_split :, :]
-        self.steps = len(self.data_test)
-        # Pick correct sklearn model
-        if self.sklearn_model == "LinearRegression":
-            base_model = LinearRegression()
-        elif self.sklearn_model == "ElasticNet":
-            base_model = ElasticNet()
-        elif self.sklearn_model == "KNeighborsRegressor":
-            base_model = KNeighborsRegressor()
-        else:
-            self.logger.error(
-                "Passed sklearn model "
-                + self.sklearn_model
-                + " is not valid. Defaulting to KNeighborsRegressor"
-            )
-            base_model = KNeighborsRegressor()
-        # Define the forecaster object
-        self.forecaster = ForecasterRecursive(regressor=base_model, lags=self.num_lags)
-        # Fit and time it
-        self.logger.info("Training a " + self.sklearn_model + " model")
-        start_time = time.time()
-        self.forecaster.fit(
-            y=self.data_train[self.var_model],
-            exog=self.data_train.drop(self.var_model, axis=1),
-        )
-        self.logger.info(f"Elapsed time for model fit: {time.time() - start_time}")
-        # Make a prediction to print metrics
-        predictions = self.forecaster.predict(
-            steps=self.steps, exog=self.data_test.drop(self.var_model, axis=1)
-        )
-        pred_metric = r2_score(self.data_test[self.var_model], predictions)
-        self.logger.info(
-            f"Prediction R2 score of fitted model on test data: {pred_metric}"
-        )
-        # Packing results in a DataFrame
-        df_pred = pd.DataFrame(
-            index=self.data_exo.index, columns=["train", "test", "pred"]
-        )
-        df_pred["train"] = self.data_train[self.var_model]
-        df_pred["test"] = self.data_test[self.var_model]
-        df_pred["pred"] = predictions
-        df_pred_backtest = None
-        if perform_backtest is True:
-            # Using backtesting tool to evaluate the model
-            self.logger.info("Performing simple backtesting of fitted model")
+        try:
+            self.logger.info("Performing a forecast model fit for " + self.model_type)
+
+            # Check if variable exists in data
+            if self.var_model not in self.data.columns:
+                raise KeyError(
+                    f"Variable '{self.var_model}' not found in data columns: {list(self.data.columns)}"
+                )
+
+            # Preparing the data: adding exogenous features
+            self.data_exo = pd.DataFrame(index=self.data.index)
+            self.data_exo = utils.add_date_features(self.data_exo)
+            self.data_exo[self.var_model] = self.data[self.var_model]
+
+            self.data_exo = await self.interpolate_async(self.data_exo)
+
+            # train/test split
+            self.date_train = (
+                self.data_exo.index[-1] - pd.Timedelta("5days") + self.data_exo.index.freq
+            )  # The last 5 days
+            self.date_split = (
+                self.data_exo.index[-1] - pd.Timedelta(split_date_delta) + self.data_exo.index.freq
+            )  # The last 48h
+            self.data_train = self.data_exo.loc[: self.date_split - self.data_exo.index.freq, :]
+            self.data_test = self.data_exo.loc[self.date_split :, :]
+            self.steps = len(self.data_test)
+
+            # Pick correct sklearn model
+            base_model = self._get_sklearn_model(self.sklearn_model)
+
+            # Define the forecaster object
+            self.forecaster = ForecasterRecursive(regressor=base_model, lags=self.num_lags)
+
+            # Fit and time it
+            self.logger.info("Training a " + self.sklearn_model + " model")
             start_time = time.time()
-            cv = TimeSeriesFold(
-                steps=self.num_lags,
-                initial_train_size=None,
-                fixed_train_size=False,
-                gap=0,
-                allow_incomplete_fold=True,
-                refit=False,
-            )
-            metric, predictions_backtest = backtesting_forecaster(
-                forecaster=self.forecaster,
+
+            await asyncio.to_thread(
+                self.forecaster.fit,
                 y=self.data_train[self.var_model],
                 exog=self.data_train.drop(self.var_model, axis=1),
-                cv=cv,
-                metric=MLForecaster.neg_r2_score,
-                verbose=False,
-                show_progress=True,
+                store_in_sample_residuals=True,
             )
-            self.logger.info(f"Elapsed backtesting time: {time.time() - start_time}")
-            self.logger.info(f"Backtest R2 score: {-metric}")
-            df_pred_backtest = pd.DataFrame(
-                index=self.data_exo.index, columns=["train", "pred"]
-            )
-            df_pred_backtest["train"] = self.data_exo[self.var_model]
-            df_pred_backtest["pred"] = predictions_backtest["pred"]
-        return df_pred, df_pred_backtest
 
-    def predict(self, data_last_window: pd.DataFrame | None = None) -> pd.Series:
+            fit_time = time.time() - start_time
+            self.logger.info(f"Elapsed time for model fit: {fit_time}")
+
+            # Make a prediction to print metrics
+            predictions = await asyncio.to_thread(
+                self.forecaster.predict,
+                steps=self.steps,
+                exog=self.data_test.drop(self.var_model, axis=1),
+            )
+            pred_metric = await asyncio.to_thread(
+                r2_score, self.data_test[self.var_model], predictions
+            )
+            self.logger.info(f"Prediction R2 score of fitted model on test data: {pred_metric}")
+
+            # Packing results in a DataFrame
+            df_pred = pd.DataFrame(index=self.data_exo.index, columns=["train", "test", "pred"])
+
+            df_pred["train"] = self.data_train[self.var_model]
+            df_pred["test"] = self.data_test[self.var_model]
+            df_pred["pred"] = predictions
+
+            df_pred_backtest = None
+
+            if perform_backtest is True:
+                # Using backtesting tool to evaluate the model
+                self.logger.info("Performing simple backtesting of fitted model")
+                start_time = time.time()
+                cv = TimeSeriesFold(
+                    steps=self.num_lags,
+                    initial_train_size=None,
+                    fixed_train_size=False,
+                    gap=0,
+                    allow_incomplete_fold=True,
+                    refit=False,
+                )
+
+                metric, predictions_backtest = await asyncio.to_thread(
+                    backtesting_forecaster,
+                    forecaster=self.forecaster,
+                    y=self.data_train[self.var_model],
+                    exog=self.data_train.drop(self.var_model, axis=1),
+                    cv=cv,
+                    metric=MLForecaster.neg_r2_score,
+                    verbose=False,
+                    show_progress=True,
+                )
+
+                backtest_time = time.time() - start_time
+                backtest_r2 = -metric
+                self.logger.info(f"Elapsed backtesting time: {backtest_time}")
+                self.logger.info(f"Backtest R2 score: {backtest_r2}")
+                df_pred_backtest = pd.DataFrame(
+                    index=self.data_exo.index, columns=["train", "pred"]
+                )
+                df_pred_backtest["train"] = self.data_exo[self.var_model]
+                # Handle skforecast 0.18.0+ DataFrame output with fold column
+                if isinstance(predictions_backtest, pd.DataFrame):
+                    # Extract the 'pred' column from the DataFrame
+                    pred_values = (
+                        predictions_backtest["pred"]
+                        if "pred" in predictions_backtest.columns
+                        else predictions_backtest.iloc[:, -1]
+                    )
+                else:
+                    # If it's a Series, use it directly
+                    pred_values = predictions_backtest
+
+                # Use loc to align indices properly - only assign where indices match
+                df_pred_backtest.loc[pred_values.index, "pred"] = pred_values
+
+            return df_pred, df_pred_backtest
+
+        except asyncio.CancelledError:
+            self.logger.info("Model training was cancelled")
+            raise
+        except Exception as e:
+            self.logger.error(f"Error during model fitting: {e}")
+            raise
+
+    async def predict(
+        self,
+        data_last_window: pd.DataFrame | None = None,
+    ) -> pd.Series:
         """The predict method to generate forecasts from a previously fitted ML model.
 
         :param data_last_window: The data that will be used to generate the new forecast, this \
@@ -241,35 +307,120 @@ class MLForecaster:
         :return: A pandas series containing the generated forecasts.
         :rtype: pd.Series
         """
-        if data_last_window is None:
-            predictions = self.forecaster.predict(
-                steps=self.num_lags, exog=self.data_test.drop(self.var_model, axis=1)
-            )
-        else:
-            data_last_window = data_last_window.interpolate(
-                method="linear", axis=0, limit=None
-            )
-            if self.is_tuned:
-                exog = MLForecaster.generate_exog(
-                    data_last_window, self.lags_opt, self.var_model
-                )
-                predictions = self.forecaster.predict(
-                    steps=self.lags_opt,
-                    last_window=data_last_window[self.var_model],
-                    exog=exog.drop(self.var_model, axis=1),
+        try:
+            if self.forecaster is None:
+                raise ValueError("Model has not been fitted yet. Call fit() first.")
+
+            if data_last_window is None:
+                predictions = await asyncio.to_thread(
+                    self.forecaster.predict,
+                    steps=self.num_lags,
+                    exog=self.data_test.drop(self.var_model, axis=1),
                 )
             else:
-                exog = MLForecaster.generate_exog(
-                    data_last_window, self.num_lags, self.var_model
-                )
-                predictions = self.forecaster.predict(
-                    steps=self.num_lags,
-                    last_window=data_last_window[self.var_model],
-                    exog=exog.drop(self.var_model, axis=1),
-                )
-        return predictions
+                data_last_window = await self.interpolate_async(data_last_window)
 
-    def tune(
+                if self.is_tuned:
+                    exog = await self.generate_exog(data_last_window, self.lags_opt, self.var_model)
+
+                    predictions = await asyncio.to_thread(
+                        self.forecaster.predict,
+                        steps=self.lags_opt,
+                        last_window=data_last_window[self.var_model],
+                        exog=exog.drop(self.var_model, axis=1),
+                    )
+                else:
+                    exog = await self.generate_exog(data_last_window, self.num_lags, self.var_model)
+
+                    predictions = await asyncio.to_thread(
+                        self.forecaster.predict,
+                        steps=self.num_lags,
+                        last_window=data_last_window[self.var_model],
+                        exog=exog.drop(self.var_model, axis=1),
+                    )
+
+            return predictions
+
+        except asyncio.CancelledError:
+            self.logger.info("Prediction was cancelled")
+            raise
+        except Exception as e:
+            self.logger.error(f"Error during prediction: {e}")
+            raise
+
+    def _get_search_space(self, debug: bool, lags_list: list[int] | None = None):
+        """Get the hyperparameter search space for the given model.
+
+        :param debug: If True, use simplified search space for faster testing
+        :type debug: bool
+        :param lags_list: List of lag values to use. If None, uses default values
+        :type lags_list: list[int] | None
+        """
+        if lags_list is None:
+            # Default lags for backward compatibility (hardcoded values)
+            lags_list = [6, 12, 24, 36, 48, 60, 72]
+
+        if self.sklearn_model == "LinearRegression":
+            if debug:
+
+                def search_space(trial):
+                    return {
+                        "fit_intercept": trial.suggest_categorical("fit_intercept", [True]),
+                        "lags": trial.suggest_categorical("lags", [3]),
+                    }
+
+            else:
+
+                def search_space(trial):
+                    return {
+                        "fit_intercept": trial.suggest_categorical("fit_intercept", [True, False]),
+                        "lags": trial.suggest_categorical("lags", lags_list),
+                    }
+
+        elif self.sklearn_model == "ElasticNet":
+            if debug:
+
+                def search_space(trial):
+                    return {
+                        "selection": trial.suggest_categorical("selection", ["random"]),
+                        "lags": trial.suggest_categorical("lags", [3]),
+                    }
+
+            else:
+
+                def search_space(trial):
+                    return {
+                        "alpha": trial.suggest_float("alpha", 0.0, 2.0),
+                        "l1_ratio": trial.suggest_float("l1_ratio", 0.0, 1.0),
+                        "selection": trial.suggest_categorical("selection", ["cyclic", "random"]),
+                        "lags": trial.suggest_categorical("lags", lags_list),
+                    }
+
+        elif self.sklearn_model == "KNeighborsRegressor":
+            if debug:
+
+                def search_space(trial):
+                    return {
+                        "weights": trial.suggest_categorical("weights", ["uniform"]),
+                        "lags": trial.suggest_categorical("lags", [3]),
+                    }
+
+            else:
+
+                def search_space(trial):
+                    return {
+                        "n_neighbors": trial.suggest_int("n_neighbors", 2, 20),
+                        "leaf_size": trial.suggest_int("leaf_size", 20, 40),
+                        "weights": trial.suggest_categorical("weights", ["uniform", "distance"]),
+                        "lags": trial.suggest_categorical("lags", lags_list),
+                    }
+
+        else:
+            raise ValueError(f"Unsupported model for tuning: {self.sklearn_model}")
+
+        return search_space
+
+    async def tune(
         self, split_date_delta: str | None = "48h", debug: bool | None = False
     ) -> pd.DataFrame:
         """Tuning a previously fitted model using bayesian optimization.
@@ -283,143 +434,82 @@ class MLForecaster:
         :return: The DataFrame with the forecasts using the optimized model.
         :rtype: pd.DataFrame
         """
-        # Calculate appropriate lags based on data frequency
-        freq_timedelta = pd.Timedelta(self.data_exo.index.freq)
-        lags_list = MLForecaster.get_lags_list_from_frequency(freq_timedelta)
-        self.logger.info(
-            f"Using lags list based on data frequency ({self.data_exo.index.freq}): {lags_list}"
-        )
-
-        # Regressor hyperparameters search space
-        if self.sklearn_model == "LinearRegression":
-            if debug:
-
-                def search_space(trial):
-                    search_space = {
-                        "fit_intercept": trial.suggest_categorical(
-                            "fit_intercept", [True]
-                        ),
-                        "lags": trial.suggest_categorical("lags", [3]),
-                    }
-                    return search_space
-            else:
-
-                def search_space(trial):
-                    search_space = {
-                        "fit_intercept": trial.suggest_categorical(
-                            "fit_intercept", [True, False]
-                        ),
-                        "lags": trial.suggest_categorical("lags", lags_list),
-                    }
-                    return search_space
-        elif self.sklearn_model == "ElasticNet":
-            if debug:
-
-                def search_space(trial):
-                    search_space = {
-                        "selection": trial.suggest_categorical("selection", ["random"]),
-                        "lags": trial.suggest_categorical("lags", [3]),
-                    }
-                    return search_space
-            else:
-
-                def search_space(trial):
-                    search_space = {
-                        "alpha": trial.suggest_float("alpha", 0.0, 2.0),
-                        "l1_ratio": trial.suggest_float("l1_ratio", 0.0, 1.0),
-                        "selection": trial.suggest_categorical(
-                            "selection", ["cyclic", "random"]
-                        ),
-                        "lags": trial.suggest_categorical("lags", lags_list),
-                    }
-                    return search_space
-        elif self.sklearn_model == "KNeighborsRegressor":
-            if debug:
-
-                def search_space(trial):
-                    search_space = {
-                        "weights": trial.suggest_categorical("weights", ["uniform"]),
-                        "lags": trial.suggest_categorical("lags", [3]),
-                    }
-                    return search_space
-            else:
-
-                def search_space(trial):
-                    search_space = {
-                        "n_neighbors": trial.suggest_int("n_neighbors", 2, 20),
-                        "leaf_size": trial.suggest_int("leaf_size", 20, 40),
-                        "weights": trial.suggest_categorical(
-                            "weights", ["uniform", "distance"]
-                        ),
-                        "lags": trial.suggest_categorical("lags", lags_list),
-                    }
-                    return search_space
-
-        # Bayesian search hyperparameter and lags with skforecast/optuna
-        # Lags used as predictors
-        if debug:
-            refit = False
-            num_lags = 3
-        else:
-            refit = True
-            num_lags = self.num_lags
-        # The optimization routine call
-        self.logger.info("Bayesian hyperparameter optimization with backtesting")
-        start_time = time.time()
-
-        # Use the 'y' data that will be passed to the optimizer
-        data_to_tune = self.data_train[self.var_model]
-
-        # Calculate the new split date and initial_train_size based on the passed split_date_delta
         try:
-            date_split = (
-                data_to_tune.index[-1]
-                - pd.Timedelta(split_date_delta)
-                + data_to_tune.index.freq
+            # Calculate appropriate lags based on data frequency
+            freq_timedelta = pd.Timedelta(self.data_exo.index.freq)
+            lags_list = MLForecaster.get_lags_list_from_frequency(freq_timedelta)
+            self.logger.info(
+                f"Using lags list based on data frequency ({self.data_exo.index.freq}): {lags_list}"
             )
-            initial_train_size = len(
-                data_to_tune.loc[: date_split - data_to_tune.index.freq]
-            )
-        except (ValueError, TypeError):
-            self.logger.warning(
-                f"Invalid split_date_delta: {split_date_delta}. Falling back to 5 days."
-            )
-            date_split = (
-                data_to_tune.index[-1] - pd.Timedelta("5days") + data_to_tune.index.freq
-            )
-            initial_train_size = len(
-                data_to_tune.loc[: date_split - data_to_tune.index.freq]
+            if self.forecaster is None:
+                raise ValueError("Model has not been fitted yet. Call fit() first.")
+
+            # Get the search space for this model
+            search_space = self._get_search_space(debug, lags_list)
+
+            # Bayesian search hyperparameter and lags with skforecast/optuna
+            if debug:
+                refit = False
+                num_lags = 3
+            else:
+                refit = True
+                num_lags = self.num_lags
+            # The optimization routine call
+            self.logger.info("Bayesian hyperparameter optimization with backtesting")
+            start_time = time.time()
+
+            # Use the 'y' data that will be passed to the optimizer
+            data_to_tune = self.data_train[self.var_model]
+
+            # Calculate the new split date and initial_train_size based on the passed split_date_delta
+            try:
+                date_split = (
+                    data_to_tune.index[-1]
+                    - pd.Timedelta(split_date_delta)
+                    + data_to_tune.index.freq
+                )
+                initial_train_size = len(data_to_tune.loc[: date_split - data_to_tune.index.freq])
+            except (ValueError, TypeError):
+                self.logger.warning(
+                    f"Invalid split_date_delta: {split_date_delta}. Falling back to 5 days."
+                )
+                date_split = (
+                    data_to_tune.index[-1] - pd.Timedelta("5days") + data_to_tune.index.freq
+                )
+                initial_train_size = len(data_to_tune.loc[: date_split - data_to_tune.index.freq])
+
+            # Check if the calculated initial_train_size is valid
+            window_size = num_lags  # This is what skforecast will use as window_size
+            if debug:
+                window_size = 3  # Match debug lags
+
+            if initial_train_size <= window_size:
+                self.logger.warning(
+                    f"Calculated initial_train_size ({initial_train_size}) is <= window_size ({window_size})."
+                )
+                self.logger.warning(
+                    "This is likely because split_date_delta is too large for the dataset."
+                )
+                self.logger.warning(
+                    f"Adjusting initial_train_size to {window_size + 1} to attempt recovery."
+                )
+                initial_train_size = window_size + 1
+
+            cv = TimeSeriesFold(
+                steps=num_lags,
+                initial_train_size=initial_train_size,
+                fixed_train_size=True,
+                gap=0,
+                skip_folds=None,
+                allow_incomplete_fold=True,
+                refit=refit,
             )
 
-        # Check if the calculated initial_train_size is valid
-        window_size = num_lags  # This is what skforecast will use as window_size
-        if debug:
-            window_size = 3  # Match debug lags
-
-        if initial_train_size <= window_size:
-            self.logger.warning(
-                f"Calculated initial_train_size ({initial_train_size}) is <= window_size ({window_size})."
-            )
-            self.logger.warning(
-                "This is likely because split_date_delta is too large for the dataset."
-            )
-            self.logger.warning(
-                f"Adjusting initial_train_size to {window_size + 1} to attempt recovery."
-            )
-            initial_train_size = window_size + 1
-
-        cv = TimeSeriesFold(
-            steps=num_lags,
-            initial_train_size=initial_train_size,
-            fixed_train_size=True,
-            gap=0,
-            skip_folds=None,
-            allow_incomplete_fold=True,
-            refit=refit,
-        )
-
-        self.optimize_results, self.optimize_results_object = (
-            bayesian_search_forecaster(
+            (
+                self.optimize_results,
+                self.optimize_results_object,
+            ) = await asyncio.to_thread(
+                bayesian_search_forecaster,
                 forecaster=self.forecaster,
                 y=self.data_train[self.var_model],
                 exog=self.data_train.drop(self.var_model, axis=1),
@@ -430,31 +520,49 @@ class MLForecaster:
                 random_state=123,
                 return_best=True,
             )
-        )
-        self.logger.info(f"Elapsed time: {time.time() - start_time}")
-        self.is_tuned = True
-        predictions_opt = self.forecaster.predict(
-            steps=self.num_lags, exog=self.data_test.drop(self.var_model, axis=1)
-        )
-        freq_hours = self.data_exo.index.freq.delta.seconds / 3600
-        self.lags_opt = int(np.round(len(self.optimize_results.iloc[0]["lags"])))
-        self.days_needed = int(np.round(self.lags_opt * freq_hours / 24))
-        df_pred_opt = pd.DataFrame(
-            index=self.data_exo.index, columns=["train", "test", "pred_optim"]
-        )
-        df_pred_opt["train"] = self.data_train[self.var_model]
-        df_pred_opt["test"] = self.data_test[self.var_model]
-        df_pred_opt["pred_optim"] = predictions_opt
-        pred_optim_metric_train = -self.optimize_results.iloc[0]["neg_r2_score"]
-        self.logger.info(
-            f"R2 score for optimized prediction in train period: {pred_optim_metric_train}"
-        )
-        pred_optim_metric_test = r2_score(
-            df_pred_opt.loc[predictions_opt.index, "test"],
-            df_pred_opt.loc[predictions_opt.index, "pred_optim"],
-        )
-        self.logger.info(
-            f"R2 score for optimized prediction in test period: {pred_optim_metric_test}"
-        )
-        self.logger.info("Number of optimal lags obtained: " + str(self.lags_opt))
-        return df_pred_opt
+
+            optimization_time = time.time() - start_time
+            self.logger.info(f"Elapsed time: {optimization_time}")
+
+            self.is_tuned = True
+
+            predictions_opt = await asyncio.to_thread(
+                self.forecaster.predict,
+                steps=self.num_lags,
+                exog=self.data_test.drop(self.var_model, axis=1),
+            )
+
+            freq_hours = self.data_exo.index.freq.delta.seconds / 3600
+            self.lags_opt = int(np.round(len(self.optimize_results.iloc[0]["lags"])))
+            self.days_needed = int(np.round(self.lags_opt * freq_hours / 24))
+
+            df_pred_opt = pd.DataFrame(
+                index=self.data_exo.index, columns=["train", "test", "pred_optim"]
+            )
+            df_pred_opt["train"] = self.data_train[self.var_model]
+            df_pred_opt["test"] = self.data_test[self.var_model]
+            df_pred_opt["pred_optim"] = predictions_opt
+
+            pred_optim_metric_train = -self.optimize_results.iloc[0]["neg_r2_score"]
+            self.logger.info(
+                f"R2 score for optimized prediction in train period: {pred_optim_metric_train}"
+            )
+
+            pred_optim_metric_test = await asyncio.to_thread(
+                r2_score,
+                df_pred_opt.loc[predictions_opt.index, "test"],
+                df_pred_opt.loc[predictions_opt.index, "pred_optim"],
+            )
+            self.logger.info(
+                f"R2 score for optimized prediction in test period: {pred_optim_metric_test}"
+            )
+            self.logger.info("Number of optimal lags obtained: " + str(self.lags_opt))
+
+            return df_pred_opt
+
+        except asyncio.CancelledError:
+            self.logger.info("Model tuning was cancelled")
+            raise
+        except Exception as e:
+            self.logger.error(f"Error during model tuning: {e}")
+            raise
