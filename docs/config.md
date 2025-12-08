@@ -24,7 +24,8 @@ We will need to define these parameters to retrieve data from Home Assistant. Th
 	- 'sensor.power_load_no_var_loads'
 - `method_ts_round`: Set the method for timestamp rounding, options are: first, last and nearest.
 - `continual_publish`: set to True to save entities to .json after an optimization run. Then automatically republish the saved entities *(with updated current state value)* every `optimization_time_step` minutes. *entity data saved to data_path/entities.*
-- `use_influxdb`: Enable InfluxDB as a data source instead of the Home Assistant API. This allows for longer historical data retention and better performance for machine learning models.
+- `use_websocket`: Enable WebSocket as a data source instead of the Home Assistant API. This allows for longer historical data retention and better performance for machine learning models.
+- `use_influxdb`: Enable InfluxDB (version 1.x) as a data source instead of the Home Assistant API. This allows for longer historical data retention and better performance for machine learning models. InfluxDB v2 is not currently supported.
 - `influxdb_host`: The IP address or hostname of your InfluxDB instance. Defaults to `localhost`.
 - `influxdb_port`: The port number for your InfluxDB instance. Defaults to 8086.
 - `influxdb_username`: Username for authenticating with InfluxDB. Leave empty if no authentication is required.
@@ -88,6 +89,10 @@ The following parameters and definitions are only needed if load_cost_forecast_m
 - `production_price_forecast_method`: Define the method that will be used for PV power production price forecast. This is the price that is paid by the utility for energy injected into the grid. The options are 'constant' for a constant fixed value or 'csv' to load custom price forecasts from a CSV file. The default CSV file path that will be used is '/data/data_prod_price_forecast.csv'.
 - `photovoltaic_production_sell_price`: The paid price for energy injected to the grid from excedent PV production in €/kWh. Defaults to 0.065. This parameter is only needed if production_price_forecast_method='constant'.
 - `set_total_pv_sell`: Set this parameter to true to consider that all the PV power produced is injected to the grid. No direct self-consumption. The default is false, for a system with direct self-consumption.
+- `set_use_adjusted_pv`: Set to True to enable machine learning-based PV forecast adjustment. This uses historical data to train a regression model that corrects PV forecasts based on local conditions. Defaults to False. See the [forecasts documentation](forecasts.md#adjusting-pv-forecasts-using-machine-learning) for more details.
+- `adjusted_pv_regression_model`: The regression model to use for PV forecast adjustment. Options include 'LassoRegression' (default), 'RidgeRegression', 'LinearRegression', etc. Only used when `set_use_adjusted_pv` is True.
+- `adjusted_pv_solar_elevation_threshold`: The solar elevation threshold in degrees below which the adjusted PV forecast is set to zero. This prevents negative or unrealistic values during low sun angles. Defaults to 10.
+- `adjusted_pv_model_max_age`: Maximum age in hours before the adjusted PV regression model is re-fitted. If the saved model is older than this value, a new model will be trained using fresh historical data. Set to 0 to force re-fitting on every call. Defaults to 24 hours (1 day). This caching mechanism significantly reduces API calls to Home Assistant and speeds up optimization runs.
 - `lp_solver`: Set the name of the linear programming solver that will be used. Defaults to 'COIN_CMD'. The options are 'PULP_CBC_CMD', 'GLPK_CMD', 'HiGHS', and 'COIN_CMD'.
 - `lp_solver_path`: Set the path to the LP solver. Defaults to '/usr/bin/cbc'. 
 - `num_threads`: Set the number of threads to pass to LP solvers that support specifying a number of threads. Defaults to 0 (auto-detect).

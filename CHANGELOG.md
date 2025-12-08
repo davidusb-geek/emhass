@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+### Improvement
+- Added support for async emhass code (@gieljnssns)
+- Added support for websocket data retrieval (@gieljnssns)
+- Add feature to cache pv regression model (@sokorn)
+- Thermal model improvements:
+	- Implemented a Min/Max temperature control, proposed by @werdnum
+	- Implemented needed unit tests
+	- Improved documentation
+### Fix
+- Fixed warning message because pickle files saved with old Numpy version
+- A buch of code refactor following SonarCloud Code Analysis 
+- Solved runtime param optimization_time_step not recognized, issue #563
+- Attempt at solving data publish problem when containing both battery sensor definitions and a def_load_config, issue #587
+
+## 0.14.1 - 2025-11-29
+### Improvement
+- Improved InfluxDB version support documentation
+- Adjust ML forecast tune lags with optizimation_time_step (@sokorn)
+- Improved documentation for MLRegressor (@sokorn)
+- Update description for semi_cont load parameter (@purcell-lab)
+### Fix
+- Refactored proposed changes for HA independent configuration
+- Fixed behavior to run EMHASS independently from HA (@Jahper)
+- Proposed solution to Maximum battery charging rate issue #613
+- Proposed solution to solve issue with missing use of split_date_delta
+
 ## 0.14.0 - 2025-11-15
 ### Improvement
 - Add InfluxDB integration for enhanced historical data retrieval (@scrusberghs)

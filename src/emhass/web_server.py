@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
-import json
+import asyncio
 import logging
 import os
 import pickle
@@ -10,11 +10,13 @@ import threading
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+import aiofiles
 import jinja2
+import orjson
 import yaml
-from flask import Flask, make_response, request
-from flask import logging as log
-from waitress import serve
+from markupsafe import Markup
+from quart import Quart, make_response, request
+from quart import logging as log
 
 from emhass.command_line import (
     continual_publish,
@@ -31,6 +33,11 @@ from emhass.command_line import (
     set_input_data_dict,
     weather_forecast_cache,
 )
+from emhass.connection_manager import (
+    close_global_connection,
+    get_websocket_client,
+    is_connected,
+)
 from emhass.utils import (
     build_config,
     build_legacy_config_params,
@@ -42,35 +49,62 @@ from emhass.utils import (
     param_to_config,
 )
 
-# Define the Flask instance
-app = Flask(__name__)
+app = Quart(__name__)
 
-emhass_conf = {}
-entity_path = Path
-params_secrets = {}
-continual_publish_thread = []
-injection_dict = {}
+emhass_conf: dict[str, Path] = {}
+entity_path: Path = Path()
+params_secrets: dict[str, str | float] = {}
+continual_publish_thread: list = []
+injection_dict: dict = {}
 
 templates = jinja2.Environment(
+    autoescape=True,
     loader=jinja2.PackageLoader("emhass", "templates"),
 )
 
 
-def create_app(settings_override=None):
-    """
-    Create a Flask application.
-    :param settings_override: Override settings
-    :return: Flask app
-    """
-    global app
-    gunicorn_logger = logging.getLogger("gunicorn.error")
-    app.logger.handlers = gunicorn_logger.handlers
-    app.logger.setLevel(logging.INFO)
-    main()
-    return app
+# Add custom filter for trusted HTML content
+def mark_safe(value):
+    """Mark pre-rendered HTML plots as safe (use only for trusted content)"""
+    if value is None:
+        return ""
+    return Markup(value)
 
 
-def checkFileLog(refString=None) -> bool:
+templates.filters["mark_safe"] = mark_safe
+
+
+# Register async startup and shutdown handlers
+@app.before_serving
+async def before_serving():
+    """Initialize EMHASS before starting to serve requests."""
+    # Initialize the application
+    try:
+        await initialize()
+        app.logger.info("Full initialization completed")
+    except Exception as e:
+        app.logger.warning(f"Full initialization failed (this is normal in test environments): {e}")
+        app.logger.info("Continuing without WebSocket connection...")
+        # The initialize() function already sets up all necessary components except WebSocket
+        # So we can continue serving requests even if WebSocket connection fails
+
+
+@app.after_serving
+async def after_serving():
+    """Clean up resources after serving."""
+    try:
+        # Only close WebSocket connection if it was established
+        if is_connected():
+            await close_global_connection()
+            app.logger.info("WebSocket connection closed")
+        else:
+            app.logger.info("No WebSocket connection to close")
+    except Exception as e:
+        app.logger.warning(f"WebSocket shutdown failed: {e}")
+    app.logger.info("Quart shutdown complete")
+
+
+async def check_file_log(refString: str | None = None) -> bool:
     """
     Check logfile for error, anything after string match if provided.
 
@@ -80,23 +114,28 @@ def checkFileLog(refString=None) -> bool:
     :rtype: bool
 
     """
+    log_array: list[str] = []
+
     if refString is not None:
-        logArray = grabLog(
+        log_array = await grabLog(
             refString
         )  # grab reduced log array (everything after string match)
     else:
         if (emhass_conf["data_path"] / "actionLogs.txt").exists():
-            with open(str(emhass_conf["data_path"] / "actionLogs.txt")) as fp:
-                logArray = fp.readlines()
+            async with aiofiles.open(str(emhass_conf["data_path"] / "actionLogs.txt")) as fp:
+                content = await fp.read()
+                log_array = content.splitlines()
         else:
             app.logger.debug("Unable to obtain actionLogs.txt")
-    for logString in logArray:
+            return False
+
+    for logString in log_array:
         if logString.split(" ", 1)[0] == "ERROR":
             return True
     return False
 
 
-def grabLog(refString) -> list:
+async def grabLog(refString: str | None = None) -> list[str]:
     """
     Find string in logs, append all lines after into list to return.
 
@@ -109,211 +148,210 @@ def grabLog(refString) -> list:
     isFound = []
     output = []
     if (emhass_conf["data_path"] / "actionLogs.txt").exists():
-        with open(str(emhass_conf["data_path"] / "actionLogs.txt")) as fp:
-            logArray = fp.readlines()
+        async with aiofiles.open(str(emhass_conf["data_path"] / "actionLogs.txt")) as fp:
+            content = await fp.read()
+            log_array = content.splitlines()
         # Find all string matches, log key (line Number) in isFound
-        for x in range(len(logArray) - 1):
-            if re.search(refString, logArray[x]):
+        for x in range(len(log_array) - 1):
+            if re.search(refString, log_array[x]):
                 isFound.append(x)
         if len(isFound) != 0:
             # Use last item in isFound to extract action logs
-            for x in range(isFound[-1], len(logArray)):
-                output.append(logArray[x])
+            for x in range(isFound[-1], len(log_array)):
+                output.append(log_array[x])
     return output
 
 
 # Clear the log file
-def clearFileLog():
+async def clear_file_log():
     """
     Clear the contents of the log file (actionLogs.txt)
 
     """
     if (emhass_conf["data_path"] / "actionLogs.txt").exists():
-        with open(str(emhass_conf["data_path"] / "actionLogs.txt"), "w") as fp:
-            fp.truncate()
+        async with aiofiles.open(str(emhass_conf["data_path"] / "actionLogs.txt"), "w") as fp:
+            await fp.write("")
 
 
 @app.route("/")
 @app.route("/index")
-def index():
+async def index():
     """
     Render initial index page and serve to web server.
     Appends plot tables saved from previous optimization into index.html, then serves.
-
     """
     app.logger.info("EMHASS server online, serving index.html...")
+
     # Load cached dict (if exists), to present generated plot tables
     if (emhass_conf["data_path"] / "injection_dict.pkl").exists():
-        with open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "rb") as fid:
-            injection_dict = pickle.load(fid)
+        async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "rb") as fid:
+            content = await fid.read()
+            injection_dict = pickle.loads(content)
     else:
         app.logger.info(
             "The data container dictionary is empty... Please launch an optimization task"
         )
         injection_dict = {}
 
-    # replace {{basename}} in html template html with path root
-    # basename = request.headers.get("X-Ingress-Path", "")
-    # return make_response(template.render(injection_dict=injection_dict, basename=basename))
-
     template = templates.get_template("index.html")
-    return make_response(template.render(injection_dict=injection_dict))
+    return await make_response(template.render(injection_dict=injection_dict))
 
 
 @app.route("/configuration")
-def configuration():
+async def configuration():
     """
     Configuration page actions:
     Render and serve configuration page html
-
     """
     app.logger.info("serving configuration.html...")
+
     # get params
     if (emhass_conf["data_path"] / "params.pkl").exists():
-        with open(str(emhass_conf["data_path"] / "params.pkl"), "rb") as fid:
-            emhass_conf["config_path"], params = pickle.load(fid)
+        async with aiofiles.open(str(emhass_conf["data_path"] / "params.pkl"), "rb") as fid:
+            content = await fid.read()
+            emhass_conf["config_path"], params = pickle.loads(content)
 
     template = templates.get_template("configuration.html")
-    return make_response(template.render(config=params))
+    return await make_response(template.render(config=params))
 
 
 @app.route("/template", methods=["GET"])
-def template_action():
+async def template_action():
     """
     template page actions:
     Render and serve template html
-
     """
-    app.logger.info(" >> Sending rendered template table data")
+    app.logger.info(" >> Sending rendered template data")
+
     if (emhass_conf["data_path"] / "injection_dict.pkl").exists():
-        with open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "rb") as fid:
-            injection_dict = pickle.load(fid)
+        async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "rb") as fid:
+            content = await fid.read()
+            injection_dict = pickle.loads(content)
     else:
         app.logger.warning("Unable to obtain plot data from injection_dict.pkl")
         app.logger.warning("Try running an launch an optimization task")
         injection_dict = {}
 
     template = templates.get_template("template.html")
-    return make_response(template.render(injection_dict=injection_dict))
+    return await make_response(template.render(injection_dict=injection_dict))
 
 
 @app.route("/get-config", methods=["GET"])
-def parameter_get():
+async def parameter_get():
     """
     Get request action that builds, formats and sends config as json (config.json format)
 
     """
     app.logger.debug("Obtaining current saved parameters as config")
     # Build config from all possible sources (inc. legacy yaml config)
-    config = build_config(
+    config = await build_config(
         emhass_conf,
         app.logger,
-        emhass_conf["defaults_path"],
-        emhass_conf["config_path"],
-        emhass_conf["legacy_config_path"],
+        str(emhass_conf["defaults_path"]),
+        str(emhass_conf["config_path"]),
+        str(emhass_conf["legacy_config_path"]),
     )
     if type(config) is bool and not config:
-        return make_response(["failed to retrieve default config file"], 500)
+        return await make_response(["failed to retrieve default config file"], 500)
     # Format parameters in config with params (converting legacy json parameters from options.json if any)
-    params = build_params(emhass_conf, {}, config, app.logger)
+    params = await build_params(emhass_conf, {}, config, app.logger)
     if type(params) is bool and not params:
-        return make_response(["Unable to obtain associations file"], 500)
+        return await make_response(["Unable to obtain associations file"], 500)
     # Covert formatted parameters from params back into config.json format
     return_config = param_to_config(params, app.logger)
     # Send config
-    return make_response(return_config, 201)
+    return await make_response(return_config, 201)
 
 
 # Get default Config
 @app.route("/get-config/defaults", methods=["GET"])
-def config_get():
+async def config_get():
     """
     Get request action, retrieves and sends default configuration
 
     """
     app.logger.debug("Obtaining default parameters")
     # Build config, passing only default file
-    config = build_config(emhass_conf, app.logger, emhass_conf["defaults_path"])
+    config = await build_config(emhass_conf, app.logger, str(emhass_conf["defaults_path"]))
     if type(config) is bool and not config:
-        return make_response(["failed to retrieve default config file"], 500)
+        return await make_response(["failed to retrieve default config file"], 500)
     # Format parameters in config with params
-    params = build_params(emhass_conf, {}, config, app.logger)
+    params = await build_params(emhass_conf, {}, config, app.logger)
     if type(params) is bool and not params:
-        return make_response(["Unable to obtain associations file"], 500)
+        return await make_response(["Unable to obtain associations file"], 500)
     # Covert formatted parameters from params back into config.json format
     return_config = param_to_config(params, app.logger)
     # Send params
-    return make_response(return_config, 201)
+    return await make_response(return_config, 201)
 
 
 # Get YAML-to-JSON config
 @app.route("/get-json", methods=["POST"])
-def json_convert():
+async def json_convert():
     """
     Post request action, receives yaml config (config_emhass.yaml or EMHASS-Add-on config page) and converts to config json format.
 
     """
     app.logger.info("Attempting to convert YAML to JSON")
-    data = request.get_data()
+    data = await request.get_data()
     yaml_config = yaml.safe_load(data)
 
     # If filed to Parse YAML
     if yaml_config is None:
-        return make_response(["failed to Parse YAML from data"], 400)
+        return await make_response(["failed to Parse YAML from data"], 400)
     # Test YAML is legacy config format (from config_emhass.yaml)
-    test_legacy_config = build_legacy_config_params(
-        emhass_conf, yaml_config, app.logger
-    )
+    test_legacy_config = await build_legacy_config_params(emhass_conf, yaml_config, app.logger)
     if test_legacy_config:
         yaml_config = test_legacy_config
     # Format YAML to params (format params. check if params match legacy option.json format)
-    params = build_params(emhass_conf, {}, yaml_config, app.logger)
+    params = await build_params(emhass_conf, {}, yaml_config, app.logger)
     if type(params) is bool and not params:
-        return make_response(["Unable to obtain associations file"], 500)
+        return await make_response(["Unable to obtain associations file"], 500)
     # Covert formatted parameters from params back into config.json format
     config = param_to_config(params, app.logger)
     # convert json to str
-    config = json.dumps(config)
+    config = orjson.dumps(config).decode()
 
     # Send params
-    return make_response(config, 201)
+    return await make_response(config, 201)
 
 
 @app.route("/set-config", methods=["POST"])
-def parameter_set():
+async def parameter_set():
     """
     Receive JSON config, and save config to file (config.json and param.pkl)
 
     """
     config = {}
     if not emhass_conf["defaults_path"]:
-        return make_response(["Unable to Obtain defaults_path from emhass_conf"], 500)
+        return await make_response(["Unable to Obtain defaults_path from emhass_conf"], 500)
     if not emhass_conf["config_path"]:
-        return make_response(["Unable to Obtain config_path from emhass_conf"], 500)
+        return await make_response(["Unable to Obtain config_path from emhass_conf"], 500)
 
     # Load defaults as a reference point (for sorting) and a base to override
     if (
         os.path.exists(emhass_conf["defaults_path"])
         and Path(emhass_conf["defaults_path"]).is_file()
     ):
-        with emhass_conf["defaults_path"].open("r") as data:
-            config = json.load(data)
+        async with aiofiles.open(str(emhass_conf["defaults_path"])) as data:
+            content = await data.read()
+            config = orjson.loads(content)
     else:
         app.logger.warning(
             "Unable to obtain default config. only parameters passed from request will be saved to config.json"
         )
 
     # Retrieve sent config json
-    request_data = request.get_json(force=True)
+    request_data = await request.get_json(force=True)
 
     # check if data is empty
     if len(request_data) == 0:
-        return make_response(["failed to retrieve config json"], 400)
+        return await make_response(["failed to retrieve config json"], 400)
 
     # Format config by converting to params (format params. check if params match legacy option.json format. If so format)
-    params = build_params(emhass_conf, params_secrets, request_data, app.logger)
+    params = await build_params(emhass_conf, params_secrets, request_data, app.logger)
     if type(params) is bool and not params:
-        return make_response(["Unable to obtain associations file"], 500)
+        return await make_response(["Unable to obtain associations file"], 500)
 
     # Covert formatted parameters from params back into config.json format.
     # Overwrite existing default parameters in config
@@ -321,241 +359,255 @@ def parameter_set():
 
     # Save config to config.json
     if os.path.exists(emhass_conf["config_path"].parent):
-        with emhass_conf["config_path"].open("w") as f:
-            json.dump(config, f, indent=4)
+        async with aiofiles.open(str(emhass_conf["config_path"]), "w") as f:
+            await f.write(orjson.dumps(config, option=orjson.OPT_INDENT_2).decode())
     else:
-        return make_response(["Unable to save config file"], 500)
+        return await make_response(["Unable to save config file"], 500)
 
     # Save params with updated config
     if os.path.exists(emhass_conf["data_path"]):
-        with open(str(emhass_conf["data_path"] / "params.pkl"), "wb") as fid:
-            pickle.dump(
+        async with aiofiles.open(str(emhass_conf["data_path"] / "params.pkl"), "wb") as fid:
+            content = pickle.dumps(
                 (
                     emhass_conf["config_path"],
-                    build_params(emhass_conf, params_secrets, config, app.logger),
-                ),
-                fid,
+                    await build_params(emhass_conf, params_secrets, config, app.logger),
+                )
             )
+            await fid.write(content)
     else:
-        return make_response(["Unable to save params file, missing data_path"], 500)
+        return await make_response(["Unable to save params file, missing data_path"], 500)
 
     app.logger.info("Saved parameters from webserver")
-    return make_response({}, 201)
+    return await make_response({}, 201)
+
+
+async def _load_params_and_runtime(request, emhass_conf, logger):
+    """
+    Loads configuration parameters from pickle and runtime parameters from the request.
+    Returns a tuple (params, costfun, runtimeparams) or raises an exception/returns None on failure.
+    """
+    action_str = " >> Obtaining params: "
+    logger.info(action_str)
+
+    # Load params.pkl
+    params = None
+    costfun = "profit"
+    params_path = emhass_conf["data_path"] / "params.pkl"
+
+    if params_path.exists():
+        async with aiofiles.open(str(params_path), "rb") as fid:
+            content = await fid.read()
+            emhass_conf["config_path"], params = pickle.loads(content)
+            # Set local costfun variable
+            if params.get("optim_conf") is not None:
+                costfun = params["optim_conf"].get("costfun", "profit")
+            params = orjson.dumps(params).decode()
+    else:
+        logger.error("Unable to find params.pkl file")
+        return None, None, None
+
+    # Load runtime params
+    runtimeparams = await request.get_json(force=True, silent=True)
+    if runtimeparams and runtimeparams != "{}":
+        logger.info("Passed runtime parameters: " + str(runtimeparams))
+    else:
+        logger.warning("Unable to parse runtime parameters")
+        runtimeparams = {}
+
+    runtimeparams = orjson.dumps(runtimeparams).decode()
+
+    return params, costfun, runtimeparams
+
+
+async def _handle_action_dispatch(
+    action_name, input_data_dict, emhass_conf, params, runtimeparams, logger
+):
+    """
+    Dispatches the specific logic based on the action_name.
+    Returns (response_msg, status_code).
+    """
+    # Actions that don't require input_data_dict or have specific flows
+    if action_name == "weather-forecast-cache":
+        action_str = " >> Performing weather forecast, try to caching result"
+        logger.info(action_str)
+        await weather_forecast_cache(emhass_conf, params, runtimeparams, logger)
+        return "EMHASS >> Weather Forecast has run and results possibly cached... \n", 201
+
+    if action_name == "export-influxdb-to-csv":
+        action_str = " >> Exporting InfluxDB data to CSV..."
+        logger.info(action_str)
+        success = await export_influxdb_to_csv(None, logger, emhass_conf, params, runtimeparams)
+        if success:
+            return "EMHASS >> Action export-influxdb-to-csv executed successfully... \n", 201
+        return await grabLog(action_str), 400
+
+    # Actions requiring input_data_dict
+    if action_name == "publish-data":
+        action_str = " >> Publishing data..."
+        logger.info(action_str)
+        _ = await publish_data(input_data_dict, logger)
+        return "EMHASS >> Action publish-data executed... \n", 201
+
+    # Mapping for optimization actions to their functions
+    optim_actions = {
+        "perfect-optim": perfect_forecast_optim,
+        "dayahead-optim": dayahead_forecast_optim,
+        "naive-mpc-optim": naive_mpc_optim,
+    }
+
+    if action_name in optim_actions:
+        action_str = f" >> Performing {action_name}..."
+        logger.info(action_str)
+        opt_res = await optim_actions[action_name](input_data_dict, logger)
+        injection_dict = get_injection_dict(opt_res)
+        await _save_injection_dict(injection_dict, emhass_conf["data_path"])
+        return f"EMHASS >> Action {action_name} executed... \n", 201
+
+    # Delegate Machine Learning actions to helper
+    ml_response = await _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger)
+    if ml_response:
+        return ml_response
+
+    # Fallback for invalid action
+    logger.error("ERROR: passed action is not valid")
+    return "EMHASS >> ERROR: Passed action is not valid... \n", 400
+
+
+async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
+    """
+    Helper function to handle Machine Learning specific actions.
+    Returns (msg, status) if action is handled, otherwise None.
+    """
+    # forecast-model-fit
+    if action_name == "forecast-model-fit":
+        action_str = " >> Performing a machine learning forecast model fit..."
+        logger.info(action_str)
+        df_fit_pred, _, mlf = await forecast_model_fit(input_data_dict, logger)
+        injection_dict = get_injection_dict_forecast_model_fit(df_fit_pred, mlf)
+        await _save_injection_dict(injection_dict, emhass_conf["data_path"])
+        return "EMHASS >> Action forecast-model-fit executed... \n", 201
+
+    # forecast-model-predict
+    if action_name == "forecast-model-predict":
+        action_str = " >> Performing a machine learning forecast model predict..."
+        logger.info(action_str)
+        df_pred = await forecast_model_predict(input_data_dict, logger)
+        if df_pred is None:
+            return await grabLog(action_str), 400
+
+        table1 = df_pred.reset_index().to_html(classes="mystyle", index=False)
+        injection_dict = {
+            "title": "<h2>Custom machine learning forecast model predict</h2>",
+            "subsubtitle0": "<h4>Performed a prediction using a pre-trained model</h4>",
+            "table1": table1,
+        }
+        await _save_injection_dict(injection_dict, emhass_conf["data_path"])
+        return "EMHASS >> Action forecast-model-predict executed... \n", 201
+
+    # forecast-model-tune
+    if action_name == "forecast-model-tune":
+        action_str = " >> Performing a machine learning forecast model tune..."
+        logger.info(action_str)
+        df_pred_optim, mlf = await forecast_model_tune(input_data_dict, logger)
+        if df_pred_optim is None or mlf is None:
+            return await grabLog(action_str), 400
+
+        injection_dict = get_injection_dict_forecast_model_tune(df_pred_optim, mlf)
+        await _save_injection_dict(injection_dict, emhass_conf["data_path"])
+        return "EMHASS >> Action forecast-model-tune executed... \n", 201
+
+    # regressor-model-fit
+    if action_name == "regressor-model-fit":
+        action_str = " >> Performing a machine learning regressor fit..."
+        logger.info(action_str)
+        await regressor_model_fit(input_data_dict, logger)
+        return "EMHASS >> Action regressor-model-fit executed... \n", 201
+
+    # regressor-model-predict
+    if action_name == "regressor-model-predict":
+        action_str = " >> Performing a machine learning regressor predict..."
+        logger.info(action_str)
+        await regressor_model_predict(input_data_dict, logger)
+        return "EMHASS >> Action regressor-model-predict executed... \n", 201
+
+    return None
+
+
+async def _save_injection_dict(injection_dict, data_path):
+    """Helper to save injection dict to pickle."""
+    async with aiofiles.open(str(data_path / "injection_dict.pkl"), "wb") as fid:
+        content = pickle.dumps(injection_dict)
+        await fid.write(content)
 
 
 @app.route("/action/<action_name>", methods=["POST"])
-def action_call(action_name):
+async def action_call(action_name: str):
     """
-    Receive Post action, run action according to passed slug(action_name) (e.g. /action/publish-data)
-
-    :param action_name: Slug/Action string corresponding to which action to take
-    :type action_name: String
-
+    Receive Post action, run action according to passed slug(action_name)
     """
     global continual_publish_thread
     global injection_dict
 
-    # Setting up parameters
-    # Params
-    ActionStr = " >> Obtaining params: "
-    app.logger.info(ActionStr)
-    if (emhass_conf["data_path"] / "params.pkl").exists():
-        with open(str(emhass_conf["data_path"] / "params.pkl"), "rb") as fid:
-            emhass_conf["config_path"], params = pickle.load(fid)
-            # Set local costfun variable
-            if params.get("optim_conf", None) is not None:
-                costfun = params["optim_conf"].get("costfun", "profit")
-            params = json.dumps(params)
-    else:
-        app.logger.error("Unable to find params.pkl file")
-        return make_response(grabLog(ActionStr), 400)
-    # Runtime
-    runtimeparams = request.get_json(force=True, silent=True)
-    if runtimeparams is not None:
-        if runtimeparams != "{}":
-            app.logger.info("Passed runtime parameters: " + str(runtimeparams))
-    else:
-        app.logger.warning("Unable to parse runtime parameters")
-        runtimeparams = {}
-    runtimeparams = json.dumps(runtimeparams)
+    # Load Parameters
+    params, costfun, runtimeparams = await _load_params_and_runtime(
+        request, emhass_conf, app.logger
+    )
+    if params is None:
+        return await make_response(await grabLog(" >> Obtaining params: "), 400)
 
-    # weather-forecast-cache (check before set_input_data_dict)
-    if action_name == "weather-forecast-cache":
-        ActionStr = " >> Performing weather forecast, try to caching result"
-        app.logger.info(ActionStr)
-        weather_forecast_cache(emhass_conf, params, runtimeparams, app.logger)
-        msg = "EMHASS >> Weather Forecast has run and results possibly cached... \n"
-        if not checkFileLog(ActionStr):
-            return make_response(msg, 201)
-        return make_response(grabLog(ActionStr), 400)
-
-    # export-influxdb-to-csv (check before set_input_data_dict - doesn't need HA connection)
-    if action_name == "export-influxdb-to-csv":
-        ActionStr = " >> Exporting InfluxDB data to CSV..."
-        app.logger.info(ActionStr)
-        success = export_influxdb_to_csv(
-            None, app.logger, emhass_conf, params, runtimeparams
+    # Check for actions that do not need input_data_dict
+    if action_name in ["weather-forecast-cache", "export-influxdb-to-csv"]:
+        msg, status = await _handle_action_dispatch(
+            action_name, None, emhass_conf, params, runtimeparams, app.logger
         )
-        if success:
-            msg = "EMHASS >> Action export-influxdb-to-csv executed successfully... \n"
-            if not checkFileLog(ActionStr):
-                return make_response(msg, 201)
-        return make_response(grabLog(ActionStr), 400)
+        if status == 400:
+            return await make_response(msg, status)
 
-    ActionStr = " >> Setting input data dict"
-    app.logger.info(ActionStr)
-    input_data_dict = set_input_data_dict(
+        # Check logs for these specific actions
+        action_str = f" >> Performing {action_name}..."
+        if not await check_file_log(action_str):
+            return await make_response(msg, status)
+        return await make_response(await grabLog(action_str), 400)
+
+    # Set Input Data Dict (Common for all other actions)
+    action_str = " >> Setting input data dict"
+    app.logger.info(action_str)
+    input_data_dict = await set_input_data_dict(
         emhass_conf, costfun, params, runtimeparams, action_name, app.logger
     )
-    if not input_data_dict:
-        return make_response(grabLog(ActionStr), 400)
 
-    # If continual_publish is True, start thread with loop function
+    if not input_data_dict:
+        return await make_response(await grabLog(action_str), 400)
+
+    # Handle Continual Publish Threading
     if len(continual_publish_thread) == 0 and input_data_dict["retrieve_hass_conf"].get(
         "continual_publish", False
     ):
-        # Start Thread
         continualLoop = threading.Thread(
             name="continual_publish",
-            target=continual_publish,
-            args=[input_data_dict, entity_path, app.logger],
+            target=lambda: asyncio.run(continual_publish(input_data_dict, entity_path, app.logger)),
         )
         continualLoop.start()
         continual_publish_thread.append(continualLoop)
 
-    # Run action based on POST request
-    # If error in log when running action, return actions log (list) as response. (Using ActionStr as a reference of the action start in the log)
-    # publish-data
-    if action_name == "publish-data":
-        ActionStr = " >> Publishing data..."
-        app.logger.info(ActionStr)
-        _ = publish_data(input_data_dict, app.logger)
-        msg = "EMHASS >> Action publish-data executed... \n"
-        if not checkFileLog(ActionStr):
-            return make_response(msg, 201)
-        return make_response(grabLog(ActionStr), 400)
-    # perfect-optim
-    elif action_name == "perfect-optim":
-        ActionStr = " >> Performing perfect optimization..."
-        app.logger.info(ActionStr)
-        opt_res = perfect_forecast_optim(input_data_dict, app.logger)
-        injection_dict = get_injection_dict(opt_res)
-        with open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
-            pickle.dump(injection_dict, fid)
-        msg = "EMHASS >> Action perfect-optim executed... \n"
-        if not checkFileLog(ActionStr):
-            return make_response(msg, 201)
-        return make_response(grabLog(ActionStr), 400)
-    # dayahead-optim
-    elif action_name == "dayahead-optim":
-        ActionStr = " >> Performing dayahead optimization..."
-        app.logger.info(ActionStr)
-        opt_res = dayahead_forecast_optim(input_data_dict, app.logger)
-        injection_dict = get_injection_dict(opt_res)
-        with open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
-            pickle.dump(injection_dict, fid)
-        msg = "EMHASS >> Action dayahead-optim executed... \n"
-        if not checkFileLog(ActionStr):
-            return make_response(msg, 201)
-        return make_response(grabLog(ActionStr), 400)
-    # naive-mpc-optim
-    elif action_name == "naive-mpc-optim":
-        ActionStr = " >> Performing naive MPC optimization..."
-        app.logger.info(ActionStr)
-        opt_res = naive_mpc_optim(input_data_dict, app.logger)
-        injection_dict = get_injection_dict(opt_res)
-        with open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
-            pickle.dump(injection_dict, fid)
-        msg = "EMHASS >> Action naive-mpc-optim executed... \n"
-        if not checkFileLog(ActionStr):
-            return make_response(msg, 201)
-        return make_response(grabLog(ActionStr), 400)
-    # forecast-model-fit
-    elif action_name == "forecast-model-fit":
-        ActionStr = " >> Performing a machine learning forecast model fit..."
-        app.logger.info(ActionStr)
-        df_fit_pred, _, mlf = forecast_model_fit(input_data_dict, app.logger)
-        injection_dict = get_injection_dict_forecast_model_fit(df_fit_pred, mlf)
-        with open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
-            pickle.dump(injection_dict, fid)
-        msg = "EMHASS >> Action forecast-model-fit executed... \n"
-        if not checkFileLog(ActionStr):
-            return make_response(msg, 201)
-        return make_response(grabLog(ActionStr), 400)
-    # forecast-model-predict
-    elif action_name == "forecast-model-predict":
-        ActionStr = " >> Performing a machine learning forecast model predict..."
-        app.logger.info(ActionStr)
-        df_pred = forecast_model_predict(input_data_dict, app.logger)
-        if df_pred is None:
-            return make_response(grabLog(ActionStr), 400)
-        table1 = df_pred.reset_index().to_html(classes="mystyle", index=False)
-        injection_dict = {}
-        injection_dict["title"] = (
-            "<h2>Custom machine learning forecast model predict</h2>"
-        )
-        injection_dict["subsubtitle0"] = (
-            "<h4>Performed a prediction using a pre-trained model</h4>"
-        )
-        injection_dict["table1"] = table1
-        with open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
-            pickle.dump(injection_dict, fid)
-        msg = "EMHASS >> Action forecast-model-predict executed... \n"
-        if not checkFileLog(ActionStr):
-            return make_response(msg, 201)
-        return make_response(grabLog(ActionStr), 400)
-    # forecast-model-tune
-    elif action_name == "forecast-model-tune":
-        ActionStr = " >> Performing a machine learning forecast model tune..."
-        app.logger.info(ActionStr)
-        df_pred_optim, mlf = forecast_model_tune(input_data_dict, app.logger)
-        if df_pred_optim is None or mlf is None:
-            return make_response(grabLog(ActionStr), 400)
-        injection_dict = get_injection_dict_forecast_model_tune(df_pred_optim, mlf)
-        with open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "wb") as fid:
-            pickle.dump(injection_dict, fid)
-        msg = "EMHASS >> Action forecast-model-tune executed... \n"
-        if not checkFileLog(ActionStr):
-            return make_response(msg, 201)
-        return make_response(grabLog(ActionStr), 400)
-    # regressor-model-fit
-    elif action_name == "regressor-model-fit":
-        ActionStr = " >> Performing a machine learning regressor fit..."
-        app.logger.info(ActionStr)
-        regressor_model_fit(input_data_dict, app.logger)
-        msg = "EMHASS >> Action regressor-model-fit executed... \n"
-        if not checkFileLog(ActionStr):
-            return make_response(msg, 201)
-        return make_response(grabLog(ActionStr), 400)
-    # regressor-model-predict
-    elif action_name == "regressor-model-predict":
-        ActionStr = " >> Performing a machine learning regressor predict..."
-        app.logger.info(ActionStr)
-        regressor_model_predict(input_data_dict, app.logger)
-        msg = "EMHASS >> Action regressor-model-predict executed... \n"
-        if not checkFileLog(ActionStr):
-            return make_response(msg, 201)
-        return make_response(grabLog(ActionStr), 400)
-    # Else return error
-    else:
-        app.logger.error("ERROR: passed action is not valid")
-        msg = "EMHASS >> ERROR: Passed action is not valid... \n"
-        return make_response(msg, 400)
+    # Execute Action
+    msg, status = await _handle_action_dispatch(
+        action_name, input_data_dict, emhass_conf, params, runtimeparams, app.logger
+    )
+
+    # Final Log Check & Response
+    if status == 201:
+        if not await check_file_log(" >> "):
+            return await make_response(msg, 201)
+        return await make_response(await grabLog(" >> "), 400)
+
+    return await make_response(msg, status)
 
 
-def main(
-    args: dict | None = None,
-):
-    global continual_publish_thread
-    global emhass_conf
-    global entity_path
-    global injection_dict
-    global app
-    # Pre formatted config parameters
+async def initialize(args: dict | None = None):
+    global emhass_conf, params_secrets, continual_publish_thread, injection_dict, entity_path
+
     config = {}
-    # Secrets
-    global params_secrets
-    # Built parameters (formatted config + secrets)
     params = None
 
     # Find env's, not not set defaults
@@ -563,15 +615,9 @@ def main(
     ROOT_PATH = os.getenv("ROOT_PATH", default=str(Path(__file__).parent))
     CONFIG_PATH = os.getenv("CONFIG_PATH", default="/share/config.json")
     OPTIONS_PATH = os.getenv("OPTIONS_PATH", default="/data/options.json")
-    DEFAULTS_PATH = os.getenv(
-        "DEFAULTS_PATH", default=ROOT_PATH + "/data/config_defaults.json"
-    )
-    ASSOCIATIONS_PATH = os.getenv(
-        "ASSOCIATIONS_PATH", default=ROOT_PATH + "/data/associations.csv"
-    )
-    LEGACY_CONFIG_PATH = os.getenv(
-        "LEGACY_CONFIG_PATH", default="/app/config_emhass.yaml"
-    )
+    DEFAULTS_PATH = os.getenv("DEFAULTS_PATH", default=ROOT_PATH + "/data/config_defaults.json")
+    ASSOCIATIONS_PATH = os.getenv("ASSOCIATIONS_PATH", default=ROOT_PATH + "/data/associations.csv")
+    LEGACY_CONFIG_PATH = os.getenv("LEGACY_CONFIG_PATH", default="/app/config_emhass.yaml")
 
     # Define the paths
     config_path = Path(CONFIG_PATH)
@@ -592,8 +638,12 @@ def main(
 
     # Combine parameters from configuration sources (if exists)
     config.update(
-        build_config(
-            emhass_conf, app.logger, defaults_path, config_path, legacy_config_path
+        await build_config(
+            emhass_conf,
+            app.logger,
+            str(defaults_path),
+            str(config_path) if config_path.exists() else None,
+            str(legacy_config_path) if legacy_config_path.exists() else None,
         )
     )
     if type(config) is bool and not config:
@@ -617,14 +667,15 @@ def main(
             argument["key"] = args["key"]
         if args.get("no_response", None):
             no_response = args["no_response"]
+
     # Combine secrets from ENV, Arguments/ARG, Secrets file (secrets_emhass.yaml), options (options.json from addon configuration file) and/or Home Assistant Standalone API (if exist)
-    emhass_conf, secrets = build_secrets(
+    emhass_conf, secrets = await build_secrets(
         emhass_conf,
         app.logger,
-        argument,
-        options_path,
-        os.getenv("SECRETS_PATH", default="/app/secrets_emhass.yaml"),
-        bool(no_response),
+        secrets_path=os.getenv("SECRETS_PATH", default="/app/secrets_emhass.yaml"),
+        options_path=str(options_path),
+        argument=argument,
+        no_response=bool(no_response),
     )
     params_secrets.update(secrets)
 
@@ -642,13 +693,14 @@ def main(
 
     # Initialize this global dict
     if (emhass_conf["data_path"] / "injection_dict.pkl").exists():
-        with open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "rb") as fid:
-            injection_dict = pickle.load(fid)
+        async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "rb") as fid:
+            content = await fid.read()
+            injection_dict = pickle.loads(content)
     else:
         injection_dict = None
 
     # Build params from config and param_secrets (migrate params to correct config catagories), save result to params.pkl
-    params = build_params(emhass_conf, params_secrets, config, app.logger)
+    params = await build_params(emhass_conf, params_secrets, config, app.logger)
     if type(params) is bool:
         raise Exception("A error has occurred while building params")
     # Update params with local variables
@@ -657,15 +709,14 @@ def main(
 
     # Save params to file for later reference
     if os.path.exists(str(emhass_conf["data_path"])):
-        with open(str(emhass_conf["data_path"] / "params.pkl"), "wb") as fid:
-            pickle.dump((config_path, params), fid)
+        async with aiofiles.open(str(emhass_conf["data_path"] / "params.pkl"), "wb") as fid:
+            content = pickle.dumps((config_path, params))
+            await fid.write(content)
     else:
         raise Exception("missing: " + str(emhass_conf["data_path"]))
 
     # Define loggers
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     log.default_handler.setFormatter(formatter)
     # Action file logger
     fileLogger = logging.FileHandler(str(emhass_conf["data_path"] / "actionLogs.txt"))
@@ -689,7 +740,7 @@ def main(
     app.logger.propagate = False
     app.logger.addHandler(fileLogger)
     # Clear Action File logger file, ready for new instance
-    clearFileLog()
+    await clear_file_log()
 
     # If entity_path exists, remove any entity/metadata files
     entity_path = emhass_conf["data_path"] / "entities"
@@ -704,12 +755,9 @@ def main(
 
     # Logging
     port = int(os.environ.get("PORT", 5000))
+    app.logger.info("Launching the emhass webserver at: http://" + server_ip + ":" + str(port))
     app.logger.info(
-        "Launching the emhass webserver at: http://" + server_ip + ":" + str(port)
-    )
-    app.logger.info(
-        "Home Assistant data fetch will be performed using url: "
-        + params_secrets["hass_url"]
+        "Home Assistant data fetch will be performed using url: " + params_secrets["hass_url"]
     )
     app.logger.info("The data path is: " + str(emhass_conf["data_path"]))
     app.logger.info("The logging is: " + str(logging_level))
@@ -718,32 +766,62 @@ def main(
     except PackageNotFoundError:
         app.logger.info("Using development emhass version")
 
-    return server_ip, port
+    # Initialize persistent WebSocket connection only if use_websocket is enabled
+    use_websocket = params.get("retrieve_hass_conf", {}).get("use_websocket", False)
+
+    if use_websocket:
+        app.logger.info("WebSocket mode enabled - initializing connection...")
+        try:
+            await get_websocket_client(
+                hass_url=params_secrets["hass_url"],
+                token=params_secrets["long_lived_token"],
+                logger=app.logger,
+            )
+            app.logger.info("WebSocket connection established")
+
+            # WebSocket shutdown is already handled by @app.after_serving
+            # No need for atexit handler
+        except Exception as ws_error:
+            app.logger.warning(f"WebSocket connection failed: {ws_error}")
+            app.logger.info("Continuing without WebSocket connection...")
+            # Re-raise the exception so before_serving can handle it
+            raise
+    else:
+        app.logger.info("WebSocket mode disabled - using REST API only")
+
+    app.logger.info("Initialization complete")
+
+
+async def main() -> None:
+    """
+    Main function to handle command line arguments.
+
+    Note: In production, the app should be run via gunicorn with uvicorn workers:
+    gunicorn emhass.web_server:app -c gunicorn.conf.py -k uvicorn.workers.UvicornWorker
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--url", type=str, help="HA URL")
+    parser.add_argument("--key", type=str, help="HA long‑lived token")
+    parser.add_argument("--no_response", action="store_true")
+    args = parser.parse_args()
+    args_dict = {k: v for k, v in vars(args).items() if v is not None}
+
+    # Initialize the app before starting server
+    await initialize(args_dict)
+
+    # For direct execution (development/testing), use uvicorn programmatically
+    import uvicorn
+
+    host = params_secrets.get("server_ip", "0.0.0.0")
+    port = int(os.getenv("PORT", 5000))
+
+    app.logger.info(f"Starting server directly on {host}:{port}")
+
+    # Use uvicorn.Server to run within existing event loop
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    await server.serve()
 
 
 if __name__ == "__main__":
-    # Parsing arguments
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--url",
-        type=str,
-        help="The URL to your Home Assistant instance, ex the external_url in your hass configuration",
-    )
-    parser.add_argument(
-        "--key",
-        type=str,
-        help="Your access key. If using EMHASS in standalone this should be a Long-Lived Access Token",
-    )
-    parser.add_argument(
-        "--no_response",
-        type=bool,
-        default=False,
-        help="This is set if json response errors occur",
-    )
-    args = parser.parse_args()
-
-    server_ip, port = main(vars(args))
-    os.environ["IP"] = str(server_ip)
-    os.environ["PORT"] = str(port)
-
-    serve(app, host=server_ip, port=port, threads=8)
+    asyncio.run(main())
