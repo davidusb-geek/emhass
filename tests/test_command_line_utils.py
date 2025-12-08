@@ -1163,9 +1163,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             os.utime(tmp_path, (recent_time, recent_time))
         try:
             result = is_model_outdated(tmp_path, 24, logger)
-            self.assertFalse(
-                result, "Should return False for model just under max_age threshold"
-            )
+            self.assertFalse(result, "Should return False for model just under max_age threshold")
         finally:
             tmp_path.unlink()
 
@@ -1233,19 +1231,26 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         import tempfile
         from unittest.mock import AsyncMock, MagicMock, patch
 
+        import aiofiles
+
         from emhass.command_line import adjust_pv_forecast
         from emhass.forecast import Forecast
 
-        # Create a corrupted pickle file
-        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:
-            tmp_path = pathlib.Path(tmp.name)
-            # Write corrupted data
-            tmp.write(b"This is not a valid pickle file!")
+        # Create a corrupted pickle file using tempfile for the path, then write async
+        tmp_fd, tmp_name = tempfile.mkstemp(suffix=".pkl")
+        import os
+
+        os.close(tmp_fd)  # Close the file descriptor immediately
+        tmp_path = pathlib.Path(tmp_name)
+
+        # Write corrupted data asynchronously
+        async with aiofiles.open(tmp_path, "wb") as tmp:
+            await tmp.write(b"This is not a valid pickle file!")
 
         try:
             # Setup mock objects
             fcst = MagicMock(spec=Forecast)
-            P_PV_forecast = pd.Series([100, 200, 300], name="P_PV")
+            p_pv_forecast = pd.Series([100, 200, 300], name="P_PV")
 
             test_emhass_conf = {
                 "data_path": tmp_path.parent,
@@ -1264,9 +1269,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             tmp_path.rename(model_path)
 
             # Mock the data retrieval and fit methods
-            with patch(
-                "emhass.command_line.retrieve_home_assistant_data"
-            ) as mock_retrieve:
+            with patch("emhass.command_line.retrieve_home_assistant_data") as mock_retrieve:
                 mock_retrieve.return_value = (True, pd.DataFrame(), None)
                 fcst.adjust_pv_forecast_data_prep = MagicMock()
                 fcst.adjust_pv_forecast_fit = AsyncMock()
@@ -1278,7 +1281,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 result = await adjust_pv_forecast(
                     logger,
                     fcst,
-                    P_PV_forecast,
+                    p_pv_forecast,
                     True,
                     test_retrieve_hass_conf,
                     test_optim_conf,
@@ -1289,9 +1292,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
 
                 # Verify that it called re-fit after detecting corruption
                 fcst.adjust_pv_forecast_fit.assert_called_once()
-                self.assertIsNotNone(
-                    result, "Should return valid result after recovery"
-                )
+                self.assertIsNotNone(result, "Should return valid result after recovery")
 
         finally:
             # Cleanup - unlink_missing_ok handles non-existent files safely
@@ -1317,13 +1318,15 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
 
             # Create a simple picklable object to represent a valid model
             # (Using a dict instead of MagicMock since MagicMock isn't picklable)
+            import aiofiles
+
             mock_model = {"model_type": "test", "params": [1, 2, 3]}
-            with open(model_path, "wb") as f:
-                pickle.dump(mock_model, f)
+            async with aiofiles.open(model_path, "wb") as f:
+                await f.write(pickle.dumps(mock_model))
 
             # Setup test objects
             fcst = MagicMock(spec=Forecast)
-            P_PV_forecast = pd.Series([100, 200, 300], name="P_PV")
+            p_pv_forecast = pd.Series([100, 200, 300], name="P_PV")
 
             test_emhass_conf = {
                 "data_path": data_path,
@@ -1333,9 +1336,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             rh = MagicMock()
 
             # Mock the data retrieval to avoid real I/O
-            with patch(
-                "emhass.command_line.retrieve_home_assistant_data"
-            ) as mock_retrieve:
+            with patch("emhass.command_line.retrieve_home_assistant_data") as mock_retrieve:
                 mock_retrieve.return_value = (True, pd.DataFrame(), None)
                 fcst.adjust_pv_forecast_data_prep = MagicMock()
                 fcst.adjust_pv_forecast_fit = AsyncMock()
@@ -1355,7 +1356,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 result = await adjust_pv_forecast(
                     logger,
                     fcst,
-                    P_PV_forecast.copy(),
+                    p_pv_forecast.copy(),
                     True,
                     test_retrieve_hass_conf,
                     test_optim_conf_fresh,
@@ -1368,9 +1369,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 fcst.adjust_pv_forecast_fit.assert_not_called()
                 # Should NOT retrieve data when model is fresh
                 mock_retrieve.assert_not_called()
-                self.assertIsNotNone(
-                    result, "Should return valid result using cached model"
-                )
+                self.assertIsNotNone(result, "Should return valid result using cached model")
 
                 # Test Case 2: max_age = 0 -> should force refit
                 test_optim_conf_force = {
@@ -1384,7 +1383,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 result = await adjust_pv_forecast(
                     logger,
                     fcst,
-                    P_PV_forecast.copy(),
+                    p_pv_forecast.copy(),
                     True,
                     test_retrieve_hass_conf,
                     test_optim_conf_force,
@@ -1397,9 +1396,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 fcst.adjust_pv_forecast_fit.assert_called_once()
                 # Should retrieve data when refitting
                 mock_retrieve.assert_called_once()
-                self.assertIsNotNone(
-                    result, "Should return valid result after forced refit"
-                )
+                self.assertIsNotNone(result, "Should return valid result after forced refit")
 
                 # Test Case 3: Old model (48h old) with max_age=24 -> should refit
                 # Set model file modification time to 48 hours ago
@@ -1417,7 +1414,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 result = await adjust_pv_forecast(
                     logger,
                     fcst,
-                    P_PV_forecast.copy(),
+                    p_pv_forecast.copy(),
                     True,
                     test_retrieve_hass_conf,
                     test_optim_conf_stale,
@@ -1450,7 +1447,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 result = await adjust_pv_forecast(
                     logger,
                     fcst,
-                    P_PV_forecast.copy(),
+                    p_pv_forecast.copy(),
                     True,
                     test_retrieve_hass_conf,
                     test_optim_conf_under,
