@@ -7,8 +7,6 @@ import logging
 import os
 import pathlib
 import pickle
-import re
-import time
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
 
@@ -91,9 +89,7 @@ async def retrieve_home_assistant_data(
     return True, rh.df_final.copy(), days_list
 
 
-def is_model_outdated(
-    model_path: pathlib.Path, max_age_hours: int, logger: logging.Logger
-) -> bool:
+def is_model_outdated(model_path: pathlib.Path, max_age_hours: int, logger: logging.Logger) -> bool:
     """
     Check if the saved model file is outdated based on its modification time.
 
@@ -201,12 +197,13 @@ async def adjust_pv_forecast(
         # Load existing model
         logger.info("Loading existing adjusted PV model from file")
         try:
-            with open(model_path, "rb") as inp:
-                fcst.model_adjust_pv = pickle.load(inp)
+            import aiofiles
+
+            async with aiofiles.open(model_path, "rb") as inp:
+                content = await inp.read()
+                fcst.model_adjust_pv = pickle.loads(content)
         except (pickle.UnpicklingError, EOFError, AttributeError, ImportError) as e:
-            logger.error(
-                f"Failed to load existing adjusted PV model: {type(e).__name__}: {str(e)}"
-            )
+            logger.error(f"Failed to load existing adjusted PV model: {type(e).__name__}: {str(e)}")
             logger.warning(
                 "Model file may be corrupted or incompatible. Falling back to re-fitting the model."
             )
@@ -221,9 +218,7 @@ async def adjust_pv_forecast(
                 test_df_literal,
             )
             if not success:
-                logger.error(
-                    "Failed to retrieve data for model re-fit after load error"
-                )
+                logger.error("Failed to retrieve data for model re-fit after load error")
                 return False
             # Call data preparation method
             fcst.adjust_pv_forecast_data_prep(df_input_data)
