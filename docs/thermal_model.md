@@ -12,14 +12,15 @@ A big thanks to @werdnum for proposing this model and the initial code for imple
 The thermal model implemented in EMHASS is a linear model represented by the following equation:
 
 $$
-    T_{in}^{pred}[k+1] = T_{in}^{pred}[k] + P_{def}[k]\frac{\alpha_h\Delta t}{P_{def}^{nom}}-(\gamma_c(T_{in}^{pred}[k] - T_{out}^{fcst}[k]))
+    T_{in}^{pred}[k+1] = T_{in}^{pred}[k] + S \cdot P_{def}[k]\frac{\alpha_h\Delta t}{P_{def}^{nom}}-(\gamma_c \Delta t (T_{in}^{pred}[k] - T_{out}^{fcst}[k]))
 $$
 
-where $k$ is each time instant, $T_{in}^{pred}$ is the indoor predicted temperature, $T_{out}^{fcst}$ is the outdoor forecasted temperature and $P_{def}$ is the deferrable load power.
+where $k$ is each time instant, $T_{in}^{pred}$ is the indoor predicted temperature, $T_{out}^{fcst}$ is the outdoor forecasted temperature and $P_{def}$ is the deferrable load power. $S$ represents the direction of the energy flow (1 for heating, -1 for cooling).
 
-In this model we can see two main configuration parameters:
+In this model we can see the main configuration parameters:
 - The heating rate $\alpha_h$ in degrees per hour.
 - The cooling constant $\gamma_c$ in degrees per hour per degree of cooling.
+- The sense $S$ (heating or cooling direction).
 
 These parameters are defined according to the thermal characteristics of the building/house.
 It was reported by @werdnum, that values of $\alpha_h=5.0$ and $\gamma_c=0.1$ were reasonable in his case. 
@@ -36,8 +37,26 @@ To implement this model we need to provide a configuration for the discussed par
 We will control this by using data passed at runtime.
 The first step will be to define a new entry `def_load_config`, this will be used as a dictionary to store any needed special configuration for each deferrable load.
 
-For example, if we have just **two** deferrable loads and the **second** load is a **thermal load** then we will define `def_load_config` as:
-```
+### Configuration Parameters
+
+You can define the following parameters inside the `thermal_config` dictionary:
+
+* **heating_rate**: The rate at which the temperature changes per hour when the device is operating at nominal power.
+* **cooling_constant**: The rate at which temperature is lost to the environment (per hour per degree difference).
+* **start_temperature**: The initial room temperature.
+* **sense**: Defines the operation mode of the thermal load.
+    * `'heat'`: (Default) The device adds heat (e.g., heater).
+    * `'cool'`: The device removes heat (e.g., AC).
+* **min_temperatures**: (List of floats) The minimum allowed temperature per timestep.
+* **max_temperatures**: (List of floats) The maximum allowed temperature per timestep.
+* **desired_temperatures**: (Legacy) A specific target temperature per timestep. Used with `penalty_factor`.
+* **overshoot_temperature**: (Legacy) A global maximum temperature limit.
+
+**Note on Constraint Modes:**
+It is recommended to use `min_temperatures` and `max_temperatures` to define a "Comfort Range". This allows the optimizer to "float" the temperature within this range to find the cheapest time to operate, resulting in clear On/Off blocks.
+
+For example, if we have just **two** deferrable loads and the **second** load is a **thermal load** (functioning as a heater) then we will define `def_load_config` as:
+```json
 'def_load_config': {
     {},
     {'thermal_config': {
@@ -45,12 +64,11 @@ For example, if we have just **two** deferrable loads and the **second** load is
         'cooling_constant': 0.1,
         'overshoot_temperature': 24.0,
         'start_temperature': 20,
+        'sense': 'heat',
         'desired_temperatures': [...]
     }}
 }
-```
-
-Here the `desired_temperatures` is a list of float values for each time step.
+Here the desired_temperatures is a list of float values for each time step.
 
 Now we also need to define the other needed input, the `outdoor_temperature_forecast`, which is a list of float values. The list of floats for `desired_temperatures` and the list in `outdoor_temperature_forecast` should have proper lengths, if using MPC the length should be at least equal to the prediction horizon.
 
@@ -70,7 +88,7 @@ rest_command:
         {{ (((today_at(time) - now()) / timedelta(minutes=30)) | round(0, 'ceiling')) % 48 }}
       {%- endmacro %}
       {%- set horizon = 24 -%}
-      {%- set heated_intervals = [[time_to_timestep("06:30")|int, time_to_timestep("07:30")|int], [time_to_timestep("17:30")|int, time_to_timestep("23:00")|int]] -%}
+      {%- set comfort_intervals = [[time_to_timestep("06:30")|int, time_to_timestep("23:00")|int]] -%}
       {%- set pv_power_forecast = namespace(all=[]) -%}
       {% for i in range(horizon) %}
         {%- set pv_power_forecast.all = pv_power_forecast.all + [ 0.0 ] -%}
@@ -88,17 +106,18 @@ rest_command:
           {"thermal_config": {
             "heating_rate": 5.0,
             "cooling_constant": 0.1,
-            "overshoot_temperature": {{ (states('sensor.my_room_temperature') | float) + 3.0 }},
             "start_temperature": {{ states('sensor.my_room_temperature') }},
-            "desired_temperatures": [
+            "sense": "heat",
+            "max_temperatures": [24.0] * {{ horizon }}, 
+            "min_temperatures": [
               {%- set comma = joiner(", ") -%}
               {%- for i in range(horizon) -%}
                 {%- set timestep = i -%}
                 {{ comma() }}
-                {% for interval in heated_intervals if timestep >= interval[0] and timestep <= interval[1] %}
+                {% for interval in comfort_intervals if timestep >= interval[0] and timestep <= interval[1] %}
                 21.0
                 {%- else -%}
-                15.0
+                18.0
                 {%- endfor %}
               {%- endfor %}
             ]}
