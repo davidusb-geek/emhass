@@ -359,13 +359,19 @@ class RetrieveHass:
         if not client:
             return False
 
-        start_time = days_list[0].tz_localize(None)
+        # Convert to naive timestamp by removing timezone info
+        start_time = days_list[0]
+        if hasattr(start_time, "tzinfo") and start_time.tzinfo is not None:
+            start_time = start_time.replace(tzinfo=None)
 
         # Don't query into the future - cap end_time at current time
         # This prevents FILL(previous) from creating fake future datapoints
-        # Use tz_localize(None) to to match timezone format to naive while preserving local time
-        now = pd.Timestamp.now(tz=self.time_zone).tz_localize(None)
-        requested_end = (days_list[-1] + pd.Timedelta(days=1)).tz_localize(None)
+        # Convert to naive timestamps by removing timezone info to enable comparison
+        now = pd.Timestamp.now(tz=self.time_zone).replace(tzinfo=None)
+        requested_end = days_list[-1] + pd.Timedelta(days=1)
+        # Ensure requested_end is also naive
+        if hasattr(requested_end, "tzinfo") and requested_end.tzinfo is not None:
+            requested_end = requested_end.replace(tzinfo=None)
         end_time = min(now, requested_end)
 
         total_days = (end_time - start_time).days
