@@ -4,6 +4,7 @@
 ### Improvement
 - Added support for async emhass code (@gieljnssns)
 - Added support for websocket data retrieval (@gieljnssns)
+- Add feature to cache pv regression model (@sokorn)
 - Thermal model improvements:
 	- Implemented a Min/Max temperature control, proposed by @werdnum
 	- Implemented needed unit tests
