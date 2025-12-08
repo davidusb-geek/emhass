@@ -129,7 +129,6 @@ def is_model_outdated(model_path: pathlib.Path, max_age_hours: int, logger: logg
 
 
 async def _retrieve_and_fit_pv_model(
-    logger: logging.Logger,
     fcst: Forecast,
     get_data_from_file: bool,
     retrieve_hass_conf: dict,
@@ -141,8 +140,6 @@ async def _retrieve_and_fit_pv_model(
     """
     Helper function to retrieve data and fit the PV adjustment model.
 
-    :param logger: Logger object for logging information and errors.
-    :type logger: logging.Logger
     :param fcst: Forecast object used for PV forecast adjustment.
     :type fcst: Forecast
     :param get_data_from_file: Whether to retrieve data from a file instead of Home Assistant.
@@ -230,7 +227,6 @@ async def adjust_pv_forecast(
     if is_model_outdated(model_path, max_age_hours, logger):
         logger.info("Adjusting PV forecast, retrieving history data for model fit")
         success = await _retrieve_and_fit_pv_model(
-            logger,
             fcst,
             get_data_from_file,
             retrieve_hass_conf,
@@ -255,7 +251,6 @@ async def adjust_pv_forecast(
             )
             # Use helper function to retrieve data and re-fit model
             success = await _retrieve_and_fit_pv_model(
-                logger,
                 fcst,
                 get_data_from_file,
                 retrieve_hass_conf,
