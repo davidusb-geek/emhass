@@ -506,19 +506,27 @@ class RetrieveHass:
         if not client:
             return False
 
-        # Convert to naive timestamp by removing timezone info
-        start_time = days_list[0]
-        if hasattr(start_time, "tzinfo") and start_time.tzinfo is not None:
-            start_time = start_time.replace(tzinfo=None)
+        # Convert all timestamps to UTC for comparison, then make naive for InfluxDB
+        # This ensures we compare actual instants in time, not wall clock times
+        # InfluxDB queries expect naive UTC timestamps (with 'Z' suffix)
 
-        # Don't query into the future - cap end_time at current time
+        # Normalize start_time to pd.Timestamp in UTC
+        start_time = pd.Timestamp(days_list[0])
+        if start_time.tz is not None:
+            start_time = start_time.tz_convert("UTC").tz_localize(None)
+        # If naive, assume it's already UTC
+
+        # Get current time in UTC
+        now = pd.Timestamp.now(tz="UTC").tz_localize(None)
+
+        # Normalize requested_end to pd.Timestamp in UTC
+        requested_end = pd.Timestamp(days_list[-1]) + pd.Timedelta(days=1)
+        if requested_end.tz is not None:
+            requested_end = requested_end.tz_convert("UTC").tz_localize(None)
+        # If naive, assume it's already UTC
+
+        # Cap end_time at current time to avoid querying future data
         # This prevents FILL(previous) from creating fake future datapoints
-        # Convert to naive timestamps by removing timezone info to enable comparison
-        now = pd.Timestamp.now(tz=self.time_zone).replace(tzinfo=None)
-        requested_end = days_list[-1] + pd.Timedelta(days=1)
-        # Ensure requested_end is also naive
-        if hasattr(requested_end, "tzinfo") and requested_end.tzinfo is not None:
-            requested_end = requested_end.replace(tzinfo=None)
         end_time = min(now, requested_end)
         total_days = (end_time - start_time).days
 
