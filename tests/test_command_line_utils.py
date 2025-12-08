@@ -108,8 +108,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIs(input_data_dict["df_input_data"], None)
         self.assertIs(input_data_dict["df_input_data_dayahead"], None)
-        self.assertIs(input_data_dict["P_PV_forecast"], None)
-        self.assertIs(input_data_dict["P_load_forecast"], None)
+        self.assertIs(input_data_dict["p_pv_forecast"], None)
+        self.assertIs(input_data_dict["p_load_forecast"], None)
         # Test naive mpc
         action = "naive-mpc-optim"
         input_data_dict = await set_input_data_dict(
@@ -419,12 +419,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         opt_res_last = await publish_data(input_data_dict, logger, opt_res_latest=opt_res)
         self.assertEqual(len(opt_res_last), 1)
-        # Reproduce when trying to publish data params=None and runtimeparams=None
-        # action = 'publish-data'
-        # input_data_dict = await set_input_data_dict(emhass_conf, costfun, None, None,
-        #                                       action, logger, get_data_from_file=True)
-        # opt_res_last = await publish_data(input_data_dict, logger, opt_res_latest=opt_res)
-        # self.assertTrue(len(opt_res_last)==1)
+
         # Check if status is published
         from datetime import datetime
 

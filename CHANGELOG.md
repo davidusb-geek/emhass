@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+### Improvement
+- Added support for async emhass code (@gieljnssns)
+- Added support for websocket data retrieval (@gieljnssns)
+- Thermal model improvements:
+	- Implemented a Min/Max temperature control, proposed by @werdnum
+	- Implemented needed unit tests
+	- Improved documentation
+### Fix
+- Fixed warning message because pickle files saved with old Numpy version
+- A buch of code refactor following SonarCloud Code Analysis 
+- Solved runtime param optimization_time_step not recognized, issue #563
+- Attempt at solving data publish problem when containing both battery sensor definitions and a def_load_config, issue #587
+
 ## 0.14.1 - 2025-11-29
 ### Improvement
 - Improved InfluxDB version support documentation
