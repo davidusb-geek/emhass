@@ -1169,10 +1169,10 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         finally:
             tmp_path.unlink()
 
-    def test_adjusted_pv_model_max_age_runtime_override(self):
+    async def test_adjusted_pv_model_max_age_runtime_override(self):
         """Test that runtime adjusted_pv_model_max_age parameter overrides config parameter."""
         # Build params with default config
-        params = TestCommandLineUtils.get_test_params(set_use_pv=True)
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
 
         # Set adjusted_pv_model_max_age in config to 24
         params["optim_conf"]["adjusted_pv_model_max_age"] = 24
@@ -1184,14 +1184,14 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             "adjusted_pv_model_max_age": 6,  # Override to 6 hours
         }
 
-        params_json = json.dumps(params)
-        runtimeparams_json = json.dumps(runtimeparams)
+        params_json = orjson.dumps(params).decode("utf-8")
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
 
         costfun = "profit"
         action = "dayahead-optim"
 
         # Call set_input_data_dict
-        input_data_dict = set_input_data_dict(
+        input_data_dict = await set_input_data_dict(
             emhass_conf,
             costfun,
             params_json,
@@ -1210,9 +1210,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
 
         # Test with different value
         runtimeparams["adjusted_pv_model_max_age"] = 0  # Force refit
-        runtimeparams_json = json.dumps(runtimeparams)
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
 
-        input_data_dict = set_input_data_dict(
+        input_data_dict = await set_input_data_dict(
             emhass_conf,
             costfun,
             params_json,
@@ -1228,10 +1228,10 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             "Runtime parameter should override with value 0 (force refit)",
         )
 
-    def test_adjust_pv_forecast_corrupted_model_recovery(self):
+    async def test_adjust_pv_forecast_corrupted_model_recovery(self):
         """Test that adjust_pv_forecast gracefully handles corrupted model files."""
         import tempfile
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import AsyncMock, MagicMock, patch
 
         from emhass.command_line import adjust_pv_forecast
         from emhass.forecast import Forecast
@@ -1269,13 +1269,13 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             ) as mock_retrieve:
                 mock_retrieve.return_value = (True, pd.DataFrame(), None)
                 fcst.adjust_pv_forecast_data_prep = MagicMock()
-                fcst.adjust_pv_forecast_fit = MagicMock()
+                fcst.adjust_pv_forecast_fit = AsyncMock()
                 fcst.adjust_pv_forecast_predict = MagicMock(
                     return_value=pd.DataFrame({"adjusted_forecast": [100, 200, 300]})
                 )
 
                 # Call adjust_pv_forecast - should handle corruption and re-fit
-                result = adjust_pv_forecast(
+                result = await adjust_pv_forecast(
                     logger,
                     fcst,
                     P_PV_forecast,
@@ -1297,7 +1297,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             # Cleanup - unlink_missing_ok handles non-existent files safely
             model_path.unlink(missing_ok=True)
 
-    def test_adjusted_pv_model_max_age_affects_model_refit_behavior(self):
+    async def test_adjusted_pv_model_max_age_affects_model_refit_behavior(self):
         """
         Test that adjusted_pv_model_max_age controls whether a cached model is reused
         vs. refit within adjust_pv_forecast.
@@ -1306,7 +1306,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         import pickle
         import tempfile
         from datetime import datetime, timedelta
-        from unittest.mock import MagicMock
+        from unittest.mock import AsyncMock, MagicMock
 
         from emhass.forecast import Forecast
 
@@ -1338,7 +1338,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             ) as mock_retrieve:
                 mock_retrieve.return_value = (True, pd.DataFrame(), None)
                 fcst.adjust_pv_forecast_data_prep = MagicMock()
-                fcst.adjust_pv_forecast_fit = MagicMock()
+                fcst.adjust_pv_forecast_fit = AsyncMock()
                 fcst.adjust_pv_forecast_predict = MagicMock(
                     return_value=pd.DataFrame({"adjusted_forecast": [100, 200, 300]})
                 )
@@ -1352,7 +1352,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 fcst.adjust_pv_forecast_fit.reset_mock()
                 mock_retrieve.reset_mock()
 
-                result = adjust_pv_forecast(
+                result = await adjust_pv_forecast(
                     logger,
                     fcst,
                     P_PV_forecast.copy(),
@@ -1381,7 +1381,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 fcst.adjust_pv_forecast_fit.reset_mock()
                 mock_retrieve.reset_mock()
 
-                result = adjust_pv_forecast(
+                result = await adjust_pv_forecast(
                     logger,
                     fcst,
                     P_PV_forecast.copy(),
@@ -1414,7 +1414,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 fcst.adjust_pv_forecast_fit.reset_mock()
                 mock_retrieve.reset_mock()
 
-                result = adjust_pv_forecast(
+                result = await adjust_pv_forecast(
                     logger,
                     fcst,
                     P_PV_forecast.copy(),
@@ -1447,7 +1447,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 fcst.adjust_pv_forecast_fit.reset_mock()
                 mock_retrieve.reset_mock()
 
-                result = adjust_pv_forecast(
+                result = await adjust_pv_forecast(
                     logger,
                     fcst,
                     P_PV_forecast.copy(),

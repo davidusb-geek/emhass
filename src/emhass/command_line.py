@@ -179,7 +179,7 @@ async def adjust_pv_forecast(
     if is_model_outdated(model_path, max_age_hours, logger):
         logger.info("Adjusting PV forecast, retrieving history data for model fit")
         # Retrieve data from Home Assistant
-        success, df_input_data, _ = retrieve_home_assistant_data(
+        success, df_input_data, _ = await retrieve_home_assistant_data(
             "adjust_pv",
             get_data_from_file,
             retrieve_hass_conf,
@@ -193,7 +193,7 @@ async def adjust_pv_forecast(
         # Call data preparation method
         fcst.adjust_pv_forecast_data_prep(df_input_data)
         # Call the fit method
-        fcst.adjust_pv_forecast_fit(
+        await fcst.adjust_pv_forecast_fit(
             n_splits=5,
             regression_model=optim_conf["adjusted_pv_regression_model"],
         )
@@ -211,7 +211,7 @@ async def adjust_pv_forecast(
                 "Model file may be corrupted or incompatible. Falling back to re-fitting the model."
             )
             # Retrieve data from Home Assistant for re-fit
-            success, df_input_data, _ = retrieve_home_assistant_data(
+            success, df_input_data, _ = await retrieve_home_assistant_data(
                 "adjust_pv",
                 get_data_from_file,
                 retrieve_hass_conf,
@@ -228,7 +228,7 @@ async def adjust_pv_forecast(
             # Call data preparation method
             fcst.adjust_pv_forecast_data_prep(df_input_data)
             # Call the fit method to create new model
-            fcst.adjust_pv_forecast_fit(
+            await fcst.adjust_pv_forecast_fit(
                 n_splits=5,
                 regression_model=optim_conf["adjusted_pv_regression_model"],
             )
