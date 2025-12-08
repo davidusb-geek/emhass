@@ -11,11 +11,13 @@ import pandas as pd
 
 from emhass import utils
 from emhass.command_line import (
+    adjust_pv_forecast,
     dayahead_forecast_optim,
     export_influxdb_to_csv,
     forecast_model_fit,
     forecast_model_predict,
     forecast_model_tune,
+    is_model_outdated,
     main,
     naive_mpc_optim,
     perfect_forecast_optim,
@@ -1110,6 +1112,358 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             "profit",
             "Should use config parameter when runtime parameter is not provided",
         )
+
+    def test_is_model_outdated(self):
+        """Test the is_model_outdated function for various scenarios."""
+        import os
+        import tempfile
+        from datetime import datetime, timedelta
+
+        # Test 1: Non-existent file should return True
+        with tempfile.TemporaryDirectory() as tmpdir:
+            non_existent_path = pathlib.Path(tmpdir) / "nonexistent_model.pkl"
+            result = is_model_outdated(non_existent_path, 24, logger)
+            self.assertTrue(result, "Should return True for non-existent file")
+
+        # Test 2: max_age_hours = 0 should force refit (return True)
+        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:
+            tmp_path = pathlib.Path(tmp.name)
+        try:
+            result = is_model_outdated(tmp_path, 0, logger)
+            self.assertTrue(result, "Should return True when max_age_hours = 0")
+        finally:
+            tmp_path.unlink()
+
+        # Test 3: Fresh model (just created) should return False
+        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:
+            tmp_path = pathlib.Path(tmp.name)
+        try:
+            result = is_model_outdated(tmp_path, 24, logger)
+            self.assertFalse(result, "Should return False for fresh model")
+        finally:
+            tmp_path.unlink()
+
+        # Test 4: Old model (simulated old modification time) should return True
+        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:
+            tmp_path = pathlib.Path(tmp.name)
+            # Set modification time to 48 hours ago
+            old_time = (datetime.now() - timedelta(hours=48)).timestamp()
+            os.utime(tmp_path, (old_time, old_time))
+        try:
+            result = is_model_outdated(tmp_path, 24, logger)
+            self.assertTrue(result, "Should return True for model older than max_age")
+        finally:
+            tmp_path.unlink()
+
+        # Test 5: Model just under the threshold should return False
+        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:
+            tmp_path = pathlib.Path(tmp.name)
+            # Set modification time to 23 hours ago (just under 24h threshold)
+            recent_time = (datetime.now() - timedelta(hours=23)).timestamp()
+            os.utime(tmp_path, (recent_time, recent_time))
+        try:
+            result = is_model_outdated(tmp_path, 24, logger)
+            self.assertFalse(result, "Should return False for model just under max_age threshold")
+        finally:
+            tmp_path.unlink()
+
+    async def test_adjusted_pv_model_max_age_runtime_override(self):
+        """Test that runtime adjusted_pv_model_max_age parameter overrides config parameter."""
+        # Build params with default config
+        params = await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True)
+
+        # Set adjusted_pv_model_max_age in config to 24
+        params["optim_conf"]["adjusted_pv_model_max_age"] = 24
+
+        # Add runtime parameters with adjusted_pv_model_max_age override
+        runtimeparams = {
+            "pv_power_forecast": [i + 1 for i in range(48)],
+            "load_power_forecast": [i + 1 for i in range(48)],
+            "adjusted_pv_model_max_age": 6,  # Override to 6 hours
+        }
+
+        params_json = orjson.dumps(params).decode("utf-8")
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+
+        costfun = "profit"
+        action = "dayahead-optim"
+
+        # Call set_input_data_dict
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+
+        # Check that adjusted_pv_model_max_age was overridden in the forecast object
+        self.assertEqual(
+            input_data_dict["fcst"].optim_conf["adjusted_pv_model_max_age"],
+            6,
+            "Runtime parameter 'adjusted_pv_model_max_age' should override config parameter",
+        )
+
+        # Test with different value
+        runtimeparams["adjusted_pv_model_max_age"] = 0  # Force refit
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+
+        self.assertEqual(
+            input_data_dict["fcst"].optim_conf["adjusted_pv_model_max_age"],
+            0,
+            "Runtime parameter should override with value 0 (force refit)",
+        )
+
+    async def test_adjust_pv_forecast_corrupted_model_recovery(self):
+        """Test that adjust_pv_forecast gracefully handles corrupted model files."""
+        import tempfile
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import aiofiles
+
+        from emhass.command_line import adjust_pv_forecast
+        from emhass.forecast import Forecast
+
+        # Create a corrupted pickle file using tempfile for the path, then write async
+        tmp_fd, tmp_name = tempfile.mkstemp(suffix=".pkl")
+        import os
+
+        os.close(tmp_fd)  # Close the file descriptor immediately
+        tmp_path = pathlib.Path(tmp_name)
+
+        # Write corrupted data asynchronously
+        async with aiofiles.open(tmp_path, "wb") as tmp:
+            await tmp.write(b"This is not a valid pickle file!")
+
+        try:
+            # Setup mock objects
+            fcst = MagicMock(spec=Forecast)
+            p_pv_forecast = pd.Series([100, 200, 300], name="P_PV")
+
+            test_emhass_conf = {
+                "data_path": tmp_path.parent,
+            }
+
+            test_optim_conf = {
+                "adjusted_pv_model_max_age": 24,
+                "adjusted_pv_regression_model": "LassoRegression",
+            }
+
+            test_retrieve_hass_conf = {}
+            rh = MagicMock()
+
+            # Rename temp file to expected model name
+            model_path = tmp_path.parent / "adjust_pv_regressor.pkl"
+            tmp_path.rename(model_path)
+
+            # Mock the data retrieval and fit methods
+            with patch("emhass.command_line.retrieve_home_assistant_data") as mock_retrieve:
+                mock_retrieve.return_value = (True, pd.DataFrame(), None)
+                fcst.adjust_pv_forecast_data_prep = MagicMock()
+                fcst.adjust_pv_forecast_fit = AsyncMock()
+                fcst.adjust_pv_forecast_predict = MagicMock(
+                    return_value=pd.DataFrame({"adjusted_forecast": [100, 200, 300]})
+                )
+
+                # Call adjust_pv_forecast - should handle corruption and re-fit
+                result = await adjust_pv_forecast(
+                    logger,
+                    fcst,
+                    p_pv_forecast,
+                    True,
+                    test_retrieve_hass_conf,
+                    test_optim_conf,
+                    rh,
+                    test_emhass_conf,
+                    pd.DataFrame(),
+                )
+
+                # Verify that it called re-fit after detecting corruption
+                fcst.adjust_pv_forecast_fit.assert_called_once()
+                self.assertIsNotNone(result, "Should return valid result after recovery")
+
+        finally:
+            # Cleanup - unlink_missing_ok handles non-existent files safely
+            model_path.unlink(missing_ok=True)
+
+    async def test_adjusted_pv_model_max_age_affects_model_refit_behavior(self):
+        """
+        Test that adjusted_pv_model_max_age controls whether a cached model is reused
+        vs. refit within adjust_pv_forecast.
+        """
+        import os
+        import pickle
+        import tempfile
+        from datetime import datetime, timedelta
+        from unittest.mock import AsyncMock, MagicMock
+
+        from emhass.forecast import Forecast
+
+        # Create a temporary data_path with a synthetic PV model file
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_path = pathlib.Path(tmpdir)
+            model_path = data_path / "adjust_pv_regressor.pkl"
+
+            # Create a simple picklable object to represent a valid model
+            # (Using a dict instead of MagicMock since MagicMock isn't picklable)
+            import aiofiles
+
+            mock_model = {"model_type": "test", "params": [1, 2, 3]}
+            async with aiofiles.open(model_path, "wb") as f:
+                await f.write(pickle.dumps(mock_model))
+
+            # Setup test objects
+            fcst = MagicMock(spec=Forecast)
+            p_pv_forecast = pd.Series([100, 200, 300], name="P_PV")
+
+            test_emhass_conf = {
+                "data_path": data_path,
+            }
+
+            test_retrieve_hass_conf = {}
+            rh = MagicMock()
+
+            # Mock the data retrieval to avoid real I/O
+            with patch("emhass.command_line.retrieve_home_assistant_data") as mock_retrieve:
+                mock_retrieve.return_value = (True, pd.DataFrame(), None)
+                fcst.adjust_pv_forecast_data_prep = MagicMock()
+                fcst.adjust_pv_forecast_fit = AsyncMock()
+                fcst.adjust_pv_forecast_predict = MagicMock(
+                    return_value=pd.DataFrame({"adjusted_forecast": [100, 200, 300]})
+                )
+
+                # Test Case 1: Fresh model with large max_age -> should load existing, no refit
+                test_optim_conf_fresh = {
+                    "adjusted_pv_model_max_age": 24,
+                    "adjusted_pv_regression_model": "LassoRegression",
+                }
+
+                fcst.adjust_pv_forecast_fit.reset_mock()
+                mock_retrieve.reset_mock()
+
+                result = await adjust_pv_forecast(
+                    logger,
+                    fcst,
+                    p_pv_forecast.copy(),
+                    True,
+                    test_retrieve_hass_conf,
+                    test_optim_conf_fresh,
+                    rh,
+                    test_emhass_conf,
+                    pd.DataFrame(),
+                )
+
+                # Should NOT call fit when model is fresh
+                fcst.adjust_pv_forecast_fit.assert_not_called()
+                # Should NOT retrieve data when model is fresh
+                mock_retrieve.assert_not_called()
+                self.assertIsNotNone(result, "Should return valid result using cached model")
+
+                # Test Case 2: max_age = 0 -> should force refit
+                test_optim_conf_force = {
+                    "adjusted_pv_model_max_age": 0,
+                    "adjusted_pv_regression_model": "LassoRegression",
+                }
+
+                fcst.adjust_pv_forecast_fit.reset_mock()
+                mock_retrieve.reset_mock()
+
+                result = await adjust_pv_forecast(
+                    logger,
+                    fcst,
+                    p_pv_forecast.copy(),
+                    True,
+                    test_retrieve_hass_conf,
+                    test_optim_conf_force,
+                    rh,
+                    test_emhass_conf,
+                    pd.DataFrame(),
+                )
+
+                # Should call fit when max_age = 0
+                fcst.adjust_pv_forecast_fit.assert_called_once()
+                # Should retrieve data when refitting
+                mock_retrieve.assert_called_once()
+                self.assertIsNotNone(result, "Should return valid result after forced refit")
+
+                # Test Case 3: Old model (48h old) with max_age=24 -> should refit
+                # Set model file modification time to 48 hours ago
+                old_time = (datetime.now() - timedelta(hours=48)).timestamp()
+                os.utime(model_path, (old_time, old_time))
+
+                test_optim_conf_stale = {
+                    "adjusted_pv_model_max_age": 24,
+                    "adjusted_pv_regression_model": "LassoRegression",
+                }
+
+                fcst.adjust_pv_forecast_fit.reset_mock()
+                mock_retrieve.reset_mock()
+
+                result = await adjust_pv_forecast(
+                    logger,
+                    fcst,
+                    p_pv_forecast.copy(),
+                    True,
+                    test_retrieve_hass_conf,
+                    test_optim_conf_stale,
+                    rh,
+                    test_emhass_conf,
+                    pd.DataFrame(),
+                )
+
+                # Should call fit when model is stale
+                fcst.adjust_pv_forecast_fit.assert_called_once()
+                # Should retrieve data when refitting
+                mock_retrieve.assert_called_once()
+                self.assertIsNotNone(
+                    result, "Should return valid result after refitting stale model"
+                )
+
+                # Test Case 4: Model just under threshold (23h old, max_age=24) -> should reuse
+                # Set model file modification time to 23 hours ago
+                recent_time = (datetime.now() - timedelta(hours=23)).timestamp()
+                os.utime(model_path, (recent_time, recent_time))
+
+                test_optim_conf_under = {
+                    "adjusted_pv_model_max_age": 24,
+                    "adjusted_pv_regression_model": "LassoRegression",
+                }
+
+                fcst.adjust_pv_forecast_fit.reset_mock()
+                mock_retrieve.reset_mock()
+
+                result = await adjust_pv_forecast(
+                    logger,
+                    fcst,
+                    p_pv_forecast.copy(),
+                    True,
+                    test_retrieve_hass_conf,
+                    test_optim_conf_under,
+                    rh,
+                    test_emhass_conf,
+                    pd.DataFrame(),
+                )
+
+                # Should NOT call fit when model is just under threshold
+                fcst.adjust_pv_forecast_fit.assert_not_called()
+                # Should NOT retrieve data when model is still fresh enough
+                mock_retrieve.assert_not_called()
+                self.assertIsNotNone(
+                    result,
+                    "Should return valid result using cached model just under threshold",
+                )
 
 
 if __name__ == "__main__":

@@ -81,6 +81,7 @@
   "set_use_adjusted_pv": false,
   "adjusted_pv_regression_model": "LassoRegression",
   "adjusted_pv_solar_elevation_threshold": 10,
+  "adjusted_pv_model_max_age": 24,
   "pv_module_model": [
     "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M"
   ],
