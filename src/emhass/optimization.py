@@ -657,6 +657,22 @@ class Optimization:
             }
         )
 
+        # Constraint for inverter AC input limit
+        # Only apply this if the inverter is hybrid. 
+        if self.plant_conf["inverter_is_hybrid"]:
+            inverter_ac_input_limit = self.plant_conf.get("inverter_ac_input_max")
+            if inverter_ac_input_limit is not None:
+                constraints.update(
+                    {
+                        f"constraint_inverter_ac_input_{i}": plp.LpConstraint(
+                            e=P_grid_pos[i] - inverter_ac_input_limit,
+                            sense=plp.LpConstraintLE,
+                            rhs=0,
+                        )
+                        for i in set_I
+                    }
+                )
+
         # Treat deferrable loads constraints
         predicted_temps = {}
         for k in range(self.optim_conf["number_of_deferrable_loads"]):
