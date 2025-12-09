@@ -938,7 +938,7 @@ class Forecast:
             filename = "adjust_pv_regressor.pkl"
             filename_path = self.emhass_conf["data_path"] / filename
             async with aiofiles.open(filename_path, "wb") as outp:
-                pickle.dump(self.model_adjust_pv, outp, pickle.HIGHEST_PROTOCOL)
+                await outp.write(pickle.dumps(self.model_adjust_pv, pickle.HIGHEST_PROTOCOL))
 
     def adjust_pv_forecast_predict(self, forecasted_pv: pd.DataFrame | None = None) -> pd.DataFrame:
         """
