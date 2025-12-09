@@ -26,7 +26,7 @@ The minimum number of `historic_days_to_retrieve` is hard coded to 9 by default.
 
 - `var_model`: the name of the sensor to retrieve data from Home Assistant. Example: `sensor.power_load_no_var_loads`.
 
-- `sklearn_model`: the `scikit-learn` model that will be used. For now, only these options are possible: `LinearRegression`, `ElasticNet` and `KNeighborsRegressor`.
+- `sklearn_model`: the `scikit-learn` model that will be used. These options are possible: `LinearRegression`, `RidgeRegression`, `LassoRegression`, `ElasticNet`, `KNeighborsRegressor`, `DecisionTreeRegressor`, `SVR`, `RandomForestRegressor`, `ExtraTreesRegressor`, `GradientBoostingRegressor`, `AdaBoostRegressor`, `MLPRegressor`.
 
 - `num_lags`: the number of auto-regression lags to consider. A good starting point is to fix this at one day. For example, if your time step is 30 minutes, then fix this to 48, if the time step is 1 hour fix this to 24 and so on.
 
