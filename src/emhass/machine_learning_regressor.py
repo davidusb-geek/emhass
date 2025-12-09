@@ -49,21 +49,21 @@ REGRESSION_METHODS = {
         "model": Lasso(),
         "param_grid": {"lasso__alpha": [1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100]},
     },
-    "ElasticNetRegression": {
+    "ElasticNet": {
         "model": ElasticNet(),
         "param_grid": {
             "elasticnet__alpha": [1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100],
             "elasticnet__l1_ratio": [0.1, 0.5, 0.7, 0.9, 0.95, 0.99, 1],
         },
     },
-    "KNeighborsRegression": {
+    "KNeighborsRegressor": {
         "model": KNeighborsRegressor(),
         "param_grid": {
             "kneighborsregressor__n_neighbors": [3, 5, 7, 10, 15],
             "kneighborsregressor__weights": ["uniform", "distance"],
         },
     },
-    "DecisionTreeRegression": {
+    "DecisionTreeRegressor": {
         "model": DecisionTreeRegressor(),
         "param_grid": {
             "decisiontreeregressor__max_depth": [None, 5, 10, 20],
@@ -78,7 +78,7 @@ REGRESSION_METHODS = {
             "svr__kernel": ["rbf", "linear"],
         },
     },
-    "RandomForestRegression": {
+    "RandomForestRegressor": {
         "model": RandomForestRegressor(),
         "param_grid": {
             "randomforestregressor__n_estimators": [50, 100, 200],
@@ -86,15 +86,15 @@ REGRESSION_METHODS = {
             "randomforestregressor__max_features": ["sqrt", "log2", None],
         },
     },
-    "ExtraTreesRegression": {
+    "ExtraTreesRegressor": {
         "model": ExtraTreesRegressor(),
         "param_grid": {
             "extratreesregressor__n_estimators": [50, 100, 200],
             "extratreesregressor__max_depth": [None, 10, 20],
-            "randomforestregressor__max_features": ["sqrt", "log2", None],
+            "extratreesregressor__max_features": ["sqrt", "log2", None],
         },
     },
-    "GradientBoostingRegression": {
+    "GradientBoostingRegressor": {
         "model": GradientBoostingRegressor(),
         "param_grid": {
             "gradientboostingregressor__n_estimators": [50, 100, 200],
@@ -102,14 +102,14 @@ REGRESSION_METHODS = {
             "gradientboostingregressor__max_depth": [3, 5, 10],
         },
     },
-    "AdaBoostRegression": {
+    "AdaBoostRegressor": {
         "model": AdaBoostRegressor(),
         "param_grid": {
             "adaboostregressor__n_estimators": [50, 100, 200],
             "adaboostregressor__learning_rate": [0.01, 0.1, 0.2],
         },
     },
-    "MLPRegression": {
+    "MLPRegressor": {
         "model": MLPRegressor(),
         "param_grid": {
             "mlpregressor__hidden_layer_sizes": [(50,), (100,), (50, 50)],
