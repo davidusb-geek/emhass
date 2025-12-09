@@ -5,7 +5,7 @@
 - Added support for async emhass code (@gieljnssns)
 - Added support for websocket data retrieval (@gieljnssns)
 - Add feature to cache pv regression model (@sokorn)
-- Added support for a more comprehensive list of Scikit-Learn models for both ML Forecaster and Regressor classes
+- Added support for a more comprehensive list of `scikit-learn` models for both ML Forecaster and Regressor classes
 - Improved documentation re-arranged sections
 - Thermal model improvements:
 	- Implemented a Min/Max temperature control, proposed by @werdnum
