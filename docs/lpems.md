@@ -235,7 +235,7 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 
 For a more readable option we can use the `rest_command` integration:
 ```yaml
 rest_command:
-  url: http://127.0.0.1:5000/action/dayahead-optim
+  url: http://127.0.0.1:5000/action/naive-mpc-optim
   method: POST
   headers:
     content-type: application/json
