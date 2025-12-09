@@ -1,4 +1,4 @@
-# Publish data from EMHASS to Home Assistant
+# Publish data to Home Assistant
 
 ## The publish-data specificities
 
