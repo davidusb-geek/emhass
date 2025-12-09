@@ -11,9 +11,18 @@ from skforecast.model_selection import (
     bayesian_search_forecaster,
 )
 from skforecast.recursive import ForecasterRecursive
-from sklearn.linear_model import ElasticNet, LinearRegression
 from sklearn.metrics import r2_score
+from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
 from sklearn.neighbors import KNeighborsRegressor
+from sklearn.ensemble import (
+    AdaBoostRegressor,
+    ExtraTreesRegressor,
+    GradientBoostingRegressor,
+    RandomForestRegressor,
+)
+from sklearn.svm import SVR
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.neural_network import MLPRegressor
 
 from emhass import utils
 
@@ -142,8 +151,17 @@ class MLForecaster:
         """Get the sklearn model instance based on the model name."""
         models = {
             "LinearRegression": LinearRegression(),
+            "RidgeRegression": Ridge(),
+            "LassoRegression": Lasso(),
             "ElasticNet": ElasticNet(),
             "KNeighborsRegressor": KNeighborsRegressor(),
+            "DecisionTreeRegressor": DecisionTreeRegressor(),
+            "SVR": SVR(),
+            "RandomForestRegressor": RandomForestRegressor(),
+            "ExtraTreesRegressor": ExtraTreesRegressor(),
+            "GradientBoostingRegressor": GradientBoostingRegressor(),
+            "AdaBoostRegressor": AdaBoostRegressor(),
+            "MLPRegressor": MLPRegressor(),
         }
 
         if model_name not in models:
@@ -412,6 +430,129 @@ class MLForecaster:
                         "n_neighbors": trial.suggest_int("n_neighbors", 2, 20),
                         "leaf_size": trial.suggest_int("leaf_size", 20, 40),
                         "weights": trial.suggest_categorical("weights", ["uniform", "distance"]),
+                        "lags": trial.suggest_categorical("lags", lags_list),
+                    }
+
+        elif self.sklearn_model == "RidgeRegression":
+            if debug:
+                def search_space(trial):
+                    return {
+                        "alpha": trial.suggest_float("alpha", 0.1, 1.0),
+                        "lags": trial.suggest_categorical("lags", [3]),
+                    }
+            else:
+                def search_space(trial):
+                    return {
+                        "alpha": trial.suggest_float("alpha", 1e-4, 100.0, log=True),
+                        "lags": trial.suggest_categorical("lags", lags_list),
+                    }
+
+        elif self.sklearn_model == "LassoRegression":
+            if debug:
+                def search_space(trial):
+                    return {
+                        "alpha": trial.suggest_float("alpha", 0.1, 1.0),
+                        "lags": trial.suggest_categorical("lags", [3]),
+                    }
+            else:
+                def search_space(trial):
+                    return {
+                        "alpha": trial.suggest_float("alpha", 1e-4, 100.0, log=True),
+                        "lags": trial.suggest_categorical("lags", lags_list),
+                    }
+
+        elif self.sklearn_model == "DecisionTreeRegressor":
+            if debug:
+                def search_space(trial):
+                    return {
+                        "max_depth": trial.suggest_int("max_depth", 2, 5),
+                        "lags": trial.suggest_categorical("lags", [3]),
+                    }
+            else:
+                def search_space(trial):
+                    return {
+                        "max_depth": trial.suggest_int("max_depth", 2, 20),
+                        "min_samples_split": trial.suggest_int("min_samples_split", 2, 20),
+                        "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 10),
+                        "lags": trial.suggest_categorical("lags", lags_list),
+                    }
+
+        elif self.sklearn_model == "SVR":
+            if debug:
+                def search_space(trial):
+                    return {
+                        "C": trial.suggest_float("C", 0.1, 1.0),
+                        "lags": trial.suggest_categorical("lags", [3]),
+                    }
+            else:
+                def search_space(trial):
+                    return {
+                        "C": trial.suggest_float("C", 1e-2, 100.0, log=True),
+                        "epsilon": trial.suggest_float("epsilon", 0.01, 1.0),
+                        "kernel": trial.suggest_categorical("kernel", ["linear", "rbf"]),
+                        "lags": trial.suggest_categorical("lags", lags_list),
+                    }
+
+        elif self.sklearn_model in ["RandomForestRegressor", "ExtraTreesRegressor"]:
+            if debug:
+                def search_space(trial):
+                    return {
+                        "n_estimators": trial.suggest_int("n_estimators", 10, 20),
+                        "lags": trial.suggest_categorical("lags", [3]),
+                    }
+            else:
+                def search_space(trial):
+                    return {
+                        "n_estimators": trial.suggest_int("n_estimators", 50, 300),
+                        "max_depth": trial.suggest_int("max_depth", 3, 20),
+                        "min_samples_split": trial.suggest_int("min_samples_split", 2, 10),
+                        "lags": trial.suggest_categorical("lags", lags_list),
+                    }
+
+        elif self.sklearn_model == "GradientBoostingRegressor":
+            if debug:
+                def search_space(trial):
+                    return {
+                        "n_estimators": trial.suggest_int("n_estimators", 10, 20),
+                        "lags": trial.suggest_categorical("lags", [3]),
+                    }
+            else:
+                def search_space(trial):
+                    return {
+                        "n_estimators": trial.suggest_int("n_estimators", 50, 300),
+                        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.5),
+                        "max_depth": trial.suggest_int("max_depth", 3, 10),
+                        "lags": trial.suggest_categorical("lags", lags_list),
+                    }
+
+        elif self.sklearn_model == "AdaBoostRegressor":
+            if debug:
+                def search_space(trial):
+                    return {
+                        "n_estimators": trial.suggest_int("n_estimators", 10, 20),
+                        "lags": trial.suggest_categorical("lags", [3]),
+                    }
+            else:
+                def search_space(trial):
+                    return {
+                        "n_estimators": trial.suggest_int("n_estimators", 50, 300),
+                        "learning_rate": trial.suggest_float("learning_rate", 0.01, 1.0),
+                        "lags": trial.suggest_categorical("lags", lags_list),
+                    }
+
+        elif self.sklearn_model == "MLPRegressor":
+            if debug:
+                def search_space(trial):
+                    return {
+                        "learning_rate_init": trial.suggest_float("learning_rate_init", 0.001, 0.01),
+                        "lags": trial.suggest_categorical("lags", [3]),
+                    }
+            else:
+                def search_space(trial):
+                    return {
+                        "hidden_layer_sizes": trial.suggest_categorical("hidden_layer_sizes", [(50,), (100,), (50, 50)]),
+                        "activation": trial.suggest_categorical("activation", ["relu", "tanh"]),
+                        "alpha": trial.suggest_float("alpha", 1e-5, 1e-1, log=True),
                         "lags": trial.suggest_categorical("lags", lags_list),
                     }
 
