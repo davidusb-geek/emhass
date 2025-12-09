@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.15.0 - 2025-12-09
 ### Improvement
 - Added support for async emhass code (@gieljnssns)
 - Added support for websocket data retrieval (@gieljnssns)
