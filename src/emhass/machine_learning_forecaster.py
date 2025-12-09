@@ -383,6 +383,7 @@ class MLForecaster:
             return trial.suggest_categorical("lags", debug_lags if debug else lags_list)
 
         def svr_search_space(trial):
+            # Base SVR parameters
             search = {
                 "C": trial.suggest_float("C", 0.1, 1.0)
                 if debug
@@ -391,7 +392,7 @@ class MLForecaster:
                 "kernel": trial.suggest_categorical("kernel", ["linear", "rbf"]),
                 "lags": get_lags(trial),
             }
-            # Only tune gamma if kernel is rbf
+            # Conditional Gamma: Only tune specific float values if kernel is rbf
             if search["kernel"] == "rbf":
                 search["gamma"] = trial.suggest_float("gamma", 1e-4, 10.0, log=True)
             else:
@@ -427,8 +428,12 @@ class MLForecaster:
                 "lags": get_lags(trial),
             },
             "KNeighborsRegressor": lambda trial: {
-                "n_neighbors": 2 if debug else trial.suggest_int("n_neighbors", 2, 20),
-                "leaf_size": 20 if debug else trial.suggest_int("leaf_size", 20, 40),
+                "n_neighbors": trial.suggest_int("n_neighbors", 2, 2)
+                if debug
+                else trial.suggest_int("n_neighbors", 2, 20),
+                "leaf_size": trial.suggest_int("leaf_size", 20, 20)
+                if debug
+                else trial.suggest_int("leaf_size", 20, 40),
                 "weights": trial.suggest_categorical(
                     "weights", ["uniform"] if debug else ["uniform", "distance"]
                 ),
@@ -449,7 +454,9 @@ class MLForecaster:
                 else trial.suggest_int("n_estimators", 50, 300),
                 "max_depth": trial.suggest_int("max_depth", 3, 20),
                 "min_samples_split": trial.suggest_int("min_samples_split", 2, 10),
-                "max_features": trial.suggest_categorical("max_features", ["sqrt", "log2", None]),
+                "max_features": trial.suggest_categorical(
+                    "max_features", ["sqrt", "log2", None]
+                ),
                 "lags": get_lags(trial),
             },
             "ExtraTreesRegressor": lambda trial: {
@@ -458,7 +465,9 @@ class MLForecaster:
                 else trial.suggest_int("n_estimators", 50, 300),
                 "max_depth": trial.suggest_int("max_depth", 3, 20),
                 "min_samples_split": trial.suggest_int("min_samples_split", 2, 10),
-                "max_features": trial.suggest_categorical("max_features", ["sqrt", "log2", None]),
+                "max_features": trial.suggest_categorical(
+                    "max_features", ["sqrt", "log2", None]
+                ),
                 "lags": get_lags(trial),
             },
             "GradientBoostingRegressor": lambda trial: {
@@ -477,7 +486,9 @@ class MLForecaster:
                 "lags": get_lags(trial),
             },
             "MLPRegressor": lambda trial: {
-                "learning_rate_init": trial.suggest_float("learning_rate_init", 0.001, 0.01),
+                "learning_rate_init": trial.suggest_float(
+                    "learning_rate_init", 0.001, 0.01
+                ),
                 "hidden_layer_sizes": trial.suggest_categorical(
                     "hidden_layer_sizes", [(50,), (100,), (50, 50)]
                 ),
