@@ -454,9 +454,7 @@ class MLForecaster:
                 else trial.suggest_int("n_estimators", 50, 300),
                 "max_depth": trial.suggest_int("max_depth", 3, 20),
                 "min_samples_split": trial.suggest_int("min_samples_split", 2, 10),
-                "max_features": trial.suggest_categorical(
-                    "max_features", ["sqrt", "log2", None]
-                ),
+                "max_features": trial.suggest_categorical("max_features", ["sqrt", "log2", None]),
                 "lags": get_lags(trial),
             },
             "ExtraTreesRegressor": lambda trial: {
@@ -465,9 +463,7 @@ class MLForecaster:
                 else trial.suggest_int("n_estimators", 50, 300),
                 "max_depth": trial.suggest_int("max_depth", 3, 20),
                 "min_samples_split": trial.suggest_int("min_samples_split", 2, 10),
-                "max_features": trial.suggest_categorical(
-                    "max_features", ["sqrt", "log2", None]
-                ),
+                "max_features": trial.suggest_categorical("max_features", ["sqrt", "log2", None]),
                 "lags": get_lags(trial),
             },
             "GradientBoostingRegressor": lambda trial: {
@@ -486,9 +482,7 @@ class MLForecaster:
                 "lags": get_lags(trial),
             },
             "MLPRegressor": lambda trial: {
-                "learning_rate_init": trial.suggest_float(
-                    "learning_rate_init", 0.001, 0.01
-                ),
+                "learning_rate_init": trial.suggest_float("learning_rate_init", 0.001, 0.01),
                 "hidden_layer_sizes": trial.suggest_categorical(
                     "hidden_layer_sizes", [(50,), (100,), (50, 50)]
                 ),
