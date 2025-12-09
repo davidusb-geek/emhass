@@ -22,7 +22,7 @@ Some parameters can be optionally defined at runtime:
 
 - `model_type`: Define the name of the model regressor that this will be used for. For example: `heating_hours_degreeday`. This should be a unique name if you are using multiple custom regressor models.
 
-- `regression_model`: The regression model that will be used. For now, only these options are possible: `LinearRegression`, `RidgeRegression`, `LassoRegression`, `RandomForestRegression`, `GradientBoostingRegression` and `AdaBoostRegression`.
+- `regression_model`: The regression model that will be used. These options are possible: `LinearRegression`, `RidgeRegression`, `LassoRegression`, `ElasticNet`, `KNeighborsRegressor`, `DecisionTreeRegressor`, `SVR`, `RandomForestRegressor`, `ExtraTreesRegressor`, `GradientBoostingRegressor`, `AdaBoostRegressor`, `MLPRegressor`.
 
 - `timestamp`: If defined, the column key that has to be used for timestamp.
 
