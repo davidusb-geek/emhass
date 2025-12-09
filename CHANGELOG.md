@@ -5,6 +5,7 @@
 - Added support for async emhass code (@gieljnssns)
 - Added support for websocket data retrieval (@gieljnssns)
 - Add feature to cache pv regression model (@sokorn)
+- Improved documentation re-arranged sections
 - Thermal model improvements:
 	- Implemented a Min/Max temperature control, proposed by @werdnum
 	- Implemented needed unit tests
@@ -14,6 +15,9 @@
 - A buch of code refactor following SonarCloud Code Analysis 
 - Solved runtime param optimization_time_step not recognized, issue #563
 - Attempt at solving data publish problem when containing both battery sensor definitions and a def_load_config, issue #587
+- Fix timezone comparison issue with InfluxDB (@sokorn)
+- Update skforecast requirement from <0.19.0,>=0.18.0 to >=0.18.0,<0.20.0
+- Implement inverter AC input limit constraint
 
 ## 0.14.1 - 2025-11-29
 ### Improvement

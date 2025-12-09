@@ -18,6 +18,8 @@ To get started go ahead and look at the installation procedure and usage instruc
 :maxdepth: 2
 
 intro.md
+publish_data.md
+passing_data.md
 differences.md
 lpems.md
 forecasts.md
