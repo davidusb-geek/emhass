@@ -83,6 +83,7 @@ REGRESSION_METHODS = {
         "param_grid": {
             "randomforestregressor__n_estimators": [50, 100, 200],
             "randomforestregressor__max_depth": [None, 10, 20],
+            "randomforestregressor__max_features": ["sqrt", "log2", None],
         },
     },
     "ExtraTreesRegression": {
@@ -90,6 +91,7 @@ REGRESSION_METHODS = {
         "param_grid": {
             "extratreesregressor__n_estimators": [50, 100, 200],
             "extratreesregressor__max_depth": [None, 10, 20],
+            "randomforestregressor__max_features": ["sqrt", "log2", None],
         },
     },
     "GradientBoostingRegression": {
