@@ -382,6 +382,20 @@ class MLForecaster:
         def get_lags(trial):
             return trial.suggest_categorical("lags", debug_lags if debug else lags_list)
 
+        def svr_search_space(trial):
+            search = {
+                "C": trial.suggest_float("C", 0.1, 1.0) if debug else trial.suggest_float("C", 1e-2, 100.0, log=True),
+                "epsilon": trial.suggest_float("epsilon", 0.01, 1.0),
+                "kernel": trial.suggest_categorical("kernel", ["linear", "rbf"]),
+                "lags": get_lags(trial),
+            }
+            # Only tune gamma if kernel is rbf
+            if search["kernel"] == "rbf":
+                 search["gamma"] = trial.suggest_float("gamma", 1e-4, 10.0, log=True)
+            else:
+                 search["gamma"] = trial.suggest_categorical("gamma", ["scale", "auto"])
+            return search
+
         # Registry of search space generators
         search_spaces = {
             "LinearRegression": lambda trial: {
@@ -414,12 +428,7 @@ class MLForecaster:
                 "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 10),
                 "lags": get_lags(trial),
             },
-            "SVR": lambda trial: {
-                "C": trial.suggest_float("C", 0.1, 1.0) if debug else trial.suggest_float("C", 1e-2, 100.0, log=True),
-                "epsilon": trial.suggest_float("epsilon", 0.01, 1.0),
-                "kernel": trial.suggest_categorical("kernel", ["linear", "rbf"]),
-                "lags": get_lags(trial),
-            },
+            "SVR": svr_search_space,
             "RandomForestRegressor": lambda trial: {
                 "n_estimators": trial.suggest_int("n_estimators", 10, 20) if debug else trial.suggest_int("n_estimators", 50, 300),
                 "max_depth": trial.suggest_int("max_depth", 3, 20),
