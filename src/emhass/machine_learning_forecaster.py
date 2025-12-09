@@ -486,10 +486,20 @@ class MLForecaster:
                     }
             else:
                 def search_space(trial):
+                    kernel = trial.suggest_categorical("kernel", ["linear", "rbf"])
+
+                    # Tune gamma explicitly for RBF kernels; for linear kernels gamma is unused
+                    if kernel == "rbf":
+                        gamma = trial.suggest_float("gamma", 1e-4, 10.0, log=True)
+                    else:
+                        # Stay consistent with sklearn's typical options
+                        gamma = trial.suggest_categorical("gamma", ["scale", "auto"])
+
                     return {
                         "C": trial.suggest_float("C", 1e-2, 100.0, log=True),
                         "epsilon": trial.suggest_float("epsilon", 0.01, 1.0),
-                        "kernel": trial.suggest_categorical("kernel", ["linear", "rbf"]),
+                        "kernel": kernel,
+                        "gamma": gamma,
                         "lags": trial.suggest_categorical("lags", lags_list),
                     }
 
