@@ -1806,7 +1806,8 @@ async def continual_publish(
     while True:
         # Sleep for x seconds (using current time as a reference for time left)
         time_zone = input_data_dict["retrieve_hass_conf"]["time_zone"]
-        sleep_seconds = max(0, freq.total_seconds() - (datetime.now(time_zone).timestamp() % 60))
+        timestamp_diff = freq.total_seconds() - (datetime.now(time_zone).timestamp() % 60)
+        sleep_seconds = min(timestamp_diff, 60.0)
         await asyncio.sleep(sleep_seconds)
         # Delegate processing to helper function to reduce complexity
         freq = await _publish_and_update_freq(input_data_dict, entity_path, logger, freq)

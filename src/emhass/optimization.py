@@ -883,22 +883,22 @@ class Optimization:
                                 )
                                 opt_model.setObjective(opt_model.objective + penalty_var)
 
-                    # Force thermal load to be semi-continuous (On/Off).
-                    # This ensures the solver creates solid heating blocks instead of fractional power.
-                    constraints.update(
-                        {
-                            f"constraint_thermal_semicont_{k}_{i}": plp.LpConstraint(
-                                e=P_deferrable[k][i]
-                                - (
-                                    P_def_bin2[k][i]
-                                    * self.optim_conf["nominal_power_of_deferrable_loads"][k]
-                                ),
-                                sense=plp.LpConstraintEQ,
-                                rhs=0,
-                            )
-                            for i in set_I
-                        }
-                    )
+                    # Only enforce semi-continuous if configured to do so
+                    if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
+                        constraints.update(
+                            {
+                                f"constraint_thermal_semicont_{k}_{i}": plp.LpConstraint(
+                                    e=P_deferrable[k][i]
+                                    - (
+                                        P_def_bin2[k][i]
+                                        * self.optim_conf["nominal_power_of_deferrable_loads"][k]
+                                    ),
+                                    sense=plp.LpConstraintEQ,
+                                    rhs=0,
+                                )
+                                for i in set_I
+                            }
+                        )
 
                     predicted_temps[k] = predicted_temp
                     self.logger.debug(f"Load {k}: Thermal constraints set.")
