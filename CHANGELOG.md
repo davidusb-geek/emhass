@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.15.1 - 2025-12-09
+### Fix
+- Hot fix for thermal model semi-continuous mode and continual publish caped to 60s
+
 ## 0.15.0 - 2025-12-09
 ### Improvement
 - Added support for async emhass code (@gieljnssns)
