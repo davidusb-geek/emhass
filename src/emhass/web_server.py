@@ -411,7 +411,6 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
     if runtimeparams and runtimeparams != "{}":
         logger.info("Passed runtime parameters: " + str(runtimeparams))
     else:
-        logger.warning("Unable to parse runtime parameters")
         runtimeparams = {}
 
     runtimeparams = orjson.dumps(runtimeparams).decode()
