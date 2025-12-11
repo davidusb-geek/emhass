@@ -219,7 +219,7 @@ class MLForecaster:
             base_model = self._get_sklearn_model(self.sklearn_model)
 
             # Define the forecaster object
-            self.forecaster = ForecasterRecursive(regressor=base_model, lags=self.num_lags)
+            self.forecaster = ForecasterRecursive(estimator=base_model, lags=self.num_lags)
 
             # Fit and time it
             self.logger.info("Training a " + self.sklearn_model + " model")
