@@ -1099,7 +1099,7 @@ class RetrieveHass:
             data = {
                 "state": state,
                 "attributes": {
-                "friendly_name": friendly_name,
+                    "friendly_name": friendly_name,
                 },
             }
         elif type_var == "mlregressor":
