@@ -900,8 +900,11 @@ class Forecast:
 
         :param n_splits: The number of splits for time-series cross-validation, defaults to 5.
         :type n_splits: int, optional
-        :param regression_model: The type of regression model to use. Options include \
-            "LassoRegression", "RidgeRegression", etc., defaults to "LassoRegression".
+        :param regression_model: The type of regression model to use. Available options: \
+            'LinearRegression', 'RidgeRegression', 'LassoRegression', 'ElasticNet', \
+            'KNeighborsRegressor', 'DecisionTreeRegressor', 'SVR', 'RandomForestRegressor', \
+            'ExtraTreesRegressor', 'GradientBoostingRegressor', 'AdaBoostRegressor', \
+            'MLPRegressor'. Defaults to "LassoRegression".
         :type regression_model: str, optional
         :param debug: If True, the model is not saved to disk, useful for debugging, defaults to False.
         :type debug: bool, optional
