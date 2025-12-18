@@ -151,7 +151,7 @@ rest_command:
       }
 ```
 
-As we can see the thermal configuration can be left empty as what is needed is the `thermal_config` key. This is needed if using the add-on, for user using a `config_emhass.yaml` configuration file this is not needed if the `def_load_config` dictionary is directly defined there. 
+As we can see the thermal configuration can be left empty as what is needed is the `thermal_config` key. This is needed if using the add-on; for users using a `config_emhass.yaml` configuration file this is not needed if the `def_load_config` dictionary is directly defined there. 
 
 For a configuration with **three** deferrable loads where the **second** load is a thermal load the payload would have been:
 ```
