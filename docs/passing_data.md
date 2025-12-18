@@ -26,6 +26,20 @@ For example, if using the add-on or the standalone docker installation you can p
 ```bash
 curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}' http://localhost:5000/action/dayahead-optim
 ```
+
+Or the equivalent `rest_command` implementation:
+```yaml
+rest_command:
+  dayahead_optim:
+    url: http://localhost:5000/action/dayahead-optim
+    method: post
+    content_type: application/json
+    payload: >
+      {
+        "pv_power_forecast": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+```
+
 Or if using the legacy method using a Python virtual environment:
 ```bash
 emhass --action 'dayahead-optim' --config ~/emhass/config.json --runtimeparams '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}'
@@ -81,3 +95,10 @@ Here is the list of the other additional dictionary keys that can be passed at r
 - `battery_charge_power_max` for the maximum battery charge power.
 
 - `publish_prefix` use this key to pass a common prefix to all published data. This will add a prefix to the sensor name but also the forecast attribute keys within the sensor.
+
+### Passing forecast data
+
+There is a complete dedicated section in the [Forecast section](https://emhass.readthedocs.io/en/latest/forecasts.html).
+
+Specifically the [Passing your own forecast data](https://emhass.readthedocs.io/en/latest/forecasts.html#passing-your-own-forecast-data) section.
+
