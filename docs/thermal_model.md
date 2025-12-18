@@ -68,6 +68,8 @@ For example, if we have just **two** deferrable loads and the **second** load is
         'desired_temperatures': [...]
     }}
 }
+```
+
 Here the desired_temperatures is a list of float values for each time step.
 
 Now we also need to define the other needed input, the `outdoor_temperature_forecast`, which is a list of float values. The list of floats for `desired_temperatures` and the list in `outdoor_temperature_forecast` should have proper lengths, if using MPC the length should be at least equal to the prediction horizon.
@@ -132,6 +134,21 @@ In the previous example with just one thermal load, the working example for a pu
 ```
 shell_command:
   publish_data: 'curl -i -H "Content-Type: application/json" -X POST -d ''{"def_load_config": [{"thermal_config": {}}]}'' http://localhost:5000/action/publish-data'
+```
+
+Or the equivalent using the `rest_command` integration:
+```yaml
+rest_command:
+  publish_data:
+    url: http://localhost:5000/action/publish-data
+    method: post
+    timeout: 300
+    headers:
+      content-type: application/json
+    payload: >
+      {
+        "def_load_config": [{"thermal_config": {}}]
+      }
 ```
 
 As we can see the thermal configuration can be left empty as what is needed is the `thermal_config` key. This is needed if using the add-on, for user using a `config_emhass.yaml` configuration file this is not needed if the `def_load_config` dictionary is directly defined there. 
