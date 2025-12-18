@@ -45,7 +45,7 @@ For example:
 weather_forecast_method: 'solcast'
 ```
 ```bash
-# Example of running day-ahead, passing Solcast secrets fyi runtime parameters (i.e. not set in configuration)
+# Example of running day-ahead, passing Solcast secrets via runtime parameters (i.e. not set in configuration)
 curl -i -H "Content-Type:application/json" -X POST -d '{
 	"solcast_rooftop_id":"<your_system_id>",
 	"solcast_api_key":"<your_secret_api_key>"
