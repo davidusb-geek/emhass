@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.2 - 2025-12-19
+### Improvement
+- Update documentation and parameter definitions for adjusted PV regression models to include all available scikit-learn options (@sokorn)
+- Removed device class and unit of measurement for optim status (@mime24)
+### Fix
+- Fixing some docs math mode and rearrange sections 
+- Refactor REST API data retrieval to reuse one aiohttp ClientSession, solve issue #648 (@gieljnssns)
+- Change regressor parameter to estimator in forecaster
+- Remove warning log for runtime parameters parsing
+
 ## 0.15.1 - 2025-12-09
 ### Fix
 - Hot fix for thermal model semi-continuous mode and continual publish caped to 60s
