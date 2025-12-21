@@ -292,7 +292,13 @@ class Optimization:
         D = {(i): plp.LpVariable(cat="Binary", name=f"D_{i}") for i in set_I}
         E = {(i): plp.LpVariable(cat="Binary", name=f"E_{i}") for i in set_I}
         if self.optim_conf["set_use_battery"]:
-            # Battery internal DC limit
+            if not self.plant_conf["inverter_is_hybrid"]:
+                self.logger.debug(
+                    "Non-hybrid system detected. Using 'battery_charge_power_max' (%s W) "
+                    "as the effective charge limit. "
+                    "Any 'inverter_ac_input_max' setting is ignored to prevent default value conflicts.",
+                    self.plant_conf["battery_charge_power_max"],
+                )
             P_sto_pos = {
                 (i): plp.LpVariable(
                     cat="Continuous",
