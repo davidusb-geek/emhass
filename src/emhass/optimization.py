@@ -311,7 +311,7 @@ class Optimization:
             P_sto_neg = {
                 (i): plp.LpVariable(
                     cat="Continuous",
-                    lowBound=-self.plant_conf["battery_charge_power_max"],
+                    lowBound=-np.abs(self.plant_conf["battery_charge_power_max"]),
                     upBound=0,
                     name=f"P_sto_neg_{i}",
                 )
