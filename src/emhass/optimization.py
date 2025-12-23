@@ -639,7 +639,7 @@ class Optimization:
         )
 
         # Constraint for inverter AC input limit
-        # Only apply this if the inverter is hybrid. 
+        # Only apply this if the inverter is hybrid.
         if self.plant_conf["inverter_is_hybrid"]:
             inverter_ac_input_limit = self.plant_conf.get("inverter_ac_input_max")
             if inverter_ac_input_limit is not None:
