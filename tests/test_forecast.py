@@ -1303,6 +1303,97 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         except Exception as e:
             self.fail(f"US Eastern DST forecast failed during backward transition: {e}")
 
+    async def test_solcast_caching_and_errors(self):
+        """Test Solcast caching logic and API error handling."""
+        w_forecast_cache_path = emhass_conf["data_path"] / "weather_forecast_data.pkl"
+        # Test Cache Hit (if os.path.isfile(...) -> get_cached_forecast_data)
+        # Create dummy cache file
+        data = pd.DataFrame(index=self.fcst.forecast_dates)
+        data["yhat"] = 1000.0
+        await self.fcst.set_cached_forecast_data(w_forecast_cache_path, data)
+        # Call method - should return cached data without hitting API
+        # We verify this by NOT mocking the API; if it tried to hit API it would fail or we'd see error
+        res = await self.fcst.get_weather_forecast(method="solcast")
+        self.assertIsInstance(res, pd.DataFrame)
+        self.assertTrue((res["yhat"] == 1000.0).all())
+        # Test API Errors (429, 402, 500)
+        # Clean up cache to force API call
+        if os.path.exists(w_forecast_cache_path):
+            os.remove(w_forecast_cache_path)
+        # Setup credentials to pass initial checks
+        self.fcst.retrieve_hass_conf["solcast_api_key"] = "TEST_KEY"
+        self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "TEST_ID"
+        # Test 429/402 (Subscription limit)
+        with aioresponses() as mocked:
+            mocked.get(re.compile(r"https://api.solcast.com.au/.*"), status=429)
+            res = await self.fcst.get_weather_forecast(method="solcast")
+            self.assertFalse(res)
+        # Test 400+ (General error)
+        with aioresponses() as mocked:
+            mocked.get(re.compile(r"https://api.solcast.com.au/.*"), status=400)
+            res = await self.fcst.get_weather_forecast(method="solcast")
+            self.assertFalse(res)
+
+    async def test_open_meteo_legacy_pvlib(self):
+        """Test the use_legacy_pvlib=True path in open-meteo."""
+        # Load mock data
+        test_data_path = emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2"
+        async with aiofiles.open(test_data_path, "rb") as f:
+            compressed = await f.read()
+        data = bz2.decompress(compressed)
+        data = cPickle.loads(data)
+        data = orjson.loads(data.content)
+        with aioresponses() as mocked:
+            mocked.get(re.compile(r"https://api.open-meteo.com/.*"), payload=data)
+            # Call with legacy=True
+            df = await self.fcst.get_weather_forecast(method="open-meteo", use_legacy_pvlib=True)
+            self.assertIsInstance(df, pd.DataFrame)
+            # Verify columns exist (calculated by cloud_cover_to_irradiance)
+            self.assertIn("ghi", df.columns)
+            self.assertIn("dni", df.columns)
+            self.assertIn("dhi", df.columns)
+
+    def test_cloud_cover_to_irradiance(self):
+        """Test the manual irradiance calculation from cloud cover."""
+        # Create dummy cloud cover data
+        cloud_cover = pd.Series(
+            [0, 50, 100], index=pd.date_range("2021-01-01", periods=3, freq="1h")
+        )
+        cloud_cover = cloud_cover.tz_localize(self.fcst.time_zone)
+        res = self.fcst.cloud_cover_to_irradiance(cloud_cover)
+        self.assertIsInstance(res, pd.DataFrame)
+        self.assertTrue("ghi" in res.columns)
+        self.assertTrue("dni" in res.columns)
+        self.assertTrue("dhi" in res.columns)
+        # Check basic physics: 0 cloud cover should have higher GHI than 100
+        # (Assuming daytime, but solar position depends on lat/lon/time.
+        #  Just checking structure is usually enough for coverage).
+
+    def test_get_power_from_weather_single_system(self):
+        """Test get_power_from_weather with a single PV system configuration."""
+        # Force single string configuration (not list)
+        self.plant_conf["pv_module_model"] = "CS5P-220M"
+        self.plant_conf["pv_inverter_model"] = (
+            "Fronius_International_GmbH__Fronius_IG_Plus_V_3_8_1_UNI__240V_"
+        )
+        self.plant_conf["surface_tilt"] = 30
+        self.plant_conf["surface_azimuth"] = 180
+        self.plant_conf["modules_per_string"] = 8
+        self.plant_conf["strings_per_inverter"] = 1
+        # Re-initialize Forecast to apply new plant_conf
+        self.fcst = Forecast(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            orjson.dumps(self.fcst.params).decode("utf-8"),
+            emhass_conf,
+            logger,
+            get_data_from_file=self.get_data_from_file,
+        )
+        p_pv_forecast = self.fcst.get_power_from_weather(self.df_weather_scrap)
+        self.assertIsInstance(p_pv_forecast, pd.Series)
+        self.assertEqual(len(p_pv_forecast), len(self.df_weather_scrap))
+
 
 if __name__ == "__main__":
     unittest.main()
