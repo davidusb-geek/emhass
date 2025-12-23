@@ -390,13 +390,11 @@ class MLForecaster:
                 else trial.suggest_float("C", 1e-2, 100.0, log=True),
                 "epsilon": trial.suggest_float("epsilon", 0.01, 1.0),
                 "kernel": trial.suggest_categorical("kernel", ["linear", "rbf"]),
+                "gamma": trial.suggest_categorical(
+                    "gamma", ["scale", "auto", 0.01, 0.1, 1.0, 10.0]
+                ),
                 "lags": get_lags(trial),
             }
-            # Conditional Gamma: Only tune specific float values if kernel is rbf
-            if search["kernel"] == "rbf":
-                search["gamma"] = trial.suggest_float("gamma_rbf", 1e-4, 10.0, log=True)
-            else:
-                search["gamma"] = trial.suggest_categorical("gamma_other", ["scale", "auto"])
             return search
 
         # Registry of search space generators

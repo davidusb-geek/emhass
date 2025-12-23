@@ -200,9 +200,9 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
 
     async def test_error_handling_and_fallbacks(self):
         """Test exception handling and invalid model fallbacks."""
+        data = copy.deepcopy(self.input_data_dict["df_input_data"])
         # Test "Invalid Model" Fallback in _get_sklearn_model
         # We pass a nonsense model name
-        data = copy.deepcopy(self.input_data_dict["df_input_data"])
         mlf_bad_model = MLForecaster(
             data,
             "test_type",
