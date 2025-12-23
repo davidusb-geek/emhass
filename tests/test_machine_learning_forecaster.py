@@ -166,7 +166,7 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
         self.assertIs(self.mlf.is_tuned, True)
 
-async def test_tune_svr(self):
+    async def test_tune_svr(self):
         """Test tuning specifically for SVR to cover svr_search_space logic."""
         data = copy.deepcopy(self.input_data_dict["df_input_data"])
         # Initialize with SVR
@@ -185,7 +185,7 @@ async def test_tune_svr(self):
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
         self.assertIs(self.mlf.is_tuned, True)
 
-async def test_tune_edge_case_short_data(self):
+    async def test_tune_edge_case_short_data(self):
         """Test tuning when split_date_delta leaves insufficient training data."""
         await self.mlf.fit()
         # Force a split delta that is almost the entire length of the dataset
@@ -197,7 +197,7 @@ async def test_tune_edge_case_short_data(self):
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
         self.assertTrue(self.mlf.is_tuned)
 
-async def test_error_handling_and_fallbacks(self):
+    async def test_error_handling_and_fallbacks(self):
         """Test exception handling and invalid model fallbacks."""
         # Test "Invalid Model" Fallback in _get_sklearn_model
         # We pass a nonsense model name
@@ -214,8 +214,8 @@ async def test_error_handling_and_fallbacks(self):
         # Should NOT raise error, but log error and default to KNeighborsRegressor
         await mlf_bad_model.fit()
         self.assertIsInstance(
-             mlf_bad_model.forecaster.regressor,
-             type(mlf_bad_model._get_sklearn_model("KNeighborsRegressor")),
+            mlf_bad_model.forecaster.regressor,
+            type(mlf_bad_model._get_sklearn_model("KNeighborsRegressor")),
         )
         # Test "Variable Not Found" in fit() (KeyError -> Exception)
         # We define a var_model that doesn't exist in the dataframe
@@ -234,7 +234,13 @@ async def test_error_handling_and_fallbacks(self):
         # Test "Not Fitted" errors
         # Initialize a fresh object but do NOT call fit()
         mlf_not_fitted = MLForecaster(
-            data, "test_type", "sensor.power_load_no_var_loads", "LinearRegression", 48, emhass_conf, logger
+            data,
+            "test_type",
+            "sensor.power_load_no_var_loads",
+            "LinearRegression",
+            48,
+            emhass_conf,
+            logger,
         )
         # Calling predict() before fit() should raise ValueError
         with self.assertRaises(ValueError):
