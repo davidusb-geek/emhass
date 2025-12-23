@@ -1329,12 +1329,12 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # Test 429 (Too Many Requests)
         with aioresponses() as mocked:
             # We mock ANY URL starting with solcast
-            mocked.get(re.compile(r"https://api.solcast.com.au/.*"), status=429)
+            mocked.get(re.compile(r"https://api\.solcast\.com\.au/.*"), status=429)
             res = await self.fcst.get_weather_forecast(method="solcast")
             self.assertFalse(res)
         # Test 500 (Server Error)
         with aioresponses() as mocked:
-            mocked.get(re.compile(r"https://api.solcast.com.au/.*"), status=500)
+            mocked.get(re.compile(r"https://api\.solcast\.com\.au/.*"), status=500)
             res = await self.fcst.get_weather_forecast(method="solcast")
             self.assertFalse(res)
 
@@ -1348,7 +1348,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         data = cPickle.loads(data)
         data = orjson.loads(data.content)
         with aioresponses() as mocked:
-            mocked.get(re.compile(r"https://api.open-meteo.com/.*"), payload=data)
+            mocked.get(re.compile(r"https://api\.open-meteo\.com/.*"), payload=data)
             # Call with legacy=True
             df = await self.fcst.get_weather_forecast(method="open-meteo", use_legacy_pvlib=True)
             self.assertIsInstance(df, pd.DataFrame)
