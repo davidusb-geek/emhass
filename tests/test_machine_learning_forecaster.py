@@ -187,6 +187,7 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
 
     async def test_tune_edge_case_short_data(self):
         """Test tuning when split_date_delta leaves insufficient training data."""
+        self.mlf.sklearn_model = "LinearRegression"
         await self.mlf.fit()
         # Force a split delta that is almost the entire length of the dataset
         # This triggers: if initial_train_size <= window_size
