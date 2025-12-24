@@ -33,6 +33,12 @@ if TYPE_CHECKING:
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
+# AUTHORITATIVE SOURCE: Supported regression models for MLRegressor and adjust_pv_forecast
+# When adding/removing models, also update:
+# - src/emhass/static/data/param_definitions.json (adjusted_pv_regression_model select_options)
+# - docs/config.md (adjusted_pv_regression_model description)
+# - docs/forecasts.md (Model Training section)
+# - src/emhass/forecast.py (adjust_pv_forecast_fit docstring)
 REGRESSION_METHODS = {
     "LinearRegression": {
         "model": LinearRegression(),
