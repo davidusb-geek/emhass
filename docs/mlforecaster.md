@@ -125,6 +125,13 @@ You can pass the same parameter you defined during the fit step, but `var_model`
 ```bash
 curl -i -H "Content-Type:application/json" -X POST -d '{"var_model": "sensor.power_load_no_var_loads"}' http://localhost:5000/action/forecast-model-tune
 ```
+It is possible to pass the `n_trials` parameter to define the number of trials to perform during the optimization.
+The default values for this parameter is:
+```yaml
+runtimeparams = {
+    "n_trials": 10
+}
+```
 This will launch the optimization routine and optimize the internal hyperparameters of the `scikit-learn` regressor and it will find the optimal number of lags.
 The following are the logs with the results obtained after the optimization for a KNN regressor:
 
