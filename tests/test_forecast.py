@@ -10,6 +10,7 @@ import re
 import unittest
 
 import aiofiles
+import numpy as np
 import orjson
 import pandas as pd
 from aioresponses import aioresponses
@@ -1319,7 +1320,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         res = await self.fcst.get_weather_forecast(method="solcast")
         self.assertIsInstance(res, pd.DataFrame)
         # Ensure it loaded our dummy data
-        self.assertTrue((res["yhat"] == 1000.0).all())
+        self.assertTrue(np.all(np.isclose(res["yhat"], 1000.0)))
         # Test API Errors
         # Remove cache to force API call
         if os.path.exists(w_forecast_cache_path):
@@ -1366,9 +1367,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         cloud_cover = cloud_cover.tz_localize(self.fcst.time_zone)
         res = self.fcst.cloud_cover_to_irradiance(cloud_cover)
         self.assertIsInstance(res, pd.DataFrame)
-        self.assertTrue("ghi" in res.columns)
-        self.assertTrue("dni" in res.columns)
-        self.assertTrue("dhi" in res.columns)
+        self.assertIn("ghi", res.columns)
+        self.assertIn("dni", res.columns)
+        self.assertIn("dhi", res.columns)
         # Check basic physics: 0 cloud cover should have higher GHI than 100
         # (Assuming daytime, but solar position depends on lat/lon/time.
         #  Just checking structure is usually enough for coverage).
