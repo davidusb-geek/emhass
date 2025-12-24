@@ -500,7 +500,7 @@ class MLForecaster:
     async def tune(
         self,
         split_date_delta: str | None = "48h",
-        n_trials: int | None = 10,
+        n_trials: int = 10,
         debug: bool | None = False,
     ) -> pd.DataFrame:
         """Tuning a previously fitted model using bayesian optimization.
