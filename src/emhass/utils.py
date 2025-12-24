@@ -701,7 +701,7 @@ async def treat_runtimeparams(
         if "n_trials" not in runtimeparams.keys():
             n_trials = 10
         else:
-            n_trials = runtimeparams["n_trials"]
+            n_trials = int(runtimeparams["n_trials"])
         params["passed_data"]["n_trials"] = n_trials
         if "perform_backtest" not in runtimeparams.keys():
             perform_backtest = False
