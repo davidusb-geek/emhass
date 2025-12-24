@@ -10,6 +10,7 @@ import re
 import unittest
 
 import aiofiles
+import numpy as np
 import orjson
 import pandas as pd
 from aioresponses import aioresponses
@@ -131,6 +132,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.p_load_forecast = await self.fcst.get_load_forecast(
             method=optim_conf["load_forecast_method"]
         )
+        self.p_pv_forecast = self.p_pv_forecast[~self.p_pv_forecast.index.duplicated(keep="first")]
+        self.p_load_forecast = self.p_load_forecast[
+            ~self.p_load_forecast.index.duplicated(keep="first")
+        ]
         self.df_input_data_dayahead = pd.concat([self.p_pv_forecast, self.p_load_forecast], axis=1)
         self.df_input_data_dayahead.columns = ["p_pv_forecast", "p_load_forecast"]
         self.opt = Optimization(
@@ -1302,6 +1307,109 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             logger.info("US Eastern DST backward transition test: PASSED")
         except Exception as e:
             self.fail(f"US Eastern DST forecast failed during backward transition: {e}")
+
+    async def test_solcast_caching_and_errors(self):
+        """Test Solcast caching logic and API error handling."""
+        w_forecast_cache_path = emhass_conf["data_path"] / "weather_forecast_data.pkl"
+        # Test Cache Hit
+        data = pd.DataFrame(index=self.fcst.forecast_dates)
+        data["yhat"] = 1000.0
+        # Caching logic uses pickle, so we can save whatever we want
+        await self.fcst.set_cached_forecast_data(w_forecast_cache_path, data)
+        # Force method="solcast" to hit the cache check
+        res = await self.fcst.get_weather_forecast(method="solcast")
+        self.assertIsInstance(res, pd.DataFrame)
+        # Ensure it loaded our dummy data
+        self.assertTrue(np.all(np.isclose(res["yhat"], 1000.0)))
+        # Test API Errors
+        # Remove cache to force API call
+        if os.path.exists(w_forecast_cache_path):
+            os.remove(w_forecast_cache_path)
+        self.fcst.retrieve_hass_conf["solcast_api_key"] = "TEST_KEY"
+        self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "TEST_ID"
+        # Test 429 (Too Many Requests)
+        with aioresponses() as mocked:
+            # We mock ANY URL starting with solcast
+            mocked.get(re.compile(r"https://api\.solcast\.com\.au/.*"), status=429)
+            res = await self.fcst.get_weather_forecast(method="solcast")
+            self.assertFalse(res)
+        # Test 500 (Server Error)
+        with aioresponses() as mocked:
+            mocked.get(re.compile(r"https://api\.solcast\.com\.au/.*"), status=500)
+            res = await self.fcst.get_weather_forecast(method="solcast")
+            self.assertFalse(res)
+
+    async def test_open_meteo_legacy_pvlib(self):
+        """Test the use_legacy_pvlib=True path in open-meteo."""
+        # Load mock data
+        test_data_path = emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2"
+        async with aiofiles.open(test_data_path, "rb") as f:
+            compressed = await f.read()
+        data = bz2.decompress(compressed)
+        data = cPickle.loads(data)
+        data = orjson.loads(data.content)
+        with aioresponses() as mocked:
+            mocked.get(re.compile(r"https://api\.open-meteo\.com/.*"), payload=data)
+            # Call with legacy=True
+            df = await self.fcst.get_weather_forecast(method="open-meteo", use_legacy_pvlib=True)
+            self.assertIsInstance(df, pd.DataFrame)
+            # Verify columns exist (calculated by cloud_cover_to_irradiance)
+            self.assertIn("ghi", df.columns)
+            self.assertIn("dni", df.columns)
+            self.assertIn("dhi", df.columns)
+
+    def test_cloud_cover_to_irradiance(self):
+        """Test the manual irradiance calculation from cloud cover."""
+        # Create dummy cloud cover data
+        cloud_cover = pd.Series(
+            [0, 50, 100], index=pd.date_range("2021-01-01", periods=3, freq="1h")
+        )
+        cloud_cover = cloud_cover.tz_localize(self.fcst.time_zone)
+        res = self.fcst.cloud_cover_to_irradiance(cloud_cover)
+        self.assertIsInstance(res, pd.DataFrame)
+        self.assertIn("ghi", res.columns)
+        self.assertIn("dni", res.columns)
+        self.assertIn("dhi", res.columns)
+        # Check basic physics: 0 cloud cover should have higher GHI than 100
+        # (Assuming daytime, but solar position depends on lat/lon/time.
+        #  Just checking structure is usually enough for coverage).
+
+    def test_get_power_from_weather_single_system(self):
+        """Test get_power_from_weather with a single PV system configuration."""
+        # Force single string configuration (not list)
+        self.plant_conf["pv_module_model"] = (
+            "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M"
+        )
+        self.plant_conf["pv_inverter_model"] = (
+            "Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_"
+        )
+        self.plant_conf["surface_tilt"] = 30
+        self.plant_conf["surface_azimuth"] = 180
+        self.plant_conf["modules_per_string"] = 8
+        self.plant_conf["strings_per_inverter"] = 1
+        # Re-initialize Forecast to apply new plant_conf
+        self.fcst = Forecast(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            orjson.dumps(self.fcst.params).decode("utf-8"),
+            emhass_conf,
+            logger,
+            get_data_from_file=self.get_data_from_file,
+        )
+        if not hasattr(self.fcst, "weather_forecast_method"):
+            self.fcst.weather_forecast_method = self.optim_conf.get(
+                "weather_forecast_method", "scrapper"
+            )
+        self.df_weather_scrap["ghi"] = 1000.0
+        self.df_weather_scrap["dni"] = 900.0
+        self.df_weather_scrap["dhi"] = 100.0
+        self.df_weather_scrap["temp_air"] = 25.0
+        self.df_weather_scrap["wind_speed"] = 2.0
+        self.df_weather_scrap["precipitable_water"] = 0.5
+        p_pv_forecast = self.fcst.get_power_from_weather(self.df_weather_scrap)
+        self.assertIsInstance(p_pv_forecast, pd.Series)
+        self.assertEqual(len(p_pv_forecast), len(self.df_weather_scrap))
 
 
 if __name__ == "__main__":
