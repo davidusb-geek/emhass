@@ -126,7 +126,7 @@ You can pass the same parameter you defined during the fit step, but `var_model`
 curl -i -H "Content-Type:application/json" -X POST -d '{"var_model": "sensor.power_load_no_var_loads"}' http://localhost:5000/action/forecast-model-tune
 ```
 It is possible to pass the `n_trials` parameter to define the number of trials to perform during the optimization.
-The default values for this parameter is:
+The default value for this parameter is:
 ```yaml
 runtimeparams = {
     "n_trials": 10
