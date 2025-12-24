@@ -45,10 +45,12 @@ For example:
 weather_forecast_method: 'solcast'
 ```
 ```bash
-# Example of running day-ahead, passing Solcast secrets fyi runtime parameters (i.e. not set in configuration)
-curl -i -H "Content-Type:application/json" -X POST -d '{"solcast_rooftop_id":"<your_system_id>","solcast_api_key":"<your_secret_api_key>"}' http://localhost:5000/action/dayahead-optim
+# Example of running day-ahead, passing Solcast secrets via runtime parameters (i.e. not set in configuration)
+curl -i -H "Content-Type:application/json" -X POST -d '{
+	"solcast_rooftop_id":"<your_system_id>",
+	"solcast_api_key":"<your_secret_api_key>"
+}' http://localhost:5000/action/dayahead-optim
 ```
-</br>
 
 #### solar.forecast 
 
@@ -56,7 +58,9 @@ A third method uses the Solar.Forecast service. You will need to set `method=sol
 
 For example, for a 5 kW installation:
 ```bash
-curl -i -H "Content-Type:application/json" -X POST -d '{"solar_forecast_kwp":5}' http://localhost:5000/action/dayahead-optim
+curl -i -H "Content-Type:application/json" -X POST -d '{
+	"solar_forecast_kwp":5
+}' http://localhost:5000/action/dayahead-optim
 ```
 
 ```{note} 
@@ -81,7 +85,9 @@ EMHASS will see the saved cache file and use its data over pulling new data from
 `weather_forecast_cache` can also be provided as a runtime parameter, in an optimization, to save the forecast results to cache:
 ```bash
 # Example of running day-ahead and optimization storing the retrieved Solcast data to cache
-curl -i -H 'Content-Type:application/json' -X POST -d '{"weather_forecast_cache":true}' http://localhost:5000/action/dayahead-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{
+	"weather_forecast_cache":true
+}' http://localhost:5000/action/dayahead-optim
 ```
 
 By default, if EMHASS finds a problem with the cache file, the cache will be automatically deleted. Due to the missing cache, the next optimization will run and pull data from the External API.
@@ -91,7 +97,9 @@ For Solcast only, If you wish to make sure that a certain optimization will only
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/weather-forecast-cache
 
 # Then run your regular MPC call (E.g. every 5 minutes) and make sure it only uses the Solcast cache. (do not pull from Solcast)
-curl -i -H 'Content-Type:application/json' -X POST -d '{"weather_forecast_cache_only":true}' http://localhost:5000/action/naive-mpc-optim
+curl -i -H 'Content-Type:application/json' -X POST -d '{
+	"weather_forecast_cache_only":true
+}' http://localhost:5000/action/naive-mpc-optim
 ```
 
 #### Caching Open-Meteo Weather Service Usage
@@ -113,7 +121,7 @@ This functionality may help to **fine-tune** the PV prediction and model some lo
 
 To activate this option all that is needed is to set `set_use_adjusted_pv` to `True` in the configuration.
 
-The **Model Training** uses the `adjust_pv_forecast_fit` method in the `Forecast` class. This method fits a regression model to adjust the PV forecast. It uses historical forecasted and actual PV production data as training input, incorporating additional features such as time of day and solar angles. The model is trained using time-series cross-validation, with hyperparameter tuning performed via grid search. The best model is selected based on mean squared error scoring. The historical data retrieved depends on the `historic_days_to_retrieve` parameter in the configuration. By default, the method uses `LassoRegression`, but other models can also be specified using parameter `adjusted_pv_regression_model`. Once the model is trained, it computes root mean squared error (RMSE) and R² metrics to assess performance. These metrics are logged for reference. If debugging is disabled, the trained model is saved for future use.
+The **Model Training** uses the `adjust_pv_forecast_fit` method in the `Forecast` class. This method fits a regression model to adjust the PV forecast. It uses historical forecasted and actual PV production data as training input, incorporating additional features such as time of day and solar angles. The model is trained using time-series cross-validation, with hyperparameter tuning performed via grid search. The best model is selected based on mean squared error scoring. The historical data retrieved depends on the `historic_days_to_retrieve` parameter in the configuration. By default, the method uses `LassoRegression`, but the `adjusted_pv_regression_model` parameter supports the following regression models (defined in `machine_learning_regressor.py`): 'LinearRegression', 'RidgeRegression', 'LassoRegression', 'ElasticNet', 'KNeighborsRegressor', 'DecisionTreeRegressor', 'SVR', 'RandomForestRegressor', 'ExtraTreesRegressor', 'GradientBoostingRegressor', 'AdaBoostRegressor', and 'MLPRegressor'. Once the model is trained, it computes root mean squared error (RMSE) and R² metrics to assess performance. These metrics are logged for reference. If debugging is disabled, the trained model is saved for future use.
 
 The actual **Forecast Adjustment** is performed by the `adjust_pv_forecast_predict` method. This method applies the trained regression model to adjust PV forecast data. Before making predictions, the method enhances the data by adding date-based and solar-related features. It then uses the trained model to predict the adjusted forecast. A correction is applied based on solar elevation to prevent negative or unrealistic values, ensuring that the adjusted forecast remains physically meaningful. The correction based on solar elevation can be parametrized using a threshold value with parameter `adjusted_pv_solar_elevation_threshold` from the configuration.
 
@@ -133,8 +141,8 @@ You can also override the `adjusted_pv_model_max_age` parameter at runtime using
 
 ```bash
 curl -i -H "Content-Type: application/json" -X POST -d '{
-  "adjusted_pv_model_max_age": 6,
-  "pv_power_forecast": [0, 0, 50, 150, ...]
+	"adjusted_pv_model_max_age": 6,
+	"pv_power_forecast": [0, 0, 50, 150, ...]
 }' http://localhost:5000/action/naive-mpc-optim
 ```
 
@@ -220,169 +228,174 @@ The possible dictionary keys to pass data are:
 
 For example, if using the add-on or the docker method, you can pass this data as a list of values to the data dictionary during the `curl` POST:
 ```bash
-curl -i -H "Content-Type: application/json" -X POST -d '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}' http://localhost:5000/action/dayahead-optim
+curl -i -H "Content-Type: application/json" -X POST -d '{
+	"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+}' http://localhost:5000/action/dayahead-optim
 ```
 
 You need to be careful here to send the correct amount of data on this list, the correct length. For example, if the data time step is defined as 1 hour and you are performing a day-ahead optimization, then this list length should be 24 data points.
 
-  ### Understanding forecast data formats: List vs Dictionary
+### Understanding forecast data formats: List vs Dictionary
 
-  EMHASS supports two formats for passing forecast data as runtime parameters: **list format** and **dictionary format
-  with timestamps**. Understanding when to use each format can significantly simplify your Home Assistant automations.
+EMHASS supports two formats for passing forecast data as runtime parameters: **list format** and **dictionary format
+with timestamps**. Understanding when to use each format can significantly simplify your Home Assistant automations.
 
-  #### List Format (Traditional)
+#### List Format (Traditional)
 
-  The list format passes forecast values as a simple array. This is the most compact format but requires careful
-  attention to timing and data length.
+The list format passes forecast values as a simple array. This is the most compact format but requires careful
+attention to timing and data length.
 
-  **Requirements:**
-  - The list must contain values for the **current time period first**, followed by future values
-  - The list length must match your prediction horizon based on `optimization_time_step`
-  - Values must be in the correct order (chronological)
+**Requirements:**
+- The list must contain values for the **current time period first**, followed by future values
+- The list length must match your prediction horizon based on `optimization_time_step`
+- Values must be in the correct order (chronological)
 
-  **Example:**
-  ```bash
-  curl -i -H "Content-Type: application/json" -X POST -d '{
-    "load_cost_forecast": [0.25, 0.24, 0.23, 0.26, 0.28, ...],
-    "prediction_horizon": 24,
-    "optimization_time_step": 60
-  }' http://localhost:5000/action/dayahead-optim
+**Example:**
+```bash
+curl -i -H "Content-Type: application/json" -X POST -d '{
+	"load_cost_forecast": [0.25, 0.24, 0.23, 0.26, 0.28, ...],
+	"prediction_horizon": 24,
+	"optimization_time_step": 60
+}' http://localhost:5000/action/dayahead-optim
 ```
-  For a 24-hour forecast with 1-hour intervals, you need exactly 24 values starting from the current hour.
+For a 24-hour forecast with 1-hour intervals, you need exactly 24 values starting from the current hour.
 
-  When to use list format:
-  - Your forecast data is already aligned with EMHASS intervals
-  - You want minimal JSON payload size
-  - You generate forecast values programmatically in the correct interval
+When to use list format:
+- Your forecast data is already aligned with EMHASS intervals
+- You want minimal JSON payload size
+- You generate forecast values programmatically in the correct interval
 
-  Dictionary Format with Timestamps (Recommended for most users)
+Dictionary Format with Timestamps (Recommended for most users)
 
-  The dictionary format allows you to pass forecast values with explicit timestamps. EMHASS will automatically handle
-  resampling, alignment, and gap filling.
+The dictionary format allows you to pass forecast values with explicit timestamps. EMHASS will automatically handle
+resampling, alignment, and gap filling.
 
-  Advantages:
-  - Automatic resampling: If your data is hourly but EMHASS runs at 15-minute intervals, resampling happens
-  automatically
-  - Flexible timing: No need to calculate exact list length or worry about current time alignment
-  - Self-documenting: Timestamps make it clear which value applies when
-  - Automatic gap filling: Missing timestamps are filled using forward-fill and backward-fill
-  - Timezone aware: Timestamps are parsed and converted to your configured timezone
+Advantages:
+- Automatic resampling: If your data is hourly but EMHASS runs at 15-minute intervals, resampling happens
+automatically
+- Flexible timing: No need to calculate exact list length or worry about current time alignment
+- Self-documenting: Timestamps make it clear which value applies when
+- Automatic gap filling: Missing timestamps are filled using forward-fill and backward-fill
+- Timezone aware: Timestamps are parsed and converted to your configured timezone
 
-  Format:
-  {
-    "load_cost_forecast": {
-      "2025-10-16 10:00:00+00:00": 0.25,
-      "2025-10-16 11:00:00+00:00": 0.28,
-      "2025-10-16 12:00:00+00:00": 0.23,
-      ...
-    }
-  }
+Format:
+```bash
+{
+	"load_cost_forecast": {
+		"2025-10-16 10:00:00+00:00": 0.25,
+		"2025-10-16 11:00:00+00:00": 0.28,
+		"2025-10-16 12:00:00+00:00": 0.23,
+		...
+	}
+}
+```
 
-  Example curl command:
-  curl -i -H "Content-Type: application/json" -X POST -d '{
-    "load_cost_forecast": {
-      "2025-10-16 10:00:00+00:00": 0.25,
-      "2025-10-16 11:00:00+00:00": 0.28,
-      "2025-10-16 12:00:00+00:00": 0.23
-    },
-    "prediction_horizon": 48,
-    "optimization_time_step": 15
-  }' http://localhost:5000/action/naive-mpc-optim
+Example curl command:
+```bash
+curl -i -H "Content-Type: application/json" -X POST -d '{
+	"load_cost_forecast": {
+		"2025-10-16 10:00:00+00:00": 0.25,
+		"2025-10-16 11:00:00+00:00": 0.28,
+		"2025-10-16 12:00:00+00:00": 0.23
+	},
+	"prediction_horizon": 48,
+	"optimization_time_step": 15
+}' http://localhost:5000/action/naive-mpc-optim
+```
 
-  What happens internally:
-  1. Timestamps are parsed as ISO8601 format with timezone
-  2. Data is resampled to match your optimization_time_step (e.g., from 1h to 15min intervals)
-  3. Values are aligned with the forecast horizon using nearest-neighbor interpolation
-  4. Any missing values are filled using forward-fill then backward-fill
-  5. The result is converted to a list for the optimizer
+What happens internally:
+1. Timestamps are parsed as ISO8601 format with timezone
+2. Data is resampled to match your optimization_time_step (e.g., from 1h to 15min intervals)
+3. Values are aligned with the forecast horizon using nearest-neighbor interpolation
+4. Any missing values are filled using forward-fill then backward-fill
+5. The result is converted to a list for the optimizer
 
-  When to use dictionary format:
-  - Your price data comes from an API (Nordpool, ENTSO-E, Amber, etc.) that provides hourly prices
-  - You want EMHASS to handle interval conversion automatically
-  - Your optimization_time_step differs from your data resolution
-  - You want more readable and maintainable Home Assistant templates
+When to use dictionary format:
+- Your price data comes from an API (Nordpool, ENTSO-E, Amber, etc.) that provides hourly prices
+- You want EMHASS to handle interval conversion automatically
+- Your optimization_time_step differs from your data resolution
+- You want more readable and maintainable Home Assistant templates
 
-  Practical Home Assistant Examples
+Practical Home Assistant Examples
 
-  Dictionary format with Nordpool (Simple - Recommended!):
-  ```
-  shell_command:
-    emhass_dayahead_nordpool: >
-      curl -i -H "Content-Type: application/json" -X POST -d '{
-        "load_cost_forecast": {{ state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | tojson }},
-        "prod_price_forecast": {{ state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | tojson }}
-      }' http://localhost:5000/action/dayahead-optim
-  ```
-  The Nordpool integration already provides data in dictionary format with timestamps, so you can pass it directly using
-   | tojson!
+Dictionary format with Nordpool (Simple - Recommended!):
+```bash
+shell_command:
+	emhass_dayahead_nordpool: >
+		curl -i -H "Content-Type: application/json" -X POST -d '{
+			"load_cost_forecast": {{ state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | tojson }},
+			"prod_price_forecast": {{ state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | tojson }}
+		}' http://localhost:5000/action/dayahead-optim
+```
+The Nordpool integration already provides data in dictionary format with timestamps, so you can pass it directly using `| tojson`!
 
-  List format with Nordpool (Traditional - More Complex):
-  ```
-  shell_command:
-    emhass_dayahead_nordpool_list: >
-      curl -i -H "Content-Type: application/json" -X POST -d '{
-        "load_cost_forecast": {{(
-          ([states("sensor.nordpool_kwh_be_eur_3_10_025")|float(0)] +
-          state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | map(attribute="value") | list +
-          state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") | map(attribute="value") | list)
-          [now().hour:][:24]
-        )}}
-      }' http://localhost:5000/action/dayahead-optim
-   ```
+List format with Nordpool (Traditional - More Complex):
+```bash
+shell_command:
+	emhass_dayahead_nordpool_list: >
+		curl -i -H "Content-Type: application/json" -X POST -d '{
+			"load_cost_forecast": {{(
+				([states("sensor.nordpool_kwh_be_eur_3_10_025")|float(0)] +
+				state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_today") | map(attribute="value") | list +
+				state_attr("sensor.nordpool_kwh_be_eur_3_10_025", "raw_tomorrow") | map(attribute="value") | list)
+				[now().hour:][:24]
+			)}}
+		}' http://localhost:5000/action/dayahead-optim
+```
 
-  Notice how the list format requires:
-  - Adding the current hour value first [states("sensor.nordpool...")]
-  - Extracting values from dictionaries map(attribute="value")
-  - Slicing from current hour [now().hour:]
-  - Limiting to the correct length [:24]
+Notice how the list format requires:
+- Adding the current hour value first `[states("sensor.nordpool...")]`
+- Extracting values from dictionaries `map(attribute="value")`
+- Slicing from current hour `[now().hour:]`
+- Limiting to the correct length `[:24]`
 
-  Dictionary format handles all of this automatically!
+Dictionary format handles all of this automatically!
 
-  Important Notes
+Important Notes
 
-  Timezone handling:
-  - Timestamps should include timezone information (e.g., +00:00 for UTC, +02:00 for CEST)
-  - EMHASS will convert timestamps to your configured timezone from secrets_emhass.yaml
-  - If timestamps don't include timezone, they're assumed to be in your local timezone
+Timezone handling:
+- Timestamps should include timezone information (e.g., +00:00 for UTC, +02:00 for CEST)
+- EMHASS will convert timestamps to your configured timezone from `secrets_emhass.yaml`
+- If timestamps don't include timezone, they're assumed to be in your local timezone
 
-  Data resolution:
-  - Dictionary format works best when your source data is at a coarser resolution than your optimization_time_step
-  - Example: Hourly price data automatically resampled to 15-minute intervals
-  - The resampling uses "nearest neighbor" method, so hourly prices are held constant for all 15-minute intervals within
-   that hour
+Data resolution:
+- Dictionary format works best when your source data is at a coarser resolution than your optimization_time_step
+- Example: Hourly price data automatically resampled to 15-minute intervals
+- The resampling uses "nearest neighbor" method, so hourly prices are held constant for all 15-minute intervals within
+that hour
 
-  Current values:
-  - When using list format, the first value in the list must be the current period
-  - Example: If it's 14:30 and your intervals are 30 minutes, the first value should be for 14:30-15:00
-  - Dictionary format automatically handles this by using timestamps
+Current values:
+- When using list format, the first value in the list must be the current period
+- Example: If it's 14:30 and your intervals are 30 minutes, the first value should be for 14:30-15:00
+- Dictionary format automatically handles this by using timestamps
 
-  Mixing formats:
-  - You can use list format for some forecasts and dictionary format for others in the same API call
-  - Example: pv_power_forecast as list, load_cost_forecast as dictionary
+Mixing formats:
+- You can use list format for some forecasts and dictionary format for others in the same API call
+- Example: `pv_power_forecast` as list, `load_cost_forecast` as dictionary
 
-  curl -i -H "Content-Type: application/json" -X POST -d '{
-    "pv_power_forecast": [0, 0, 50, 150, 300, ...],
-    "load_cost_forecast": {
-      "2025-10-16 10:00:00+00:00": 0.25,
-      "2025-10-16 11:00:00+00:00": 0.28
-    }
-  }' http://localhost:5000/action/naive-mpc-optim
+```bash
+curl -i -H "Content-Type: application/json" -X POST -d '{
+	"pv_power_forecast": [0, 0, 50, 150, 300, ...],
+	"load_cost_forecast": {
+		"2025-10-16 10:00:00+00:00": 0.25,
+		"2025-10-16 11:00:00+00:00": 0.28
+	}
+}' http://localhost:5000/action/naive-mpc-optim
+```
 
-  Summary: Which Format Should I Use?
+Summary: Which Format Should I Use?
 
-  | Scenario                                         | Recommended Format | Reason                           |
-  |--------------------------------------------------|--------------------|----------------------------------|
-  | Using Nordpool/ENTSO-E/Amber price APIs          | Dictionary         | Data already includes timestamps |
-  | Data from Home Assistant sensors with attributes | Dictionary         | Easier template syntax           |
-  | Hourly data with 15-min optimization intervals   | Dictionary         | Automatic resampling             |
-  | Self-generated forecast in Python/Node-RED       | Either             | Choose based on convenience      |
-  | Minimal network payload needed                   | List               | More compact JSON                |
-  | Generated forecast already matches intervals     | List               | No conversion needed             |
+| Scenario                                         | Recommended Format | Reason                           |
+|--------------------------------------------------|--------------------|----------------------------------|
+| Using Nordpool/ENTSO-E/Amber price APIs          | Dictionary         | Data already includes timestamps |
+| Data from Home Assistant sensors with attributes | Dictionary         | Easier template syntax           |
+| Hourly data with 15-min optimization intervals   | Dictionary         | Automatic resampling             |
+| Self-generated forecast in Python/Node-RED       | Either             | Choose based on convenience      |
+| Minimal network payload needed                   | List               | More compact JSON                |
+| Generated forecast already matches intervals     | List               | No conversion needed             |
 
-  For most Home Assistant users: Use dictionary format with timestamps for simpler, more maintainable automations.
+For most Home Assistant users: Use dictionary format with timestamps for simpler, more maintainable automations.
 
-
-  ---
 
 ### Example using: Solcast forecast + Amber prices
 

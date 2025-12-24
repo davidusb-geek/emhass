@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+### Improvement
+- Improve logging for non-hybrid systems to clarify that inverter_ac_input_max is ignored and battery_charge_power_max is used as the charge limit.
+- Expand and update configuration documentation for weather, load, load cost, and production price forecast methods, including references to dedicated forecast documentation and external data inputs.
+### Fix
+- Always use the configured battery_charge_power_max as the effective battery DC charge limit, avoiding unintended constraint tightening from inverter_ac_input_max on non-hybrid systems.
+
+## 0.15.2 - 2025-12-19
+### Improvement
+- Update documentation and parameter definitions for adjusted PV regression models to include all available scikit-learn options (@sokorn)
+- Removed device class and unit of measurement for optim status (@mime24)
+### Fix
+- Fixing some docs math mode and rearrange sections 
+- Refactor REST API data retrieval to reuse one aiohttp ClientSession, solve issue #648 (@gieljnssns)
+- Change regressor parameter to estimator in forecaster
+- Remove warning log for runtime parameters parsing
+
 ## 0.15.1 - 2025-12-09
 ### Fix
 - Hot fix for thermal model semi-continuous mode and continual publish caped to 60s

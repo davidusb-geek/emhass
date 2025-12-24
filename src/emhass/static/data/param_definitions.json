@@ -330,15 +330,21 @@
     },
     "adjusted_pv_regression_model": {
       "friendly_name": "Regression model for adjusted PV",
-      "Description": "Set the type of regression model that will be used to adjust the solr PV production to local conditions. Defaults to LassoRegression",
+      "Description": "Set the type of regression model that will be used to adjust the solar PV production to local conditions. Available models are defined in REGRESSION_METHODS (machine_learning_regressor.py). Defaults to LassoRegression",
       "input": "select",
       "select_options": [
         "LinearRegression",
         "RidgeRegression",
         "LassoRegression",
-        "RandomForestRegression",
-        "GradientBoostingRegression",
-        "AdaBoostRegression"
+        "ElasticNet",
+        "KNeighborsRegressor",
+        "DecisionTreeRegressor",
+        "SVR",
+        "RandomForestRegressor",
+        "ExtraTreesRegressor",
+        "GradientBoostingRegressor",
+        "AdaBoostRegressor",
+        "MLPRegressor"
       ],
       "default_value": "LassoRegression"
     },
