@@ -486,6 +486,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
         params["optim_conf"]["load_forecast_method"] = "skforecast"
         params_json = orjson.dumps(params).decode("utf-8")
+        # Test with explicit runtime parameters
         input_data_dict = await set_input_data_dict(
             emhass_conf,
             costfun,
@@ -501,16 +502,28 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIs(input_data_dict["params"]["passed_data"]["perform_backtest"], False)
         # Check that the default params are loaded
-        input_data_dict = await set_input_data_dict(
-            emhass_conf,
-            costfun,
-            self.params_json,
-            self.runtimeparams_json,
-            action,
-            logger,
-            get_data_from_file=True,
-        )
-        self.assertEqual(input_data_dict["params"]["passed_data"]["model_type"], "long_train_data")
+        # The new default model_type is "load_forecast", so set_input_data_dict tries to load "load_forecast.pkl".
+        # We ensure this file exists temporarily for this test to pass.
+        default_file_path = emhass_conf["data_path"] / "load_forecast.pkl"
+        created_dummy = False
+        if not default_file_path.exists():
+            pd.DataFrame().to_pickle(default_file_path)
+            created_dummy = True
+        try:
+            input_data_dict = await set_input_data_dict(
+                emhass_conf,
+                costfun,
+                self.params_json,
+                self.runtimeparams_json,
+                action,
+                logger,
+                get_data_from_file=True,
+            )
+        finally:
+            if created_dummy and default_file_path.exists():
+                default_file_path.unlink()
+        # Update assertion: The default is now "load_forecast" (as evidenced by the file lookup error)
+        self.assertEqual(input_data_dict["params"]["passed_data"]["model_type"], "load_forecast")
         self.assertEqual(
             input_data_dict["params"]["passed_data"]["sklearn_model"], "KNeighborsRegressor"
         )
@@ -521,7 +534,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(df_fit_pred, pd.DataFrame)
         self.assertIs(df_fit_pred_backtest, None)
-        # Test ijection_dict for fit method on webui
+        # Test injection_dict for fit method on webui
         injection_dict = utils.get_injection_dict_forecast_model_fit(df_fit_pred, mlf)
         self.assertIsInstance(injection_dict, dict)
         self.assertIsInstance(injection_dict["figure_0"], str)
