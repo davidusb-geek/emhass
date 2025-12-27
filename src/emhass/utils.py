@@ -668,46 +668,66 @@ async def treat_runtimeparams(
                 params["passed_data"]["historic_days_to_retrieve"] = params["retrieve_hass_conf"][
                     "historic_days_to_retrieve"
                 ]
-        if "model_type" not in runtimeparams.keys():
-            model_type = "long_train_data"
+        # UPDATED ML PARAMETER HANDLING
+        # Prioritize Runtime Params -> Config Params (optim_conf) -> Default
+        # model_type
+        if "model_type" in runtimeparams:
+            params["passed_data"]["model_type"] = runtimeparams["model_type"]
         else:
-            model_type = runtimeparams["model_type"]
-        params["passed_data"]["model_type"] = model_type
-        if "var_model" not in runtimeparams.keys():
-            var_model = params["retrieve_hass_conf"]["sensor_power_load_no_var_loads"]
+            params["passed_data"]["model_type"] = params["optim_conf"].get(
+                "model_type", "long_train_data"
+            )
+        # var_model
+        if "var_model" in runtimeparams:
+            params["passed_data"]["var_model"] = runtimeparams["var_model"]
         else:
-            var_model = runtimeparams["var_model"]
-        params["passed_data"]["var_model"] = var_model
-        if "sklearn_model" not in runtimeparams.keys():
-            sklearn_model = "KNeighborsRegressor"
+            # Default for var_model falls back to the configured load sensor
+            default_var_model = params["retrieve_hass_conf"].get(
+                "sensor_power_load_no_var_loads", "sensor.power_load_no_var_loads"
+            )
+            params["passed_data"]["var_model"] = params["optim_conf"].get(
+                "var_model", default_var_model
+            )
+        # sklearn_model
+        if "sklearn_model" in runtimeparams:
+            params["passed_data"]["sklearn_model"] = runtimeparams["sklearn_model"]
         else:
-            sklearn_model = runtimeparams["sklearn_model"]
-        params["passed_data"]["sklearn_model"] = sklearn_model
-        if "regression_model" not in runtimeparams.keys():
-            regression_model = "AdaBoostRegression"
+            params["passed_data"]["sklearn_model"] = params["optim_conf"].get(
+                "sklearn_model", "KNeighborsRegressor"
+            )
+        # regression_model
+        if "regression_model" in runtimeparams:
+            params["passed_data"]["regression_model"] = runtimeparams["regression_model"]
         else:
-            regression_model = runtimeparams["regression_model"]
-        params["passed_data"]["regression_model"] = regression_model
-        if "num_lags" not in runtimeparams.keys():
-            num_lags = 48
+            params["passed_data"]["regression_model"] = params["optim_conf"].get(
+                "regression_model", "AdaBoostRegression"
+            )
+        # num_lags
+        if "num_lags" in runtimeparams:
+            params["passed_data"]["num_lags"] = runtimeparams["num_lags"]
         else:
-            num_lags = runtimeparams["num_lags"]
-        params["passed_data"]["num_lags"] = num_lags
-        if "split_date_delta" not in runtimeparams.keys():
-            split_date_delta = "48h"
+            params["passed_data"]["num_lags"] = params["optim_conf"].get("num_lags", 48)
+        # split_date_delta
+        if "split_date_delta" in runtimeparams:
+            params["passed_data"]["split_date_delta"] = runtimeparams["split_date_delta"]
         else:
-            split_date_delta = runtimeparams["split_date_delta"]
-        params["passed_data"]["split_date_delta"] = split_date_delta
-        if "n_trials" not in runtimeparams.keys():
-            n_trials = 10
+            params["passed_data"]["split_date_delta"] = params["optim_conf"].get(
+                "split_date_delta", "48h"
+            )
+        # n_trials
+        if "n_trials" in runtimeparams:
+            params["passed_data"]["n_trials"] = int(runtimeparams["n_trials"])
         else:
-            n_trials = int(runtimeparams["n_trials"])
-        params["passed_data"]["n_trials"] = n_trials
-        if "perform_backtest" not in runtimeparams.keys():
-            perform_backtest = False
-        else:
+            params["passed_data"]["n_trials"] = params["optim_conf"].get("n_trials", 10)
+        # perform_backtest
+        if "perform_backtest" in runtimeparams:
             perform_backtest = ast.literal_eval(str(runtimeparams["perform_backtest"]).capitalize())
-        params["passed_data"]["perform_backtest"] = perform_backtest
+            params["passed_data"]["perform_backtest"] = perform_backtest
+        else:
+            params["passed_data"]["perform_backtest"] = params["optim_conf"].get(
+                "perform_backtest", False
+            )
+        # Other non-dynamic options
         if "model_predict_publish" not in runtimeparams.keys():
             model_predict_publish = False
         else:
