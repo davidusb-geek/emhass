@@ -187,14 +187,19 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
 
     async def test_tune_edge_case_short_data(self):
         """Test tuning when split_date_delta leaves insufficient training data."""
+        # Change model to LinearRegression to avoid n_neighbors constraints with small data
         self.mlf.sklearn_model = "LinearRegression"
         await self.mlf.fit()
         # Force a split delta that is almost the entire length of the dataset
         # This triggers: if initial_train_size <= window_size
         total_days = (self.mlf.data_exo.index[-1] - self.mlf.data_exo.index[0]).days
         long_delta = f"{total_days - 1}d"
-        # This should log warnings and adjust initial_train_size automatically
-        df_pred_optim = await self.mlf.tune(split_date_delta=long_delta, debug=True)
+        # Verify that the recovery path was exercised by checking for the specific warning
+        with self.assertLogs(logger, level="WARNING") as cm:
+            df_pred_optim = await self.mlf.tune(split_date_delta=long_delta, debug=True)
+            # Check if the specific adjustment message is in the logs
+            warning_messages = " ".join(record.getMessage() for record in cm.records)
+            self.assertIn("Adjusting initial_train_size", warning_messages)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
         self.assertTrue(self.mlf.is_tuned)
 
