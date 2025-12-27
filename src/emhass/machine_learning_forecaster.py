@@ -390,13 +390,11 @@ class MLForecaster:
                 else trial.suggest_float("C", 1e-2, 100.0, log=True),
                 "epsilon": trial.suggest_float("epsilon", 0.01, 1.0),
                 "kernel": trial.suggest_categorical("kernel", ["linear", "rbf"]),
+                "gamma": trial.suggest_categorical(
+                    "gamma", ["scale", "auto", 0.01, 0.1, 1.0, 10.0]
+                ),
                 "lags": get_lags(trial),
             }
-            # Conditional Gamma: Only tune specific float values if kernel is rbf
-            if search["kernel"] == "rbf":
-                search["gamma"] = trial.suggest_float("gamma", 1e-4, 10.0, log=True)
-            else:
-                search["gamma"] = trial.suggest_categorical("gamma", ["scale", "auto"])
             return search
 
         # Registry of search space generators
@@ -517,14 +515,15 @@ class MLForecaster:
         :rtype: pd.DataFrame
         """
         try:
+            if self.forecaster is None:
+                raise ValueError("Model has not been fitted yet. Call fit() first.")
+
             # Calculate appropriate lags based on data frequency
             freq_timedelta = pd.Timedelta(self.data_exo.index.freq)
             lags_list = MLForecaster.get_lags_list_from_frequency(freq_timedelta)
             self.logger.info(
                 f"Using lags list based on data frequency ({self.data_exo.index.freq}): {lags_list}"
             )
-            if self.forecaster is None:
-                raise ValueError("Model has not been fitted yet. Call fit() first.")
 
             # Get the search space for this model
             search_space = self._get_search_space(debug, lags_list)
@@ -572,10 +571,12 @@ class MLForecaster:
                 self.logger.warning(
                     "This is likely because split_date_delta is too large for the dataset."
                 )
+                MIN_SAMPLES_FOR_KNN = 6
+                new_train_size = window_size + MIN_SAMPLES_FOR_KNN
                 self.logger.warning(
-                    f"Adjusting initial_train_size to {window_size + 1} to attempt recovery."
+                    f"Adjusting initial_train_size to {new_train_size} to attempt recovery."
                 )
-                initial_train_size = window_size + 1
+                initial_train_size = new_train_size
 
             cv = TimeSeriesFold(
                 steps=num_lags,

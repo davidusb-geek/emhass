@@ -166,6 +166,100 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
         self.assertIs(self.mlf.is_tuned, True)
 
+    async def test_tune_svr(self):
+        """Test tuning specifically for SVR to cover svr_search_space logic."""
+        data = copy.deepcopy(self.input_data_dict["df_input_data"])
+        # Initialize with SVR
+        self.mlf = MLForecaster(
+            data,
+            self.input_data_dict["params"]["passed_data"]["model_type"],
+            self.input_data_dict["params"]["passed_data"]["var_model"],
+            "SVR",
+            self.input_data_dict["params"]["passed_data"]["num_lags"],
+            emhass_conf,
+            logger,
+        )
+        await self.mlf.fit()
+        # Run tune. This should cover the SVR specific search space logic.
+        df_pred_optim = await self.mlf.tune(debug=True)
+        self.assertIsInstance(df_pred_optim, pd.DataFrame)
+        self.assertIs(self.mlf.is_tuned, True)
+
+    async def test_tune_edge_case_short_data(self):
+        """Test tuning when split_date_delta leaves insufficient training data."""
+        # Change model to LinearRegression to avoid n_neighbors constraints with small data
+        self.mlf.sklearn_model = "LinearRegression"
+        await self.mlf.fit()
+        # Force a split delta that is almost the entire length of the dataset
+        # This triggers: if initial_train_size <= window_size
+        total_days = (self.mlf.data_exo.index[-1] - self.mlf.data_exo.index[0]).days
+        long_delta = f"{total_days - 1}d"
+        # Verify that the recovery path was exercised by checking for the specific warning
+        with self.assertLogs(logger, level="WARNING") as cm:
+            df_pred_optim = await self.mlf.tune(split_date_delta=long_delta, debug=True)
+            # Check if the specific adjustment message is in the logs
+            warning_messages = " ".join(record.getMessage() for record in cm.records)
+            self.assertIn("Adjusting initial_train_size", warning_messages)
+        self.assertIsInstance(df_pred_optim, pd.DataFrame)
+        self.assertTrue(self.mlf.is_tuned)
+
+    async def test_error_handling_and_fallbacks(self):
+        """Test exception handling and invalid model fallbacks."""
+        data = copy.deepcopy(self.input_data_dict["df_input_data"])
+        # Test "Invalid Model" Fallback in _get_sklearn_model
+        # We pass a nonsense model name
+        mlf_bad_model = MLForecaster(
+            data,
+            "test_type",
+            "sensor.power_load_no_var_loads",
+            "NonExistentModel",
+            48,
+            emhass_conf,
+            logger,
+        )
+        # Should NOT raise error, but log error and default to KNeighborsRegressor
+        await mlf_bad_model.fit()
+        self.assertIsInstance(
+            mlf_bad_model.forecaster.regressor,
+            type(mlf_bad_model._get_sklearn_model("KNeighborsRegressor")),
+        )
+        # Test "Variable Not Found" in fit() (KeyError -> Exception)
+        # We define a var_model that doesn't exist in the dataframe
+        mlf_missing_col = MLForecaster(
+            data,
+            "test_type",
+            "sensor.non_existent_ghost_sensor",
+            "LinearRegression",
+            48,
+            emhass_conf,
+            logger,
+        )
+        # This should hit the try/except block in fit()
+        with self.assertRaises(KeyError):
+            await mlf_missing_col.fit()
+        # Test "Not Fitted" errors
+        # Initialize a fresh object but do NOT call fit()
+        mlf_not_fitted = MLForecaster(
+            data,
+            "test_type",
+            "sensor.power_load_no_var_loads",
+            "LinearRegression",
+            48,
+            emhass_conf,
+            logger,
+        )
+        # Calling predict() before fit() should raise ValueError
+        with self.assertRaises(ValueError):
+            await mlf_not_fitted.predict()
+        # Calling tune() before fit() should raise ValueError
+        with self.assertRaises(ValueError):
+            await mlf_not_fitted.tune()
+        # Test Unsupported Model for Tuning (ValueError)
+        await self.mlf.fit()
+        self.mlf.sklearn_model = "UnsupportedModel"
+        with self.assertRaises(ValueError):
+            await self.mlf.tune()
+
 
 if __name__ == "__main__":
     unittest.main()
