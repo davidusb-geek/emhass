@@ -16,7 +16,6 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         # Create a test client
         self.client = web_server.app.test_client()
-
         # Mock the global emhass_conf in web_server module
         self.mock_conf = {
             "data_path": pathlib.Path("/tmp/emhass/data"),
@@ -26,25 +25,27 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
             "legacy_config_path": pathlib.Path("/tmp/emhass/legacy.yaml"),
             "root_path": pathlib.Path("/tmp/emhass/root"),
         }
+        # Save original config to prevent leaks
+        self.original_conf = web_server.emhass_conf.copy()
         web_server.emhass_conf = self.mock_conf
-
         # Mock params_secrets
         web_server.params_secrets = {"hass_url": "http://localhost", "long_lived_token": "token"}
+
+    async def asyncTearDown(self):
+        # Restore original config
+        web_server.emhass_conf = self.original_conf
 
     @patch("emhass.web_server.aiofiles.open")
     @patch("os.path.exists")
     async def test_index(self, mock_exists, mock_file):
         # Mock file existence for injection_dict.pkl
         mock_exists.return_value = True
-
         # Mock content of injection_dict.pkl
         mock_data = pickle.dumps({"table1": "<html>table</html>"})
-
         # Setup async file read mock
         f = AsyncMock()
         f.read.return_value = mock_data
         mock_file.return_value.__aenter__.return_value = f
-
         response = await self.client.get("/")
         self.assertEqual(response.status_code, 200)
         result = await response.get_data(as_text=True)
@@ -58,7 +59,6 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         mock_build_config.return_value = {"some": "config"}
         mock_build_params.return_value = {"some": "params"}
         mock_p2c.return_value = {"final": "config"}
-
         response = await self.client.get("/get-config")
         self.assertEqual(response.status_code, 201)
         data = await response.get_json()
@@ -74,25 +74,19 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
     ):
         # Mock parameter loading
         mock_load.return_value = ({"optim_conf": {}}, "profit", "{}")
-
         # Mock input data set
         mock_set_input.return_value = {
             "retrieve_hass_conf": {"continual_publish": False},
             "some": "data",
         }
-
         # Mock optimization result
         mock_df = pd.DataFrame()
         mock_optim.return_value = mock_df
-
         # Mock injection dict
         mock_get_inject.return_value = {}
-
         response = await self.client.post("/action/perfect-optim", json={})
-
         self.assertEqual(response.status_code, 201)
         self.assertIn("Action perfect-optim executed", await response.get_data(as_text=True))
-
         mock_optim.assert_called_once()
 
     @patch("emhass.web_server.export_influxdb_to_csv")
@@ -100,9 +94,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
     async def test_action_export_csv(self, mock_load, mock_export):
         mock_load.return_value = ({}, "profit", "{}")
         mock_export.return_value = True  # Success
-
         response = await self.client.post("/action/export-influxdb-to-csv", json={})
-
         self.assertEqual(response.status_code, 201)
         mock_export.assert_called_once()
 
@@ -116,21 +108,16 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
     ):
         # Mock parameter loading
         mock_load.return_value = ({}, "profit", "{}")
-
         # Mock input data set
         mock_set_input.return_value = {
             "retrieve_hass_conf": {"continual_publish": False},
             "data": "test",
         }
-
         # Mock fit return (df, something, mlf)
         mock_fit.return_value = (pd.DataFrame(), None, MagicMock())
-
         # Mock injection dict for ML (prevent util function crash)
         mock_get_inject_ml.return_value = {}
-
         response = await self.client.post("/action/forecast-model-fit", json={})
-
         self.assertEqual(response.status_code, 201)
         mock_fit.assert_called_once()
 

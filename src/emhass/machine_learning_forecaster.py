@@ -571,7 +571,8 @@ class MLForecaster:
                 self.logger.warning(
                     "This is likely because split_date_delta is too large for the dataset."
                 )
-                new_train_size = window_size + 6
+                MIN_SAMPLES_FOR_KNN = 6
+                new_train_size = window_size + MIN_SAMPLES_FOR_KNN
                 self.logger.warning(
                     f"Adjusting initial_train_size to {new_train_size} to attempt recovery."
                 )
