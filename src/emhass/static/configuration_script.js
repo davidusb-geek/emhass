@@ -206,8 +206,10 @@ function loadConfigurationListView(param_definitions, config, list_html) {
     "model_type",
     "var_model",
     "sklearn_model",
+    "regression_model",
     "num_lags",
     "split_date_delta",
+    "n_trials",
     "perform_backtest"
   ];
 
@@ -220,7 +222,7 @@ function loadConfigurationListView(param_definitions, config, list_html) {
         ml_related_params.forEach(paramId => {
           const paramDiv = document.getElementById(paramId);
           if (paramDiv) {
-            paramDiv.style.display = isML ? "block" : "none";
+            paramDiv.style.display = isML ? "" : "none";
           }
         });
       };
