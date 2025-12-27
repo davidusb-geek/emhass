@@ -2,6 +2,7 @@
 
 ## Unreleased
 ### Improvement
+- Align runtime ML parameter handling with configuration defaults and introduce dynamic frontend visibility for related options.
 - Greatly improved coverage for the whole project. Added a new long awaited unit testing suite for the web server.
 - Allow configuring the number of Bayesian optimization trials in the machine-learning forecaster tune API.
 - Improve logging for non-hybrid systems to clarify that inverter_ac_input_max is ignored and battery_charge_power_max is used as the charge limit.
