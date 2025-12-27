@@ -496,7 +496,10 @@ class MLForecaster:
         return search_spaces[self.sklearn_model]
 
     async def tune(
-        self, split_date_delta: str | None = "48h", debug: bool | None = False
+        self,
+        split_date_delta: str | None = "48h",
+        n_trials: int = 10,
+        debug: bool | None = False,
     ) -> pd.DataFrame:
         """Tuning a previously fitted model using bayesian optimization.
 
@@ -506,6 +509,8 @@ class MLForecaster:
         :type split_date_delta: Optional[str], optional
         :param debug: Set to True for testing and faster optimizations, defaults to False
         :type debug: Optional[bool], optional
+        :param n_trials: Number of trials for bayesian optimization, defaults to 10
+        :type n_trials: Optional[int], optional
         :return: The DataFrame with the forecasts using the optimized model.
         :rtype: pd.DataFrame
         """
@@ -593,7 +598,7 @@ class MLForecaster:
                 cv=cv,
                 search_space=search_space,
                 metric=MLForecaster.neg_r2_score,
-                n_trials=10,
+                n_trials=n_trials,
                 random_state=123,
                 return_best=True,
             )
