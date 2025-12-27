@@ -668,65 +668,61 @@ async def treat_runtimeparams(
                 params["passed_data"]["historic_days_to_retrieve"] = params["retrieve_hass_conf"][
                     "historic_days_to_retrieve"
                 ]
+
         # UPDATED ML PARAMETER HANDLING
-        # Prioritize Runtime Params -> Config Params (optim_conf) -> Default
-        # model_type
-        if "model_type" in runtimeparams:
-            params["passed_data"]["model_type"] = runtimeparams["model_type"]
-        else:
-            params["passed_data"]["model_type"] = params["optim_conf"].get(
-                "model_type", "long_train_data"
+        # Define Helper Functions
+        def _cast_bool(value):
+            """Helper to cast string inputs to boolean safely."""
+            try:
+                return ast.literal_eval(str(value).capitalize())
+            except (ValueError, SyntaxError):
+                return False
+
+        def _get_ml_param(name, params, runtimeparams, default=None, cast=None):
+            """
+            Prioritize Runtime Params -> Config Params (optim_conf) -> Default.
+            """
+            if name in runtimeparams:
+                value = runtimeparams[name]
+            else:
+                value = params["optim_conf"].get(name, default)
+
+            if cast is not None and value is not None:
+                try:
+                    value = cast(value)
+                except Exception:
+                    pass
+            return value
+
+        # Compute dynamic defaults
+        # Default for var_model falls back to the configured load sensor
+        default_var_model = params["retrieve_hass_conf"].get(
+            "sensor_power_load_no_var_loads", "sensor.power_load_no_var_loads"
+        )
+
+        # Define Configuration Table
+        # Format: (parameter_name, default_value, cast_function)
+        ml_param_defs = [
+            ("model_type", "long_train_data", None),
+            ("var_model", default_var_model, None),
+            ("sklearn_model", "KNeighborsRegressor", None),
+            ("regression_model", "AdaBoostRegression", None),
+            ("num_lags", 48, None),
+            ("split_date_delta", "48h", None),
+            ("n_trials", 10, int),
+            ("perform_backtest", False, _cast_bool),
+        ]
+
+        # Apply Configuration
+        for name, default, caster in ml_param_defs:
+            params["passed_data"][name] = _get_ml_param(
+                name=name,
+                params=params,
+                runtimeparams=runtimeparams,
+                default=default,
+                cast=caster,
             )
-        # var_model
-        if "var_model" in runtimeparams:
-            params["passed_data"]["var_model"] = runtimeparams["var_model"]
-        else:
-            # Default for var_model falls back to the configured load sensor
-            default_var_model = params["retrieve_hass_conf"].get(
-                "sensor_power_load_no_var_loads", "sensor.power_load_no_var_loads"
-            )
-            params["passed_data"]["var_model"] = params["optim_conf"].get(
-                "var_model", default_var_model
-            )
-        # sklearn_model
-        if "sklearn_model" in runtimeparams:
-            params["passed_data"]["sklearn_model"] = runtimeparams["sklearn_model"]
-        else:
-            params["passed_data"]["sklearn_model"] = params["optim_conf"].get(
-                "sklearn_model", "KNeighborsRegressor"
-            )
-        # regression_model
-        if "regression_model" in runtimeparams:
-            params["passed_data"]["regression_model"] = runtimeparams["regression_model"]
-        else:
-            params["passed_data"]["regression_model"] = params["optim_conf"].get(
-                "regression_model", "AdaBoostRegression"
-            )
-        # num_lags
-        if "num_lags" in runtimeparams:
-            params["passed_data"]["num_lags"] = runtimeparams["num_lags"]
-        else:
-            params["passed_data"]["num_lags"] = params["optim_conf"].get("num_lags", 48)
-        # split_date_delta
-        if "split_date_delta" in runtimeparams:
-            params["passed_data"]["split_date_delta"] = runtimeparams["split_date_delta"]
-        else:
-            params["passed_data"]["split_date_delta"] = params["optim_conf"].get(
-                "split_date_delta", "48h"
-            )
-        # n_trials
-        if "n_trials" in runtimeparams:
-            params["passed_data"]["n_trials"] = int(runtimeparams["n_trials"])
-        else:
-            params["passed_data"]["n_trials"] = params["optim_conf"].get("n_trials", 10)
-        # perform_backtest
-        if "perform_backtest" in runtimeparams:
-            perform_backtest = ast.literal_eval(str(runtimeparams["perform_backtest"]).capitalize())
-            params["passed_data"]["perform_backtest"] = perform_backtest
-        else:
-            params["passed_data"]["perform_backtest"] = params["optim_conf"].get(
-                "perform_backtest", False
-            )
+
         # Other non-dynamic options
         if "model_predict_publish" not in runtimeparams.keys():
             model_predict_publish = False
