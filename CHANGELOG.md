@@ -2,6 +2,8 @@
 
 ## Unreleased
 ### Improvement
+- Greatly improved coverage for the whole project. Added a new long awaited unit testing suite for the web server.
+- Allow configuring the number of Bayesian optimization trials in the machine-learning forecaster tune API.
 - Improve logging for non-hybrid systems to clarify that inverter_ac_input_max is ignored and battery_charge_power_max is used as the charge limit.
 - Expand and update configuration documentation for weather, load, load cost, and production price forecast methods, including references to dedicated forecast documentation and external data inputs.
 ### Fix
