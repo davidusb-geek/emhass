@@ -503,12 +503,14 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIs(input_data_dict["params"]["passed_data"]["perform_backtest"], False)
         # Check that the default params are loaded
-        # The new default model_type is "load_forecast", so set_input_data_dict tries to load "load_forecast.pkl".
         default_file_path = emhass_conf["data_path"] / "load_forecast.pkl"
         created_dummy = False
         if not default_file_path.exists():
-            # We create a tuple with an empty DataFrame and 3 Nones to satisfy this.
-            dummy_data = (pd.DataFrame(), None, None, None)
+            idx = pd.date_range(start="2024-01-01", periods=48, freq="30min")
+            df_dummy = pd.DataFrame({"sensor.power_load_no_var_loads": [100.0] * 48}, index=idx)
+
+            # The code expects to unpack 4 values
+            dummy_data = (df_dummy, None, None, None)
             with open(default_file_path, "wb") as f:
                 pickle.dump(dummy_data, f)
             created_dummy = True
@@ -1319,7 +1321,6 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         vs. refit within adjust_pv_forecast.
         """
         import os
-        import pickle
         import tempfile
         from datetime import datetime, timedelta
         from unittest.mock import AsyncMock, MagicMock
