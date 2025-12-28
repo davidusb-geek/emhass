@@ -505,6 +505,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         created_dummy = False
         if default_file_path.exists():
             default_file_path.unlink()
+        # Create dummy file with valid structure
         idx = pd.date_range(end=pd.Timestamp.now(), periods=48, freq="30min")
         df_dummy = pd.DataFrame({"sensor.power_load_no_var_loads": [100.0] * 48}, index=idx)
         dummy_data = (df_dummy, None, None, None)
@@ -529,9 +530,10 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             input_data_dict["params"]["passed_data"]["sklearn_model"], "KNeighborsRegressor"
         )
         self.assertIsInstance(input_data_dict["df_input_data"], pd.DataFrame)
-        idx_fresh = pd.date_range(end=pd.Timestamp.now(), periods=100, freq="30min")
+        idx_fresh = pd.date_range(end=pd.Timestamp.now(), periods=48 * 14, freq="30min")
         df_fresh = pd.DataFrame(
-            {"sensor.power_load_no_var_loads": np.random.rand(100) * 100}, index=idx_fresh
+            {"sensor.power_load_no_var_loads": np.random.rand(len(idx_fresh)) * 100},
+            index=idx_fresh,
         )
         df_fresh = utils.set_df_index_freq(df_fresh)
         input_data_dict["df_input_data"] = df_fresh
@@ -543,6 +545,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         injection_dict = utils.get_injection_dict_forecast_model_fit(df_fit_pred, mlf)
         self.assertIsInstance(injection_dict, dict)
         self.assertIsInstance(injection_dict["figure_0"], str)
+        # Re-inject fresh data for predict
         input_data_dict["df_input_data"] = df_fresh
         df_pred = await forecast_model_predict(
             input_data_dict, logger, use_last_window=False, debug=True, mlf=mlf
