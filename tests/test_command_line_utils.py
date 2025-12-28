@@ -469,7 +469,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
     # Test outputs of fit, predict and tune
     async def test_forecast_model_fit_predict_tune(self):
         costfun = "profit"
-        action = "forecast-model-fit"  # fit, predict and tune methods
+        action = "forecast-model-fit"
         params = await TestCommandLineAsyncUtils.get_test_params()
         runtimeparams = {
             "historic_days_to_retrieve": 20,
@@ -487,7 +487,6 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
         params["optim_conf"]["load_forecast_method"] = "skforecast"
         params_json = orjson.dumps(params).decode("utf-8")
-        # Test with explicit runtime parameters
         input_data_dict = await set_input_data_dict(
             emhass_conf,
             costfun,
@@ -502,21 +501,16 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             input_data_dict["params"]["passed_data"]["sklearn_model"], "KNeighborsRegressor"
         )
         self.assertIs(input_data_dict["params"]["passed_data"]["perform_backtest"], False)
-        # Check that the default params are loaded
         default_file_path = emhass_conf["data_path"] / "load_forecast.pkl"
         created_dummy = False
-        if not default_file_path.exists():
-            # FIX: Create a NON-EMPTY DataFrame with a valid index.
-            # The code accesses df.index[-1], so we need at least one row.
-            idx = pd.date_range(end=pd.Timestamp.now(), periods=48, freq="30min")
-            df_dummy = pd.DataFrame({"sensor.power_load_no_var_loads": [100.0] * 48}, index=idx)
-
-            # The code expects to unpack 4 values: (df, _, _, _)
-            dummy_data = (df_dummy, None, None, None)
-
-            with default_file_path.open("wb") as f:
-                pickle.dump(dummy_data, f)
-            created_dummy = True
+        if default_file_path.exists():
+            default_file_path.unlink()
+        idx = pd.date_range(end=pd.Timestamp.now(), periods=48, freq="30min")
+        df_dummy = pd.DataFrame({"sensor.power_load_no_var_loads": [100.0] * 48}, index=idx)
+        dummy_data = (df_dummy, None, None, None)
+        with default_file_path.open("wb") as f:
+            pickle.dump(dummy_data, f)
+        created_dummy = True
         try:
             input_data_dict = await set_input_data_dict(
                 emhass_conf,
@@ -535,41 +529,32 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             input_data_dict["params"]["passed_data"]["sklearn_model"], "KNeighborsRegressor"
         )
         self.assertIsInstance(input_data_dict["df_input_data"], pd.DataFrame)
-        # Test the fit method
-        # Inject fresh data into input_data_dict to ensure fit() has enough valid data to run
         idx_fresh = pd.date_range(end=pd.Timestamp.now(), periods=100, freq="30min")
         df_fresh = pd.DataFrame(
             {"sensor.power_load_no_var_loads": np.random.rand(100) * 100}, index=idx_fresh
         )
+        df_fresh = utils.set_df_index_freq(df_fresh)
         input_data_dict["df_input_data"] = df_fresh
-
         df_fit_pred, df_fit_pred_backtest, mlf = await forecast_model_fit(
             input_data_dict, logger, debug=True
         )
         self.assertIsInstance(df_fit_pred, pd.DataFrame)
         self.assertIs(df_fit_pred_backtest, None)
-        # Test injection_dict for fit method on webui
         injection_dict = utils.get_injection_dict_forecast_model_fit(df_fit_pred, mlf)
         self.assertIsInstance(injection_dict, dict)
         self.assertIsInstance(injection_dict["figure_0"], str)
-        # Test the predict method
-        # Re-inject fresh data because set_input_data_dict is called again in the flow (simulated)
         input_data_dict["df_input_data"] = df_fresh
-
         df_pred = await forecast_model_predict(
             input_data_dict, logger, use_last_window=False, debug=True, mlf=mlf
         )
         self.assertIsInstance(df_pred, pd.Series)
         self.assertEqual(df_pred.isnull().sum().sum(), 0)
-        # Now a predict using last_window
         df_pred = await forecast_model_predict(input_data_dict, logger, debug=True, mlf=mlf)
         self.assertIsInstance(df_pred, pd.Series)
         self.assertEqual(df_pred.isnull().sum().sum(), 0)
-        # Test the tune method
         df_pred_optim, mlf = await forecast_model_tune(input_data_dict, logger, debug=True, mlf=mlf)
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
         self.assertIs(mlf.is_tuned, True)
-        # Test injection_dict for tune method on webui
         injection_dict = utils.get_injection_dict_forecast_model_tune(df_fit_pred, mlf)
         self.assertIsInstance(injection_dict, dict)
         self.assertIsInstance(injection_dict["figure_0"], str)
