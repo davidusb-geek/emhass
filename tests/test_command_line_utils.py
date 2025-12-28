@@ -506,12 +506,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         default_file_path = emhass_conf["data_path"] / "load_forecast.pkl"
         created_dummy = False
         if not default_file_path.exists():
-            start_date = pd.Timestamp.now() - pd.Timedelta(days=2)
-            idx = pd.date_range(start=start_date, periods=48, freq="30min")
-            df_dummy = pd.DataFrame({"sensor.power_load_no_var_loads": [100.0] * 48}, index=idx)
-            # The code expects to unpack 4 values
-            dummy_data = (df_dummy, None, None, None)
-            # Use path.open() to satisfy SonarQube
+            # Create a dummy file to satisfy the initial load check in set_input_data_dict
+            dummy_data = (pd.DataFrame(), None, None, None)
             with default_file_path.open("wb") as f:
                 pickle.dump(dummy_data, f)
             created_dummy = True
@@ -533,6 +529,12 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             input_data_dict["params"]["passed_data"]["sklearn_model"], "KNeighborsRegressor"
         )
         self.assertIsInstance(input_data_dict["df_input_data"], pd.DataFrame)
+        # Inject Fresh Data for Training
+        idx = pd.date_range(end=pd.Timestamp.now(), periods=48 * 10, freq="30min")
+        data = np.random.rand(len(idx)) * 100  # Random load data
+        df_fresh = pd.DataFrame({"sensor.power_load_no_var_loads": data}, index=idx)
+        df_fresh = utils.set_df_index_freq(df_fresh)  # Ensure freq is set
+        input_data_dict["df_input_data"] = df_fresh
         # Test the fit method
         df_fit_pred, df_fit_pred_backtest, mlf = await forecast_model_fit(
             input_data_dict, logger, debug=True
@@ -544,6 +546,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(injection_dict, dict)
         self.assertIsInstance(injection_dict["figure_0"], str)
         # Test the predict method on observations following the train period
+        # We need to re-inject the fresh data because set_input_data_dict is called again
         input_data_dict = await set_input_data_dict(
             emhass_conf,
             costfun,
@@ -553,6 +556,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
+        input_data_dict["df_input_data"] = df_fresh  # Inject again for consistency
         df_pred = await forecast_model_predict(
             input_data_dict, logger, use_last_window=False, debug=True, mlf=mlf
         )
