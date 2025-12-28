@@ -2,6 +2,7 @@
 
 import copy
 import pathlib
+import pickle
 import unittest
 from unittest.mock import Mock, patch
 
@@ -503,11 +504,13 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIs(input_data_dict["params"]["passed_data"]["perform_backtest"], False)
         # Check that the default params are loaded
         # The new default model_type is "load_forecast", so set_input_data_dict tries to load "load_forecast.pkl".
-        # We ensure this file exists temporarily for this test to pass.
         default_file_path = emhass_conf["data_path"] / "load_forecast.pkl"
         created_dummy = False
         if not default_file_path.exists():
-            pd.DataFrame().to_pickle(default_file_path)
+            # We create a tuple with an empty DataFrame and 3 Nones to satisfy this.
+            dummy_data = (pd.DataFrame(), None, None, None)
+            with open(default_file_path, "wb") as f:
+                pickle.dump(dummy_data, f)
             created_dummy = True
         try:
             input_data_dict = await set_input_data_dict(
@@ -522,7 +525,6 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         finally:
             if created_dummy and default_file_path.exists():
                 default_file_path.unlink()
-        # Update assertion: The default is now "load_forecast" (as evidenced by the file lookup error)
         self.assertEqual(input_data_dict["params"]["passed_data"]["model_type"], "load_forecast")
         self.assertEqual(
             input_data_dict["params"]["passed_data"]["sklearn_model"], "KNeighborsRegressor"
