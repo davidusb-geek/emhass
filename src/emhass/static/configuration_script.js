@@ -189,7 +189,7 @@ function loadConfigurationListView(param_definitions, config, list_html) {
         influx_related_params.forEach(paramId => {
           const paramDiv = document.getElementById(paramId);
           if (paramDiv) {
-            paramDiv.style.display = isChecked ? "block" : "none";
+            paramDiv.style.display = isChecked ? "" : "none";
           }
         });
       };
