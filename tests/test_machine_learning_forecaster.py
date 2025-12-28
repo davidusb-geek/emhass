@@ -92,22 +92,11 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
                 "config_defaults.json not found in " + str(emhass_conf["defaults_path"])
             )
 
-    async def test_mlforecaster_init(self):
-        mlf = MLForecaster(
-            self.data,
-            self.params["passed_data"]["model_type"],
-            self.params["passed_data"]["var_model"],
-            self.params["passed_data"]["sklearn_model"],
-            self.params["passed_data"]["num_lags"],
-            emhass_conf,
-            logger,
-        )
-        self.assertIsInstance(mlf, MLForecaster)
-
-    async def test_mlforecaster_fit(self):
+    def _get_standard_mlf(self):
+        """Helper to initialize MLForecaster with standard parameters."""
         self.input_data_dict["params"]["passed_data"]["model_type"] = "load_forecast"
         self.input_data_dict["params"]["passed_data"]["sklearn_model"] = "KNeighborsRegressor"
-        mlf = MLForecaster(
+        return MLForecaster(
             self.data,
             self.input_data_dict["params"]["passed_data"]["model_type"],
             self.input_data_dict["params"]["passed_data"]["var_model"],
@@ -116,50 +105,35 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
             emhass_conf,
             logger,
         )
-        df_pred, df_pred_backtest = await mlf.fit(
+
+    async def _fit_standard_mlf(self, mlf):
+        """Helper to fit the model with standard parameters."""
+        return await mlf.fit(
             split_date_delta=self.input_data_dict["params"]["passed_data"]["split_date_delta"],
             perform_backtest=self.input_data_dict["params"]["passed_data"]["perform_backtest"],
         )
+
+    async def test_mlforecaster_init(self):
+        mlf = self._get_standard_mlf()
+        self.assertIsInstance(mlf, MLForecaster)
+
+    async def test_mlforecaster_fit(self):
+        mlf = self._get_standard_mlf()
+        df_pred, df_pred_backtest = await self._fit_standard_mlf(mlf)
         self.assertIsInstance(df_pred, pd.DataFrame)
         self.assertTrue(df_pred_backtest is None)
 
     async def test_mlforecaster_predict(self):
-        self.input_data_dict["params"]["passed_data"]["model_type"] = "load_forecast"
-        self.input_data_dict["params"]["passed_data"]["sklearn_model"] = "KNeighborsRegressor"
-        mlf = MLForecaster(
-            self.data,
-            self.input_data_dict["params"]["passed_data"]["model_type"],
-            self.input_data_dict["params"]["passed_data"]["var_model"],
-            self.input_data_dict["params"]["passed_data"]["sklearn_model"],
-            self.input_data_dict["params"]["passed_data"]["num_lags"],
-            emhass_conf,
-            logger,
-        )
-        await mlf.fit(
-            split_date_delta=self.input_data_dict["params"]["passed_data"]["split_date_delta"],
-            perform_backtest=self.input_data_dict["params"]["passed_data"]["perform_backtest"],
-        )
+        mlf = self._get_standard_mlf()
+        await self._fit_standard_mlf(mlf)
         df_pred = await mlf.predict(
             data_last_window=self.data,
         )
         self.assertIsInstance(df_pred, pd.Series)
 
     async def test_mlforecaster_tune(self):
-        self.input_data_dict["params"]["passed_data"]["model_type"] = "load_forecast"
-        self.input_data_dict["params"]["passed_data"]["sklearn_model"] = "KNeighborsRegressor"
-        mlf = MLForecaster(
-            self.data,
-            self.input_data_dict["params"]["passed_data"]["model_type"],
-            self.input_data_dict["params"]["passed_data"]["var_model"],
-            self.input_data_dict["params"]["passed_data"]["sklearn_model"],
-            self.input_data_dict["params"]["passed_data"]["num_lags"],
-            emhass_conf,
-            logger,
-        )
-        await mlf.fit(
-            split_date_delta=self.input_data_dict["params"]["passed_data"]["split_date_delta"],
-            perform_backtest=self.input_data_dict["params"]["passed_data"]["perform_backtest"],
-        )
+        mlf = self._get_standard_mlf()
+        await self._fit_standard_mlf(mlf)
         df_pred_optim = await mlf.tune(
             debug=True,
             split_date_delta=self.input_data_dict["params"]["passed_data"]["split_date_delta"],
@@ -198,10 +172,8 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
             emhass_conf,
             logger,
         )
-        # We need to fit before we can tune (even if it fails later)
         try:
             await mlf.fit(split_date_delta="1h", perform_backtest=False)
-            # Remove invalid args for tune
             await mlf.tune(
                 debug=True,
                 split_date_delta="1h",
