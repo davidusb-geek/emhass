@@ -203,6 +203,46 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
         self.assertTrue(self.mlf.is_tuned)
 
+    async def test_treat_runtimeparams_ml_lags_real_associations(self):
+        """
+        Test that num_lags passed at runtime is correctly mapped using the REAL
+        associations.csv file shipped with the package.
+        """
+        # Define the Runtime Input (changing num_lags to 96)
+        runtime_input = {"num_lags": 96, "model_type": "load_forecast", "perform_backtest": True}
+        runtimeparams_json = orjson.dumps(runtime_input).decode("utf-8")
+        # Setup Base Parameters
+        # We initialize with empty configs to ensure values come strictly from runtime processing
+        params = {"retrieve_hass_conf": {}, "optim_conf": {}, "plant_conf": {}, "passed_data": {}}
+        # Call treat_runtimeparams using the REAL emhass_conf
+        # This will read the actual src/emhass/data/associations.csv file
+        params_json_res, _, _, _ = await utils.treat_runtimeparams(
+            runtimeparams_json,
+            params,
+            {},  # retrieve_hass_conf
+            {},  # optim_conf
+            {},  # plant_conf
+            "forecast-model-fit",  # set_type
+            logger,
+            emhass_conf,
+        )
+        # Deserialize result
+        params_result = orjson.loads(params_json_res)
+        # Verify the Mapping
+        # Check A: Did associations.csv map 'num_lags' into 'optim_conf'?
+        # If this fails, your associations.csv file is missing the line: optim_conf,num_lags,num_lags
+        self.assertEqual(
+            params_result["optim_conf"].get("num_lags"),
+            96,
+            "Failed to map num_lags to optim_conf. Check your associations.csv file.",
+        )
+        # Check B: Did the logic propagate it to 'passed_data'?
+        self.assertEqual(
+            params_result["passed_data"]["num_lags"],
+            96,
+            "Failed to propagate num_lags to passed_data.",
+        )
+
     async def test_error_handling_and_fallbacks(self):
         """Test exception handling and invalid model fallbacks."""
         data = copy.deepcopy(self.input_data_dict["df_input_data"])

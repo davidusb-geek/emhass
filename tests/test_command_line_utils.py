@@ -506,12 +506,13 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         default_file_path = emhass_conf["data_path"] / "load_forecast.pkl"
         created_dummy = False
         if not default_file_path.exists():
-            idx = pd.date_range(start="2024-01-01", periods=48, freq="30min")
+            start_date = pd.Timestamp.now() - pd.Timedelta(days=2)
+            idx = pd.date_range(start=start_date, periods=48, freq="30min")
             df_dummy = pd.DataFrame({"sensor.power_load_no_var_loads": [100.0] * 48}, index=idx)
-
             # The code expects to unpack 4 values
             dummy_data = (df_dummy, None, None, None)
-            with open(default_file_path, "wb") as f:
+            # Use path.open() to satisfy SonarQube
+            with default_file_path.open("wb") as f:
                 pickle.dump(dummy_data, f)
             created_dummy = True
         try:
