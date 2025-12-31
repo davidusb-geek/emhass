@@ -33,11 +33,7 @@ from emhass.command_line import (
     set_input_data_dict,
     weather_forecast_cache,
 )
-from emhass.connection_manager import (
-    close_global_connection,
-    get_websocket_client,
-    is_connected,
-)
+from emhass.connection_manager import close_global_connection, get_websocket_client, is_connected
 from emhass.utils import (
     build_config,
     build_legacy_config_params,
@@ -117,7 +113,7 @@ async def check_file_log(refString: str | None = None) -> bool:
     log_array: list[str] = []
 
     if refString is not None:
-        log_array = await grabLog(
+        log_array = await grab_log(
             refString
         )  # grab reduced log array (everything after string match)
     else:
@@ -135,7 +131,7 @@ async def check_file_log(refString: str | None = None) -> bool:
     return False
 
 
-async def grabLog(refString: str | None = None) -> list[str]:
+async def grab_log(refString: str | None = None) -> list[str]:
     """
     Find string in logs, append all lines after into list to return.
 
@@ -210,6 +206,9 @@ async def configuration():
         async with aiofiles.open(str(emhass_conf["data_path"] / "params.pkl"), "rb") as fid:
             content = await fid.read()
             emhass_conf["config_path"], params = pickle.loads(content)
+    else:
+        # Safe fallback if params.pkl doesn't exist
+        params = {}
 
     template = templates.get_template("configuration.html")
     return await make_response(template.render(config=params))
@@ -438,7 +437,7 @@ async def _handle_action_dispatch(
         success = await export_influxdb_to_csv(None, logger, emhass_conf, params, runtimeparams)
         if success:
             return "EMHASS >> Action export-influxdb-to-csv executed successfully... \n", 201
-        return await grabLog(action_str), 400
+        return await grab_log(action_str), 400
 
     # Actions requiring input_data_dict
     if action_name == "publish-data":
@@ -492,7 +491,7 @@ async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
         logger.info(action_str)
         df_pred = await forecast_model_predict(input_data_dict, logger)
         if df_pred is None:
-            return await grabLog(action_str), 400
+            return await grab_log(action_str), 400
 
         table1 = df_pred.reset_index().to_html(classes="mystyle", index=False)
         injection_dict = {
@@ -509,7 +508,7 @@ async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
         logger.info(action_str)
         df_pred_optim, mlf = await forecast_model_tune(input_data_dict, logger)
         if df_pred_optim is None or mlf is None:
-            return await grabLog(action_str), 400
+            return await grab_log(action_str), 400
 
         injection_dict = get_injection_dict_forecast_model_tune(df_pred_optim, mlf)
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
@@ -552,7 +551,7 @@ async def action_call(action_name: str):
         request, emhass_conf, app.logger
     )
     if params is None:
-        return await make_response(await grabLog(" >> Obtaining params: "), 400)
+        return await make_response(await grab_log(" >> Obtaining params: "), 400)
 
     # Check for actions that do not need input_data_dict
     if action_name in ["weather-forecast-cache", "export-influxdb-to-csv"]:
@@ -566,7 +565,7 @@ async def action_call(action_name: str):
         action_str = f" >> Performing {action_name}..."
         if not await check_file_log(action_str):
             return await make_response(msg, status)
-        return await make_response(await grabLog(action_str), 400)
+        return await make_response(await grab_log(action_str), 400)
 
     # Set Input Data Dict (Common for all other actions)
     action_str = " >> Setting input data dict"
@@ -576,7 +575,7 @@ async def action_call(action_name: str):
     )
 
     if not input_data_dict:
-        return await make_response(await grabLog(action_str), 400)
+        return await make_response(await grab_log(action_str), 400)
 
     # Handle Continual Publish Threading
     if len(continual_publish_thread) == 0 and input_data_dict["retrieve_hass_conf"].get(
@@ -598,7 +597,7 @@ async def action_call(action_name: str):
     if status == 201:
         if not await check_file_log(" >> "):
             return await make_response(msg, 201)
-        return await make_response(await grabLog(" >> "), 400)
+        return await make_response(await grab_log(" >> "), 400)
 
     return await make_response(msg, status)
 
