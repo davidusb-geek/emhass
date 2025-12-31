@@ -658,6 +658,7 @@ class Optimization:
 
         # Treat deferrable loads constraints
         predicted_temps = {}
+        heating_demands = {}  # Store heating demand for thermal loads
         for k in range(self.optim_conf["number_of_deferrable_loads"]):
             self.logger.debug(f"Processing deferrable load {k}")
             if isinstance(self.optim_conf["nominal_power_of_deferrable_loads"][k], list):
@@ -935,7 +936,7 @@ class Optimization:
                     )
 
                     # Auto-detect heating demand calculation method
-                    # Use physics-based if all required parameters are provided
+                    # Use physics-based if core parameters are provided
                     if all(
                         key in hc
                         for key in [
@@ -943,10 +944,15 @@ class Optimization:
                             "envelope_area",
                             "ventilation_rate",
                             "heated_volume",
-                            "indoor_target_temperature",
                         ]
                     ):
                         # Physics-based method (more accurate)
+                        # Default indoor_target_temperature to min_temperature if not specified
+                        # This represents maintaining the lower comfort bound
+                        indoor_target_temp = hc.get(
+                            "indoor_target_temperature", min_temperature
+                        )
+
                         # Extract optional solar gain parameters
                         window_area = hc.get("window_area", None)
                         shgc = hc.get("shgc", 0.6)  # Default SHGC for modern double-glazed windows
@@ -961,7 +967,7 @@ class Optimization:
                             envelope_area=hc["envelope_area"],
                             ventilation_rate=hc["ventilation_rate"],
                             heated_volume=hc["heated_volume"],
-                            indoor_target_temperature=hc["indoor_target_temperature"],
+                            indoor_target_temperature=indoor_target_temp,
                             outdoor_temperature_forecast=outdoor_temperature_forecast,
                             optimization_time_step=int(self.freq.total_seconds() / 60),
                             solar_irradiance_forecast=solar_irradiance,
@@ -972,23 +978,31 @@ class Optimization:
                         # Log with solar gains info if applicable
                         if solar_irradiance is not None:
                             self.logger.debug(
-                                "Load %s: Using physics-based heating demand with solar gains (u_value=%.2f, envelope_area=%.1f, ventilation_rate=%.2f, heated_volume=%.1f, window_area=%.1f, shgc=%.2f)",
+                                "Load %s: Using physics-based heating demand with solar gains "
+                                "(u_value=%.2f, envelope_area=%.1f, ventilation_rate=%.2f, heated_volume=%.1f, "
+                                "indoor_target_temp=%.1f%s, window_area=%.1f, shgc=%.2f)",
                                 k,
                                 hc["u_value"],
                                 hc["envelope_area"],
                                 hc["ventilation_rate"],
                                 hc["heated_volume"],
+                                indoor_target_temp,
+                                " (defaulted to min_temp)" if "indoor_target_temperature" not in hc else "",
                                 window_area,
                                 shgc,
                             )
                         else:
                             self.logger.debug(
-                                "Load %s: Using physics-based heating demand calculation (u_value=%.2f, envelope_area=%.1f, ventilation_rate=%.2f, heated_volume=%.1f)",
+                                "Load %s: Using physics-based heating demand calculation "
+                                "(u_value=%.2f, envelope_area=%.1f, ventilation_rate=%.2f, heated_volume=%.1f, "
+                                "indoor_target_temp=%.1f%s)",
                                 k,
                                 hc["u_value"],
                                 hc["envelope_area"],
                                 hc["ventilation_rate"],
                                 hc["heated_volume"],
+                                indoor_target_temp,
+                                " (defaulted to min_temp)" if "indoor_target_temperature" not in hc else "",
                             )
                     else:
                         # HDD method (backward compatible) with configurable parameters
@@ -1012,6 +1026,9 @@ class Optimization:
                         )
 
                     # Thermal battery state transition (Langer & Volling 2020, Eq B.11-B.15)
+                    # Store heating demand for this thermal battery load
+                    heating_demands[k] = heating_demand
+
                     predicted_temp_thermal = [start_temperature]
                     for Id in set_I:
                         if Id == 0:
@@ -1602,6 +1619,13 @@ class Optimization:
                         target_temps,
                         index=opt_tp.index,
                     )
+
+        # Add heating demands for thermal loads (both thermal_config and thermal_battery)
+        for i, heating_demand in heating_demands.items():
+            opt_tp[f"heating_demand_heater{i}"] = pd.Series(
+                heating_demand,
+                index=opt_tp.index,
+            )
 
         # Battery initialization logging
         if self.optim_conf["set_use_battery"]:

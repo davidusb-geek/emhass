@@ -1842,19 +1842,20 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # NEW: Verify solar gains actually reduce heating demand
         # Compare average heating power during sunny periods vs night periods
         heating_power = opt_res["P_deferrable0"].values
+        total_heat_pump_energy = heating_power.sum()
 
         # Calculate average heating during sunny and night periods
-        if sunny_hours.sum() > 0 and night_hours.sum() > 0:
+        if sunny_hours.sum() > 0 and night_hours.sum() > 0 and total_heat_pump_energy > 0:
             avg_heating_sunny = heating_power[sunny_hours].mean()
             avg_heating_night = heating_power[night_hours].mean()
 
             # During sunny periods, solar gains should reduce the need for active heating
-            # Therefore, average heating power during sunny periods should be <= night periods
-            # (assuming outdoor temps are similar, which they are due to the sin pattern)
+            # Therefore, average heating power during sunny periods should be less than or equal
+            # to night periods (assuming outdoor temps are similar due to the sin pattern)
             self.assertLessEqual(
                 avg_heating_sunny,
-                avg_heating_night * 1.5,  # Allow 50% tolerance for optimizer scheduling flexibility
-                f"Solar gains should reduce heating demand. "
+                avg_heating_night,
+                f"Solar gains should reduce heating demand during sunny periods. "
                 f"Sunny period avg: {avg_heating_sunny:.3f} kW, Night avg: {avg_heating_night:.3f} kW"
             )
 
