@@ -11,18 +11,18 @@ from skforecast.model_selection import (
     bayesian_search_forecaster,
 )
 from skforecast.recursive import ForecasterRecursive
-from sklearn.metrics import r2_score
-from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
-from sklearn.neighbors import KNeighborsRegressor
 from sklearn.ensemble import (
     AdaBoostRegressor,
     ExtraTreesRegressor,
     GradientBoostingRegressor,
     RandomForestRegressor,
 )
+from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
+from sklearn.metrics import r2_score
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.neural_network import MLPRegressor
 from sklearn.svm import SVR
 from sklearn.tree import DecisionTreeRegressor
-from sklearn.neural_network import MLPRegressor
 
 from emhass import utils
 
@@ -390,13 +390,11 @@ class MLForecaster:
                 else trial.suggest_float("C", 1e-2, 100.0, log=True),
                 "epsilon": trial.suggest_float("epsilon", 0.01, 1.0),
                 "kernel": trial.suggest_categorical("kernel", ["linear", "rbf"]),
+                "gamma": trial.suggest_categorical(
+                    "gamma", ["scale", "auto", 0.01, 0.1, 1.0, 10.0]
+                ),
                 "lags": get_lags(trial),
             }
-            # Conditional Gamma: Only tune specific float values if kernel is rbf
-            if search["kernel"] == "rbf":
-                search["gamma"] = trial.suggest_float("gamma", 1e-4, 10.0, log=True)
-            else:
-                search["gamma"] = trial.suggest_categorical("gamma", ["scale", "auto"])
             return search
 
         # Registry of search space generators
@@ -498,7 +496,10 @@ class MLForecaster:
         return search_spaces[self.sklearn_model]
 
     async def tune(
-        self, split_date_delta: str | None = "48h", debug: bool | None = False
+        self,
+        split_date_delta: str | None = "48h",
+        n_trials: int = 10,
+        debug: bool | None = False,
     ) -> pd.DataFrame:
         """Tuning a previously fitted model using bayesian optimization.
 
@@ -508,18 +509,21 @@ class MLForecaster:
         :type split_date_delta: Optional[str], optional
         :param debug: Set to True for testing and faster optimizations, defaults to False
         :type debug: Optional[bool], optional
+        :param n_trials: Number of trials for bayesian optimization, defaults to 10
+        :type n_trials: Optional[int], optional
         :return: The DataFrame with the forecasts using the optimized model.
         :rtype: pd.DataFrame
         """
         try:
+            if self.forecaster is None:
+                raise ValueError("Model has not been fitted yet. Call fit() first.")
+
             # Calculate appropriate lags based on data frequency
             freq_timedelta = pd.Timedelta(self.data_exo.index.freq)
             lags_list = MLForecaster.get_lags_list_from_frequency(freq_timedelta)
             self.logger.info(
                 f"Using lags list based on data frequency ({self.data_exo.index.freq}): {lags_list}"
             )
-            if self.forecaster is None:
-                raise ValueError("Model has not been fitted yet. Call fit() first.")
 
             # Get the search space for this model
             search_space = self._get_search_space(debug, lags_list)
@@ -567,10 +571,12 @@ class MLForecaster:
                 self.logger.warning(
                     "This is likely because split_date_delta is too large for the dataset."
                 )
+                MIN_SAMPLES_FOR_KNN = 6
+                new_train_size = window_size + MIN_SAMPLES_FOR_KNN
                 self.logger.warning(
-                    f"Adjusting initial_train_size to {window_size + 1} to attempt recovery."
+                    f"Adjusting initial_train_size to {new_train_size} to attempt recovery."
                 )
-                initial_train_size = window_size + 1
+                initial_train_size = new_train_size
 
             cv = TimeSeriesFold(
                 steps=num_lags,
@@ -593,7 +599,7 @@ class MLForecaster:
                 cv=cv,
                 search_space=search_space,
                 metric=MLForecaster.neg_r2_score,
-                n_trials=10,
+                n_trials=n_trials,
                 random_state=123,
                 return_best=True,
             )
