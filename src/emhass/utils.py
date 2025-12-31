@@ -139,6 +139,314 @@ def get_forecast_dates(
     return [ts.isoformat() for ts in forecast_dates]
 
 
+def calculate_cop_heatpump(
+    supply_temperature: float,
+    carnot_efficiency: float,
+    outdoor_temperature_forecast: np.ndarray | pd.Series,
+) -> np.ndarray:
+    r"""
+    Calculate heat pump Coefficient of Performance (COP) for each timestep in the prediction horizon.
+
+    The COP is calculated using a Carnot-based formula:
+    COP(h) = carnot_efficiency × T_supply_K / |T_supply_K - T_outdoor_K(h)|
+
+    Where temperatures are converted to Kelvin (K = °C + 273.15).
+
+    This formula models real heat pump behavior where COP decreases as the temperature lift
+    (difference between supply and outdoor temperature) increases. The carnot_efficiency factor
+    represents the real-world efficiency as a fraction of the ideal Carnot cycle efficiency.
+
+    :param supply_temperature: The heat pump supply temperature in degrees Celsius (constant value). \
+        Typical values: 30-40°C for underfloor heating, 50-70°C for radiator systems.
+    :type supply_temperature: float
+    :param carnot_efficiency: Real-world efficiency factor as fraction of ideal Carnot cycle. \
+        Typical range: 0.35-0.50 (35-50%). Default in thermal battery config: 0.4 (40%). \
+        Higher values represent more efficient heat pumps.
+    :type carnot_efficiency: float
+    :param outdoor_temperature_forecast: Array of outdoor temperature forecasts in degrees Celsius, \
+        one value per timestep in the prediction horizon.
+    :type outdoor_temperature_forecast: np.ndarray or pd.Series
+    :return: Array of COP values for each timestep, same length as outdoor_temperature_forecast. \
+        Typical COP range: 2-6 for normal operating conditions.
+    :rtype: np.ndarray
+
+    Example:
+        >>> supply_temp = 35.0  # °C, underfloor heating
+        >>> carnot_eff = 0.4  # 40% of ideal Carnot efficiency
+        >>> outdoor_temps = np.array([0.0, 5.0, 10.0, 15.0, 20.0])
+        >>> cops = calculate_cop_heatpump(supply_temp, carnot_eff, outdoor_temps)
+        >>> cops
+        array([3.521..., 4.108..., 4.926..., 6.163..., 8.217...])
+        >>> # At 5°C outdoor: COP = 0.4 × 308.15K / 30K = 4.11
+
+    """
+    # Convert to numpy array if pandas Series
+    if isinstance(outdoor_temperature_forecast, pd.Series):
+        outdoor_temps = outdoor_temperature_forecast.values
+    else:
+        outdoor_temps = np.asarray(outdoor_temperature_forecast)
+
+    # Convert temperatures from Celsius to Kelvin for Carnot formula
+    supply_temperature_kelvin = supply_temperature + 273.15
+    outdoor_temperature_kelvin = outdoor_temps + 273.15
+
+    # Calculate temperature difference (supply - outdoor)
+    # For heating, supply temperature should be higher than outdoor temperature
+    temperature_diff = supply_temperature_kelvin - outdoor_temperature_kelvin
+
+    # Check for non-physical scenarios where outdoor temp >= supply temp
+    # This indicates cooling mode or invalid configuration for heating
+    if np.any(temperature_diff <= 0):
+        # Log warning about non-physical temperature scenario
+        logger = logging.getLogger(__name__)
+        num_invalid = np.sum(temperature_diff <= 0)
+        invalid_indices = np.nonzero(temperature_diff <= 0)[0]
+        logger.warning(
+            f"COP calculation: {num_invalid} timestep(s) have outdoor temperature >= supply temperature. "
+            f"This is non-physical for heating mode. Indices: {invalid_indices.tolist()[:5]}{'...' if len(invalid_indices) > 5 else ''}. "
+            f"Supply temp: {supply_temperature:.1f}°C. Using epsilon to prevent division by zero."
+        )
+        # Add small epsilon to prevent division by zero and allow calculation to proceed
+        epsilon = 1e-6
+        temperature_diff = np.where(temperature_diff <= 0, epsilon, temperature_diff)
+
+    # Vectorized Carnot-based COP calculation
+    # COP = carnot_efficiency × T_supply / (T_supply - T_outdoor)
+    cop_values = carnot_efficiency * supply_temperature_kelvin / temperature_diff
+
+    # Apply lower bound of 1.0 (realistic minimum for heat pumps)
+    # Values below 1.0 indicate the heat pump is less efficient than direct electric heating
+    cop_values = np.maximum(cop_values, 1.0)
+
+    return cop_values
+
+
+def calculate_thermal_loss_signed(
+    outdoor_temperature_forecast: np.ndarray | pd.Series,
+    indoor_temperature: float,
+    base_loss: float,
+) -> np.ndarray:
+    r"""
+    Calculate signed thermal loss factor based on indoor/outdoor temperature difference.
+
+    **SIGN CONVENTION:**
+    - **Positive** (+loss): outdoor < indoor → heat loss, building cools, heating required
+    - **Negative** (-loss): outdoor ≥ indoor → heat gain, building warms passively
+
+    Formula: loss * (1 - 2 * Hot(h)), where Hot(h) = 1 if outdoor ≥ indoor, else 0.
+    Based on Langer & Volling (2020) Equation B.13.
+
+    :param outdoor_temperature_forecast: Outdoor temperature forecast (°C)
+    :type outdoor_temperature_forecast: np.ndarray or pd.Series
+    :param indoor_temperature: Indoor/target temperature threshold (°C)
+    :type indoor_temperature: float
+    :param base_loss: Base thermal loss coefficient in kW (default: 0.045 kW)
+    :type base_loss: float
+    :return: Signed loss array (positive = heat loss, negative = heat gain)
+    :rtype: np.ndarray
+
+    """
+    # Convert to numpy array if pandas Series
+    if isinstance(outdoor_temperature_forecast, pd.Series):
+        outdoor_temps = outdoor_temperature_forecast.values
+    else:
+        outdoor_temps = np.asarray(outdoor_temperature_forecast)
+
+    # Create binary hot indicator: 1 if outdoor temp >= indoor temp, 0 otherwise
+    hot_indicator = (outdoor_temps >= indoor_temperature).astype(float)
+
+    return base_loss * (1.0 - 2.0 * hot_indicator)
+
+
+def calculate_heating_demand(
+    specific_heating_demand: float,
+    floor_area: float,
+    outdoor_temperature_forecast: np.ndarray | pd.Series,
+    base_temperature: float = 18.0,
+    annual_reference_hdd: float = 3000.0,
+    optimization_time_step: int | None = None,
+) -> np.ndarray:
+    """
+    Calculate heating demand per timestep based on heating degree days method.
+
+    Uses heating degree days (HDD) to calculate heating demand based on outdoor temperature
+    forecast, specific heating demand, and floor area. The specific heating demand should be
+    calibrated to the annual reference HDD value.
+
+    :param specific_heating_demand: Specific heating demand in kWh/m²/year (calibrated to annual_reference_hdd)
+    :type specific_heating_demand: float
+    :param floor_area: Floor area in m²
+    :type floor_area: float
+    :param outdoor_temperature_forecast: Outdoor temperature forecast in °C for each timestep
+    :type outdoor_temperature_forecast: np.ndarray | pd.Series
+    :param base_temperature: Base temperature for HDD calculation in °C, defaults to 18.0 (European standard)
+    :type base_temperature: float, optional
+    :param annual_reference_hdd: Annual reference HDD value for normalization, defaults to 3000.0 (Central Europe)
+    :type annual_reference_hdd: float, optional
+    :param optimization_time_step: Optimization time step in minutes. If None, automatically infers from
+        pandas Series DatetimeIndex frequency. Falls back to 30 minutes if not inferrable.
+    :type optimization_time_step: int | None, optional
+    :return: Array of heating demand values (kWh) per timestep
+    :rtype: np.ndarray
+
+    """
+
+    # Convert outdoor temperature forecast to numpy array if pandas Series
+    outdoor_temps = (
+        outdoor_temperature_forecast.values
+        if isinstance(outdoor_temperature_forecast, pd.Series)
+        else np.asarray(outdoor_temperature_forecast)
+    )
+
+    # Calculate heating degree days per timestep
+    # HDD = max(base_temperature - outdoor_temperature, 0)
+    hdd_per_timestep = np.maximum(base_temperature - outdoor_temps, 0.0)
+
+    # Determine timestep duration in hours
+    if optimization_time_step is None:
+        # Try to infer from pandas Series DatetimeIndex
+        if isinstance(outdoor_temperature_forecast, pd.Series) and isinstance(
+            outdoor_temperature_forecast.index, pd.DatetimeIndex
+        ):
+            if len(outdoor_temperature_forecast.index) > 1:
+                freq_minutes = (
+                    outdoor_temperature_forecast.index[1] - outdoor_temperature_forecast.index[0]
+                ).total_seconds() / 60.0
+                hours_per_timestep = freq_minutes / 60.0
+            else:
+                # Single datapoint, fallback to default 30 min
+                hours_per_timestep = 0.5
+        else:
+            # Cannot infer, use default 30 minutes
+            hours_per_timestep = 0.5
+    else:
+        # Convert minutes to hours
+        hours_per_timestep = optimization_time_step / 60.0
+
+    # Scale HDD to timestep duration (standard HDD is per 24 hours)
+    hdd_per_timestep_scaled = hdd_per_timestep * (hours_per_timestep / 24.0)
+
+    return specific_heating_demand * floor_area * (hdd_per_timestep_scaled / annual_reference_hdd)
+
+
+def calculate_heating_demand_physics(
+    u_value: float,
+    envelope_area: float,
+    ventilation_rate: float,
+    heated_volume: float,
+    indoor_target_temperature: float,
+    outdoor_temperature_forecast: np.ndarray | pd.Series,
+    optimization_time_step: int,
+    solar_irradiance_forecast: np.ndarray | pd.Series | None = None,
+    window_area: float | None = None,
+    shgc: float = 0.6,
+) -> np.ndarray:
+    """
+    Calculate heating demand per timestep based on building physics heat loss model.
+
+    More accurate than HDD method as it directly calculates transmission and ventilation
+    losses based on building thermal properties. Optionally accounts for solar gains
+    through windows to reduce heating demand.
+
+    :param u_value: Overall thermal transmittance (U-value) in W/(m²·K). Typical values:
+        - 0.2-0.3: Well-insulated modern building
+        - 0.4-0.6: Average insulation
+        - 0.8-1.2: Poor insulation / old building
+    :type u_value: float
+    :param envelope_area: Total building envelope area (walls + roof + floor + windows) in m²
+    :type envelope_area: float
+    :param ventilation_rate: Air changes per hour (ACH). Typical values:
+        - 0.3-0.5: Well-sealed modern building with controlled ventilation
+        - 0.5-1.0: Average building
+        - 1.0-2.0: Leaky old building
+    :type ventilation_rate: float
+    :param heated_volume: Total heated volume in m³
+    :type heated_volume: float
+    :param indoor_target_temperature: Target indoor temperature in °C
+    :type indoor_target_temperature: float
+    :param outdoor_temperature_forecast: Outdoor temperature forecast in °C for each timestep
+    :type outdoor_temperature_forecast: np.ndarray | pd.Series
+    :param optimization_time_step: Optimization time step in minutes
+    :type optimization_time_step: int
+    :param solar_irradiance_forecast: Global Horizontal Irradiance (GHI) in W/m² for each timestep.
+        If provided along with window_area, solar gains will be subtracted from heating demand.
+    :type solar_irradiance_forecast: np.ndarray | pd.Series | None, optional
+    :param window_area: Total window area in m². If provided along with solar_irradiance_forecast,
+        solar gains will reduce heating demand. Typical values: 15-25% of floor area.
+    :type window_area: float | None, optional
+    :param shgc: Solar Heat Gain Coefficient (dimensionless, 0-1). Fraction of solar radiation
+        that becomes heat inside the building. Typical values:
+        - 0.5-0.6: Modern low-e double-glazed windows
+        - 0.6-0.7: Standard double-glazed windows
+        - 0.7-0.8: Single-glazed windows
+        Default: 0.6
+    :type shgc: float, optional
+    :return: Array of heating demand values (kWh) per timestep
+    :rtype: np.ndarray
+
+    Example:
+        >>> outdoor_temps = np.array([5, 8, 12, 15])
+        >>> ghi = np.array([0, 100, 400, 600])  # W/m²
+        >>> demand = calculate_heating_demand_physics(
+        ...     u_value=0.3,
+        ...     envelope_area=400,
+        ...     ventilation_rate=0.5,
+        ...     heated_volume=250,
+        ...     indoor_target_temperature=20,
+        ...     outdoor_temperature_forecast=outdoor_temps,
+        ...     optimization_time_step=30,
+        ...     solar_irradiance_forecast=ghi,
+        ...     window_area=50,
+        ...     shgc=0.6
+        ... )
+    """
+
+    # Convert outdoor temperature forecast to numpy array if pandas Series
+    outdoor_temps = (
+        outdoor_temperature_forecast.values
+        if isinstance(outdoor_temperature_forecast, pd.Series)
+        else np.asarray(outdoor_temperature_forecast)
+    )
+
+    # Calculate temperature difference (only heat when outdoor < indoor)
+    temp_diff = indoor_target_temperature - outdoor_temps
+    temp_diff = np.maximum(temp_diff, 0.0)
+
+    # Transmission losses: Q_trans = U * A * ΔT (W to kW)
+    transmission_loss_kw = u_value * envelope_area * temp_diff / 1000.0
+
+    # Ventilation losses: Q_vent = V * ρ * c * n * ΔT / 3600
+    # ρ = air density (kg/m³), c = specific heat capacity (kJ/(kg·K)), n = ACH
+    air_density = 1.2  # kg/m³ at 20°C
+    air_heat_capacity = 1.005  # kJ/(kg·K)
+    ventilation_loss_kw = (
+        ventilation_rate * heated_volume * air_density * air_heat_capacity * temp_diff / 3600.0
+    )
+
+    # Total heat loss in kW
+    total_loss_kw = transmission_loss_kw + ventilation_loss_kw
+
+    # Calculate solar gains if irradiance and window area are provided
+    if solar_irradiance_forecast is not None and window_area is not None:
+        # Convert solar irradiance to numpy array if pandas Series
+        solar_irradiance = (
+            solar_irradiance_forecast.values
+            if isinstance(solar_irradiance_forecast, pd.Series)
+            else np.asarray(solar_irradiance_forecast)
+        )
+
+        # Solar gains: Q_solar = window_area * SHGC * GHI (W to kW)
+        # GHI is in W/m², so multiply by window_area (m²) gives W, then divide by 1000 for kW
+        solar_gains_kw = window_area * shgc * solar_irradiance / 1000.0
+
+        # Subtract solar gains from heat loss (but never go negative)
+        total_loss_kw = np.maximum(total_loss_kw - solar_gains_kw, 0.0)
+
+    # Convert to kWh for the timestep
+    hours_per_timestep = optimization_time_step / 60.0
+    return total_loss_kw * hours_per_timestep
+
+
 def update_params_with_ha_config(
     params: str,
     ha_config: dict,
@@ -263,6 +571,7 @@ async def treat_runtimeparams(
     # Some default data needed
     custom_deferrable_forecast_id = []
     custom_predicted_temperature_id = []
+    custom_heating_demand_id = []
     for k in range(params["optim_conf"]["number_of_deferrable_loads"]):
         custom_deferrable_forecast_id.append(
             {
@@ -278,6 +587,14 @@ async def treat_runtimeparams(
                 "device_class": "temperature",
                 "unit_of_measurement": default_temperature_unit,
                 "friendly_name": f"Predicted temperature {k}",
+            }
+        )
+        custom_heating_demand_id.append(
+            {
+                "entity_id": f"sensor.heating_demand{k}",
+                "device_class": "energy",
+                "unit_of_measurement": "kWh",
+                "friendly_name": f"Heating demand {k}",
             }
         )
     default_passed_dict = {
@@ -349,6 +666,7 @@ async def treat_runtimeparams(
         },
         "custom_deferrable_forecast_id": custom_deferrable_forecast_id,
         "custom_predicted_temperature_id": custom_predicted_temperature_id,
+        "custom_heating_demand_id": custom_heating_demand_id,
         "publish_prefix": "",
     }
     if "passed_data" in params.keys():
@@ -855,6 +1173,10 @@ async def treat_runtimeparams(
         if "custom_predicted_temperature_id" in runtimeparams.keys():
             params["passed_data"]["custom_predicted_temperature_id"] = runtimeparams[
                 "custom_predicted_temperature_id"
+            ]
+        if "custom_heating_demand_id" in runtimeparams.keys():
+            params["passed_data"]["custom_heating_demand_id"] = runtimeparams[
+                "custom_heating_demand_id"
             ]
 
     # split config categories from params
