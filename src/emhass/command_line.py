@@ -1707,7 +1707,7 @@ async def publish_data(
             else:
                 # If def_load_config is shorter than k, just stop checking thermal for this index
                 pass
-    # Publish heating demand for thermal models
+    # Publish heating demand for thermal models (both thermal_config and thermal_battery)
     if "custom_heating_demand_id" in params["passed_data"]:
         custom_heating_demand_id = params["passed_data"]["custom_heating_demand_id"]
         # Safety: Ensure def_load_config exists and is a list
@@ -1717,7 +1717,12 @@ async def publish_data(
         for k in range(input_data_dict["opt"].optim_conf["number_of_deferrable_loads"]):
             # Check 1: Ensure k is within bounds of def_load_config
             if k < len(def_load_config):
-                if "thermal_config" in def_load_config[k]:
+                # Check if this is a thermal load (either thermal_config or thermal_battery)
+                is_thermal_load = (
+                    "thermal_config" in def_load_config[k]
+                    or "thermal_battery" in def_load_config[k]
+                )
+                if is_thermal_load:
                     # Check 2: Ensure k is within bounds of custom_heating_demand_id
                     if k < len(custom_heating_demand_id):
                         # Check 3: Ensure the column exists in the DataFrame

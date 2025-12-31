@@ -204,19 +204,27 @@ def calculate_cop_heatpump(
         logger.warning(
             f"COP calculation: {num_invalid} timestep(s) have outdoor temperature >= supply temperature. "
             f"This is non-physical for heating mode. Indices: {invalid_indices.tolist()[:5]}{'...' if len(invalid_indices) > 5 else ''}. "
-            f"Supply temp: {supply_temperature:.1f}°C. Using epsilon to prevent division by zero."
+            f"Supply temp: {supply_temperature:.1f}°C. Setting COP to 1.0 (direct electric heating) for these periods."
         )
-        # Add small epsilon to prevent division by zero and allow calculation to proceed
-        epsilon = 1e-6
-        temperature_diff = np.where(temperature_diff <= 0, epsilon, temperature_diff)
 
     # Vectorized Carnot-based COP calculation
     # COP = carnot_efficiency × T_supply / (T_supply - T_outdoor)
-    cop_values = carnot_efficiency * supply_temperature_kelvin / temperature_diff
+    # For non-physical cases (outdoor >= supply), we use a neutral COP of 1.0
+    # This prevents the optimizer from exploiting unrealistic high COP values
 
-    # Apply lower bound of 1.0 (realistic minimum for heat pumps)
-    # Values below 1.0 indicate the heat pump is less efficient than direct electric heating
-    cop_values = np.maximum(cop_values, 1.0)
+    # Avoid division by zero: use a mask to only calculate for valid cases
+    cop_values = np.ones_like(outdoor_temperature_kelvin)  # Default to 1.0 everywhere
+    valid_mask = temperature_diff > 0
+    if np.any(valid_mask):
+        cop_values[valid_mask] = (
+            carnot_efficiency * supply_temperature_kelvin / temperature_diff[valid_mask]
+        )
+
+    # Apply realistic bounds: minimum 1.0, maximum 8.0
+    # - Lower bound: 1.0 means direct electric heating (no efficiency gain)
+    # - Upper bound: 8.0 is an optimistic but reasonable maximum for modern heat pumps
+    #   (prevents numerical instability from very small temperature differences)
+    cop_values = np.clip(cop_values, 1.0, 8.0)
 
     return cop_values
 
@@ -240,7 +248,7 @@ def calculate_thermal_loss_signed(
     :type outdoor_temperature_forecast: np.ndarray or pd.Series
     :param indoor_temperature: Indoor/target temperature threshold (°C)
     :type indoor_temperature: float
-    :param base_loss: Base thermal loss coefficient in kW (default: 0.045 kW)
+    :param base_loss: Base thermal loss coefficient in kW
     :type base_loss: float
     :return: Signed loss array (positive = heat loss, negative = heat gain)
     :rtype: np.ndarray

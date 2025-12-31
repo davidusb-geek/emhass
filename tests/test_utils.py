@@ -1250,6 +1250,158 @@ class TestHeatingDemand(unittest.TestCase):
         # Should also match explicit 30 min
         np.testing.assert_array_almost_equal(demand_series_no_dt, demand_explicit)
 
+    def test_calculate_heating_demand_physics_no_solar_basic_monotonic(self):
+        """No solar gains: zero demand when outdoor >= indoor, higher demand for colder steps."""
+        indoor_temp = 21.0
+        # Outdoor temps: some above, some below indoor
+        outdoor_temps = np.array([22.0, 21.0, 20.0, 15.0, 10.0, 5.0])
+        optimization_time_step = 60  # minutes
+        u_value = 0.35  # W/m²K
+        envelope_area = 380.0  # m²
+        ventilation_rate = 0.4  # ACH
+        heated_volume = 240.0  # m³
+
+        demand = utils.calculate_heating_demand_physics(
+            u_value=u_value,
+            envelope_area=envelope_area,
+            ventilation_rate=ventilation_rate,
+            heated_volume=heated_volume,
+            indoor_target_temperature=indoor_temp,
+            outdoor_temperature_forecast=outdoor_temps,
+            optimization_time_step=optimization_time_step,
+            solar_irradiance_forecast=None,
+            window_area=None,
+        )
+
+        # 1) Non-negative demand
+        self.assertTrue(np.all(demand >= 0.0), "All heating demands should be non-negative")
+
+        # 2) Zero demand when outdoor >= indoor (first two steps)
+        self.assertEqual(demand[0], 0.0, "No heating needed when outdoor (22°C) > indoor (21°C)")
+        self.assertEqual(demand[1], 0.0, "No heating needed when outdoor (21°C) = indoor (21°C)")
+
+        # 3) Positive demand when outdoor < indoor
+        self.assertGreater(demand[2], 0.0, "Heating needed when outdoor (20°C) < indoor (21°C)")
+        self.assertGreater(demand[3], 0.0, "Heating needed when outdoor (15°C) < indoor (21°C)")
+
+        # 4) Colder timesteps yield higher demand (monotonic relationship)
+        colder_indices = [2, 3, 4, 5]
+        for i in range(len(colder_indices) - 1):
+            idx_warmer = colder_indices[i]
+            idx_colder = colder_indices[i + 1]
+            self.assertGreaterEqual(
+                demand[idx_colder],
+                demand[idx_warmer],
+                msg=f"Demand at colder step {idx_colder} ({outdoor_temps[idx_colder]}°C) "
+                f"should be >= step {idx_warmer} ({outdoor_temps[idx_warmer]}°C)",
+            )
+
+    def test_calculate_heating_demand_physics_with_solar_gains_reduces_demand(self):
+        """Solar gains reduce demand vs. no-solar case, and demand never becomes negative."""
+        indoor_temp = 21.0
+        outdoor_temps = np.array([0.0, 0.0, 0.0, 0.0])
+        optimization_time_step = 60  # minutes
+        u_value = 0.35  # W/m²K
+        envelope_area = 380.0  # m²
+        ventilation_rate = 0.4  # ACH
+        heated_volume = 240.0  # m³
+        window_area = 28.0  # m²
+        shgc = 0.6  # Solar Heat Gain Coefficient
+
+        # Simple GHI profile with some non-zero irradiance
+        solar_irradiance = np.array([0.0, 200.0, 400.0, 0.0])  # W/m²
+
+        demand_no_solar = utils.calculate_heating_demand_physics(
+            u_value=u_value,
+            envelope_area=envelope_area,
+            ventilation_rate=ventilation_rate,
+            heated_volume=heated_volume,
+            indoor_target_temperature=indoor_temp,
+            outdoor_temperature_forecast=outdoor_temps,
+            optimization_time_step=optimization_time_step,
+            solar_irradiance_forecast=None,
+            window_area=None,
+        )
+
+        demand_with_solar = utils.calculate_heating_demand_physics(
+            u_value=u_value,
+            envelope_area=envelope_area,
+            ventilation_rate=ventilation_rate,
+            heated_volume=heated_volume,
+            indoor_target_temperature=indoor_temp,
+            outdoor_temperature_forecast=outdoor_temps,
+            optimization_time_step=optimization_time_step,
+            solar_irradiance_forecast=solar_irradiance,
+            window_area=window_area,
+            shgc=shgc,
+        )
+
+        # Demand must never be negative
+        self.assertTrue(
+            np.all(demand_with_solar >= 0.0), "Demand with solar gains should never be negative"
+        )
+
+        # With solar gains, demand should not increase at any timestep
+        self.assertTrue(
+            np.all(demand_with_solar <= demand_no_solar),
+            msg=f"Demand with solar gains should be <= no-solar demand at all timesteps.\n"
+            f"no_solar={demand_no_solar}, with_solar={demand_with_solar}",
+        )
+
+        # For timesteps with non-zero irradiance, some reduction is expected
+        self.assertLess(
+            np.sum(demand_with_solar[solar_irradiance > 0.0]),
+            np.sum(demand_no_solar[solar_irradiance > 0.0]),
+            "Solar irradiance should reduce total heating demand during sunny periods",
+        )
+
+    def test_calculate_heating_demand_physics_scaling_with_timestep(self):
+        """Sanity check: total demand scales appropriately with optimization_time_step."""
+        indoor_temp = 21.0
+        outdoor_temps = np.array([5.0, 5.0, 5.0, 5.0])  # constant cold
+        u_value = 0.35  # W/m²K
+        envelope_area = 380.0  # m²
+        ventilation_rate = 0.4  # ACH
+        heated_volume = 240.0  # m³
+
+        # Case 1: 30-minute timestep
+        demand_30min = utils.calculate_heating_demand_physics(
+            u_value=u_value,
+            envelope_area=envelope_area,
+            ventilation_rate=ventilation_rate,
+            heated_volume=heated_volume,
+            indoor_target_temperature=indoor_temp,
+            outdoor_temperature_forecast=outdoor_temps,
+            optimization_time_step=30,
+            solar_irradiance_forecast=None,
+            window_area=None,
+        )
+
+        # Case 2: 60-minute timestep with same temperatures
+        demand_60min = utils.calculate_heating_demand_physics(
+            u_value=u_value,
+            envelope_area=envelope_area,
+            ventilation_rate=ventilation_rate,
+            heated_volume=heated_volume,
+            indoor_target_temperature=indoor_temp,
+            outdoor_temperature_forecast=outdoor_temps,
+            optimization_time_step=60,
+            solar_irradiance_forecast=None,
+            window_area=None,
+        )
+
+        total_30 = np.sum(demand_30min)
+        total_60 = np.sum(demand_60min)
+
+        # For a purely linear time scaling, 60-minute steps should yield about 2× 30-minute steps
+        # (depending on implementation details, allow a small numerical tolerance).
+        self.assertAlmostEqual(
+            total_60,
+            2.0 * total_30,
+            delta=0.01 * total_60,
+            msg=f"60-minute timestep total ({total_60:.3f}) should be ~2x 30-minute total ({total_30:.3f})",
+        )
+
     def test_calculate_cop_heatpump(self):
         """Test heat pump COP calculation utility function with Carnot-based formula."""
         # Test basic calculation with example outdoor temperatures
@@ -1298,9 +1450,11 @@ class TestHeatingDemand(unittest.TestCase):
         # Test with different carnot_efficiency values
         carnot_eff_high = 0.5
         cops_high_eff = utils.calculate_cop_heatpump(supply_temp, carnot_eff_high, outdoor_temps)
-        # Higher Carnot efficiency should give proportionally higher COPs
+        # Higher Carnot efficiency should give proportionally higher COPs (subject to 8.0 cap)
         expected_ratio = carnot_eff_high / carnot_efficiency
-        np.testing.assert_array_almost_equal(cops_high_eff, cops * expected_ratio)
+        expected_cops_uncapped = cops * expected_ratio
+        expected_cops_capped = np.minimum(expected_cops_uncapped, 8.0)
+        np.testing.assert_array_almost_equal(cops_high_eff, expected_cops_capped)
 
         # Test realistic scenario: heat pump at 35°C supply, 5°C outdoor
         # COP = 0.4 * 308.15 / |308.15 - 278.15| = 0.4 * 308.15 / 30 = 4.108
@@ -1332,11 +1486,22 @@ class TestHeatingDemand(unittest.TestCase):
                 "Should log warning about non-physical temperature scenario",
             )
 
-        # Verify result is still valid (uses epsilon to prevent errors)
+        # Verify result is still valid (uses COP=1.0 for non-physical scenarios)
         self.assertIsInstance(cops, np.ndarray)
         self.assertEqual(len(cops), len(outdoor_temps))
         self.assertTrue(np.all(cops >= 1.0), "All COPs should be >= 1.0 (lower bound)")
+        self.assertTrue(np.all(cops <= 8.0), "All COPs should be <= 8.0 (upper bound)")
         self.assertTrue(np.all(np.isfinite(cops)), "All COPs should be finite (no inf/nan)")
+        # Non-physical scenarios (outdoor >= supply) should get COP=1.0 (direct electric heating)
+        # outdoor_temps = [5, 10, 30, 35, 40], supply = 30
+        # Valid: cops[0], cops[1]  (5 < 30, 10 < 30)
+        # Invalid: cops[2], cops[3], cops[4]  (30 >= 30, 35 > 30, 40 > 30)
+        self.assertEqual(cops[2], 1.0, "Boundary case (equal temps) should have COP=1.0")
+        self.assertEqual(cops[3], 1.0, "Non-physical scenario (outdoor > supply) should have COP=1.0")
+        self.assertEqual(cops[4], 1.0, "Non-physical scenario (outdoor > supply) should have COP=1.0")
+        # Valid scenarios should have reasonable COP > 1.0
+        self.assertGreater(cops[0], 1.0, "Valid scenario should have COP > 1.0")
+        self.assertGreater(cops[1], 1.0, "Valid scenario should have COP > 1.0")
 
     def test_calculate_thermal_loss_signed(self):
         """Test thermal loss sign-switching utility function based on Langer & Volling (2020)."""
