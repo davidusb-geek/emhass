@@ -8,6 +8,7 @@
 - Improve logging for non-hybrid systems to clarify that inverter_ac_input_max is ignored and battery_charge_power_max is used as the charge limit.
 - Expand and update configuration documentation for weather, load, load cost, and production price forecast methods, including references to dedicated forecast documentation and external data inputs.
 ### Fix
+- Fixed problem with missing prepare data method on MLForecaster workflow.
 - Always use the configured battery_charge_power_max as the effective battery DC charge limit, avoiding unintended constraint tightening from inverter_ac_input_max on non-hybrid systems.
 
 ## 0.15.2 - 2025-12-19
