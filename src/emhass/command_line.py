@@ -603,7 +603,7 @@ async def set_input_data_dict(
                 set_zero_min=retrieve_hass_conf.get("set_zero_min", True),
                 var_replace_zero=retrieve_hass_conf.get("sensor_replace_zero", []),
                 var_interp=retrieve_hass_conf.get("sensor_linear_interp", []),
-                skip_renaming=True 
+                skip_renaming=True,
             )
             df_input_data = rh.df_final.copy()
     elif set_type == "regressor-model-fit" or set_type == "regressor-model-predict":
