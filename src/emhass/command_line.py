@@ -785,6 +785,79 @@ async def perfect_forecast_optim(
     return opt_res
 
 
+def prepare_forecast_and_weather_data(
+    input_data_dict: dict,
+    logger: logging.Logger,
+    warn_on_resolution: bool = False,
+) -> pd.DataFrame | bool:
+    """
+    Prepare forecast data with load costs, production prices, outdoor temperature, and GHI.
+
+    This helper function eliminates duplication between dayahead_forecast_optim and naive_mpc_optim.
+
+    :param input_data_dict: Dictionary with forecast and input data
+    :type input_data_dict: dict
+    :param logger: Logger object
+    :type logger: logging.Logger
+    :param warn_on_resolution: Whether to warn about GHI resolution mismatch
+    :type warn_on_resolution: bool
+    :return: Prepared DataFrame or False on error
+    :rtype: pd.DataFrame | bool
+    """
+    # Get load cost forecast
+    df_input_data_dayahead = input_data_dict["fcst"].get_load_cost_forecast(
+        input_data_dict["df_input_data_dayahead"],
+        method=input_data_dict["fcst"].optim_conf["load_cost_forecast_method"],
+    )
+    if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
+        return False
+
+    # Get production price forecast
+    df_input_data_dayahead = input_data_dict["fcst"].get_prod_price_forecast(
+        df_input_data_dayahead,
+        method=input_data_dict["fcst"].optim_conf["production_price_forecast_method"],
+    )
+    if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
+        return False
+
+    # Add outdoor temperature if provided
+    if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
+        df_input_data_dayahead["outdoor_temperature_forecast"] = input_data_dict["params"][
+            "passed_data"
+        ]["outdoor_temperature_forecast"]
+
+    # Merge GHI (Global Horizontal Irradiance) from weather forecast if available
+    if input_data_dict["df_weather"] is not None and "ghi" in input_data_dict["df_weather"].columns:
+        dayahead_index = df_input_data_dayahead.index
+
+        # Check time resolution if requested
+        if warn_on_resolution and len(input_data_dict["df_weather"].index) > 1 and len(dayahead_index) > 1:
+            weather_index = input_data_dict["df_weather"].index
+            weather_freq = (weather_index[1] - weather_index[0]).total_seconds()
+            dayahead_freq = (dayahead_index[1] - dayahead_index[0]).total_seconds()
+            if weather_freq > 2 * dayahead_freq:
+                logger.warning(
+                    "Weather data time resolution (%.0fs) is much coarser than dayahead index (%.0fs). "
+                    "Step changes in GHI may occur.",
+                    weather_freq,
+                    dayahead_freq,
+                )
+
+        # Align GHI data to dayahead index using interpolation
+        df_input_data_dayahead["ghi"] = (
+            input_data_dict["df_weather"]["ghi"]
+            .reindex(dayahead_index)
+            .interpolate(method="time", limit_direction="both")
+        )
+        logger.debug(
+            "Merged GHI data into optimization input: mean=%.1f W/m², max=%.1f W/m²",
+            df_input_data_dayahead["ghi"].mean(),
+            df_input_data_dayahead["ghi"].max(),
+        )
+
+    return df_input_data_dayahead
+
+
 async def dayahead_forecast_optim(
     input_data_dict: dict,
     logger: logging.Logger,
@@ -807,36 +880,12 @@ async def dayahead_forecast_optim(
 
     """
     logger.info("Performing day-ahead forecast optimization")
-    # Load cost and prod price forecast
-    df_input_data_dayahead = input_data_dict["fcst"].get_load_cost_forecast(
-        input_data_dict["df_input_data_dayahead"],
-        method=input_data_dict["fcst"].optim_conf["load_cost_forecast_method"],
+    # Prepare forecast data with costs, prices, outdoor temp, and GHI
+    df_input_data_dayahead = prepare_forecast_and_weather_data(
+        input_data_dict, logger, warn_on_resolution=False
     )
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
-    df_input_data_dayahead = input_data_dict["fcst"].get_prod_price_forecast(
-        df_input_data_dayahead,
-        method=input_data_dict["fcst"].optim_conf["production_price_forecast_method"],
-    )
-    if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
-        return False
-    if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
-        df_input_data_dayahead["outdoor_temperature_forecast"] = input_data_dict["params"][
-            "passed_data"
-        ]["outdoor_temperature_forecast"]
-    # Merge GHI (Global Horizontal Irradiance) from weather forecast if available
-    if input_data_dict["df_weather"] is not None and "ghi" in input_data_dict["df_weather"].columns:
-        # Align GHI data to df_input_data_dayahead index using interpolation for accurate temporal matching
-        df_input_data_dayahead["ghi"] = (
-            input_data_dict["df_weather"]["ghi"]
-            .reindex(df_input_data_dayahead.index)
-            .interpolate(method="time", limit_direction="both")
-        )
-        logger.debug(
-            "Merged GHI data into optimization input: mean=%.1f W/m², max=%.1f W/m²",
-            df_input_data_dayahead["ghi"].mean(),
-            df_input_data_dayahead["ghi"].max(),
-        )
     opt_res_dayahead = input_data_dict["opt"].perform_dayahead_forecast_optim(
         df_input_data_dayahead,
         input_data_dict["p_pv_forecast"],
@@ -891,47 +940,12 @@ async def naive_mpc_optim(
 
     """
     logger.info("Performing naive MPC optimization")
-    # Load cost and prod price forecast
-    df_input_data_dayahead = input_data_dict["fcst"].get_load_cost_forecast(
-        input_data_dict["df_input_data_dayahead"],
-        method=input_data_dict["fcst"].optim_conf["load_cost_forecast_method"],
+    # Prepare forecast data with costs, prices, outdoor temp, and GHI (with resolution warning)
+    df_input_data_dayahead = prepare_forecast_and_weather_data(
+        input_data_dict, logger, warn_on_resolution=True
     )
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
-    df_input_data_dayahead = input_data_dict["fcst"].get_prod_price_forecast(
-        df_input_data_dayahead,
-        method=input_data_dict["fcst"].optim_conf["production_price_forecast_method"],
-    )
-    if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
-        return False
-    if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
-        df_input_data_dayahead["outdoor_temperature_forecast"] = input_data_dict["params"][
-            "passed_data"
-        ]["outdoor_temperature_forecast"]
-    # Merge GHI (Global Horizontal Irradiance) from weather forecast if available
-    if input_data_dict["df_weather"] is not None and "ghi" in input_data_dict["df_weather"].columns:
-        # Check time resolution of both indices
-        weather_index = input_data_dict["df_weather"].index
-        dayahead_index = df_input_data_dayahead.index
-        if len(weather_index) > 1 and len(dayahead_index) > 1:
-            weather_freq = (weather_index[1] - weather_index[0]).total_seconds()
-            dayahead_freq = (dayahead_index[1] - dayahead_index[0]).total_seconds()
-            if weather_freq > 2 * dayahead_freq:
-                logger.warning(
-                    "Weather data time resolution (%.0fs) is much coarser than dayahead index (%.0fs). Step changes in GHI may occur.",
-                    weather_freq,
-                    dayahead_freq,
-                )
-        # Interpolate GHI data to match df_input_data_dayahead index
-        ghi_series = input_data_dict["df_weather"]["ghi"].reindex(dayahead_index)
-        if ghi_series.isnull().any():
-            ghi_series = ghi_series.interpolate(method="time")
-        df_input_data_dayahead["ghi"] = ghi_series
-        logger.debug(
-            "Merged GHI data into MPC optimization input: mean=%.1f W/m², max=%.1f W/m²",
-            df_input_data_dayahead["ghi"].mean(),
-            df_input_data_dayahead["ghi"].max(),
-        )
     # The specifics params for the MPC at runtime
     prediction_horizon = input_data_dict["params"]["passed_data"]["prediction_horizon"]
     soc_init = input_data_dict["params"]["passed_data"]["soc_init"]
@@ -1678,7 +1692,12 @@ async def publish_data(
         for k in range(input_data_dict["opt"].optim_conf["number_of_deferrable_loads"]):
             # Check 1: Ensure k is within bounds of def_load_config
             if k < len(def_load_config):
-                if "thermal_config" in def_load_config[k]:
+                # Check if this is a thermal load (either thermal_config or thermal_battery)
+                is_thermal_load = (
+                    "thermal_config" in def_load_config[k]
+                    or "thermal_battery" in def_load_config[k]
+                )
+                if is_thermal_load:
                     # Check 2: Ensure k is within bounds of custom_predicted_temperature_id
                     if k < len(custom_predicted_temperature_id):
                         # Check 3: Ensure the column exists in the DataFrame
