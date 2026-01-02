@@ -128,70 +128,187 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.df_input_data_dayahead.columns = ["p_pv_forecast", "p_load_forecast"]
         # Build Optimization object
         self.costfun = "profit"
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
+        self.opt = self.create_optimization()
         self.df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data)
         self.df_input_data = self.fcst.get_prod_price_forecast(self.df_input_data)
         self.input_data_dict = {
             "retrieve_hass_conf": retrieve_hass_conf,
         }
 
+    # Helper methods to reduce code duplication
+    def create_optimization(self, costfun=None, optim_conf=None, **kwargs):
+        """Helper to create Optimization object with standard parameters.
+
+        Args:
+            costfun: Cost function override (defaults to self.costfun)
+            optim_conf: Optim config override (defaults to self.optim_conf)
+            **kwargs: Additional overrides for any parameter
+
+        Returns:
+            Optimization object
+        """
+        return Optimization(
+            kwargs.get("retrieve_hass_conf", self.retrieve_hass_conf),
+            optim_conf or self.optim_conf,
+            kwargs.get("plant_conf", self.plant_conf),
+            kwargs.get("var_load_cost", self.fcst.var_load_cost),
+            kwargs.get("var_prod_price", self.fcst.var_prod_price),
+            costfun or self.costfun,
+            kwargs.get("emhass_conf", emhass_conf),
+            kwargs.get("logger", logger),
+        )
+
+    def prepare_forecast_data(self, df=None):
+        """Prepare input data with load cost and production price forecasts.
+
+        Args:
+            df: DataFrame to prepare (defaults to self.df_input_data_dayahead)
+
+        Returns:
+            DataFrame with forecasts added
+        """
+        if df is None:
+            df = self.df_input_data_dayahead
+        df = self.fcst.get_load_cost_forecast(df)
+        df = self.fcst.get_prod_price_forecast(df)
+        return df
+
+    def assert_valid_optimization_result(self, opt_res, costfun=None, check_battery=False):
+        """Assert optimization result has correct format and required columns.
+
+        Args:
+            opt_res: Optimization result DataFrame
+            costfun: Expected cost function name (defaults to self.costfun)
+            check_battery: Whether to check for battery-related columns
+        """
+        # Structure assertions
+        self.assertIsInstance(opt_res, type(pd.DataFrame()))
+        self.assertIsInstance(opt_res.index, pd.core.indexes.datetimes.DatetimeIndex)
+        self.assertIsInstance(opt_res.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
+
+        # Column assertions
+        costfun = costfun or self.costfun
+        if costfun == "self-consumption":
+            self.assertIn("cost_fun_selfcons", opt_res.columns)
+        else:
+            self.assertIn(f"cost_fun_{costfun}", opt_res.columns)
+
+        if check_battery:
+            self.assertIn("P_batt", opt_res.columns)
+            self.assertIn("SOC_opt", opt_res.columns)
+
+    def assert_energy_constraint(
+        self, power_series, expected_hours, nominal_power=None, tolerance=1e-3
+    ):
+        """Assert that total energy matches expected operating hours.
+
+        Args:
+            power_series: Power values (Series or array)
+            expected_hours: Expected operating hours
+            nominal_power: Nominal power (defaults to first deferrable load)
+            tolerance: Numerical tolerance
+        """
+        if nominal_power is None:
+            nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][0]
+
+        timestep_hours = self.retrieve_hass_conf["optimization_time_step"].seconds / 3600
+        expected_energy = nominal_power * expected_hours
+        actual_energy = power_series.sum() * timestep_hours
+
+        self.assertLess(
+            np.abs(expected_energy - actual_energy),
+            tolerance,
+            f"Energy mismatch: expected {expected_energy:.3f} Wh, got {actual_energy:.3f} Wh",
+        )
+
+    def run_thermal_battery_optimization(self, thermal_config, outdoor_temps=None, ghi=None):
+        """Helper to run thermal battery optimization tests.
+
+        Args:
+            thermal_config: Thermal battery configuration dict
+            outdoor_temps: Outdoor temperature forecast (list or single value for constant)
+            ghi: Global horizontal irradiance forecast (optional)
+
+        Returns:
+            Optimization result DataFrame
+        """
+        # Prepare forecast data
+        df = self.prepare_forecast_data()
+
+        # Add outdoor temperature
+        if outdoor_temps is None:
+            outdoor_temps = 10.0
+        df["outdoor_temperature_forecast"] = outdoor_temps
+
+        # Add GHI if provided
+        if ghi is not None:
+            df["ghi"] = ghi
+
+        # Configure thermal battery
+        self.optim_conf["def_load_config"] = [{"thermal_battery": thermal_config}]
+        opt = self.create_optimization()
+
+        # Run optimization
+        unit_load_cost = df[opt.var_load_cost].values
+        unit_prod_price = df[opt.var_prod_price].values
+
+        return opt.perform_optimization(
+            df,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+
+    def run_startup_penalty_test(self, load_costs, optim_updates, expected_pattern):
+        """Helper for startup penalty tests.
+
+        Args:
+            load_costs: List of load cost forecasts
+            optim_updates: Dict of optim_conf updates
+            expected_pattern: Expected P_deferrable0 pattern (list of 0/1 multipliers)
+        """
+        self.fcst.params["passed_data"]["load_cost_forecast"] = load_costs
+        self.optim_conf.update(optim_updates)
+        self.run_penalty_test_forecast()
+
+        assert_series_equal(
+            self.opt_res_dayahead["P_deferrable0"],
+            self.optim_conf["nominal_power_of_deferrable_loads"][0]
+            * pd.Series(expected_pattern, index=self.opt_res_dayahead.index),
+            check_names=False,
+        )
+
     # Check formatting of output from perfect optimization
     def test_perform_perfect_forecast_optim(self):
         self.opt_res = self.opt.perform_perfect_forecast_optim(self.df_input_data, self.days_list)
-        self.assertIsInstance(self.opt_res, type(pd.DataFrame()))
-        self.assertIsInstance(self.opt_res.index, pd.core.indexes.datetimes.DatetimeIndex)
-        self.assertIsInstance(self.opt_res.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
-        self.assertIn("cost_fun_" + self.costfun, self.opt_res.columns)
+        self.assert_valid_optimization_result(self.opt_res)
 
     def test_perform_dayahead_forecast_optim(self):
         # Check formatting of output from dayahead optimization
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.prepare_forecast_data()
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
-        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertIsInstance(self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex)
-        self.assertIsInstance(
-            self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-        )
-        self.assertIn("cost_fun_" + self.costfun, self.opt_res_dayahead.columns)
-        self.assertEqual(
-            self.opt_res_dayahead["P_deferrable0"].sum()
-            * (self.retrieve_hass_conf["optimization_time_step"].seconds / 3600),
-            self.optim_conf["nominal_power_of_deferrable_loads"][0]
-            * self.optim_conf["operating_hours_of_each_deferrable_load"][0],
+        self.assert_valid_optimization_result(self.opt_res_dayahead)
+        self.assert_energy_constraint(
+            self.opt_res_dayahead["P_deferrable0"],
+            self.optim_conf["operating_hours_of_each_deferrable_load"][0],
         )
         # Test the battery, dynamics and grid exchange contraints
-        self.optim_conf.update({"set_use_battery": True})
-        self.optim_conf.update({"set_nocharge_from_grid": True})
-        self.optim_conf.update({"set_battery_dynamic": True})
-        self.optim_conf.update({"set_nodischarge_to_grid": True})
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "set_nocharge_from_grid": True,
+                "set_battery_dynamic": True,
+                "set_nodischarge_to_grid": True,
+            }
         )
+        self.opt = self.create_optimization()
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
-        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertIn("P_batt", self.opt_res_dayahead.columns)
-        self.assertIn("SOC_opt", self.opt_res_dayahead.columns)
+        self.assert_valid_optimization_result(self.opt_res_dayahead, check_battery=True)
         self.assertAlmostEqual(
             self.opt_res_dayahead.loc[self.opt_res_dayahead.index[-1], "SOC_opt"],
             self.plant_conf["battery_target_state_of_charge"],
@@ -213,82 +330,53 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # Check status
         self.assertIn("optim_status", self.opt_res_dayahead.columns)
         # Test treat_def_as_semi_cont and set_def_constant constraints
-        self.optim_conf.update({"treat_deferrable_load_as_semi_cont": [True, True]})
-        self.optim_conf.update({"set_deferrable_load_single_constant": [True, True]})
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
+        self.optim_conf.update(
+            {
+                "treat_deferrable_load_as_semi_cont": [True, True],
+                "set_deferrable_load_single_constant": [True, True],
+            }
         )
+        self.opt = self.create_optimization()
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
         self.assertEqual(self.opt.optim_status, "Optimal")
-        self.optim_conf.update({"treat_deferrable_load_as_semi_cont": [False, True]})
-        self.optim_conf.update({"set_deferrable_load_single_constant": [True, True]})
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
+        self.optim_conf.update(
+            {
+                "treat_deferrable_load_as_semi_cont": [False, True],
+                "set_deferrable_load_single_constant": [True, True],
+            }
         )
+        self.opt = self.create_optimization()
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
         self.assertEqual(self.opt.optim_status, "Optimal")
-        self.optim_conf.update({"treat_deferrable_load_as_semi_cont": [False, True]})
-        self.optim_conf.update({"set_deferrable_load_single_constant": [False, True]})
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
+        self.optim_conf.update(
+            {
+                "treat_deferrable_load_as_semi_cont": [False, True],
+                "set_deferrable_load_single_constant": [False, True],
+            }
         )
+        self.opt = self.create_optimization()
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
         self.assertEqual(self.opt.optim_status, "Optimal")
-        self.optim_conf.update({"treat_deferrable_load_as_semi_cont": [False, False]})
-        self.optim_conf.update({"set_deferrable_load_single_constant": [False, True]})
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
+        self.optim_conf.update(
+            {
+                "treat_deferrable_load_as_semi_cont": [False, False],
+                "set_deferrable_load_single_constant": [False, True],
+            }
         )
+        self.opt = self.create_optimization()
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
         self.assertEqual(self.opt.optim_status, "Optimal")
         self.optim_conf.update({"treat_deferrable_load_as_semi_cont": [False, False]})
         self.optim_conf.update({"set_deferrable_load_single_constant": [False, False]})
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
+        self.opt = self.create_optimization()
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
@@ -300,16 +388,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         soc_init = None
         soc_final = 0.3
         self.optim_conf["set_total_pv_sell"] = True
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
+        self.opt = self.create_optimization()
 
         unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
         unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
@@ -334,18 +413,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
     # Check formatting of output from dayahead optimization in self-consumption
     def test_perform_dayahead_forecast_optim_costfun_selfconsumption(self):
         costfun = "self-consumption"
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            costfun,
-            emhass_conf,
-            logger,
-        )
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.opt = self.create_optimization(costfun=costfun)
+        self.df_input_data_dayahead = self.prepare_forecast_data()
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
@@ -359,18 +428,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
     # Check formatting of output from dayahead optimization in cost
     def test_perform_dayahead_forecast_optim_costfun_cost(self):
         costfun = "cost"
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            costfun,
-            emhass_conf,
-            logger,
-        )
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.opt = self.create_optimization(costfun=costfun)
+        self.df_input_data_dayahead = self.prepare_forecast_data()
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
@@ -386,18 +445,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False, False]
         self.optim_conf["set_total_pv_sell"] = True
         self.optim_conf["set_deferrable_load_single_constant"] = [True, True]
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.opt = self.create_optimization()
+        self.df_input_data_dayahead = self.prepare_forecast_data()
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
@@ -414,16 +463,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.optim_conf["lp_solver"] = solver
             if os.getenv("lp_solver_path", default=None) is None:
                 self.optim_conf["lp_solver_path"] = os.getenv("lp_solver_path", default=None)
-            self.opt = Optimization(
-                self.retrieve_hass_conf,
-                self.optim_conf,
-                self.plant_conf,
-                self.fcst.var_load_cost,
-                self.fcst.var_prod_price,
-                self.costfun,
-                emhass_conf,
-                logger,
-            )
+            self.opt = self.create_optimization()
             self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
                 self.df_input_data_dayahead
             )
@@ -444,18 +484,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
     # Check minimum deferrable load power
     def test_perform_dayahead_forecast_optim_min_def_load_power(self):
         self.optim_conf["minimum_power_of_deferrable_loads"] = [1000.0, 100.0]
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.opt = self.create_optimization()
+        self.df_input_data_dayahead = self.prepare_forecast_data()
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
@@ -482,20 +512,10 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 )
 
     def test_perform_naive_mpc_optim(self):
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.prepare_forecast_data()
         # Test the battery
         self.optim_conf.update({"set_use_battery": True})
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
+        self.opt = self.create_optimization()
         prediction_horizon = 10
         soc_init = 0.4
         soc_final = 0.6
@@ -550,8 +570,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     # Test format output of dayahead optimization with a thermal deferrable load
     def test_thermal_load_optim(self):
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.prepare_forecast_data()
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
             random.normalvariate(10.0, 3.0) for _ in range(48)
         ]
@@ -570,16 +589,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             ]
         }
         self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
+        self.opt = self.create_optimization()
         unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values  # €/kWh
         unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values  # €/kWh
         self.opt_res_dayahead = self.opt.perform_optimization(
@@ -613,16 +623,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         if input_data is None:
             input_data = pd.DataFrame()
 
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
+        self.opt = self.create_optimization()
         def_start_timestep = [0]
         def_end_timestep = [0]
         passed_data["prediction_horizon"] = prediction_horizon
@@ -738,16 +739,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         unit_prod_price = input_data[self.opt.var_prod_price].values
 
         # Re-init optimization to ensure clean state
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
+        self.opt = self.create_optimization()
 
         self.opt_res_dayahead = self.opt.perform_optimization(
             input_data,
@@ -926,16 +918,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     # Setup function to run dayahead optimization for the following tests
     def run_penalty_test_forecast(self):
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
+        self.opt = self.create_optimization()
         def_total_hours = [5 * self.retrieve_hass_conf["optimization_time_step"].seconds / 3600.0]
         def_start_timestep = [0]
         def_end_timestep = [0]
@@ -1124,20 +1107,10 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         This test verifies that operating_timesteps_of_each_deferrable_load works correctly
         and produces the exact number of timesteps requested, regardless of timestep size.
         """
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.prepare_forecast_data()
         # Test the battery
         self.optim_conf.update({"set_use_battery": True})
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
+        self.opt = self.create_optimization()
         prediction_horizon = 10
         soc_init = 0.4
         soc_final = 0.6
@@ -1199,8 +1172,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     def test_perform_naive_mpc_optim_def_total_timestep_various_sizes(self):
         """Test operating_timesteps_of_each_deferrable_load with various timestep sizes."""
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.prepare_forecast_data()
 
         # Test with common timestep sizes that should work reliably
         timestep_sizes = [15, 30]  # minutes - stick to known working sizes
@@ -1277,8 +1249,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     def test_thermal_battery_constraints(self):
         """Test thermal battery optimization with Langer & Volling 2020 model."""
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.prepare_forecast_data()
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
             10.0 + 5.0 * np.sin(i * np.pi / 12)
             for i in range(48)  # Varying outdoor temp
@@ -1301,16 +1272,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         }
 
         self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
+        self.opt = self.create_optimization()
 
         # Run optimization
         unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
@@ -1374,8 +1336,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     def test_thermal_battery_infeasible_temperature_constraints(self):
         """Test optimizer handles infeasible thermal battery configuration (min_temperature > max_temperature)."""
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.prepare_forecast_data()
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
             10.0 + 5.0 * np.sin(i * np.pi / 12) for i in range(48)
         ]
@@ -1398,16 +1359,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         }
 
         self.optim_conf["def_load_config"] = infeasible_runtimeparams["def_load_config"]
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
+        self.opt = self.create_optimization()
 
         # Run optimization - should handle infeasibility gracefully
         unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
@@ -1431,8 +1383,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     def test_thermal_battery_physics_based(self):
         """Test thermal battery optimization with physics-based heating demand calculation."""
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.prepare_forecast_data()
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
             5.0 + 10.0 * np.sin(i * np.pi / 12)
             for i in range(48)  # Temperature cycling 5-15°C
@@ -1460,16 +1411,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         }
 
         self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
+        self.opt = self.create_optimization()
 
         # Run optimization
         unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
@@ -1527,8 +1469,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     def test_thermal_battery_hdd_configurable(self):
         """Test thermal battery optimization with configurable HDD parameters."""
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.prepare_forecast_data()
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
             8.0 + 6.0 * np.sin(i * np.pi / 12)
             for i in range(48)  # Temperature cycling 2-14°C
@@ -1554,16 +1495,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         }
 
         self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
+        self.opt = self.create_optimization()
 
         # Run optimization
         unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
@@ -1604,16 +1536,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         }
 
         self.optim_conf["def_load_config"] = runtimeparams_default["def_load_config"]
-        opt_default = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
+        opt_default = self.create_optimization()
 
         opt_res_default = opt_default.perform_optimization(
             self.df_input_data_dayahead,
@@ -1660,8 +1583,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     def test_thermal_battery_hdd_extreme_invalid_params(self):
         """Test thermal battery optimization with extreme/invalid HDD parameters handles gracefully."""
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.prepare_forecast_data()
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
             8.0 + 6.0 * np.sin(i * np.pi / 12) for i in range(48)
         ]
@@ -1692,16 +1614,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             }
 
             self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
-            opt = Optimization(
-                self.retrieve_hass_conf,
-                self.optim_conf,
-                self.plant_conf,
-                self.fcst.var_load_cost,
-                self.fcst.var_prod_price,
-                self.costfun,
-                emhass_conf,
-                logger,
-            )
+            opt = self.create_optimization()
 
             # Run optimization - should not crash
             unit_load_cost = self.df_input_data_dayahead[opt.var_load_cost].values
@@ -1735,8 +1648,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     def test_thermal_battery_physics_with_solar_gains(self):
         """Test thermal battery optimization with physics-based heating demand and solar gains."""
-        self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(self.df_input_data_dayahead)
-        self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(self.df_input_data_dayahead)
+        self.df_input_data_dayahead = self.prepare_forecast_data()
 
         # Add outdoor temperature forecast (cycling between 2-12°C, cold winter day)
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
@@ -1781,16 +1693,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         }
 
         self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
-        self.opt = Optimization(
-            self.retrieve_hass_conf,
-            self.optim_conf,
-            self.plant_conf,
-            self.fcst.var_load_cost,
-            self.fcst.var_prod_price,
-            self.costfun,
-            emhass_conf,
-            logger,
-        )
+        self.opt = self.create_optimization()
 
         # Run optimization
         unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
