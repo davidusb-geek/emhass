@@ -279,6 +279,36 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             check_names=False,
         )
 
+    def run_optimization_with_config(self, def_load_config):
+        """Helper to run optimization with a given def_load_config and verify success.
+
+        Args:
+            def_load_config: Configuration list for deferrable loads
+
+        Returns:
+            Optimization result DataFrame
+        """
+        self.optim_conf["def_load_config"] = def_load_config
+        opt = self.create_optimization()
+
+        # Run optimization
+        unit_load_cost = self.df_input_data_dayahead[opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[opt.var_prod_price].values
+        opt_res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+
+        # Verify optimization succeeded
+        self.assertIsInstance(opt_res, type(pd.DataFrame()))
+        self.assertIn("P_deferrable0", opt_res.columns)
+        self.assertGreater(len(opt_res), 0)
+
+        return opt_res
+
     # Check formatting of output from perfect optimization
     def test_perform_perfect_forecast_optim(self):
         self.opt_res = self.opt.perform_perfect_forecast_optim(self.df_input_data, self.days_list)
@@ -1271,28 +1301,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             ]
         }
 
-        self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
-        self.opt = self.create_optimization()
-
-        # Run optimization
-        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
-        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
-        opt_res = self.opt.perform_optimization(
-            self.df_input_data_dayahead,
-            self.p_pv_forecast.values.ravel(),
-            self.p_load_forecast.values.ravel(),
-            unit_load_cost,
-            unit_prod_price,
-        )
-
-        # Verify optimization succeeded
-        self.assertIsInstance(opt_res, type(pd.DataFrame()))
-        self.assertIn("P_deferrable0", opt_res.columns)
-
-        # Verify the optimization is not infeasible
-        # Note: The optimization status is stored in a separate variable in the Optimization class
-        # We verify success by checking that we have valid results
-        self.assertGreater(len(opt_res), 0)
+        # Run optimization and verify success
+        opt_res = self.run_optimization_with_config(runtimeparams["def_load_config"])
 
         # Assert physical plausibility: heating demand should be higher during colder periods
         outdoor_temp = self.df_input_data_dayahead["outdoor_temperature_forecast"]
@@ -1410,24 +1420,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             ]
         }
 
-        self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
-        self.opt = self.create_optimization()
-
-        # Run optimization
-        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
-        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
-        opt_res = self.opt.perform_optimization(
-            self.df_input_data_dayahead,
-            self.p_pv_forecast.values.ravel(),
-            self.p_load_forecast.values.ravel(),
-            unit_load_cost,
-            unit_prod_price,
-        )
-
-        # Verify optimization succeeded
-        self.assertIsInstance(opt_res, type(pd.DataFrame()))
-        self.assertIn("P_deferrable0", opt_res.columns)
-        self.assertGreater(len(opt_res), 0)
+        # Run optimization and verify success
+        opt_res = self.run_optimization_with_config(runtimeparams["def_load_config"])
 
         # Verify physical plausibility: heating power should correlate with outdoor temperature
         # Lower outdoor temperatures should require higher heating power
@@ -1494,24 +1488,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             ]
         }
 
-        self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
-        self.opt = self.create_optimization()
-
-        # Run optimization
-        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
-        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
-        opt_res = self.opt.perform_optimization(
-            self.df_input_data_dayahead,
-            self.p_pv_forecast.values.ravel(),
-            self.p_load_forecast.values.ravel(),
-            unit_load_cost,
-            unit_prod_price,
-        )
-
-        # Verify optimization succeeded
-        self.assertIsInstance(opt_res, type(pd.DataFrame()))
-        self.assertIn("P_deferrable0", opt_res.columns)
-        self.assertGreater(len(opt_res), 0)
+        # Run optimization and verify success
+        opt_res = self.run_optimization_with_config(runtimeparams["def_load_config"])
 
         # Store results with custom HDD parameters
         total_energy_custom_hdd = opt_res["P_deferrable0"].sum()
@@ -1535,16 +1513,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             ]
         }
 
-        self.optim_conf["def_load_config"] = runtimeparams_default["def_load_config"]
-        opt_default = self.create_optimization()
-
-        opt_res_default = opt_default.perform_optimization(
-            self.df_input_data_dayahead,
-            self.p_pv_forecast.values.ravel(),
-            self.p_load_forecast.values.ravel(),
-            unit_load_cost,
-            unit_prod_price,
-        )
+        # Run optimization with default HDD parameters
+        opt_res_default = self.run_optimization_with_config(runtimeparams_default["def_load_config"])
 
         total_energy_default_hdd = opt_res_default["P_deferrable0"].sum()
 
@@ -1692,24 +1662,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             ]
         }
 
-        self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
-        self.opt = self.create_optimization()
-
-        # Run optimization
-        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
-        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
-        opt_res = self.opt.perform_optimization(
-            self.df_input_data_dayahead,
-            self.p_pv_forecast.values.ravel(),
-            self.p_load_forecast.values.ravel(),
-            unit_load_cost,
-            unit_prod_price,
-        )
-
-        # Verify optimization succeeded
-        self.assertIsInstance(opt_res, type(pd.DataFrame()))
-        self.assertIn("P_deferrable0", opt_res.columns)
-        self.assertGreater(len(opt_res), 0)
+        # Run optimization and verify success
+        opt_res = self.run_optimization_with_config(runtimeparams["def_load_config"])
 
         # Verify that solar gains feature is working correctly by checking that:
         # 1. Optimization completes successfully with GHI data present
