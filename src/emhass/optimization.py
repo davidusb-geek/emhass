@@ -540,11 +540,20 @@ class Optimization:
             # Define the core energy balance equations for each timestep
             for i in set_I:
                 # The net DC power from PV and battery must equal the net DC flow of the inverter
+                # Conditionally include curtailment variable to avoid energy leaks when feature is disabled
+                if self.plant_conf["compute_curtailment"]:
+                    e_dc_balance = (P_PV[i] - P_PV_curtailment[i] + P_sto_pos[i] + P_sto_neg[i]) - (
+                        P_dc_ac[i] - P_ac_dc[i]
+                    )
+                else:
+                    e_dc_balance = (P_PV[i] + P_sto_pos[i] + P_sto_neg[i]) - (
+                        P_dc_ac[i] - P_ac_dc[i]
+                    )
+
                 constraints.update(
                     {
                         f"constraint_dc_bus_balance_{i}": plp.LpConstraint(
-                            e=(P_PV[i] - P_PV_curtailment[i] + P_sto_pos[i] + P_sto_neg[i])
-                            - (P_dc_ac[i] - P_ac_dc[i]),
+                            e=e_dc_balance,
                             sense=plp.LpConstraintEQ,
                             rhs=0,
                         )
