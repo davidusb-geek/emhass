@@ -118,6 +118,75 @@ class Optimization:
         )
         self.logger.debug(f"Number of threads: {self.num_threads}")
 
+    def _setup_stress_cost(self, set_I, cost_conf_key, max_power, var_name_prefix):
+        """
+        Generic setup for a stress cost (battery or inverter).
+        """
+        stress_unit_cost = self.plant_conf.get(cost_conf_key, 0)
+        active = stress_unit_cost > 0 and max_power > 0
+
+        stress_cost_vars = None
+        if active:
+            self.logger.debug(
+                f"Stress cost enabled for {var_name_prefix}. "
+                f"Unit Cost: {stress_unit_cost}/kWh at full load {max_power}W."
+            )
+            stress_cost_vars = {
+                i: plp.LpVariable(
+                    cat="Continuous",
+                    lowBound=0,
+                    name=f"{var_name_prefix}_stress_cost_{i}",
+                )
+                for i in set_I
+            }
+
+        return {
+            "active": active,
+            "vars": stress_cost_vars,
+            "unit_cost": stress_unit_cost,
+            "max_power": max_power,
+            # Defaults to 10 segments if not provided in config
+            "segments": self.plant_conf.get(f"{var_name_prefix}_stress_segments", 10),
+        }
+
+    def _build_stress_segments(self, max_power, stress_unit_cost, segments):
+        """
+        Generic builder for Piece-Wise Linear segments for a quadratic cost curve.
+        """
+        # Cost rate at nominal power (currency/hr)
+        max_cost_rate_hr = (max_power / 1000.0) * stress_unit_cost
+        max_cost_step = max_cost_rate_hr * self.timeStep
+
+        x_points = np.linspace(0, max_power, segments + 1)
+        y_points = max_cost_step * (x_points / max_power) ** 2
+
+        seg_params = []
+        for k in range(segments):
+            x0, x1 = x_points[k], x_points[k + 1]
+            y0, y1 = y_points[k], y_points[k + 1]
+            slope = (y1 - y0) / (x1 - x0)
+            intercept = y0 - slope * x0
+            seg_params.append((k, slope, intercept))
+        return seg_params
+
+    def _add_stress_constraints(
+        self, constraints, set_I, power_var_func, stress_vars, seg_params, prefix
+    ):
+        """
+        Generic constraint adder.
+        :param power_var_func: A function(i) that returns the LpVariable or Expression
+                               representing the power to be penalized at index i.
+        """
+        for k, slope, intercept in seg_params:
+            for sign, suffix in ((+1, "pos"), (-1, "neg")):
+                for i in set_I:
+                    name = f"constraint_stress_pwl_{prefix}_{suffix}_{k}_{i}"
+                    constraints[name] = plp.LpConstraint(
+                        e=stress_vars[i] - (sign * slope * power_var_func(i) + intercept),
+                        sense=plp.LpConstraintGE,
+                        rhs=0,
+                    )
+
     def perform_optimization(
         self,
         data_opt: pd.DataFrame,
@@ -291,6 +360,11 @@ class Optimization:
             )
         D = {(i): plp.LpVariable(cat="Binary", name=f"D_{i}") for i in set_I}
         E = {(i): plp.LpVariable(cat="Binary", name=f"E_{i}") for i in set_I}
+
+        # Initialize stress configuration dictionaries
+        inv_stress_conf = None
+        batt_stress_conf = None
+
         if self.optim_conf["set_use_battery"]:
             if not self.plant_conf["inverter_is_hybrid"]:
                 self.logger.debug(
@@ -317,16 +391,37 @@ class Optimization:
                 )
                 for i in set_I
             }
+
+            # Setup Battery Stress Cost
+            # We determine max power for the stress calculation as the max of charge/discharge limits
+            P_batt_max = max(
+                self.plant_conf.get("battery_discharge_power_max", 0),
+                self.plant_conf.get("battery_charge_power_max", 0),
+            )
+            batt_stress_conf = self._setup_stress_cost(
+                set_I, "battery_stress_cost", P_batt_max, "battery"
+            )
+
         else:
             P_sto_pos = {(i): i * 0 for i in set_I}
             P_sto_neg = {(i): i * 0 for i in set_I}
 
         if self.costfun == "self-consumption":
             SC = {(i): plp.LpVariable(cat="Continuous", name=f"SC_{i}") for i in set_I}
+
         if self.plant_conf["inverter_is_hybrid"]:
             P_hybrid_inverter = {
                 (i): plp.LpVariable(cat="Continuous", name=f"P_hybrid_inverter{i}") for i in set_I
             }
+            # Setup Inverter Stress Cost
+            P_nom_inverter_max = max(
+                self.plant_conf.get("inverter_ac_output_max", 0),
+                self.plant_conf.get("inverter_ac_input_max", 0),
+            )
+            inv_stress_conf = self._setup_stress_cost(
+                set_I, "inverter_stress_cost", P_nom_inverter_max, "inv"
+            )
+
         P_PV_curtailment = {
             (i): plp.LpVariable(cat="Continuous", lowBound=0, name=f"P_PV_curtailment{i}")
             for i in set_I
@@ -420,6 +515,16 @@ class Optimization:
                         for i in set_I
                     )
 
+        # Add the Hybrid Inverter Stress cost to objective
+        if inv_stress_conf and inv_stress_conf["active"]:
+            objective = objective - plp.lpSum(inv_stress_conf["vars"][i] for i in set_I)
+
+        # Add the Battery Stress cost to objective
+        if batt_stress_conf and batt_stress_conf["active"]:
+            # Sanity check logging
+            self.logger.debug("Adding battery stress cost to objective function")
+            objective = objective - plp.lpSum(batt_stress_conf["vars"][i] for i in set_I)
+
         opt_model.setObjective(objective)
 
         ## Setting constraints
@@ -469,6 +574,26 @@ class Optimization:
                     )
                     for i in set_I
                 }
+
+        # Implementation of the Quadratic Battery Stress Cost
+        # This applies regardless of whether the inverter is hybrid or not, as long as battery is used.
+        if batt_stress_conf and batt_stress_conf["active"]:
+            self.logger.debug("Applying battery stress constraints to LP model")
+            seg_params = self._build_stress_segments(
+                batt_stress_conf["max_power"],
+                batt_stress_conf["unit_cost"],
+                batt_stress_conf["segments"],
+            )
+            # For Battery, the power magnitude is P_sto_pos[i] - P_sto_neg[i]
+            # (Recall P_sto_neg is <= 0, so this sums the absolute values)
+            self._add_stress_constraints(
+                constraints,
+                set_I,
+                lambda i: P_sto_pos[i] - P_sto_neg[i],
+                batt_stress_conf["vars"],
+                seg_params,
+                "batt",
+            )
 
         if self.plant_conf["inverter_is_hybrid"]:
             P_nom_inverter_output = self.plant_conf.get("inverter_ac_output_max", None)
@@ -540,11 +665,20 @@ class Optimization:
             # Define the core energy balance equations for each timestep
             for i in set_I:
                 # The net DC power from PV and battery must equal the net DC flow of the inverter
+                # Conditionally include curtailment variable to avoid energy leaks when feature is disabled
+                if self.plant_conf["compute_curtailment"]:
+                    e_dc_balance = (P_PV[i] - P_PV_curtailment[i] + P_sto_pos[i] + P_sto_neg[i]) - (
+                        P_dc_ac[i] - P_ac_dc[i]
+                    )
+                else:
+                    e_dc_balance = (P_PV[i] + P_sto_pos[i] + P_sto_neg[i]) - (
+                        P_dc_ac[i] - P_ac_dc[i]
+                    )
+
                 constraints.update(
                     {
                         f"constraint_dc_bus_balance_{i}": plp.LpConstraint(
-                            e=(P_PV[i] - P_PV_curtailment[i] + P_sto_pos[i] + P_sto_neg[i])
-                            - (P_dc_ac[i] - P_ac_dc[i]),
+                            e=e_dc_balance,
                             sense=plp.LpConstraintEQ,
                             rhs=0,
                         )
@@ -579,6 +713,23 @@ class Optimization:
                             rhs=0,
                         ),
                     }
+                )
+
+            # Implementation of the Quadratic Inverter Stress Cost
+            if inv_stress_conf and inv_stress_conf["active"]:
+                seg_params = self._build_stress_segments(
+                    inv_stress_conf["max_power"],
+                    inv_stress_conf["unit_cost"],
+                    inv_stress_conf["segments"],
+                )
+                # For Inverter, the variable is P_hybrid_inverter[i]
+                self._add_stress_constraints(
+                    constraints,
+                    set_I,
+                    lambda i: P_hybrid_inverter[i],
+                    inv_stress_conf["vars"],
+                    seg_params,
+                    "inv",
                 )
 
         # Apply curtailment constraint if enabled, regardless of inverter type
@@ -1294,8 +1445,17 @@ class Optimization:
                 SOC_opt.append(SOCinit - SOC_opt_delta[i])
                 SOCinit = SOC_opt[i]
             opt_tp["SOC_opt"] = SOC_opt
+
+            # Record Battery Stress Cost if active
+            if batt_stress_conf and batt_stress_conf["active"]:
+                opt_tp["batt_stress_cost"] = [batt_stress_conf["vars"][i].varValue for i in set_I]
+
         if self.plant_conf["inverter_is_hybrid"]:
             opt_tp["P_hybrid_inverter"] = [P_hybrid_inverter[i].varValue for i in set_I]
+            # Record Inverter Stress Cost if active
+            if inv_stress_conf and inv_stress_conf["active"]:
+                opt_tp["inv_stress_cost"] = [inv_stress_conf["vars"][i].varValue for i in set_I]
+
         if self.plant_conf["compute_curtailment"]:
             opt_tp["P_PV_curtailment"] = [P_PV_curtailment[i].varValue for i in set_I]
         opt_tp.index = data_opt.index

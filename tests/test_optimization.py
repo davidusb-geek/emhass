@@ -1275,6 +1275,281 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                     f"({active_timesteps} active timesteps)",
                 )
 
+    def test_inverter_stress_cost_discharge_spread(self):
+        """Test that inverter stress cost encourages spreading discharge over time."""
+        # Setup plant configuration for hybrid inverter with battery
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": True,
+                "compute_curtailment": False,
+                "inverter_ac_output_max": 5000,
+                "inverter_ac_input_max": 5000,
+                "inverter_stress_segments": 5,
+                "battery_nominal_energy_capacity": 5000,
+                "battery_discharge_power_max": 5000,
+                "battery_charge_power_max": 5000,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_target_state_of_charge": 0.0,
+            }
+        )
+
+        # Optimization configuration
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "set_nocharge_from_grid": True,  # Ensure purely discharge behavior
+                "operating_hours_of_each_deferrable_load": [0, 0],
+                "load_cost_forecast_method": "csv",
+                "production_price_forecast_method": "csv",
+                "set_nodischarge_to_grid": False,
+            }
+        )
+
+        # Create input data: 4 periods of 30 minutes, 0 PV, 0 load (focus on selling discharge)
+        periods = 4
+        dates = pd.date_range(
+            start=pd.Timestamp.now(tz=self.retrieve_hass_conf["time_zone"]),
+            periods=periods,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df_input = pd.DataFrame(index=dates)
+        df_input["p_pv_forecast"] = 0.0
+        df_input["p_load_forecast"] = 0.0  # No load, focus on selling battery discharge
+
+        # Varying production prices: increasing prices to incentivize discharge later
+        df_input[self.fcst.var_prod_price] = [0.1, 0.2, 0.3, 0.4]
+        # Higher load cost, should not be used
+        df_input[self.fcst.var_load_cost] = [0.5, 0.6, 0.7, 0.8]
+
+        # Test without stress cost
+        self.plant_conf["inverter_stress_cost"] = 0.0
+        self.opt_no_stress = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        opt_res_no_stress = self.opt_no_stress.perform_optimization(
+            df_input,
+            df_input["p_pv_forecast"].values,
+            df_input["p_load_forecast"].values,
+            df_input[self.opt_no_stress.var_load_cost].values,
+            df_input[self.opt_no_stress.var_prod_price].values,
+            soc_init=0.5,
+            soc_final=0.0,
+        )
+
+        # Test with stress cost
+        self.plant_conf["inverter_stress_cost"] = 1.0  # currency/kWh at max power
+        self.opt_with_stress = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        opt_res_with_stress = self.opt_with_stress.perform_optimization(
+            df_input,
+            df_input["p_pv_forecast"].values,
+            df_input["p_load_forecast"].values,
+            df_input[self.opt_with_stress.var_load_cost].values,
+            df_input[self.opt_with_stress.var_prod_price].values,
+            soc_init=0.5,
+            soc_final=0.0,
+        )
+
+        # Assertions
+        # Both optimizations should be successful
+        self.assertEqual(self.opt_no_stress.optim_status, "Optimal")
+        self.assertEqual(self.opt_with_stress.optim_status, "Optimal")
+
+        for res in [opt_res_no_stress, opt_res_with_stress]:
+            self.assertAlmostEqual(
+                res["P_grid_pos"].sum(),
+                0.0,
+                msg="Grid charging should be 0",
+            )
+
+        # In a hybrid system with efficiency=1.0, 0 PV, and 0 Load:
+        # P_batt (discharge) should exactly equal P_hybrid_inverter.
+        # If this fails, the solver is "leaking" energy from the battery to satisfy SOC constraints
+        # without passing it through the inverter variable to avoid the stress cost.
+        for name, res in [("No Stress", opt_res_no_stress), ("With Stress", opt_res_with_stress)]:
+            try:
+                assert_series_equal(
+                    res["P_batt"], res["P_hybrid_inverter"], check_names=False, atol=1e-3
+                )
+            except AssertionError as e:
+                self.fail(
+                    f"{name} optimization failed P_batt == P_hybrid_inverter check. "
+                    f"Likely missing constraint on P_hybrid_inverter.\n{e}"
+                )
+
+        # Without stress cost: should discharge at max power in the most expensive period
+        self.assertAlmostEqual(opt_res_no_stress["P_batt"].max(), 5000)
+
+        # With stress cost: discharge should be more spread out
+        discharge_no_stress = opt_res_no_stress["P_batt"].abs()
+        discharge_with_stress = opt_res_with_stress["P_batt"].abs()
+
+        variance_no_stress = discharge_no_stress.var()
+        variance_with_stress = discharge_with_stress.var()
+
+        self.assertLess(
+            variance_with_stress,
+            variance_no_stress,
+            "Stress cost should reduce variance in discharge power",
+        )
+
+        # Check that stress cost is present and positive
+        self.assertIn("inv_stress_cost", opt_res_with_stress.columns)
+        self.assertGreater(opt_res_with_stress["inv_stress_cost"].sum(), 0)
+
+    def test_battery_stress_cost_charging_spread(self):
+        """Test that battery stress cost encourages spreading charging over time."""
+        # Setup plant configuration for a non-hybrid system
+        # We use a small battery and force a charge event
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": False,
+                "compute_curtailment": False,
+                "battery_nominal_energy_capacity": 2000,  # 2kWh
+                "battery_discharge_power_max": 1000,  # 1kW
+                "battery_charge_power_max": 1000,  # 1kW
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_target_state_of_charge": 0.5,
+                "battery_stress_segments": 5,
+            }
+        )
+
+        # Optimization configuration
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "set_nocharge_from_grid": False,  # Allow grid charging
+                "operating_hours_of_each_deferrable_load": [0, 0],
+                "load_cost_forecast_method": "csv",
+                "production_price_forecast_method": "csv",
+            }
+        )
+
+        # Create input data: 4 periods of 30 minutes
+        # We use constant prices. Without stress cost, the solver won't care WHEN it charges.
+        # It usually picks the first or last slot or random.
+        # With stress cost, it should flatten the curve.
+        periods = 4
+        dates = pd.date_range(
+            start=pd.Timestamp.now(tz=self.retrieve_hass_conf["time_zone"]),
+            periods=periods,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df_input = pd.DataFrame(index=dates)
+        df_input["p_pv_forecast"] = 0.0
+        df_input["p_load_forecast"] = 0.0
+        df_input[self.fcst.var_prod_price] = 0.1
+        df_input[self.fcst.var_load_cost] = 0.1
+
+        # --- Run 1: No Stress Cost ---
+        self.plant_conf["battery_stress_cost"] = 0.0
+        self.opt_no_stress = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        # Force charge from 0.0 to 0.5 SOC (Needs 1000Wh)
+        # Available time: 2 hours (4 * 30min). Max charge 1000W.
+        # It could charge 1000W for 1hr, or 500W for 2hrs.
+        opt_res_no_stress = self.opt_no_stress.perform_optimization(
+            df_input,
+            df_input["p_pv_forecast"].values,
+            df_input["p_load_forecast"].values,
+            df_input[self.opt_no_stress.var_load_cost].values,
+            df_input[self.opt_no_stress.var_prod_price].values,
+            soc_init=0.0,
+            soc_final=0.5,
+        )
+
+        # --- Run 2: With Stress Cost ---
+        self.plant_conf["battery_stress_cost"] = 0.5  # Significant cost
+        self.opt_with_stress = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        opt_res_with_stress = self.opt_with_stress.perform_optimization(
+            df_input,
+            df_input["p_pv_forecast"].values,
+            df_input["p_load_forecast"].values,
+            df_input[self.opt_with_stress.var_load_cost].values,
+            df_input[self.opt_with_stress.var_prod_price].values,
+            soc_init=0.0,
+            soc_final=0.5,
+        )
+
+        # Assertions
+        self.assertEqual(self.opt_no_stress.optim_status, "Optimal")
+        self.assertEqual(self.opt_with_stress.optim_status, "Optimal")
+
+        # Verify result column existence
+        self.assertIn("batt_stress_cost", opt_res_with_stress.columns)
+        self.assertNotIn("batt_stress_cost", opt_res_no_stress.columns)
+
+        # Verify Energy constraints met (Both must reach target SOC)
+        # SOC delta = 0.5 * 2000Wh = 1000Wh
+        # P_batt is negative for charging. Sum(P_batt) * 0.5h
+        energy_no_stress = -opt_res_no_stress["P_batt"].sum() * 0.5
+        energy_with_stress = -opt_res_with_stress["P_batt"].sum() * 0.5
+
+        self.assertAlmostEqual(energy_no_stress, 1000.0, delta=1.0)
+        self.assertAlmostEqual(energy_with_stress, 1000.0, delta=1.0)
+
+        # Verify Distribution
+        # No stress: likely max power (1000W) for fewer steps
+        # With stress: likely lower power (500W) for more steps
+        peak_power_no_stress = opt_res_no_stress["P_batt"].abs().max()
+        peak_power_with_stress = opt_res_with_stress["P_batt"].abs().max()
+
+        # The smoothed peak should be strictly less than the "bang-bang" peak
+        # (Given that we have enough time windows to spread it out)
+        self.assertLess(peak_power_with_stress, peak_power_no_stress)
+
+        # Variance check
+        variance_no_stress = opt_res_no_stress["P_batt"].var()
+        variance_with_stress = opt_res_with_stress["P_batt"].var()
+
+        self.assertLess(
+            variance_with_stress,
+            variance_no_stress,
+            "Battery stress cost should reduce variance in charging power",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
