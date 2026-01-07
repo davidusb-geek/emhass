@@ -46,8 +46,20 @@ jobs:
         shell: bash -l {0}
         env:
           ANACONDA_TOKEN: ${{ secrets.ANACONDA_TOKEN }}
-          ANACONDA_USER: davidusb
+          ANACONDA_USER: davidusb-geek
         run: |
-          # Find the .tar.bz2 file wherever it is (noarch or linux-64) and upload it
-          # This avoids wildcard expansion errors
-          find ./build_output -name "*.tar.bz2" -exec anaconda -t $ANACONDA_TOKEN upload -u $ANACONDA_USER {} --force \;
+          # Find the package file (targeting .conda specifically based on your debug output)
+          # We use `find` to handle the path cleanly
+          PACKAGE_FILE=$(find ./build_output -name "*.conda" | head -n 1)
+
+          # Safety check
+          if [ -z "$PACKAGE_FILE" ]; then
+            echo "::error::No .conda package file found!"
+            ls -R ./build_output
+            exit 1
+          fi
+
+          echo "Found package: $PACKAGE_FILE"
+
+          # Upload
+          anaconda -t $ANACONDA_TOKEN upload -u $ANACONDA_USER "$PACKAGE_FILE" --force

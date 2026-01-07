@@ -8,7 +8,7 @@
 
 <p align="center">
   <a style="text-decoration:none" href="https://github.com/davidusb-geek/emhass/releases">
-    <img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/davidusb-geek/emhass">
+    <img alt="PyPI - Version" src="https://img.shields.io/pypi/v/emhass">
   </a>
   <a style="text-decoration:none" href="https://github.com/davidusb-geek/emhass/actions">
     <img alt="EMHASS GitHub Workflow Status" src="https://github.com/davidusb-geek/emhass/actions/workflows/publish_docker.yaml/badge.svg?event=release">
