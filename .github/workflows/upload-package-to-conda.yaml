@@ -12,25 +12,41 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Sets up the Conda environment needed for the build action
+      # Setup Conda Environment
       - name: Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
         with:
           auto-update-conda: true
-          python-version: "3.11" # Adjust to match your project's python version
+          python-version: "3.11"
+          # Important: Install build tools and the upload client here
+          activate-environment: build_env
+          channels: conda-forge,defaults
+          
+      # Install Build Dependencies
+      - name: Install Build Tools
+        shell: bash -l {0}
+        run: |
+          conda install -y conda-build anaconda-client
+          # Install your project dependencies needed for the recipe (host requirements)
+          conda install -y setuptools wheel hatchling pip
 
-      - name: Build and Upload to Anaconda
-        uses: uibcdf/action-build-and-upload-conda-packages@v1.4.0
-        with:
-          # IMPORTANT: Point this to the directory containing your meta.yaml file
-          # Common convention is a folder named 'conda', 'recipe', or '.' if in root
-          meta_yaml_dir: ./conda 
-          
-          # Replace with your Anaconda user or organization name
-          user: davidusb
-          
-          # This token must be added to your GitHub repository secrets
-          token: ${{ secrets.ANACONDA_TOKEN }}
-          
-          # Optional: Overwrite if the version already exists
-          overwrite: false
+      # Build the Package
+      - name: Build Conda Package
+        shell: bash -l {0}
+        run: |
+          # Build the package using the recipe in the 'conda' folder
+          conda build ./conda --output-folder ./build_output
+
+      # Upload to Anaconda
+      - name: Upload to Anaconda
+        shell: bash -l {0}
+        env:
+          ANACONDA_TOKEN: ${{ secrets.ANACONDA_TOKEN }}
+          # Replace with your actual Anaconda username
+          ANACONDA_USER: davidusb 
+        run: |
+          # Find the built tar.bz2 file
+          # We use a wildcard because the exact filename includes version/build strings
+          # The -t flag provides the auth token
+          # The -u flag specifies the user/org to upload to
+          anaconda -t $ANACONDA_TOKEN upload -u $ANACONDA_USER ./build_output/noarch/*.tar.bz2 --force
