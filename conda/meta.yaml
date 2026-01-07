@@ -1,0 +1,74 @@
+{% set name = "emhass" %}
+{% set version = "0.15.3" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  # Sets the source to the root of the repository (one level up from this file)
+  path: ..
+
+build:
+  # Starts at 0, increment if you need to rebuild the same version
+  number: 0
+  # Do not include the generic test files in the package
+  script: {{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
+  entry_points:
+    - emhass = emhass.command_line:main_sync
+
+requirements:
+  host:
+    - python >=3.10,<3.13
+    - pip
+    - hatchling  # Required because your build-system usually implies a backend, 
+                 # and hatchling/flit/setuptools are common. 
+                 # If you use setuptools/wheel, swap this for 'setuptools' and 'wheel'.
+                 # Looking at your pyproject, you use hatchling in the 'test' list, 
+                 # implying it might be the backend. If standard, likely setuptools or hatchling.
+    - setuptools # Fallback safe bet for most standard python builds
+    - wheel
+
+  run:
+    - python >=3.10,<3.13
+    - numpy >=2.0.0,<2.3.0
+    - scipy >=1.15.0
+    - pandas >=2.2.0
+    - pvlib-python >=0.11.0
+    - protobuf >=5.29.3
+    - pytz >=2024.2
+    - h5py >=3.12.1
+    - highspy >=1.10.0
+    - pulp >=2.8.0
+    - pyyaml >=6.0.2
+    - requests >=2.32.3
+    - beautifulsoup4 >=4.12.3
+    - waitress >=3.0.1
+    - paho-mqtt >=2.1.0
+    - skforecast >=0.14.0
+    - optuna >=4.1.0
+    - flask >=3.1.0
+    - jinja2 >=3.1.5
+    - ftfy >=6.3.1
+    - mlflow >=2.19.0
+
+test:
+  imports:
+    - emhass
+  commands:
+    - emhass --help
+  requires:
+    - pytest
+
+about:
+  home: https://github.com/davidusb-geek/emhass
+  summary: An Energy Management System for Home Assistant
+  license: MIT
+  license_file: LICENSE
+  description: |
+    EMHASS: Energy Management for Home Assistant is a Python-based optimization 
+    tool designed to optimize energy usage in households.
+
+extra:
+  recipe-maintainers:
+    - davidusb-geek
