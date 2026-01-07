@@ -1104,6 +1104,17 @@ class RetrieveHass:
                 "scheduled_forecast",
                 state,
             )
+        elif type_var == "energy":
+            data = RetrieveHass.get_attr_data_dict(
+                data_df,
+                idx,
+                entity_id,
+                device_class,
+                unit_of_measurement,
+                friendly_name,
+                "heating_demand_forecast",
+                state,
+            )
         elif type_var == "optim_status":
             data = {
                 "state": state,

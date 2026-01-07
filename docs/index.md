@@ -26,6 +26,7 @@ forecasts.md
 mlforecaster.md
 mlregressor.md
 thermal_model.md
+thermal_battery.md
 study_case.md
 config.md
 emhass.md

@@ -407,7 +407,7 @@ async def set_input_data_dict(
         if not success:
             return False
         # What we don't need for this type of action
-        p_pv_forecast, p_load_forecast, df_input_data_dayahead = None, None, None
+        p_pv_forecast, p_load_forecast, df_input_data_dayahead, df_weather = None, None, None, None
     elif set_type == "dayahead-optim":
         # Get PV and load forecasts
         if optim_conf["set_use_pv"] or optim_conf.get("weather_forecast_method", None) == "list":
@@ -433,6 +433,7 @@ async def set_input_data_dict(
                 )
         else:
             p_pv_forecast = pd.Series(0, index=fcst.forecast_dates)
+            df_weather = None
         p_load_forecast = await fcst.get_load_forecast(
             days_min_load_forecast=optim_conf["delta_forecast_daily"].days,
             method=optim_conf["load_forecast_method"],
@@ -528,6 +529,7 @@ async def set_input_data_dict(
                 )
         else:
             p_pv_forecast = pd.Series(0, index=fcst.forecast_dates)
+            df_weather = None
         p_load_forecast = await fcst.get_load_forecast(
             days_min_load_forecast=optim_conf["delta_forecast_daily"].days,
             method=optim_conf["load_forecast_method"],
@@ -573,7 +575,7 @@ async def set_input_data_dict(
         or set_type == "forecast-model-predict"
         or set_type == "forecast-model-tune"
     ):
-        df_input_data_dayahead = None
+        df_input_data_dayahead, df_weather = None, None
         p_pv_forecast, p_load_forecast = None, None
         params = orjson.loads(params)
         # Retrieve data from hass
@@ -607,7 +609,7 @@ async def set_input_data_dict(
             )
             df_input_data = rh.df_final.copy()
     elif set_type == "regressor-model-fit" or set_type == "regressor-model-predict":
-        df_input_data, df_input_data_dayahead = None, None
+        df_input_data, df_input_data_dayahead, df_weather = None, None, None
         p_pv_forecast, p_load_forecast = None, None
         params = orjson.loads(params)
         days_list = None
@@ -647,14 +649,14 @@ async def set_input_data_dict(
                 logger.error(msg)
                 return False
     elif set_type == "publish-data":
-        df_input_data, df_input_data_dayahead = None, None
+        df_input_data, df_input_data_dayahead, df_weather = None, None, None
         p_pv_forecast, p_load_forecast = None, None
         days_list = None
     else:
         logger.error(
             "The passed action argument and hence the set_type parameter for setup is not valid",
         )
-        df_input_data, df_input_data_dayahead = None, None
+        df_input_data, df_input_data_dayahead, df_weather = None, None, None
         p_pv_forecast, p_load_forecast = None, None
         days_list = None
     # The input data dictionary to return
@@ -666,6 +668,7 @@ async def set_input_data_dict(
         "fcst": fcst,
         "df_input_data": df_input_data,
         "df_input_data_dayahead": df_input_data_dayahead,
+        "df_weather": df_weather,
         "p_pv_forecast": p_pv_forecast,
         "p_load_forecast": p_load_forecast,
         "costfun": costfun,
@@ -792,6 +795,79 @@ async def perfect_forecast_optim(
     return opt_res
 
 
+def prepare_forecast_and_weather_data(
+    input_data_dict: dict,
+    logger: logging.Logger,
+    warn_on_resolution: bool = False,
+) -> pd.DataFrame | bool:
+    """
+    Prepare forecast data with load costs, production prices, outdoor temperature, and GHI.
+
+    This helper function eliminates duplication between dayahead_forecast_optim and naive_mpc_optim.
+
+    :param input_data_dict: Dictionary with forecast and input data
+    :type input_data_dict: dict
+    :param logger: Logger object
+    :type logger: logging.Logger
+    :param warn_on_resolution: Whether to warn about GHI resolution mismatch
+    :type warn_on_resolution: bool
+    :return: Prepared DataFrame or False on error
+    :rtype: pd.DataFrame | bool
+    """
+    # Get load cost forecast
+    df_input_data_dayahead = input_data_dict["fcst"].get_load_cost_forecast(
+        input_data_dict["df_input_data_dayahead"],
+        method=input_data_dict["fcst"].optim_conf["load_cost_forecast_method"],
+    )
+    if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
+        return False
+
+    # Get production price forecast
+    df_input_data_dayahead = input_data_dict["fcst"].get_prod_price_forecast(
+        df_input_data_dayahead,
+        method=input_data_dict["fcst"].optim_conf["production_price_forecast_method"],
+    )
+    if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
+        return False
+
+    # Add outdoor temperature if provided
+    if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
+        df_input_data_dayahead["outdoor_temperature_forecast"] = input_data_dict["params"][
+            "passed_data"
+        ]["outdoor_temperature_forecast"]
+
+    # Merge GHI (Global Horizontal Irradiance) from weather forecast if available
+    if input_data_dict["df_weather"] is not None and "ghi" in input_data_dict["df_weather"].columns:
+        dayahead_index = df_input_data_dayahead.index
+
+        # Check time resolution if requested
+        if warn_on_resolution and len(input_data_dict["df_weather"].index) > 1 and len(dayahead_index) > 1:
+            weather_index = input_data_dict["df_weather"].index
+            weather_freq = (weather_index[1] - weather_index[0]).total_seconds()
+            dayahead_freq = (dayahead_index[1] - dayahead_index[0]).total_seconds()
+            if weather_freq > 2 * dayahead_freq:
+                logger.warning(
+                    "Weather data time resolution (%.0fs) is much coarser than dayahead index (%.0fs). "
+                    "Step changes in GHI may occur.",
+                    weather_freq,
+                    dayahead_freq,
+                )
+
+        # Align GHI data to dayahead index using interpolation
+        df_input_data_dayahead["ghi"] = (
+            input_data_dict["df_weather"]["ghi"]
+            .reindex(dayahead_index)
+            .interpolate(method="time", limit_direction="both")
+        )
+        logger.debug(
+            "Merged GHI data into optimization input: mean=%.1f W/m², max=%.1f W/m²",
+            df_input_data_dayahead["ghi"].mean(),
+            df_input_data_dayahead["ghi"].max(),
+        )
+
+    return df_input_data_dayahead
+
+
 async def dayahead_forecast_optim(
     input_data_dict: dict,
     logger: logging.Logger,
@@ -814,23 +890,12 @@ async def dayahead_forecast_optim(
 
     """
     logger.info("Performing day-ahead forecast optimization")
-    # Load cost and prod price forecast
-    df_input_data_dayahead = input_data_dict["fcst"].get_load_cost_forecast(
-        input_data_dict["df_input_data_dayahead"],
-        method=input_data_dict["fcst"].optim_conf["load_cost_forecast_method"],
+    # Prepare forecast data with costs, prices, outdoor temp, and GHI
+    df_input_data_dayahead = prepare_forecast_and_weather_data(
+        input_data_dict, logger, warn_on_resolution=False
     )
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
-    df_input_data_dayahead = input_data_dict["fcst"].get_prod_price_forecast(
-        df_input_data_dayahead,
-        method=input_data_dict["fcst"].optim_conf["production_price_forecast_method"],
-    )
-    if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
-        return False
-    if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
-        df_input_data_dayahead["outdoor_temperature_forecast"] = input_data_dict["params"][
-            "passed_data"
-        ]["outdoor_temperature_forecast"]
     opt_res_dayahead = input_data_dict["opt"].perform_dayahead_forecast_optim(
         df_input_data_dayahead,
         input_data_dict["p_pv_forecast"],
@@ -885,23 +950,12 @@ async def naive_mpc_optim(
 
     """
     logger.info("Performing naive MPC optimization")
-    # Load cost and prod price forecast
-    df_input_data_dayahead = input_data_dict["fcst"].get_load_cost_forecast(
-        input_data_dict["df_input_data_dayahead"],
-        method=input_data_dict["fcst"].optim_conf["load_cost_forecast_method"],
+    # Prepare forecast data with costs, prices, outdoor temp, and GHI (with resolution warning)
+    df_input_data_dayahead = prepare_forecast_and_weather_data(
+        input_data_dict, logger, warn_on_resolution=True
     )
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
-    df_input_data_dayahead = input_data_dict["fcst"].get_prod_price_forecast(
-        df_input_data_dayahead,
-        method=input_data_dict["fcst"].optim_conf["production_price_forecast_method"],
-    )
-    if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
-        return False
-    if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
-        df_input_data_dayahead["outdoor_temperature_forecast"] = input_data_dict["params"][
-            "passed_data"
-        ]["outdoor_temperature_forecast"]
     # The specifics params for the MPC at runtime
     prediction_horizon = input_data_dict["params"]["passed_data"]["prediction_horizon"]
     soc_init = input_data_dict["params"]["passed_data"]["soc_init"]
@@ -1648,7 +1702,12 @@ async def publish_data(
         for k in range(input_data_dict["opt"].optim_conf["number_of_deferrable_loads"]):
             # Check 1: Ensure k is within bounds of def_load_config
             if k < len(def_load_config):
-                if "thermal_config" in def_load_config[k]:
+                # Check if this is a thermal load (either thermal_config or thermal_battery)
+                is_thermal_load = (
+                    "thermal_config" in def_load_config[k]
+                    or "thermal_battery" in def_load_config[k]
+                )
+                if is_thermal_load:
                     # Check 2: Ensure k is within bounds of custom_predicted_temperature_id
                     if k < len(custom_predicted_temperature_id):
                         # Check 3: Ensure the column exists in the DataFrame
@@ -1673,6 +1732,50 @@ async def publish_data(
                     else:
                         logger.warning(
                             f"custom_predicted_temperature_id missing for index {k}, skipping."
+                        )
+            else:
+                # If def_load_config is shorter than k, just stop checking thermal for this index
+                pass
+    # Publish heating demand for thermal models (both thermal_config and thermal_battery)
+    if "custom_heating_demand_id" in params["passed_data"]:
+        custom_heating_demand_id = params["passed_data"]["custom_heating_demand_id"]
+        # Safety: Ensure def_load_config exists and is a list
+        def_load_config = input_data_dict["opt"].optim_conf.get("def_load_config", [])
+        if not isinstance(def_load_config, list):
+            def_load_config = []
+        for k in range(input_data_dict["opt"].optim_conf["number_of_deferrable_loads"]):
+            # Check 1: Ensure k is within bounds of def_load_config
+            if k < len(def_load_config):
+                # Check if this is a thermal load (either thermal_config or thermal_battery)
+                is_thermal_load = (
+                    "thermal_config" in def_load_config[k]
+                    or "thermal_battery" in def_load_config[k]
+                )
+                if is_thermal_load:
+                    # Check 2: Ensure k is within bounds of custom_heating_demand_id
+                    if k < len(custom_heating_demand_id):
+                        # Check 3: Ensure the column exists in the DataFrame
+                        if f"heating_demand_heater{k}" in opt_res_latest.columns:
+                            await input_data_dict["rh"].post_data(
+                                opt_res_latest[f"heating_demand_heater{k}"],
+                                idx_closest,
+                                custom_heating_demand_id[k]["entity_id"],
+                                "energy",
+                                custom_heating_demand_id[k]["unit_of_measurement"],
+                                custom_heating_demand_id[k]["friendly_name"],
+                                type_var="energy",
+                                publish_prefix=publish_prefix,
+                                save_entities=entity_save,
+                                dont_post=dont_post,
+                            )
+                            cols_published = cols_published + [f"heating_demand_heater{k}"]
+                        else:
+                            logger.debug(
+                                f"heating_demand_heater{k} not found in results, skipping."
+                            )
+                    else:
+                        logger.warning(
+                            f"custom_heating_demand_id missing for index {k}, skipping."
                         )
             else:
                 # If def_load_config is shorter than k, just stop checking thermal for this index
