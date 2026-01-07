@@ -1042,6 +1042,12 @@ class Optimization:
                     min_temperatures = hc["min_temperatures"]  # list of lower bounds per timestep °C
                     max_temperatures = hc["max_temperatures"]  # list of upper bounds per timestep °C
 
+                    # Validate that temperature lists are not empty
+                    if not min_temperatures:
+                        raise ValueError(f"Load {k}: thermal_battery requires non-empty 'min_temperatures' list")
+                    if not max_temperatures:
+                        raise ValueError(f"Load {k}: thermal_battery requires non-empty 'max_temperatures' list")
+
                     p_concr = 2400  # Density of concrete kg/m3
                     c_concr = 0.88  # Heat capacity of concrete kJ/kg*K
                     loss = 0.045  # Temperature loss per time period (+/-) kW

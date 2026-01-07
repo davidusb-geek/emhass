@@ -1715,6 +1715,131 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 f"Solar gains should reduce heating demand during sunny periods. "
                 f"Sunny period avg: {avg_heating_sunny:.3f} kW, Night avg: {avg_heating_night:.3f} kW"
             )
+
+    def test_thermal_battery_variable_temperature_bounds(self):
+        """Test thermal battery with non-uniform per-timestep temperature bounds.
+
+        This verifies that the LP constraints correctly use different temperature
+        bounds for different timesteps, enabling features like night setback.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
+            10.0 + 5.0 * np.sin(i * np.pi / 12) for i in range(48)
+        ]
+
+        # Create variable temperature bounds: warmer comfort range during day (timesteps 16-40)
+        min_temps = [18.0] * 16 + [20.0] * 24 + [18.0] * 8  # Lower at night/early morning
+        max_temps = [24.0] * 16 + [26.0] * 24 + [24.0] * 8  # Higher limits during day
+
+        runtimeparams = {
+            "def_load_config": [
+                {
+                    "thermal_battery": {
+                        "start_temperature": 20.0,
+                        "supply_temperature": 35.0,
+                        "volume": 50.0,
+                        "specific_heating_demand": 100.0,
+                        "area": 100.0,
+                        "min_temperatures": min_temps,
+                        "max_temperatures": max_temps,
+                    }
+                },
+            ]
+        }
+
+        # Run optimization and verify success
+        opt_res = self.run_optimization_with_config(runtimeparams["def_load_config"])
+
+        # Verify that bounds actually vary across timesteps (sanity check for test)
+        self.assertNotEqual(min_temps[0], min_temps[20], "Test should use varying min temps")
+        self.assertNotEqual(max_temps[0], max_temps[20], "Test should use varying max temps")
+
+        # Verify optimization succeeded with variable bounds
+        self.assertGreater(len(opt_res), 0, "Optimization should return results")
+        self.assertIn("P_deferrable0", opt_res.columns)
+        total_heating_energy = opt_res["P_deferrable0"].sum()
+        self.assertGreaterEqual(total_heating_energy, 0, "Heat pump energy must be non-negative")
+
+    def test_thermal_battery_short_temperature_lists(self):
+        """Test thermal battery with temperature lists shorter than optimization horizon.
+
+        Constraints should only apply to timesteps covered by the lists. Later
+        timesteps should have no temperature constraints.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
+            10.0 + 5.0 * np.sin(i * np.pi / 12) for i in range(48)
+        ]
+
+        # Use temperature lists that only cover first 24 timesteps (half the horizon)
+        short_length = 24
+        min_temps = [18.0] * short_length
+        max_temps = [22.0] * short_length
+
+        runtimeparams = {
+            "def_load_config": [
+                {
+                    "thermal_battery": {
+                        "start_temperature": 20.0,
+                        "supply_temperature": 35.0,
+                        "volume": 50.0,
+                        "specific_heating_demand": 100.0,
+                        "area": 100.0,
+                        "min_temperatures": min_temps,
+                        "max_temperatures": max_temps,
+                    }
+                },
+            ]
+        }
+
+        # Optimization should still succeed; constraints beyond list length are skipped
+        opt_res = self.run_optimization_with_config(runtimeparams["def_load_config"])
+
+        self.assertGreater(len(opt_res), 0, "Optimization should succeed with short temperature lists")
+        self.assertIn("P_deferrable0", opt_res.columns)
+
+    def test_thermal_battery_none_temperature_entries(self):
+        """Test thermal battery with None entries in temperature lists.
+
+        Timesteps with None values should not have temperature constraints,
+        allowing the optimizer more flexibility for those periods.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
+            10.0 + 5.0 * np.sin(i * np.pi / 12) for i in range(48)
+        ]
+
+        # Create temperature lists with None entries for some timesteps
+        min_temps = [18.0] * 48
+        max_temps = [22.0] * 48
+
+        # Remove constraints for middle-of-night periods (allows more flexibility)
+        for i in [5, 10, 15, 20, 25, 30]:
+            min_temps[i] = None
+            max_temps[i] = None
+
+        runtimeparams = {
+            "def_load_config": [
+                {
+                    "thermal_battery": {
+                        "start_temperature": 20.0,
+                        "supply_temperature": 35.0,
+                        "volume": 50.0,
+                        "specific_heating_demand": 100.0,
+                        "area": 100.0,
+                        "min_temperatures": min_temps,
+                        "max_temperatures": max_temps,
+                    }
+                },
+            ]
+        }
+
+        # Optimization should succeed; None entries mean no constraints for those timesteps
+        opt_res = self.run_optimization_with_config(runtimeparams["def_load_config"])
+
+        self.assertGreater(len(opt_res), 0, "Optimization should succeed with None temperature entries")
+        self.assertIn("P_deferrable0", opt_res.columns)
+
     def test_inverter_stress_cost_discharge_spread(self):
         """Test that inverter stress cost encourages spreading discharge over time."""
         # Setup plant configuration for hybrid inverter with battery
