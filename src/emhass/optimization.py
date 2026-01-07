@@ -10,6 +10,8 @@ import pandas as pd
 import pulp as plp
 from pulp import COIN_CMD, GLPK_CMD, PULP_CBC_CMD, HiGHS
 
+from emhass import utils
+
 
 class Optimization:
     r"""
@@ -791,6 +793,7 @@ class Optimization:
 
         # Treat deferrable loads constraints
         predicted_temps = {}
+        heating_demands = {}  # Store heating demand for thermal loads
         for k in range(self.optim_conf["number_of_deferrable_loads"]):
             self.logger.debug(f"Processing deferrable load {k}")
             if isinstance(self.optim_conf["nominal_power_of_deferrable_loads"][k], list):
@@ -1018,6 +1021,192 @@ class Optimization:
 
                     predicted_temps[k] = predicted_temp
                     self.logger.debug(f"Load {k}: Thermal constraints set.")
+
+            # Thermal battery load logic
+            elif (
+                "def_load_config" in self.optim_conf.keys()
+                and len(self.optim_conf["def_load_config"]) > k
+                and "thermal_battery" in self.optim_conf["def_load_config"][k]
+            ):
+                self.logger.debug(f"Load {k} is a thermal battery load.")
+                def_load_config = self.optim_conf["def_load_config"][k]
+                if def_load_config and "thermal_battery" in def_load_config:
+                    hc = def_load_config["thermal_battery"]
+
+                    start_temperature = hc["start_temperature"]
+
+                    supply_temperature = hc["supply_temperature"]  # heatpump supply temperature °C
+                    volume = hc["volume"]  # volume of the thermal battery m3
+                    outdoor_temperature_forecast = data_opt["outdoor_temperature_forecast"]
+
+                    min_temperature = hc["min_temperature"]  # lower bound of the comfort range °C
+                    max_temperature = hc["max_temperature"]  # upper bound of the comfort range °C
+
+                    p_concr = 2400  # Density of concrete kg/m3
+                    c_concr = 0.88  # Heat capacity of concrete kJ/kg*K
+                    loss = 0.045  # Temperature loss per time period (+/-) kW
+                    conversion = self.freq.total_seconds() / (
+                        p_concr * c_concr * volume
+                    )  # kW to K per time period
+
+                    self.logger.debug(
+                        "Load %s: Thermal battery parameters: start_temperature=%s, supply_temperature=%s, volume=%s, min_temperature=%s, max_temperature=%s",
+                        k,
+                        start_temperature,
+                        supply_temperature,
+                        volume,
+                        min_temperature,
+                        max_temperature,
+                    )
+
+                    heatpump_cops = utils.calculate_cop_heatpump(
+                        supply_temperature=supply_temperature,
+                        carnot_efficiency=hc.get("carnot_efficiency", 0.4),
+                        outdoor_temperature_forecast=outdoor_temperature_forecast,
+                    )
+                    thermal_losses = utils.calculate_thermal_loss_signed(
+                        outdoor_temperature_forecast=outdoor_temperature_forecast,
+                        indoor_temperature=start_temperature,
+                        base_loss=loss,
+                    )
+
+                    # Auto-detect heating demand calculation method
+                    # Use physics-based if core parameters are provided
+                    if all(
+                        key in hc
+                        for key in [
+                            "u_value",
+                            "envelope_area",
+                            "ventilation_rate",
+                            "heated_volume",
+                        ]
+                    ):
+                        # Physics-based method (more accurate)
+                        # Default indoor_target_temperature to min_temperature if not specified
+                        # This represents maintaining the lower comfort bound
+                        indoor_target_temp = hc.get(
+                            "indoor_target_temperature", min_temperature
+                        )
+
+                        # Extract optional solar gain parameters
+                        window_area = hc.get("window_area", None)
+                        shgc = hc.get("shgc", 0.6)  # Default SHGC for modern double-glazed windows
+
+                        # Check if GHI (Global Horizontal Irradiance) data is available
+                        solar_irradiance = None
+                        if "ghi" in data_opt.columns and window_area is not None:
+                            solar_irradiance = data_opt["ghi"]
+
+                        heating_demand = utils.calculate_heating_demand_physics(
+                            u_value=hc["u_value"],
+                            envelope_area=hc["envelope_area"],
+                            ventilation_rate=hc["ventilation_rate"],
+                            heated_volume=hc["heated_volume"],
+                            indoor_target_temperature=indoor_target_temp,
+                            outdoor_temperature_forecast=outdoor_temperature_forecast,
+                            optimization_time_step=int(self.freq.total_seconds() / 60),
+                            solar_irradiance_forecast=solar_irradiance,
+                            window_area=window_area,
+                            shgc=shgc,
+                        )
+
+                        # Log with solar gains info if applicable
+                        if solar_irradiance is not None:
+                            self.logger.debug(
+                                "Load %s: Using physics-based heating demand with solar gains "
+                                "(u_value=%.2f, envelope_area=%.1f, ventilation_rate=%.2f, heated_volume=%.1f, "
+                                "indoor_target_temp=%.1f%s, window_area=%.1f, shgc=%.2f)",
+                                k,
+                                hc["u_value"],
+                                hc["envelope_area"],
+                                hc["ventilation_rate"],
+                                hc["heated_volume"],
+                                indoor_target_temp,
+                                " (defaulted to min_temp)" if "indoor_target_temperature" not in hc else "",
+                                window_area,
+                                shgc,
+                            )
+                        else:
+                            self.logger.debug(
+                                "Load %s: Using physics-based heating demand calculation "
+                                "(u_value=%.2f, envelope_area=%.1f, ventilation_rate=%.2f, heated_volume=%.1f, "
+                                "indoor_target_temp=%.1f%s)",
+                                k,
+                                hc["u_value"],
+                                hc["envelope_area"],
+                                hc["ventilation_rate"],
+                                hc["heated_volume"],
+                                indoor_target_temp,
+                                " (defaulted to min_temp)" if "indoor_target_temperature" not in hc else "",
+                            )
+                    else:
+                        # HDD method (backward compatible) with configurable parameters
+                        base_temperature = hc.get("base_temperature", 18.0)
+                        annual_reference_hdd = hc.get("annual_reference_hdd", 3000.0)
+                        heating_demand = utils.calculate_heating_demand(
+                            specific_heating_demand=hc["specific_heating_demand"],
+                            floor_area=hc["area"],
+                            outdoor_temperature_forecast=outdoor_temperature_forecast,
+                            base_temperature=base_temperature,
+                            annual_reference_hdd=annual_reference_hdd,
+                            optimization_time_step=int(self.freq.total_seconds() / 60),
+                        )
+                        self.logger.debug(
+                            "Load %s: Using HDD heating demand calculation (specific_heating_demand=%.1f, area=%.1f, base_temperature=%.1f, annual_reference_hdd=%.1f)",
+                            k,
+                            hc["specific_heating_demand"],
+                            hc["area"],
+                            base_temperature,
+                            annual_reference_hdd,
+                        )
+
+                    # Thermal battery state transition (Langer & Volling 2020, Eq B.11-B.15)
+                    # Store heating demand for this thermal battery load
+                    heating_demands[k] = heating_demand
+
+                    predicted_temp_thermal = [start_temperature]
+                    for Id in set_I:
+                        if Id == 0:
+                            continue
+
+                        # Equation B.11: T(h+1) = T(h) + conv * (COP*P - demand - loss)
+                        # where P is in kW, but emhass variables are in W, so divide by 1000
+                        predicted_temp_thermal.append(
+                            predicted_temp_thermal[Id - 1]
+                            + conversion
+                            * (
+                                heatpump_cops[Id - 1]
+                                * P_deferrable[k][Id - 1]
+                                / 1000
+                                * self.timeStep
+                                - heating_demand[Id - 1]
+                                - thermal_losses[Id - 1]
+                            )
+                        )
+
+                        # Equation B.15: Comfort range constraints
+                        constraints.update(
+                            {
+                                f"constraint_thermal_battery{k}_min_temp_{Id}": plp.LpConstraint(
+                                    e=predicted_temp_thermal[Id],
+                                    sense=plp.LpConstraintGE,
+                                    rhs=min_temperature,
+                                )
+                            }
+                        )
+
+                        constraints.update(
+                            {
+                                f"constraint_thermal_battery{k}_max_temp_{Id}": plp.LpConstraint(
+                                    e=predicted_temp_thermal[Id],
+                                    sense=plp.LpConstraintLE,
+                                    rhs=max_temperature,
+                                )
+                            }
+                        )
+
+                    predicted_temps[k] = predicted_temp_thermal
+                    self.logger.debug(f"Load {k}: Thermal battery constraints set.")
 
             # Standard/non-thermal deferrable load logic comes after thermal
             elif (def_total_timestep and def_total_timestep[k] > 0) or (
@@ -1560,19 +1749,27 @@ class Optimization:
                 index=opt_tp.index,
             )
             # Try desired, then min, then max, else empty list
-            thermal_config = self.optim_conf["def_load_config"][i]["thermal_config"]
-            target_temps = thermal_config.get("desired_temperatures")
-            # If desired_temperatures is missing, try to fallback to min or max for visualization
-            if not target_temps:
-                target_temps = thermal_config.get("min_temperatures")
-            if not target_temps:
-                target_temps = thermal_config.get("max_temperatures")
-            # If we found something, add it to the DF
-            if target_temps:
-                opt_tp[f"target_temp_heater{i}"] = pd.Series(
-                    target_temps,
-                    index=opt_tp.index,
-                )
+            if "thermal_config" in self.optim_conf["def_load_config"][i]:
+                thermal_config = self.optim_conf["def_load_config"][i]["thermal_config"]
+                target_temps = thermal_config.get("desired_temperatures")
+                # If desired_temperatures is missing, try to fallback to min or max for visualization
+                if not target_temps:
+                    target_temps = thermal_config.get("min_temperatures")
+                if not target_temps:
+                    target_temps = thermal_config.get("max_temperatures")
+                # If we found something, add it to the DF
+                if target_temps:
+                    opt_tp[f"target_temp_heater{i}"] = pd.Series(
+                        target_temps,
+                        index=opt_tp.index,
+                    )
+
+        # Add heating demands for thermal loads (both thermal_config and thermal_battery)
+        for i, heating_demand in heating_demands.items():
+            opt_tp[f"heating_demand_heater{i}"] = pd.Series(
+                heating_demand,
+                index=opt_tp.index,
+            )
 
         # Battery initialization logging
         if self.optim_conf["set_use_battery"]:
