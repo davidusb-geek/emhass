@@ -66,7 +66,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         params["optim_conf"]["production_price_forecast_method"] = "list"
         self.params_json = orjson.dumps(params).decode("utf-8")
         # Create dummy data resembling optimization output
-        generator = np.random.default_rng()
+        generator = np.random.default_rng(42)
         dates = pd.date_range(start="2024-01-01", periods=24, freq="1h")
         self.df = pd.DataFrame(index=dates)
         self.df["P_PV"] = generator.standard_normal(24) * 1000

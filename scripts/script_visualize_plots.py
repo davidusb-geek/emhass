@@ -9,7 +9,7 @@ from emhass import utils
 
 def generate_debug_html():
     # Create Dummy Data (Same as the test)
-    generator = np.random.default_rng()
+    generator = np.random.default_rng(42)
     dates = pd.date_range(start="2024-01-01", periods=48, freq="30min")
     df = pd.DataFrame(index=dates)
     df["P_PV"] = generator.standard_normal(48) * 4000
