@@ -1039,21 +1039,27 @@ class Optimization:
                     volume = hc["volume"]  # volume of the thermal battery m3
                     outdoor_temperature_forecast = data_opt["outdoor_temperature_forecast"]
 
-                    min_temperatures = hc["min_temperatures"]  # list of lower bounds per timestep °C
-                    max_temperatures = hc["max_temperatures"]  # list of upper bounds per timestep °C
+                    min_temperatures = hc[
+                        "min_temperatures"
+                    ]  # list of lower bounds per timestep °C
+                    max_temperatures = hc[
+                        "max_temperatures"
+                    ]  # list of upper bounds per timestep °C
 
                     # Validate that temperature lists are not empty
                     if not min_temperatures:
-                        raise ValueError(f"Load {k}: thermal_battery requires non-empty 'min_temperatures' list")
+                        raise ValueError(
+                            f"Load {k}: thermal_battery requires non-empty 'min_temperatures' list"
+                        )
                     if not max_temperatures:
-                        raise ValueError(f"Load {k}: thermal_battery requires non-empty 'max_temperatures' list")
+                        raise ValueError(
+                            f"Load {k}: thermal_battery requires non-empty 'max_temperatures' list"
+                        )
 
                     p_concr = 2400  # Density of concrete kg/m3
                     c_concr = 0.88  # Heat capacity of concrete kJ/kg*K
                     loss = 0.045  # Temperature loss per time period (+/-) kW
-                    conversion = self.freq.total_seconds() / (
-                        p_concr * c_concr * volume
-                    )  # kW to K per time period
+                    conversion = 3600 / (p_concr * c_concr * volume)  # °C per kWh
 
                     self.logger.debug(
                         "Load %s: Thermal battery parameters: start_temperature=%s, supply_temperature=%s, volume=%s, min_temperatures=%s, max_temperatures=%s",
@@ -1061,8 +1067,8 @@ class Optimization:
                         start_temperature,
                         supply_temperature,
                         volume,
-                        min_temperatures,
-                        max_temperatures,
+                        min_temperatures[0],
+                        max_temperatures[0],
                     )
 
                     heatpump_cops = utils.calculate_cop_heatpump(
@@ -1091,7 +1097,8 @@ class Optimization:
                         # Default indoor_target_temperature to the first min_temperature if not specified
                         # This represents maintaining the lower comfort bound
                         indoor_target_temp = hc.get(
-                            "indoor_target_temperature", min_temperatures[0] if min_temperatures else 20.0
+                            "indoor_target_temperature",
+                            min_temperatures[0] if min_temperatures else 20.0,
                         )
 
                         # Extract optional solar gain parameters
@@ -1128,7 +1135,9 @@ class Optimization:
                                 hc["ventilation_rate"],
                                 hc["heated_volume"],
                                 indoor_target_temp,
-                                " (defaulted to min_temp)" if "indoor_target_temperature" not in hc else "",
+                                " (defaulted to min_temp)"
+                                if "indoor_target_temperature" not in hc
+                                else "",
                                 window_area,
                                 shgc,
                             )
@@ -1143,7 +1152,9 @@ class Optimization:
                                 hc["ventilation_rate"],
                                 hc["heated_volume"],
                                 indoor_target_temp,
-                                " (defaulted to min_temp)" if "indoor_target_temperature" not in hc else "",
+                                " (defaulted to min_temp)"
+                                if "indoor_target_temperature" not in hc
+                                else "",
                             )
                     else:
                         # HDD method (backward compatible) with configurable parameters
