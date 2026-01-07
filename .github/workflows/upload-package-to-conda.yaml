@@ -46,7 +46,7 @@ jobs:
         shell: bash -l {0}
         env:
           ANACONDA_TOKEN: ${{ secrets.ANACONDA_TOKEN }}
-          ANACONDA_USER: davidusb-geek
+          ANACONDA_USER: davidusb
         run: |
           # Find the package file (targeting .conda specifically based on your debug output)
           # We use `find` to handle the path cleanly
