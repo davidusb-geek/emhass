@@ -976,6 +976,12 @@ async def treat_runtimeparams(
             else:
                 params["passed_data"][forecast_key] = None
 
+        # Explicitly handle historic_days_to_retrieve from runtimeparams BEFORE validation
+        if "historic_days_to_retrieve" in runtimeparams:
+            params["retrieve_hass_conf"]["historic_days_to_retrieve"] = int(
+                runtimeparams["historic_days_to_retrieve"]
+            )
+
         # Treat passed data for forecast model fit/predict/tune at runtime
         if (
             params["passed_data"].get("historic_days_to_retrieve", None) is not None
@@ -1278,8 +1284,11 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     df[cols_p] = df[cols_p].astype(int)
     df[cols_else] = df[cols_else].round(3)
     # Create plots
+    # Figure 0: Systems Powers
     n_colors = len(cols_p)
-    colors = px.colors.sample_colorscale("jet", [n / (n_colors - 1) for n in range(n_colors)])
+    colors = px.colors.sample_colorscale(
+        "jet", [n / (n_colors - 1) if n_colors > 1 else 0 for n in range(n_colors)]
+    )
     fig_0 = px.line(
         df[cols_p],
         title="Systems powers schedule after optimization results",
@@ -1289,6 +1298,9 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         render_mode="svg",
     )
     fig_0.update_layout(xaxis_title="Timestamp", yaxis_title="System powers (W)")
+    image_path_0 = fig_0.to_html(full_html=False, default_width="75%")
+    # Figure 1: Battery SOC (Optional)
+    image_path_1 = None
     if "SOC_opt" in df.columns.to_list():
         fig_1 = px.line(
             df["SOC_opt"],
@@ -1299,9 +1311,34 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
             render_mode="svg",
         )
         fig_1.update_layout(xaxis_title="Timestamp", yaxis_title="Battery SOC (%)")
+        image_path_1 = fig_1.to_html(full_html=False, default_width="75%")
+    # Figure Thermal: Temperatures (Optional)
+    # Detect columns for predicted or target temperatures
+    cols_temp = [
+        i for i in df.columns.to_list() if "predicted_temp_heater" in i or "target_temp_heater" in i
+    ]
+    image_path_temp = None
+    if len(cols_temp) > 0:
+        n_colors = len(cols_temp)
+        colors = px.colors.sample_colorscale(
+            "jet", [n / (n_colors - 1) if n_colors > 1 else 0 for n in range(n_colors)]
+        )
+        fig_temp = px.line(
+            df[cols_temp],
+            title="Thermal loads temperature schedule",
+            template="presentation",
+            line_shape="hv",
+            color_discrete_sequence=colors,
+            render_mode="svg",
+        )
+        fig_temp.update_layout(xaxis_title="Timestamp", yaxis_title="Temperature (&deg;C)")
+        image_path_temp = fig_temp.to_html(full_html=False, default_width="75%")
+    # Figure 2: Costs
     cols_cost = [i for i in df.columns.to_list() if "cost_" in i or "unit_" in i]
     n_colors = len(cols_cost)
-    colors = px.colors.sample_colorscale("jet", [n / (n_colors - 1) for n in range(n_colors)])
+    colors = px.colors.sample_colorscale(
+        "jet", [n / (n_colors - 1) if n_colors > 1 else 0 for n in range(n_colors)]
+    )
     fig_2 = px.line(
         df[cols_cost],
         title="Systems costs obtained from optimization results",
@@ -1311,12 +1348,8 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         render_mode="svg",
     )
     fig_2.update_layout(xaxis_title="Timestamp", yaxis_title="System costs (currency)")
-    # Get full path to image
-    image_path_0 = fig_0.to_html(full_html=False, default_width="75%")
-    if "SOC_opt" in df.columns.to_list():
-        image_path_1 = fig_1.to_html(full_html=False, default_width="75%")
     image_path_2 = fig_2.to_html(full_html=False, default_width="75%")
-    # The tables
+    # Tables
     table1 = df.reset_index().to_html(classes="mystyle", index=False)
     cost_cols = [i for i in df.columns if "cost_" in i]
     table2 = df[cost_cols].reset_index().sum(numeric_only=True)
@@ -1326,13 +1359,19 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         .reset_index(names="Variable")
         .to_html(classes="mystyle", index=False)
     )
-    # The dict of plots
+    # Construct Injection Dict
     injection_dict = {}
     injection_dict["title"] = "<h2>EMHASS optimization results</h2>"
     injection_dict["subsubtitle0"] = "<h4>Plotting latest optimization results</h4>"
+    # Add Powers
     injection_dict["figure_0"] = image_path_0
-    if "SOC_opt" in df.columns.to_list():
+    # Add Thermal
+    if image_path_temp is not None:
+        injection_dict["figure_thermal"] = image_path_temp
+    # Add SOC
+    if image_path_1 is not None:
         injection_dict["figure_1"] = image_path_1
+    # Add Costs
     injection_dict["figure_2"] = image_path_2
     injection_dict["subsubtitle1"] = "<h4>Last run optimization results table</h4>"
     injection_dict["table1"] = table1

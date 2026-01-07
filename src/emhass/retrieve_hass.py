@@ -821,7 +821,9 @@ class RetrieveHass:
         self.logger.debug("prepare_data var_replace_zero=%s", var_replace_zero)
         self.logger.debug("prepare_data var_interp=%s", var_interp)
         self.logger.debug("prepare_data skip_renaming=%s", skip_renaming)
-        self.logger.debug(f"prepare_data df_final columns before rename: {list(self.df_final.columns)}")
+        self.logger.debug(
+            f"prepare_data df_final columns before rename: {list(self.df_final.columns)}"
+        )
 
         # Confirm var_replace_zero & var_interp contain only sensors contained in var_list
         # Do this BEFORE renaming so we can validate against original names
@@ -856,7 +858,9 @@ class RetrieveHass:
                     self.df_final[var_load + "_positive"] = self.df_final[var_load]
                 self.df_final.drop([var_load], inplace=True, axis=1)
                 # Update var_list to reflect the renamed column
-                self.var_list = [var.replace(var_load, var_load + "_positive") for var in self.var_list]
+                self.var_list = [
+                    var.replace(var_load, var_load + "_positive") for var in self.var_list
+                ]
                 self.logger.debug(f"prepare_data var_list updated after rename: {self.var_list}")
         except KeyError as e:
             self.logger.error(

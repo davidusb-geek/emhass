@@ -65,6 +65,14 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         params["optim_conf"]["load_cost_forecast_method"] = "list"
         params["optim_conf"]["production_price_forecast_method"] = "list"
         self.params_json = orjson.dumps(params).decode("utf-8")
+        # Create dummy data resembling optimization output
+        generator = np.random.default_rng(42)
+        dates = pd.date_range(start="2024-01-01", periods=24, freq="1h")
+        self.df = pd.DataFrame(index=dates)
+        self.df["P_PV"] = generator.standard_normal(24) * 1000
+        self.df["P_Load"] = generator.standard_normal(24) * 500
+        self.df["optim_status"] = "Optimal"
+        self.df["cost_fun_profit"] = 0.5
 
     async def test_build_config(self):
         # Test building with the different config methods
@@ -1033,6 +1041,95 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params["retrieve_hass_conf"]["hass_url"], "test.url")
         self.assertEqual(params["retrieve_hass_conf"]["long_lived_token"], "test.key")
 
+    def test_get_injection_dict_with_thermal(self):
+        # Add thermal columns to dummy df
+        self.df["predicted_temp_heater1"] = 21.0
+        self.df["target_temp_heater1"] = 22.0
+        # Run function
+        injection_dict = utils.get_injection_dict(self.df.copy())
+        # Verify Keys
+        self.assertIn("figure_0", injection_dict, "Powers plot missing")
+        self.assertIn("figure_thermal", injection_dict, "Thermal plot missing")
+        self.assertIn("figure_2", injection_dict, "Cost plot missing")
+        # Verify Content
+        self.assertIn("Thermal loads temperature schedule", injection_dict["figure_thermal"])
+        self.assertIn("Temperature (&deg;C)", injection_dict["figure_thermal"])
+
+    def test_get_injection_dict_without_thermal(self):
+        # Ensure no thermal columns
+        cols = [c for c in self.df.columns if "heater" not in c]
+        df_clean = self.df[cols].copy()
+        # Run function
+        injection_dict = utils.get_injection_dict(df_clean)
+        # Verify Thermal is NOT present
+        self.assertNotIn("figure_thermal", injection_dict)
+        self.assertIn("figure_0", injection_dict)
+
+    async def test_treat_runtimeparams_historic_days_to_retrieve(self):
+        # Setup base configuration
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
+        set_type = "forecast-model-fit"
+        # Case 1: Parameter NOT provided in runtimeparams
+        # Should fallback to config default (usually 2), which is < 9, so it should be forced to 9.
+        runtimeparams_empty = {}
+        runtimeparams_json_1 = orjson.dumps(runtimeparams_empty).decode("utf-8")
+        params_1, _, _, _ = await utils.treat_runtimeparams(
+            runtimeparams_json_1,
+            self.params_json,
+            retrieve_hass_conf.copy(),
+            optim_conf.copy(),
+            plant_conf.copy(),
+            set_type,
+            logger,
+            emhass_conf,
+        )
+        params_1 = orjson.loads(params_1)
+        self.assertEqual(
+            params_1["passed_data"]["historic_days_to_retrieve"],
+            9,
+            "If not provided (and default < 9), should be forced to 9",
+        )
+        # Case 2: Provided but < 9 (e.g. 5 days)
+        # The user specifically asks for 5 days. Since 5 < 9, validation should force it to 9.
+        runtimeparams_low = {"historic_days_to_retrieve": 5}
+        runtimeparams_json_2 = orjson.dumps(runtimeparams_low).decode("utf-8")
+        params_2, _, _, _ = await utils.treat_runtimeparams(
+            runtimeparams_json_2,
+            self.params_json,
+            retrieve_hass_conf.copy(),
+            optim_conf.copy(),
+            plant_conf.copy(),
+            set_type,
+            logger,
+            emhass_conf,
+        )
+        params_2 = orjson.loads(params_2)
+        self.assertEqual(
+            params_2["passed_data"]["historic_days_to_retrieve"],
+            9,
+            "If provided value is < 9, should be overridden to 9",
+        )
+        # Case 3: Provided and >= 9 (e.g. 26 days)
+        # This is the fix verification. It should NOT be overridden.
+        runtimeparams_high = {"historic_days_to_retrieve": 26}
+        runtimeparams_json_3 = orjson.dumps(runtimeparams_high).decode("utf-8")
+        params_3, _, _, _ = await utils.treat_runtimeparams(
+            runtimeparams_json_3,
+            self.params_json,
+            retrieve_hass_conf.copy(),
+            optim_conf.copy(),
+            plant_conf.copy(),
+            set_type,
+            logger,
+            emhass_conf,
+        )
+        params_3 = orjson.loads(params_3)
+        self.assertEqual(
+            params_3["passed_data"]["historic_days_to_retrieve"],
+            26,
+            "If provided value is >= 9, it should be respected",
+        )
+
 
 class TestHeatingDemand(unittest.TestCase):
     def test_calculate_heating_demand_basic(self):
@@ -1112,10 +1209,18 @@ class TestHeatingDemand(unittest.TestCase):
 
         # Compare 30-minute vs 60-minute timesteps
         demand_30min = utils.calculate_heating_demand(
-            specific_heating_demand, floor_area, outdoor_temps, base_temperature, optimization_time_step=30
+            specific_heating_demand,
+            floor_area,
+            outdoor_temps,
+            base_temperature,
+            optimization_time_step=30,
         )
         demand_60min = utils.calculate_heating_demand(
-            specific_heating_demand, floor_area, outdoor_temps, base_temperature, optimization_time_step=60
+            specific_heating_demand,
+            floor_area,
+            outdoor_temps,
+            base_temperature,
+            optimization_time_step=60,
         )
 
         # 60-minute timestep should have exactly double the demand of 30-minute
@@ -1192,15 +1297,21 @@ class TestHeatingDemand(unittest.TestCase):
 
         # Create pandas Series with 30-minute DatetimeIndex
         start_date = pd.Timestamp("2024-01-01 00:00:00", tz="UTC")
-        date_range_30min = pd.date_range(start=start_date, periods=len(outdoor_temps_values), freq="30min")
+        date_range_30min = pd.date_range(
+            start=start_date, periods=len(outdoor_temps_values), freq="30min"
+        )
         outdoor_temps_30min = pd.Series(outdoor_temps_values, index=date_range_30min)
 
         # Create pandas Series with 60-minute DatetimeIndex
-        date_range_60min = pd.date_range(start=start_date, periods=len(outdoor_temps_values), freq="60min")
+        date_range_60min = pd.date_range(
+            start=start_date, periods=len(outdoor_temps_values), freq="60min"
+        )
         outdoor_temps_60min = pd.Series(outdoor_temps_values, index=date_range_60min)
 
         # Test auto-inference (should infer 30 min from Series)
-        demand_auto_30 = utils.calculate_heating_demand(specific_heating_demand, floor_area, outdoor_temps_30min)
+        demand_auto_30 = utils.calculate_heating_demand(
+            specific_heating_demand, floor_area, outdoor_temps_30min
+        )
 
         # Test explicit 30 min parameter (should match auto-inference)
         demand_explicit_30 = utils.calculate_heating_demand(
@@ -1211,7 +1322,9 @@ class TestHeatingDemand(unittest.TestCase):
         np.testing.assert_array_almost_equal(demand_auto_30, demand_explicit_30)
 
         # Test auto-inference with 60-minute frequency
-        demand_auto_60 = utils.calculate_heating_demand(specific_heating_demand, floor_area, outdoor_temps_60min)
+        demand_auto_60 = utils.calculate_heating_demand(
+            specific_heating_demand, floor_area, outdoor_temps_60min
+        )
 
         # Test explicit 60 min parameter
         demand_explicit_60 = utils.calculate_heating_demand(
@@ -1231,7 +1344,9 @@ class TestHeatingDemand(unittest.TestCase):
         outdoor_temps_array = np.array([5.0, 10.0, 15.0])
 
         # Test with numpy array (should fall back to 30 min)
-        demand_array = utils.calculate_heating_demand(specific_heating_demand, floor_area, outdoor_temps_array)
+        demand_array = utils.calculate_heating_demand(
+            specific_heating_demand, floor_area, outdoor_temps_array
+        )
 
         # Test explicit 30 min parameter
         demand_explicit = utils.calculate_heating_demand(
@@ -1422,9 +1537,7 @@ class TestHeatingDemand(unittest.TestCase):
         # COP = 0.4 * 308.15 / 35 = 3.521...
         supply_kelvin = supply_temp + 273.15
         outdoor_kelvin = outdoor_temps[0] + 273.15
-        expected_first_cop = carnot_efficiency * supply_kelvin / abs(
-            supply_kelvin - outdoor_kelvin
-        )
+        expected_first_cop = carnot_efficiency * supply_kelvin / abs(supply_kelvin - outdoor_kelvin)
         self.assertAlmostEqual(cops[0], expected_first_cop, places=6)
 
         # Verify all COPs are non-negative
@@ -1467,8 +1580,6 @@ class TestHeatingDemand(unittest.TestCase):
 
     def test_calculate_cop_heatpump_edge_case_warning(self):
         """Test COP calculation logs warning when outdoor temp >= supply temp."""
-        import logging
-        from unittest.mock import patch
 
         # Test case where outdoor temps exceed or equal supply temp
         supply_temp = 30.0
@@ -1482,7 +1593,9 @@ class TestHeatingDemand(unittest.TestCase):
 
             # Verify warning was logged
             self.assertTrue(
-                any("outdoor temperature >= supply temperature" in msg for msg in log_context.output),
+                any(
+                    "outdoor temperature >= supply temperature" in msg for msg in log_context.output
+                ),
                 "Should log warning about non-physical temperature scenario",
             )
 
@@ -1497,8 +1610,12 @@ class TestHeatingDemand(unittest.TestCase):
         # Valid: cops[0], cops[1]  (5 < 30, 10 < 30)
         # Invalid: cops[2], cops[3], cops[4]  (30 >= 30, 35 > 30, 40 > 30)
         self.assertEqual(cops[2], 1.0, "Boundary case (equal temps) should have COP=1.0")
-        self.assertEqual(cops[3], 1.0, "Non-physical scenario (outdoor > supply) should have COP=1.0")
-        self.assertEqual(cops[4], 1.0, "Non-physical scenario (outdoor > supply) should have COP=1.0")
+        self.assertEqual(
+            cops[3], 1.0, "Non-physical scenario (outdoor > supply) should have COP=1.0"
+        )
+        self.assertEqual(
+            cops[4], 1.0, "Non-physical scenario (outdoor > supply) should have COP=1.0"
+        )
         # Valid scenarios should have reasonable COP > 1.0
         self.assertGreater(cops[0], 1.0, "Valid scenario should have COP > 1.0")
         self.assertGreater(cops[1], 1.0, "Valid scenario should have COP > 1.0")
@@ -1536,17 +1653,13 @@ class TestHeatingDemand(unittest.TestCase):
 
         # Test winter scenario: all outdoor temps below indoor (all positive losses)
         outdoor_winter = np.array([0.0, 5.0, 10.0, 15.0])
-        losses_winter = utils.calculate_thermal_loss_signed(
-            outdoor_winter, indoor_temp, base_loss
-        )
+        losses_winter = utils.calculate_thermal_loss_signed(outdoor_winter, indoor_temp, base_loss)
         self.assertTrue(np.all(losses_winter > 0))
         self.assertTrue(np.allclose(losses_winter, base_loss))
 
         # Test summer scenario: all outdoor temps above indoor (all negative losses)
         outdoor_summer = np.array([25.0, 30.0, 35.0, 40.0])
-        losses_summer = utils.calculate_thermal_loss_signed(
-            outdoor_summer, indoor_temp, base_loss
-        )
+        losses_summer = utils.calculate_thermal_loss_signed(outdoor_summer, indoor_temp, base_loss)
         self.assertTrue(np.all(losses_summer < 0))
         self.assertTrue(np.allclose(losses_summer, -base_loss))
 

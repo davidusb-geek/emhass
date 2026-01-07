@@ -766,7 +766,9 @@ async def initialize(args: dict | None = None):
 
     # Initialize persistent WebSocket connection only if use_websocket is enabled
     use_websocket = params.get("retrieve_hass_conf", {}).get("use_websocket", False)
+    use_influxdb = params.get("retrieve_hass_conf", {}).get("use_influxdb", False)
 
+    # Initialize persistent WebSocket connection if enabled
     if use_websocket:
         app.logger.info("WebSocket mode enabled - initializing connection...")
         try:
@@ -778,14 +780,19 @@ async def initialize(args: dict | None = None):
             app.logger.info("WebSocket connection established")
 
             # WebSocket shutdown is already handled by @app.after_serving
-            # No need for atexit handler
         except Exception as ws_error:
             app.logger.warning(f"WebSocket connection failed: {ws_error}")
             app.logger.info("Continuing without WebSocket connection...")
             # Re-raise the exception so before_serving can handle it
             raise
+
+    # Log InfluxDB mode if enabled (No persistent connection init required here)
+    elif use_influxdb:
+        app.logger.info("InfluxDB mode enabled - using InfluxDB for data retrieval")
+
+    # Default to REST API if neither is enabled
     else:
-        app.logger.info("WebSocket mode disabled - using REST API only")
+        app.logger.info("WebSocket and InfluxDB modes disabled - using REST API for data retrieval")
 
     app.logger.info("Initialization complete")
 
