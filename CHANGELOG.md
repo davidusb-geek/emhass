@@ -2,14 +2,19 @@
 
 ## Unreleased
 ### Improvement
-- Introduce dynamic frontend visibility toggles for InfluxDB and machine-learning forecaster options in the web configuration UI.
-- Greatly improved coverage for the whole project. Added a new long awaited unit testing suite for the web server.
-- Allow configuring the number of Bayesian optimization trials in the machine-learning forecaster tune API.
-- Improve logging for non-hybrid systems to clarify that inverter_ac_input_max is ignored and battery_charge_power_max is used as the charge limit.
-- Expand and update configuration documentation for weather, load, load cost, and production price forecast methods, including references to dedicated forecast documentation and external data inputs.
+- Added new thermal model plots
+- Implement thermal battery for underfloor heating from Langer & Volling (2020) (@sokorn)
+- Add hybrid inverter stress cost (@rmounce)
+- Introduce dynamic frontend visibility toggles for `InfluxDB` and machine-learning forecaster options in the web configuration UI
+- Greatly improved coverage for the whole project. Added a new long-awaited unit testing suite for the web server
+- Allow configuring the number of Bayesian optimization trials in the machine-learning forecaster tune API (@gieljnssns)
+- Improve logging for non-hybrid systems to clarify that `inverter_ac_input_max` is ignored and `battery_charge_power_max` is used as the charge limit
+- Expand and update configuration documentation for weather, load, load cost, and production price forecast methods, including references to dedicated forecast documentation and external data inputs
 ### Fix
-- Fixed problem with missing prepare data method on MLForecaster workflow.
-- Always use the configured battery_charge_power_max as the effective battery DC charge limit, avoiding unintended constraint tightening from inverter_ac_input_max on non-hybrid systems.
+- Solved issue with `historic_days_to_retrieve` not taken into account
+- Clarify initialization logging for WebSocket, InfluxDB, and REST API data retrieval modes
+- Fixed problem with missing prepare data method on MLForecaster workflow
+- Always use the configured `battery_charge_power_max` as the effective battery DC charge limit, avoiding unintended constraint tightening from `inverter_ac_input_max` on non-hybrid systems
 
 ## 0.15.2 - 2025-12-19
 ### Improvement
