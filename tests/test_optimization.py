@@ -1329,7 +1329,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         max_temp = runtimeparams["def_load_config"][0]["thermal_battery"]["max_temperature"]
 
         # Verify constraint parameters are reasonable
-        self.assertGreater(max_temp, min_temp, "max_temperature must be greater than min_temperature")
+        self.assertGreater(
+            max_temp, min_temp, "max_temperature must be greater than min_temperature"
+        )
         self.assertGreaterEqual(min_temp, 10.0, "min_temperature should be reasonable (>= 10°C)")
         self.assertLessEqual(max_temp, 30.0, "max_temperature should be reasonable (<= 30°C)")
 
@@ -1444,7 +1446,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             mean_power_warm,
             f"Physics check failed: heating during cold periods ({mean_power_cold:.3f} kW) "
             f"should be >= warm periods ({mean_power_warm:.3f} kW). "
-            f"Temperature range: {outdoor_temp.min():.1f}°C to {outdoor_temp.max():.1f}°C"
+            f"Temperature range: {outdoor_temp.min():.1f}°C to {outdoor_temp.max():.1f}°C",
         )
 
         # Verify physics-based parameters are being used by checking log output was correct
@@ -1458,8 +1460,16 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             # For the given parameters (u_value=0.4, envelope_area=350, ventilation_rate=0.6, volume=250)
             # at ΔT=15°C, heating demand should be around 2.5-3.5 kWh per 30-min timestep
             # Over 48 timesteps with average ΔT≈10°C, total should be roughly 50-150 kWh
-            self.assertGreater(total_heating_energy, 0, "Some heating should occur given the cold outdoor temperatures")
-            self.assertLess(total_heating_energy, 200, "Total heating energy should be reasonable (not excessive)")
+            self.assertGreater(
+                total_heating_energy,
+                0,
+                "Some heating should occur given the cold outdoor temperatures",
+            )
+            self.assertLess(
+                total_heating_energy,
+                200,
+                "Total heating energy should be reasonable (not excessive)",
+            )
 
     def test_thermal_battery_hdd_configurable(self):
         """Test thermal battery optimization with configurable HDD parameters."""
@@ -1514,7 +1524,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         }
 
         # Run optimization with default HDD parameters
-        opt_res_default = self.run_optimization_with_config(runtimeparams_default["def_load_config"])
+        opt_res_default = self.run_optimization_with_config(
+            runtimeparams_default["def_load_config"]
+        )
 
         total_energy_default_hdd = opt_res_default["P_deferrable0"].sum()
 
@@ -1528,14 +1540,18 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # Combined effect: custom params should result in MORE heating demand
 
         # The difference should be meaningful (at least 5%)
-        percent_difference = abs(total_energy_custom_hdd - total_energy_default_hdd) / max(total_energy_default_hdd, 0.001) * 100
+        percent_difference = (
+            abs(total_energy_custom_hdd - total_energy_default_hdd)
+            / max(total_energy_default_hdd, 0.001)
+            * 100
+        )
 
         self.assertGreater(
             percent_difference,
             5.0,
             f"Changing HDD parameters should significantly affect heating demand. "
             f"Custom HDD: {total_energy_custom_hdd:.2f} kW, Default HDD: {total_energy_default_hdd:.2f} kW, "
-            f"Difference: {percent_difference:.1f}% (expected > 5%)"
+            f"Difference: {percent_difference:.1f}% (expected > 5%)",
         )
 
         # Additional verification: With higher base_temperature and lower annual_reference_hdd,
@@ -1548,7 +1564,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(
                 total_energy_custom_hdd,
                 total_energy_default_hdd,
-                "Custom and default HDD parameters should produce different results"
+                "Custom and default HDD parameters should produce different results",
             )
 
     def test_thermal_battery_hdd_extreme_invalid_params(self):
@@ -1598,14 +1614,17 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             )
 
             # Verify result is returned (even if optimization is infeasible)
-            self.assertIsInstance(opt_res, type(pd.DataFrame()),
-                f"Case {idx}: Should return DataFrame for extreme HDD params {params}")
+            self.assertIsInstance(
+                opt_res,
+                type(pd.DataFrame()),
+                f"Case {idx}: Should return DataFrame for extreme HDD params {params}",
+            )
 
             # Verify no NaN values in heating power
             if "P_deferrable0" in opt_res.columns:
                 self.assertFalse(
                     opt_res["P_deferrable0"].isna().any(),
-                    f"Case {idx}: Heating power should not contain NaN for params {params}"
+                    f"Case {idx}: Heating power should not contain NaN for params {params}",
                 )
 
                 # Verify non-negative heating energy
@@ -1613,7 +1632,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 self.assertGreaterEqual(
                     total_energy,
                     0,
-                    f"Case {idx}: Heating energy should not be negative for params {params}"
+                    f"Case {idx}: Heating energy should not be negative for params {params}",
                 )
 
     def test_thermal_battery_physics_with_solar_gains(self):
@@ -1676,14 +1695,18 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         night_hours = ghi_data == 0  # Zero GHI periods
 
         # Verify test setup includes both sunny and night periods
-        self.assertGreater(sunny_hours.sum(), 0, "Test should include sunny periods with GHI > 200 W/m²")
+        self.assertGreater(
+            sunny_hours.sum(), 0, "Test should include sunny periods with GHI > 200 W/m²"
+        )
         self.assertGreater(night_hours.sum(), 0, "Test should include night periods with GHI = 0")
 
         # Verify heat pump behavior is reasonable
         total_heat_pump_energy = opt_res["P_deferrable0"].sum()
         # Note: Heat pump may run zero energy if solar gains completely offset heating needs
         # and thermal battery stays within temperature bounds. This is valid optimizer behavior.
-        self.assertGreaterEqual(total_heat_pump_energy, 0, "Heat pump energy should be non-negative")
+        self.assertGreaterEqual(
+            total_heat_pump_energy, 0, "Heat pump energy should be non-negative"
+        )
 
         # Log the result for verification
         if total_heat_pump_energy == 0:
@@ -1713,8 +1736,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 avg_heating_sunny,
                 avg_heating_night,
                 f"Solar gains should reduce heating demand during sunny periods. "
-                f"Sunny period avg: {avg_heating_sunny:.3f} kW, Night avg: {avg_heating_night:.3f} kW"
+                f"Sunny period avg: {avg_heating_sunny:.3f} kW, Night avg: {avg_heating_night:.3f} kW",
             )
+
     def test_inverter_stress_cost_discharge_spread(self):
         """Test that inverter stress cost encourages spreading discharge over time."""
         # Setup plant configuration for hybrid inverter with battery

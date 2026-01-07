@@ -841,7 +841,11 @@ def prepare_forecast_and_weather_data(
         dayahead_index = df_input_data_dayahead.index
 
         # Check time resolution if requested
-        if warn_on_resolution and len(input_data_dict["df_weather"].index) > 1 and len(dayahead_index) > 1:
+        if (
+            warn_on_resolution
+            and len(input_data_dict["df_weather"].index) > 1
+            and len(dayahead_index) > 1
+        ):
             weather_index = input_data_dict["df_weather"].index
             weather_freq = (weather_index[1] - weather_index[0]).total_seconds()
             dayahead_freq = (dayahead_index[1] - dayahead_index[0]).total_seconds()
@@ -1774,9 +1778,7 @@ async def publish_data(
                                 f"heating_demand_heater{k} not found in results, skipping."
                             )
                     else:
-                        logger.warning(
-                            f"custom_heating_demand_id missing for index {k}, skipping."
-                        )
+                        logger.warning(f"custom_heating_demand_id missing for index {k}, skipping.")
             else:
                 # If def_load_config is shorter than k, just stop checking thermal for this index
                 pass
