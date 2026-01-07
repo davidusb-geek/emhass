@@ -1039,8 +1039,8 @@ class Optimization:
                     volume = hc["volume"]  # volume of the thermal battery m3
                     outdoor_temperature_forecast = data_opt["outdoor_temperature_forecast"]
 
-                    min_temperature = hc["min_temperature"]  # lower bound of the comfort range °C
-                    max_temperature = hc["max_temperature"]  # upper bound of the comfort range °C
+                    min_temperatures = hc["min_temperatures"]  # list of lower bounds per timestep °C
+                    max_temperatures = hc["max_temperatures"]  # list of upper bounds per timestep °C
 
                     p_concr = 2400  # Density of concrete kg/m3
                     c_concr = 0.88  # Heat capacity of concrete kJ/kg*K
@@ -1050,13 +1050,13 @@ class Optimization:
                     )  # kW to K per time period
 
                     self.logger.debug(
-                        "Load %s: Thermal battery parameters: start_temperature=%s, supply_temperature=%s, volume=%s, min_temperature=%s, max_temperature=%s",
+                        "Load %s: Thermal battery parameters: start_temperature=%s, supply_temperature=%s, volume=%s, min_temperatures=%s, max_temperatures=%s",
                         k,
                         start_temperature,
                         supply_temperature,
                         volume,
-                        min_temperature,
-                        max_temperature,
+                        min_temperatures,
+                        max_temperatures,
                     )
 
                     heatpump_cops = utils.calculate_cop_heatpump(
@@ -1082,10 +1082,10 @@ class Optimization:
                         ]
                     ):
                         # Physics-based method (more accurate)
-                        # Default indoor_target_temperature to min_temperature if not specified
+                        # Default indoor_target_temperature to the first min_temperature if not specified
                         # This represents maintaining the lower comfort bound
                         indoor_target_temp = hc.get(
-                            "indoor_target_temperature", min_temperature
+                            "indoor_target_temperature", min_temperatures[0] if min_temperatures else 20.0
                         )
 
                         # Extract optional solar gain parameters
@@ -1185,25 +1185,28 @@ class Optimization:
                         )
 
                         # Equation B.15: Comfort range constraints
-                        constraints.update(
-                            {
-                                f"constraint_thermal_battery{k}_min_temp_{Id}": plp.LpConstraint(
-                                    e=predicted_temp_thermal[Id],
-                                    sense=plp.LpConstraintGE,
-                                    rhs=min_temperature,
-                                )
-                            }
-                        )
+                        # Support per-timestep temperature bounds (aligned with thermal_config)
+                        if len(min_temperatures) > Id and min_temperatures[Id] is not None:
+                            constraints.update(
+                                {
+                                    f"constraint_thermal_battery{k}_min_temp_{Id}": plp.LpConstraint(
+                                        e=predicted_temp_thermal[Id],
+                                        sense=plp.LpConstraintGE,
+                                        rhs=min_temperatures[Id],
+                                    )
+                                }
+                            )
 
-                        constraints.update(
-                            {
-                                f"constraint_thermal_battery{k}_max_temp_{Id}": plp.LpConstraint(
-                                    e=predicted_temp_thermal[Id],
-                                    sense=plp.LpConstraintLE,
-                                    rhs=max_temperature,
-                                )
-                            }
-                        )
+                        if len(max_temperatures) > Id and max_temperatures[Id] is not None:
+                            constraints.update(
+                                {
+                                    f"constraint_thermal_battery{k}_max_temp_{Id}": plp.LpConstraint(
+                                        e=predicted_temp_thermal[Id],
+                                        sense=plp.LpConstraintLE,
+                                        rhs=max_temperatures[Id],
+                                    )
+                                }
+                            )
 
                     predicted_temps[k] = predicted_temp_thermal
                     self.logger.debug(f"Load {k}: Thermal battery constraints set.")
