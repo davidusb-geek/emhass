@@ -7,8 +7,11 @@
 <br>
 
 <p align="center">
-  <a style="text-decoration:none" href="https://github.com/davidusb-geek/emhass/releases">
+  <a style="text-decoration:none" href="https://pypi.org/project/emhass/">
     <img alt="PyPI - Version" src="https://img.shields.io/pypi/v/emhass">
+  </a>
+  <a style="text-decoration:none" href="https://anaconda.org/channels/davidusb/packages/emhass/overview">
+    <img alt="Conda - Version" src="https://img.shields.io/conda/v/davidusb/emhass">
   </a>
   <a style="text-decoration:none" href="https://github.com/davidusb-geek/emhass/actions">
     <img alt="EMHASS GitHub Workflow Status" src="https://github.com/davidusb-geek/emhass/actions/workflows/publish_docker.yaml/badge.svg?event=release">
