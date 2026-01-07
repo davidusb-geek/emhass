@@ -66,10 +66,11 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         params["optim_conf"]["production_price_forecast_method"] = "list"
         self.params_json = orjson.dumps(params).decode("utf-8")
         # Create dummy data resembling optimization output
+        generator = np.random.default_rng()
         dates = pd.date_range(start="2024-01-01", periods=24, freq="1h")
         self.df = pd.DataFrame(index=dates)
-        self.df["P_PV"] = np.random.rand(24) * 1000
-        self.df["P_Load"] = np.random.rand(24) * 500
+        self.df["P_PV"] = generator.standard_normal(24) * 1000
+        self.df["P_Load"] = generator.standard_normal(24) * 500
         self.df["optim_status"] = "Optimal"
         self.df["cost_fun_profit"] = 0.5
 
@@ -1040,7 +1041,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params["retrieve_hass_conf"]["hass_url"], "test.url")
         self.assertEqual(params["retrieve_hass_conf"]["long_lived_token"], "test.key")
 
-    async def test_get_injection_dict_with_thermal(self):
+    def test_get_injection_dict_with_thermal(self):
         # Add thermal columns to dummy df
         self.df["predicted_temp_heater1"] = 21.0
         self.df["target_temp_heater1"] = 22.0
@@ -1054,7 +1055,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Thermal loads temperature schedule", injection_dict["figure_thermal"])
         self.assertIn("Temperature (&deg;C)", injection_dict["figure_thermal"])
 
-    async def test_get_injection_dict_without_thermal(self):
+    def test_get_injection_dict_without_thermal(self):
         # Ensure no thermal columns
         cols = [c for c in self.df.columns if "heater" not in c]
         df_clean = self.df[cols].copy()
