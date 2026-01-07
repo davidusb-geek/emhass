@@ -1052,7 +1052,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIn("figure_2", injection_dict, "Cost plot missing")
         # Verify Content
         self.assertIn("Thermal loads temperature schedule", injection_dict["figure_thermal"])
-        self.assertIn("Temperature (°C)", injection_dict["figure_thermal"])
+        self.assertIn("Temperature (&deg;C)", injection_dict["figure_thermal"])
 
     async def test_get_injection_dict_without_thermal(self):
         # Ensure no thermal columns
