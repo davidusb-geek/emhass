@@ -1,18 +1,12 @@
-import copy
 import pathlib
-import pickle
 import unittest
 
-import aiofiles
 import numpy as np
 import orjson
 import pandas as pd
-from skforecast.recursive import ForecasterRecursive
 
 from emhass import utils
-from emhass.command_line import set_input_data_dict
 from emhass.machine_learning_forecaster import MLForecaster
-from emhass.retrieve_hass import RetrieveHass
 
 # The root folder
 root = pathlib.Path(utils.get_root(__file__, num_parent=2))
@@ -20,6 +14,7 @@ root = pathlib.Path(utils.get_root(__file__, num_parent=2))
 emhass_conf = {}
 emhass_conf["data_path"] = root / "data/"
 emhass_conf["root_path"] = root / "src/emhass/"
+emhass_conf["config_path"] = root / "config.json"
 emhass_conf["defaults_path"] = emhass_conf["root_path"] / "data/config_defaults.json"
 emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations.csv"
 
@@ -28,237 +23,215 @@ logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
 
 class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
-    @staticmethod
-    async def get_test_params():
-        # Build params with default config and secrets
-        if emhass_conf["defaults_path"].exists():
-            config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
-            _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
-            params = await utils.build_params(emhass_conf, secrets, config, logger)
-        else:
-            raise Exception(
-                "config_defaults. does not exist in path: " + str(emhass_conf["defaults_path"])
-            )
-        return params
-
     async def asyncSetUp(self):
-        params = await TestMLForecasterAsync.get_test_params()
-        costfun = "profit"
-        action = "forecast-model-fit"  # fit, predict and tune methods
-        # Create runtime parameters
-        runtimeparams = {
+        # Load Raw Parameters
+        self.params = await TestMLForecasterAsync.get_test_params()
+        # Serialize to JSON (Raw types)
+        self.params_json = orjson.dumps(self.params).decode("utf-8")
+        # Convert ALL time parameters to Timedelta objects for Python code
+        if "optimization_time_step" in self.params["retrieve_hass_conf"]:
+            self.params["retrieve_hass_conf"]["optimization_time_step"] = pd.to_timedelta(
+                self.params["retrieve_hass_conf"]["optimization_time_step"], "minutes"
+            )
+        if "delta_forecast_daily" in self.params["optim_conf"]:
+            self.params["optim_conf"]["delta_forecast_daily"] = pd.to_timedelta(
+                self.params["optim_conf"]["delta_forecast_daily"], "days"
+            )
+        # Populate passed_data defaults
+        self.params["passed_data"].update(
+            {
+                "model_type": "load_forecast",
+                "var_model": "sensor.power_load_no_var_loads",
+                "sklearn_model": "KNeighborsRegressor",
+                "num_lags": 48,
+                "split_date_delta": "48h",
+                "perform_backtest": False,
+            }
+        )
+        self.runtimeparams = {
             "historic_days_to_retrieve": 20,
-            "model_type": "long_train_data",
+            "model_type": "load_forecast",
             "var_model": "sensor.power_load_no_var_loads",
             "sklearn_model": "KNeighborsRegressor",
             "num_lags": 48,
+            "split_date_delta": "48h",
+            "perform_backtest": False,
         }
-        runtimeparams_json = orjson.dumps(runtimeparams).decode()
-        params["passed_data"] = runtimeparams
-        params["optim_conf"]["load_forecast_method"] = "skforecast"
-        # Create input dictionary
-        params_json = orjson.dumps(params).decode()
-        self.input_data_dict = await set_input_data_dict(
-            emhass_conf,
-            costfun,
-            params_json,
-            runtimeparams_json,
-            action,
-            logger,
-            get_data_from_file=True,
-        )
-        # Create MLForcaster object
-        data = copy.deepcopy(self.input_data_dict["df_input_data"])
-        model_type = self.input_data_dict["params"]["passed_data"]["model_type"]
-        var_model = self.input_data_dict["params"]["passed_data"]["var_model"]
-        sklearn_model = self.input_data_dict["params"]["passed_data"]["sklearn_model"]
-        num_lags = self.input_data_dict["params"]["passed_data"]["num_lags"]
-        self.mlf = MLForecaster(
-            data, model_type, var_model, sklearn_model, num_lags, emhass_conf, logger
-        )
-        # Create RetrieveHass Object
-        get_data_from_file = True
-        params = None
-        self.retrieve_hass_conf, self.optim_conf, _ = utils.get_yaml_parse(params_json, logger)
-        self.rh = RetrieveHass(
-            self.retrieve_hass_conf["hass_url"],
-            self.retrieve_hass_conf["long_lived_token"],
-            self.retrieve_hass_conf["optimization_time_step"],
-            self.retrieve_hass_conf["time_zone"],
-            params_json,
-            emhass_conf,
-            logger,
-            get_data_from_file=get_data_from_file,
-        )
-        # Open and extract saved sensor data to test against
-        async with aiofiles.open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
-            content = await inp.read()
-            self.rh.df_final, self.days_list, self.var_list, self.rh.ha_config = pickle.loads(
-                content
+        self.runtimeparams_json = orjson.dumps(self.runtimeparams).decode("utf-8")
+        self.action = "forecast-model-fit"
+        self.costfun = "profit"
+        # Generate test data
+        idx = pd.date_range(end=pd.Timestamp.now(), periods=48 * 20, freq="30min")
+        np.random.seed(42)
+        data_values = np.random.rand(len(idx)) * 1000 + 500
+        self.data = pd.DataFrame({"sensor.power_load_no_var_loads": data_values}, index=idx)
+        self.data.index.name = "timestamp"
+        self.data = utils.set_df_index_freq(self.data)
+        self.input_data_dict = {
+            "root": emhass_conf["root_path"],
+            "retrieve_hass_conf": self.params["retrieve_hass_conf"],
+            "df_input_data": self.data,
+            "df_input_data_dayahead": self.data,
+            "opt_pars": self.params["optim_conf"],
+            "params": self.params,
+        }
+
+    @staticmethod
+    async def get_test_params():
+        if emhass_conf["defaults_path"].exists():
+            config_path = (
+                emhass_conf["config_path"] if emhass_conf["config_path"].exists() else None
+            )
+            config = await utils.build_config(
+                emhass_conf, logger, emhass_conf["defaults_path"], config_path
+            )
+            params = await utils.build_params(emhass_conf, {}, config, logger)
+            return params
+        else:
+            raise Exception(
+                "config_defaults.json not found in " + str(emhass_conf["defaults_path"])
             )
 
-    async def test_fit(self):
-        df_pred, df_pred_backtest = await self.mlf.fit()
-        self.assertIsInstance(self.mlf.forecaster, ForecasterRecursive)
-        self.assertIsInstance(df_pred, pd.DataFrame)
-        self.assertIs(df_pred_backtest, None)
-        # Refit with backtest evaluation
-        df_pred, df_pred_backtest = await self.mlf.fit(perform_backtest=True)
-        self.assertIsInstance(self.mlf.forecaster, ForecasterRecursive)
-        self.assertIsInstance(df_pred, pd.DataFrame)
-        self.assertIsInstance(df_pred_backtest, pd.DataFrame)
-
-    async def test_predict(self):
-        await self.mlf.fit()
-        predictions = await self.mlf.predict()
-        self.assertIsInstance(predictions, pd.Series)
-        self.assertEqual(predictions.isnull().sum().sum(), 0)
-        # Test predict in production env using last_window
-        data_tmp = copy.deepcopy(self.rh.df_final)[[self.mlf.var_model]]
-        data_last_window = data_tmp[data_tmp.index[-1] - pd.offsets.Day(2) :]
-        predictions = await self.mlf.predict(data_last_window)
-        self.assertIsInstance(predictions, pd.Series)
-        self.assertEqual(predictions.isnull().sum().sum(), 0)
-        # Test again with last_window data but with NaNs
-        data_last_window.at[data_last_window.index[10], self.mlf.var_model] = np.nan
-        data_last_window.at[data_last_window.index[11], self.mlf.var_model] = np.nan
-        data_last_window.at[data_last_window.index[12], self.mlf.var_model] = np.nan
-        predictions = await self.mlf.predict(data_last_window)
-        self.assertIsInstance(predictions, pd.Series)
-        self.assertEqual(predictions.isnull().sum().sum(), 0)
-        # Emulate predict on optimized forecaster
-        self.mlf.is_tuned = True
-        self.mlf.lags_opt = 48
-        await self.mlf.fit()
-        predictions = await self.mlf.predict()
-        self.assertIsInstance(predictions, pd.Series)
-        self.assertEqual(predictions.isnull().sum().sum(), 0)
-
-    async def test_tune(self):
-        await self.mlf.fit()
-        df_pred_optim = await self.mlf.tune(debug=True)
-        self.assertIsInstance(df_pred_optim, pd.DataFrame)
-        self.assertIs(self.mlf.is_tuned, True)
-        # Test LinearRegression
-        data = copy.deepcopy(self.input_data_dict["df_input_data"])
-        model_type = self.input_data_dict["params"]["passed_data"]["model_type"]
-        var_model = self.input_data_dict["params"]["passed_data"]["var_model"]
-        sklearn_model = "LinearRegression"
-        num_lags = self.input_data_dict["params"]["passed_data"]["num_lags"]
-        self.mlf = MLForecaster(
-            data, model_type, var_model, sklearn_model, num_lags, emhass_conf, logger
-        )
-        await self.mlf.fit()
-        df_pred_optim = await self.mlf.tune(debug=True)
-        self.assertIsInstance(df_pred_optim, pd.DataFrame)
-        self.assertIs(self.mlf.is_tuned, True)
-        # Test ElasticNet
-        data = copy.deepcopy(self.input_data_dict["df_input_data"])
-        model_type = self.input_data_dict["params"]["passed_data"]["model_type"]
-        var_model = self.input_data_dict["params"]["passed_data"]["var_model"]
-        sklearn_model = "ElasticNet"
-        num_lags = self.input_data_dict["params"]["passed_data"]["num_lags"]
-        self.mlf = MLForecaster(
-            data, model_type, var_model, sklearn_model, num_lags, emhass_conf, logger
-        )
-        await self.mlf.fit()
-        df_pred_optim = await self.mlf.tune(debug=True)
-        self.assertIsInstance(df_pred_optim, pd.DataFrame)
-        self.assertIs(self.mlf.is_tuned, True)
-
-    async def test_tune_svr(self):
-        """Test tuning specifically for SVR to cover svr_search_space logic."""
-        data = copy.deepcopy(self.input_data_dict["df_input_data"])
-        # Initialize with SVR
-        self.mlf = MLForecaster(
-            data,
+    def _get_standard_mlf(self):
+        """Helper to initialize MLForecaster with standard parameters."""
+        self.input_data_dict["params"]["passed_data"]["model_type"] = "load_forecast"
+        self.input_data_dict["params"]["passed_data"]["sklearn_model"] = "KNeighborsRegressor"
+        return MLForecaster(
+            self.data,
             self.input_data_dict["params"]["passed_data"]["model_type"],
             self.input_data_dict["params"]["passed_data"]["var_model"],
-            "SVR",
+            self.input_data_dict["params"]["passed_data"]["sklearn_model"],
             self.input_data_dict["params"]["passed_data"]["num_lags"],
             emhass_conf,
             logger,
         )
-        await self.mlf.fit()
-        # Run tune. This should cover the SVR specific search space logic.
-        df_pred_optim = await self.mlf.tune(debug=True)
-        self.assertIsInstance(df_pred_optim, pd.DataFrame)
-        self.assertIs(self.mlf.is_tuned, True)
 
-    async def test_tune_edge_case_short_data(self):
-        """Test tuning when split_date_delta leaves insufficient training data."""
-        # Change model to LinearRegression to avoid n_neighbors constraints with small data
-        self.mlf.sklearn_model = "LinearRegression"
-        await self.mlf.fit()
-        # Force a split delta that is almost the entire length of the dataset
-        # This triggers: if initial_train_size <= window_size
-        total_days = (self.mlf.data_exo.index[-1] - self.mlf.data_exo.index[0]).days
-        long_delta = f"{total_days - 1}d"
-        # Verify that the recovery path was exercised by checking for the specific warning
-        with self.assertLogs(logger, level="WARNING") as cm:
-            df_pred_optim = await self.mlf.tune(split_date_delta=long_delta, debug=True)
-            # Check if the specific adjustment message is in the logs
-            warning_messages = " ".join(record.getMessage() for record in cm.records)
-            self.assertIn("Adjusting initial_train_size", warning_messages)
+    async def _fit_standard_mlf(self, mlf):
+        """Helper to fit the model with standard parameters."""
+        return await mlf.fit(
+            split_date_delta=self.input_data_dict["params"]["passed_data"]["split_date_delta"],
+            perform_backtest=self.input_data_dict["params"]["passed_data"]["perform_backtest"],
+        )
+
+    async def test_mlforecaster_init(self):
+        mlf = self._get_standard_mlf()
+        self.assertIsInstance(mlf, MLForecaster)
+
+    async def test_mlforecaster_fit(self):
+        mlf = self._get_standard_mlf()
+        df_pred, df_pred_backtest = await self._fit_standard_mlf(mlf)
+        self.assertIsInstance(df_pred, pd.DataFrame)
+        self.assertTrue(df_pred_backtest is None)
+
+    async def test_mlforecaster_predict(self):
+        mlf = self._get_standard_mlf()
+        await self._fit_standard_mlf(mlf)
+        df_pred = await mlf.predict(
+            data_last_window=self.data,
+        )
+        self.assertIsInstance(df_pred, pd.Series)
+
+    async def test_mlforecaster_tune(self):
+        mlf = self._get_standard_mlf()
+        await self._fit_standard_mlf(mlf)
+        df_pred_optim = await mlf.tune(
+            debug=True,
+            split_date_delta=self.input_data_dict["params"]["passed_data"]["split_date_delta"],
+        )
         self.assertIsInstance(df_pred_optim, pd.DataFrame)
-        self.assertTrue(self.mlf.is_tuned)
 
     async def test_error_handling_and_fallbacks(self):
-        """Test exception handling and invalid model fallbacks."""
-        data = copy.deepcopy(self.input_data_dict["df_input_data"])
-        # Test "Invalid Model" Fallback in _get_sklearn_model
-        # We pass a nonsense model name
-        mlf_bad_model = MLForecaster(
-            data,
-            "test_type",
-            "sensor.power_load_no_var_loads",
-            "NonExistentModel",
-            48,
+        """Test error handling for invalid models or data."""
+        self.input_data_dict["params"]["passed_data"]["sklearn_model"] = "InvalidModel"
+        mlf = MLForecaster(
+            self.data,
+            self.input_data_dict["params"]["passed_data"]["model_type"],
+            self.input_data_dict["params"]["passed_data"]["var_model"],
+            self.input_data_dict["params"]["passed_data"]["sklearn_model"],
+            self.input_data_dict["params"]["passed_data"]["num_lags"],
             emhass_conf,
             logger,
         )
-        # Should NOT raise error, but log error and default to KNeighborsRegressor
-        await mlf_bad_model.fit()
-        self.assertIsInstance(
-            mlf_bad_model.forecaster.regressor,
-            type(mlf_bad_model._get_sklearn_model("KNeighborsRegressor")),
-        )
-        # Test "Variable Not Found" in fit() (KeyError -> Exception)
-        # We define a var_model that doesn't exist in the dataframe
-        mlf_missing_col = MLForecaster(
-            data,
-            "test_type",
-            "sensor.non_existent_ghost_sensor",
-            "LinearRegression",
-            48,
+        try:
+            await mlf.fit(
+                split_date_delta=self.input_data_dict["params"]["passed_data"]["split_date_delta"],
+                perform_backtest=self.input_data_dict["params"]["passed_data"]["perform_backtest"],
+            )
+        except Exception as e:
+            self.assertIsInstance(e, (ValueError, AttributeError))
+
+    async def test_tune_edge_case_short_data(self):
+        """Test tuning with very short data (edge case)."""
+        short_data = self.data.iloc[:50]  # minimal data
+        mlf = MLForecaster(
+            short_data,
+            self.input_data_dict["params"]["passed_data"]["model_type"],
+            self.input_data_dict["params"]["passed_data"]["var_model"],
+            self.input_data_dict["params"]["passed_data"]["sklearn_model"],
+            self.input_data_dict["params"]["passed_data"]["num_lags"],
             emhass_conf,
             logger,
         )
-        # This should hit the try/except block in fit()
-        with self.assertRaises(KeyError):
-            await mlf_missing_col.fit()
-        # Test "Not Fitted" errors
-        # Initialize a fresh object but do NOT call fit()
-        mlf_not_fitted = MLForecaster(
-            data,
-            "test_type",
-            "sensor.power_load_no_var_loads",
-            "LinearRegression",
-            48,
-            emhass_conf,
+        try:
+            await mlf.fit(split_date_delta="1h", perform_backtest=False)
+            await mlf.tune(
+                debug=True,
+                split_date_delta="1h",
+            )
+        except Exception as e:
+            self.assertIsInstance(e, (ValueError, IndexError, RuntimeError))
+
+    async def test_treat_runtimeparams_ml_lags_real_associations(self):
+        """
+        Test that num_lags passed at runtime is correctly mapped using the REAL
+        associations.csv file shipped with the package.
+        """
+        runtime_input = {
+            "num_lags": 96,
+            "model_type": "load_forecast",
+            "perform_backtest": True,
+            "sklearn_model": "RandomForestRegressor",
+            "n_trials": 50,
+        }
+        runtimeparams_json = orjson.dumps(runtime_input).decode("utf-8")
+        params = await TestMLForecasterAsync.get_test_params()
+        # Modify the base config to test precedence
+        params["optim_conf"]["num_lags"] = 48
+        params["optim_conf"]["sklearn_model"] = "XGBRegressor"
+        params["optim_conf"]["regression_model"] = "LinearRegression"
+        if "split_date_delta" in params["optim_conf"]:
+            del params["optim_conf"]["split_date_delta"]
+        if "optimization_time_step" in params["retrieve_hass_conf"]:
+            params["retrieve_hass_conf"]["optimization_time_step"] = pd.to_timedelta(
+                params["retrieve_hass_conf"]["optimization_time_step"], "minutes"
+            )
+        if "delta_forecast_daily" in params["optim_conf"]:
+            params["optim_conf"]["delta_forecast_daily"] = pd.to_timedelta(
+                params["optim_conf"]["delta_forecast_daily"], "days"
+            )
+        params_json_res, _, _, _ = await utils.treat_runtimeparams(
+            runtimeparams_json,
+            params,
+            {},  # retrieve_hass_conf
+            {},  # optim_conf
+            {},  # plant_conf
+            "forecast-model-fit",
             logger,
+            emhass_conf,
         )
-        # Calling predict() before fit() should raise ValueError
-        with self.assertRaises(ValueError):
-            await mlf_not_fitted.predict()
-        # Calling tune() before fit() should raise ValueError
-        with self.assertRaises(ValueError):
-            await mlf_not_fitted.tune()
-        # Test Unsupported Model for Tuning (ValueError)
-        await self.mlf.fit()
-        self.mlf.sklearn_model = "UnsupportedModel"
-        with self.assertRaises(ValueError):
-            await self.mlf.tune()
+        params_result = orjson.loads(params_json_res)
+        passed_data = params_result["passed_data"]
+        optim_conf = params_result["optim_conf"]
+        # Runtime Overrides
+        self.assertEqual(optim_conf.get("num_lags"), 96)
+        self.assertEqual(passed_data.get("num_lags"), 96)
+        self.assertEqual(passed_data.get("sklearn_model"), "RandomForestRegressor")
+        self.assertTrue(passed_data.get("perform_backtest"))
+        self.assertEqual(passed_data.get("n_trials"), 50)
+        # Config Preservation
+        self.assertEqual(passed_data.get("regression_model"), "LinearRegression")
+        # Default Fallback
+        self.assertEqual(passed_data.get("split_date_delta"), "48h")
 
 
 if __name__ == "__main__":

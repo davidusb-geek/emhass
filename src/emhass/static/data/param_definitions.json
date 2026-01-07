@@ -254,6 +254,18 @@
       "input": "float",
       "default_value": 1.0
     },
+    "inverter_stress_cost": {
+      "friendly_name": "Hybrid Inverter Stress Cost",
+      "Description": "A virtual cost (Currency/kWh) applied at the inverter's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows.",
+      "input": "float",
+      "default_value": 0.0
+    },
+    "inverter_stress_segments": {
+      "friendly_name": "Hybrid Inverter Stress Segments",
+      "Description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time.",
+      "input": "int",
+      "default_value": 10
+    },
     "compute_curtailment": {
       "friendly_name": "Set compute curtailment (grid export limit)",
       "Description": "Set to True to compute a special PV curtailment variable (Default False)",
@@ -557,6 +569,18 @@
       "Description": "The desired battery state of charge at the end of each optimization cycle. (percentage/100)",
       "input": "float",
       "default_value": 0.6
+    },
+    "battery_stress_cost": {
+      "friendly_name": "Battery Stress Cost",
+      "Description": "A virtual cost (Currency/kWh) applied at the battery's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows.",
+      "input": "float",
+      "default_value": 0.0
+    },
+    "battery_stress_segments": {
+      "friendly_name": "Battery Stress Segments",
+      "Description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time.",
+      "input": "int",
+      "default_value": 10
     },
     "ignore_pv_feedback_during_curtailment": {
       "friendly_name": "Ignore PV feedback during curtailment",

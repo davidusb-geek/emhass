@@ -597,6 +597,16 @@ async def set_input_data_dict(
             var_list = [var_model]
             if not await rh.get_data(days_list, var_list):
                 return False
+            # Call prepare_data to apply cleaning
+            # We use skip_renaming=True to preserve the sensor name for the ML model
+            rh.prepare_data(
+                var_model,
+                load_negative=retrieve_hass_conf.get("load_negative", False),
+                set_zero_min=retrieve_hass_conf.get("set_zero_min", True),
+                var_replace_zero=retrieve_hass_conf.get("sensor_replace_zero", []),
+                var_interp=retrieve_hass_conf.get("sensor_linear_interp", []),
+                skip_renaming=True,
+            )
             df_input_data = rh.df_final.copy()
     elif set_type == "regressor-model-fit" or set_type == "regressor-model-predict":
         df_input_data, df_input_data_dayahead, df_weather = None, None, None

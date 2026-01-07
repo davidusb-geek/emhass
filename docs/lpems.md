@@ -169,6 +169,43 @@ $$
 \sum_{i=1}^{k} \frac{P_{stoPos_i}}{\eta_{dis}} + \eta_{ch}P_{stoNeg_i} = \frac{E_{nom}}{\Delta_t}(SOC_{init}-SOC_{final})
 $$
 
+### Inverter Stress Cost (Smooth Operation)
+
+There is the ability to apply a "Stress Cost" to your Hybrid Inverter. This feature adds a virtual cost to high-power operation, encouraging the system to run "low and slow" rather than jumping between 0% and 100% power for marginal gains.
+
+Standard linear optimization often results in "bang-bang" control: the battery charges at maximum speed as soon as energy is cheap, and discharges at maximum speed as soon as it is profitable.
+
+While mathematically optimal for profit, this can have downsides in the real world:
+
+- Thermal Stress: Running at 100% generates significant heat.
+- Fan Noise: High load triggers loud cooling fans.
+- Efficiency Losses: Resistive losses ($I^2R$) increase quadratically with power.
+- Battery Health: High C-rates can degrade battery chemistry faster.
+
+The Inverter Stress Cost introduces a penalty that increases quadratically with power usage. The optimizer will now balance the "profit" from energy arbitrage against this "stress" penalty, preferring to spread the load over a longer time window if the price difference isn't massive.
+
+The cost is modeled as a symmetric quadratic function of the inverter power ($Cost \propto Power^2$). Because EMHASS uses Linear Programming (LP), this quadratic curve is approximated using a Piecewise Linear function.
+
+The penalty is calculated such that at Nominal Power (100% load), the stress cost equals your configured `inverter_stress_cost`.
+
+- Low Power: Very low penalty.
+- High Power: High penalty.
+
+$$\text{Total Cost} = \text{Energy Cost} + \text{Stress Penalty}(P_{inverter})$$
+
+To enable this, add the following parameters to your `config.json` (or `optim_conf` in `config_emhass.yaml`):
+
+- `inverter_stress_cost` (float): The virtual penalty cost (in currency/kWh) applied if the inverter runs at its maximum nominal power (Recommended: 0.05 - 0.20).
+- `inverter_stress_segments` (Integer): The number of linear segments used to approximate the quadratic curve. Higher values are more accurate but increase computation slightly (Recommended: 10).
+
+Example usage using `runtimeparams`:
+```bash
+curl -i -H "Content-Type: application/json" -X POST -d '{
+    "inverter_stress_cost": 0.5,
+    "prediction_horizon": 24
+}' http://localhost:5000/action/naive-mpc-optim
+```
+
 ## The EMHASS optimizations
 
 There are 3 different optimization types that are implemented in EMHASS.

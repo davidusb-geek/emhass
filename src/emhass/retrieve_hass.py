@@ -790,6 +790,7 @@ class RetrieveHass:
         set_zero_min: bool,
         var_replace_zero: list[str],
         var_interp: list[str],
+        skip_renaming: bool = False,
     ) -> bool:
         r"""
         Apply some data treatment in preparation for the optimization task.
@@ -867,7 +868,11 @@ class RetrieveHass:
         # Just changing the names of variables to contain the fact that they are considered positive
         if var_replace_zero is not None:
             for string in var_replace_zero:
-                new_string = string.replace(var_load, var_load + "_positive")
+                # Only rename if we are NOT skipping renaming
+                if not skip_renaming:
+                    new_string = string.replace(var_load, var_load + "_positive")
+                else:
+                    new_string = string
                 new_var_replace_zero.append(new_string)
         else:
             self.logger.warning("Unable to find all the sensors in sensor_replace_zero parameter")
@@ -877,7 +882,11 @@ class RetrieveHass:
             new_var_replace_zero = None
         if var_interp is not None:
             for string in var_interp:
-                new_string = string.replace(var_load, var_load + "_positive")
+                # Only rename if we are NOT skipping renaming
+                if not skip_renaming:
+                    new_string = string.replace(var_load, var_load + "_positive")
+                else:
+                    new_string = string
                 new_var_interp.append(new_string)
         else:
             new_var_interp = None
