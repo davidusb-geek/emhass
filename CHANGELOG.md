@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.15.3 - 2026-01-07
 ### Improvement
 - Added new thermal model plots
 - Implement thermal battery for underfloor heating from Langer & Volling (2020) (@sokorn)
