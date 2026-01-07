@@ -820,17 +820,20 @@ class RetrieveHass:
         self.logger.debug("prepare_data set_zero_min=%s", set_zero_min)
         self.logger.debug("prepare_data var_replace_zero=%s", var_replace_zero)
         self.logger.debug("prepare_data var_interp=%s", var_interp)
+        self.logger.debug("prepare_data skip_renaming=%s", skip_renaming)
+        self.logger.debug(f"prepare_data df_final columns before rename: {list(self.df_final.columns)}")
         try:
-            if load_negative:  # Apply the correct sign to load power
-                self.df_final[var_load + "_positive"] = -self.df_final[var_load]
-            else:
-                self.df_final[var_load + "_positive"] = self.df_final[var_load]
-            self.df_final.drop([var_load], inplace=True, axis=1)
-        except KeyError:
+            # Only rename column if skip_renaming is False
+            if not skip_renaming:
+                if load_negative:  # Apply the correct sign to load power
+                    self.df_final[var_load + "_positive"] = -self.df_final[var_load]
+                else:
+                    self.df_final[var_load + "_positive"] = self.df_final[var_load]
+                self.df_final.drop([var_load], inplace=True, axis=1)
+        except KeyError as e:
             self.logger.error(
-                "Variable "
-                + var_load
-                + " was not found. This is typically because no data could be retrieved from Home Assistant"
+                f"Variable '{var_load}' was not found in DataFrame columns: {list(self.df_final.columns)}. "
+                f"This is typically because no data could be retrieved from Home Assistant or InfluxDB. Error: {e}"
             )
             return False
         except ValueError:
