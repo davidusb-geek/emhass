@@ -1064,6 +1064,71 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("figure_thermal", injection_dict)
         self.assertIn("figure_0", injection_dict)
 
+    async def test_treat_runtimeparams_historic_days_to_retrieve(self):
+        # Setup base configuration
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
+        set_type = "forecast-model-fit"
+        # Case 1: Parameter NOT provided in runtimeparams
+        # Should fallback to config default (usually 2), which is < 9, so it should be forced to 9.
+        runtimeparams_empty = {}
+        runtimeparams_json_1 = orjson.dumps(runtimeparams_empty).decode("utf-8")
+        params_1, _, _, _ = await utils.treat_runtimeparams(
+            runtimeparams_json_1,
+            self.params_json,
+            retrieve_hass_conf.copy(),
+            optim_conf.copy(),
+            plant_conf.copy(),
+            set_type,
+            logger,
+            emhass_conf,
+        )
+        params_1 = orjson.loads(params_1)
+        self.assertEqual(
+            params_1["passed_data"]["historic_days_to_retrieve"],
+            9,
+            "If not provided (and default < 9), should be forced to 9",
+        )
+        # Case 2: Provided but < 9 (e.g. 5 days)
+        # The user specifically asks for 5 days. Since 5 < 9, validation should force it to 9.
+        runtimeparams_low = {"historic_days_to_retrieve": 5}
+        runtimeparams_json_2 = orjson.dumps(runtimeparams_low).decode("utf-8")
+        params_2, _, _, _ = await utils.treat_runtimeparams(
+            runtimeparams_json_2,
+            self.params_json,
+            retrieve_hass_conf.copy(),
+            optim_conf.copy(),
+            plant_conf.copy(),
+            set_type,
+            logger,
+            emhass_conf,
+        )
+        params_2 = orjson.loads(params_2)
+        self.assertEqual(
+            params_2["passed_data"]["historic_days_to_retrieve"],
+            9,
+            "If provided value is < 9, should be overridden to 9",
+        )
+        # Case 3: Provided and >= 9 (e.g. 26 days)
+        # This is the fix verification. It should NOT be overridden.
+        runtimeparams_high = {"historic_days_to_retrieve": 26}
+        runtimeparams_json_3 = orjson.dumps(runtimeparams_high).decode("utf-8")
+        params_3, _, _, _ = await utils.treat_runtimeparams(
+            runtimeparams_json_3,
+            self.params_json,
+            retrieve_hass_conf.copy(),
+            optim_conf.copy(),
+            plant_conf.copy(),
+            set_type,
+            logger,
+            emhass_conf,
+        )
+        params_3 = orjson.loads(params_3)
+        self.assertEqual(
+            params_3["passed_data"]["historic_days_to_retrieve"],
+            26,
+            "If provided value is >= 9, it should be respected",
+        )
+
 
 class TestHeatingDemand(unittest.TestCase):
     def test_calculate_heating_demand_basic(self):

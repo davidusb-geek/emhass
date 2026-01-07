@@ -976,6 +976,12 @@ async def treat_runtimeparams(
             else:
                 params["passed_data"][forecast_key] = None
 
+        # Explicitly handle historic_days_to_retrieve from runtimeparams BEFORE validation
+        if "historic_days_to_retrieve" in runtimeparams:
+            params["retrieve_hass_conf"]["historic_days_to_retrieve"] = int(
+                runtimeparams["historic_days_to_retrieve"]
+            )
+
         # Treat passed data for forecast model fit/predict/tune at runtime
         if (
             params["passed_data"].get("historic_days_to_retrieve", None) is not None
