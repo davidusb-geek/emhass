@@ -822,26 +822,9 @@ class RetrieveHass:
         self.logger.debug("prepare_data var_interp=%s", var_interp)
         self.logger.debug("prepare_data skip_renaming=%s", skip_renaming)
         self.logger.debug(f"prepare_data df_final columns before rename: {list(self.df_final.columns)}")
-        try:
-            # Only rename column if skip_renaming is False
-            if not skip_renaming:
-                if load_negative:  # Apply the correct sign to load power
-                    self.df_final[var_load + "_positive"] = -self.df_final[var_load]
-                else:
-                    self.df_final[var_load + "_positive"] = self.df_final[var_load]
-                self.df_final.drop([var_load], inplace=True, axis=1)
-        except KeyError as e:
-            self.logger.error(
-                f"Variable '{var_load}' was not found in DataFrame columns: {list(self.df_final.columns)}. "
-                f"This is typically because no data could be retrieved from Home Assistant or InfluxDB. Error: {e}"
-            )
-            return False
-        except ValueError:
-            self.logger.error(
-                "sensor.power_photovoltaics and sensor.power_load_no_var_loads should not be the same"
-            )
-            return False
+
         # Confirm var_replace_zero & var_interp contain only sensors contained in var_list
+        # Do this BEFORE renaming so we can validate against original names
         if isinstance(var_replace_zero, list):
             original_list = var_replace_zero[:]
             var_replace_zero = [item for item in var_replace_zero if item in self.var_list]
@@ -862,6 +845,31 @@ class RetrieveHass:
                 )
         else:
             var_interp = []
+
+        # Now rename the DataFrame column and update var_list
+        try:
+            # Only rename column if skip_renaming is False
+            if not skip_renaming:
+                if load_negative:  # Apply the correct sign to load power
+                    self.df_final[var_load + "_positive"] = -self.df_final[var_load]
+                else:
+                    self.df_final[var_load + "_positive"] = self.df_final[var_load]
+                self.df_final.drop([var_load], inplace=True, axis=1)
+                # Update var_list to reflect the renamed column
+                self.var_list = [var.replace(var_load, var_load + "_positive") for var in self.var_list]
+                self.logger.debug(f"prepare_data var_list updated after rename: {self.var_list}")
+        except KeyError as e:
+            self.logger.error(
+                f"Variable '{var_load}' was not found in DataFrame columns: {list(self.df_final.columns)}. "
+                f"This is typically because no data could be retrieved from Home Assistant or InfluxDB. Error: {e}"
+            )
+            return False
+        except ValueError:
+            self.logger.error(
+                "sensor.power_photovoltaics and sensor.power_load_no_var_loads should not be the same"
+            )
+            return False
+
         # Apply minimum values
         if set_zero_min:
             self.df_final.clip(lower=0.0, inplace=True, axis=1)
