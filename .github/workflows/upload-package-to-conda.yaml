@@ -20,7 +20,7 @@ jobs:
           python-version: "3.11" # Adjust to match your project's python version
 
       - name: Build and Upload to Anaconda
-        uses: uibcdf/action-build-and-upload-conda-packages@v2
+        uses: uibcdf/action-build-and-upload-conda-packages@v2.0.0
         with:
           # IMPORTANT: Point this to the directory containing your meta.yaml file
           # Common convention is a folder named 'conda', 'recipe', or '.' if in root
