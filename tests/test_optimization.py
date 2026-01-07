@@ -1294,8 +1294,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                         "volume": 50.0,
                         "specific_heating_demand": 100.0,
                         "area": 100.0,
-                        "min_temperature": 18.0,
-                        "max_temperature": 22.0,
+                        "min_temperatures": [18.0] * 48,
+                        "max_temperatures": [22.0] * 48,
                     }
                 },
             ]
@@ -1325,17 +1325,17 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
 
         # Verify thermal battery temperature constraints are properly configured
-        min_temp = runtimeparams["def_load_config"][0]["thermal_battery"]["min_temperature"]
-        max_temp = runtimeparams["def_load_config"][0]["thermal_battery"]["max_temperature"]
+        min_temps = runtimeparams["def_load_config"][0]["thermal_battery"]["min_temperatures"]
+        max_temps = runtimeparams["def_load_config"][0]["thermal_battery"]["max_temperatures"]
 
         # Verify constraint parameters are reasonable
-        self.assertGreater(max_temp, min_temp, "max_temperature must be greater than min_temperature")
-        self.assertGreaterEqual(min_temp, 10.0, "min_temperature should be reasonable (>= 10°C)")
-        self.assertLessEqual(max_temp, 30.0, "max_temperature should be reasonable (<= 30°C)")
+        self.assertGreater(max_temps[0], min_temps[0], "max_temperatures must be greater than min_temperatures")
+        self.assertGreaterEqual(min_temps[0], 10.0, "min_temperatures should be reasonable (>= 10°C)")
+        self.assertLessEqual(max_temps[0], 30.0, "max_temperatures should be reasonable (<= 30°C)")
 
         # Note: Thermal battery temperatures are enforced via LP constraints (see Langer & Volling 2020,
         # Equations B.13-B.14) but are not currently output to the results DataFrame. The constraints
-        # ensure T_bat[t] >= min_temperature and T_bat[t] <= max_temperature for all timesteps.
+        # ensure T_bat[t] >= min_temperatures[t] and T_bat[t] <= max_temperatures[t] for all timesteps.
         # The optimizer would fail with "Infeasible" status if these constraints cannot be satisfied.
 
         # Instead, we verify the optimization succeeded (which proves constraints were satisfied)
@@ -1345,7 +1345,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(total_heating_energy, 0, "Heat pump energy must be non-negative")
 
     def test_thermal_battery_infeasible_temperature_constraints(self):
-        """Test optimizer handles infeasible thermal battery configuration (min_temperature > max_temperature)."""
+        """Test optimizer handles infeasible thermal battery configuration (min_temperatures > max_temperatures)."""
         self.df_input_data_dayahead = self.prepare_forecast_data()
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
             10.0 + 5.0 * np.sin(i * np.pi / 12) for i in range(48)
@@ -1361,8 +1361,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                         "volume": 50.0,
                         "specific_heating_demand": 100.0,
                         "area": 100.0,
-                        "min_temperature": 25.0,  # Deliberately set min > max
-                        "max_temperature": 20.0,  # This creates infeasibility
+                        "min_temperatures": [25.0] * 48,  # Deliberately set min > max
+                        "max_temperatures": [20.0] * 48,  # This creates infeasibility
                     }
                 },
             ]
@@ -1408,8 +1408,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                         "volume": 50.0,
                         "specific_heating_demand": 100.0,  # Still needed for fallback
                         "area": 100.0,  # Still needed for fallback
-                        "min_temperature": 18.0,
-                        "max_temperature": 22.0,
+                        "min_temperatures": [18.0] * 48,
+                        "max_temperatures": [22.0] * 48,
                         # Physics-based parameters
                         "u_value": 0.4,  # W/(m²·K) - average insulation
                         "envelope_area": 350.0,  # m² - building envelope
@@ -1478,8 +1478,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                         "volume": 60.0,
                         "specific_heating_demand": 120.0,  # kWh/(m²·year)
                         "area": 150.0,  # m²
-                        "min_temperature": 19.0,
-                        "max_temperature": 21.0,
+                        "min_temperatures": [19.0] * 48,
+                        "max_temperatures": [21.0] * 48,
                         # Configurable HDD parameters
                         "base_temperature": 20.0,  # Use comfort target instead of default 18°C
                         "annual_reference_hdd": 2500.0,  # Adjust for milder climate
@@ -1505,8 +1505,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                         "volume": 60.0,
                         "specific_heating_demand": 120.0,  # Same as above
                         "area": 150.0,  # Same as above
-                        "min_temperature": 19.0,
-                        "max_temperature": 21.0,
+                        "min_temperatures": [19.0] * 48,
+                        "max_temperatures": [21.0] * 48,
                         # NO custom HDD parameters - will use defaults (base_temperature=18°C, annual_reference_hdd=3000)
                     }
                 },
@@ -1574,8 +1574,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                             "volume": 60.0,
                             "specific_heating_demand": 100.0,
                             "area": 120.0,
-                            "min_temperature": 19.0,
-                            "max_temperature": 21.0,
+                            "min_temperatures": [19.0] * 48,
+                            "max_temperatures": [21.0] * 48,
                             "base_temperature": params["base_temperature"],
                             "annual_reference_hdd": params["annual_reference_hdd"],
                         }
@@ -1647,8 +1647,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                         "volume": 50.0,
                         "specific_heating_demand": 100.0,  # Fallback
                         "area": 100.0,  # Fallback
-                        "min_temperature": 18.0,
-                        "max_temperature": 22.0,
+                        "min_temperatures": [18.0] * 48,
+                        "max_temperatures": [22.0] * 48,
                         # Physics-based parameters with calibrated values
                         "u_value": 0.236,  # W/(m²·K) - calibrated from real data
                         "envelope_area": 250.0,  # m² - building envelope

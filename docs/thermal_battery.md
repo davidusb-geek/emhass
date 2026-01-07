@@ -45,15 +45,19 @@ These parameters define the basic thermal battery system:
     * For underfloor: measure floor surface temperature
     * Example: `22.0`
 
-* **min_temperature**: Minimum allowed storage temperature in °C.
-    * Lower bound of the comfort range
-    * Temperature should not drop below this
-    * Example: `20.0` for typical comfort
+* **min_temperatures**: Minimum allowed storage temperatures in °C per timestep (list).
+    * Lower bound of the comfort range for each optimization timestep
+    * Temperature should not drop below these values
+    * Can be constant or vary by time of day (e.g., lower at night)
+    * Example: `[20.0] * 48` for constant 20°C comfort over 48 timesteps
+    * Example: `[18.0]*16 + [20.0]*16 + [18.0]*16` for night setback
 
-* **max_temperature**: Maximum allowed storage temperature in °C.
-    * Upper bound of the comfort range
+* **max_temperatures**: Maximum allowed storage temperatures in °C per timestep (list).
+    * Upper bound of the comfort range for each optimization timestep
     * Safety limit for the storage medium
-    * Example: `28.0` for underfloor heating (avoid too hot floors)
+    * Can be constant or vary by time of day
+    * Example: `[28.0] * 48` for underfloor heating (avoid too hot floors)
+    * Example: `[26.0]*24 + [28.0]*24` for different day/night limits
 
 ### Optional efficiency parameter
 
@@ -142,7 +146,7 @@ Optional HDD parameters:
 
 This example shows a well-insulated modern home with underfloor heating, using the physics-based heating demand calculation including solar gains through windows.
 
-```json
+```python
 {
   "def_load_config": [
     {
@@ -150,8 +154,8 @@ This example shows a well-insulated modern home with underfloor heating, using t
         "supply_temperature": 35.0,
         "volume": 18.0,
         "start_temperature": 22.0,
-        "min_temperature": 20.0,
-        "max_temperature": 28.0,
+        "min_temperatures": [20.0] * 48,  # Constant 20°C minimum
+        "max_temperatures": [28.0] * 48,  # Constant 28°C maximum
         "carnot_efficiency": 0.45,
         "u_value": 0.35,
         "envelope_area": 380.0,
@@ -177,7 +181,7 @@ This configuration:
 
 This example uses the simpler HDD-based approach for an older home with radiator heating.
 
-```json
+```python
 {
   "def_load_config": [
     {
@@ -185,8 +189,8 @@ This example uses the simpler HDD-based approach for an older home with radiator
         "supply_temperature": 50.0,
         "volume": 12.0,
         "start_temperature": 45.0,
-        "min_temperature": 40.0,
-        "max_temperature": 65.0,
+        "min_temperatures": [40.0] * 48,  # Constant 40°C minimum
+        "max_temperatures": [65.0] * 48,  # Constant 65°C maximum
         "carnot_efficiency": 0.38,
         "specific_heating_demand": 95.0,
         "area": 120.0,
@@ -210,7 +214,7 @@ This configuration:
 
 If you have other deferrable loads (EV charger, dishwasher, etc.) along with your thermal battery:
 
-```json
+```python
 {
   "def_load_config": [
     {},
@@ -219,8 +223,8 @@ If you have other deferrable loads (EV charger, dishwasher, etc.) along with you
         "supply_temperature": 35.0,
         "volume": 15.0,
         "start_temperature": 22.0,
-        "min_temperature": 20.0,
-        "max_temperature": 26.0,
+        "min_temperatures": [20.0] * 48,  # Constant 20°C minimum
+        "max_temperatures": [26.0] * 48,  # Constant 26°C maximum
         "u_value": 0.45,
         "envelope_area": 320.0,
         "ventilation_rate": 0.5,
@@ -383,8 +387,8 @@ rest_command:
               "supply_temperature": 35.0,
               "volume": 18.0,
               "start_temperature": {{ states('sensor.floor_temperature') | float }},
-              "min_temperature": 20.0,
-              "max_temperature": 28.0,
+              "min_temperatures": {{ [20.0] * 24 | tojson }},
+              "max_temperatures": {{ [28.0] * 24 | tojson }},
               "carnot_efficiency": 0.42,
               "u_value": 0.35,
               "envelope_area": 380.0,
@@ -528,9 +532,10 @@ Expected COP ranges:
 ### Floor gets too hot or too cold
 
 The optimizer is keeping storage temperature within bounds, but:
-- If too hot: lower the `max_temperature`
-- If too cold: raise the `min_temperature`
+- If too hot: lower the values in `max_temperatures`
+- If too cold: raise the values in `min_temperatures`
 - If temperature swings are too large: check your thermal mass `volume` is accurate
+- Consider using variable temperature limits (night setback) by adjusting the list values
 
 ### Solar gains not working
 
