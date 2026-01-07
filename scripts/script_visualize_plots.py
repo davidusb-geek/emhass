@@ -9,17 +9,18 @@ from emhass import utils
 
 def generate_debug_html():
     # Create Dummy Data (Same as the test)
+    generator = np.random.default_rng()
     dates = pd.date_range(start="2024-01-01", periods=48, freq="30min")
     df = pd.DataFrame(index=dates)
-    df["P_PV"] = np.random.rand(48) * 4000
-    df["P_Load"] = np.random.rand(48) * 2000
+    df["P_PV"] = generator.standard_normal(48) * 4000
+    df["P_Load"] = generator.standard_normal(48) * 2000
     df["P_grid"] = df["P_Load"] - df["P_PV"]
     df["optim_status"] = "Optimal"
     df["cost_fun_profit"] = -2.5
     df["unit_load_cost"] = 0.20
 
     # Add Thermal Data (The new feature)
-    df["predicted_temp_heater1"] = 21.0 + np.random.rand(48) * 2
+    df["predicted_temp_heater1"] = 21.0 + generator.standard_normal(48) * 2
     df["target_temp_heater1"] = 22.0
 
     # Get the Injection Dictionary
