@@ -34,19 +34,20 @@ jobs:
       - name: Build Conda Package
         shell: bash -l {0}
         run: |
-          # Build the package using the recipe in the 'conda' folder
+          mkdir -p build_output
           conda build ./conda --output-folder ./build_output
+
+      # Debug: List generated files (Helps verify where the file actually went)
+      - name: Debug Build Output
+        run: ls -R ./build_output
 
       # Upload to Anaconda
       - name: Upload to Anaconda
         shell: bash -l {0}
         env:
           ANACONDA_TOKEN: ${{ secrets.ANACONDA_TOKEN }}
-          # Replace with your actual Anaconda username
-          ANACONDA_USER: davidusb 
+          ANACONDA_USER: davidusb
         run: |
-          # Find the built tar.bz2 file
-          # We use a wildcard because the exact filename includes version/build strings
-          # The -t flag provides the auth token
-          # The -u flag specifies the user/org to upload to
-          anaconda -t $ANACONDA_TOKEN upload -u $ANACONDA_USER ./build_output/noarch/*.tar.bz2 --force
+          # Find the .tar.bz2 file wherever it is (noarch or linux-64) and upload it
+          # This avoids wildcard expansion errors
+          find ./build_output -name "*.tar.bz2" -exec anaconda -t $ANACONDA_TOKEN upload -u $ANACONDA_USER {} --force \;
