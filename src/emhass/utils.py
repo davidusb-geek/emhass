@@ -994,46 +994,62 @@ async def treat_runtimeparams(
                 params["passed_data"]["historic_days_to_retrieve"] = params["retrieve_hass_conf"][
                     "historic_days_to_retrieve"
                 ]
-        if "model_type" not in runtimeparams.keys():
-            model_type = "long_train_data"
-        else:
-            model_type = runtimeparams["model_type"]
-        params["passed_data"]["model_type"] = model_type
-        if "var_model" not in runtimeparams.keys():
-            var_model = params["retrieve_hass_conf"]["sensor_power_load_no_var_loads"]
-        else:
-            var_model = runtimeparams["var_model"]
-        params["passed_data"]["var_model"] = var_model
-        if "sklearn_model" not in runtimeparams.keys():
-            sklearn_model = "KNeighborsRegressor"
-        else:
-            sklearn_model = runtimeparams["sklearn_model"]
-        params["passed_data"]["sklearn_model"] = sklearn_model
-        if "regression_model" not in runtimeparams.keys():
-            regression_model = "AdaBoostRegression"
-        else:
-            regression_model = runtimeparams["regression_model"]
-        params["passed_data"]["regression_model"] = regression_model
-        if "num_lags" not in runtimeparams.keys():
-            num_lags = 48
-        else:
-            num_lags = runtimeparams["num_lags"]
-        params["passed_data"]["num_lags"] = num_lags
-        if "split_date_delta" not in runtimeparams.keys():
-            split_date_delta = "48h"
-        else:
-            split_date_delta = runtimeparams["split_date_delta"]
-        params["passed_data"]["split_date_delta"] = split_date_delta
-        if "n_trials" not in runtimeparams.keys():
-            n_trials = 10
-        else:
-            n_trials = int(runtimeparams["n_trials"])
-        params["passed_data"]["n_trials"] = n_trials
-        if "perform_backtest" not in runtimeparams.keys():
-            perform_backtest = False
-        else:
-            perform_backtest = ast.literal_eval(str(runtimeparams["perform_backtest"]).capitalize())
-        params["passed_data"]["perform_backtest"] = perform_backtest
+
+        # UPDATED ML PARAMETER HANDLING
+        # Define Helper Functions
+        def _cast_bool(value):
+            """Helper to cast string inputs to boolean safely."""
+            try:
+                return ast.literal_eval(str(value).capitalize())
+            except (ValueError, SyntaxError):
+                return False
+
+        def _get_ml_param(name, params, runtimeparams, default=None, cast=None):
+            """
+            Prioritize Runtime Params -> Config Params (optim_conf) -> Default.
+            """
+            if name in runtimeparams:
+                value = runtimeparams[name]
+            else:
+                value = params["optim_conf"].get(name, default)
+
+            if cast is not None and value is not None:
+                try:
+                    value = cast(value)
+                except Exception:
+                    pass
+            return value
+
+        # Compute dynamic defaults
+        # Default for var_model falls back to the configured load sensor
+        default_var_model = params["retrieve_hass_conf"].get(
+            "sensor_power_load_no_var_loads", "sensor.power_load_no_var_loads"
+        )
+
+        # Define Configuration Table
+        # Format: (parameter_name, default_value, cast_function)
+        ml_param_defs = [
+            ("model_type", "long_train_data", None),
+            ("var_model", default_var_model, None),
+            ("sklearn_model", "KNeighborsRegressor", None),
+            ("regression_model", "AdaBoostRegression", None),
+            ("num_lags", 48, None),
+            ("split_date_delta", "48h", None),
+            ("n_trials", 10, int),
+            ("perform_backtest", False, _cast_bool),
+        ]
+
+        # Apply Configuration
+        for name, default, caster in ml_param_defs:
+            params["passed_data"][name] = _get_ml_param(
+                name=name,
+                params=params,
+                runtimeparams=runtimeparams,
+                default=default,
+                cast=caster,
+            )
+
+        # Other non-dynamic options
         if "model_predict_publish" not in runtimeparams.keys():
             model_predict_publish = False
         else:

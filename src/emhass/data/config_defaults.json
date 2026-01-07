@@ -46,6 +46,12 @@
   "weather_forecast_method": "open-meteo",
   "open_meteo_cache_max_age": 30,
   "load_forecast_method": "naive",
+  "model_type": "load_forecast",
+  "var_model": "sensor.power_load_no_var_loads",
+  "sklearn_model": "KNeighborsRegressor",
+  "num_lags": 48,
+  "split_date_delta": "48h",
+  "perform_backtest": false,
   "delta_forecast_daily": 1,
   "load_cost_forecast_method": "hp_hc_periods",
   "start_timesteps_of_each_deferrable_load": [0, 0],
@@ -97,6 +103,8 @@
   "inverter_ac_input_max": 5000,
   "inverter_efficiency_dc_ac": 1.0,
   "inverter_efficiency_ac_dc": 1.0,
+  "inverter_stress_cost": 0.0,
+  "inverter_stress_segments": 10,
   "compute_curtailment": false,
   "set_use_battery": false,
   "battery_discharge_power_max": 1000,
@@ -106,5 +114,7 @@
   "battery_nominal_energy_capacity": 5000,
   "battery_minimum_state_of_charge": 0.3,
   "battery_maximum_state_of_charge": 0.9,
-  "battery_target_state_of_charge": 0.6
+  "battery_target_state_of_charge": 0.6,
+  "battery_stress_cost": 0.0,
+  "battery_stress_segments": 10
 }

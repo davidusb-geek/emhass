@@ -126,7 +126,7 @@ function loadConfigurationListView(param_definitions, config, list_html) {
   //get the main container and append list template html
   document.getElementById("configuration-container").innerHTML = list_html;
 
-  //loop though configuration sections ('Local','System','Tariff','Solar System (PV)') in definitions file
+  //loop through configuration sections ('Local','System','Tariff','Solar System (PV)') in definitions file
   for (let section in param_definitions) {
     // build each section by adding parameters with their corresponding input elements
     buildParamContainers(
@@ -162,6 +162,74 @@ function loadConfigurationListView(param_definitions, config, list_html) {
           headerElement(header_input_element, param_definitions, config);
         }
       }
+    }
+  }
+
+  // Dynamic hiding for InfluxDB options
+  const use_influx_param = "use_influxdb";
+  const influx_related_params = [
+    "influxdb_host",
+    "influxdb_port",
+    "influxdb_username",
+    "influxdb_password",
+    "influxdb_database",
+    "influxdb_measurement",
+    "influxdb_retention_policy",
+    "influxdb_use_ssl",
+    "influxdb_verify_ssl"
+  ];
+
+  const influx_toggle_div = document.getElementById(use_influx_param);
+  if (influx_toggle_div) {
+    // The actual input is inside the div with the ID
+    const influx_input = influx_toggle_div.querySelector("input");
+    if (influx_input) {
+      const toggleInfluxVisibility = () => {
+        const isChecked = influx_input.checked;
+        influx_related_params.forEach(paramId => {
+          const paramDiv = document.getElementById(paramId);
+          if (paramDiv) {
+            paramDiv.style.display = isChecked ? "" : "none";
+          }
+        });
+      };
+
+      // Add listener and set initial state
+      influx_input.addEventListener("change", toggleInfluxVisibility);
+      toggleInfluxVisibility();
+    }
+  }
+
+  // ML Forecaster Visibility Logic
+  const forecast_method_param = "load_forecast_method";
+  const ml_related_params = [
+    "model_type",
+    "var_model",
+    "sklearn_model",
+    "regression_model",
+    "num_lags",
+    "split_date_delta",
+    "n_trials",
+    "perform_backtest"
+  ];
+
+  const forecast_method_div = document.getElementById(forecast_method_param);
+  if (forecast_method_div) {
+    const method_select = forecast_method_div.querySelector("select, input");
+    if (method_select) {
+      const toggleMLVisibility = () => {
+        const isML = method_select.value === "mlforecaster";
+        ml_related_params.forEach(paramId => {
+          const paramDiv = document.getElementById(paramId);
+          if (paramDiv) {
+            paramDiv.style.display = isML ? "" : "none";
+          }
+        });
+      };
+      // Add listener and set initial state
+      method_select.addEventListener("change", toggleMLVisibility);
+      method_select.addEventListener("input", toggleMLVisibility); // Handle both select and text input types
+      toggleMLVisibility();
     }
   }
 }
