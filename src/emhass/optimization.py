@@ -1084,9 +1084,7 @@ class Optimization:
                         # Physics-based method (more accurate)
                         # Default indoor_target_temperature to min_temperature if not specified
                         # This represents maintaining the lower comfort bound
-                        indoor_target_temp = hc.get(
-                            "indoor_target_temperature", min_temperature
-                        )
+                        indoor_target_temp = hc.get("indoor_target_temperature", min_temperature)
 
                         # Extract optional solar gain parameters
                         window_area = hc.get("window_area", None)
@@ -1122,7 +1120,9 @@ class Optimization:
                                 hc["ventilation_rate"],
                                 hc["heated_volume"],
                                 indoor_target_temp,
-                                " (defaulted to min_temp)" if "indoor_target_temperature" not in hc else "",
+                                " (defaulted to min_temp)"
+                                if "indoor_target_temperature" not in hc
+                                else "",
                                 window_area,
                                 shgc,
                             )
@@ -1137,7 +1137,9 @@ class Optimization:
                                 hc["ventilation_rate"],
                                 hc["heated_volume"],
                                 indoor_target_temp,
-                                " (defaulted to min_temp)" if "indoor_target_temperature" not in hc else "",
+                                " (defaulted to min_temp)"
+                                if "indoor_target_temperature" not in hc
+                                else "",
                             )
                     else:
                         # HDD method (backward compatible) with configurable parameters
