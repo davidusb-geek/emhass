@@ -149,19 +149,20 @@ class MLForecaster:
 
     def _get_sklearn_model(self, model_name: str):
         """Get the sklearn model instance based on the model name."""
+        seed = 42
         models = {
             "LinearRegression": LinearRegression(),
             "RidgeRegression": Ridge(),
-            "LassoRegression": Lasso(),
-            "ElasticNet": ElasticNet(),
+            "LassoRegression": Lasso(random_state=seed),
+            "ElasticNet": ElasticNet(random_state=seed),
             "KNeighborsRegressor": KNeighborsRegressor(),
-            "DecisionTreeRegressor": DecisionTreeRegressor(),
+            "DecisionTreeRegressor": DecisionTreeRegressor(random_state=seed),
             "SVR": SVR(),
-            "RandomForestRegressor": RandomForestRegressor(),
-            "ExtraTreesRegressor": ExtraTreesRegressor(),
-            "GradientBoostingRegressor": GradientBoostingRegressor(),
-            "AdaBoostRegressor": AdaBoostRegressor(),
-            "MLPRegressor": MLPRegressor(),
+            "RandomForestRegressor": RandomForestRegressor(random_state=seed),
+            "ExtraTreesRegressor": ExtraTreesRegressor(random_state=seed),
+            "GradientBoostingRegressor": GradientBoostingRegressor(random_state=seed),
+            "AdaBoostRegressor": AdaBoostRegressor(random_state=seed),
+            "MLPRegressor": MLPRegressor(random_state=seed),
         }
 
         if model_name not in models:
