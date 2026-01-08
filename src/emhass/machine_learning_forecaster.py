@@ -154,15 +154,21 @@ class MLForecaster:
             "LinearRegression": LinearRegression(),
             "RidgeRegression": Ridge(),
             "LassoRegression": Lasso(random_state=seed),
-            "ElasticNet": ElasticNet(random_state=seed),
+            "ElasticNet": ElasticNet(alpha=1.0, l1_ratio=0.5, random_state=seed),
             "KNeighborsRegressor": KNeighborsRegressor(),
-            "DecisionTreeRegressor": DecisionTreeRegressor(random_state=seed),
+            "DecisionTreeRegressor": DecisionTreeRegressor(ccp_alpha=0.0, random_state=seed),
             "SVR": SVR(),
-            "RandomForestRegressor": RandomForestRegressor(random_state=seed),
-            "ExtraTreesRegressor": ExtraTreesRegressor(random_state=seed),
-            "GradientBoostingRegressor": GradientBoostingRegressor(random_state=seed),
-            "AdaBoostRegressor": AdaBoostRegressor(random_state=seed),
-            "MLPRegressor": MLPRegressor(random_state=seed),
+            "RandomForestRegressor": RandomForestRegressor(
+                min_samples_leaf=1, max_features=1.0, random_state=seed
+            ),
+            "ExtraTreesRegressor": ExtraTreesRegressor(
+                min_samples_leaf=1, max_features=1.0, random_state=seed
+            ),
+            "GradientBoostingRegressor": GradientBoostingRegressor(
+                learning_rate=0.1, random_state=seed
+            ),
+            "AdaBoostRegressor": AdaBoostRegressor(learning_rate=1.0, random_state=seed),
+            "MLPRegressor": MLPRegressor(hidden_layer_sizes=(100,), random_state=seed),
         }
 
         if model_name not in models:
