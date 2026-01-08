@@ -323,54 +323,75 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         await web_server.after_serving()
         mock_close.assert_not_called()
 
-    # Patch web_server.app.logger to avoid polluting global logger with Mocks
-    # which causes TypeError in other tests
-    @patch("emhass.web_server.app.logger")
-    @patch("logging.FileHandler")
-    @patch("emhass.web_server.build_config")
-    @patch("emhass.web_server.build_secrets")
-    @patch("emhass.web_server.build_params")
-    @patch("emhass.web_server.get_websocket_client")
-    @patch("os.path.isdir")
-    @patch("pathlib.Path.mkdir")
     @patch("pathlib.Path.exists")
-    @patch("os.path.exists")
-    @patch("os.listdir")
     @patch("emhass.web_server.aiofiles.open")
-    async def test_initialize(
+    @patch("emhass.web_server.set_input_data_dict", new_callable=AsyncMock)
+    @patch("emhass.web_server.dayahead_forecast_optim", new_callable=AsyncMock)
+    @patch("emhass.web_server.get_injection_dict")
+    @patch("emhass.web_server.app.logger")
+    async def test_action_malformed_json(
         self,
-        mock_file,
-        mock_listdir,
-        mock_os_exists,
-        mock_path_exists,
-        mock_mkdir,
-        mock_isdir,
-        mock_get_ws,
-        mock_params,
-        mock_secrets,
-        mock_config,
-        mock_handler,
         mock_logger,
+        mock_get_inject,
+        mock_optim,
+        mock_set_input,
+        mock_file,
+        mock_path_exists,
     ):
-        # Setup comprehensive mocks for the massive initialize function
-        mock_config.return_value = {"costfun": "profit", "logging_level": "INFO"}
-        mock_secrets.return_value = (
-            web_server.emhass_conf,
-            {"hass_url": "http://ha", "long_lived_token": "token"},
-        )
-        mock_params.return_value = {"optim_conf": {}, "retrieve_hass_conf": {"use_websocket": True}}
-        mock_isdir.return_value = True
-        # Ensure paths exist so no Exception is raised
-        mock_os_exists.return_value = True
+        """
+        Test that sending malformed JSON (e.g. Python syntax 'False' instead of 'false')
+        triggers a logged error instead of silently failing.
+        """
+        # Setup Mocks
         mock_path_exists.return_value = True
-        # Return empty list to skip cleanup loop
-        mock_listdir.return_value = []
-        # Mock file reads for pickle loading (return bytes)
-        f = AsyncMock()
-        f.read.return_value = pickle.dumps({})
-        mock_file.return_value.__aenter__.return_value = f
-        await web_server.initialize()
-        mock_get_ws.assert_called()
+
+        def aiofiles_side_effect(file, mode="r", *args, **kwargs):
+            context_mock = AsyncMock()
+            file_handle = AsyncMock()
+            context_mock.__aenter__.return_value = file_handle
+            filename = str(file)
+            if "params.pkl" in filename:
+                # 1. params.pkl -> Return BYTES (for pickle.loads)
+                content = pickle.dumps((pathlib.Path("/config"), {"optim_conf": {}}))
+                file_handle.read.return_value = content
+            else:
+                # 2. emhass.log -> Return ONE STRING (for .read().splitlines() or regex)
+                # The server greps for " >> " in the logs to verify success
+                log_content = (
+                    "2024-01-01 12:00:00,000 INFO >> Obtaining params\n"
+                    "2024-01-01 12:00:01,000 INFO >> Setting input data dict\n"
+                    "2024-01-01 12:00:02,000 INFO >> Performing optimization..."
+                )
+                file_handle.read.return_value = log_content
+            return context_mock
+
+        mock_file.side_effect = aiofiles_side_effect
+        # Mock set_input_data_dict
+        mock_set_input.return_value = {
+            "params": {},
+            "retrieve_hass_conf": {"continual_publish": False},
+        }
+        # Mock optimization result
+        mock_optim.return_value = MagicMock()
+        # Mock plotting
+        mock_get_inject.return_value = {
+            "optim_status": "Optimal",
+            "table1": "<div>Table</div>",
+            "div1": "<div>Plot1</div>",
+            "div2": "<div>Plot2</div>",
+        }
+        # Execute Test
+        response = await self.client.post(
+            "/action/dayahead-optim",
+            data='{"perform_backtest": False}',
+            headers={"Content-Type": "application/json"},
+        )
+        # Assertions
+        # Expect 201 (Created)
+        self.assertEqual(response.status_code, 201)
+        # Verify that the JSON error was logged
+        logs = str(mock_logger.error.mock_calls)
+        self.assertIn("Error parsing runtime params JSON", logs)
 
 
 if __name__ == "__main__":
