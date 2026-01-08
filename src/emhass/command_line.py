@@ -682,12 +682,13 @@ async def set_input_data_dict(
             _, _, _, rh.ha_config = pickle.loads(content)
     elif not await rh.get_ha_config():
         return False
-    # We must re-serialize params if it is already a dict.
     if isinstance(params, dict):
         params_str = orjson.dumps(params).decode("utf-8")
         params = utils.update_params_with_ha_config(params_str, rh.ha_config)
     else:
         params = utils.update_params_with_ha_config(params, rh.ha_config)
+    if isinstance(params, str):
+        params = dict(orjson.loads(params))
     costfun = optim_conf.get("costfun", costfun)
     fcst = Forecast(
         retrieve_hass_conf,
