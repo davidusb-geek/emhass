@@ -9,21 +9,21 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import r2_score
-from sklearn.linear_model import Lasso, LinearRegression, Ridge, ElasticNet
 from sklearn.ensemble import (
     AdaBoostRegressor,
+    ExtraTreesRegressor,
     GradientBoostingRegressor,
     RandomForestRegressor,
-    ExtraTreesRegressor,
 )
-from sklearn.neighbors import KNeighborsRegressor
-from sklearn.svm import SVR
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.neural_network import MLPRegressor
+from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
+from sklearn.metrics import r2_score
 from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.neural_network import MLPRegressor
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVR
+from sklearn.tree import DecisionTreeRegressor
 
 from emhass import utils
 
@@ -39,6 +39,8 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 # - docs/config.md (adjusted_pv_regression_model description)
 # - docs/forecasts.md (Model Training section)
 # - src/emhass/forecast.py (adjust_pv_forecast_fit docstring)
+# Define a seed for reproducibility
+seed = 42
 REGRESSION_METHODS = {
     "LinearRegression": {
         "model": LinearRegression(),
@@ -52,11 +54,13 @@ REGRESSION_METHODS = {
         "param_grid": {"ridge__alpha": [1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100]},
     },
     "LassoRegression": {
-        "model": Lasso(),
+        # Added random_state (though Lasso is often deterministic with default selection='cyclic',
+        # setting it is safer if selection='random' is ever used)
+        "model": Lasso(random_state=seed),
         "param_grid": {"lasso__alpha": [1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100]},
     },
     "ElasticNet": {
-        "model": ElasticNet(),
+        "model": ElasticNet(random_state=seed),
         "param_grid": {
             "elasticnet__alpha": [1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100],
             "elasticnet__l1_ratio": [0.1, 0.5, 0.7, 0.9, 0.95, 0.99, 1],
@@ -70,7 +74,7 @@ REGRESSION_METHODS = {
         },
     },
     "DecisionTreeRegressor": {
-        "model": DecisionTreeRegressor(),
+        "model": DecisionTreeRegressor(random_state=seed),
         "param_grid": {
             "decisiontreeregressor__max_depth": [None, 5, 10, 20],
             "decisiontreeregressor__min_samples_split": [2, 5, 10],
@@ -85,7 +89,7 @@ REGRESSION_METHODS = {
         },
     },
     "RandomForestRegressor": {
-        "model": RandomForestRegressor(),
+        "model": RandomForestRegressor(random_state=seed),
         "param_grid": {
             "randomforestregressor__n_estimators": [50, 100, 200],
             "randomforestregressor__max_depth": [None, 10, 20],
@@ -93,7 +97,7 @@ REGRESSION_METHODS = {
         },
     },
     "ExtraTreesRegressor": {
-        "model": ExtraTreesRegressor(),
+        "model": ExtraTreesRegressor(random_state=seed),
         "param_grid": {
             "extratreesregressor__n_estimators": [50, 100, 200],
             "extratreesregressor__max_depth": [None, 10, 20],
@@ -101,7 +105,7 @@ REGRESSION_METHODS = {
         },
     },
     "GradientBoostingRegressor": {
-        "model": GradientBoostingRegressor(),
+        "model": GradientBoostingRegressor(random_state=seed),
         "param_grid": {
             "gradientboostingregressor__n_estimators": [50, 100, 200],
             "gradientboostingregressor__learning_rate": [0.01, 0.1, 0.2],
@@ -109,14 +113,14 @@ REGRESSION_METHODS = {
         },
     },
     "AdaBoostRegressor": {
-        "model": AdaBoostRegressor(),
+        "model": AdaBoostRegressor(random_state=seed),
         "param_grid": {
             "adaboostregressor__n_estimators": [50, 100, 200],
             "adaboostregressor__learning_rate": [0.01, 0.1, 0.2],
         },
     },
     "MLPRegressor": {
-        "model": MLPRegressor(),
+        "model": MLPRegressor(random_state=seed),
         "param_grid": {
             "mlpregressor__hidden_layer_sizes": [(50,), (100,), (50, 50)],
             "mlpregressor__activation": ["relu", "tanh"],
