@@ -102,3 +102,47 @@ There is a complete dedicated section in the [Forecast section](https://emhass.r
 
 Specifically the [Passing your own forecast data](https://emhass.readthedocs.io/en/latest/forecasts.html#passing-your-own-forecast-data) section.
 
+
+## InfluxDB as a data source
+A new feature allows using **InfluxDB** as an alternative data source to the Home Assistant recorder database. This is beneficial for users who want to treat longer data retention periods for training machine learning models or to reduce the query load on their main Home Assistant instance.
+
+When `use_influxdb: true` is set, EMHASS will fetch sensor data directly from your InfluxDB instance using the provided connection parameters. The `influxdb_username` and `influxdb_password` are treated as secrets.
+
+
+## Passing in secret parameters
+Secret parameters are passed differently, depending on which method you choose. Alternative options are also present for passing secrets, if you are running EMHASS separately from Home Assistant. _(I.e. not via EMHASS-Add-on)_ 
+
+### EMHASS with Docker or Python
+Running EMHASS in Docker or Python by default retrieves all secret parameters via a passed `secrets_emhass.yaml` file. An example template has been provided under the name `secrets_emhass(example).yaml` on the EMHASS repo.
+
+To pass the the secrets file:
+- On Docker: *(via volume mount)*
+```bash
+Docker run ... -v ./secrets_emhass.yaml:/app/secrets_emhass.yaml ...
+```
+- On Python: *(optional: specify path as a argument)*
+```bash
+emhass ... --secrets=./secrets_emhass.yaml ...
+```
+
+#### Alternative Options
+For users who are running EMHASS with methods other than EMHASS-Add-on, secret parameters can be passed with the use of environment variables. _(instead of `secrets_emhass.yaml`)_
+
+Some environment variables include: `TIME_ZONE`, `LAT`, `LON`, `ALT`, `EMHASS_URL`, `EMHASS_KEY`
+
+_Note: As of writing, EMHASS will override ENV secret parameters if the file is present._
+
+For more information on passing arguments and environment variables using docker, have a look at some examples from [Configuration and Installation](https://emhass.readthedocs.io/en/latest/intro.html#configuration-and-installation) and [EMHASS Development](https://emhass.readthedocs.io/en/latest/develop.html) pages. 
+
+### EMHASS-Add-on *(Emhass Add-on)*
+By default, the `URL` and `KEY` parameters have been set to `empty`/blank in the Home Assistant configuration page for EMHASS addon. This results in EMHASS calling its Local `Supervisor API` to gain access. This is the easiest method, as there is no user input necessary.  
+
+However, if you wish to receive/send sensor data to a different Home Assistant environment, set url and key values in the `hass_url` & `long_lived_token` hidden parameters on the Home Assistant EMHASS addon configuration page. *(E.g. http://localhost:8123/hassio/addon/emhass/config)*
+-  `hass_url` example: `https://192.168.1.2:8123/`  
+-  `long_lived_token` generated from the `Long-lived access tokens` section in your user profile settings
+</br></br>
+
+Secret Parameters such as: `solcast_api_key`, `solcast_rooftop_id` and `solar_forecast_kwp` _(used by their respective `weather_forecast_method` parameter values)_, can also be set via hidden parameters in the addon configuration page.
+
+Secret Parameters such as: `time_zone`, `lon`, `lat` and `alt` are also automatically passed in via the Home Assistants `Supervisor API`. _(Values set in the Home Assistants config/general page)_  
+_Note: Local currency could also be obtained via the Home Assistant environment, however as of writing, this functionality has not yet been developed._
