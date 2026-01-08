@@ -33,6 +33,16 @@ jobs:
           uv run coverage report
           uv run coverage xml -o coverage.xml 
 
+      - name: Debug Token Presence
+        run: |
+          if [ -z "${{ secrets.SONAR_TOKEN }}" ]; then
+            echo "Error: SONAR_TOKEN is EMPTY"
+          else
+            echo "Success: SONAR_TOKEN is set (length: ${#SONAR_TOKEN})"
+          fi
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
       - name: SonarCloud Scan
         uses: SonarSource/sonarcloud-github-action@master
         env:
