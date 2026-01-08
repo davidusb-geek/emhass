@@ -31,29 +31,34 @@ jobs:
           uv sync --reinstall --extra test
           uv run coverage run -m --source=emhass unittest
           uv run coverage report
-          uv run coverage xml -o coverage.xml 
-
-      - name: Debug Token Presence
-        run: |
-          if [ -z "${{ secrets.SONAR_TOKEN }}" ]; then
-            echo "Error: SONAR_TOKEN is EMPTY"
-          else
-            echo "Success: SONAR_TOKEN is set (length: ${#SONAR_TOKEN})"
-          fi
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
-      - name: SonarCloud Scan
-        uses: SonarSource/sonarcloud-github-action@master
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Needed to get PR information, if any
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        with:
-          args: >
-            -Dsonar.python.coverage.reportPaths=coverage.xml
+          uv run coverage xml -o coverage.xml
 
       - name: Upload coverage reports to Codecov
         run: |
           curl -Os https://uploader.codecov.io/latest/linux/codecov
           chmod +x codecov
           ./codecov -t ${CODECOV_TOKEN}
+
+      - name: Debug SONAR_TOKEN
+        run: |
+          if [ -z "${SONAR_TOKEN}" ]; then
+            echo "::error::SONAR_TOKEN is EMPTY. The secret is not being passed to the runner."
+            exit 1
+          else
+            echo "SUCCESS: SONAR_TOKEN is set. Length: ${#SONAR_TOKEN}"
+          fi
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v5.0.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=davidusb-geek
+            -Dsonar.projectKey=davidusb-geek_emhass
+            -Dsonar.python.coverage.reportPaths=coverage.xml
+            -Dsonar.sources=./src
+            -Dsonar.tests=./tests
+            -Dsonar.host.url=https://sonarcloud.io
