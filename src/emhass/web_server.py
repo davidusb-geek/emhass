@@ -406,10 +406,15 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
         return None, None, None
 
     # Load runtime params
-    runtimeparams = await request.get_json(force=True, silent=True)
-    if runtimeparams and runtimeparams != "{}":
-        logger.info("Passed runtime parameters: " + str(runtimeparams))
-    else:
+    try:
+        runtimeparams = await request.get_json(force=True)
+        if runtimeparams:
+            logger.info("Passed runtime parameters: " + str(runtimeparams))
+        else:
+            runtimeparams = {}
+    except Exception as e:
+        logger.error(f"Error parsing runtime params JSON: {e}")
+        logger.error("Check your payload for syntax errors (e.g., use 'false' instead of 'False')")
         runtimeparams = {}
 
     runtimeparams = orjson.dumps(runtimeparams).decode()

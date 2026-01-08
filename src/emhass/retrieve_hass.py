@@ -218,10 +218,11 @@ class RetrieveHass:
         :type significant_changes_only: bool, optional
         :return: The DataFrame populated with the retrieved data from hass
         :rtype: pandas.DataFrame
-
-        .. warning:: The minimal_response and significant_changes_only options \
-            are experimental
         """
+        # Use InfluxDB if configured (Prioritize over WebSocket/REST for history)
+        if self.use_influxdb:
+            return self.get_data_influxdb(days_list, var_list)
+
         # Use WebSockets if configured, otherwise use Home Assistant REST API
         if self.use_websocket:
             success = await self.get_data_websocket(days_list, var_list)
@@ -236,10 +237,6 @@ class RetrieveHass:
                     test_url,
                 )
             return success
-
-        # Use InfluxDB if configured, otherwise use Home Assistant API
-        if self.use_influxdb:
-            return self.get_data_influxdb(days_list, var_list)
 
         self.logger.info("Using REST API for data retrieval")
         return await self._get_data_rest_api(
