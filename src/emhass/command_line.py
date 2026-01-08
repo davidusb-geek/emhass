@@ -332,7 +332,6 @@ async def _get_dayahead_pv_forecast(
     optim_conf, fcst, logger, get_data_from_file, retrieve_hass_conf, rh, emhass_conf
 ):
     """Helper to retrieve and optionally adjust PV forecast."""
-    test_df_literal = "test_df_final.pkl"
     # Check if we should calculate PV forecast
     if not (optim_conf["set_use_pv"] or optim_conf.get("weather_forecast_method", None) == "list"):
         return pd.Series(0, index=fcst.forecast_dates), None
@@ -431,7 +430,7 @@ async def _get_naive_mpc_history(
         optim_conf,
         rh,
         emhass_conf,
-        "test_df_final.pkl",
+        test_df_literal,
         logger,
     )
     return success, df_input_data, days_list, True
@@ -471,7 +470,7 @@ async def _get_naive_mpc_pv_forecast(
             optim_conf,
             rh,
             emhass_conf,
-            "test_df_final.pkl",
+            test_df_literal,
         )
     return p_pv_forecast, df_weather
 
