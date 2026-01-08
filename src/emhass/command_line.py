@@ -730,7 +730,7 @@ async def set_input_data_dict(
         result = {}
     else:
         logger.error(f"The passed action set_type parameter '{set_type}' is not valid")
-        return False
+        result = {}
     if result is None:
         return False
     data_results.update(result)
