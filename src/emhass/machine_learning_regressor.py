@@ -54,13 +54,11 @@ REGRESSION_METHODS = {
         "param_grid": {"ridge__alpha": [1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100]},
     },
     "LassoRegression": {
-        # Added random_state (though Lasso is often deterministic with default selection='cyclic',
-        # setting it is safer if selection='random' is ever used)
         "model": Lasso(random_state=seed),
         "param_grid": {"lasso__alpha": [1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100]},
     },
     "ElasticNet": {
-        "model": ElasticNet(random_state=seed),
+        "model": ElasticNet(alpha=1.0, l1_ratio=0.5, random_state=seed),
         "param_grid": {
             "elasticnet__alpha": [1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100],
             "elasticnet__l1_ratio": [0.1, 0.5, 0.7, 0.9, 0.95, 0.99, 1],
@@ -74,7 +72,7 @@ REGRESSION_METHODS = {
         },
     },
     "DecisionTreeRegressor": {
-        "model": DecisionTreeRegressor(random_state=seed),
+        "model": DecisionTreeRegressor(ccp_alpha=0.0, random_state=seed),
         "param_grid": {
             "decisiontreeregressor__max_depth": [None, 5, 10, 20],
             "decisiontreeregressor__min_samples_split": [2, 5, 10],
@@ -89,7 +87,7 @@ REGRESSION_METHODS = {
         },
     },
     "RandomForestRegressor": {
-        "model": RandomForestRegressor(random_state=seed),
+        "model": RandomForestRegressor(min_samples_leaf=1, max_features=1.0, random_state=seed),
         "param_grid": {
             "randomforestregressor__n_estimators": [50, 100, 200],
             "randomforestregressor__max_depth": [None, 10, 20],
@@ -97,7 +95,7 @@ REGRESSION_METHODS = {
         },
     },
     "ExtraTreesRegressor": {
-        "model": ExtraTreesRegressor(random_state=seed),
+        "model": ExtraTreesRegressor(min_samples_leaf=1, max_features=1.0, random_state=seed),
         "param_grid": {
             "extratreesregressor__n_estimators": [50, 100, 200],
             "extratreesregressor__max_depth": [None, 10, 20],
@@ -105,7 +103,7 @@ REGRESSION_METHODS = {
         },
     },
     "GradientBoostingRegressor": {
-        "model": GradientBoostingRegressor(random_state=seed),
+        "model": GradientBoostingRegressor(learning_rate=0.1, random_state=seed),
         "param_grid": {
             "gradientboostingregressor__n_estimators": [50, 100, 200],
             "gradientboostingregressor__learning_rate": [0.01, 0.1, 0.2],
@@ -113,14 +111,14 @@ REGRESSION_METHODS = {
         },
     },
     "AdaBoostRegressor": {
-        "model": AdaBoostRegressor(random_state=seed),
+        "model": AdaBoostRegressor(learning_rate=1.0, random_state=seed),
         "param_grid": {
             "adaboostregressor__n_estimators": [50, 100, 200],
             "adaboostregressor__learning_rate": [0.01, 0.1, 0.2],
         },
     },
     "MLPRegressor": {
-        "model": MLPRegressor(random_state=seed),
+        "model": MLPRegressor(hidden_layer_sizes=(100,), random_state=seed),
         "param_grid": {
             "mlpregressor__hidden_layer_sizes": [(50,), (100,), (50, 50)],
             "mlpregressor__activation": ["relu", "tanh"],

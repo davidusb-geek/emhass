@@ -162,7 +162,6 @@ a:active {
 
 a:active,
 a:hover {
-  outline-width: 0;
   outline: 0;
 }
 
@@ -217,7 +216,7 @@ blockquote> :last-child {
   margin-bottom: 0;
 }
 
-padding b,
+b,
 strong {
   font-weight: inherit;
   font-weight: 600;
@@ -338,7 +337,6 @@ hr::after {
 }
 
 img {
-  border-style: none;
   border: 0;
   max-width: 50%;
 }
@@ -451,6 +449,7 @@ html [type="button"],
 [type="reset"],
 [type="submit"] {
   -webkit-appearance: button;
+  appearance: button;
 }
 
 button::-moz-focus-inner,
@@ -503,6 +502,7 @@ textarea {
 
 [type="search"] {
   -webkit-appearance: textfield;
+  appearance: textfield;
   outline-offset: -2px;
 }
 
@@ -1158,9 +1158,7 @@ input:checked+.slider:before {
 
 .param h5,
 p {
-  margin: 5px;
-  margin-left: 0px;
-  margin-bottom: 0px;
+  margin: 5px 5px 0 0;
 }
 
 .param button {
