@@ -726,9 +726,9 @@ async def set_input_data_dict(
             set_type, retrieve_hass_conf, rh, emhass_conf, get_data_from_file, params
         )
     elif set_type in ["regressor-model-fit", "regressor-model-predict"]:
-        result = await _prepare_regressor_fit(emhass_conf, get_data_from_file, params, logger)
-    elif set_type == "publish-data":
-        result = {}  # No specific data preparation needed
+        result = _prepare_regressor_fit(emhass_conf, get_data_from_file, params, logger)
+    elif set_type == "publish-data" or set_type == "export-influxdb-to-csv":
+        result = {}
     else:
         logger.error(f"The passed action set_type parameter '{set_type}' is not valid")
         return False
