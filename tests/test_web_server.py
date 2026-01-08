@@ -340,23 +340,20 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
     ):
         """
         Test that sending malformed JSON (e.g. Python syntax 'False' instead of 'false')
-        triggers a logged error instead of silently failing.
+        triggers a logged error and proceeds with empty runtime parameters.
         """
-        # Setup Mocks
         mock_path_exists.return_value = True
 
+        # Mock .read() for everything
         def aiofiles_side_effect(file, mode="r", *args, **kwargs):
             context_mock = AsyncMock()
             file_handle = AsyncMock()
             context_mock.__aenter__.return_value = file_handle
             filename = str(file)
             if "params.pkl" in filename:
-                # 1. params.pkl -> Return BYTES (for pickle.loads)
                 content = pickle.dumps((pathlib.Path("/config"), {"optim_conf": {}}))
                 file_handle.read.return_value = content
             else:
-                # 2. emhass.log -> Return ONE STRING (for .read().splitlines() or regex)
-                # The server greps for " >> " in the logs to verify success
                 log_content = (
                     "2024-01-01 12:00:00,000 INFO >> Obtaining params\n"
                     "2024-01-01 12:00:01,000 INFO >> Setting input data dict\n"
@@ -366,14 +363,11 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
             return context_mock
 
         mock_file.side_effect = aiofiles_side_effect
-        # Mock set_input_data_dict
         mock_set_input.return_value = {
             "params": {},
             "retrieve_hass_conf": {"continual_publish": False},
         }
-        # Mock optimization result
         mock_optim.return_value = MagicMock()
-        # Mock plotting
         mock_get_inject.return_value = {
             "optim_status": "Optimal",
             "table1": "<div>Table</div>",
@@ -387,11 +381,71 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
             headers={"Content-Type": "application/json"},
         )
         # Assertions
-        # Expect 201 (Created)
         self.assertEqual(response.status_code, 201)
-        # Verify that the JSON error was logged
-        logs = str(mock_logger.error.mock_calls)
-        self.assertIn("Error parsing runtime params JSON", logs)
+        log_found = False
+        for call in mock_logger.error.call_args_list:
+            args, _ = call
+            if args and "Error parsing runtime params JSON" in str(args[0]):
+                log_found = True
+                break
+        self.assertTrue(log_found, "Expected error log message not found")
+        # Verify downstream call received empty string/dict for runtime params
+        call_args = mock_set_input.call_args
+        # runtimeparams is the 4th argument (index 3)
+        self.assertEqual(call_args[0][3], "{}")
+
+    @patch("pathlib.Path.exists")
+    @patch("emhass.web_server.aiofiles.open")
+    @patch("emhass.web_server.set_input_data_dict", new_callable=AsyncMock)
+    @patch("emhass.web_server.dayahead_forecast_optim", new_callable=AsyncMock)
+    @patch("emhass.web_server.get_injection_dict")
+    @patch("emhass.web_server.app.logger")
+    async def test_action_valid_json(
+        self,
+        mock_logger,
+        mock_get_inject,
+        mock_optim,
+        mock_set_input,
+        mock_file,
+        mock_path_exists,
+    ):
+        """Test that sending valid JSON works correctly."""
+        mock_path_exists.return_value = True
+
+        # Reuse side effect
+        def aiofiles_side_effect(file, mode="r", *args, **kwargs):
+            context_mock = AsyncMock()
+            file_handle = AsyncMock()
+            context_mock.__aenter__.return_value = file_handle
+            if "params.pkl" in str(file):
+                content = pickle.dumps((pathlib.Path("/config"), {"optim_conf": {}}))
+                file_handle.read.return_value = content
+            else:
+                file_handle.read.return_value = "INFO >> Success"
+            return context_mock
+
+        mock_file.side_effect = aiofiles_side_effect
+        mock_set_input.return_value = {
+            "params": {},
+            "retrieve_hass_conf": {"continual_publish": False},
+        }
+        mock_optim.return_value = MagicMock()
+        mock_get_inject.return_value = {"optim_status": "Optimal"}
+        # Execute Test with valid JSON
+        valid_json_str = '{"perform_backtest": false}'
+        response = await self.client.post(
+            "/action/dayahead-optim",
+            data=valid_json_str,
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(response.status_code, 201)
+        # Verify no error was logged
+        self.assertFalse(mock_logger.error.called)
+        # Verify runtime params were passed correctly
+        call_args = mock_set_input.call_args
+        actual_arg = call_args[0][3]
+        # Compare as dictionaries to ignore whitespace differences (e.g. " : " vs ":")
+        self.assertEqual(orjson.loads(actual_arg), orjson.loads(valid_json_str))
 
 
 if __name__ == "__main__":

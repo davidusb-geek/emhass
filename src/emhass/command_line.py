@@ -7,6 +7,7 @@ import logging
 import os
 import pathlib
 import pickle
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
 
@@ -26,6 +27,44 @@ default_csv_filename = "opt_res_latest.csv"
 default_pkl_suffix = "_mlf.pkl"
 default_metadata_json = "metadata.json"
 test_df_literal = "test_df_final.pkl"
+
+
+@dataclass
+class SetupContext:
+    """Context object for optimization preparation helpers."""
+
+    retrieve_hass_conf: dict
+    optim_conf: dict
+    plant_conf: dict
+    emhass_conf: dict
+    params: dict
+    logger: logging.Logger
+    get_data_from_file: bool
+    rh: RetrieveHass
+    fcst: Forecast | None = None
+
+
+@dataclass
+class PublishContext:
+    """Context object for data publishing helpers."""
+
+    input_data_dict: dict
+    params: dict
+    idx: int
+    common_kwargs: dict
+    logger: logging.Logger
+
+    @property
+    def rh(self) -> RetrieveHass:
+        return self.input_data_dict["rh"]
+
+    @property
+    def opt(self) -> Optimization:
+        return self.input_data_dict["opt"]
+
+    @property
+    def fcst(self) -> Forecast:
+        return self.input_data_dict["fcst"]
 
 
 async def _retrieve_from_file(
@@ -95,9 +134,9 @@ async def retrieve_home_assistant_data(
     optim_conf: dict,
     rh: RetrieveHass,
     emhass_conf: dict,
-    test_df_literal: pd.DataFrame,
+    test_df_literal: str,
     logger: logging.Logger | None = None,
-) -> dict:
+) -> tuple[bool, pd.DataFrame | None, list | None]:
     """Retrieve data from Home Assistant or file and prepare it for optimization."""
 
     if get_data_from_file:
@@ -306,19 +345,17 @@ async def adjust_pv_forecast(
     return p_pv_forecast["adjusted_forecast"].rename(None)
 
 
-async def _prepare_perfect_optim(
-    retrieve_hass_conf, optim_conf, rh, emhass_conf, logger, get_data_from_file
-):
+async def _prepare_perfect_optim(ctx: SetupContext):
     """Helper to prepare data for perfect optimization."""
     success, df_input_data, days_list = await retrieve_home_assistant_data(
         "perfect-optim",
-        get_data_from_file,
-        retrieve_hass_conf,
-        optim_conf,
-        rh,
-        emhass_conf,
+        ctx.get_data_from_file,
+        ctx.retrieve_hass_conf,
+        ctx.optim_conf,
+        ctx.rh,
+        ctx.emhass_conf,
         test_df_literal,
-        logger,
+        ctx.logger,
     )
     if not success:
         return None
@@ -328,36 +365,40 @@ async def _prepare_perfect_optim(
     }
 
 
-async def _get_dayahead_pv_forecast(
-    optim_conf, fcst, logger, get_data_from_file, retrieve_hass_conf, rh, emhass_conf
-):
+async def _get_dayahead_pv_forecast(ctx: SetupContext):
     """Helper to retrieve and optionally adjust PV forecast."""
     # Check if we should calculate PV forecast
-    if not (optim_conf["set_use_pv"] or optim_conf.get("weather_forecast_method", None) == "list"):
-        return pd.Series(0, index=fcst.forecast_dates), None
+    if not (
+        ctx.optim_conf["set_use_pv"]
+        or ctx.optim_conf.get("weather_forecast_method", None) == "list"
+    ):
+        return pd.Series(0, index=ctx.fcst.forecast_dates), None
     # Get weather forecast
-    df_weather = await fcst.get_weather_forecast(method=optim_conf["weather_forecast_method"])
+    df_weather = await ctx.fcst.get_weather_forecast(
+        method=ctx.optim_conf["weather_forecast_method"]
+    )
     if isinstance(df_weather, bool) and not df_weather:
         return None, None
-
-    p_pv_forecast = fcst.get_power_from_weather(df_weather)
+    p_pv_forecast = ctx.fcst.get_power_from_weather(df_weather)
     # Adjust PV forecast if needed
-    if optim_conf["set_use_adjusted_pv"]:
+    if ctx.optim_conf["set_use_adjusted_pv"]:
         p_pv_forecast = await adjust_pv_forecast(
-            logger,
-            fcst,
+            ctx.logger,
+            ctx.fcst,
             p_pv_forecast,
-            get_data_from_file,
-            retrieve_hass_conf,
-            optim_conf,
-            rh,
-            emhass_conf,
+            ctx.get_data_from_file,
+            ctx.retrieve_hass_conf,
+            ctx.optim_conf,
+            ctx.rh,
+            ctx.emhass_conf,
             test_df_literal,
         )
     return p_pv_forecast, df_weather
 
 
-def _apply_df_freq_horizon(df, retrieve_hass_conf, params):
+def _apply_df_freq_horizon(
+    df: pd.DataFrame, retrieve_hass_conf: dict, prediction_horizon: int | None
+) -> pd.DataFrame:
     """Helper to apply frequency adjustment and prediction horizon slicing."""
     # Handle Frequency
     if retrieve_hass_conf.get("optimization_time_step"):
@@ -368,31 +409,25 @@ def _apply_df_freq_horizon(df, retrieve_hass_conf, params):
     else:
         df = utils.set_df_index_freq(df)
     # Handle Prediction Horizon
-    params_dict = orjson.loads(params)
-    if params_dict["passed_data"].get("prediction_horizon"):
-        horizon = params_dict["passed_data"]["prediction_horizon"]
+    if prediction_horizon:
         # Slice the dataframe up to the horizon
-        df = copy.deepcopy(df)[df.index[0] : df.index[horizon - 1]]
+        df = copy.deepcopy(df)[df.index[0] : df.index[prediction_horizon - 1]]
     return df
 
 
-async def _prepare_dayahead_optim(
-    retrieve_hass_conf, optim_conf, fcst, rh, emhass_conf, logger, get_data_from_file, params
-):
+async def _prepare_dayahead_optim(ctx: SetupContext):
     """Helper to prepare data for day-ahead optimization."""
     # Get PV Forecast
-    p_pv_forecast, df_weather = await _get_dayahead_pv_forecast(
-        optim_conf, fcst, logger, get_data_from_file, retrieve_hass_conf, rh, emhass_conf
-    )
+    p_pv_forecast, df_weather = await _get_dayahead_pv_forecast(ctx)
     if p_pv_forecast is None:
         return None
     # Get Load Forecast
-    p_load_forecast = await fcst.get_load_forecast(
-        days_min_load_forecast=optim_conf["delta_forecast_daily"].days,
-        method=optim_conf["load_forecast_method"],
+    p_load_forecast = await ctx.fcst.get_load_forecast(
+        days_min_load_forecast=ctx.optim_conf["delta_forecast_daily"].days,
+        method=ctx.optim_conf["load_forecast_method"],
     )
     if isinstance(p_load_forecast, bool) and not p_load_forecast:
-        logger.error("Unable to get load forecast.")
+        ctx.logger.error("Unable to get load forecast.")
         return None
     # Build Input DataFrame
     df_input_data_dayahead = pd.DataFrame(
@@ -401,8 +436,10 @@ async def _prepare_dayahead_optim(
         columns=["p_pv_forecast", "p_load_forecast"],
     )
     # Apply Frequency and Prediction Horizon
+    # Use explicitly passed horizon, avoiding JSON re-parsing
+    prediction_horizon = ctx.params["passed_data"].get("prediction_horizon")
     df_input_data_dayahead = _apply_df_freq_horizon(
-        df_input_data_dayahead, retrieve_hass_conf, params
+        df_input_data_dayahead, ctx.retrieve_hass_conf, prediction_horizon
     )
     return {
         "df_input_data_dayahead": df_input_data_dayahead,
@@ -412,97 +449,78 @@ async def _prepare_dayahead_optim(
     }
 
 
-async def _get_naive_mpc_history(
-    retrieve_hass_conf, optim_conf, rh, emhass_conf, logger, get_data_from_file
-):
+async def _get_naive_mpc_history(ctx: SetupContext):
     """Helper to retrieve historical data for Naive MPC."""
     # Check if we need to skip historical data retrieval
-    is_list_forecast = optim_conf.get("load_forecast_method") == "list"
-    is_list_weather = optim_conf.get("weather_forecast_method") == "list"
-    no_pv = not optim_conf["set_use_pv"]
+    is_list_forecast = ctx.optim_conf.get("load_forecast_method") == "list"
+    is_list_weather = ctx.optim_conf.get("weather_forecast_method") == "list"
+    no_pv = not ctx.optim_conf["set_use_pv"]
+
     if (is_list_forecast and is_list_weather) or (is_list_forecast and no_pv):
         return True, None, None, False  # success, df, days_list, set_mix_forecast
     # Retrieve data from Home Assistant
     success, df_input_data, days_list = await retrieve_home_assistant_data(
         "naive-mpc-optim",
-        get_data_from_file,
-        retrieve_hass_conf,
-        optim_conf,
-        rh,
-        emhass_conf,
+        ctx.get_data_from_file,
+        ctx.retrieve_hass_conf,
+        ctx.optim_conf,
+        ctx.rh,
+        ctx.emhass_conf,
         test_df_literal,
-        logger,
+        ctx.logger,
     )
     return success, df_input_data, days_list, True
 
 
-async def _get_naive_mpc_pv_forecast(
-    optim_conf,
-    fcst,
-    logger,
-    get_data_from_file,
-    retrieve_hass_conf,
-    rh,
-    emhass_conf,
-    set_mix_forecast,
-    df_input_data,
-):
+async def _get_naive_mpc_pv_forecast(ctx: SetupContext, set_mix_forecast, df_input_data):
     """Helper to generate PV forecast for Naive MPC."""
     # If PV is disabled and no weather list, return zero series
-    if not (optim_conf["set_use_pv"] or optim_conf.get("weather_forecast_method") == "list"):
-        return pd.Series(0, index=fcst.forecast_dates), None
+    if not (
+        ctx.optim_conf["set_use_pv"] or ctx.optim_conf.get("weather_forecast_method") == "list"
+    ):
+        return pd.Series(0, index=ctx.fcst.forecast_dates), None
     # Get weather forecast
-    df_weather = await fcst.get_weather_forecast(method=optim_conf["weather_forecast_method"])
+    df_weather = await ctx.fcst.get_weather_forecast(
+        method=ctx.optim_conf["weather_forecast_method"]
+    )
     if isinstance(df_weather, bool) and not df_weather:
         return None, None
     # Calculate PV power
-    p_pv_forecast = fcst.get_power_from_weather(
+    p_pv_forecast = ctx.fcst.get_power_from_weather(
         df_weather, set_mix_forecast=set_mix_forecast, df_now=df_input_data
     )
     # Adjust PV forecast if needed
-    if optim_conf["set_use_adjusted_pv"]:
+    if ctx.optim_conf["set_use_adjusted_pv"]:
         p_pv_forecast = await adjust_pv_forecast(
-            logger,
-            fcst,
+            ctx.logger,
+            ctx.fcst,
             p_pv_forecast,
-            get_data_from_file,
-            retrieve_hass_conf,
-            optim_conf,
-            rh,
-            emhass_conf,
+            ctx.get_data_from_file,
+            ctx.retrieve_hass_conf,
+            ctx.optim_conf,
+            ctx.rh,
+            ctx.emhass_conf,
             test_df_literal,
         )
     return p_pv_forecast, df_weather
 
 
-async def _prepare_naive_mpc_optim(
-    retrieve_hass_conf, optim_conf, fcst, rh, emhass_conf, logger, get_data_from_file, params
-):
+async def _prepare_naive_mpc_optim(ctx: SetupContext):
     """Helper to prepare data for Naive MPC optimization."""
     # Retrieve Historical Data
-    success, df_input_data, days_list, set_mix_forecast = await _get_naive_mpc_history(
-        retrieve_hass_conf, optim_conf, rh, emhass_conf, logger, get_data_from_file
-    )
+    success, df_input_data, days_list, set_mix_forecast = await _get_naive_mpc_history(ctx)
     if not success:
         return None
     # Get PV Forecast
     p_pv_forecast, df_weather = await _get_naive_mpc_pv_forecast(
-        optim_conf,
-        fcst,
-        logger,
-        get_data_from_file,
-        retrieve_hass_conf,
-        rh,
-        emhass_conf,
-        set_mix_forecast,
-        df_input_data,
+        ctx, set_mix_forecast, df_input_data
     )
     if p_pv_forecast is None:
         return None
     # Get Load Forecast
-    p_load_forecast = await fcst.get_load_forecast(
-        days_min_load_forecast=optim_conf["delta_forecast_daily"].days,
-        method=optim_conf["load_forecast_method"],
+    p_load_forecast = await ctx.fcst.get_load_forecast(
+        days_min_load_forecast=ctx.optim_conf["delta_forecast_daily"].days,
+        method=ctx.optim_conf["load_forecast_method"],
         set_mix_forecast=set_mix_forecast,
         df_now=df_input_data,
     )
@@ -511,9 +529,10 @@ async def _prepare_naive_mpc_optim(
     # Build and Format Input DataFrame
     df_input_data_dayahead = pd.concat([p_pv_forecast, p_load_forecast], axis=1)
     df_input_data_dayahead.columns = ["p_pv_forecast", "p_load_forecast"]
-    # Reusing the helper from the previous refactor (ensure it is defined in the file)
+    # Reuse freq/horizon helper
+    prediction_horizon = ctx.params["passed_data"].get("prediction_horizon")
     df_input_data_dayahead = _apply_df_freq_horizon(
-        df_input_data_dayahead, retrieve_hass_conf, params
+        df_input_data_dayahead, ctx.retrieve_hass_conf, prediction_horizon
     )
     return {
         "df_input_data": df_input_data,
@@ -525,17 +544,14 @@ async def _prepare_naive_mpc_optim(
     }
 
 
-async def _prepare_ml_fit_predict(
-    _, retrieve_hass_conf, rh, emhass_conf, get_data_from_file, params
-):
+async def _prepare_ml_fit_predict(ctx: SetupContext, set_type: str):
     """Helper to prepare data for ML fit/predict/tune."""
-    params_dict = orjson.loads(params)
-    days_to_retrieve = params_dict["passed_data"]["historic_days_to_retrieve"]
-    model_type = params_dict["passed_data"]["model_type"]
-    var_model = params_dict["passed_data"]["var_model"]
-    if get_data_from_file:
+    days_to_retrieve = ctx.params["passed_data"]["historic_days_to_retrieve"]
+    model_type = ctx.params["passed_data"]["model_type"]
+    var_model = ctx.params["passed_data"]["var_model"]
+    if ctx.get_data_from_file:
         filename = model_type + ".pkl"
-        filename_path = emhass_conf["data_path"] / filename
+        filename_path = ctx.emhass_conf["data_path"] / filename
         async with aiofiles.open(filename_path, "rb") as inp:
             content = await inp.read()
             df_input_data, _, _, _ = pickle.loads(content)
@@ -544,45 +560,47 @@ async def _prepare_ml_fit_predict(
     else:
         days_list = utils.get_days_list(days_to_retrieve)
         var_list = [var_model]
-        if not await rh.get_data(days_list, var_list):
+        if not await ctx.rh.get_data(days_list, var_list):
             return None
-        rh.prepare_data(
+        ctx.rh.prepare_data(
             var_model,
-            load_negative=retrieve_hass_conf.get("load_negative", False),
-            set_zero_min=retrieve_hass_conf.get("set_zero_min", True),
-            var_replace_zero=retrieve_hass_conf.get("sensor_replace_zero", []),
-            var_interp=retrieve_hass_conf.get("sensor_linear_interp", []),
+            load_negative=ctx.retrieve_hass_conf.get("load_negative", False),
+            set_zero_min=ctx.retrieve_hass_conf.get("set_zero_min", True),
+            var_replace_zero=ctx.retrieve_hass_conf.get("sensor_replace_zero", []),
+            var_interp=ctx.retrieve_hass_conf.get("sensor_linear_interp", []),
             skip_renaming=True,
         )
-        return {"df_input_data": rh.df_final.copy()}
+        return {"df_input_data": ctx.rh.df_final.copy()}
 
 
-def _prepare_regressor_fit(emhass_conf, get_data_from_file, params, logger):
+async def _prepare_regressor_fit(ctx: SetupContext):
     """Helper to prepare data for Regressor fit/predict."""
-    params_dict = orjson.loads(params)
-    csv_file = params_dict["passed_data"].get("csv_file", None)
+    csv_file = ctx.params["passed_data"].get("csv_file", None)
     if not csv_file:
-        return {}
-    if get_data_from_file:
-        base_path = emhass_conf["data_path"]
+        ctx.logger.error("csv_file is required for regressor actions but was not provided.")
+        return None
+    if ctx.get_data_from_file:
+        base_path = ctx.emhass_conf["data_path"]
         filename_path = pathlib.Path(base_path) / csv_file
     else:
-        filename_path = emhass_conf["data_path"] / csv_file
+        filename_path = ctx.emhass_conf["data_path"] / csv_file
     if filename_path.is_file():
         df_input_data = pd.read_csv(filename_path, parse_dates=True)
     else:
-        logger.error(f"The CSV file {csv_file} was not found in path: {emhass_conf['data_path']}")
+        ctx.logger.error(
+            f"The CSV file {csv_file} was not found in path: {ctx.emhass_conf['data_path']}"
+        )
         return None
     # Validate columns
     required_columns = []
-    if "features" in params_dict["passed_data"]:
-        required_columns.extend(params_dict["passed_data"]["features"])
-    if "target" in params_dict["passed_data"]:
-        required_columns.append(params_dict["passed_data"]["target"])
-    if "timestamp" in params_dict["passed_data"]:
-        required_columns.append(params_dict["passed_data"]["timestamp"])
+    if "features" in ctx.params["passed_data"]:
+        required_columns.extend(ctx.params["passed_data"]["features"])
+    if "target" in ctx.params["passed_data"]:
+        required_columns.append(ctx.params["passed_data"]["target"])
+    if "timestamp" in ctx.params["passed_data"]:
+        required_columns.append(ctx.params["passed_data"]["timestamp"])
     if not set(required_columns).issubset(df_input_data.columns):
-        logger.error(
+        ctx.logger.error(
             f"The csv file does not contain the required columns: {', '.join(required_columns)}"
         )
         return None
@@ -622,7 +640,7 @@ async def set_input_data_dict(
     logger.info("Setting up needed data")
     # Parse Parameters
     if (params is not None) and (params != "null"):
-        if type(params) is str:
+        if isinstance(params, str):
             params = dict(orjson.loads(params))
     else:
         params = {}
@@ -644,6 +662,8 @@ async def set_input_data_dict(
         logger,
         emhass_conf,
     )
+    if isinstance(params, str):
+        params = dict(orjson.loads(params))
     # Initialize Core Objects
     rh = RetrieveHass(
         retrieve_hass_conf["hass_url"],
@@ -683,6 +703,18 @@ async def set_input_data_dict(
         emhass_conf,
         logger,
     )
+    # Create SetupContext
+    ctx = SetupContext(
+        retrieve_hass_conf=retrieve_hass_conf,
+        optim_conf=optim_conf,
+        plant_conf=plant_conf,
+        emhass_conf=emhass_conf,
+        params=params,
+        logger=logger,
+        get_data_from_file=get_data_from_file,
+        rh=rh,
+        fcst=fcst,
+    )
     # Initialize Default Return Data
     data_results = {
         "df_input_data": None,
@@ -695,37 +727,15 @@ async def set_input_data_dict(
     # Delegate to Helpers based on set_type
     result = None
     if set_type == "perfect-optim":
-        result = await _prepare_perfect_optim(
-            retrieve_hass_conf, optim_conf, rh, emhass_conf, logger, get_data_from_file
-        )
+        result = await _prepare_perfect_optim(ctx)
     elif set_type == "dayahead-optim":
-        result = await _prepare_dayahead_optim(
-            retrieve_hass_conf,
-            optim_conf,
-            fcst,
-            rh,
-            emhass_conf,
-            logger,
-            get_data_from_file,
-            params,
-        )
+        result = await _prepare_dayahead_optim(ctx)
     elif set_type == "naive-mpc-optim":
-        result = await _prepare_naive_mpc_optim(
-            retrieve_hass_conf,
-            optim_conf,
-            fcst,
-            rh,
-            emhass_conf,
-            logger,
-            get_data_from_file,
-            params,
-        )
+        result = await _prepare_naive_mpc_optim(ctx)
     elif set_type in ["forecast-model-fit", "forecast-model-predict", "forecast-model-tune"]:
-        result = await _prepare_ml_fit_predict(
-            set_type, retrieve_hass_conf, rh, emhass_conf, get_data_from_file, params
-        )
+        result = await _prepare_ml_fit_predict(ctx, set_type)
     elif set_type in ["regressor-model-fit", "regressor-model-predict"]:
-        result = _prepare_regressor_fit(emhass_conf, get_data_from_file, params, logger)
+        result = _prepare_regressor_fit(ctx)
     elif set_type == "publish-data" or set_type == "export-influxdb-to-csv":
         result = {}
     else:
@@ -734,9 +744,6 @@ async def set_input_data_dict(
     if result is None:
         return False
     data_results.update(result)
-    # Ensure params is a dict (treat_runtimeparams returns it as a string)
-    if isinstance(params, str):
-        params = orjson.loads(params)
     # Build Final Dictionary
     input_data_dict = {
         "emhass_conf": emhass_conf,
@@ -1573,7 +1580,6 @@ async def _publish_from_saved_entities(
         logger.warning("Falling back to opt_res_latest")
         return None
     entity_path_contents = os.listdir(entity_path)
-    # Check if any file matches prefix or if prefix is "all"
     matches_prefix = any(publish_prefix in entity for entity in entity_path_contents)
     if not (matches_prefix or publish_prefix == "all"):
         logger.warning(f"No saved entity json files that match prefix: {publish_prefix}")
@@ -1624,93 +1630,89 @@ def _get_closest_index(retrieve_hass_conf: dict, index: pd.DatetimeIndex) -> int
         return index.get_indexer([now_precise], method="ffill")[0]
     elif method == "last":
         return index.get_indexer([now_precise], method="bfill")[0]
-    # Fallback
     return index.get_indexer([now_precise], method="nearest")[0]
 
 
 async def _publish_standard_forecasts(
-    input_data_dict, opt_res_latest, idx, params, kwargs
+    ctx: PublishContext, opt_res_latest: pd.DataFrame
 ) -> list[str]:
     """Publish PV, Load, Curtailment, and Hybrid Inverter data."""
     cols = []
-    rh = input_data_dict["rh"]
     # PV Forecast
-    custom_pv = params["passed_data"]["custom_pv_forecast_id"]
-    await rh.post_data(
+    custom_pv = ctx.params["passed_data"]["custom_pv_forecast_id"]
+    await ctx.rh.post_data(
         opt_res_latest["P_PV"],
-        idx,
+        ctx.idx,
         custom_pv["entity_id"],
         "power",
         custom_pv["unit_of_measurement"],
         custom_pv["friendly_name"],
         type_var="power",
-        **kwargs,
+        **ctx.common_kwargs,
     )
     cols.append("P_PV")
     # Load Forecast
-    custom_load = params["passed_data"]["custom_load_forecast_id"]
-    await rh.post_data(
+    custom_load = ctx.params["passed_data"]["custom_load_forecast_id"]
+    await ctx.rh.post_data(
         opt_res_latest["P_Load"],
-        idx,
+        ctx.idx,
         custom_load["entity_id"],
         "power",
         custom_load["unit_of_measurement"],
         custom_load["friendly_name"],
         type_var="power",
-        **kwargs,
+        **ctx.common_kwargs,
     )
     cols.append("P_Load")
     # Curtailment
-    if input_data_dict["fcst"].plant_conf["compute_curtailment"]:
-        custom_curt = params["passed_data"]["custom_pv_curtailment_id"]
-        await rh.post_data(
+    if ctx.fcst.plant_conf["compute_curtailment"]:
+        custom_curt = ctx.params["passed_data"]["custom_pv_curtailment_id"]
+        await ctx.rh.post_data(
             opt_res_latest["P_PV_curtailment"],
-            idx,
+            ctx.idx,
             custom_curt["entity_id"],
             "power",
             custom_curt["unit_of_measurement"],
             custom_curt["friendly_name"],
             type_var="power",
-            **kwargs,
+            **ctx.common_kwargs,
         )
         cols.append("P_PV_curtailment")
     # Hybrid Inverter
-    if input_data_dict["fcst"].plant_conf["inverter_is_hybrid"]:
-        custom_inv = params["passed_data"]["custom_hybrid_inverter_id"]
-        await rh.post_data(
+    if ctx.fcst.plant_conf["inverter_is_hybrid"]:
+        custom_inv = ctx.params["passed_data"]["custom_hybrid_inverter_id"]
+        await ctx.rh.post_data(
             opt_res_latest["P_hybrid_inverter"],
-            idx,
+            ctx.idx,
             custom_inv["entity_id"],
             "power",
             custom_inv["unit_of_measurement"],
             custom_inv["friendly_name"],
             type_var="power",
-            **kwargs,
+            **ctx.common_kwargs,
         )
         cols.append("P_hybrid_inverter")
     return cols
 
 
-async def _publish_deferrable_loads(
-    input_data_dict, opt_res_latest, idx, params, kwargs, logger
-) -> list[str]:
+async def _publish_deferrable_loads(ctx: PublishContext, opt_res_latest: pd.DataFrame) -> list[str]:
     """Publish data for all deferrable loads."""
     cols = []
-    custom_def = params["passed_data"]["custom_deferrable_forecast_id"]
-    for k in range(input_data_dict["opt"].optim_conf["number_of_deferrable_loads"]):
+    custom_def = ctx.params["passed_data"]["custom_deferrable_forecast_id"]
+    for k in range(ctx.opt.optim_conf["number_of_deferrable_loads"]):
         col_name = f"P_deferrable{k}"
         if col_name not in opt_res_latest.columns:
-            logger.error(f"{col_name} was not found in results DataFrame.")
+            ctx.logger.error(f"{col_name} was not found in results DataFrame.")
             continue
-        await input_data_dict["rh"].post_data(
+        await ctx.rh.post_data(
             opt_res_latest[col_name],
-            idx,
+            ctx.idx,
             custom_def[k]["entity_id"],
             "power",
             custom_def[k]["unit_of_measurement"],
             custom_def[k]["friendly_name"],
             type_var="deferrable",
-            **kwargs,
+            **ctx.common_kwargs,
         )
         cols.append(col_name)
     return cols
@@ -1720,10 +1722,8 @@ async def _publish_thermal_variable(
     rh, opt_res_latest, idx, k, custom_ids, col_prefix, type_var, unit_type, kwargs
 ) -> str | None:
     """Helper to publish a single thermal variable if valid."""
-    # Check 1: Ensure custom ID exists for this index k
     if custom_ids and k < len(custom_ids):
         col_name = f"{col_prefix}{k}"
-        # Check 2: Ensure column exists in DataFrame
         if col_name in opt_res_latest.columns:
             entity_conf = custom_ids[k]
             await rh.post_data(
@@ -1740,145 +1740,132 @@ async def _publish_thermal_variable(
     return None
 
 
-async def _publish_thermal_loads(
-    input_data_dict, opt_res_latest, idx, params, kwargs, _
-) -> list[str]:
+async def _publish_thermal_loads(ctx: PublishContext, opt_res_latest: pd.DataFrame) -> list[str]:
     """Publish predicted temperature and heating demand for thermal loads."""
     cols = []
-    # Validation and Setup
-    if "custom_predicted_temperature_id" not in params["passed_data"]:
+    if "custom_predicted_temperature_id" not in ctx.params["passed_data"]:
         return cols
-    custom_temp = params["passed_data"]["custom_predicted_temperature_id"]
-    custom_heat = params["passed_data"].get("custom_heating_demand_id")
-    def_load_config = input_data_dict["opt"].optim_conf.get("def_load_config", [])
+    custom_temp = ctx.params["passed_data"]["custom_predicted_temperature_id"]
+    custom_heat = ctx.params["passed_data"].get("custom_heating_demand_id")
+    def_load_config = ctx.opt.optim_conf.get("def_load_config", [])
     if not isinstance(def_load_config, list):
         def_load_config = []
-    rh = input_data_dict["rh"]
-    # Iterate Loads
-    for k in range(input_data_dict["opt"].optim_conf["number_of_deferrable_loads"]):
-        # Skip if config doesn't exist for this index
+    for k in range(ctx.opt.optim_conf["number_of_deferrable_loads"]):
         if k >= len(def_load_config):
             continue
-        # Skip if not a thermal load
         load_cfg = def_load_config[k]
         if "thermal_config" not in load_cfg and "thermal_battery" not in load_cfg:
             continue
-        # Publish Temperature
         col_t = await _publish_thermal_variable(
-            rh,
+            ctx.rh,
             opt_res_latest,
-            idx,
+            ctx.idx,
             k,
             custom_temp,
             "predicted_temp_heater",
             "temperature",
             "temperature",
-            kwargs,
+            ctx.common_kwargs,
         )
         if col_t:
             cols.append(col_t)
-        # Publish Heating Demand
         col_h = await _publish_thermal_variable(
-            rh,
+            ctx.rh,
             opt_res_latest,
-            idx,
+            ctx.idx,
             k,
             custom_heat,
             "heating_demand_heater",
             "energy",
             "energy",
-            kwargs,
+            ctx.common_kwargs,
         )
         if col_h:
             cols.append(col_h)
     return cols
 
 
-async def _publish_battery_data(
-    input_data_dict, opt_res_latest, idx, params, kwargs, logger
-) -> list[str]:
+async def _publish_battery_data(ctx: PublishContext, opt_res_latest: pd.DataFrame) -> list[str]:
     """Publish Battery Power and SOC."""
     cols = []
-    if not input_data_dict["opt"].optim_conf["set_use_battery"]:
+    if not ctx.opt.optim_conf["set_use_battery"]:
         return cols
     if "P_batt" not in opt_res_latest.columns:
-        logger.error("P_batt was not found in results DataFrame.")
+        ctx.logger.error("P_batt was not found in results DataFrame.")
         return cols
     # Power
-    custom_batt = params["passed_data"]["custom_batt_forecast_id"]
-    await input_data_dict["rh"].post_data(
+    custom_batt = ctx.params["passed_data"]["custom_batt_forecast_id"]
+    await ctx.rh.post_data(
         opt_res_latest["P_batt"],
-        idx,
+        ctx.idx,
         custom_batt["entity_id"],
         "power",
         custom_batt["unit_of_measurement"],
         custom_batt["friendly_name"],
         type_var="batt",
-        **kwargs,
+        **ctx.common_kwargs,
     )
     cols.append("P_batt")
     # SOC
-    custom_soc = params["passed_data"]["custom_batt_soc_forecast_id"]
-    await input_data_dict["rh"].post_data(
+    custom_soc = ctx.params["passed_data"]["custom_batt_soc_forecast_id"]
+    await ctx.rh.post_data(
         opt_res_latest["SOC_opt"] * 100,
-        idx,
+        ctx.idx,
         custom_soc["entity_id"],
         "battery",
         custom_soc["unit_of_measurement"],
         custom_soc["friendly_name"],
         type_var="SOC",
-        **kwargs,
+        **ctx.common_kwargs,
     )
     cols.append("SOC_opt")
     return cols
 
 
-async def _publish_grid_and_costs(
-    input_data_dict, opt_res_latest, idx, params, kwargs, logger
-) -> list[str]:
+async def _publish_grid_and_costs(ctx: PublishContext, opt_res_latest: pd.DataFrame) -> list[str]:
     """Publish Grid Power, Costs, and Optimization Status."""
     cols = []
-    rh = input_data_dict["rh"]
     # Grid
-    custom_grid = params["passed_data"]["custom_grid_forecast_id"]
-    await rh.post_data(
+    custom_grid = ctx.params["passed_data"]["custom_grid_forecast_id"]
+    await ctx.rh.post_data(
         opt_res_latest["P_grid"],
-        idx,
+        ctx.idx,
         custom_grid["entity_id"],
         "power",
         custom_grid["unit_of_measurement"],
         custom_grid["friendly_name"],
         type_var="power",
-        **kwargs,
+        **ctx.common_kwargs,
     )
     cols.append("P_grid")
     # Cost Function
-    custom_cost = params["passed_data"]["custom_cost_fun_id"]
+    custom_cost = ctx.params["passed_data"]["custom_cost_fun_id"]
     col_cost_fun = [i for i in opt_res_latest.columns if "cost_fun_" in i]
-    await rh.post_data(
+    await ctx.rh.post_data(
         opt_res_latest[col_cost_fun],
-        idx,
+        ctx.idx,
         custom_cost["entity_id"],
         "monetary",
         custom_cost["unit_of_measurement"],
         custom_cost["friendly_name"],
         type_var="cost_fun",
-        **kwargs,
+        **ctx.common_kwargs,
     )
     # Optim Status
-    custom_status = params["passed_data"]["custom_optim_status_id"]
-    status_val = opt_res_latest.get("optim_status", "Optimal")
+    custom_status = ctx.params["passed_data"]["custom_optim_status_id"]
     if "optim_status" not in opt_res_latest:
-        logger.warning("no optim_status in opt_res_latest")
-    await rh.post_data(
+        opt_res_latest["optim_status"] = "Optimal"
+        ctx.logger.warning("no optim_status in opt_res_latest")
+    status_val = opt_res_latest["optim_status"]
+    await ctx.rh.post_data(
         status_val,
-        idx,
+        ctx.idx,
         custom_status["entity_id"],
         "",
         "",
         custom_status["friendly_name"],
         type_var="optim_status",
-        **kwargs,
+        **ctx.common_kwargs,
     )
     cols.append("optim_status")
     # Unit Costs
@@ -1886,16 +1873,16 @@ async def _publish_grid_and_costs(
         ("custom_unit_load_cost_id", "unit_load_cost"),
         ("custom_unit_prod_price_id", "unit_prod_price"),
     ]:
-        custom_id = params["passed_data"][key]
-        await rh.post_data(
+        custom_id = ctx.params["passed_data"][key]
+        await ctx.rh.post_data(
             opt_res_latest[var_name],
-            idx,
+            ctx.idx,
             custom_id["entity_id"],
             "monetary",
             custom_id["unit_of_measurement"],
             custom_id["friendly_name"],
             type_var=var_name,
-            **kwargs,
+            **ctx.common_kwargs,
         )
         cols.append(var_name)
     return cols
@@ -1930,7 +1917,6 @@ async def publish_data(
     # Parse Parameters
     params = _get_params(input_data_dict)
     # Check for Entity Publishing (Prefix mode)
-    # If publish_prefix is set and we find matching files, we publish them and return early.
     publish_prefix = params["passed_data"].get("publish_prefix", "")
     if not save_data_to_file and publish_prefix != "" and not dont_post:
         opt_res = await _publish_from_saved_entities(input_data_dict, logger, params)
@@ -1943,47 +1929,27 @@ async def publish_data(
             return None
     # Determine Closest Index
     idx_closest = _get_closest_index(input_data_dict["retrieve_hass_conf"], opt_res_latest.index)
-    # Publish Data Components
-    # Collect columns published to build the return Summary DataFrame
-    cols_published = []
-    # Arguments common to all post_data calls
+    # Create Context
     common_kwargs = {
         "publish_prefix": publish_prefix,
         "save_entities": entity_save,
         "dont_post": dont_post,
     }
-    # Group 1: Standard Forecasts (PV, Load, Curtailment, Hybrid)
-    cols_published.extend(
-        await _publish_standard_forecasts(
-            input_data_dict, opt_res_latest, idx_closest, params, common_kwargs
-        )
+    ctx = PublishContext(
+        input_data_dict=input_data_dict,
+        params=params,
+        idx=idx_closest,
+        common_kwargs=common_kwargs,
+        logger=logger,
     )
-    # Group 2: Deferrable Loads
-    cols_published.extend(
-        await _publish_deferrable_loads(
-            input_data_dict, opt_res_latest, idx_closest, params, common_kwargs, logger
-        )
-    )
-    # Group 3: Thermal Loads (Temperatures & Demand)
-    cols_published.extend(
-        await _publish_thermal_loads(
-            input_data_dict, opt_res_latest, idx_closest, params, common_kwargs, logger
-        )
-    )
-    # Group 4: Battery (Power & SOC)
-    cols_published.extend(
-        await _publish_battery_data(
-            input_data_dict, opt_res_latest, idx_closest, params, common_kwargs, logger
-        )
-    )
-    # Group 5: Grid & Costs (Grid Power, Cost Fun, Status, Unit Costs)
-    cols_published.extend(
-        await _publish_grid_and_costs(
-            input_data_dict, opt_res_latest, idx_closest, params, common_kwargs, logger
-        )
-    )
+    # Publish Data Components
+    cols_published = []
+    cols_published.extend(await _publish_standard_forecasts(ctx, opt_res_latest))
+    cols_published.extend(await _publish_deferrable_loads(ctx, opt_res_latest))
+    cols_published.extend(await _publish_thermal_loads(ctx, opt_res_latest))
+    cols_published.extend(await _publish_battery_data(ctx, opt_res_latest))
+    cols_published.extend(await _publish_grid_and_costs(ctx, opt_res_latest))
     # Return Summary DataFrame
-    # Extract only the published columns for the specific timestep
     opt_res = opt_res_latest[cols_published].loc[[opt_res_latest.index[idx_closest]]]
     return opt_res
 
