@@ -108,6 +108,43 @@ A new feature allows using **InfluxDB** as an alternative data source to the Hom
 
 When `use_influxdb: true` is set, EMHASS will fetch sensor data directly from your InfluxDB instance using the provided connection parameters. The `influxdb_username` and `influxdb_password` are treated as secrets.
 
+If you are using the Influxdb official Home Assistant Add-on, then if you have set the integration via the `configuration.yaml` it will look like this: 
+
+```yaml
+  influxdb:
+  host: xxxxxxxx-influxdb
+  port: 8086
+  database: homeassistant
+  username: !secret influxdb_user
+  password: !secret influxdb_password
+  max_retries: 3
+  default_measurement: state
+  include:
+    domains:
+      - sensor
+```
+
+```{note} 
+
+Here yo need to set your own values for: `xxxxxxxx-influxdb`, `influxdb_user` and `influxdb_password`
+```
+
+Then on the EMHASS configuration you need to set:
+
+```json
+{
+  "influxdb_database": "homeassistant",
+  "influxdb_host": "xxxxxxxx-influxdb",
+  "influxdb_port": 8086,
+  "influxdb_measurement": "state",
+  "influxdb_retention_policy": "autogen",
+  "influxdb_password": "influxdb_password",
+  "influxdb_username": "influxdb_user",
+  "influxdb_use_ssl": false,
+  "influxdb_verify_ssl": false,
+}
+```
+
 
 ## Passing in secret parameters
 Secret parameters are passed differently, depending on which method you choose. Alternative options are also present for passing secrets, if you are running EMHASS separately from Home Assistant. _(I.e. not via EMHASS-Add-on)_ 

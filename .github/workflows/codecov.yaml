@@ -40,7 +40,7 @@ jobs:
           ./codecov -t ${CODECOV_TOKEN}
 
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v7  # <-- Updated to v7 per docs
+        uses: SonarSource/sonarqube-scan-action@v7
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }} #
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

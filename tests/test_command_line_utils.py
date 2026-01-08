@@ -4,7 +4,7 @@ import copy
 import pathlib
 import pickle
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import numpy as np
 import orjson
@@ -25,6 +25,7 @@ from emhass.command_line import (
     publish_data,
     regressor_model_fit,
     regressor_model_predict,
+    retrieve_home_assistant_data,
     set_input_data_dict,
 )
 
@@ -1472,6 +1473,87 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                     result,
                     "Should return valid result using cached model just under threshold",
                 )
+
+    async def test_retrieve_from_hass_naive_mpc(self):
+        """
+        Test the _retrieve_from_hass helper specifically for the 'naive-mpc-optim' path
+        to cover the days_list=1 assignment and debug logging.
+        """
+        # Prepare params to trigger the specific if/else blocks
+        optim_conf = {
+            "set_use_pv": True,
+            "set_use_adjusted_pv": True,  # triggers the nested if/log block
+        }
+        retrieve_hass_conf = {
+            "historic_days_to_retrieve": 2,
+            "sensor_power_load_no_var_loads": "sensor.load",
+            "sensor_power_photovoltaics": "sensor.pv",
+            "sensor_power_photovoltaics_forecast": "sensor.pv_forecast",
+        }
+        # Mock the RetrieveHass object
+        mock_rh = Mock()
+        mock_rh.get_data = AsyncMock(return_value=True)
+        # Mock logger to verify debug call
+        mock_logger = Mock()
+        # Execute
+        success, days_list, _ = await retrieve_home_assistant_data(
+            set_type="naive-mpc-optim",  # triggers the elif set_type == "naive-mpc-optim"
+            get_data_from_file=False,  # triggers _retrieve_from_hass
+            retrieve_hass_conf=retrieve_hass_conf,
+            optim_conf=optim_conf,
+            rh=mock_rh,
+            emhass_conf={},
+            test_df_literal="test.pkl",
+            logger=mock_logger,
+        )
+        # Assertions
+        self.assertTrue(success)
+        # Verify the specific logger path was hit
+        # logger.debug(f"Variable list for data retrieval: {var_list}")
+        mock_logger.debug.assert_called()
+        call_args = str(mock_logger.debug.call_args)
+        self.assertIn("Variable list for data retrieval", call_args)
+
+    async def test_adjust_pv_forecast_generic_exception(self):
+        """
+        Test the catch-all Exception block in adjust_pv_forecast.
+        This simulates a non-pickle/EOF error (like a Runtime error) during model load.
+        """
+        mock_logger = Mock()
+        mock_fcst = Mock()
+        mock_rh = Mock()
+        # 1. Force is_model_outdated to False so it attempts to load
+        # 2. Mock aiofiles to return bytes
+        # 3. Mock pickle.loads to raise a generic Exception (not one of the specific caught ones)
+        with (
+            patch("emhass.command_line.is_model_outdated", return_value=False),
+            patch("emhass.command_line.aiofiles.open") as mock_file,
+            patch("pickle.loads", side_effect=Exception("Generic catastrophe")),
+        ):
+            # Setup mock file context
+            mock_file_handle = AsyncMock()
+            mock_file.return_value.__aenter__.return_value = mock_file_handle
+            mock_file_handle.read.return_value = b"some bytes"
+            # Execute
+            result = await adjust_pv_forecast(
+                logger=mock_logger,
+                fcst=mock_fcst,
+                p_pv_forecast=pd.Series([1, 2]),
+                get_data_from_file=False,
+                retrieve_hass_conf={},
+                optim_conf={"adjusted_pv_model_max_age": 1},
+                rh=mock_rh,
+                emhass_conf={"data_path": "."},
+                test_df_literal=pd.DataFrame(),
+            )
+            # Assertions
+            self.assertFalse(result, "Should return False on generic exception")
+            # Verify we hit the specific exception block
+            # logger.error(f"Unexpected error loading adjusted PV model: ...")
+            # logger.error("Cannot recover from this error")
+            error_logs = [str(call) for call in mock_logger.error.mock_calls]
+            self.assertTrue(any("Unexpected error loading" in log for log in error_logs))
+            self.assertTrue(any("Cannot recover" in log for log in error_logs))
 
 
 if __name__ == "__main__":
