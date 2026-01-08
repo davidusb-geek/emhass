@@ -544,7 +544,7 @@ async def _prepare_naive_mpc_optim(ctx: SetupContext):
     }
 
 
-async def _prepare_ml_fit_predict(ctx: SetupContext, set_type: str):
+async def _prepare_ml_fit_predict(ctx: SetupContext):
     """Helper to prepare data for ML fit/predict/tune."""
     days_to_retrieve = ctx.params["passed_data"]["historic_days_to_retrieve"]
     model_type = ctx.params["passed_data"]["model_type"]
@@ -573,7 +573,7 @@ async def _prepare_ml_fit_predict(ctx: SetupContext, set_type: str):
         return {"df_input_data": ctx.rh.df_final.copy()}
 
 
-async def _prepare_regressor_fit(ctx: SetupContext):
+def _prepare_regressor_fit(ctx: SetupContext):
     """Helper to prepare data for Regressor fit/predict."""
     csv_file = ctx.params["passed_data"].get("csv_file", None)
     if not csv_file:
