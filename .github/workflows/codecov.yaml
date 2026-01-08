@@ -39,21 +39,11 @@ jobs:
           chmod +x codecov
           ./codecov -t ${CODECOV_TOKEN}
 
-      - name: Debug SONAR_TOKEN
-        run: |
-          if [ -z "${SONAR_TOKEN}" ]; then
-            echo "::error::SONAR_TOKEN is EMPTY. The secret is not being passed to the runner."
-            exit 1
-          else
-            echo "SUCCESS: SONAR_TOKEN is set. Length: ${#SONAR_TOKEN}"
-          fi
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v5.0.0
+        uses: SonarSource/sonarqube-scan-action@v7  # <-- Updated to v7 per docs
         env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }} #
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           args: >
             -Dsonar.organization=davidusb-geek
@@ -62,3 +52,4 @@ jobs:
             -Dsonar.sources=./src
             -Dsonar.tests=./tests
             -Dsonar.host.url=https://sonarcloud.io
+            -Dsonar.scanner.skipJreProvisioning=true
