@@ -507,7 +507,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         if default_file_path.exists():
             default_file_path.unlink()
         # Create dummy file with valid structure
-        idx = pd.date_range(end=pd.Timestamp.now(), periods=48, freq="30min")
+        idx = pd.date_range(end=pd.Timestamp.now(), periods=60, freq="30min")
         df_dummy = pd.DataFrame({"sensor.power_load_no_var_loads": [100.0] * 48}, index=idx)
         dummy_data = (df_dummy, None, None, None)
         with default_file_path.open("wb") as f:
@@ -1480,19 +1480,23 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         to cover the days_list=1 assignment and debug logging.
         """
         # Prepare params to trigger the specific if/else blocks
-        optim_conf = {
-            "set_use_pv": True,
-            "set_use_adjusted_pv": True,  # triggers the nested if/log block
-        }
+        optim_conf = {"set_use_pv": True, "set_use_adjusted_pv": True}
         retrieve_hass_conf = {
             "historic_days_to_retrieve": 2,
             "sensor_power_load_no_var_loads": "sensor.load",
             "sensor_power_photovoltaics": "sensor.pv",
             "sensor_power_photovoltaics_forecast": "sensor.pv_forecast",
+            "load_negative": False,
+            "set_zero_min": True,
+            "sensor_replace_zero": [],
+            "sensor_linear_interp": [],
         }
         # Mock the RetrieveHass object
         mock_rh = Mock()
         mock_rh.get_data = AsyncMock(return_value=True)
+        # Mock prepare_data so it doesn't fail if called
+        mock_rh.prepare_data = Mock()
+        mock_rh.df_final = pd.DataFrame()  # Ensure df_final exists for copy()
         # Mock logger to verify debug call
         mock_logger = Mock()
         # Execute
@@ -1509,7 +1513,6 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         # Assertions
         self.assertTrue(success)
         # Verify the specific logger path was hit
-        # logger.debug(f"Variable list for data retrieval: {var_list}")
         mock_logger.debug.assert_called()
         call_args = str(mock_logger.debug.call_args)
         self.assertIn("Variable list for data retrieval", call_args)
