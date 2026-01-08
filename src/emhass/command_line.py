@@ -738,7 +738,7 @@ async def set_input_data_dict(
     elif set_type == "naive-mpc-optim":
         result = await _prepare_naive_mpc_optim(ctx)
     elif set_type in ["forecast-model-fit", "forecast-model-predict", "forecast-model-tune"]:
-        result = await _prepare_ml_fit_predict(ctx, set_type)
+        result = await _prepare_ml_fit_predict(ctx)
     elif set_type in ["regressor-model-fit", "regressor-model-predict"]:
         result = _prepare_regressor_fit(ctx)
     elif set_type == "publish-data" or set_type == "export-influxdb-to-csv":
