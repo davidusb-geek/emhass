@@ -531,7 +531,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             input_data_dict["params"]["passed_data"]["sklearn_model"], "KNeighborsRegressor"
         )
         self.assertIsInstance(input_data_dict["df_input_data"], pd.DataFrame)
-        idx_fresh = pd.date_range(end=pd.Timestamp.now(), periods=48 * 14, freq="30min")
+        idx_fresh = pd.date_range(end=pd.Timestamp.now(), periods=48 * 3, freq="30min")
         df_fresh = pd.DataFrame(
             {"sensor.power_load_no_var_loads": np.random.rand(len(idx_fresh)) * 100},
             index=idx_fresh,

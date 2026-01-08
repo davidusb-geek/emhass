@@ -1275,7 +1275,10 @@ async def forecast_model_tune(
             return None, None
     # Tune the model
     split_date_delta = input_data_dict["params"]["passed_data"]["split_date_delta"]
-    n_trials = input_data_dict["params"]["passed_data"]["n_trials"]
+    if debug:
+        n_trials = 5
+    else:
+        n_trials = input_data_dict["params"]["passed_data"]["n_trials"]
     df_pred_optim = await mlf.tune(
         split_date_delta=split_date_delta, n_trials=n_trials, debug=debug
     )
