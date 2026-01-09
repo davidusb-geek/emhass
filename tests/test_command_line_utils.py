@@ -1521,7 +1521,6 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         params = copy.deepcopy(orjson.loads(self.params_json))
         params["passed_data"]["publish_prefix"] = "test_"
         params_json = orjson.dumps(params).decode("utf-8")
-
         input_data_dict = await set_input_data_dict(
             emhass_conf,
             "profit",
@@ -1531,10 +1530,10 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-
         # Mock os.listdir to return a fake file
         with (
             patch("os.path.isdir", return_value=True),
+            patch("pathlib.Path.exists", return_value=True),
             patch("os.listdir", return_value=["test_entity.json"]),
             patch("emhass.command_line.aiofiles.open") as mock_file,
         ):
@@ -1590,7 +1589,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             get_data_from_file=True,
         )
         # Mock the optimization results DataFrame to include thermal columns
-        idx = pd.date_range(end=pd.Timestamp.now(), periods=1, freq="30min")
+        idx = pd.date_range(end=pd.Timestamp.now(tz="Europe/Paris"), periods=1, freq="30min")
         mock_df = pd.DataFrame(
             {
                 "predicted_temp_heater0": [20.5],
@@ -1619,7 +1618,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         Test logger error paths in _prepare_regressor_fit (missing CSV, missing columns).
         """
         # Case 1: No csv_file in params
-        params = {"passed_data": {}}
+        params = await TestCommandLineAsyncUtils.get_test_params()
+        params["passed_data"] = {}
         params_json = orjson.dumps(params).decode("utf-8")
         # We use set_input_data_dict which calls _prepare_regressor_fit
         # This should return False (failed setup) because csv_file is missing
@@ -1679,6 +1679,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         params = await TestCommandLineAsyncUtils.get_test_params()
         params["optim_conf"]["weather_forecast_method"] = "list"
         params["optim_conf"]["set_use_pv"] = True
+        params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(
+            days=params["optim_conf"]["delta_forecast_daily"]
+        )
         mock_fcst = Mock()
         mock_fcst.forecast_dates = pd.date_range("2024-01-01", periods=1)
         mock_fcst.get_weather_forecast = AsyncMock(return_value=pd.DataFrame())
