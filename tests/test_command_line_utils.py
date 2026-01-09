@@ -1561,19 +1561,14 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             _ = await publish_data(input_data_dict, logger, save_data_to_file=False)
             # Assertions
             # Ensure the file open was attempted (confirms we reached the loop)
-            mock_file.assert_called()
+            mock_file.assert_called_once_with("test_entity.json", mode="r")
             # Verify post_data was called with the data from JSON
-            input_data_dict["rh"].post_data.assert_called()
-            # Robust check: Search for the expected call in the list of calls
-            found_call = False
-            for call in input_data_dict["rh"].post_data.call_args_list:
-                args, _ = call
-                if args[0] == "10.5" and args[2] == "Test Entity":
-                    found_call = True
-                    break
-            self.assertTrue(
-                found_call,
-                "post_data was not called with expected JSON values '10.5' and 'Test Entity'",
+            input_data_dict["rh"].post_data.assert_called_once_with(
+                "test_entity",
+                {
+                    "state": "10.5",
+                    "attributes": {"friendly_name": "Test Entity", "unit_of_measurement": "W"},
+                },
             )
 
     async def test_publish_thermal_loads(self):
