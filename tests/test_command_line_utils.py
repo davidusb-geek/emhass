@@ -1540,8 +1540,6 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         ):
             # Mock file content for publish_json
             mock_file_handle = AsyncMock()
-            mock_file.return_value.__aenter__.return_value = mock_file_handle
-            # JSON content mimicking a HA state object
             fake_content = orjson.dumps(
                 {
                     "state": "10.5",
@@ -1549,6 +1547,11 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 }
             )
             mock_file_handle.read.return_value = fake_content
+            # Setup async context manager properly
+            mock_context = AsyncMock()
+            mock_context.__aenter__.return_value = mock_file_handle
+            mock_context.__aexit__.return_value = None
+            mock_file.return_value = mock_context
             # Mock rh.post_data
             input_data_dict["rh"].post_data = AsyncMock(return_value=True)
             # Execute
@@ -1556,8 +1559,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             # Assertions
             # Verify post_data was called with the data from JSON
             input_data_dict["rh"].post_data.assert_called()
-            # Robust check: Search for the expected call in the list of calls
-            # This handles cases where other calls might have occurred
+            # Robust check
             found_call = False
             for call in input_data_dict["rh"].post_data.call_args_list:
                 args, _ = call
