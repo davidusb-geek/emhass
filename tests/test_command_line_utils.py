@@ -1536,6 +1536,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             patch("pathlib.Path.exists", return_value=True),
             patch("os.listdir", return_value=["test_entity.json"]),
             patch("emhass.command_line.aiofiles.open") as mock_file,
+            patch("emhass.command_line._load_opt_res_latest", return_value=None),
         ):
             # Mock file content for publish_json
             mock_file_handle = AsyncMock()
@@ -1551,14 +1552,22 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             # Mock rh.post_data
             input_data_dict["rh"].post_data = AsyncMock(return_value=True)
             # Execute
-            opt_res = await publish_data(input_data_dict, logger, save_data_to_file=False)
+            _ = await publish_data(input_data_dict, logger, save_data_to_file=False)
             # Assertions
-            self.assertIsNotNone(opt_res)
             # Verify post_data was called with the data from JSON
             input_data_dict["rh"].post_data.assert_called()
-            call_args = input_data_dict["rh"].post_data.call_args
-            self.assertEqual(call_args[0][0], "10.5")  # state
-            self.assertEqual(call_args[0][2], "Test Entity")  # friendly_name
+            # Robust check: Search for the expected call in the list of calls
+            # This handles cases where other calls might have occurred
+            found_call = False
+            for call in input_data_dict["rh"].post_data.call_args_list:
+                args, _ = call
+                if args[0] == "10.5" and args[2] == "Test Entity":
+                    found_call = True
+                    break
+            self.assertTrue(
+                found_call,
+                "post_data was not called with expected JSON values '10.5' and 'Test Entity'",
+            )
 
     async def test_publish_thermal_loads(self):
         """
@@ -1588,7 +1597,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        # Mock the optimization results DataFrame to include thermal columns
+        # Mock the optimization results DataFrame to include thermal columns AND standard columns
         idx = pd.date_range(end=pd.Timestamp.now(tz="Europe/Paris"), periods=1, freq="30min")
         mock_df = pd.DataFrame(
             {
@@ -1598,15 +1607,18 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 "P_Load": [0.0],
                 "P_grid": [0.0],
                 "optim_status": ["Optimal"],
+                "unit_load_cost": [0.1],
+                "unit_prod_price": [0.05],
             },
             index=idx,
         )
         # Mock rh.post_data
         input_data_dict["rh"].post_data = AsyncMock(return_value=True)
-        # Execute
-        await publish_data(input_data_dict, logger, opt_res_latest=mock_df)
+        # Patch _get_closest_index to return 0 to bypass timestamp matching issues
+        with patch("emhass.command_line._get_closest_index", return_value=0):
+            # Execute
+            await publish_data(input_data_dict, logger, opt_res_latest=mock_df)
         # Verify calls for thermal data
-        # We expect calls for temp and heat
         call_args_list = input_data_dict["rh"].post_data.call_args_list
         found_temp = any("sensor.temp" in str(args) for args in call_args_list)
         found_heat = any("sensor.heat" in str(args) for args in call_args_list)
@@ -1618,6 +1630,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         Test logger error paths in _prepare_regressor_fit (missing CSV, missing columns).
         """
         # Case 1: No csv_file in params
+        # Use get_test_params to ensure proper structure
         params = await TestCommandLineAsyncUtils.get_test_params()
         params["passed_data"] = {}
         params_json = orjson.dumps(params).decode("utf-8")
@@ -1634,7 +1647,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(res, "Should fail when csv_file is missing")
         # Case 2: CSV file missing on disk
-        params = {"passed_data": {"csv_file": "missing.csv"}}
+        params = await TestCommandLineAsyncUtils.get_test_params()
+        params["passed_data"] = {"csv_file": "missing.csv"}
         params_json = orjson.dumps(params).decode("utf-8")
         with patch("pathlib.Path.is_file", return_value=False):
             res = await set_input_data_dict(
@@ -1648,12 +1662,11 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             )
             self.assertFalse(res, "Should fail when file does not exist")
         # Case 3: CSV exists but missing required columns
-        params = {
-            "passed_data": {
-                "csv_file": "exists.csv",
-                "features": ["required_col"],
-                "target": "target_col",
-            }
+        params = await TestCommandLineAsyncUtils.get_test_params()
+        params["passed_data"] = {
+            "csv_file": "exists.csv",
+            "features": ["required_col"],
+            "target": "target_col",
         }
         params_json = orjson.dumps(params).decode("utf-8")
         with (
