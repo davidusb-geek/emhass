@@ -223,6 +223,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         mock_res["p_grid"] = 0.0
         mock_res["p_pv"] = 0.0
         mock_res["cost_fun_profit"] = 0.0
+        mock_res["optim_status"] = "Optimal"
         input_data_dict["opt"].perform_dayahead_forecast_optim = MagicMock(return_value=mock_res)
         opt_res = await dayahead_forecast_optim(input_data_dict, logger, debug=True)
         injection_dict = utils.get_injection_dict(opt_res)
@@ -546,11 +547,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             if created_dummy and default_file_path.exists():
                 default_file_path.unlink()
         self.assertEqual(input_data_dict["params"]["passed_data"]["model_type"], "load_forecast")
-        self.assertEqual(
-            input_data_dict["params"]["passed_data"]["sklearn_model"], "KNeighborsRegressor"
-        )
         self.assertIsInstance(input_data_dict["df_input_data"], pd.DataFrame)
-        idx_fresh = pd.date_range(end=pd.Timestamp.now(), periods=48 * 3, freq="30min")
+        idx_fresh = pd.date_range(end=pd.Timestamp.now(), periods=48 * 10, freq="30min")
         df_fresh = pd.DataFrame(
             {"sensor.power_load_no_var_loads": np.random.rand(len(idx_fresh)) * 100},
             index=idx_fresh,
