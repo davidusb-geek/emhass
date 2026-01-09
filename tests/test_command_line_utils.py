@@ -1519,12 +1519,18 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         Test _publish_from_saved_entities and publish_json using a temporary directory.
         This avoids brittle mocking of aiofiles/os/pathlib.
         """
+        import tempfile
+
         # Prepare input data
         params = copy.deepcopy(orjson.loads(self.params_json))
         params["passed_data"]["publish_prefix"] = "test_"
         params_json = orjson.dumps(params).decode("utf-8")
+
+        # Pass a COPY of emhass_conf to avoid polluting global state for other tests
+        local_emhass_conf = copy.deepcopy(emhass_conf)
+
         input_data_dict = await set_input_data_dict(
-            emhass_conf,
+            local_emhass_conf,
             "profit",
             params_json,
             None,
@@ -1532,14 +1538,19 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
+
         # Use a temporary directory to simulate the data folder
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = pathlib.Path(tmpdir)
-            # Update the configuration to point to our temp dir
+
+            # Update the configuration in our local dict to point to our temp dir
+            # This affects only this test execution context
             input_data_dict["emhass_conf"]["data_path"] = tmp_path
+
             # Create the 'entities' folder
             entities_path = tmp_path / "entities"
             entities_path.mkdir()
+
             # Create a real JSON file
             test_content = {
                 "state": "10.5",
@@ -1547,26 +1558,29 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             }
             with open(entities_path / "test_entity.json", "w") as f:
                 json.dump(test_content, f)
+
             # Mock post_data to verify the call
             input_data_dict["rh"].post_data = AsyncMock(return_value=True)
+
             # Patch _load_opt_res_latest to return None.
             # This ensures that if entity publishing fails, we don't fall back to
             # standard CSV publishing (which would confuse our assertions).
             with patch("emhass.command_line._load_opt_res_latest", return_value=None):
                 # Execute
                 _ = await publish_data(input_data_dict, logger, save_data_to_file=False)
+
             # Assertions
             # Verify post_data was called
             input_data_dict["rh"].post_data.assert_called()
+
             # Iterate through calls to find the specific one for our entity.
-            # publish_json calls post_data with:
-            # (state, idx, friendly_name, unit, unit, friendly_name, type_var)
             found_call = False
             for call in input_data_dict["rh"].post_data.call_args_list:
                 args, _ = call
                 if args[0] == "10.5" and args[2] == "Test Entity":
                     found_call = True
                     break
+
             self.assertTrue(
                 found_call,
                 f"post_data was not called with expected JSON values. Calls: {input_data_dict['rh'].post_data.call_args_list}",
