@@ -1521,6 +1521,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         params = copy.deepcopy(orjson.loads(self.params_json))
         params["passed_data"]["publish_prefix"] = "test_"
         params_json = orjson.dumps(params).decode("utf-8")
+
         input_data_dict = await set_input_data_dict(
             emhass_conf,
             "profit",
@@ -1530,7 +1531,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
+
         # Mock os.listdir to return a fake file
+        # Patch _load_opt_res_latest to return None so we don't fall back to CSV if entity publish fails
         with (
             patch("os.path.isdir", return_value=True),
             patch("pathlib.Path.exists", return_value=True),
@@ -1538,8 +1541,9 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             patch("emhass.command_line.aiofiles.open") as mock_file,
             patch("emhass.command_line._load_opt_res_latest", return_value=None),
         ):
-            # Mock file content for publish_json
+            # 1. Setup the file handle (what 'as inp' receives)
             mock_file_handle = AsyncMock()
+            # JSON content mimicking a HA state object
             fake_content = orjson.dumps(
                 {
                     "state": "10.5",
@@ -1547,25 +1551,36 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
                 }
             )
             mock_file_handle.read.return_value = fake_content
-            # Setup async context manager properly
-            mock_context = AsyncMock()
-            mock_context.__aenter__.return_value = mock_file_handle
-            mock_context.__aexit__.return_value = None
+
+            # 2. Setup the context manager (what 'open()' returns)
+            # aiofiles.open() returns an object that has async __aenter__ and __aexit__
+            mock_context = MagicMock()
+            mock_context.__aenter__ = AsyncMock(return_value=mock_file_handle)
+            mock_context.__aexit__ = AsyncMock(return_value=None)
+
             mock_file.return_value = mock_context
+
             # Mock rh.post_data
             input_data_dict["rh"].post_data = AsyncMock(return_value=True)
+
             # Execute
-            _ = await publish_data(input_data_dict, logger, save_data_to_file=False)
+            opt_res = await publish_data(input_data_dict, logger, save_data_to_file=False)
+
             # Assertions
+            # Ensure the file open was attempted (confirms we reached the loop)
+            mock_file.assert_called()
+
             # Verify post_data was called with the data from JSON
             input_data_dict["rh"].post_data.assert_called()
-            # Robust check
+
+            # Robust check: Search for the expected call in the list of calls
             found_call = False
             for call in input_data_dict["rh"].post_data.call_args_list:
                 args, _ = call
                 if args[0] == "10.5" and args[2] == "Test Entity":
                     found_call = True
                     break
+
             self.assertTrue(
                 found_call,
                 "post_data was not called with expected JSON values '10.5' and 'Test Entity'",
