@@ -1513,133 +1513,116 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(any("Unexpected error loading" in log for log in error_logs))
             self.assertTrue(any("Cannot recover" in log for log in error_logs))
 
+    async def test_publish_from_saved_entities_and_json(self):
+        """
+        Test _publish_from_saved_entities and publish_json.
+        """
+        # Prepare input data
+        params = copy.deepcopy(orjson.loads(self.params_json))
+        params["passed_data"]["publish_prefix"] = "test_"
+        params_json = orjson.dumps(params).decode("utf-8")
 
-async def test_publish_from_saved_entities_and_json(self):
-    """
-    Test _publish_from_saved_entities and publish_json.
-    """
-    # Prepare input data
-    params = copy.deepcopy(orjson.loads(self.params_json))
-    params["passed_data"]["publish_prefix"] = "test_"
-    params_json = orjson.dumps(params).decode("utf-8")
-
-    input_data_dict = await set_input_data_dict(
-        emhass_conf,
-        "profit",
-        params_json,
-        None,
-        "publish-data",
-        logger,
-        get_data_from_file=True,
-    )
-
-    # Mock os.listdir to return a fake file
-    with (
-        patch("os.path.isdir", return_value=True),
-        patch("os.listdir", return_value=["test_entity.json"]),
-        patch("emhass.command_line.aiofiles.open") as mock_file,
-    ):
-        # Mock file content for publish_json
-        mock_file_handle = AsyncMock()
-        mock_file.return_value.__aenter__.return_value = mock_file_handle
-        # JSON content mimicking a HA state object
-        fake_content = orjson.dumps(
-            {
-                "state": "10.5",
-                "attributes": {"friendly_name": "Test Entity", "unit_of_measurement": "W"},
-            }
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            "profit",
+            params_json,
+            None,
+            "publish-data",
+            logger,
+            get_data_from_file=True,
         )
-        mock_file_handle.read.return_value = fake_content
+
+        # Mock os.listdir to return a fake file
+        with (
+            patch("os.path.isdir", return_value=True),
+            patch("os.listdir", return_value=["test_entity.json"]),
+            patch("emhass.command_line.aiofiles.open") as mock_file,
+        ):
+            # Mock file content for publish_json
+            mock_file_handle = AsyncMock()
+            mock_file.return_value.__aenter__.return_value = mock_file_handle
+            # JSON content mimicking a HA state object
+            fake_content = orjson.dumps(
+                {
+                    "state": "10.5",
+                    "attributes": {"friendly_name": "Test Entity", "unit_of_measurement": "W"},
+                }
+            )
+            mock_file_handle.read.return_value = fake_content
+            # Mock rh.post_data
+            input_data_dict["rh"].post_data = AsyncMock(return_value=True)
+            # Execute
+            opt_res = await publish_data(input_data_dict, logger, save_data_to_file=False)
+            # Assertions
+            self.assertIsNotNone(opt_res)
+            # Verify post_data was called with the data from JSON
+            input_data_dict["rh"].post_data.assert_called()
+            call_args = input_data_dict["rh"].post_data.call_args
+            self.assertEqual(call_args[0][0], "10.5")  # state
+            self.assertEqual(call_args[0][2], "Test Entity")  # friendly_name
+
+    async def test_publish_thermal_loads(self):
+        """
+        Test _publish_thermal_loads with a configured thermal load.
+        """
+        # Setup thermal config in optim_conf
+        params = await TestCommandLineAsyncUtils.get_test_params()
+        params["optim_conf"]["def_load_config"] = [{"thermal_config": {"model_type": "ideal"}}]
+        params["optim_conf"]["number_of_deferrable_loads"] = 1
+        # Setup passed_data with thermal IDs
+        runtimeparams = {
+            "custom_predicted_temperature_id": [
+                {"entity_id": "sensor.temp", "unit_of_measurement": "C", "friendly_name": "Temp"}
+            ],
+            "custom_heating_demand_id": [
+                {"entity_id": "sensor.heat", "unit_of_measurement": "W", "friendly_name": "Heat"}
+            ],
+        }
+        params["passed_data"] = runtimeparams
+        params_json = orjson.dumps(params).decode("utf-8")
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            "profit",
+            params_json,
+            None,
+            "publish-data",
+            logger,
+            get_data_from_file=True,
+        )
+        # Mock the optimization results DataFrame to include thermal columns
+        idx = pd.date_range(end=pd.Timestamp.now(), periods=1, freq="30min")
+        mock_df = pd.DataFrame(
+            {
+                "predicted_temp_heater0": [20.5],
+                "heating_demand_heater0": [1000.0],
+                "P_PV": [0.0],
+                "P_Load": [0.0],
+                "P_grid": [0.0],
+                "optim_status": ["Optimal"],
+            },
+            index=idx,
+        )
         # Mock rh.post_data
         input_data_dict["rh"].post_data = AsyncMock(return_value=True)
         # Execute
-        opt_res = await publish_data(input_data_dict, logger, save_data_to_file=False)
-        # Assertions
-        self.assertIsNotNone(opt_res)
-        # Verify post_data was called with the data from JSON
-        input_data_dict["rh"].post_data.assert_called()
-        call_args = input_data_dict["rh"].post_data.call_args
-        self.assertEqual(call_args[0][0], "10.5")  # state
-        self.assertEqual(call_args[0][2], "Test Entity")  # friendly_name
+        await publish_data(input_data_dict, logger, opt_res_latest=mock_df)
+        # Verify calls for thermal data
+        # We expect calls for temp and heat
+        call_args_list = input_data_dict["rh"].post_data.call_args_list
+        found_temp = any("sensor.temp" in str(args) for args in call_args_list)
+        found_heat = any("sensor.heat" in str(args) for args in call_args_list)
+        self.assertTrue(found_temp, "Should publish predicted temperature")
+        self.assertTrue(found_heat, "Should publish heating demand")
 
-
-async def test_publish_thermal_loads(self):
-    """
-    Test _publish_thermal_loads with a configured thermal load.
-    """
-    # Setup thermal config in optim_conf
-    params = await TestCommandLineAsyncUtils.get_test_params()
-    params["optim_conf"]["def_load_config"] = [{"thermal_config": {"model_type": "ideal"}}]
-    params["optim_conf"]["number_of_deferrable_loads"] = 1
-    # Setup passed_data with thermal IDs
-    runtimeparams = {
-        "custom_predicted_temperature_id": [
-            {"entity_id": "sensor.temp", "unit_of_measurement": "C", "friendly_name": "Temp"}
-        ],
-        "custom_heating_demand_id": [
-            {"entity_id": "sensor.heat", "unit_of_measurement": "W", "friendly_name": "Heat"}
-        ],
-    }
-    params["passed_data"] = runtimeparams
-    params_json = orjson.dumps(params).decode("utf-8")
-    input_data_dict = await set_input_data_dict(
-        emhass_conf,
-        "profit",
-        params_json,
-        None,
-        "publish-data",
-        logger,
-        get_data_from_file=True,
-    )
-    # Mock the optimization results DataFrame to include thermal columns
-    idx = pd.date_range(end=pd.Timestamp.now(), periods=1, freq="30min")
-    mock_df = pd.DataFrame(
-        {
-            "predicted_temp_heater0": [20.5],
-            "heating_demand_heater0": [1000.0],
-            "P_PV": [0.0],
-            "P_Load": [0.0],
-            "P_grid": [0.0],
-            "optim_status": ["Optimal"],
-        },
-        index=idx,
-    )
-    # Mock rh.post_data
-    input_data_dict["rh"].post_data = AsyncMock(return_value=True)
-    # Execute
-    await publish_data(input_data_dict, logger, opt_res_latest=mock_df)
-    # Verify calls for thermal data
-    # We expect calls for temp and heat
-    call_args_list = input_data_dict["rh"].post_data.call_args_list
-    found_temp = any("sensor.temp" in str(args) for args in call_args_list)
-    found_heat = any("sensor.heat" in str(args) for args in call_args_list)
-    self.assertTrue(found_temp, "Should publish predicted temperature")
-    self.assertTrue(found_heat, "Should publish heating demand")
-
-
-async def test_regressor_preparation_errors(self):
-    """
-    Test logger error paths in _prepare_regressor_fit (missing CSV, missing columns).
-    """
-    # Case 1: No csv_file in params
-    params = {"passed_data": {}}
-    params_json = orjson.dumps(params).decode("utf-8")
-    # We use set_input_data_dict which calls _prepare_regressor_fit
-    # This should return False (failed setup) because csv_file is missing
-    res = await set_input_data_dict(
-        emhass_conf,
-        "profit",
-        params_json,
-        None,
-        "regressor-model-fit",
-        logger,
-        get_data_from_file=True,
-    )
-    self.assertFalse(res, "Should fail when csv_file is missing")
-    # Case 2: CSV file missing on disk
-    params = {"passed_data": {"csv_file": "missing.csv"}}
-    params_json = orjson.dumps(params).decode("utf-8")
-    with patch("pathlib.Path.is_file", return_value=False):
+    async def test_regressor_preparation_errors(self):
+        """
+        Test logger error paths in _prepare_regressor_fit (missing CSV, missing columns).
+        """
+        # Case 1: No csv_file in params
+        params = {"passed_data": {}}
+        params_json = orjson.dumps(params).decode("utf-8")
+        # We use set_input_data_dict which calls _prepare_regressor_fit
+        # This should return False (failed setup) because csv_file is missing
         res = await set_input_data_dict(
             emhass_conf,
             "profit",
@@ -1649,65 +1632,78 @@ async def test_regressor_preparation_errors(self):
             logger,
             get_data_from_file=True,
         )
-        self.assertFalse(res, "Should fail when file does not exist")
-    # Case 3: CSV exists but missing required columns
-    params = {
-        "passed_data": {
-            "csv_file": "exists.csv",
-            "features": ["required_col"],
-            "target": "target_col",
+        self.assertFalse(res, "Should fail when csv_file is missing")
+        # Case 2: CSV file missing on disk
+        params = {"passed_data": {"csv_file": "missing.csv"}}
+        params_json = orjson.dumps(params).decode("utf-8")
+        with patch("pathlib.Path.is_file", return_value=False):
+            res = await set_input_data_dict(
+                emhass_conf,
+                "profit",
+                params_json,
+                None,
+                "regressor-model-fit",
+                logger,
+                get_data_from_file=True,
+            )
+            self.assertFalse(res, "Should fail when file does not exist")
+        # Case 3: CSV exists but missing required columns
+        params = {
+            "passed_data": {
+                "csv_file": "exists.csv",
+                "features": ["required_col"],
+                "target": "target_col",
+            }
         }
-    }
-    params_json = orjson.dumps(params).decode("utf-8")
-    with (
-        patch("pathlib.Path.is_file", return_value=True),
-        patch("pandas.read_csv", return_value=pd.DataFrame({"wrong_col": [1]})),
-    ):
-        res = await set_input_data_dict(
-            emhass_conf,
-            "profit",
-            params_json,
-            None,
-            "regressor-model-fit",
-            logger,
-            get_data_from_file=True,
+        params_json = orjson.dumps(params).decode("utf-8")
+        with (
+            patch("pathlib.Path.is_file", return_value=True),
+            patch("pandas.read_csv", return_value=pd.DataFrame({"wrong_col": [1]})),
+        ):
+            res = await set_input_data_dict(
+                emhass_conf,
+                "profit",
+                params_json,
+                None,
+                "regressor-model-fit",
+                logger,
+                get_data_from_file=True,
+            )
+            self.assertFalse(res, "Should fail when columns are missing")
+
+    async def test_weather_forecast_methods(self):
+        """
+        Test logic in _get_dayahead_pv_forecast regarding weather method switching.
+        """
+        # Test Method = List (should skip normal weather forecast fetch)
+        params = await TestCommandLineAsyncUtils.get_test_params()
+        params["optim_conf"]["weather_forecast_method"] = "list"
+        params["optim_conf"]["set_use_pv"] = True
+        mock_fcst = Mock()
+        mock_fcst.forecast_dates = pd.date_range("2024-01-01", periods=1)
+        mock_fcst.get_weather_forecast = AsyncMock(return_value=pd.DataFrame())
+        mock_fcst.get_power_from_weather = Mock(return_value=pd.Series([0]))
+        mock_fcst.get_load_forecast = AsyncMock(return_value=pd.Series([0]))
+        # Create SetupContext manually to bypass set_input_data_dict complexity
+        ctx = SetupContext(
+            retrieve_hass_conf=params["retrieve_hass_conf"],
+            optim_conf=params["optim_conf"],
+            plant_conf={},
+            emhass_conf=emhass_conf,
+            params=params,
+            logger=logger,
+            get_data_from_file=False,
+            rh=Mock(),
+            fcst=mock_fcst,
         )
-        self.assertFalse(res, "Should fail when columns are missing")
-
-
-async def test_weather_forecast_methods(self):
-    """
-    Test logic in _get_dayahead_pv_forecast regarding weather method switching.
-    """
-    # Test Method = List (should skip normal weather forecast fetch)
-    params = await TestCommandLineAsyncUtils.get_test_params()
-    params["optim_conf"]["weather_forecast_method"] = "list"
-    params["optim_conf"]["set_use_pv"] = True
-    mock_fcst = Mock()
-    mock_fcst.forecast_dates = pd.date_range("2024-01-01", periods=1)
-    mock_fcst.get_weather_forecast = AsyncMock(return_value=pd.DataFrame())
-    mock_fcst.get_power_from_weather = Mock(return_value=pd.Series([0]))
-    mock_fcst.get_load_forecast = AsyncMock(return_value=pd.Series([0]))
-    # Create SetupContext manually to bypass set_input_data_dict complexity
-    ctx = SetupContext(
-        retrieve_hass_conf=params["retrieve_hass_conf"],
-        optim_conf=params["optim_conf"],
-        plant_conf={},
-        emhass_conf=emhass_conf,
-        params=params,
-        logger=logger,
-        get_data_from_file=False,
-        rh=Mock(),
-        fcst=mock_fcst,
-    )
-    await _prepare_dayahead_optim(ctx)
-    # get_weather_forecast should be called with method='list'
-    mock_fcst.get_weather_forecast.assert_called_with(method="list")
-    # Test Method != List (e.g. scrapper), ensuring it returns None if weather fails
-    ctx.optim_conf["weather_forecast_method"] = "scrapper"
-    mock_fcst.get_weather_forecast = AsyncMock(return_value=False)  # Simulate failure
-    res = await _prepare_dayahead_optim(ctx)
-    self.assertIsNone(res, "Should return None if weather forecast fails")
+        await _prepare_dayahead_optim(ctx)
+        # get_weather_forecast should be called with method='list'
+        mock_fcst.get_weather_forecast.assert_called_with(method="list")
+        # Test Method != List (e.g. scrapper), ensuring it returns None if weather fails
+        ctx.optim_conf["weather_forecast_method"] = "scrapper"
+        mock_fcst.get_weather_forecast = AsyncMock(return_value=False)  # Simulate failure
+        res = await _prepare_dayahead_optim(ctx)
+        self.assertIsNone(res, "Should return None if weather forecast fails")
 
 
 if __name__ == "__main__":
