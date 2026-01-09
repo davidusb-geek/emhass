@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import copy
+import json
 import os
 import pathlib
 import pickle
@@ -1515,7 +1516,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
 
     async def test_publish_from_saved_entities_and_json(self):
         """
-        Test _publish_from_saved_entities and publish_json.
+        Test _publish_from_saved_entities and publish_json using a temporary directory.
+        This avoids brittle mocking of aiofiles/os/pathlib.
         """
         # Prepare input data
         params = copy.deepcopy(orjson.loads(self.params_json))
@@ -1530,45 +1532,44 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        # Mock os.listdir to return a fake file
-        # Patch _load_opt_res_latest to return None so we don't fall back to CSV if entity publish fails
-        with (
-            patch("os.path.isdir", return_value=True),
-            patch("pathlib.Path.exists", return_value=True),
-            patch("os.listdir", return_value=["test_entity.json"]),
-            patch("emhass.command_line.aiofiles.open") as mock_file,
-            patch("emhass.command_line._load_opt_res_latest", return_value=None),
-        ):
-            # Setup the file handle (what 'as inp' receives)
-            mock_file_handle = AsyncMock()
-            # JSON content mimicking a HA state object
-            fake_content = orjson.dumps(
-                {
-                    "state": "10.5",
-                    "attributes": {"friendly_name": "Test Entity", "unit_of_measurement": "W"},
-                }
-            )
-            mock_file_handle.read.return_value = fake_content
-            # Setup the context manager (what 'open()' returns)
-            # aiofiles.open() returns an object that has async __aenter__ and __aexit__
-            mock_context = MagicMock()
-            mock_context.__aenter__ = AsyncMock(return_value=mock_file_handle)
-            mock_context.__aexit__ = AsyncMock(return_value=None)
-            mock_file.return_value = mock_context
-            # Mock rh.post_data
+        # Use a temporary directory to simulate the data folder
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = pathlib.Path(tmpdir)
+            # Update the configuration to point to our temp dir
+            input_data_dict["emhass_conf"]["data_path"] = tmp_path
+            # Create the 'entities' folder
+            entities_path = tmp_path / "entities"
+            entities_path.mkdir()
+            # Create a real JSON file
+            test_content = {
+                "state": "10.5",
+                "attributes": {"friendly_name": "Test Entity", "unit_of_measurement": "W"},
+            }
+            with open(entities_path / "test_entity.json", "w") as f:
+                json.dump(test_content, f)
+            # Mock post_data to verify the call
             input_data_dict["rh"].post_data = AsyncMock(return_value=True)
-            # Execute
-            _ = await publish_data(input_data_dict, logger, save_data_to_file=False)
+            # Patch _load_opt_res_latest to return None.
+            # This ensures that if entity publishing fails, we don't fall back to
+            # standard CSV publishing (which would confuse our assertions).
+            with patch("emhass.command_line._load_opt_res_latest", return_value=None):
+                # Execute
+                _ = await publish_data(input_data_dict, logger, save_data_to_file=False)
             # Assertions
-            # Ensure the file open was attempted (confirms we reached the loop)
-            mock_file.assert_called_once_with("test_entity.json", mode="r")
-            # Verify post_data was called with the data from JSON
-            input_data_dict["rh"].post_data.assert_called_once_with(
-                "test_entity",
-                {
-                    "state": "10.5",
-                    "attributes": {"friendly_name": "Test Entity", "unit_of_measurement": "W"},
-                },
+            # Verify post_data was called
+            input_data_dict["rh"].post_data.assert_called()
+            # Iterate through calls to find the specific one for our entity.
+            # publish_json calls post_data with:
+            # (state, idx, friendly_name, unit, unit, friendly_name, type_var)
+            found_call = False
+            for call in input_data_dict["rh"].post_data.call_args_list:
+                args, _ = call
+                if args[0] == "10.5" and args[2] == "Test Entity":
+                    found_call = True
+                    break
+            self.assertTrue(
+                found_call,
+                f"post_data was not called with expected JSON values. Calls: {input_data_dict['rh'].post_data.call_args_list}",
             )
 
     async def test_publish_thermal_loads(self):
