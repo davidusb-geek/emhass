@@ -845,8 +845,9 @@ class Forecast:
         from the target variable (y).
 
         :param data: A DataFrame containing the actual PV production data and the
-        forecasted PV production data.
+            forecasted PV production data.
         :type data: pd.DataFrame
+        :return: DataFrame with data for adjusted PV model train.
         """
         # Extract target and predictor
         self.logger.debug("adjust_pv_forecast_data_prep using data:\n%s", data)

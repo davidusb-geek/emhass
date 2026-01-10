@@ -148,7 +148,9 @@ def calculate_cop_heatpump(
     Calculate heat pump Coefficient of Performance (COP) for each timestep in the prediction horizon.
 
     The COP is calculated using a Carnot-based formula:
-    COP(h) = carnot_efficiency × T_supply_K / |T_supply_K - T_outdoor_K(h)|
+
+    .. math::
+        COP(h) = \eta_{carnot} \times \frac{T_{supply\_K}}{|T_{supply\_K} - T_{outdoor\_K}(h)|}
 
     Where temperatures are converted to Kelvin (K = °C + 273.15).
 

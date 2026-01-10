@@ -56,18 +56,19 @@ You can define the following parameters inside the `thermal_config` dictionary:
 It is recommended to use `min_temperatures` and `max_temperatures` to define a "Comfort Range". This allows the optimizer to "float" the temperature within this range to find the cheapest time to operate, resulting in clear On/Off blocks.
 
 For example, if we have just **two** deferrable loads and the **second** load is a **thermal load** (functioning as a heater) then we will define `def_load_config` as:
+
 ```json
-'def_load_config': {
+"def_load_config": [
     {},
-    {'thermal_config': {
-        'heating_rate': 5.0,
-        'cooling_constant': 0.1,
-        'overshoot_temperature': 24.0,
-        'start_temperature': 20,
-        'sense': 'heat',
-        'desired_temperatures': [...]
+    {"thermal_config": {
+        "heating_rate": 5.0,
+        "cooling_constant": 0.1,
+        "overshoot_temperature": 24.0,
+        "start_temperature": 20,
+        "sense": "heat",
+        "desired_temperatures": [20, 21, 20, 19]
     }}
-}
+]
 ```
 
 Here the desired_temperatures is a list of float values for each time step.

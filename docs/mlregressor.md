@@ -29,7 +29,7 @@ Some parameters can be optionally defined at runtime:
 - `date_features`: A list of 'date_features' to take into account when fitting the model. Possibilities are `year`, `month`, `day_of_week` (monday=0, sunday=6), `day_of_year`, `day`(day_of_month) and `hour`
 
 ### Examples: 
-```yaml
+```python
 runtimeparams = {
     "csv_file": "heating_prediction.csv",
     "features": ["degreeday", "solar"],
@@ -96,7 +96,7 @@ The list of parameters needed to set the data publish task is:
 - `model_type`: The model type that has to be predicted
 
 ### Examples: 
-```yaml
+```python
 runtimeparams = {
     "mlr_predict_entity_id": "sensor.mlr_predict",
     "mlr_predict_unit_of_measurement": None,

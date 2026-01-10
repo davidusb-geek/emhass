@@ -100,7 +100,7 @@ Installation instructions and example Home Assistant automation configurations a
 You must follow these steps to make EMHASS work properly:
 
 1) Install and run EMHASS.
-    - There are multiple methods of installing and Running EMHASS. See [Installation Method](#Installation-Methods) below to pick a method that best suits your use case.
+    - There are multiple methods of installing and Running EMHASS. See [Installation Method](https://emhass.readthedocs.io/en/latest/intro.html#installation-methods) below to pick a method that best suits your use case.
 
 2) Define all the parameters in the configuration file *(`config.json`)* or configuration page *(`YOURIP:5000/configuration`)*.
     - Since EMHASS v0.12.0: the default configuration does not need to retrieve any data from Home Assistant! After installing and running the add-on, EMHASS should start and it will be ready to launch an optimization.
@@ -114,10 +114,10 @@ You must follow these steps to make EMHASS work properly:
     - Or with a `curl` command like this: `curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/dayahead-optim`.
 
 5) If you’re satisfied with the optimization results then you can set the optimization and data publish task commands in an automation. 
-    - You can read more about this in the [usage](#usage) section below.
+    - You can read more about this in the [usage](https://emhass.readthedocs.io/en/latest/intro.html#usage) section below.
 
 6) The final step is to link the deferrable loads variables to real switches on your installation. 
-    - An example code for this using automations and the shell command integration is presented below in the [usage](#usage) section.
+    - An example code for this using automations and the shell command integration is presented below in the [usage](https://emhass.readthedocs.io/en/latest/intro.html#usage) section.
 
 A more detailed workflow is given below:
 
@@ -345,9 +345,9 @@ in configuration page/`config.json`
 In this automation, the day-ahead optimization is performed once a day, every day at 5:30am. 
 If the `optimization_time_step` parameter is set to `30` *(default)* in the configuration, the results of the day-ahead optimization will generate 48 values *(for each entity)*, a value for every 30 minutes in a day *(i.e. 24 hrs x 2)*.
 
-Setting the parameter `continual_publish` to `true` in the configuration page will allow EMHASS to store the optimization results as entities/sensors into separate json files. `continual_publish` will periodically (every `optimization_time_step` amount of minutes) run a publish, and publish the optimization results of each generated entities/sensors to Home Assistant. The current state of the sensor/entity being updated every time publish runs, selecting one of the 48 stored values, by comparing the stored values' timestamps, the current timestamp and [`'method_ts_round': "first"`](#the-publish-data-specificities) to select the optimal stored value for the current state.
+Setting the parameter `continual_publish` to `true` in the configuration page will allow EMHASS to store the optimization results as entities/sensors into separate json files. `continual_publish` will periodically (every `optimization_time_step` amount of minutes) run a publish, and publish the optimization results of each generated entities/sensors to Home Assistant. The current state of the sensor/entity being updated every time publish runs, selecting one of the 48 stored values, by comparing the stored values' timestamps, the current timestamp and [`'method_ts_round': "first"`](https://emhass.readthedocs.io/en/latest/publish_data.html#the-publish-data-specificities) to select the optimal stored value for the current state.
 
-option 1 and 2 are very similar, however, option 2 (`continual_publish`) will require a CPU thread to constantly be run inside of EMHASS, lowering efficiency. The reason why you may pick one over the other is explained in more detail below in [continual_publish](#continual_publish-emhass-automation).
+option 1 and 2 are very similar, however, option 2 (`continual_publish`) will require a CPU thread to constantly be run inside of EMHASS, lowering efficiency. The reason why you may pick one over the other is explained in more detail below in [continual_publish](https://emhass.readthedocs.io/en/latest/publish_data.html#continual-publish-emhass-automation).
 
 Lastly, we can link an EMHASS published entity/sensor's current state to a Home Assistant entity on/off switch, controlling a desired controllable load. 
 For example, imagine that I want to control my water heater. I can use a published `deferrable` EMHASS entity to control my water heater's desired behavior. In this case, we could use an automation like the below, to control the desired water heater on and off:
