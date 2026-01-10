@@ -31,11 +31,11 @@ For the PV production selling price and Load cost forecasts the privileged metho
 
 ## PV power production forecast
 
-#### open-meteo 
+### open-meteo 
 
 The default method for PV power forecast is the weather forecast API proposed by [Open-Meteo](https://open-meteo.com/). For more detail see the [Open-Meteo API documentation](https://open-meteo.com/en/docs). This is obtained using `method=open-meteo`. This site proposes detailed forecasts based on Lat/Lon locations. The weather forecast data is then converted into PV power production using the `list_pv_module_model` and `list_pv_inverter_model` parameters defined in the configuration.
 
-#### solcast 
+### solcast 
 
 The second method uses the Solcast solar forecast service. Go to [https://solcast.com/](https://solcast.com/) and configure your system. You will need to set `method=solcast` and use two parameters `solcast_rooftop_id` and `solcast_api_key` that should be passed as parameters at runtime or provided in the configuration/secrets. The free hobbyist account will be limited to 10 API requests per day, the granularity will be 30 minutes and the forecast will be updated every 6 hours. If needed, better performances may be obtained with paid plans: [https://solcast.com/pricing/live-and-forecast](https://solcast.com/pricing/live-and-forecast).
 
@@ -52,7 +52,7 @@ curl -i -H "Content-Type:application/json" -X POST -d '{
 }' http://localhost:5000/action/dayahead-optim
 ```
 
-#### solar.forecast 
+### solar.forecast 
 
 A third method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the PV peak installed power in kW) that should be passed at runtime. This will be using the free public Solar.Forecast account with 12 API requests per hour, per IP, and 1h data resolution. As with Solcast, there are paid account services that may result in better forecasts.
 
@@ -68,7 +68,7 @@ curl -i -H "Content-Type:application/json" -X POST -d '{
 If you use the Solar.Forecast or Solcast methods, or explicitly pass the PV power forecast values (see below), the list_pv_module_model and list_pv_inverter_model parameters defined in the configuration will be ignored.
 ```
 
-#### Caching PV Forecast
+### Caching PV Forecast
 For the MPC users, running optimizations regularly; You may wish to cache your PV forecast results, to reuse throughout the day.
 Partially for those who use the free plan of Solcast, Caching can help reduce the amount of calls bellow 10 a day.
 Caching Forecast data will also speed up the forecast process, bypassing the need to call to the external forecast API each MPC run. 
@@ -102,7 +102,7 @@ curl -i -H 'Content-Type:application/json' -X POST -d '{
 }' http://localhost:5000/action/naive-mpc-optim
 ```
 
-#### Caching Open-Meteo Weather Service Usage
+### Caching Open-Meteo Weather Service Usage
 
 When you have EMHASS configured to use the Open-Meteo weather service, to minimize API calls to the service, and to provide
 resilience in case of transient connectivity issues, EMHASS caches successful calls to the Open-Meteo API in a
@@ -114,7 +114,7 @@ will continue to be used until a new version can been fetched. The maximum cache
 configured using the `open_meteo_cache_max_age` setting in config.json or as a parameter in EMHASS REST API calls.
 The value is specified in minutes. If you want to disable caching you can specify a value of 0.
 
-#### Adjusting PV Forecasts using machine learning
+### Adjusting PV Forecasts using machine learning
 EMHASS provides methods to adjust the PV power forecast using machine learning regression techniques. The adjustment process consists of two steps: training a regression model using historical PV data and then applying the trained model to correct new PV forecasts.
 
 This functionality may help to **fine-tune** the PV prediction and model some local behavior of your PV production such as: tree shading, under-production due to dust/dirt, curtailment events, local micro-weather conditions, etc.
@@ -125,7 +125,7 @@ The **Model Training** uses the `adjust_pv_forecast_fit` method in the `Forecast
 
 The actual **Forecast Adjustment** is performed by the `adjust_pv_forecast_predict` method. This method applies the trained regression model to adjust PV forecast data. Before making predictions, the method enhances the data by adding date-based and solar-related features. It then uses the trained model to predict the adjusted forecast. A correction is applied based on solar elevation to prevent negative or unrealistic values, ensuring that the adjusted forecast remains physically meaningful. The correction based on solar elevation can be parametrized using a threshold value with parameter `adjusted_pv_solar_elevation_threshold` from the configuration.
 
-#### Model Caching for Performance Optimization
+### Model Caching for Performance Optimization
 
 To improve performance and reduce unnecessary Home Assistant API calls, EMHASS implements a model caching mechanism for the adjusted PV forecast regression model. Instead of re-training the model on every optimization run, EMHASS saves the trained model to disk and reuses it if it's still fresh.
 
@@ -279,13 +279,12 @@ automatically
 - Timezone aware: Timestamps are parsed and converted to your configured timezone
 
 Format:
-```bash
+```json
 {
 	"load_cost_forecast": {
 		"2025-10-16 10:00:00+00:00": 0.25,
 		"2025-10-16 11:00:00+00:00": 0.28,
-		"2025-10-16 12:00:00+00:00": 0.23,
-		...
+		"2025-10-16 12:00:00+00:00": 0.23
 	}
 }
 ```

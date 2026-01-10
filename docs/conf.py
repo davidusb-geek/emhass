@@ -19,7 +19,7 @@ for x in os.walk("../src/"):
 # -- Project information -----------------------------------------------------
 
 project = "emhass"
-copyright = "2021-2025, David HERNANDEZ"
+copyright = "2021-2026, David HERNANDEZ"
 author = "David HERNANDEZ"
 
 # The full version, including alpha/beta/rc tags
@@ -27,14 +27,18 @@ release = "0.15.3"
 
 # -- General configuration ---------------------------------------------------
 
+# Enable linking to specific headers (anchors)
+myst_heading_anchors = 3
+
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ["sphinx.ext.autodoc", "myst_parser"]
+extensions = ["sphinx.ext.autodoc", "myst_parser", "sphinx_design"]
 
 myst_enable_extensions = [
     "amsmath",
     "dollarmath",
+    "colon_fence",
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -51,12 +55,30 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = "sphinx_rtd_theme"
+html_theme = "pydata_sphinx_theme"
+
+html_theme_options = {
+    "show_toc_level": 2,
+    "header_links_before_dropdown": 6,
+    "navbar_align": "left",
+    # Add your GitHub repo link if you have one
+    "icon_links": [
+        {
+            "name": "GitHub",
+            "url": "https://github.com/davidusb-geek/emhass",
+            "icon": "fa-brands fa-github",
+        },
+    ],
+    "logo": {
+        "image_light": "images/emhass_logo.png",
+        "image_dark": "images/emhass_logo.png",
+    },
+}
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ["_static"]
+# html_static_path = ["_static"]
 ## EMHASS custom theme
 html_css_files = [
     "css/custom.css",
