@@ -1,6 +1,6 @@
 <!-- Index page html -->
 <!DOCTYPE html>
-<html class="adaptive">
+<html lang="en" class="adaptive">
 
 <head>
     <meta charset="UTF-8"> <title>EMHASS: Energy Management Optimization for Home Assistant</title>
@@ -52,7 +52,9 @@
     <!-- alert box element -->
     <div style="display: none;" id="alert" class="alert">
         <div>
-            <span onclick="this.parentElement.parentElement.style.display='none';">&times;</span>
+            <button type="button" class="close-btn" onclick="this.parentElement.parentElement.style.display='none';" aria-label="Close">
+  &times;
+</button>
             <p id="alert-text"></p>
         </div>
     </div>
