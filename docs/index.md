@@ -56,6 +56,12 @@ develop.md
 * **💻 Reference:** API and Development.
 * *Files:* `emhass.md`, `develop.md` -->
 
+```{image} images/logo_docs.png
+:alt: EMHASS
+:width: 700px
+:align: center
+```
+
 # <h1 align="center">Energy Management for Home Assistant</h1>
 
 <p align="center">
@@ -103,6 +109,8 @@ develop.md
 :::{container} text-center mb-3
 
 <h3>Optimize your home energy usage automatically</h3>
+
+<h4>Let's make a better use of energy!</h4>
 
 EMHASS is a Python module designed to optimize your home energy interfacing with Home Assistant.
 

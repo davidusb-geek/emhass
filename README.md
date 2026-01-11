@@ -1,6 +1,6 @@
 <div align="center">
   <br>
-  <img alt="EMHASS" src="https://raw.githubusercontent.com/davidusb-geek/emhass/master/docs/images/emhass_logo.png" width="300px">
+  <img alt="EMHASS" src="https://raw.githubusercontent.com/davidusb-geek/emhass/master/docs/images/logo_docs.png" width="700px">
   <h1>Energy Management for Home Assistant</h1>
   <strong></strong>
 </div>

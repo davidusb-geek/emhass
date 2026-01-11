@@ -1411,6 +1411,65 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(p_pv_forecast, pd.Series)
         self.assertEqual(len(p_pv_forecast), len(self.df_weather_scrap))
 
+    def test_get_model_selection(self):
+        """
+        Test the _get_model and _find_closest_model methods using the actual CEC databases.
+        """
+        # Load the databases using the configuration paths
+        # We use self.fcst.emhass_conf to ensure we get the correct root path
+        cec_modules_path = self.fcst.emhass_conf["root_path"] / "data" / "cec_modules.pbz2"
+        cec_inverters_path = self.fcst.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2"
+        # Load Modules
+        with bz2.BZ2File(cec_modules_path, "rb") as f:
+            cec_modules = cPickle.load(f)
+        # Load Inverters
+        with bz2.BZ2File(cec_inverters_path, "rb") as f:
+            cec_inverters = cPickle.load(f)
+        # TEST 1: Retrieve Module by Exact Name
+        # Using a specific known module from the database: 300W module
+        target_module = "MEMC_Singapore_MEMC_M300AMC_27"
+        model = self.fcst._get_model(target_module, cec_modules, "module")
+        self.assertIsNotNone(model, "Should return a model for a valid name string")
+        self.assertEqual(model.name, target_module, "Model name should match the requested string")
+        self.assertAlmostEqual(model["STC"], 300.0, msg="Expected STC around 300W for this module")
+        # TEST 2: Retrieve Module by Wattage (Integer)
+        # Request a 300W module by integer. Should find the closest one (likely the one above or similar)
+        model = self.fcst._get_model(300, cec_modules, "module")
+        self.assertIsNotNone(model, "Should return a model for a valid integer power")
+        # Verify the power is reasonably close to 300W (STC)
+        self.assertAlmostEqual(
+            model["STC"], 300.0, delta=10.0, msg="Selected module should be close to 300W"
+        )
+        # TEST 3: Retrieve Module by Wattage (String)
+        # Request a "300" W module (string input). Logic should convert to float and find closest.
+        model = self.fcst._get_model("300", cec_modules, "module")
+        self.assertIsNotNone(model, "Should return a model for a valid string number")
+        self.assertAlmostEqual(
+            model["STC"], 300.0, delta=10.0, msg="Selected module should be close to 300W"
+        )
+        # TEST 4: Retrieve Inverter by Exact Name
+        # Using a specific known inverter: ~5000W
+        target_inverter = "INGETEAM_POWER_TECHNOLOGY_S_A___Ingecon_Sun_5U__208V_"
+        model = self.fcst._get_model(target_inverter, cec_inverters, "inverter")
+        self.assertIsNotNone(model, "Should return an inverter for a valid name string")
+        self.assertEqual(model.name, target_inverter)
+        # TEST 5: Retrieve Inverter by Wattage (Float)
+        # Request 5000W inverter
+        model = self.fcst._get_model(5000.0, cec_inverters, "inverter")
+        self.assertIsNotNone(model, "Should return an inverter for a valid float power")
+        # Check power (Paco is typical for AC power, Pdco for DC)
+        power = model.get("Paco", model.get("Pdco", 0))
+        self.assertAlmostEqual(
+            power, 5000.0, delta=100.0, msg="Selected inverter should be close to 5000W"
+        )
+        # TEST 6: Test Fallback / Closest Match Logic
+        # Request 292W. Should match 300W or 290W module.
+        model = self.fcst._get_model(292, cec_modules, "module")
+        self.assertIsNotNone(model)
+        self.assertTrue(
+            abs(model["STC"] - 292) < 50, "Should find a module within reasonable range of 292W"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
