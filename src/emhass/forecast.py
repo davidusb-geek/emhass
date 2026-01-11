@@ -715,6 +715,22 @@ class Forecast:
         df_forecast.iloc[0] = int(round(first_fcst))
         return df_forecast
 
+    def _get_model_power(self, params, device_type):
+        """
+        Helper to extract power rating based on device type and available parameters.
+        """
+        if device_type == "module":
+            if "STC" in params:
+                return params["STC"]
+            if "I_mp_ref" in params and "V_mp_ref" in params:
+                return params["I_mp_ref"] * params["V_mp_ref"]
+        elif device_type == "inverter":
+            if "Paco" in params:
+                return params["Paco"]
+            if "Pdco" in params:
+                return params["Pdco"]
+        return None
+
     def _find_closest_model(self, target_power, database, device_type):
         """
         Find the model in the database that has a power rating closest to the target_power.
@@ -723,29 +739,16 @@ class Forecast:
         min_diff = float("inf")
         # Handle DataFrame (columns are models) or Dict (keys are models)
         iterator = database.items() if hasattr(database, "items") else database.iteritems()
-
         for _, params in iterator:
-            power = None
-            if device_type == "module":
-                # For modules, usually 'STC' is the nominal power
-                if "STC" in params:
-                    power = params["STC"]
-                elif "I_mp_ref" in params and "V_mp_ref" in params:
-                    power = params["I_mp_ref"] * params["V_mp_ref"]
-            elif device_type == "inverter":
-                # For inverters, 'Paco' is the AC power rating
-                if "Paco" in params:
-                    power = params["Paco"]
-                elif "Pdco" in params:
-                    power = params["Pdco"]
-
+            power = self._get_model_power(params, device_type)
             if power is not None:
                 diff = abs(power - target_power)
                 if diff < min_diff:
                     min_diff = diff
                     closest_model = params
         if closest_model is not None:
-            model_name = closest_model.name if hasattr(closest_model, "name") else "unknown"
+            # Safely get name if it exists (DataFrame Series usually have a .name attribute)
+            model_name = getattr(closest_model, "name", "unknown")
             self.logger.info(f"Closest {device_type} model to {target_power}W found: {model_name}")
         else:
             self.logger.warning(f"No suitable {device_type} model found close to {target_power}W")
@@ -1151,7 +1154,7 @@ class Forecast:
             data_dict = {"ts": forecast_dates_csv, "yhat": data_list}
             df_csv = pd.DataFrame.from_dict(data_dict)
             df_csv.index = forecast_dates_csv
-            df_csv.drop(["ts"], axis=1, inplace=True)
+            df_csv = df_csv.drop(["ts"], axis=1)
             df_csv = set_df_index_freq(df_csv)
             if list_and_perfect:
                 days_list = df_final.index.day.unique().tolist()
@@ -1172,7 +1175,7 @@ class Forecast:
                 df_csv.index = df_csv.index.tz_convert(self.time_zone)
             else:
                 df_csv.index = forecast_dates_csv
-                df_csv.drop(["ts"], axis=1, inplace=True)
+                df_csv = df_csv.drop(["ts"], axis=1)
             df_csv = set_df_index_freq(df_csv)
             if list_and_perfect:
                 days_list = df_final.index.day.unique().tolist()
@@ -1539,7 +1542,7 @@ class Forecast:
                 df_csv = df_csv.loc[df_csv.index[0 : len(self.forecast_dates)], :]
                 # Define index
                 df_csv.index = self.forecast_dates
-                df_csv.drop(["ts"], axis=1, inplace=True)
+                df_csv = df_csv.drop(["ts"], axis=1)
                 forecast_out = df_csv.copy().loc[self.forecast_dates]
         elif method == "list":  # reading a list of values
             # Loading data from passed list

@@ -1466,8 +1466,8 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # Request 292W. Should match 300W or 290W module.
         model = self.fcst._get_model(292, cec_modules, "module")
         self.assertIsNotNone(model)
-        self.assertTrue(
-            abs(model["STC"] - 292) < 50, "Should find a module within reasonable range of 292W"
+        self.assertLess(
+            abs(model["STC"] - 292), 50, "Should find a module within reasonable range of 292W"
         )
 
 

@@ -414,12 +414,12 @@ function buildParamElement(
     //number
     case "int":
       type = "number";
-      placeholder = parseInt(parameter_definition_object["default_value"]);
+      placeholder = Number.parseInt(parameter_definition_object["default_value"]);
       break;
     case "array.float":
     case "float":
       type = "number";
-      placeholder = parseFloat(parameter_definition_object["default_value"]);
+      placeholder = Number.parseFloat(parameter_definition_object["default_value"]);
       break;
     //text (string)
     case "array.string":
@@ -654,7 +654,7 @@ function headerElement(element, param_definitions, config) {
       }
       //calculate how much off the fist parameters input elements amount to is, compering to the number_of_deferrable_loads value
       difference =
-        parseInt(element.value) -
+        Number.parseInt(element.value) -
         param_container.firstElementChild.querySelectorAll("input").length;
       //add elements based on how many elements are missing
       if (difference > 0) {
@@ -736,7 +736,7 @@ async function saveConfiguration(param_definitions) {
           for (let input of param_inputs) {
             switch (input.type) {
               case "number":
-                param_values.push(parseFloat(input.value));
+                param_values.push(Number.parseFloat(input.value));
                 break;
               case "checkbox":
                 param_values.push(input.checked);

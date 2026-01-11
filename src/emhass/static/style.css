@@ -679,7 +679,7 @@ button {
 .mystyle,
 .main-svg {
   font-size: 11pt;
-  font-family: Arial;
+  font-family: Arial, sans-serif;
   border-collapse: collapse;
   border-style: hidden;
 }
@@ -919,7 +919,7 @@ select,
 .input-buttons {
   max-width: 50%;
   display: flex;
-  align-items: "center";
+  align-items: center;
   align-self: center;
   align-items: center;
   box-sizing: inherit;
