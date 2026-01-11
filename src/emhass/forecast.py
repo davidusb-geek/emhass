@@ -715,6 +715,65 @@ class Forecast:
         df_forecast.iloc[0] = int(round(first_fcst))
         return df_forecast
 
+    def _find_closest_model(self, target_power, database, device_type):
+        """
+        Find the model in the database that has a power rating closest to the target_power.
+        """
+        closest_model = None
+        min_diff = float("inf")
+        # Handle DataFrame (columns are models) or Dict (keys are models)
+        iterator = database.items() if hasattr(database, "items") else database.iteritems()
+
+        for _, params in iterator:
+            power = None
+            if device_type == "module":
+                # For modules, usually 'STC' is the nominal power
+                if "STC" in params:
+                    power = params["STC"]
+                elif "I_mp_ref" in params and "V_mp_ref" in params:
+                    power = params["I_mp_ref"] * params["V_mp_ref"]
+            elif device_type == "inverter":
+                # For inverters, 'Paco' is the AC power rating
+                if "Paco" in params:
+                    power = params["Paco"]
+                elif "Pdco" in params:
+                    power = params["Pdco"]
+
+            if power is not None:
+                diff = abs(power - target_power)
+                if diff < min_diff:
+                    min_diff = diff
+                    closest_model = params
+        if closest_model is not None:
+            model_name = closest_model.name if hasattr(closest_model, "name") else "unknown"
+            self.logger.info(f"Closest {device_type} model to {target_power}W found: {model_name}")
+        else:
+            self.logger.warning(f"No suitable {device_type} model found close to {target_power}W")
+        return closest_model
+
+    def _get_model(self, model_spec, database, device_type):
+        """
+        Retrieve a model from the database by name or by power rating.
+        """
+        # If it's a string, try to find it by name
+        if isinstance(model_spec, str):
+            if model_spec in database:
+                return database[model_spec]
+            # If not found by name, check if it is a number string (e.g., "300")
+            try:
+                target_power = float(model_spec)
+                return self._find_closest_model(target_power, database, device_type)
+            except ValueError:
+                # Not a number, fallback to original behavior (will likely raise KeyError later)
+                self.logger.warning(f"{device_type} model '{model_spec}' not found in database.")
+                return database[model_spec]
+        # If it's a number (int or float), find closest by power
+        elif isinstance(model_spec, int | float):
+            return self._find_closest_model(model_spec, database, device_type)
+        else:
+            self.logger.error(f"Invalid type for {device_type} model: {type(model_spec)}")
+            return None
+
     def get_power_from_weather(
         self,
         df_weather: pd.DataFrame,
@@ -768,8 +827,10 @@ class Forecast:
                     p_pv_forecast = pd.Series(0, index=df_weather.index)
                     for i in range(len(self.plant_conf["pv_module_model"])):
                         # Selecting correct module and inverter
-                        module = cec_modules[self.plant_conf["pv_module_model"][i]]
-                        inverter = cec_inverters[self.plant_conf["pv_inverter_model"][i]]
+                        module_spec = self.plant_conf["pv_module_model"][i]
+                        inverter_spec = self.plant_conf["pv_inverter_model"][i]
+                        module = self._get_model(module_spec, cec_modules, "module")
+                        inverter = self._get_model(inverter_spec, cec_inverters, "inverter")
                         # Building the PV system in PVLib
                         system = PVSystem(
                             surface_tilt=self.plant_conf["surface_tilt"][i],
@@ -787,8 +848,10 @@ class Forecast:
                         p_pv_forecast = p_pv_forecast + mc.results.ac
                 else:
                     # Selecting correct module and inverter
-                    module = cec_modules[self.plant_conf["pv_module_model"]]
-                    inverter = cec_inverters[self.plant_conf["pv_inverter_model"]]
+                    module_spec = self.plant_conf["pv_module_model"]
+                    inverter_spec = self.plant_conf["pv_inverter_model"]
+                    module = self._get_model(module_spec, cec_modules, "module")
+                    inverter = self._get_model(inverter_spec, cec_inverters, "inverter")
                     # Building the PV system in PVLib
                     system = PVSystem(
                         surface_tilt=self.plant_conf["surface_tilt"],

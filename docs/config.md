@@ -123,8 +123,18 @@ A dedicated web app will help you search for your correct PV module and inverter
 If your specific model is not found in these lists then solution (1) is to pick another model as close as possible as yours in terms of the nominal power.
 Solution (2) would be to use SolCast and pass that data directly to emhass as a list of values from a template. Take a look at this example here: [https://emhass.readthedocs.io/en/latest/forecasts.html#example-using-solcast-forecast-amber-prices](https://emhass.readthedocs.io/en/latest/forecasts.html#example-using-solcast-forecast-amber-prices)
 
-- `pv_module_model`: The PV module model. For example: 'CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M'. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270). When finding the correct model for your installation remember to replace all the special characters in the model name with '_'. The name of the table column for your device on the webapp will already have the correct naming convention.
-- `pv_inverter_model`: The PV inverter model. For example: 'Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_'. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example, one east-facing array (azimuth=90) and one west-facing array (azimuth=270). When finding the correct model for your installation remember to replace all the special characters in the model name with '_'. The name of the table column for your device on the web app will already have the correct naming convention.
+- `pv_module_model`: The PV module model. You can provide this value in two ways:
+	- **By Name (Recommended for precision):** The exact model name from the CEC database (e.g., `'CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M'`). Remember to replace special characters with `_`.
+	- **By Power (New):** An integer or float representing the nominal power of the panel in Watts (STC). EMHASS will automatically find the closest matching panel in the database (e.g., `300` or `'300'`).
+	- *Note:* This parameter can be a list of items to enable the simulation of mixed orientation systems (e.g., one east-facing array and one west-facing array).
+
+- **`pv_inverter_model`**: The PV inverter model. You can provide this value in two ways:
+	- **By Name (Recommended for precision):** The exact model name from the CEC database (e.g., `'Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_'`). Remember to replace special characters with `_`.
+	- **By Power (New):** An integer or float representing the nominal AC power of the inverter in Watts. EMHASS will automatically find the closest matching inverter in the database (e.g., `5000` or `'5000'`).
+	- *Note:* This parameter can be a list of items to enable the simulation of mixed orientation systems.
+
+Then the additional technical parameters:
+
 - `surface_tilt`: The tilt angle of your solar panels. Defaults to 30. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example, one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 
 - `surface_azimuth`: The azimuth of your PV installation. Defaults to 205. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example, one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 
 - `modules_per_string`: The number of modules per string. Defaults to 16. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example, one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 
