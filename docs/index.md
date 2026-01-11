@@ -106,7 +106,7 @@ develop.md
 
 EMHASS is a Python module designed to optimize your home energy interfacing with Home Assistant.
 
-[🚀 Quick Start](section_getting_started) · [⚙️ Configuration](section_config) · [💻 API Reference](section_reference)
+[🚀 Quick Start](quick_start) · [⚙️ Configuration](section_config) · [💻 API Reference](section_reference)
 
 [🗣️ Community](https://community.home-assistant.io/t/emhass-an-energy-management-for-home-assistant/338126) · [🛠️ Issues](https://github.com/davidusb-geek/emhass/issues) · [🧩 Home Assistant Add-on](https://github.com/davidusb-geek/emhass-add-on)
 :::
@@ -145,15 +145,15 @@ Manage thermal inertia for water heaters and heat pumps effectively to act as th
 :::
 
 :::{grid-item-card} 🔌 **Home Assistant**
-:link: intro.html#configuration-and-installation
-:link-type: url
+:link: quick_start
+:link-type: doc
 
 Seamless integration. Retrieve sensor data directly from Home Assistant and publish optimized schedules back.
 :::
 
 :::{grid-item-card} 🐳 **Docker & Add-on**
-:link: intro.html#installation-methods
-:link-type: url
+:link: installation_methods
+:link-type: doc
 
 Run easily as a Home Assistant Add-on or a standalone Docker container.
 :::

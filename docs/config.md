@@ -76,7 +76,7 @@ These are the parameters needed to properly define the optimization problem.
 - `load_forecast_method`: The load forecast method that will be used. The options are `typical` which uses basic statistics and a year long load power data grouped by the current day-of-the-week of the current month, `naive` also called persistence that assumes that the forecast for a future period will be equal to the observed values in a past period, `mlforecaster` that uses regression models considering auto-regression lags as features and finally the `csv` to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts. The default CSV file path that will be used is `/data/data_weather_forecast.csv`. This method is useful to load and use other external forecasting service data in EMHASS. Defaults to `typical`.
 ```{note} 
 
-For more information on these methods check the dedicated [Forecast section](https://emhass.readthedocs.io/en/latest/forecasts.html)
+For more information on these methods check the dedicated [Forecast section](forecasts)
 ```
 - `load_cost_forecast_method`: Define the method that will be used for load cost forecast. The options are `hp_hc_periods` for peak and non-peak hours contracts and `csv` to load custom cost from CSV file. The default CSV file path that will be used is `/data/data_load_cost_forecast.csv`.
 The following parameters and definitions are only needed if `load_cost_forecast_method=hp_hc_periods`:
