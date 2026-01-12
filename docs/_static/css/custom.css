@@ -222,7 +222,7 @@ dl {
   }
 
   .wy-nav-top i {
-    color: #e1e1e1;
+    color: #767676;
   }
 
   .wy-side-nav-search {
@@ -260,7 +260,6 @@ dl {
   }
 
   li.toctree-l2 a {
-    /* background-color: #3f3f3f; */
     color: #e1e1e1 !important;
   }
 
@@ -268,7 +267,7 @@ dl {
   .btn-neutral:hover,
   .btn-neutral:visited:hover {
     background-color: #7d7d7d !important;
-    color: #e1e1e1 !important;
+    color: #767676 !important;
   }
 
   .btn-neutral,
@@ -298,12 +297,11 @@ dl {
     color: #ccf3ff !important;
   }
 
-  a:visited,
+a:visited,
   .wy-nav-top a,
   .wy-nav-top,
   .icon:visited,
-  .fa:visited,
-  a:visited {
+  .fa:visited {
     color: #d2e8f0;
   }
 
