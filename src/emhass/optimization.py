@@ -75,7 +75,7 @@ class Optimization:
         self.plant_conf = plant_conf
         self.freq = self.retrieve_hass_conf["optimization_time_step"]
         self.time_zone = self.retrieve_hass_conf["time_zone"]
-        self.timeStep = self.freq.seconds / 3600  # in hours
+        self.time_step = self.freq.seconds / 3600  # in hours
         self.time_delta = pd.to_timedelta(opt_time_delta, "hours")  # The period of optimization
         self.var_PV = self.retrieve_hass_conf["sensor_power_photovoltaics"]
         self.var_load = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
@@ -157,7 +157,7 @@ class Optimization:
         """
         # Cost rate at nominal power (currency/hr)
         max_cost_rate_hr = (max_power / 1000.0) * stress_unit_cost
-        max_cost_step = max_cost_rate_hr * self.timeStep
+        max_cost_step = max_cost_rate_hr * self.time_step
 
         x_points = np.linspace(0, max_power, segments + 1)
         y_points = max_cost_step * (x_points / max_power) ** 2
@@ -441,7 +441,7 @@ class Optimization:
             if self.optim_conf["set_total_pv_sell"]:
                 objective = plp.lpSum(
                     -0.001
-                    * self.timeStep
+                    * self.time_step
                     * (
                         unit_load_cost[i] * (P_load[i] + P_def_sum[i])
                         + unit_prod_price[i] * P_grid_neg[i]
@@ -451,26 +451,26 @@ class Optimization:
             else:
                 objective = plp.lpSum(
                     -0.001
-                    * self.timeStep
+                    * self.time_step
                     * (unit_load_cost[i] * P_grid_pos[i] + unit_prod_price[i] * P_grid_neg[i])
                     for i in set_I
                 )
         elif self.costfun == "cost":
             if self.optim_conf["set_total_pv_sell"]:
                 objective = plp.lpSum(
-                    -0.001 * self.timeStep * unit_load_cost[i] * (P_load[i] + P_def_sum[i])
+                    -0.001 * self.time_step * unit_load_cost[i] * (P_load[i] + P_def_sum[i])
                     for i in set_I
                 )
             else:
                 objective = plp.lpSum(
-                    -0.001 * self.timeStep * unit_load_cost[i] * P_grid_pos[i] for i in set_I
+                    -0.001 * self.time_step * unit_load_cost[i] * P_grid_pos[i] for i in set_I
                 )
         elif self.costfun == "self-consumption":
             if type_self_conso == "bigm":
                 bigm = 1e3
                 objective = plp.lpSum(
                     -0.001
-                    * self.timeStep
+                    * self.time_step
                     * (
                         bigm * unit_load_cost[i] * P_grid_pos[i]
                         + unit_prod_price[i] * P_grid_neg[i]
@@ -479,7 +479,7 @@ class Optimization:
                 )
             elif type_self_conso == "maxmin":
                 objective = plp.lpSum(
-                    0.001 * self.timeStep * unit_load_cost[i] * SC[i] for i in set_I
+                    0.001 * self.time_step * unit_load_cost[i] * SC[i] for i in set_I
                 )
             else:
                 self.logger.error("Not a valid option for type_self_conso parameter")
@@ -489,7 +489,7 @@ class Optimization:
         if self.optim_conf["set_use_battery"]:
             objective = objective + plp.lpSum(
                 -0.001
-                * self.timeStep
+                * self.time_step
                 * (
                     self.optim_conf["weight_battery_discharge"] * P_sto_pos[i]
                     - self.optim_conf["weight_battery_charge"] * P_sto_neg[i]
@@ -509,7 +509,7 @@ class Optimization:
                 ):
                     objective = objective + plp.lpSum(
                         -0.001
-                        * self.timeStep
+                        * self.time_step
                         * self.optim_conf["set_deferrable_startup_penalty"][k]
                         * P_def_start[k][i]
                         * unit_load_cost[i]
@@ -904,13 +904,13 @@ class Optimization:
                                 P_deferrable[k][Id - 1]
                                 * (
                                     heating_rate
-                                    * self.timeStep
+                                    * self.time_step
                                     / self.optim_conf["nominal_power_of_deferrable_loads"][k]
                                 )
                             )
                             - (
                                 cooling_constant
-                                * self.timeStep
+                                * self.time_step
                                 * (
                                     predicted_temp[Id - 1]
                                     - outdoor_temperature_forecast.iloc[Id - 1]
@@ -1195,7 +1195,7 @@ class Optimization:
                                 heatpump_cops[Id - 1]
                                 * P_deferrable[k][Id - 1]
                                 / 1000
-                                * self.timeStep
+                                * self.time_step
                                 - heating_demand[Id - 1]
                                 - thermal_losses[Id - 1]
                             )
@@ -1240,9 +1240,9 @@ class Optimization:
                     constraints.update(
                         {
                             f"constraint_defload{k}_energy": plp.LpConstraint(
-                                e=plp.lpSum(P_deferrable[k][i] * self.timeStep for i in set_I),
+                                e=plp.lpSum(P_deferrable[k][i] * self.time_step for i in set_I),
                                 sense=plp.LpConstraintEQ,
-                                rhs=(self.timeStep * def_total_timestep[k])
+                                rhs=(self.time_step * def_total_timestep[k])
                                 * self.optim_conf["nominal_power_of_deferrable_loads"][k],
                             )
                         }
@@ -1254,7 +1254,7 @@ class Optimization:
                     constraints.update(
                         {
                             f"constraint_defload{k}_energy": plp.LpConstraint(
-                                e=plp.lpSum(P_deferrable[k][i] * self.timeStep for i in set_I),
+                                e=plp.lpSum(P_deferrable[k][i] * self.time_step for i in set_I),
                                 sense=plp.LpConstraintEQ,
                                 rhs=def_total_hours[k]
                                 * self.optim_conf["nominal_power_of_deferrable_loads"][k],
@@ -1278,7 +1278,7 @@ class Optimization:
                 def_start, def_end, warning = Optimization.validate_def_timewindow(
                     def_start_timestep[k],
                     def_end_timestep[k],
-                    ceil(def_total_hours[k] / self.timeStep),
+                    ceil(def_total_hours[k] / self.time_step),
                     n,
                 )
             if warning is not None:
@@ -1291,7 +1291,7 @@ class Optimization:
                     {
                         f"constraint_defload{k}_start_timestep": plp.LpConstraint(
                             e=plp.lpSum(
-                                P_deferrable[k][i] * self.timeStep for i in range(0, def_start)
+                                P_deferrable[k][i] * self.time_step for i in range(0, def_start)
                             ),
                             sense=plp.LpConstraintEQ,
                             rhs=0,
@@ -1303,7 +1303,7 @@ class Optimization:
                     {
                         f"constraint_defload{k}_end_timestep": plp.LpConstraint(
                             e=plp.lpSum(
-                                P_deferrable[k][i] * self.timeStep for i in range(def_end, n)
+                                P_deferrable[k][i] * self.time_step for i in range(def_end, n)
                             ),
                             sense=plp.LpConstraintEQ,
                             rhs=0,
@@ -1417,7 +1417,7 @@ class Optimization:
                             f"constraint_pdef{k}_start5": plp.LpConstraint(
                                 e=plp.lpSum(P_def_bin2[k][i] for i in set_I),
                                 sense=plp.LpConstraintEQ,
-                                rhs=def_total_hours[k] / self.timeStep,
+                                rhs=def_total_hours[k] / self.time_step,
                             )
                         }
                     )
@@ -1478,7 +1478,7 @@ class Optimization:
                         f"constraint_pos_batt_dynamic_max_{i}": plp.LpConstraint(
                             e=P_sto_pos[i + 1] - P_sto_pos[i],
                             sense=plp.LpConstraintLE,
-                            rhs=self.timeStep
+                            rhs=self.time_step
                             * self.optim_conf["battery_dynamic_max"]
                             * self.plant_conf["battery_discharge_power_max"],
                         )
@@ -1490,7 +1490,7 @@ class Optimization:
                         f"constraint_pos_batt_dynamic_min_{i}": plp.LpConstraint(
                             e=P_sto_pos[i + 1] - P_sto_pos[i],
                             sense=plp.LpConstraintGE,
-                            rhs=self.timeStep
+                            rhs=self.time_step
                             * self.optim_conf["battery_dynamic_min"]
                             * self.plant_conf["battery_discharge_power_max"],
                         )
@@ -1502,7 +1502,7 @@ class Optimization:
                         f"constraint_neg_batt_dynamic_max_{i}": plp.LpConstraint(
                             e=P_sto_neg[i + 1] - P_sto_neg[i],
                             sense=plp.LpConstraintLE,
-                            rhs=self.timeStep
+                            rhs=self.time_step
                             * self.optim_conf["battery_dynamic_max"]
                             * self.plant_conf["battery_charge_power_max"],
                         )
@@ -1514,7 +1514,7 @@ class Optimization:
                         f"constraint_neg_batt_dynamic_min_{i}": plp.LpConstraint(
                             e=P_sto_neg[i + 1] - P_sto_neg[i],
                             sense=plp.LpConstraintGE,
-                            rhs=self.timeStep
+                            rhs=self.time_step
                             * self.optim_conf["battery_dynamic_min"]
                             * self.plant_conf["battery_charge_power_max"],
                         )
@@ -1557,7 +1557,7 @@ class Optimization:
                             for j in range(i)
                         ),
                         sense=plp.LpConstraintLE,
-                        rhs=(self.plant_conf["battery_nominal_energy_capacity"] / self.timeStep)
+                        rhs=(self.plant_conf["battery_nominal_energy_capacity"] / self.time_step)
                         * (self.plant_conf["battery_maximum_state_of_charge"] - soc_init),
                     )
                     for i in set_I
@@ -1572,7 +1572,7 @@ class Optimization:
                             for j in range(i)
                         ),
                         sense=plp.LpConstraintLE,
-                        rhs=(self.plant_conf["battery_nominal_energy_capacity"] / self.timeStep)
+                        rhs=(self.plant_conf["battery_nominal_energy_capacity"] / self.time_step)
                         * (soc_init - self.plant_conf["battery_minimum_state_of_charge"]),
                     )
                     for i in set_I
@@ -1589,7 +1589,7 @@ class Optimization:
                         sense=plp.LpConstraintEQ,
                         rhs=(soc_init - soc_final)
                         * self.plant_conf["battery_nominal_energy_capacity"]
-                        / self.timeStep,
+                        / self.time_step,
                     )
                 }
             )
@@ -1645,7 +1645,7 @@ class Optimization:
                     P_sto_pos[i].varValue * (1 / self.plant_conf["battery_discharge_efficiency"])
                     + self.plant_conf["battery_charge_efficiency"] * P_sto_neg[i].varValue
                 )
-                * (self.timeStep / (self.plant_conf["battery_nominal_energy_capacity"]))
+                * (self.time_step / (self.plant_conf["battery_nominal_energy_capacity"]))
                 for i in set_I
             ]
             SOCinit = copy.copy(soc_init)
@@ -1683,7 +1683,7 @@ class Optimization:
         if self.optim_conf["set_total_pv_sell"]:
             opt_tp["cost_profit"] = [
                 -0.001
-                * self.timeStep
+                * self.time_step
                 * (
                     unit_load_cost[i] * (P_load[i] + P_def_sum_tp[i])
                     + unit_prod_price[i] * P_grid_neg[i].varValue
@@ -1693,7 +1693,7 @@ class Optimization:
         else:
             opt_tp["cost_profit"] = [
                 -0.001
-                * self.timeStep
+                * self.time_step
                 * (
                     unit_load_cost[i] * P_grid_pos[i].varValue
                     + unit_prod_price[i] * P_grid_neg[i].varValue
@@ -1705,7 +1705,7 @@ class Optimization:
             if self.optim_conf["set_total_pv_sell"]:
                 opt_tp["cost_fun_profit"] = [
                     -0.001
-                    * self.timeStep
+                    * self.time_step
                     * (
                         unit_load_cost[i] * (P_load[i] + P_def_sum_tp[i])
                         + unit_prod_price[i] * P_grid_neg[i].varValue
@@ -1715,7 +1715,7 @@ class Optimization:
             else:
                 opt_tp["cost_fun_profit"] = [
                     -0.001
-                    * self.timeStep
+                    * self.time_step
                     * (
                         unit_load_cost[i] * P_grid_pos[i].varValue
                         + unit_prod_price[i] * P_grid_neg[i].varValue
@@ -1725,23 +1725,23 @@ class Optimization:
         elif self.costfun == "cost":
             if self.optim_conf["set_total_pv_sell"]:
                 opt_tp["cost_fun_cost"] = [
-                    -0.001 * self.timeStep * unit_load_cost[i] * (P_load[i] + P_def_sum_tp[i])
+                    -0.001 * self.time_step * unit_load_cost[i] * (P_load[i] + P_def_sum_tp[i])
                     for i in set_I
                 ]
             else:
                 opt_tp["cost_fun_cost"] = [
-                    -0.001 * self.timeStep * unit_load_cost[i] * P_grid_pos[i].varValue
+                    -0.001 * self.time_step * unit_load_cost[i] * P_grid_pos[i].varValue
                     for i in set_I
                 ]
         elif self.costfun == "self-consumption":
             if type_self_conso == "maxmin":
                 opt_tp["cost_fun_selfcons"] = [
-                    -0.001 * self.timeStep * unit_load_cost[i] * SC[i].varValue for i in set_I
+                    -0.001 * self.time_step * unit_load_cost[i] * SC[i].varValue for i in set_I
                 ]
             elif type_self_conso == "bigm":
                 opt_tp["cost_fun_selfcons"] = [
                     -0.001
-                    * self.timeStep
+                    * self.time_step
                     * (
                         unit_load_cost[i] * P_grid_pos[i].varValue
                         + unit_prod_price[i] * P_grid_neg[i].varValue
