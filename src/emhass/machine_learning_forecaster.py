@@ -149,19 +149,26 @@ class MLForecaster:
 
     def _get_sklearn_model(self, model_name: str):
         """Get the sklearn model instance based on the model name."""
+        seed = 42
         models = {
             "LinearRegression": LinearRegression(),
             "RidgeRegression": Ridge(),
-            "LassoRegression": Lasso(),
-            "ElasticNet": ElasticNet(),
+            "LassoRegression": Lasso(random_state=seed),
+            "ElasticNet": ElasticNet(alpha=1.0, l1_ratio=0.5, random_state=seed),
             "KNeighborsRegressor": KNeighborsRegressor(),
-            "DecisionTreeRegressor": DecisionTreeRegressor(),
+            "DecisionTreeRegressor": DecisionTreeRegressor(ccp_alpha=0.0, random_state=seed),
             "SVR": SVR(),
-            "RandomForestRegressor": RandomForestRegressor(),
-            "ExtraTreesRegressor": ExtraTreesRegressor(),
-            "GradientBoostingRegressor": GradientBoostingRegressor(),
-            "AdaBoostRegressor": AdaBoostRegressor(),
-            "MLPRegressor": MLPRegressor(),
+            "RandomForestRegressor": RandomForestRegressor(
+                min_samples_leaf=1, max_features=1.0, random_state=seed
+            ),
+            "ExtraTreesRegressor": ExtraTreesRegressor(
+                min_samples_leaf=1, max_features=1.0, random_state=seed
+            ),
+            "GradientBoostingRegressor": GradientBoostingRegressor(
+                learning_rate=0.1, random_state=seed
+            ),
+            "AdaBoostRegressor": AdaBoostRegressor(learning_rate=1.0, random_state=seed),
+            "MLPRegressor": MLPRegressor(hidden_layer_sizes=(100,), random_state=seed),
         }
 
         if model_name not in models:

@@ -49,9 +49,9 @@ async def get_forecast_optim_objects(
         get_data_from_file=get_data_from_file,
     )
     df_weather = await fcst.get_weather_forecast(method=optim_conf["weather_forecast_method"])
-    P_PV_forecast = fcst.get_power_from_weather(df_weather)
-    P_load_forecast = await fcst.get_load_forecast(method=optim_conf["load_forecast_method"])
-    df_input_data_dayahead = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
+    p_pv_forecast = fcst.get_power_from_weather(df_weather)
+    p_load_forecast = await fcst.get_load_forecast(method=optim_conf["load_forecast_method"])
+    df_input_data_dayahead = pd.concat([p_pv_forecast, p_load_forecast], axis=1)
     df_input_data_dayahead.columns = ["P_PV_forecast", "P_load_forecast"]
     opt = Optimization(
         retrieve_hass_conf,
@@ -63,7 +63,7 @@ async def get_forecast_optim_objects(
         emhass_conf,
         logger,
     )
-    return fcst, P_PV_forecast, P_load_forecast, df_input_data_dayahead, opt
+    return fcst, p_pv_forecast, p_load_forecast, df_input_data_dayahead, opt
 
 
 async def main():
@@ -129,8 +129,8 @@ async def main():
 
     (
         fcst,
-        P_PV_forecast,
-        P_load_forecast,
+        p_pv_forecast,
+        p_load_forecast,
         df_input_data_dayahead,
         opt,
     ) = await get_forecast_optim_objects(
@@ -183,13 +183,12 @@ async def main():
     unit_prod_price = df_input_data[opt.var_prod_price].values
     opt_res_dah = opt.perform_optimization(
         df_input_data_dayahead,
-        P_PV_forecast.values.ravel(),
-        P_load_forecast.values.ravel(),
+        p_pv_forecast.values.ravel(),
+        p_load_forecast.values.ravel(),
         unit_load_cost,
         unit_prod_price,
         debug=True,
     )
-    # opt_res_dah = opt.perform_dayahead_forecast_optim(df_input_data_dayahead, P_PV_forecast, P_load_forecast)
     opt_res_dah["P_PV"] = df_input_data_dayahead[["P_PV_forecast"]]
     fig_res_dah = opt_res_dah[
         [

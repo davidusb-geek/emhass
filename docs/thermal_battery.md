@@ -575,4 +575,3 @@ Check the logs for: "Using physics-based heating demand with solar gains"
 For more information:
 - [Thermal Model (thermal_config)](thermal_model.md) - For direct heater/AC control without thermal mass
 - [Configuration Parameters](config.md) - Complete EMHASS parameter reference
-- [REST API](rest_api.md) - API endpoint documentation

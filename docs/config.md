@@ -76,7 +76,7 @@ These are the parameters needed to properly define the optimization problem.
 - `load_forecast_method`: The load forecast method that will be used. The options are `typical` which uses basic statistics and a year long load power data grouped by the current day-of-the-week of the current month, `naive` also called persistence that assumes that the forecast for a future period will be equal to the observed values in a past period, `mlforecaster` that uses regression models considering auto-regression lags as features and finally the `csv` to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts. The default CSV file path that will be used is `/data/data_weather_forecast.csv`. This method is useful to load and use other external forecasting service data in EMHASS. Defaults to `typical`.
 ```{note} 
 
-For more information on these methods check the dedicated [Forecast section](https://emhass.readthedocs.io/en/latest/forecasts.html)
+For more information on these methods check the dedicated [Forecast section](forecasts)
 ```
 - `load_cost_forecast_method`: Define the method that will be used for load cost forecast. The options are `hp_hc_periods` for peak and non-peak hours contracts and `csv` to load custom cost from CSV file. The default CSV file path that will be used is `/data/data_load_cost_forecast.csv`.
 The following parameters and definitions are only needed if `load_cost_forecast_method=hp_hc_periods`:
@@ -96,7 +96,7 @@ For all the forecast methods (`weather`, `load_power`, `load_cost` and `producti
 ```
 - `photovoltaic_production_sell_price`: The paid price for energy injected to the grid from excedent PV production in €/kWh. Defaults to 0.065. This parameter is only needed if production_price_forecast_method='constant'.
 - `set_total_pv_sell`: Set this parameter to true to consider that all the PV power produced is injected to the grid. No direct self-consumption. The default is false, for a system with direct self-consumption.
-- `set_use_adjusted_pv`: Set to True to enable machine learning-based PV forecast adjustment. This uses historical data to train a regression model that corrects PV forecasts based on local conditions. Defaults to False. See the [forecasts documentation](forecasts.md#adjusting-pv-forecasts-using-machine-learning) for more details.
+- `set_use_adjusted_pv`: Set to True to enable machine learning-based PV forecast adjustment. This uses historical data to train a regression model that corrects PV forecasts based on local conditions. Defaults to False. See the [forecasts documentation](https://emhass.readthedocs.io/en/latest/forecasts.html#adjusting-pv-forecasts-using-machine-learning) for more details.
 - `adjusted_pv_regression_model`: The regression model to use for PV forecast adjustment. See `REGRESSION_METHODS` in `machine_learning_regressor.py` for the authoritative list. Currently available: 'LinearRegression', 'RidgeRegression', 'LassoRegression' (default), 'ElasticNet', 'KNeighborsRegressor', 'DecisionTreeRegressor', 'SVR', 'RandomForestRegressor', 'ExtraTreesRegressor', 'GradientBoostingRegressor', 'AdaBoostRegressor', 'MLPRegressor'. Only used when `set_use_adjusted_pv` is True.
 - `adjusted_pv_solar_elevation_threshold`: The solar elevation threshold in degrees below which the adjusted PV forecast is set to zero. This prevents negative or unrealistic values during low sun angles. Defaults to 10.
 - `adjusted_pv_model_max_age`: Maximum age in hours before the adjusted PV regression model is re-fitted. If the saved model is older than this value, a new model will be trained using fresh historical data. Set to 0 to force re-fitting on every call. Defaults to 24 hours (1 day). This caching mechanism significantly reduces API calls to Home Assistant and speeds up optimization runs.
@@ -123,8 +123,18 @@ A dedicated web app will help you search for your correct PV module and inverter
 If your specific model is not found in these lists then solution (1) is to pick another model as close as possible as yours in terms of the nominal power.
 Solution (2) would be to use SolCast and pass that data directly to emhass as a list of values from a template. Take a look at this example here: [https://emhass.readthedocs.io/en/latest/forecasts.html#example-using-solcast-forecast-amber-prices](https://emhass.readthedocs.io/en/latest/forecasts.html#example-using-solcast-forecast-amber-prices)
 
-- `pv_module_model`: The PV module model. For example: 'CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M'. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example one east-facing array (azimuth=90) and one west-facing array (azimuth=270). When finding the correct model for your installation remember to replace all the special characters in the model name with '_'. The name of the table column for your device on the webapp will already have the correct naming convention.
-- `pv_inverter_model`: The PV inverter model. For example: 'Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_'. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example, one east-facing array (azimuth=90) and one west-facing array (azimuth=270). When finding the correct model for your installation remember to replace all the special characters in the model name with '_'. The name of the table column for your device on the web app will already have the correct naming convention.
+- `pv_module_model`: The PV module model. You can provide this value in two ways:
+	- **By Name (Recommended for precision):** The exact model name from the CEC database (e.g., `'CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M'`). Remember to replace special characters with `_`.
+	- **By Power (New):** An integer or float representing the nominal power of the panel in Watts (STC). EMHASS will automatically find the closest matching panel in the database (e.g., `300` or `'300'`).
+	- *Note:* This parameter can be a list of items to enable the simulation of mixed orientation systems (e.g., one east-facing array and one west-facing array).
+
+- **`pv_inverter_model`**: The PV inverter model. You can provide this value in two ways:
+	- **By Name (Recommended for precision):** The exact model name from the CEC database (e.g., `'Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_'`). Remember to replace special characters with `_`.
+	- **By Power (New):** An integer or float representing the nominal AC power of the inverter in Watts. EMHASS will automatically find the closest matching inverter in the database (e.g., `5000` or `'5000'`).
+	- *Note:* This parameter can be a list of items to enable the simulation of mixed orientation systems.
+
+Then the additional technical parameters:
+
 - `surface_tilt`: The tilt angle of your solar panels. Defaults to 30. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example, one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 
 - `surface_azimuth`: The azimuth of your PV installation. Defaults to 205. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example, one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 
 - `modules_per_string`: The number of modules per string. Defaults to 16. This parameter can be a list of items to enable the simulation of mixed orientation systems, for example, one east-facing array (azimuth=90) and one west-facing array (azimuth=270). 

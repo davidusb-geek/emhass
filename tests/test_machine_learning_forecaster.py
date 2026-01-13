@@ -21,6 +21,8 @@ emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations
 # create logger
 logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
+rng = np.random.default_rng()
+
 
 class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -63,7 +65,7 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         # Generate test data
         idx = pd.date_range(end=pd.Timestamp.now(), periods=48 * 20, freq="30min")
         np.random.seed(42)
-        data_values = np.random.rand(len(idx)) * 1000 + 500
+        data_values = rng.random(len(idx)) * 1000 + 500
         self.data = pd.DataFrame({"sensor.power_load_no_var_loads": data_values}, index=idx)
         self.data.index.name = "timestamp"
         self.data = utils.set_df_index_freq(self.data)
@@ -113,7 +115,7 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
             perform_backtest=self.input_data_dict["params"]["passed_data"]["perform_backtest"],
         )
 
-    async def test_mlforecaster_init(self):
+    def test_mlforecaster_init(self):
         mlf = self._get_standard_mlf()
         self.assertIsInstance(mlf, MLForecaster)
 
@@ -121,7 +123,7 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         mlf = self._get_standard_mlf()
         df_pred, df_pred_backtest = await self._fit_standard_mlf(mlf)
         self.assertIsInstance(df_pred, pd.DataFrame)
-        self.assertTrue(df_pred_backtest is None)
+        self.assertIs(df_pred_backtest, None)
 
     async def test_mlforecaster_predict(self):
         mlf = self._get_standard_mlf()
