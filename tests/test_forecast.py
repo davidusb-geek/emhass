@@ -259,7 +259,6 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             + "diffuse_radiation_instant,"
             + "direct_normal_irradiance_instant"
         )
-        get_url = "https://api.open-meteo.com/v1/forecast"
 
         with aioresponses() as mocked:
             mocked.get(get_url, payload=data)
@@ -1073,21 +1072,21 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # Test naive load forecast during DST transition
         # This should not raise NonExistentTimeError
         try:
-            P_load_forecast_dst = await dst_fcst.get_load_forecast(method="naive")
-            self.assertIsInstance(P_load_forecast_dst, pd.core.series.Series)
-            self.assertEqual(len(P_load_forecast_dst), len(dst_fcst.forecast_dates))
+            p_load_forecast_dst = await dst_fcst.get_load_forecast(method="naive")
+            self.assertIsInstance(p_load_forecast_dst, pd.core.series.Series)
+            self.assertEqual(len(p_load_forecast_dst), len(dst_fcst.forecast_dates))
             # Check that index is properly timezone-aware
-            self.assertEqual(P_load_forecast_dst.index.tz, sydney_tz)
+            self.assertEqual(p_load_forecast_dst.index.tz, sydney_tz)
             logger.info("DST forward transition test for naive method: PASSED")
         except Exception as e:
             self.fail(f"Naive forecast failed during DST forward transition: {e}")
 
         # Test typical load forecast during DST transition
         try:
-            P_load_forecast_typical = await dst_fcst.get_load_forecast(method="typical")
-            self.assertIsInstance(P_load_forecast_typical, pd.core.series.Series)
-            self.assertEqual(len(P_load_forecast_typical), len(dst_fcst.forecast_dates))
-            self.assertEqual(P_load_forecast_typical.index.tz, sydney_tz)
+            p_load_forecast_typical = await dst_fcst.get_load_forecast(method="typical")
+            self.assertIsInstance(p_load_forecast_typical, pd.core.series.Series)
+            self.assertEqual(len(p_load_forecast_typical), len(dst_fcst.forecast_dates))
+            self.assertEqual(p_load_forecast_typical.index.tz, sydney_tz)
             logger.info("DST forward transition test for typical method: PASSED")
         except Exception as e:
             self.fail(f"Typical forecast failed during DST forward transition: {e}")
@@ -1164,10 +1163,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         )
 
         try:
-            us_P_load_forecast = await us_dst_fcst.get_load_forecast(method="naive")
-            self.assertIsInstance(us_P_load_forecast, pd.core.series.Series)
-            self.assertEqual(len(us_P_load_forecast), len(us_dst_fcst.forecast_dates))
-            self.assertEqual(us_P_load_forecast.index.tz, eastern_tz)
+            us_p_load_forecast = await us_dst_fcst.get_load_forecast(method="naive")
+            self.assertIsInstance(us_p_load_forecast, pd.core.series.Series)
+            self.assertEqual(len(us_p_load_forecast), len(us_dst_fcst.forecast_dates))
+            self.assertEqual(us_p_load_forecast.index.tz, eastern_tz)
             logger.info("US Eastern DST forward transition test: PASSED")
         except Exception as e:
             self.fail(f"US Eastern DST forecast failed during forward transition: {e}")
@@ -1217,11 +1216,11 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
         # Test naive load forecast during DST backward transition
         try:
-            P_load_forecast_dst = await dst_fcst.get_load_forecast(method="naive")
-            self.assertIsInstance(P_load_forecast_dst, pd.core.series.Series)
-            self.assertEqual(len(P_load_forecast_dst), len(dst_fcst.forecast_dates))
+            p_load_forecast_dst = await dst_fcst.get_load_forecast(method="naive")
+            self.assertIsInstance(p_load_forecast_dst, pd.core.series.Series)
+            self.assertEqual(len(p_load_forecast_dst), len(dst_fcst.forecast_dates))
             # Check that index is properly timezone-aware
-            self.assertEqual(P_load_forecast_dst.index.tz, sydney_tz)
+            self.assertEqual(p_load_forecast_dst.index.tz, sydney_tz)
             logger.info("DST backward transition test for naive method: PASSED")
         except Exception as e:
             self.fail(f"Naive forecast failed during DST backward transition: {e}")
@@ -1302,10 +1301,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         )
 
         try:
-            us_P_load_forecast = await us_dst_fcst.get_load_forecast(method="naive")
-            self.assertIsInstance(us_P_load_forecast, pd.core.series.Series)
-            self.assertEqual(len(us_P_load_forecast), len(us_dst_fcst.forecast_dates))
-            self.assertEqual(us_P_load_forecast.index.tz, eastern_tz)
+            us_p_load_forecast = await us_dst_fcst.get_load_forecast(method="naive")
+            self.assertIsInstance(us_p_load_forecast, pd.core.series.Series)
+            self.assertEqual(len(us_p_load_forecast), len(us_dst_fcst.forecast_dates))
+            self.assertEqual(us_p_load_forecast.index.tz, eastern_tz)
             logger.info("US Eastern DST backward transition test: PASSED")
         except Exception as e:
             self.fail(f"US Eastern DST forecast failed during backward transition: {e}")

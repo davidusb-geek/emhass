@@ -49,6 +49,8 @@ emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations
 # create logger
 logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
+rng = np.random.default_rng()
+
 
 class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
     @staticmethod
@@ -557,7 +559,7 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(input_data_dict["df_input_data"], pd.DataFrame)
         idx_fresh = pd.date_range(end=pd.Timestamp.now(), periods=48 * 10, freq="30min")
         df_fresh = pd.DataFrame(
-            {"sensor.power_load_no_var_loads": np.random.rand(len(idx_fresh)) * 100},
+            {"sensor.power_load_no_var_loads": rng.random(len(idx_fresh)) * 100},
             index=idx_fresh,
         )
         df_fresh = utils.set_df_index_freq(df_fresh)
@@ -867,7 +869,6 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             "perform_backtest": False,
         }
         runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
-        # params = await TestCommandLineAsyncUtils.get_test_params()
         params["passed_data"] = runtimeparams
         params["optim_conf"]["load_forecast_method"] = "skforecast"
         params_json = orjson.dumps(params).decode("utf-8")
@@ -1016,8 +1017,8 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             tz=input_data_dict["rh"].time_zone,
         )
         data = {
-            "sensor.power_load_no_var_loads": np.random.rand(len(index)) * 1000,
-            "sensor.power_photovoltaics": np.random.rand(len(index)) * 5000,
+            "sensor.power_load_no_var_loads": rng.random(len(index)) * 1000,
+            "sensor.power_photovoltaics": rng.random(len(index)) * 5000,
         }
         df_final_mock = pd.DataFrame(data, index=index)
         # Add some NaNs to test handle_nan

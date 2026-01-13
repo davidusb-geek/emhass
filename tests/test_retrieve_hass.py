@@ -200,7 +200,6 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             data = orjson.loads(data.content)
             days_list = get_days_list(1)
             var_list = [self.retrieve_hass_conf["sensor_power_load_no_var_loads"]]
-            get_url = self.retrieve_hass_conf["hass_url"]
             # with aioresponses() as mocked:
             get_url = self.retrieve_hass_conf["hass_url"]
             mocked.get(get_url, payload=data, repeat=True)

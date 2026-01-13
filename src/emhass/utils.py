@@ -1226,12 +1226,12 @@ async def treat_runtimeparams(
     return params, retrieve_hass_conf, optim_conf, plant_conf
 
 
-def get_yaml_parse(params: str, logger: logging.Logger) -> tuple[dict, dict, dict]:
+def get_yaml_parse(params: str | dict, logger: logging.Logger) -> tuple[dict, dict, dict]:
     """
     Perform parsing of the params into the configuration catagories
 
     :param params: Built configuration parameters
-    :type params: str
+    :type params: str or dict
     :param logger: The logger object
     :type logger: logging.Logger
     :return: A tuple with the dictionaries containing the parsed data
