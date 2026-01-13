@@ -323,54 +323,204 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         await web_server.after_serving()
         mock_close.assert_not_called()
 
-    # Patch web_server.app.logger to avoid polluting global logger with Mocks
-    # which causes TypeError in other tests
-    @patch("emhass.web_server.app.logger")
-    @patch("logging.FileHandler")
-    @patch("emhass.web_server.build_config")
-    @patch("emhass.web_server.build_secrets")
-    @patch("emhass.web_server.build_params")
-    @patch("emhass.web_server.get_websocket_client")
-    @patch("os.path.isdir")
-    @patch("pathlib.Path.mkdir")
     @patch("pathlib.Path.exists")
-    @patch("os.path.exists")
-    @patch("os.listdir")
     @patch("emhass.web_server.aiofiles.open")
-    async def test_initialize(
+    @patch("emhass.web_server.set_input_data_dict", new_callable=AsyncMock)
+    @patch("emhass.web_server.dayahead_forecast_optim", new_callable=AsyncMock)
+    @patch("emhass.web_server.get_injection_dict")
+    @patch("emhass.web_server.app.logger")
+    async def test_action_malformed_json(
         self,
-        mock_file,
-        mock_listdir,
-        mock_os_exists,
-        mock_path_exists,
-        mock_mkdir,
-        mock_isdir,
-        mock_get_ws,
-        mock_params,
-        mock_secrets,
-        mock_config,
-        mock_handler,
         mock_logger,
+        mock_get_inject,
+        mock_optim,
+        mock_set_input,
+        mock_file,
+        mock_path_exists,
     ):
-        # Setup comprehensive mocks for the massive initialize function
-        mock_config.return_value = {"costfun": "profit", "logging_level": "INFO"}
-        mock_secrets.return_value = (
-            web_server.emhass_conf,
-            {"hass_url": "http://ha", "long_lived_token": "token"},
-        )
-        mock_params.return_value = {"optim_conf": {}, "retrieve_hass_conf": {"use_websocket": True}}
-        mock_isdir.return_value = True
-        # Ensure paths exist so no Exception is raised
-        mock_os_exists.return_value = True
+        """
+        Test that sending malformed JSON (e.g. Python syntax 'False' instead of 'false')
+        triggers a logged error and proceeds with empty runtime parameters.
+        """
         mock_path_exists.return_value = True
-        # Return empty list to skip cleanup loop
-        mock_listdir.return_value = []
-        # Mock file reads for pickle loading (return bytes)
-        f = AsyncMock()
-        f.read.return_value = pickle.dumps({})
-        mock_file.return_value.__aenter__.return_value = f
-        await web_server.initialize()
-        mock_get_ws.assert_called()
+
+        # Mock .read() for everything
+        def aiofiles_side_effect(file, mode="r", *args, **kwargs):
+            context_mock = AsyncMock()
+            file_handle = AsyncMock()
+            context_mock.__aenter__.return_value = file_handle
+            filename = str(file)
+            if "params.pkl" in filename:
+                content = pickle.dumps((pathlib.Path("/config"), {"optim_conf": {}}))
+                file_handle.read.return_value = content
+            else:
+                log_content = (
+                    "2024-01-01 12:00:00,000 INFO >> Obtaining params\n"
+                    "2024-01-01 12:00:01,000 INFO >> Setting input data dict\n"
+                    "2024-01-01 12:00:02,000 INFO >> Performing optimization..."
+                )
+                file_handle.read.return_value = log_content
+            return context_mock
+
+        mock_file.side_effect = aiofiles_side_effect
+        mock_set_input.return_value = {
+            "params": {},
+            "retrieve_hass_conf": {"continual_publish": False},
+        }
+        mock_optim.return_value = MagicMock()
+        mock_get_inject.return_value = {
+            "optim_status": "Optimal",
+            "table1": "<div>Table</div>",
+            "div1": "<div>Plot1</div>",
+            "div2": "<div>Plot2</div>",
+        }
+        # Execute Test
+        response = await self.client.post(
+            "/action/dayahead-optim",
+            data='{"perform_backtest": False}',
+            headers={"Content-Type": "application/json"},
+        )
+        # Assertions
+        self.assertEqual(response.status_code, 201)
+        log_found = False
+        for call in mock_logger.error.call_args_list:
+            args, _ = call
+            if args and "Error parsing runtime params JSON" in str(args[0]):
+                log_found = True
+                break
+        self.assertTrue(log_found, "Expected error log message not found")
+        # Verify downstream call received empty string/dict for runtime params
+        call_args = mock_set_input.call_args
+        # runtimeparams is the 4th argument (index 3)
+        self.assertEqual(call_args[0][3], "{}")
+
+    @patch("pathlib.Path.exists")
+    @patch("emhass.web_server.aiofiles.open")
+    @patch("emhass.web_server.set_input_data_dict", new_callable=AsyncMock)
+    @patch("emhass.web_server.dayahead_forecast_optim", new_callable=AsyncMock)
+    @patch("emhass.web_server.get_injection_dict")
+    @patch("emhass.web_server.app.logger")
+    async def test_action_valid_json(
+        self,
+        mock_logger,
+        mock_get_inject,
+        mock_optim,
+        mock_set_input,
+        mock_file,
+        mock_path_exists,
+    ):
+        """Test that sending valid JSON works correctly."""
+        mock_path_exists.return_value = True
+
+        # Reuse side effect
+        def aiofiles_side_effect(file, mode="r", *args, **kwargs):
+            context_mock = AsyncMock()
+            file_handle = AsyncMock()
+            context_mock.__aenter__.return_value = file_handle
+            if "params.pkl" in str(file):
+                content = pickle.dumps((pathlib.Path("/config"), {"optim_conf": {}}))
+                file_handle.read.return_value = content
+            else:
+                file_handle.read.return_value = "INFO >> Success"
+            return context_mock
+
+        mock_file.side_effect = aiofiles_side_effect
+        mock_set_input.return_value = {
+            "params": {},
+            "retrieve_hass_conf": {"continual_publish": False},
+        }
+        mock_optim.return_value = MagicMock()
+        mock_get_inject.return_value = {"optim_status": "Optimal"}
+        # Execute Test with valid JSON
+        valid_json_str = '{"perform_backtest": false}'
+        response = await self.client.post(
+            "/action/dayahead-optim",
+            data=valid_json_str,
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(response.status_code, 201)
+        # Verify no error was logged
+        self.assertFalse(mock_logger.error.called)
+        # Verify runtime params were passed correctly
+        call_args = mock_set_input.call_args
+        actual_arg = call_args[0][3]
+        # Compare as dictionaries to ignore whitespace differences (e.g. " : " vs ":")
+        self.assertEqual(orjson.loads(actual_arg), orjson.loads(valid_json_str))
+
+    @patch("os.getenv")
+    async def test_setup_paths(self, mock_getenv):
+        # Configure env vars
+        env_vars = {
+            "DATA_PATH": "/env/data",
+            "CONFIG_PATH": "/env/config.json",
+            "OPTIONS_PATH": "/env/options.json",
+            "ROOT_PATH": "/env/root",
+            "DEFAULTS_PATH": "/env/defaults.json",
+            "ASSOCIATIONS_PATH": "/env/assoc.csv",
+            "LEGACY_CONFIG_PATH": "/env/legacy.yaml",
+        }
+        mock_getenv.side_effect = lambda key, default=None: env_vars.get(key, default)
+        # Run the helper
+        paths = await web_server._setup_paths()
+        # Unpack results
+        (config_path, options_path, defaults_path, assoc_path, legacy_path, root_path) = paths
+        # Assertions: Compare against pathlib objects to handle OS separators automatically
+        self.assertEqual(config_path, pathlib.Path("/env/config.json"))
+        self.assertEqual(web_server.emhass_conf["data_path"], pathlib.Path("/env/data"))
+        self.assertEqual(web_server.emhass_conf["root_path"], pathlib.Path("/env/root"))
+
+    @patch("pathlib.Path.mkdir")
+    @patch("os.path.isdir")
+    def test_validate_data_path(self, mock_isdir, mock_mkdir):
+        root = pathlib.Path("/root")
+        # Case 1: Path exists
+        web_server.emhass_conf["data_path"] = pathlib.Path("/existing/data")
+        mock_isdir.return_value = True
+        web_server._validate_data_path(root)
+        self.assertEqual(web_server.emhass_conf["data_path"], pathlib.Path("/existing/data"))
+        # Case 2: Path missing, fallback to /data/ exists
+        web_server.emhass_conf["data_path"] = pathlib.Path("/missing/data")
+        # isdir side effect: First call (check emhass_conf) -> False, Second call (check /data/) -> True
+        mock_isdir.side_effect = [False, True]
+        web_server._validate_data_path(root)
+        self.assertEqual(web_server.emhass_conf["data_path"], pathlib.Path("/data"))
+        # Case 3: Path missing, fallback missing -> create root/data
+        web_server.emhass_conf["data_path"] = pathlib.Path("/missing/data")
+        mock_isdir.side_effect = [False, False]
+        web_server._validate_data_path(root)
+        self.assertEqual(web_server.emhass_conf["data_path"], root / "data/")
+        mock_mkdir.assert_called()
+
+    @patch("emhass.web_server.get_websocket_client")
+    async def test_initialize_connections(self, mock_ws_client):
+        # Re-enable logging for this test so assertLogs can capture output
+        logger = logging.getLogger("emhass")
+        original_level = logger.level
+        logger.setLevel(logging.INFO)
+        try:
+            # Case 1: Websocket Enabled - Success
+            params = {"retrieve_hass_conf": {"use_websocket": True}}
+            await web_server._initialize_connections(params)
+            mock_ws_client.assert_called()
+            # Case 2: Websocket Enabled - Failure
+            mock_ws_client.side_effect = ConnectionError("Connection fail")
+            with self.assertRaises(ConnectionError):
+                await web_server._initialize_connections(params)
+            # Case 3: InfluxDB Enabled
+            mock_ws_client.reset_mock()
+            params = {"retrieve_hass_conf": {"use_websocket": False, "use_influxdb": True}}
+            with self.assertLogs("emhass", level="INFO") as cm:
+                await web_server._initialize_connections(params)
+            self.assertTrue(any("InfluxDB mode enabled" in log for log in cm.output))
+            mock_ws_client.assert_not_called()
+            # Case 4: Neither (REST API)
+            params = {"retrieve_hass_conf": {"use_websocket": False, "use_influxdb": False}}
+            with self.assertLogs("emhass", level="INFO") as cm:
+                await web_server._initialize_connections(params)
+            self.assertTrue(any("using REST API" in log for log in cm.output))
+        finally:
+            # Restore original logging level
+            logger.setLevel(original_level)
 
 
 if __name__ == "__main__":

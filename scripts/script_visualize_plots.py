@@ -50,7 +50,7 @@ def generate_debug_html():
         # Loop through the dictionary items just like index.html does
         # Note: In Python 3.7+, dict insertion order is preserved,
         # so they will appear in the order defined in utils.py
-        for _, content in injection_dict.items():
+        for content in injection_dict.values():
             f.write('<div class="table_div">\n')
             f.write(content)
             f.write("</div>\n")

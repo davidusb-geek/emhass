@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.15.4 - 2026-01-13
+### Improvement
+- Support selecting PV module and inverter models by approximate power rating in addition to explicit database names
+- Introduce helper contexts and structured helpers for optimization setup, publishing, and forecast preparation
+- Add explicit SonarCloud analysis and Codecov integration in CI workflow
+- Added support to publish emhass package to conda repository
+- Improved documentation: Reorganize and expand documentation sections, including for using InfluxDB as a data source and for passing secret parameters, clarifying differences between Docker/Python deployments and the Home Assistant add-on, and moving this content into the passing_data guide. Change theme to PyData Sphinx Theme
+- Added extensive unit tests around Home Assistant data retrieval helpers, PV adjustment behavior, regressor preparation errors, weather forecast method branching, thermal loads publishing, and web server runtime parameter handling
+- Update existing optimization and CLI tests to use mocks for heavy optimization routines allowing faster tests
+### Fix
+- Ensure InfluxDB is prioritized over WebSocket and REST when configured as a data source to avoid redundant queries to Home Assistant
+- Fix runtime parameter parsing in the web server to properly handle malformed JSON payloads and default safely to empty parameters
+
 ## 0.15.3 - 2026-01-07
 ### Improvement
 - Added new thermal model plots

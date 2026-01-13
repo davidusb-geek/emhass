@@ -148,7 +148,9 @@ def calculate_cop_heatpump(
     Calculate heat pump Coefficient of Performance (COP) for each timestep in the prediction horizon.
 
     The COP is calculated using a Carnot-based formula:
-    COP(h) = carnot_efficiency × T_supply_K / |T_supply_K - T_outdoor_K(h)|
+
+    .. math::
+        COP(h) = \eta_{carnot} \times \frac{T_{supply\_K}}{|T_{supply\_K} - T_{outdoor\_K}(h)|}
 
     Where temperatures are converted to Kelvin (K = °C + 273.15).
 
@@ -1224,12 +1226,12 @@ async def treat_runtimeparams(
     return params, retrieve_hass_conf, optim_conf, plant_conf
 
 
-def get_yaml_parse(params: str, logger: logging.Logger) -> tuple[dict, dict, dict]:
+def get_yaml_parse(params: str | dict, logger: logging.Logger) -> tuple[dict, dict, dict]:
     """
     Perform parsing of the params into the configuration catagories
 
     :param params: Built configuration parameters
-    :type params: str
+    :type params: str or dict
     :param logger: The logger object
     :type logger: logging.Logger
     :return: A tuple with the dictionaries containing the parsed data
@@ -1400,9 +1402,13 @@ def get_injection_dict_forecast_model_fit(df_fit_pred: pd.DataFrame, mlf: MLFore
     injection_dict = {}
     injection_dict["title"] = "<h2>Custom machine learning forecast model fit</h2>"
     injection_dict["subsubtitle0"] = (
-        "<h4>Plotting train/test forecast model results for " + mlf.model_type + "</h4>"
+        "<h4>Plotting train/test forecast model results for "
+        + mlf.model_type
+        + "<br>"
+        + "Forecasting variable "
+        + mlf.var_model
+        + "</h4>"
     )
-    injection_dict["subsubtitle0"] = "<h4>Forecasting variable " + mlf.var_model + "</h4>"
     injection_dict["figure_0"] = image_path_0
     return injection_dict
 
