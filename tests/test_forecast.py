@@ -213,14 +213,14 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         )
         # Call the predict method
         p_pv_forecast = self.fcst.adjust_pv_forecast_predict()
-        self.assertEqual(len(p_pv_forecast), len(self.fcst.P_PV_forecast_validation))
+        self.assertEqual(len(p_pv_forecast), len(self.fcst.p_pv_forecast_validation))
         self.assertFalse(p_pv_forecast.isna().any().any(), "Adjusted forecast contains NaN values")
         self.assertGreaterEqual(self.fcst.validation_rmse, 0.0, "RMSE should be non-negative")
         self.assertLessEqual(self.fcst.validation_r2, 1.0, "R² score should be at most 1")
         self.assertGreaterEqual(self.fcst.validation_r2, -1.0, "R² score should be at least -1")
 
         # import plotly.express as px
-        # data_to_plot = self.fcst.P_PV_forecast_validation[["forecast", "adjusted_forecast"]].reset_index()
+        # data_to_plot = self.fcst.p_pv_forecast_validation[["forecast", "adjusted_forecast"]].reset_index()
         # fig = px.line(
         #     data_to_plot,
         #     x="index",  # Assuming the index is the timestamp

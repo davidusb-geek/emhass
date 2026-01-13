@@ -1068,6 +1068,83 @@ class Forecast:
             ]
         return forecast_dates_csv
 
+    def _load_forecast_data(
+        self,
+        csv_path: str,
+        data_list: list | None,
+        forecast_dates_csv: pd.date_range,
+    ) -> pd.DataFrame:
+        """
+        Helper to load and format forecast data from a CSV file or a list.
+        """
+        if csv_path is None:
+            data_dict = {"ts": forecast_dates_csv, "yhat": data_list}
+            df_csv = pd.DataFrame.from_dict(data_dict)
+            df_csv.index = forecast_dates_csv
+            df_csv = df_csv.drop(["ts"], axis=1)
+            df_csv = set_df_index_freq(df_csv)
+        else:
+            if not os.path.exists(csv_path):
+                csv_path = self.emhass_conf["data_path"] / csv_path
+            df_csv = pd.read_csv(csv_path, header=None, names=["ts", "yhat"])
+            # Check if first column is a valid datetime
+            first_col = df_csv.iloc[:, 0]
+            if pd.to_datetime(first_col, errors="coerce").notna().all():
+                df_csv["ts"] = pd.to_datetime(df_csv["ts"], utc=True)
+                df_csv.set_index("ts", inplace=True)
+                df_csv.index = df_csv.index.tz_convert(self.time_zone)
+            else:
+                df_csv.index = forecast_dates_csv
+                df_csv = df_csv.drop(["ts"], axis=1)
+            df_csv = set_df_index_freq(df_csv)
+        return df_csv
+
+    def _extract_daily_forecast(
+        self,
+        day: int,
+        df_timing: pd.DataFrame,
+        df_csv: pd.DataFrame,
+        csv_path: str,
+        list_and_perfect: bool,
+    ) -> pd.DataFrame:
+        """
+        Helper to extract a specific day's forecast data based on timing configuration.
+        """
+        # Find the start and end indices for the specific day in the timing DataFrame
+        day_mask = df_timing.index.day == day
+        day_indices = [i for i, x in enumerate(day_mask) if x]
+        first_elm_index = day_indices[0]
+        last_elm_index = day_indices[-1]
+        # Define the target forecast index based on the timing DataFrame
+        fcst_index = pd.date_range(
+            start=df_timing.index[first_elm_index],
+            end=df_timing.index[last_elm_index],
+            freq=df_timing.index.freq,
+        )
+        first_hour = f"{df_timing.index[first_elm_index].hour:02d}:{df_timing.index[first_elm_index].minute:02d}"
+        last_hour = f"{df_timing.index[last_elm_index].hour:02d}:{df_timing.index[last_elm_index].minute:02d}"
+        # Extract data
+        if csv_path is None:
+            if list_and_perfect:
+                values_array = df_csv.between_time(first_hour, last_hour).values
+                # Adjust index length if necessary
+                fcst_index = fcst_index[0 : len(values_array)]
+                return pd.DataFrame(values_array, index=fcst_index)
+            else:
+                return pd.DataFrame(
+                    df_csv.loc[fcst_index, :].between_time(first_hour, last_hour).values,
+                    index=fcst_index,
+                )
+        else:
+            # For CSV path, filter by date string first
+            df_csv_filtered_date = df_csv.loc[
+                df_csv.index.strftime("%Y-%m-%d") == fcst_index[0].date().strftime("%Y-%m-%d")
+            ]
+            return pd.DataFrame(
+                df_csv_filtered_date.between_time(first_hour, last_hour).values,
+                index=fcst_index,
+            )
+
     def get_forecast_out_from_csv_or_list(
         self,
         df_final: pd.DataFrame,
@@ -1093,108 +1170,28 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
-        if csv_path is None:
-            data_dict = {"ts": forecast_dates_csv, "yhat": data_list}
-            df_csv = pd.DataFrame.from_dict(data_dict)
-            df_csv.index = forecast_dates_csv
-            df_csv = df_csv.drop(["ts"], axis=1)
-            df_csv = set_df_index_freq(df_csv)
-            if list_and_perfect:
-                days_list = df_final.index.day.unique().tolist()
-            else:
-                days_list = df_csv.index.day.unique().tolist()
+        # Load the source data (df_csv)
+        df_csv = self._load_forecast_data(csv_path, data_list, forecast_dates_csv)
+        # Configure timing source (df_timing) and iteration list
+        if csv_path is None or list_and_perfect:
+            df_final = set_df_index_freq(df_final)
+            df_timing = copy.deepcopy(df_final)
+            days_list = df_final.index.day.unique().tolist()
         else:
-            if not os.path.exists(csv_path):
-                csv_path = self.emhass_conf["data_path"] / csv_path
-            load_csv_file_path = csv_path
-            df_csv = pd.read_csv(load_csv_file_path, header=None, names=["ts", "yhat"])
-
-            first_col = df_csv.iloc[:, 0]
-            # If the entire column can be converted to datetime, set it as index
-            if pd.to_datetime(first_col, errors="coerce").notna().all():
-                df_csv["ts"] = pd.to_datetime(df_csv["ts"], utc=True)
-                # Set the timestamp column as the index
-                df_csv.set_index("ts", inplace=True)
-                df_csv.index = df_csv.index.tz_convert(self.time_zone)
-            else:
-                df_csv.index = forecast_dates_csv
-                df_csv = df_csv.drop(["ts"], axis=1)
-            df_csv = set_df_index_freq(df_csv)
-            if list_and_perfect:
-                days_list = df_final.index.day.unique().tolist()
-            else:
-                days_list = df_csv.index.day.unique().tolist()
-        forecast_out = pd.DataFrame()
+            df_timing = copy.deepcopy(df_csv)
+            days_list = df_csv.index.day.unique().tolist()
+        # Iterate over days and collect forecast parts
+        forecast_parts = []
         for day in days_list:
-            if csv_path is None or list_and_perfect:
-                df_final = set_df_index_freq(df_final)
-                df_tmp = copy.deepcopy(df_final)
-            else:
-                df_tmp = copy.deepcopy(df_csv)
-            first_elm_index = [i for i, x in enumerate(df_tmp.index.day == day) if x][0]
-            last_elm_index = [i for i, x in enumerate(df_tmp.index.day == day) if x][-1]
-            fcst_index = pd.date_range(
-                start=df_tmp.index[first_elm_index],
-                end=df_tmp.index[last_elm_index],
-                freq=df_tmp.index.freq,
+            daily_df = self._extract_daily_forecast(
+                day, df_timing, df_csv, csv_path, list_and_perfect
             )
-            first_hour = (
-                f"{df_tmp.index[first_elm_index].hour:02d}"
-                + ":"
-                + f"{df_tmp.index[first_elm_index].minute:02d}"
-            )
-            last_hour = (
-                f"{df_tmp.index[last_elm_index].hour:02d}"
-                + ":"
-                + f"{df_tmp.index[last_elm_index].minute:02d}"
-            )
-            if len(forecast_out) == 0:
-                if csv_path is None:
-                    if list_and_perfect:
-                        values_array = df_csv.between_time(first_hour, last_hour).values
-                        fcst_index = fcst_index[0 : len(values_array)]  # Fix for different lengths
-                        forecast_out = pd.DataFrame(
-                            values_array,
-                            index=fcst_index,
-                        )
-                    else:
-                        forecast_out = pd.DataFrame(
-                            df_csv.loc[fcst_index, :].between_time(first_hour, last_hour).values,
-                            index=fcst_index,
-                        )
-                else:
-                    df_csv_filtered_date = df_csv.loc[
-                        df_csv.index.strftime("%Y-%m-%d")
-                        == fcst_index[0].date().strftime("%Y-%m-%d")
-                    ]
-                    forecast_out = pd.DataFrame(
-                        df_csv_filtered_date.between_time(first_hour, last_hour).values,
-                        index=fcst_index,
-                    )
-            else:
-                if csv_path is None:
-                    if list_and_perfect:
-                        values_array = df_csv.between_time(first_hour, last_hour).values
-                        fcst_index = fcst_index[0 : len(values_array)]  # Fix for different lengths
-                        forecast_tp = pd.DataFrame(
-                            values_array,
-                            index=fcst_index,
-                        )
-                    else:
-                        forecast_tp = pd.DataFrame(
-                            df_csv.loc[fcst_index, :].between_time(first_hour, last_hour).values,
-                            index=fcst_index,
-                        )
-                else:
-                    df_csv_filtered_date = df_csv.loc[
-                        df_csv.index.strftime("%Y-%m-%d")
-                        == fcst_index[0].date().strftime("%Y-%m-%d")
-                    ]
-                    forecast_tp = pd.DataFrame(
-                        df_csv_filtered_date.between_time(first_hour, last_hour).values,
-                        index=fcst_index,
-                    )
-                forecast_out = pd.concat([forecast_out, forecast_tp], axis=0)
+            forecast_parts.append(daily_df)
+        if forecast_parts:
+            forecast_out = pd.concat(forecast_parts, axis=0)
+        else:
+            forecast_out = pd.DataFrame()
+        # Merge with final DataFrame to align indices
         merged = pd.merge_asof(
             df_final.sort_index(),
             forecast_out.sort_index(),
@@ -1273,6 +1270,166 @@ class Forecast:
         forecast = combined_data.groupby(combined_data.index).mean()
         return forecast, used_days
 
+    async def _prepare_hass_load_data(
+        self, days_min_load_forecast: int, method: str
+    ) -> pd.DataFrame | bool:
+        """Helper to retrieve and prepare load data from Home Assistant."""
+        self.logger.info(f"Retrieving data from hass for load forecast using method = {method}")
+        var_list = [self.var_load]
+        var_replace_zero = None
+        var_interp = [self.var_load]
+        time_zone_load_forecast = None
+        rh = RetrieveHass(
+            self.retrieve_hass_conf["hass_url"],
+            self.retrieve_hass_conf["long_lived_token"],
+            self.freq,
+            time_zone_load_forecast,
+            self.params,
+            self.emhass_conf,
+            self.logger,
+        )
+        if self.get_data_from_file:
+            filename_path = self.emhass_conf["data_path"] / "test_df_final.pkl"
+            async with aiofiles.open(filename_path, "rb") as inp:
+                content = await inp.read()
+                rh.df_final, days_list, var_list, rh.ha_config = pickle.loads(content)
+                self.var_load = var_list[0]
+                self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = self.var_load
+                var_interp = [var_list[0]]
+                self.var_list = [var_list[0]]
+                rh.var_list = self.var_list
+                self.var_load_new = self.var_load + "_positive"
+        else:
+            days_list = get_days_list(days_min_load_forecast)
+            if not await rh.get_data(days_list, var_list):
+                return False
+        if not rh.prepare_data(
+            self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
+            load_negative=self.retrieve_hass_conf["load_negative"],
+            set_zero_min=self.retrieve_hass_conf["set_zero_min"],
+            var_replace_zero=var_replace_zero,
+            var_interp=var_interp,
+        ):
+            return False
+        return rh.df_final.copy()[[self.var_load_new]]
+
+    async def _get_load_forecast_typical(self) -> pd.DataFrame:
+        """Helper to generate typical load forecast."""
+        model_type = "long_train_data"
+        data_path = self.emhass_conf["data_path"] / str(model_type + ".pkl")
+        async with aiofiles.open(data_path, "rb") as fid:
+            content = await fid.read()
+            data, _, _, _ = pickle.loads(content)
+        # Ensure the data index is timezone-aware
+        data.index = (
+            data.index.tz_localize(
+                self.forecast_dates.tz,
+                ambiguous="infer",
+                nonexistent="shift_forward",
+            )
+            if data.index.tz is None
+            else data.index.tz_convert(self.forecast_dates.tz)
+        )
+        data = data[[self.var_load]]
+        current_freq = pd.Timedelta("30min")
+        if self.freq != current_freq:
+            data = Forecast.resample_data(data, self.freq, current_freq)
+        dates_list = np.unique(self.forecast_dates.date).tolist()
+        forecast = pd.DataFrame()
+        for date in dates_list:
+            forecast_date = pd.Timestamp(date)
+            data.columns = ["load"]
+            forecast_tmp, used_days = Forecast.get_typical_load_forecast(data, forecast_date)
+            self.logger.debug(f"Using {len(used_days)} days of data to generate the forecast.")
+            forecast_tmp = forecast_tmp * self.plant_conf["maximum_power_from_grid"] / 9000
+            if len(forecast) == 0:
+                forecast = forecast_tmp
+            else:
+                forecast = pd.concat([forecast, forecast_tmp], axis=0)
+        forecast_out = forecast.loc[forecast.index.intersection(self.forecast_dates)]
+        forecast_out.index = self.forecast_dates
+        forecast_out.index.name = "ts"
+        return forecast_out.rename(columns={"load": "yhat"})
+
+    def _get_load_forecast_naive(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Helper for naive forecast."""
+        forecast_horizon = len(self.forecast_dates)
+        historical_values = df.iloc[-forecast_horizon:]
+        return pd.DataFrame(historical_values.values, index=self.forecast_dates, columns=["yhat"])
+
+    async def _get_load_forecast_ml(
+        self, df: pd.DataFrame, use_last_window: bool, mlf, debug: bool
+    ) -> pd.DataFrame | bool:
+        """Helper for ML forecast."""
+        model_type = self.params["passed_data"]["model_type"]
+        filename = model_type + "_mlf.pkl"
+        filename_path = self.emhass_conf["data_path"] / filename
+        if not debug:
+            if filename_path.is_file():
+                async with aiofiles.open(filename_path, "rb") as inp:
+                    content = await inp.read()
+                    mlf = pickle.loads(content)
+            else:
+                self.logger.error(
+                    "The ML forecaster file was not found, please run a model fit method before this predict method"
+                )
+                return False
+        data_last_window = None
+        if use_last_window:
+            data_last_window = copy.deepcopy(df)
+            data_last_window = data_last_window.rename(columns={self.var_load_new: self.var_load})
+        forecast_out = await mlf.predict(data_last_window)
+        self.logger.debug(
+            "Number of ML predict forcast data generated (lags_opt): "
+            + str(len(forecast_out.index))
+        )
+        self.logger.debug(
+            "Number of forcast dates obtained (prediction_horizon): "
+            + str(len(self.forecast_dates))
+        )
+        if len(self.forecast_dates) < len(forecast_out.index):
+            forecast_out = forecast_out.iloc[0 : len(self.forecast_dates)]
+        elif len(self.forecast_dates) > len(forecast_out.index):
+            self.logger.error(
+                "Unable to obtain: "
+                + str(len(self.forecast_dates))
+                + " lags_opt values from sensor: power load no var loads, check optimization_time_step/freq and historic_days_to_retrieve/days_to_retrieve parameters"
+            )
+            return False
+        data_dict = {
+            "ts": self.forecast_dates,
+            "yhat": forecast_out.values.tolist(),
+        }
+        data = pd.DataFrame.from_dict(data_dict)
+        data.set_index("ts", inplace=True)
+        return data.copy().loc[self.forecast_dates]
+
+    def _get_load_forecast_csv(self, csv_path: str) -> pd.DataFrame:
+        """Helper to retrieve load data from CSV."""
+        df_csv = pd.read_csv(csv_path, header=None, names=["ts", "yhat"])
+        if len(df_csv) < len(self.forecast_dates):
+            self.logger.error("Passed data from CSV is not long enough")
+            return None
+        df_csv = df_csv.loc[df_csv.index[0 : len(self.forecast_dates)], :]
+        df_csv.index = self.forecast_dates
+        df_csv = df_csv.drop(["ts"], axis=1)
+        return df_csv.copy().loc[self.forecast_dates]
+
+    def _get_load_forecast_list(self) -> pd.DataFrame:
+        """Helper to retrieve load data from a passed list."""
+        data_list = self.params["passed_data"]["load_power_forecast"]
+        if (
+            len(data_list) < len(self.forecast_dates)
+            and self.params["passed_data"]["prediction_horizon"] is None
+        ):
+            self.logger.error(error_msg_list_not_long_enough)
+            return False
+        data_list = data_list[0 : len(self.forecast_dates)]
+        data_dict = {"ts": self.forecast_dates, "yhat": data_list}
+        data = pd.DataFrame.from_dict(data_dict)
+        data.set_index("ts", inplace=True)
+        return data.copy().loc[self.forecast_dates]
+
     async def get_load_forecast(
         self,
         days_min_load_forecast: int | None = 3,
@@ -1320,191 +1477,33 @@ class Forecast:
 
         """
         csv_path = self.emhass_conf["data_path"] / csv_path
-
-        if method == "naive" or method == "mlforecaster":
-            self.logger.info(f"Retrieving data from hass for load forecast using method = {method}")
-            var_list = [self.var_load]
-            var_replace_zero = None
-            var_interp = [self.var_load]
-            time_zone_load_foreacast = None
-            # We will need to retrieve a new set of load data according to the days_min_load_forecast parameter
-            rh = RetrieveHass(
-                self.retrieve_hass_conf["hass_url"],
-                self.retrieve_hass_conf["long_lived_token"],
-                self.freq,
-                time_zone_load_foreacast,
-                self.params,
-                self.emhass_conf,
-                self.logger,
-            )
-            if self.get_data_from_file:
-                filename_path = self.emhass_conf["data_path"] / "test_df_final.pkl"
-                async with aiofiles.open(filename_path, "rb") as inp:
-                    content = await inp.read()
-                    rh.df_final, days_list, var_list, rh.ha_config = pickle.loads(content)
-                    self.var_load = var_list[0]
-                    self.retrieve_hass_conf["sensor_power_load_no_var_loads"] = self.var_load
-                    var_interp = [var_list[0]]
-                    self.var_list = [var_list[0]]
-                    rh.var_list = self.var_list
-                    self.var_load_new = self.var_load + "_positive"
-            else:
-                days_list = get_days_list(days_min_load_forecast)
-                if not await rh.get_data(days_list, var_list):
-                    return False
-            if not rh.prepare_data(
-                self.retrieve_hass_conf["sensor_power_load_no_var_loads"],
-                load_negative=self.retrieve_hass_conf["load_negative"],
-                set_zero_min=self.retrieve_hass_conf["set_zero_min"],
-                var_replace_zero=var_replace_zero,
-                var_interp=var_interp,
-            ):
+        # Retrieve Data from Home Assistant if needed
+        df = None
+        if method in ["naive", "mlforecaster"]:
+            df = await self._prepare_hass_load_data(days_min_load_forecast, method)
+            if df is False:
                 return False
-            df = rh.df_final.copy()[[self.var_load_new]]
-        if method == "typical":  # using typical statistical data from a household power consumption
-            # Loading data from history file
-            model_type = "long_train_data"
-            data_path = self.emhass_conf["data_path"] / str(model_type + ".pkl")
-            async with aiofiles.open(data_path, "rb") as fid:
-                content = await fid.read()
-                data, _, _, _ = pickle.loads(content)
-            # Ensure the data index is timezone-aware and matches self.forecast_dates' timezone
-            # Use explicit ambiguous/nonexistent handling when localizing naive indexes so
-            # DST forward transitions (skipped times) do not raise NonExistentTimeError.
-            data.index = (
-                data.index.tz_localize(
-                    self.forecast_dates.tz,
-                    ambiguous="infer",
-                    nonexistent="shift_forward",
-                )
-                if data.index.tz is None
-                else data.index.tz_convert(self.forecast_dates.tz)
-            )
-            # Generate forecast
-            data = data[[self.var_load]]
-            current_freq = pd.Timedelta("30min")
-            if self.freq != current_freq:
-                data = Forecast.resample_data(data, self.freq, current_freq)
-            data_list = []
-            dates_list = np.unique(self.forecast_dates.date).tolist()
-            forecast = pd.DataFrame()
-            for date in dates_list:
-                forecast_date = pd.Timestamp(date)
-                data.columns = ["load"]
-                forecast_tmp, used_days = Forecast.get_typical_load_forecast(data, forecast_date)
-                self.logger.debug(f"Using {len(used_days)} days of data to generate the forecast.")
-                # Normalize the forecast
-                forecast_tmp = forecast_tmp * self.plant_conf["maximum_power_from_grid"] / 9000
-                data_list.extend(forecast_tmp.values.ravel().tolist())
-                if len(forecast) == 0:
-                    forecast = forecast_tmp
-                else:
-                    forecast = pd.concat([forecast, forecast_tmp], axis=0)
-            forecast_out = forecast.loc[forecast.index.intersection(self.forecast_dates)]
-            forecast_out.index = self.forecast_dates
-            forecast_out.index.name = "ts"
-            forecast_out = forecast_out.rename(columns={"load": "yhat"})
-        elif method == "naive":  # using a naive approach
-            # Old code logic (shifted timestamp problem)
-            # mask_forecast_out = (
-            #     df.index > days_list[-1] - self.optim_conf["delta_forecast_daily"]
-            # )
-            # forecast_out = df.copy().loc[mask_forecast_out]
-            # forecast_out = forecast_out.rename(columns={self.var_load_new: "yhat"})
-            # forecast_out = forecast_out.iloc[0 : len(self.forecast_dates)]
-            # forecast_out.index = self.forecast_dates
-            # New code logic
-            forecast_horizon = len(self.forecast_dates)
-            historical_values = df.iloc[-forecast_horizon:]
-            forecast_out = pd.DataFrame(
-                historical_values.values, index=self.forecast_dates, columns=["yhat"]
-            )
-        elif method == "mlforecaster":  # using a custom forecast model with machine learning
-            # Load model
-            model_type = self.params["passed_data"]["model_type"]
-            filename = model_type + "_mlf.pkl"
-            filename_path = self.emhass_conf["data_path"] / filename
-            if not debug:
-                if filename_path.is_file():
-                    async with aiofiles.open(filename_path, "rb") as inp:
-                        content = await inp.read()
-                        mlf = pickle.loads(content)
-                else:
-                    self.logger.error(
-                        "The ML forecaster file was not found, please run a model fit method before this predict method"
-                    )
-                    return False
-            # Make predictions
-            if use_last_window:
-                data_last_window = copy.deepcopy(df)
-                data_last_window = data_last_window.rename(
-                    columns={self.var_load_new: self.var_load}
-                )
-            else:
-                data_last_window = None
-            forecast_out = await mlf.predict(data_last_window)
-            # Force forecast length to avoid mismatches
-            self.logger.debug(
-                "Number of ML predict forcast data generated (lags_opt): "
-                + str(len(forecast_out.index))
-            )
-            self.logger.debug(
-                "Number of forcast dates obtained (prediction_horizon): "
-                + str(len(self.forecast_dates))
-            )
-            if len(self.forecast_dates) < len(forecast_out.index):
-                forecast_out = forecast_out.iloc[0 : len(self.forecast_dates)]
-
-            # To be removed once bug is fixed
-            elif len(self.forecast_dates) > len(forecast_out.index):
-                self.logger.error(
-                    "Unable to obtain: "
-                    + str(len(self.forecast_dates))
-                    + " lags_opt values from sensor: power load no var loads, check optimization_time_step/freq and historic_days_to_retrieve/days_to_retrieve parameters"
-                )
+        # Generate Forecast based on Method
+        if method == "typical":
+            forecast_out = await self._get_load_forecast_typical()
+        elif method == "naive":
+            forecast_out = self._get_load_forecast_naive(df)
+        elif method == "mlforecaster":
+            forecast_out = await self._get_load_forecast_ml(df, use_last_window, mlf, debug)
+            if forecast_out is False:
                 return False
-            # Define DataFrame
-            data_dict = {
-                "ts": self.forecast_dates,
-                "yhat": forecast_out.values.tolist(),
-            }
-            data = pd.DataFrame.from_dict(data_dict)
-            # Define index
-            data.set_index("ts", inplace=True)
-            forecast_out = data.copy().loc[self.forecast_dates]
-        elif method == "csv":  # reading from a csv file
-            df_csv = pd.read_csv(csv_path, header=None, names=["ts", "yhat"])
-            if len(df_csv) < len(self.forecast_dates):
-                self.logger.error("Passed data from CSV is not long enough")
-            else:
-                # Ensure correct length
-                df_csv = df_csv.loc[df_csv.index[0 : len(self.forecast_dates)], :]
-                # Define index
-                df_csv.index = self.forecast_dates
-                df_csv = df_csv.drop(["ts"], axis=1)
-                forecast_out = df_csv.copy().loc[self.forecast_dates]
-        elif method == "list":  # reading a list of values
-            # Loading data from passed list
-            data_list = self.params["passed_data"]["load_power_forecast"]
-            # Check if the passed data has the correct length
-            if (
-                len(data_list) < len(self.forecast_dates)
-                and self.params["passed_data"]["prediction_horizon"] is None
-            ):
-                self.logger.error(error_msg_list_not_long_enough)
+        elif method == "csv":
+            forecast_out = self._get_load_forecast_csv(csv_path)
+            if forecast_out is None:
                 return False
-            else:
-                # Ensure correct length
-                data_list = data_list[0 : len(self.forecast_dates)]
-                # Define DataFrame
-                data_dict = {"ts": self.forecast_dates, "yhat": data_list}
-                data = pd.DataFrame.from_dict(data_dict)
-                # Define index
-                data.set_index("ts", inplace=True)
-                forecast_out = data.copy().loc[self.forecast_dates]
+        elif method == "list":
+            forecast_out = self._get_load_forecast_list()
+            if forecast_out is False:
+                return False
         else:
             self.logger.error(error_msg_method_not_valid)
             return False
+        # Post-processing (Mix Forecast)
         p_load_forecast = copy.deepcopy(forecast_out["yhat"])
         if set_mix_forecast:
             # Load forecasts don't need curtailment protection - always use feedback
