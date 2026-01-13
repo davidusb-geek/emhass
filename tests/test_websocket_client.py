@@ -27,7 +27,7 @@ class TestWebSocketClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.token, self.token)
         self.assertEqual(self.client.websocket_url, "ws://localhost:8123/api/websocket")
 
-    async def _setup_mock_ws(self, mock_connect):
+    def _setup_mock_ws(self, mock_connect):
         """Helper to setup the websocket mock with a Queue-based recv."""
         mock_ws = MagicMock()
         mock_ws.send = AsyncMock()
