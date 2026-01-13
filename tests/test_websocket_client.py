@@ -40,7 +40,7 @@ class TestWebSocketClient(unittest.IsolatedAsyncioTestCase):
 
     @patch("emhass.websocket_client.websockets.connect", new_callable=AsyncMock)
     async def test_startup_success(self, mock_connect):
-        mock_ws = await self._setup_mock_ws(mock_connect)
+        mock_ws = self._setup_mock_ws(mock_connect)
         # Queue the auth handshake messages
         await self.response_queue.put(orjson.dumps({"type": "auth_required"}).decode())
         await self.response_queue.put(
@@ -57,7 +57,7 @@ class TestWebSocketClient(unittest.IsolatedAsyncioTestCase):
 
     @patch("emhass.websocket_client.websockets.connect", new_callable=AsyncMock)
     async def test_startup_auth_fail(self, mock_connect):
-        await self._setup_mock_ws(mock_connect)
+        self._setup_mock_ws(mock_connect)
         # Queue the fail sequence
         await self.response_queue.put(orjson.dumps({"type": "auth_required"}).decode())
         await self.response_queue.put(
@@ -69,7 +69,7 @@ class TestWebSocketClient(unittest.IsolatedAsyncioTestCase):
 
     @patch("emhass.websocket_client.websockets.connect", new_callable=AsyncMock)
     async def test_send_and_receive(self, mock_connect):
-        mock_ws = await self._setup_mock_ws(mock_connect)
+        mock_ws = self._setup_mock_ws(mock_connect)
         # Auth Handshake
         await self.response_queue.put(orjson.dumps({"type": "auth_required"}).decode())
         await self.response_queue.put(orjson.dumps({"type": "auth_ok"}).decode())
@@ -95,7 +95,7 @@ class TestWebSocketClient(unittest.IsolatedAsyncioTestCase):
 
     @patch("emhass.websocket_client.websockets.connect", new_callable=AsyncMock)
     async def test_convenience_methods(self, mock_connect):
-        await self._setup_mock_ws(mock_connect)
+        self._setup_mock_ws(mock_connect)
         # Auth Phase
         await self.response_queue.put(orjson.dumps({"type": "auth_required"}).decode())
         await self.response_queue.put(orjson.dumps({"type": "auth_ok"}).decode())
@@ -138,7 +138,7 @@ class TestWebSocketClient(unittest.IsolatedAsyncioTestCase):
     @patch("emhass.websocket_client.websockets.connect", new_callable=AsyncMock)
     async def test_send_propagates_error_result(self, mock_connect):
         """Queued response with success: False should surface as error from send()."""
-        await self._setup_mock_ws(mock_connect)
+        self._setup_mock_ws(mock_connect)
         # Auth Handshake
         await self.response_queue.put(orjson.dumps({"type": "auth_required"}).decode())
         await self.response_queue.put(
@@ -161,7 +161,7 @@ class TestWebSocketClient(unittest.IsolatedAsyncioTestCase):
     @patch("emhass.websocket_client.websockets.connect", new_callable=AsyncMock)
     async def test_send_skips_non_matching_messages(self, mock_connect):
         """Listener should ignore unrelated messages until matching response arrives."""
-        await self._setup_mock_ws(mock_connect)
+        self._setup_mock_ws(mock_connect)
         # Auth Handshake
         await self.response_queue.put(orjson.dumps({"type": "auth_required"}).decode())
         await self.response_queue.put(orjson.dumps({"type": "auth_ok"}).decode())

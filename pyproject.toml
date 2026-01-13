@@ -1,10 +1,10 @@
 [project]
 name = "emhass"
-version = "0.15.3"
+version = "0.15.4"
 description = "An Energy Management System for Home Assistant"
 readme = "README.md"
 requires-python = ">=3.10, <3.13"
-authors = [{ name = "David HERNANDEZ", email = "davidusb@gmail.com" }]
+authors = [{ name = "David HERNANDEZ TORRES", email = "davidusb@gmail.com" }]
 license = { text = "MIT" }
 keywords = ["energy", "management", "optimization", "hass"]
 classifiers = [
