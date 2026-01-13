@@ -447,6 +447,81 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         # Compare as dictionaries to ignore whitespace differences (e.g. " : " vs ":")
         self.assertEqual(orjson.loads(actual_arg), orjson.loads(valid_json_str))
 
+    @patch("os.getenv")
+    async def test_setup_paths(self, mock_getenv):
+        # Configure env vars
+        env_vars = {
+            "DATA_PATH": "/env/data",
+            "CONFIG_PATH": "/env/config.json",
+            "OPTIONS_PATH": "/env/options.json",
+            "ROOT_PATH": "/env/root",
+            "DEFAULTS_PATH": "/env/defaults.json",
+            "ASSOCIATIONS_PATH": "/env/assoc.csv",
+            "LEGACY_CONFIG_PATH": "/env/legacy.yaml",
+        }
+        mock_getenv.side_effect = lambda key, default=None: env_vars.get(key, default)
+        # Run the helper
+        paths = await web_server._setup_paths()
+        # Unpack results
+        (config_path, options_path, defaults_path, assoc_path, legacy_path, root_path) = paths
+        # Assertions: Compare against pathlib objects to handle OS separators automatically
+        self.assertEqual(config_path, pathlib.Path("/env/config.json"))
+        self.assertEqual(web_server.emhass_conf["data_path"], pathlib.Path("/env/data"))
+        self.assertEqual(web_server.emhass_conf["root_path"], pathlib.Path("/env/root"))
+
+    @patch("pathlib.Path.mkdir")
+    @patch("os.path.isdir")
+    def test_validate_data_path(self, mock_isdir, mock_mkdir):
+        root = pathlib.Path("/root")
+        # Case 1: Path exists
+        web_server.emhass_conf["data_path"] = pathlib.Path("/existing/data")
+        mock_isdir.return_value = True
+        web_server._validate_data_path(root)
+        self.assertEqual(web_server.emhass_conf["data_path"], pathlib.Path("/existing/data"))
+        # Case 2: Path missing, fallback to /data/ exists
+        web_server.emhass_conf["data_path"] = pathlib.Path("/missing/data")
+        # isdir side effect: First call (check emhass_conf) -> False, Second call (check /data/) -> True
+        mock_isdir.side_effect = [False, True]
+        web_server._validate_data_path(root)
+        self.assertEqual(web_server.emhass_conf["data_path"], pathlib.Path("/data"))
+        # Case 3: Path missing, fallback missing -> create root/data
+        web_server.emhass_conf["data_path"] = pathlib.Path("/missing/data")
+        mock_isdir.side_effect = [False, False]
+        web_server._validate_data_path(root)
+        self.assertEqual(web_server.emhass_conf["data_path"], root / "data/")
+        mock_mkdir.assert_called()
+
+    @patch("emhass.web_server.get_websocket_client")
+    async def test_initialize_connections(self, mock_ws_client):
+        # Re-enable logging for this test so assertLogs can capture output
+        logger = logging.getLogger("emhass")
+        original_level = logger.level
+        logger.setLevel(logging.INFO)
+        try:
+            # Case 1: Websocket Enabled - Success
+            params = {"retrieve_hass_conf": {"use_websocket": True}}
+            await web_server._initialize_connections(params)
+            mock_ws_client.assert_called()
+            # Case 2: Websocket Enabled - Failure
+            mock_ws_client.side_effect = ConnectionError("Connection fail")
+            with self.assertRaises(ConnectionError):
+                await web_server._initialize_connections(params)
+            # Case 3: InfluxDB Enabled
+            mock_ws_client.reset_mock()
+            params = {"retrieve_hass_conf": {"use_websocket": False, "use_influxdb": True}}
+            with self.assertLogs("emhass", level="INFO") as cm:
+                await web_server._initialize_connections(params)
+            self.assertTrue(any("InfluxDB mode enabled" in log for log in cm.output))
+            mock_ws_client.assert_not_called()
+            # Case 4: Neither (REST API)
+            params = {"retrieve_hass_conf": {"use_websocket": False, "use_influxdb": False}}
+            with self.assertLogs("emhass", level="INFO") as cm:
+                await web_server._initialize_connections(params)
+            self.assertTrue(any("using REST API" in log for log in cm.output))
+        finally:
+            # Restore original logging level
+            logger.setLevel(original_level)
+
 
 if __name__ == "__main__":
     unittest.main()
