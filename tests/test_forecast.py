@@ -177,7 +177,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             len(self.df_weather_csv),
             int(
-                self.optim_conf["delta_forecast_daily"].total_seconds() / 3600 / self.fcst.timeStep
+                self.optim_conf["delta_forecast_daily"].total_seconds()
+                / 3600
+                / (self.fcst.freq.seconds / 3600)
             ),
         )
         # Test dataframe from get power from weather
@@ -203,7 +205,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # Call data preparation method
         self.fcst.adjust_pv_forecast_data_prep(data)
         self.assertIsInstance(self.fcst.data_adjust_pv, pd.DataFrame)
-        self.assertIsInstance(self.fcst.X_adjust_pv, pd.DataFrame)
+        self.assertIsInstance(self.fcst.x_adjust_pv, pd.DataFrame)
         self.assertIsInstance(self.fcst.y_adjust_pv, pd.core.series.Series)
         # Call the fit method
         await self.fcst.adjust_pv_forecast_fit(
@@ -278,7 +280,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 int(
                     self.optim_conf["delta_forecast_daily"].total_seconds()
                     / 3600
-                    / self.fcst.timeStep
+                    / (self.fcst.freq.seconds / 3600)
                 ),
             )
             # Test the legacy code using PVLib module methods
@@ -367,7 +369,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 int(
                     self.optim_conf["delta_forecast_daily"].total_seconds()
                     / 3600
-                    / self.fcst.timeStep
+                    / (self.fcst.freq.seconds / 3600)
                 ),
             )
             if os.path.isfile(emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"):
@@ -416,7 +418,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 int(
                     self.optim_conf["delta_forecast_daily"].total_seconds()
                     / 3600
-                    / self.fcst.timeStep
+                    / (self.fcst.freq.seconds / 3600)
                 ),
             )
             if os.path.isfile(emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"):
@@ -472,7 +474,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                     int(
                         self.optim_conf["delta_forecast_daily"].total_seconds()
                         / 3600
-                        / self.fcst.timeStep
+                        / (self.fcst.freq.seconds / 3600)
                     ),
                 )
 
