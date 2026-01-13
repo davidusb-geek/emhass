@@ -704,7 +704,7 @@ async function saveConfiguration(param_definitions) {
   if (Boolean(config_card.length)) {
     //retrieve params and their input/s by looping though param_definitions list
     //loop through the sections
-    for (var [section_name, section_object] of Object.entries(
+    for (const [, section_object] of Object.entries(
       param_definitions
     )) {
       //loop through parameters
