@@ -18,6 +18,11 @@ from emhass.utils import set_df_index_freq
 
 logger = logging.getLogger(__name__)
 
+header_accept = "application/json"
+header_auth = "Bearer"
+hass_url = "http://supervisor/core/api"
+sensor_prefix = "sensor."
+
 
 class RetrieveHass:
     r"""
@@ -137,13 +142,13 @@ class RetrieveHass:
 
         # Set up headers
         headers = {
-            "Authorization": "Bearer " + self.long_lived_token,
-            "content-type": "application/json",
+            "Authorization": header_auth + " " + self.long_lived_token,
+            "content-type": header_accept,
         }
 
         # Construct the URL (incorporating the PR's helpful checks)
         # The Supervisor API sometimes uses a different path structure
-        if self.hass_url == "http://supervisor/core/api":
+        if self.hass_url == hass_url:
             url = self.hass_url + "/config"
         else:
             # Helpful check for users who forget the trailing slash
@@ -243,6 +248,109 @@ class RetrieveHass:
             days_list, var_list, minimal_response, significant_changes_only, test_url
         )
 
+    def _build_history_url(
+        self,
+        day: pd.Timestamp,
+        var: str,
+        test_url: str,
+        minimal_response: bool,
+        significant_changes_only: bool,
+    ) -> str:
+        """Helper to construct the Home Assistant History URL."""
+        if test_url != "empty":
+            return test_url
+        # Check if using supervisor API or Core API
+        if self.hass_url == hass_url:
+            base_url = f"{self.hass_url}/history/period/{day.isoformat()}"
+        else:
+            # Ensure trailing slash for Core API
+            if self.hass_url[-1] != "/":
+                self.logger.warning(
+                    "Missing slash </> at the end of the defined URL, appending a slash but please fix your URL"
+                )
+                self.hass_url = self.hass_url + "/"
+            base_url = f"{self.hass_url}api/history/period/{day.isoformat()}"
+        url = f"{base_url}?filter_entity_id={var}"
+        if minimal_response:
+            url += "?minimal_response"
+        if significant_changes_only:
+            url += "?significant_changes_only"
+        return url
+
+    async def _fetch_history_data(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        headers: dict,
+        var: str,
+        day: pd.Timestamp,
+        is_first_day: bool,
+    ) -> list | bool:
+        """Helper to execute the HTTP request and return the raw JSON list."""
+        try:
+            async with session.get(url, headers=headers) as response:
+                response.raise_for_status()
+                data = await response.read()
+                data_list = orjson.loads(data)
+        except Exception:
+            self.logger.error("Unable to access Home Assistant instance, check URL")
+            self.logger.error("If using addon, try setting url and token to 'empty'")
+            return False
+        if response.status == 401:
+            self.logger.error("Unable to access Home Assistant instance, TOKEN/KEY")
+            return False
+        if response.status > 299:
+            self.logger.error(f"Home assistant request GET error: {response.status} for var {var}")
+            return False
+        try:
+            return data_list[0]
+        except IndexError:
+            if is_first_day:
+                self.logger.error(
+                    f"The retrieved JSON is empty, A sensor: {var} may have 0 days of history, "
+                    "passed sensor may not be correct, or days to retrieve is set too high."
+                )
+            else:
+                self.logger.error(
+                    f"The retrieved JSON is empty for day: {day}, days_to_retrieve may be larger "
+                    f"than the recorded history of sensor: {var}"
+                )
+            return False
+
+    def _process_history_dataframe(
+        self, data: list, var: str, day: pd.Timestamp, is_first_day: bool, is_last_day: bool
+    ) -> pd.DataFrame | bool:
+        """Helper to convert raw data to a resampled DataFrame."""
+        df_raw = pd.DataFrame.from_dict(data)
+        # Check for empty DataFrame
+        if len(df_raw) == 0:
+            if is_first_day:
+                self.logger.error(
+                    f"The retrieved Dataframe is empty, A sensor: {var} may have 0 days of history."
+                )
+            else:
+                self.logger.error(
+                    f"Retrieved empty Dataframe for day: {day}, check recorder settings."
+                )
+            return False
+        # Check for data sufficiency (frequency consistency)
+        expected_count = (60 / (self.freq.seconds / 60)) * 24
+        if len(df_raw) < expected_count and not is_last_day:
+            self.logger.debug(
+                f"sensor: {var} retrieved Dataframe count: {len(df_raw)}, on day: {day}. "
+                f"This is less than freq value passed: {self.freq}"
+            )
+        # Process and Resample
+        df_tp = (
+            df_raw.copy()[["state"]]
+            .replace(["unknown", "unavailable", ""], np.nan)
+            .astype(float)
+            .rename(columns={"state": var})
+        )
+        df_tp.set_index(pd.to_datetime(df_raw["last_changed"], format="ISO8601"), inplace=True)
+        df_tp = df_tp.resample(self.freq).mean()
+        return df_tp
+
     async def _get_data_rest_api(
         self,
         days_list: pd.date_range,
@@ -254,161 +362,53 @@ class RetrieveHass:
         """Internal method to handle REST API data retrieval."""
         self.logger.info("Retrieve hass get data method initiated...")
         headers = {
-            "Authorization": "Bearer " + self.long_lived_token,
-            "content-type": "application/json",
+            "Authorization": header_auth + " " + self.long_lived_token,
+            "content-type": header_accept,
         }
-        # Remove empty strings from var_list
         var_list = [var for var in var_list if var != ""]
-        # Looping on each day from days list
         self.df_final = pd.DataFrame()
 
         async with aiohttp.ClientSession() as session:
-            x = 0  # iterate based on days
-
-            for day in days_list:
+            for day_idx, day in enumerate(days_list):
+                df_day = pd.DataFrame()
                 for i, var in enumerate(var_list):
-                    if test_url == "empty":
-                        if (
-                            self.hass_url == "http://supervisor/core/api"
-                        ):  # If we are using the supervisor API
-                            url = (
-                                self.hass_url
-                                + "/history/period/"
-                                + day.isoformat()
-                                + "?filter_entity_id="
-                                + var
-                            )
-                        else:  # Otherwise the Home Assistant Core API it is
-                            if self.hass_url[-1] != "/":
-                                self.logger.warning(
-                                    "Missing slash </> at the end of the defined URL, appending a slash but please fix your URL"
-                                )
-                                self.hass_url = self.hass_url + "/"
-                            url = (
-                                self.hass_url
-                                + "api/history/period/"
-                                + day.isoformat()
-                                + "?filter_entity_id="
-                                + var
-                            )
-                        if minimal_response:  # A support for minimal response
-                            url = url + "?minimal_response"
-                        if significant_changes_only:  # And for signicant changes only (check the HASS restful API for more info)
-                            url = url + "?significant_changes_only"
-                    else:
-                        url = test_url
-
-                    try:
-                        async with session.get(url, headers=headers) as response:
-                            response.raise_for_status()
-                            data = await response.read()
-                            data_list = orjson.loads(data)
-                    except Exception:
-                        self.logger.error("Unable to access Home Assistant instance, check URL")
-                        self.logger.error("If using addon, try setting url and token to 'empty'")
-                        return False
-                    else:
-                        if response.status == 401:
-                            self.logger.error("Unable to access Home Assistant instance, TOKEN/KEY")
-                            self.logger.error(
-                                "If using addon, try setting url and token to 'empty'"
-                            )
-                            return False
-                        if response.status > 299:
-                            self.logger.error(
-                                f"Home assistant request GET error: {response.status} for var {var}"
-                            )
-                            return False
-                    """import bz2 # Uncomment to save a serialized data for tests
-                    import _pickle as cPickle
-                    with bz2.BZ2File("data/test_response_get_data_get_method.pbz2", "w") as f:
-                        cPickle.dump(response, f)"""
-
-                    try:  # Sometimes when there are connection problems we need to catch empty retrieved json
-                        data = data_list[0]
-                    except IndexError:
-                        if x == 0:
-                            self.logger.error(
-                                "The retrieved JSON is empty, A sensor:"
-                                + var
-                                + " may have 0 days of history, passed sensor may not be correct, or days to retrieve is set too high. Check your Logger configuration, ensuring the sensors are in the include list."
-                            )
-                        else:
-                            self.logger.error(
-                                "The retrieved JSON is empty for day:"
-                                + str(day)
-                                + ", days_to_retrieve may be larger than the recorded history of sensor:"
-                                + var
-                                + " (check your recorder settings)"
-                            )
-                        return False
-
-                    df_raw = pd.DataFrame.from_dict(data)
-                    if len(df_raw) == 0:
-                        if x == 0:
-                            self.logger.error(
-                                "The retrieved Dataframe is empty, A sensor:"
-                                + var
-                                + " may have 0 days of history or passed sensor may not be correct"
-                            )
-                        else:
-                            self.logger.error(
-                                "Retrieved empty Dataframe for day:"
-                                + str(day)
-                                + ", days_to_retrieve may be larger than the recorded history of sensor:"
-                                + var
-                                + " (check your recorder settings)"
-                            )
-                        return False
-
-                    if (
-                        len(df_raw) < ((60 / (self.freq.seconds / 60)) * 24)
-                        and x != len(days_list) - 1
-                    ):  # check if there is enough Dataframes for passed frequency per day (not inc current day)
-                        self.logger.debug(
-                            "sensor:"
-                            + var
-                            + " retrieved Dataframe count: "
-                            + str(len(df_raw))
-                            + ", on day: "
-                            + str(day)
-                            + ". This is less than freq value passed: "
-                            + str(self.freq)
-                        )
-
-                    if i == 0:  # Defining the DataFrame container
-                        from_date = pd.to_datetime(df_raw["last_changed"], format="ISO8601").min()
-                        to_date = pd.to_datetime(df_raw["last_changed"], format="ISO8601").max()
-                        ts = pd.to_datetime(
-                            pd.date_range(start=from_date, end=to_date, freq=self.freq),
-                            format="%Y-%d-%m %H:%M",
-                        ).round(self.freq, ambiguous="infer", nonexistent="shift_forward")
-                        df_day = pd.DataFrame(index=ts)
-
-                    # Caution with undefined string data: unknown, unavailable, etc.
-                    df_tp = (
-                        df_raw.copy()[["state"]]
-                        .replace(["unknown", "unavailable", ""], np.nan)
-                        .astype(float)
-                        .rename(columns={"state": var})
+                    # Build URL
+                    url = self._build_history_url(
+                        day, var, test_url, minimal_response, significant_changes_only
                     )
-                    # Setting index, resampling and concatenation
-                    df_tp.set_index(
-                        pd.to_datetime(df_raw["last_changed"], format="ISO8601"),
-                        inplace=True,
+                    # Fetch Data
+                    data = await self._fetch_history_data(
+                        session, url, headers, var, day, is_first_day=(day_idx == 0)
                     )
-                    df_tp = df_tp.resample(self.freq).mean()
-                    df_day = pd.concat([df_day, df_tp], axis=1)
+                    if data is False:
+                        return False
+                    # Process Data
+                    df_resampled = self._process_history_dataframe(
+                        data,
+                        var,
+                        day,
+                        is_first_day=(day_idx == 0),
+                        is_last_day=(day_idx == len(days_list) - 1),
+                    )
+                    if df_resampled is False:
+                        return False
+                    # Merge into daily DataFrame
+                    # If it's the first variable, we initialize the day's index based on it
+                    if i == 0:
+                        df_day = pd.DataFrame(index=df_resampled.index)
+                        # Ensure the daily index is regularized to the frequency
+                        # Note: The original logic created a manual range here, but using the
+                        # resampled index from the first variable is safer and cleaner if
+                        # _process_history_dataframe handles resampling correctly.
+                    df_day = pd.concat([df_day, df_resampled], axis=1)
                 self.df_final = pd.concat([self.df_final, df_day], axis=0)
-                x += 1
 
+        # Final Cleanup
         self.df_final = set_df_index_freq(self.df_final)
         if self.df_final.index.freq != self.freq:
             self.logger.error(
-                "The inferred freq:"
-                + str(self.df_final.index.freq)
-                + " from data is not equal to the defined freq in passed:"
-                + str(self.freq)
+                f"The inferred freq: {self.df_final.index.freq} from data is not equal "
+                f"to the defined freq in passed: {self.freq}"
             )
             return False
         self.var_list = var_list
@@ -702,7 +702,9 @@ class RetrieveHass:
     def _build_influx_query(self, sensor: str, start_time, end_time) -> str:
         """Build InfluxQL query for sensor data retrieval (legacy method)."""
         # Convert sensor name: sensor.sec_pac_solar -> sec_pac_solar
-        entity_id = sensor.replace("sensor.", "") if sensor.startswith("sensor.") else sensor
+        entity_id = (
+            sensor.replace(sensor_prefix, "") if sensor.startswith(sensor_prefix) else sensor
+        )
 
         # Use default measurement (for backward compatibility)
         return self._build_influx_query_for_measurement(
@@ -714,7 +716,9 @@ class RetrieveHass:
         self.logger.debug(f"Retrieving sensor: {sensor}")
 
         # Clean sensor name (remove sensor. prefix if present)
-        entity_id = sensor.replace("sensor.", "") if sensor.startswith("sensor.") else sensor
+        entity_id = (
+            sensor.replace(sensor_prefix, "") if sensor.startswith(sensor_prefix) else sensor
+        )
 
         # Auto-discover which measurement contains this entity
         measurement = self._discover_entity_measurement(client, entity_id)
@@ -780,6 +784,65 @@ class RetrieveHass:
             )
             return None
 
+    def _validate_sensor_list(self, target_list: list, list_name: str) -> list:
+        """Helper to validate that config lists only contain known sensors."""
+        if not isinstance(target_list, list):
+            return []
+        valid_items = [item for item in target_list if item in self.var_list]
+        removed = set(target_list) - set(valid_items)
+        for item in removed:
+            self.logger.warning(
+                f"Sensor '{item}' in {list_name} not found in self.var_list and has been removed."
+            )
+        return valid_items
+
+    def _process_load_column_renaming(
+        self, var_load: str, load_negative: bool, skip_renaming: bool
+    ) -> bool:
+        """Helper to handle the sign flip and renaming of the main load column."""
+        if skip_renaming:
+            return True
+        try:
+            # Apply the correct sign to load power
+            if load_negative:
+                self.df_final[var_load + "_positive"] = -self.df_final[var_load]
+            else:
+                self.df_final[var_load + "_positive"] = self.df_final[var_load]
+            self.df_final.drop([var_load], inplace=True, axis=1)
+            # Update var_list to reflect the renamed column
+            self.var_list = [var.replace(var_load, var_load + "_positive") for var in self.var_list]
+            self.logger.debug(f"prepare_data var_list updated after rename: {self.var_list}")
+            return True
+        except KeyError as e:
+            self.logger.error(
+                f"Variable '{var_load}' was not found in DataFrame columns: {list(self.df_final.columns)}. "
+                f"This is typically because no data could be retrieved from Home Assistant or InfluxDB. Error: {e}"
+            )
+            return False
+        except ValueError:
+            self.logger.error(
+                "sensor.power_photovoltaics and sensor.power_load_no_var_loads should not be the same"
+            )
+            return False
+
+    def _map_variable_names(
+        self, target_list: list, var_load: str, skip_renaming: bool, param_name: str
+    ) -> list | None:
+        """Helper to map old variable names to new ones (if renaming occurred)."""
+        if not target_list:
+            self.logger.warning(f"Unable to find all the sensors in {param_name} parameter")
+            self.logger.warning(
+                f"Confirm sure all sensors in {param_name} are sensor_power_photovoltaics and/or sensor_power_load_no_var_loads"
+            )
+            return None
+        new_list = []
+        for string in target_list:
+            if not skip_renaming:
+                new_list.append(string.replace(var_load, var_load + "_positive"))
+            else:
+                new_list.append(string)
+        return new_list
+
     def prepare_data(
         self,
         var_load: str,
@@ -813,111 +876,34 @@ class RetrieveHass:
         """
         self.logger.debug("prepare_data self.var_list=%s", self.var_list)
         self.logger.debug("prepare_data var_load=%s", var_load)
-        self.logger.debug("prepare_data load_negative=%s", load_negative)
-        self.logger.debug("prepare_data set_zero_min=%s", set_zero_min)
-        self.logger.debug("prepare_data var_replace_zero=%s", var_replace_zero)
-        self.logger.debug("prepare_data var_interp=%s", var_interp)
-        self.logger.debug("prepare_data skip_renaming=%s", skip_renaming)
-        self.logger.debug(
-            f"prepare_data df_final columns before rename: {list(self.df_final.columns)}"
-        )
-
-        # Confirm var_replace_zero & var_interp contain only sensors contained in var_list
-        # Do this BEFORE renaming so we can validate against original names
-        if isinstance(var_replace_zero, list):
-            original_list = var_replace_zero[:]
-            var_replace_zero = [item for item in var_replace_zero if item in self.var_list]
-            removed = set(original_list) - set(var_replace_zero)
-            for item in removed:
-                self.logger.warning(
-                    f"Sensor '{item}' in var_replace_zero not found in self.var_list and has been removed."
-                )
-        else:
-            var_replace_zero = []
-        if isinstance(var_interp, list):
-            original_list = var_interp[:]
-            var_interp = [item for item in var_interp if item in self.var_list]
-            removed = set(original_list) - set(var_interp)
-            for item in removed:
-                self.logger.warning(
-                    f"Sensor '{item}' in var_interp not found in self.var_list and has been removed."
-                )
-        else:
-            var_interp = []
-
-        # Now rename the DataFrame column and update var_list
-        try:
-            # Only rename column if skip_renaming is False
-            if not skip_renaming:
-                if load_negative:  # Apply the correct sign to load power
-                    self.df_final[var_load + "_positive"] = -self.df_final[var_load]
-                else:
-                    self.df_final[var_load + "_positive"] = self.df_final[var_load]
-                self.df_final.drop([var_load], inplace=True, axis=1)
-                # Update var_list to reflect the renamed column
-                self.var_list = [
-                    var.replace(var_load, var_load + "_positive") for var in self.var_list
-                ]
-                self.logger.debug(f"prepare_data var_list updated after rename: {self.var_list}")
-        except KeyError as e:
-            self.logger.error(
-                f"Variable '{var_load}' was not found in DataFrame columns: {list(self.df_final.columns)}. "
-                f"This is typically because no data could be retrieved from Home Assistant or InfluxDB. Error: {e}"
-            )
+        # Validate Input Lists
+        var_replace_zero = self._validate_sensor_list(var_replace_zero, "var_replace_zero")
+        var_interp = self._validate_sensor_list(var_interp, "var_interp")
+        # Rename Load Columns (Handle sign change)
+        if not self._process_load_column_renaming(var_load, load_negative, skip_renaming):
             return False
-        except ValueError:
-            self.logger.error(
-                "sensor.power_photovoltaics and sensor.power_load_no_var_loads should not be the same"
-            )
-            return False
-
-        # Apply minimum values
+        # Apply Zero Saturation (Min value clipping)
         if set_zero_min:
             self.df_final.clip(lower=0.0, inplace=True, axis=1)
             self.df_final.replace(to_replace=0.0, value=np.nan, inplace=True)
-        new_var_replace_zero = []
-        new_var_interp = []
-        # Just changing the names of variables to contain the fact that they are considered positive
-        if var_replace_zero is not None:
-            for string in var_replace_zero:
-                # Only rename if we are NOT skipping renaming
-                if not skip_renaming:
-                    new_string = string.replace(var_load, var_load + "_positive")
-                else:
-                    new_string = string
-                new_var_replace_zero.append(new_string)
-        else:
-            self.logger.warning("Unable to find all the sensors in sensor_replace_zero parameter")
-            self.logger.warning(
-                "Confirm sure all sensors in sensor_replace_zero are sensor_power_photovoltaics and/or ensor_power_load_no_var_loads "
-            )
-            new_var_replace_zero = None
-        if var_interp is not None:
-            for string in var_interp:
-                # Only rename if we are NOT skipping renaming
-                if not skip_renaming:
-                    new_string = string.replace(var_load, var_load + "_positive")
-                else:
-                    new_string = string
-                new_var_interp.append(new_string)
-        else:
-            new_var_interp = None
-            self.logger.warning("Unable to find all the sensors in sensor_linear_interp parameter")
-            self.logger.warning(
-                "Confirm all sensors in sensor_linear_interp are sensor_power_photovoltaics and/or ensor_power_load_no_var_loads "
-            )
-        # Treating NaN replacement: either by zeros or by linear interpolation
-        if new_var_replace_zero is not None:
+        # Map Variable Names (Update lists to match new column names)
+        new_var_replace_zero = self._map_variable_names(
+            var_replace_zero, var_load, skip_renaming, "sensor_replace_zero"
+        )
+        new_var_interp = self._map_variable_names(
+            var_interp, var_load, skip_renaming, "sensor_linear_interp"
+        )
+        # Apply Data Cleaning (FillNA / Interpolate)
+        if new_var_replace_zero:
             self.df_final[new_var_replace_zero] = self.df_final[new_var_replace_zero].fillna(0.0)
-        if new_var_interp is not None:
+        if new_var_interp:
             self.df_final[new_var_interp] = self.df_final[new_var_interp].interpolate(
                 method="linear", axis=0, limit=None
             )
             self.df_final[new_var_interp] = self.df_final[new_var_interp].fillna(0.0)
-        # Setting the correct time zone on DF index
+        # Finalize Index (Timezone and Duplicates)
         if self.time_zone is not None:
             self.df_final.index = self.df_final.index.tz_convert(self.time_zone)
-        # Drop datetimeindex duplicates on final DF
         self.df_final = self.df_final[~self.df_final.index.duplicated(keep="first")]
         return True
 
@@ -941,7 +927,7 @@ class RetrieveHass:
         for i, ts in enumerate(ts_list):
             datum = {}
             datum["date"] = ts
-            datum[entity_id.split("sensor.")[1]] = vals_list[i]
+            datum[entity_id.split(sensor_prefix)[1]] = vals_list[i]
             forecast_list.append(datum)
         data = {
             "state": f"{state:.{decimals}f}",
@@ -963,7 +949,6 @@ class RetrieveHass:
         unit_of_measurement: str,
         friendly_name: str,
         type_var: str,
-        from_mlforecaster: bool | None = False,
         publish_prefix: str | None = "",
         save_entities: bool | None = False,
         logger_levels: str | None = "info",
@@ -1003,15 +988,15 @@ class RetrieveHass:
 
         """
         # Add a possible prefix to the entity ID
-        entity_id = entity_id.replace("sensor.", "sensor." + publish_prefix)
+        entity_id = entity_id.replace(sensor_prefix, sensor_prefix + publish_prefix)
         # Set the URL
-        if self.hass_url == "http://supervisor/core/api":  # If we are using the supervisor API
+        if self.hass_url == hass_url:  # If we are using the supervisor API
             url = self.hass_url + "/states/" + entity_id
         else:  # Otherwise the Home Assistant Core API it is
             url = self.hass_url + "api/states/" + entity_id
         headers = {
-            "Authorization": "Bearer " + self.long_lived_token,
-            "content-type": "application/json",
+            "Authorization": header_auth + " " + self.long_lived_token,
+            "content-type": header_accept,
         }
         # Preparing the data dict to be published
         if type_var == "cost_fun":
