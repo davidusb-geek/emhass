@@ -570,7 +570,7 @@ Check the logs for: "Using physics-based heating demand with solar gains"
 
 ## References
 
-- Langer, T., & Volling, T. (2020). "An optimal home energy management system for modular battery electric vehicles (MBEV) and the power grid". *Energies*, 13(20), 5279. [DOI: 10.3390/en13205279](https://doi.org/10.3390/en13205279)
+- Langer, T., & Volling, T. (2020). "An optimal home energy management system for modulating heat pumps and photovoltaic systems". *Applied Energy*, Vol. 278. [https://doi.org/10.1016/j.apenergy.2020.115661](https://doi.org/10.1016/j.apenergy.2020.115661)
 
 For more information:
 - [Thermal Model (thermal_config)](thermal_model.md) - For direct heater/AC control without thermal mass
