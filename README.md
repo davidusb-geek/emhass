@@ -78,13 +78,13 @@ The complete documentation for this package is [available here](https://emhass.r
 To get started you can follow our [🚀 Quick Start](/docs/quick_start.md) guide in the documentation.
 
 Here are the guides for:
-- [📦 Installation methods](/docs/installation_methods)
-- [📖 Usage](/docs/usage_guide)
-- [🤖 Home Assistant Automations](automations)
+- [📦 Installation methods](/docs/installation_methods.md)
+- [📖 Usage](/docs/usage_guide.md)
+- [🤖 Home Assistant Automations](/docs/automations.md)
 
 ## Development
 
-Pull requests are very much accepted on this project. For development, you can find some instructions here [Development](https://emhass.readthedocs.io/en/latest/develop.html).
+Pull requests are very much accepted on this project. For development, you can find some instructions here [Development](/docs/develop.md).
 
 ## License
 
