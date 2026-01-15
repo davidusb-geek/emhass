@@ -1517,6 +1517,237 @@ class TestHeatingDemand(unittest.TestCase):
             msg=f"60-minute timestep total ({total_60:.3f}) should be ~2x 30-minute total ({total_30:.3f})",
         )
 
+    def test_calculate_heating_demand_physics_with_internal_gains_reduces_demand(self):
+        """Internal gains from electrical load reduce heating demand, and demand never becomes negative."""
+        indoor_temp = 21.0
+        outdoor_temps = np.array([0.0, 0.0, 0.0, 0.0])
+        optimization_time_step = 60  # minutes
+        u_value = 0.35  # W/m²K
+        envelope_area = 380.0  # m²
+        ventilation_rate = 0.4  # ACH
+        heated_volume = 240.0  # m³
+
+        # Electrical load profile in kW
+        load_forecast = np.array([1.0, 2.0, 3.0, 1.5])
+        internal_gains_factor = 0.7  # 70% of electrical load becomes heat
+
+        demand_no_internal = utils.calculate_heating_demand_physics(
+            u_value=u_value,
+            envelope_area=envelope_area,
+            ventilation_rate=ventilation_rate,
+            heated_volume=heated_volume,
+            indoor_target_temperature=indoor_temp,
+            outdoor_temperature_forecast=outdoor_temps,
+            optimization_time_step=optimization_time_step,
+        )
+
+        demand_with_internal = utils.calculate_heating_demand_physics(
+            u_value=u_value,
+            envelope_area=envelope_area,
+            ventilation_rate=ventilation_rate,
+            heated_volume=heated_volume,
+            indoor_target_temperature=indoor_temp,
+            outdoor_temperature_forecast=outdoor_temps,
+            optimization_time_step=optimization_time_step,
+            internal_gains_forecast=load_forecast,
+            internal_gains_factor=internal_gains_factor,
+        )
+
+        # Demand must never be negative
+        self.assertTrue(
+            np.all(demand_with_internal >= 0.0),
+            "Demand with internal gains should never be negative",
+        )
+
+        # With internal gains, demand should not increase at any timestep
+        self.assertTrue(
+            np.all(demand_with_internal <= demand_no_internal),
+            msg=f"Demand with internal gains should be <= no-internal demand at all timesteps.\n"
+            f"no_internal={demand_no_internal}, with_internal={demand_with_internal}",
+        )
+
+        # Total demand should be reduced
+        self.assertLess(
+            np.sum(demand_with_internal),
+            np.sum(demand_no_internal),
+            "Internal gains should reduce total heating demand",
+        )
+
+    def test_calculate_heating_demand_physics_with_both_solar_and_internal_gains(self):
+        """Both solar and internal gains reduce heating demand cumulatively."""
+        indoor_temp = 21.0
+        outdoor_temps = np.array([0.0, 0.0, 0.0, 0.0])
+        optimization_time_step = 60  # minutes
+        u_value = 0.35  # W/m²K
+        envelope_area = 380.0  # m²
+        ventilation_rate = 0.4  # ACH
+        heated_volume = 240.0  # m³
+        window_area = 28.0  # m²
+        shgc = 0.6
+
+        # Solar and load profiles
+        solar_irradiance = np.array([0.0, 200.0, 400.0, 0.0])  # W/m²
+        load_forecast = np.array([1.0, 2.0, 2.5, 1.0])  # kW
+        internal_gains_factor = 0.7
+
+        demand_no_gains = utils.calculate_heating_demand_physics(
+            u_value=u_value,
+            envelope_area=envelope_area,
+            ventilation_rate=ventilation_rate,
+            heated_volume=heated_volume,
+            indoor_target_temperature=indoor_temp,
+            outdoor_temperature_forecast=outdoor_temps,
+            optimization_time_step=optimization_time_step,
+        )
+
+        demand_solar_only = utils.calculate_heating_demand_physics(
+            u_value=u_value,
+            envelope_area=envelope_area,
+            ventilation_rate=ventilation_rate,
+            heated_volume=heated_volume,
+            indoor_target_temperature=indoor_temp,
+            outdoor_temperature_forecast=outdoor_temps,
+            optimization_time_step=optimization_time_step,
+            solar_irradiance_forecast=solar_irradiance,
+            window_area=window_area,
+            shgc=shgc,
+        )
+
+        demand_internal_only = utils.calculate_heating_demand_physics(
+            u_value=u_value,
+            envelope_area=envelope_area,
+            ventilation_rate=ventilation_rate,
+            heated_volume=heated_volume,
+            indoor_target_temperature=indoor_temp,
+            outdoor_temperature_forecast=outdoor_temps,
+            optimization_time_step=optimization_time_step,
+            internal_gains_forecast=load_forecast,
+            internal_gains_factor=internal_gains_factor,
+        )
+
+        demand_both_gains = utils.calculate_heating_demand_physics(
+            u_value=u_value,
+            envelope_area=envelope_area,
+            ventilation_rate=ventilation_rate,
+            heated_volume=heated_volume,
+            indoor_target_temperature=indoor_temp,
+            outdoor_temperature_forecast=outdoor_temps,
+            optimization_time_step=optimization_time_step,
+            solar_irradiance_forecast=solar_irradiance,
+            window_area=window_area,
+            shgc=shgc,
+            internal_gains_forecast=load_forecast,
+            internal_gains_factor=internal_gains_factor,
+        )
+
+        # Demand must never be negative
+        self.assertTrue(
+            np.all(demand_both_gains >= 0.0),
+            "Demand with both gains should never be negative",
+        )
+
+        # Both gains combined should reduce more than either alone
+        self.assertLess(
+            np.sum(demand_both_gains),
+            np.sum(demand_solar_only),
+            "Combined gains should reduce demand more than solar only",
+        )
+        self.assertLess(
+            np.sum(demand_both_gains),
+            np.sum(demand_internal_only),
+            "Combined gains should reduce demand more than internal only",
+        )
+        self.assertLess(
+            np.sum(demand_both_gains),
+            np.sum(demand_no_gains),
+            "Combined gains should reduce demand vs no gains",
+        )
+
+    def test_calculate_heating_demand_physics_internal_gains_factor_zero(self):
+        """Factor of 0 should have no effect (backwards compatibility)."""
+        indoor_temp = 21.0
+        outdoor_temps = np.array([5.0, 5.0, 5.0, 5.0])
+        optimization_time_step = 30
+        u_value = 0.35
+        envelope_area = 380.0
+        ventilation_rate = 0.4
+        heated_volume = 240.0
+        load_forecast = np.array([2.0, 3.0, 4.0, 2.5])  # kW
+
+        demand_no_internal = utils.calculate_heating_demand_physics(
+            u_value=u_value,
+            envelope_area=envelope_area,
+            ventilation_rate=ventilation_rate,
+            heated_volume=heated_volume,
+            indoor_target_temperature=indoor_temp,
+            outdoor_temperature_forecast=outdoor_temps,
+            optimization_time_step=optimization_time_step,
+        )
+
+        demand_with_zero_factor = utils.calculate_heating_demand_physics(
+            u_value=u_value,
+            envelope_area=envelope_area,
+            ventilation_rate=ventilation_rate,
+            heated_volume=heated_volume,
+            indoor_target_temperature=indoor_temp,
+            outdoor_temperature_forecast=outdoor_temps,
+            optimization_time_step=optimization_time_step,
+            internal_gains_forecast=load_forecast,
+            internal_gains_factor=0.0,
+        )
+
+        # With factor=0, demand should be identical to no internal gains
+        np.testing.assert_array_almost_equal(
+            demand_no_internal,
+            demand_with_zero_factor,
+            decimal=10,
+            err_msg="Factor=0 should produce identical results to no internal gains",
+        )
+
+    def test_calculate_heating_demand_physics_internal_gains_with_pandas_series(self):
+        """Internal gains should work with pandas Series input."""
+        indoor_temp = 21.0
+        outdoor_temps = np.array([5.0, 5.0, 5.0, 5.0])
+        optimization_time_step = 30
+        u_value = 0.35
+        envelope_area = 380.0
+        ventilation_rate = 0.4
+        heated_volume = 240.0
+        load_array = np.array([2.0, 3.0, 4.0, 2.5])
+        load_series = pd.Series(load_array)
+        internal_gains_factor = 0.8
+
+        demand_from_array = utils.calculate_heating_demand_physics(
+            u_value=u_value,
+            envelope_area=envelope_area,
+            ventilation_rate=ventilation_rate,
+            heated_volume=heated_volume,
+            indoor_target_temperature=indoor_temp,
+            outdoor_temperature_forecast=outdoor_temps,
+            optimization_time_step=optimization_time_step,
+            internal_gains_forecast=load_array,
+            internal_gains_factor=internal_gains_factor,
+        )
+
+        demand_from_series = utils.calculate_heating_demand_physics(
+            u_value=u_value,
+            envelope_area=envelope_area,
+            ventilation_rate=ventilation_rate,
+            heated_volume=heated_volume,
+            indoor_target_temperature=indoor_temp,
+            outdoor_temperature_forecast=outdoor_temps,
+            optimization_time_step=optimization_time_step,
+            internal_gains_forecast=load_series,
+            internal_gains_factor=internal_gains_factor,
+        )
+
+        np.testing.assert_array_almost_equal(
+            demand_from_array,
+            demand_from_series,
+            decimal=10,
+            err_msg="Results should be identical for array and Series input",
+        )
+
     def test_calculate_cop_heatpump(self):
         """Test heat pump COP calculation utility function with Carnot-based formula."""
         # Test basic calculation with example outdoor temperatures
