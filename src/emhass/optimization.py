@@ -1132,7 +1132,9 @@ class Optimization:
                         # Build log message with optional gains info
                         gains_info = []
                         if solar_irradiance is not None:
-                            gains_info.append(f"solar (window_area={window_area:.1f}, shgc={shgc:.2f})")
+                            gains_info.append(
+                                f"solar (window_area={window_area:.1f}, shgc={shgc:.2f})"
+                            )
                         if internal_gains_factor > 0:
                             gains_info.append(f"internal (factor={internal_gains_factor:.2f})")
 

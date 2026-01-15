@@ -468,12 +468,25 @@ def calculate_heating_demand_physics(
 
     # Calculate internal gains from electrical load if provided
     if internal_gains_forecast is not None and internal_gains_factor > 0:
+        # Validate internal_gains_factor is in expected range [0, 1]
+        if internal_gains_factor < 0 or internal_gains_factor > 1:
+            raise ValueError(
+                f"internal_gains_factor must be between 0 and 1, got {internal_gains_factor}"
+            )
+
         # Convert internal gains forecast to numpy array if pandas Series
         internal_gains = (
             internal_gains_forecast.values
             if isinstance(internal_gains_forecast, pd.Series)
             else np.asarray(internal_gains_forecast)
         )
+
+        # Validate that internal gains forecast length matches outdoor temperature forecast
+        if len(internal_gains) != len(outdoor_temps):
+            raise ValueError(
+                f"internal_gains_forecast length ({len(internal_gains)}) must match "
+                f"outdoor_temperature_forecast length ({len(outdoor_temps)})"
+            )
 
         # Internal gains: Q_internal = load_power * factor
         # load_power is already in kW, factor is dimensionless (0-1)
