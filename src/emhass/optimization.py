@@ -189,6 +189,13 @@ class Optimization:
                         rhs=0,
                     )
 
+    # Helper to extract list from DataFrame/Series/List
+    def _get_clean_list(self, key, data_opt):
+        val = data_opt.get(key)
+        if hasattr(val, "values"):
+            return val.values.tolist()
+        return val if isinstance(val, list) else []
+
     def perform_optimization(
         self,
         data_opt: pd.DataFrame,
@@ -880,18 +887,10 @@ class Optimization:
                         float(start_temperature) if start_temperature is not None else 20.0
                     )
 
-                    # Outdoor Temperature Retrieval
-                    # Helper to extract list from DataFrame/Series/List
-                    def get_clean_list(key):
-                        val = data_opt.get(key)
-                        if hasattr(val, "values"):
-                            return val.values.tolist()
-                        return val if isinstance(val, list) else []
-
                     # Try explicit forecast first, then fallback to temp_air
-                    outdoor_temp = get_clean_list("outdoor_temperature_forecast")
+                    outdoor_temp = self._get_clean_list("outdoor_temperature_forecast", data_opt)
                     if not outdoor_temp or all(x is None for x in outdoor_temp):
-                        outdoor_temp = get_clean_list("temp_air")
+                        outdoor_temp = self._get_clean_list("temp_air", data_opt)
 
                     # Validation & Patching
                     required_len = len(data_opt)
@@ -1051,24 +1050,17 @@ class Optimization:
                 if def_load_config and "thermal_battery" in def_load_config:
                     hc = def_load_config["thermal_battery"]
 
-                    # 1. Start Temperature
+                    # Start Temperature
                     start_temperature = hc.get("start_temperature", 20.0)
                     start_temperature = (
                         float(start_temperature) if start_temperature is not None else 20.0
                     )
 
-                    # 2. Outdoor Temperature Retrieval (Same robust logic)
-                    def get_clean_list(key):
-                        val = data_opt.get(key)
-                        if hasattr(val, "values"):
-                            return val.values.tolist()
-                        return val if isinstance(val, list) else []
-
-                    outdoor_temp = get_clean_list("outdoor_temperature_forecast")
+                    outdoor_temp = self._get_clean_list("outdoor_temperature_forecast", data_opt)
                     if not outdoor_temp or all(x is None for x in outdoor_temp):
-                        outdoor_temp = get_clean_list("temp_air")
+                        outdoor_temp = self.get_clean_list("temp_air", data_opt)
 
-                    # 3. Validation & Patching
+                    # Validation & Patching
                     required_len = len(data_opt)
                     if not outdoor_temp or all(x is None for x in outdoor_temp):
                         self.logger.warning(
@@ -1084,6 +1076,23 @@ class Optimization:
                     # Use 'outdoor_temp' in your battery equations...
                     supply_temperature = hc["supply_temperature"]
                     volume = hc["volume"]
+
+                    min_temperatures = hc[
+                        "min_temperatures"
+                    ]  # list of lower bounds per timestep °C
+                    max_temperatures = hc[
+                        "max_temperatures"
+                    ]  # list of upper bounds per timestep °C
+
+                    # Validate that temperature lists are not empty
+                    if not min_temperatures:
+                        raise ValueError(
+                            f"Load {k}: thermal_battery requires non-empty 'min_temperatures' list"
+                        )
+                    if not max_temperatures:
+                        raise ValueError(
+                            f"Load {k}: thermal_battery requires non-empty 'max_temperatures' list"
+                        )
 
                     p_concr = 2400  # Density of concrete kg/m3
                     c_concr = 0.88  # Heat capacity of concrete kJ/kg*K
