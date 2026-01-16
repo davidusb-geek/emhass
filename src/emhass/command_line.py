@@ -922,6 +922,19 @@ def prepare_forecast_and_weather_data(
             "passed_data"
         ]["outdoor_temperature_forecast"]
 
+    # Auto-fallback to temp_air from Open-Meteo weather forecast
+    elif (
+        input_data_dict["df_weather"] is not None
+        and "temp_air" in input_data_dict["df_weather"].columns
+    ):
+        dayahead_index = df_input_data_dayahead.index
+        # Align temp_air data to dayahead index using interpolation
+        df_input_data_dayahead["temp_air"] = (
+            input_data_dict["df_weather"]["temp_air"]
+            .reindex(dayahead_index)
+            .interpolate(method="time", limit_direction="both")
+        )
+
     # Merge GHI (Global Horizontal Irradiance) from weather forecast if available
     if input_data_dict["df_weather"] is not None and "ghi" in input_data_dict["df_weather"].columns:
         dayahead_index = df_input_data_dayahead.index
