@@ -891,6 +891,9 @@ async def treat_runtimeparams(
         # Load the default config
         if "def_load_config" in runtimeparams:
             params["optim_conf"]["def_load_config"] = runtimeparams["def_load_config"]
+            params["optim_conf"]["number_of_deferrable_loads"] = len(
+                runtimeparams["def_load_config"]
+            )
         if "def_load_config" in params["optim_conf"]:
             for k in range(len(params["optim_conf"]["def_load_config"])):
                 if "thermal_config" in params["optim_conf"]["def_load_config"][k]:
