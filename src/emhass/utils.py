@@ -882,31 +882,32 @@ async def treat_runtimeparams(
             ].get("end_timesteps_of_each_deferrable_load", None)
 
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
-
-            # Load the default config
-            if "def_load_config" in runtimeparams:
-                params["optim_conf"]["def_load_config"] = runtimeparams["def_load_config"]
-            if "def_load_config" in params["optim_conf"]:
-                for k in range(len(params["optim_conf"]["def_load_config"])):
-                    if "thermal_config" in params["optim_conf"]["def_load_config"][k]:
-                        if (
-                            "heater_desired_temperatures" in runtimeparams
-                            and len(runtimeparams["heater_desired_temperatures"]) > k
-                        ):
-                            params["optim_conf"]["def_load_config"][k]["thermal_config"][
-                                "desired_temperatures"
-                            ] = runtimeparams["heater_desired_temperatures"][k]
-                        if (
-                            "heater_start_temperatures" in runtimeparams
-                            and len(runtimeparams["heater_start_temperatures"]) > k
-                        ):
-                            params["optim_conf"]["def_load_config"][k]["thermal_config"][
-                                "start_temperature"
-                            ] = runtimeparams["heater_start_temperatures"][k]
         else:
             params["passed_data"]["prediction_horizon"] = None
             params["passed_data"]["soc_init"] = None
             params["passed_data"]["soc_final"] = None
+
+        # Parsing the thermal model parameters
+        # Load the default config
+        if "def_load_config" in runtimeparams:
+            params["optim_conf"]["def_load_config"] = runtimeparams["def_load_config"]
+        if "def_load_config" in params["optim_conf"]:
+            for k in range(len(params["optim_conf"]["def_load_config"])):
+                if "thermal_config" in params["optim_conf"]["def_load_config"][k]:
+                    if (
+                        "heater_desired_temperatures" in runtimeparams
+                        and len(runtimeparams["heater_desired_temperatures"]) > k
+                    ):
+                        params["optim_conf"]["def_load_config"][k]["thermal_config"][
+                            "desired_temperatures"
+                        ] = runtimeparams["heater_desired_temperatures"][k]
+                    if (
+                        "heater_start_temperatures" in runtimeparams
+                        and len(runtimeparams["heater_start_temperatures"]) > k
+                    ):
+                        params["optim_conf"]["def_load_config"][k]["thermal_config"][
+                            "start_temperature"
+                        ] = runtimeparams["heater_start_temperatures"][k]
 
         # Treat passed forecast data lists
         list_forecast_key = [
