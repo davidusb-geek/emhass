@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.15.5 - 2026-01-16
+### Fix
+- Fix the thermal load parsing to use it on any type of optimization
+
 ## 0.15.4 - 2026-01-13
 ### Improvement
 - Support selecting PV module and inverter models by approximate power rating in addition to explicit database names
