@@ -869,30 +869,91 @@ class Optimization:
                 if def_load_config and "thermal_config" in def_load_config:
                     hc = def_load_config["thermal_config"]
 
-                    # Use passed runtime value (def_init_temp) if available, else config
+                    self.logger.debug(f"Setting up Thermal Load {k}")
+
+                    # Setup Start Temperature
                     if def_init_temp[k] is not None:
                         start_temperature = def_init_temp[k]
                     else:
-                        start_temperature = hc["start_temperature"]
+                        start_temperature = hc.get("start_temperature", 20.0)
+
+                    if start_temperature is None:
+                        self.logger.warning("start_temperature was None, defaulting to 20.0")
+                        start_temperature = 20.0
+                    else:
+                        start_temperature = float(start_temperature)
+
+                    # Setup Outdoor Temperature
+                    outdoor_temperature_forecast = None
+
+                    # Try getting data from 'outdoor_temperature_forecast'
+                    if (
+                        "outdoor_temperature_forecast" in data_opt
+                        and data_opt["outdoor_temperature_forecast"] is not None
+                    ):
+                        raw_data = data_opt["outdoor_temperature_forecast"]
+                        if hasattr(raw_data, "values"):
+                            outdoor_temperature_forecast = raw_data.values.tolist()
+                        elif isinstance(raw_data, list):
+                            outdoor_temperature_forecast = raw_data
+
+                        # Check if list is empty or all Nones
+                        if outdoor_temperature_forecast and all(
+                            x is None for x in outdoor_temperature_forecast
+                        ):
+                            outdoor_temperature_forecast = None
+
+                    # Fallback to 'temp_air'
+                    if outdoor_temperature_forecast is None:
+                        self.logger.debug(
+                            "'outdoor_temperature_forecast' missing or invalid, trying 'temp_air'"
+                        )
+                        if "temp_air" in data_opt and data_opt["temp_air"] is not None:
+                            raw_data = data_opt["temp_air"]
+                            if hasattr(raw_data, "values"):
+                                outdoor_temperature_forecast = raw_data.values.tolist()
+                            elif isinstance(raw_data, list):
+                                outdoor_temperature_forecast = raw_data
+
+                    # Validation & Patching
+                    required_length = len(data_opt)
+
+                    if outdoor_temperature_forecast is None:
+                        self.logger.error(
+                            "No outdoor temperature data found anywhere. Using default 15.0C constant."
+                        )
+                        outdoor_temperature_forecast = [15.0] * required_length
+                    else:
+                        # Scan for None or NaN and patch them
+                        clean_list = []
+                        for _, val in enumerate(outdoor_temperature_forecast):
+                            if val is None or pd.isna(val):
+                                clean_list.append(15.0)
+                            else:
+                                clean_list.append(float(val))
+                        outdoor_temperature_forecast = clean_list
+
+                        # Ensure length matches (extend if too short)
+                        if len(outdoor_temperature_forecast) < required_length:
+                            self.logger.warning(
+                                "Outdoor temp list too short. Extending with 15.0C."
+                            )
+                            outdoor_temperature_forecast.extend(
+                                [15.0] * (required_length - len(outdoor_temperature_forecast))
+                            )
+
+                    self.logger.debug(
+                        f"Final params -> Start Temp: {start_temperature}, First Outdoor Temp: {outdoor_temperature_forecast[0]}"
+                    )
 
                     cooling_constant = hc["cooling_constant"]
                     heating_rate = hc["heating_rate"]
                     overshoot_temperature = hc.get("overshoot_temperature", None)
-                    outdoor_temperature_forecast = data_opt["outdoor_temperature_forecast"]
-                    # Support for both single desired temperature (legacy) and min/max range (new)
                     desired_temperatures = hc.get("desired_temperatures", [])
                     min_temperatures = hc.get("min_temperatures", [])
                     max_temperatures = hc.get("max_temperatures", [])
                     sense = hc.get("sense", "heat")
                     sense_coeff = 1 if sense == "heat" else -1
-
-                    self.logger.debug(
-                        "Load %s: Thermal parameters: start_temperature=%s, cooling_constant=%s, heating_rate=%s",
-                        k,
-                        start_temperature,
-                        cooling_constant,
-                        heating_rate,
-                    )
 
                     predicted_temp = [start_temperature]
                     for index in set_i:
@@ -914,14 +975,12 @@ class Optimization:
                                 * self.time_step
                                 * (
                                     predicted_temp[index - 1]
-                                    - outdoor_temperature_forecast.iloc[index - 1]
+                                    - outdoor_temperature_forecast[index - 1]
                                 )
                             )
                         )
 
                         # Constraint Logic: Comfort Range (Min/Max)
-                        # If min/max temps are provided, we enforce them.
-                        # This avoids the "penalty" method and ensures feasibility within a range.
                         if len(min_temperatures) > index and min_temperatures[index] is not None:
                             constraints.update(
                                 {
@@ -944,8 +1003,7 @@ class Optimization:
                                 }
                             )
 
-                        # Legacy "Overshoot" logic (Keep for backward compatibility)
-                        # Only added if desired_temperatures is present AND overshoot_temperature is defined
+                        # Legacy "Overshoot" logic
                         if desired_temperatures and overshoot_temperature is not None:
                             is_overshoot = plp.LpVariable(f"defload_{k}_overshoot_{index}")
                             constraints.update(
@@ -979,9 +1037,7 @@ class Optimization:
                             if len(desired_temperatures) > index and desired_temperatures[index]:
                                 penalty_factor = hc.get("penalty_factor", 10)
                                 if penalty_factor < 0:
-                                    raise ValueError(
-                                        "penalty_factor must be positive, otherwise the problem will become unsolvable"
-                                    )
+                                    raise ValueError("penalty_factor must be positive")
                                 penalty_value = (
                                     (predicted_temp[index] - desired_temperatures[index])
                                     * penalty_factor
@@ -1003,7 +1059,6 @@ class Optimization:
                                 )
                                 opt_model.setObjective(opt_model.objective + penalty_var)
 
-                    # Only enforce semi-continuous if configured to do so
                     if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
                         constraints.update(
                             {
@@ -1038,7 +1093,25 @@ class Optimization:
 
                     supply_temperature = hc["supply_temperature"]  # heatpump supply temperature °C
                     volume = hc["volume"]  # volume of the thermal battery m3
-                    outdoor_temperature_forecast = data_opt["outdoor_temperature_forecast"]
+
+                    # Fallback to temp_air if outdoor_temperature_forecast is missing or all None
+                    outdoor_temperature_forecast = None
+                    if (
+                        "outdoor_temperature_forecast" in data_opt
+                        and not data_opt["outdoor_temperature_forecast"].isnull().all()
+                    ):
+                        outdoor_temperature_forecast = data_opt[
+                            "outdoor_temperature_forecast"
+                        ].values.tolist()
+                    elif "temp_air" in data_opt and self.optim_conf.get(
+                        "weather_forecast_method"
+                    ) in ["open-meteo", "scrapper"]:
+                        outdoor_temperature_forecast = data_opt["temp_air"].values.tolist()
+                    if outdoor_temperature_forecast is None:
+                        self.logger.error(
+                            "No outdoor temperature data found. Checked 'outdoor_temperature_forecast' and 'temp_air'."
+                        )
+                        raise ValueError("Missing outdoor temperature data for thermal battery.")
 
                     min_temperatures = hc[
                         "min_temperatures"

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+### Fix
+- Fix missing outdoor temperature data for thermal model
+
 ## 0.15.5 - 2026-01-16
 ### Fix
 - Fix the thermal load parsing to use it on any type of optimization
