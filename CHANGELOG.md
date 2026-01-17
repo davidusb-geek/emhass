@@ -2,6 +2,7 @@
 
 ## Unreleased
 ### Fix
+- Fix broken MLRegressor with not needed load treatment of a CSV file
 - Fix missing outdoor temperature data for thermal model
 
 ## 0.15.5 - 2026-01-16
