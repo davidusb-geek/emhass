@@ -76,8 +76,8 @@ COPY src/emhass/static/img/ /app/src/emhass/static/img/
 COPY src/emhass/data/ /app/src/emhass/data/
 
 # pre generated optimization results
-COPY data/opt_res_latest.csv /data/
-COPY data/long_train_data.pkl /data/
+COPY data/opt_res_latest.csv /app/data/opt_res_latest.csv
+COPY data/long_train_data.pkl /app/data/long_train_data.pkl
 COPY README.md /app/
 COPY pyproject.toml /app/
 
@@ -123,6 +123,14 @@ ENV IP=0.0.0.0
 
 # Entrypoint script inline
 ENTRYPOINT ["/bin/bash", "-c", "set -e && \
+if [ ! -f /data/long_train_data.pkl ]; then \
+    echo 'Initializing data: Copying default PKL file...'; \
+    cp /app/data/long_train_data.pkl /data/; \
+fi && \
+if [ ! -f /data/opt_res_latest.csv ]; then \
+    echo 'Initializing data: Copying default CSV file...'; \
+    cp /app/data/opt_res_latest.csv /data/; \
+fi && \
 WORKER_CLASS=${WORKER_CLASS:-uvicorn.workers.UvicornWorker} && \
 PORT=${PORT:-5000} && \
 IP=${IP:-0.0.0.0} && \
