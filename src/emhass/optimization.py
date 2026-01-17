@@ -112,7 +112,21 @@ class Optimization:
                 "lp_solver=COIN_CMD but lp_solver_path=empty, attempting to use lp_solver_path=/usr/bin/cbc"
             )
             self.lp_solver_path = "/usr/bin/cbc"
-        self.logger.debug(f"Initialized Optimization with retrieve_hass_conf: {retrieve_hass_conf}")
+        # Mask sensitive data before logging
+        conf_to_log = retrieve_hass_conf.copy()
+        keys_to_mask = [
+            "influxdb_username",
+            "influxdb_password",
+            "long_lived_token",
+            "Latitude",
+            "Longitude",
+            "solcast_api_key",
+            "solcast_rooftop_id",
+        ]
+        for key in keys_to_mask:
+            if key in conf_to_log:
+                conf_to_log[key] = "***"
+        self.logger.debug(f"Initialized Optimization with retrieve_hass_conf: {conf_to_log}")
         self.logger.debug(f"Optimization configuration: {optim_conf}")
         self.logger.debug(f"Plant configuration: {plant_conf}")
         self.logger.debug(
