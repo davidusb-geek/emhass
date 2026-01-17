@@ -1591,7 +1591,7 @@ def param_to_config(param: dict[str, dict], logger: logging.Logger) -> dict[str,
 
     return_config = {}
 
-    config_catagories = ["retrieve_hass_conf", "optim_conf", "plant_conf"]
+    config_categories = ["retrieve_hass_conf", "optim_conf", "plant_conf"]
     secret_params = [
         "hass_url",
         "time_zone",
@@ -1602,10 +1602,12 @@ def param_to_config(param: dict[str, dict], logger: logging.Logger) -> dict[str,
         "solcast_api_key",
         "solcast_rooftop_id",
         "solar_forecast_kwp",
+        "influxdb_username",
+        "influxdb_password",
     ]
 
     # Loop through config catagories that contain config params, and extract
-    for config in config_catagories:
+    for config in config_categories:
         for parameter in param[config]:
             # If parameter is not a secret, append to return_config
             if parameter not in secret_params:
