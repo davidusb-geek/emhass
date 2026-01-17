@@ -740,9 +740,13 @@ async def set_input_data_dict(
         result = await _prepare_naive_mpc_optim(ctx)
     elif set_type in ["forecast-model-fit", "forecast-model-predict", "forecast-model-tune"]:
         result = await _prepare_ml_fit_predict(ctx)
-    elif set_type in ["regressor-model-fit", "regressor-model-predict"]:
+    elif set_type == "regressor-model-fit":
         result = _prepare_regressor_fit(ctx)
-    elif set_type == "publish-data" or set_type == "export-influxdb-to-csv":
+    elif (
+        set_type == "publish-data"
+        or set_type == "export-influxdb-to-csv"
+        or set_type == "regressor-model-predict"
+    ):
         result = {}
     else:
         logger.error(f"The passed action set_type parameter '{set_type}' is not valid")

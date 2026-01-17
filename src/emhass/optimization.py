@@ -1073,7 +1073,6 @@ class Optimization:
                     if len(outdoor_temp) < required_len:
                         outdoor_temp.extend([15.0] * (required_len - len(outdoor_temp)))
 
-                    # Use 'outdoor_temp' in your battery equations...
                     supply_temperature = hc["supply_temperature"]
                     volume = hc["volume"]
 
