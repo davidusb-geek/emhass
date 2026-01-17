@@ -37,6 +37,12 @@
       "input": "array.string",
       "default_value": "sensor.power_photovoltaics"
     },
+    "ssl_no_verify": {
+      "friendly_name": "SSL no verify",
+      "Description": "Set to true to disable SSL verification when connecting to Home Assistant. Useful if using self-signed certificates (HTTPS with IP address).",
+      "input": "boolean",
+      "default_value": false
+    },
     "use_websocket": {
       "friendly_name": "Use Home Assistant websocket for data retrieval",
       "Description": "Enable Home Assistant websocket as data source instead of Home Assistant API. This allows for longer historical data retention and better performance for machine learning models.",

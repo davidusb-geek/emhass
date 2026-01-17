@@ -1,8 +1,10 @@
 # Changelog
 
 ## Unreleased
+### Improvement
+- New feature to allow to disable SSL communication with Home Assistant
 ### Fix
-- Fix broken MLRegressor with not needed load treatment of a CSV file
+- Fix broken MLRegressor by removing unnecessary loading of a CSV file
 - Fix missing outdoor temperature data for thermal model
 
 ## 0.15.5 - 2026-01-16
