@@ -89,6 +89,22 @@ class RetrieveHass:
         self.logger = logger
         self.get_data_from_file = get_data_from_file
         self.var_list = []
+        # Check if we should verify SSL certificates (defaults to True)
+        self.ssl_verify = None
+        ssl_no_verify = False
+        if self.params:
+            # Check root params
+            if self.params.get("ssl_no_verify", False):
+                ssl_no_verify = True
+            # Check passed_data (runtime parameters)
+            elif "passed_data" in self.params and self.params["passed_data"].get(
+                "ssl_no_verify", False
+            ):
+                ssl_no_verify = True
+        if ssl_no_verify:
+            self.ssl_verify = False
+            self.logger.warning("SSL verification is disabled for Home Assistant connection.")
+        # Check websocket activation
         self.use_websocket = self.params.get("retrieve_hass_conf", {}).get("use_websocket", False)
         if self.use_websocket:
             self._client = None
@@ -162,7 +178,7 @@ class RetrieveHass:
         # Attempt the connection
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers) as response:
+                async with session.get(url, headers=headers, ssl=self.ssl_verify) as response:
                     # Check for HTTP errors (404, 401, 500) before trying to parse JSON
                     response.raise_for_status()
                     data = await response.read()
@@ -288,7 +304,7 @@ class RetrieveHass:
     ) -> list | bool:
         """Helper to execute the HTTP request and return the raw JSON list."""
         try:
-            async with session.get(url, headers=headers) as response:
+            async with session.get(url, headers=headers, ssl=self.ssl_verify) as response:
                 response.raise_for_status()
                 data = await response.read()
                 data_list = orjson.loads(data)
@@ -1151,7 +1167,10 @@ class RetrieveHass:
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
-                        url, headers=headers, data=orjson.dumps(data).decode("utf-8")
+                        url,
+                        headers=headers,
+                        data=orjson.dumps(data).decode("utf-8"),
+                        ssl=self.ssl_verify,
                     ) as response:
                         # Store response data since we need to access it after the context manager
                         response_ok = response.ok
