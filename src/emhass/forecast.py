@@ -503,8 +503,8 @@ class Forecast:
                     )
                     data_tmp = data_tmp.reindex(index=self.forecast_dates)
                     # Gap filling
-                    mask_up = data_tmp.copy(deep=True).fillna(method="ffill").isnull()
-                    mask_down = data_tmp.copy(deep=True).fillna(method="bfill").isnull()
+                    mask_up = data_tmp.copy(deep=True).ffill().isnull()
+                    mask_down = data_tmp.copy(deep=True).bfill().isnull()
                     data_tmp.loc[mask_up["yhat"], :] = 0.0
                     data_tmp.loc[mask_down["yhat"], :] = 0.0
                     data_tmp.interpolate(inplace=True, limit=1)
