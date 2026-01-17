@@ -1311,7 +1311,34 @@ class Forecast:
             var_interp=var_interp,
         ):
             return False
-        return rh.df_final.copy()[[self.var_load_new]]
+        # Handle Stale CSV Headers / Default Name Mismatch
+        df = rh.df_final.copy()
+        # Check if the expected new variable name exists
+        if self.var_load_new not in df.columns:
+            self.logger.warning(
+                f"Target variable {self.var_load_new} not found in prepared data columns: {df.columns}"
+            )
+            # Check for default name with positive suffix (Most common case)
+            default_name_pos = "sensor.power_load_no_var_loads_positive"
+            if default_name_pos in df.columns:
+                self.logger.warning(
+                    f"Found default '{default_name_pos}'. Renaming to '{self.var_load_new}' to fix mismatch."
+                )
+                df = df.rename(columns={default_name_pos: self.var_load_new})
+            # Check for default name without suffix
+            elif "sensor.power_load_no_var_loads" in df.columns:
+                self.logger.warning(
+                    f"Found default 'sensor.power_load_no_var_loads'. Renaming to '{self.var_load_new}'."
+                )
+                df = df.rename(columns={"sensor.power_load_no_var_loads": self.var_load_new})
+            # Fallback: If dataframe has only 1 column, assume it is the load
+            elif len(df.columns) == 1:
+                found_col = df.columns[0]
+                self.logger.warning(
+                    f"Data has single column '{found_col}'. Assuming it is the load and renaming."
+                )
+                df = df.rename(columns={found_col: self.var_load_new})
+        return df[[self.var_load_new]]
 
     async def _get_load_forecast_typical(self) -> pd.DataFrame:
         """Helper to generate typical load forecast."""
@@ -1320,6 +1347,16 @@ class Forecast:
         async with aiofiles.open(data_path, "rb") as fid:
             content = await fid.read()
             data, _, _, _ = pickle.loads(content)
+        # Handle Stale Headers in PKL file
+        if self.var_load not in data.columns:
+            self.logger.warning(f"Variable {self.var_load} not found in {model_type}.pkl")
+            # Check for the old default name
+            default_load = "sensor.power_load_no_var_loads"
+            if default_load in data.columns:
+                self.logger.warning(
+                    f"Found legacy column '{default_load}' in pickle. Renaming to '{self.var_load}'"
+                )
+                data = data.rename(columns={default_load: self.var_load})
         # Ensure the data index is timezone-aware
         data.index = (
             data.index.tz_localize(
