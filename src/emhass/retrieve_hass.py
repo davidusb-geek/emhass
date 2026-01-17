@@ -892,9 +892,14 @@ class RetrieveHass:
         """
         self.logger.debug("prepare_data self.var_list=%s", self.var_list)
         self.logger.debug("prepare_data var_load=%s", var_load)
-        # Validate Input Lists
-        var_replace_zero = self._validate_sensor_list(var_replace_zero, "var_replace_zero")
-        var_interp = self._validate_sensor_list(var_interp, "var_interp")
+        # Silent Filter for Missing Sensors
+        # Instead of calling self._validate_sensor_list (which warns),
+        # we silently drop sensors that are not in the current fetched data.
+        if var_replace_zero:
+            var_replace_zero = [x for x in var_replace_zero if x in self.var_list]
+
+        if var_interp:
+            var_interp = [x for x in var_interp if x in self.var_list]
         # Rename Load Columns (Handle sign change)
         if not self._process_load_column_renaming(var_load, load_negative, skip_renaming):
             return False
@@ -903,6 +908,8 @@ class RetrieveHass:
             self.df_final.clip(lower=0.0, inplace=True, axis=1)
             self.df_final.replace(to_replace=0.0, value=np.nan, inplace=True)
         # Map Variable Names (Update lists to match new column names)
+        # Note: We still use _map_variable_names to handle the renaming logic
+        # (e.g. adding '_positive' suffix), but the input lists are now clean.
         new_var_replace_zero = self._map_variable_names(
             var_replace_zero, var_load, skip_renaming, "sensor_replace_zero"
         )
@@ -911,12 +918,17 @@ class RetrieveHass:
         )
         # Apply Data Cleaning (FillNA / Interpolate)
         if new_var_replace_zero:
-            self.df_final[new_var_replace_zero] = self.df_final[new_var_replace_zero].fillna(0.0)
+            # Intersection check to ensure columns exist before assigning
+            cols_to_fix = [c for c in new_var_replace_zero if c in self.df_final.columns]
+            if cols_to_fix:
+                self.df_final[cols_to_fix] = self.df_final[cols_to_fix].fillna(0.0)
         if new_var_interp:
-            self.df_final[new_var_interp] = self.df_final[new_var_interp].interpolate(
-                method="linear", axis=0, limit=None
-            )
-            self.df_final[new_var_interp] = self.df_final[new_var_interp].fillna(0.0)
+            cols_to_fix = [c for c in new_var_interp if c in self.df_final.columns]
+            if cols_to_fix:
+                self.df_final[cols_to_fix] = self.df_final[cols_to_fix].interpolate(
+                    method="linear", axis=0, limit=None
+                )
+                self.df_final[cols_to_fix] = self.df_final[cols_to_fix].fillna(0.0)
         # Finalize Index (Timezone and Duplicates)
         if self.time_zone is not None:
             self.df_final.index = self.df_final.index.tz_convert(self.time_zone)
