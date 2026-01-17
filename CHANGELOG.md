@@ -2,7 +2,7 @@
 
 ## Unreleased
 ### Improvement
-- New feature to allow to disable SSL communication with Home Assistant
+- New feature that allows users to disable SSL communication with Home Assistant
 ### Fix
 - Fix broken MLRegressor by removing unnecessary loading of a CSV file
 - Fix missing outdoor temperature data for thermal model
