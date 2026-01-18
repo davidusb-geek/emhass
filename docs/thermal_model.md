@@ -75,6 +75,11 @@ Here the desired_temperatures is a list of float values for each time step.
 
 Now we also need to define the other needed input, the `outdoor_temperature_forecast`, which is a list of float values. The list of floats for `desired_temperatures` and the list in `outdoor_temperature_forecast` should have proper lengths, if using MPC the length should be at least equal to the prediction horizon.
 
+```{note} 
+
+If you set `open-meteo` as the weather forecast method, then the `outdoor_temperature_forecast` will be retrieved automatically from the open-meteo API and you do not need to define it at runtime
+```
+
 Here is an example modified from a working example provided by @werdnum to pass all the needed data at runtime.
 This example is given for the following configuration: just one deferrable load (a thermal load), no PV, no battery, an MPC application, and pre-defined heating intervals times. 
 
