@@ -7,35 +7,49 @@ on:
     branches: [ master ]
 jobs:
   run:
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     permissions:
       actions: read
       security-events: write
       contents: read
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    env:
-      OS: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@master
-    - name: Install uv
-      uses: astral-sh/setup-uv@v5
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version-file: ".python-version"
-    - name: Generate Report
-      run: |
-        uv venv
-        uv sync --reinstall --extra test
-        uv run coverage run -m --source=emhass unittest
-        uv run coverage report
-        uv run coverage xml
-    - name: Upload coverage reports to Codecov
-      run: |
-        # Replace `linux` below with the appropriate OS
-        # Options are `alpine`, `linux`, `macos`, `windows`
-        curl -Os https://uploader.codecov.io/latest/linux/codecov
-        chmod +x codecov
-        ./codecov -t ${CODECOV_TOKEN}
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Generate Report
+        run: |
+          uv venv
+          uv sync --reinstall --extra test
+          uv run coverage run -m --source=emhass unittest
+          uv run coverage report
+          uv run coverage xml -o coverage.xml
+
+      - name: Upload coverage reports to Codecov
+        run: |
+          curl -Os https://uploader.codecov.io/latest/linux/codecov
+          chmod +x codecov
+          ./codecov -t ${CODECOV_TOKEN}
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v7
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }} #
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=davidusb-geek
+            -Dsonar.projectKey=davidusb-geek_emhass
+            -Dsonar.python.coverage.reportPaths=coverage.xml
+            -Dsonar.sources=./src
+            -Dsonar.tests=./tests
+            -Dsonar.host.url=https://sonarcloud.io
+            -Dsonar.scanner.skipJreProvisioning=true

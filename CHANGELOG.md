@@ -1,5 +1,80 @@
 # Changelog
 
+## Unreleased
+### Improvement
+- New feature that allows users to disable SSL communication with Home Assistant
+### Fix
+- Fix issues with missing `long_train_data.pkl` file and load power sensor name updated by the user
+- Fix broken MLRegressor by removing unnecessary loading of a CSV file
+- Fix missing outdoor temperature data for thermal model
+
+## 0.15.5 - 2026-01-16
+### Fix
+- Fix the thermal load parsing to use it on any type of optimization
+
+## 0.15.4 - 2026-01-13
+### Improvement
+- Support selecting PV module and inverter models by approximate power rating in addition to explicit database names
+- Introduce helper contexts and structured helpers for optimization setup, publishing, and forecast preparation
+- Add explicit SonarCloud analysis and Codecov integration in CI workflow
+- Added support to publish emhass package to conda repository
+- Improved documentation: Reorganize and expand documentation sections, including for using InfluxDB as a data source and for passing secret parameters, clarifying differences between Docker/Python deployments and the Home Assistant add-on, and moving this content into the passing_data guide. Change theme to PyData Sphinx Theme
+- Added extensive unit tests around Home Assistant data retrieval helpers, PV adjustment behavior, regressor preparation errors, weather forecast method branching, thermal loads publishing, and web server runtime parameter handling
+- Update existing optimization and CLI tests to use mocks for heavy optimization routines allowing faster tests
+### Fix
+- Ensure InfluxDB is prioritized over WebSocket and REST when configured as a data source to avoid redundant queries to Home Assistant
+- Fix runtime parameter parsing in the web server to properly handle malformed JSON payloads and default safely to empty parameters
+
+## 0.15.3 - 2026-01-07
+### Improvement
+- Added new thermal model plots
+- Implement thermal battery for underfloor heating from Langer & Volling (2020) (@sokorn)
+- Add hybrid inverter stress cost (@rmounce)
+- Introduce dynamic frontend visibility toggles for `InfluxDB` and machine-learning forecaster options in the web configuration UI
+- Greatly improved coverage for the whole project. Added a new long-awaited unit testing suite for the web server
+- Allow configuring the number of Bayesian optimization trials in the machine-learning forecaster tune API (@gieljnssns)
+- Improve logging for non-hybrid systems to clarify that `inverter_ac_input_max` is ignored and `battery_charge_power_max` is used as the charge limit
+- Expand and update configuration documentation for weather, load, load cost, and production price forecast methods, including references to dedicated forecast documentation and external data inputs
+### Fix
+- Solved issue with `historic_days_to_retrieve` not taken into account
+- Clarify initialization logging for WebSocket, InfluxDB, and REST API data retrieval modes
+- Fixed problem with missing prepare data method on MLForecaster workflow
+- Always use the configured `battery_charge_power_max` as the effective battery DC charge limit, avoiding unintended constraint tightening from `inverter_ac_input_max` on non-hybrid systems
+
+## 0.15.2 - 2025-12-19
+### Improvement
+- Update documentation and parameter definitions for adjusted PV regression models to include all available scikit-learn options (@sokorn)
+- Removed device class and unit of measurement for optim status (@mime24)
+### Fix
+- Fixing some docs math mode and rearrange sections 
+- Refactor REST API data retrieval to reuse one aiohttp ClientSession, solve issue #648 (@gieljnssns)
+- Change regressor parameter to estimator in forecaster
+- Remove warning log for runtime parameters parsing
+
+## 0.15.1 - 2025-12-09
+### Fix
+- Hot fix for thermal model semi-continuous mode and continual publish caped to 60s
+
+## 0.15.0 - 2025-12-09
+### Improvement
+- Added support for async emhass code (@gieljnssns)
+- Added support for websocket data retrieval (@gieljnssns)
+- Add feature to cache pv regression model (@sokorn)
+- Added support for a more comprehensive list of `scikit-learn` models for both ML Forecaster and Regressor classes
+- Improved documentation re-arranged sections
+- Thermal model improvements:
+	- Implemented a Min/Max temperature control, proposed by @werdnum
+	- Implemented needed unit tests
+	- Improved documentation
+### Fix
+- Fixed warning message because pickle files saved with old Numpy version
+- A buch of code refactor following SonarCloud Code Analysis 
+- Solved runtime param optimization_time_step not recognized, issue #563
+- Attempt at solving data publish problem when containing both battery sensor definitions and a def_load_config, issue #587
+- Fix timezone comparison issue with InfluxDB (@sokorn)
+- Update skforecast requirement from <0.19.0,>=0.18.0 to >=0.18.0,<0.20.0
+- Implement inverter AC input limit constraint
+
 ## 0.14.1 - 2025-11-29
 ### Improvement
 - Improved InfluxDB version support documentation

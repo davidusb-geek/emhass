@@ -1,0 +1,70 @@
+{% set name = "emhass" %}
+{% set version = "0.15.5" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  path: ..
+
+build:
+  noarch: python
+  number: 0 # Starts at 0, increment if you need to rebuild the same version
+  script: {{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
+  entry_points:
+    - emhass = emhass.command_line:main_sync
+
+requirements:
+  host:
+    - python >=3.10,<3.13
+    - pip
+    - hatchling
+    - setuptools
+    - wheel
+  run:
+    - python >=3.10,<3.13
+    - numpy >=2.0.0,<2.3.0
+    - scipy >=1.15.0
+    - pandas >=2.2.0
+    - pvlib-python >=0.11.0
+    - protobuf >=5.29.3
+    - pytz >=2024.2
+    - h5py >=3.12.1
+    - highspy >=1.10.0
+    - pulp >=2.8.0
+    - pyyaml >=6.0.2
+    - pytables >=3.10.0
+    - skforecast >=0.19.1,<0.20.0
+    - waitress >=3.0.2
+    - plotly >=6.0.0
+    - gunicorn >=23.0.0
+    - quart
+    - aiofiles
+    - jinja2
+    - aiohttp
+    - orjson
+    - websockets
+    - uvicorn >=0.30.0
+    - influxdb >=5.3.1
+
+test:
+  imports:
+    - emhass
+  commands:
+    - emhass --help
+  requires:
+    - pytest
+
+about:
+  home: https://github.com/davidusb-geek/emhass
+  summary: An Energy Management System for Home Assistant
+  license: MIT
+  license_file: LICENSE
+  description: |
+    EMHASS: Energy Management for Home Assistant is a Python-based optimization 
+    tool designed to optimize energy usage in households.
+
+extra:
+  recipe-maintainers:
+    - davidusb-geek
