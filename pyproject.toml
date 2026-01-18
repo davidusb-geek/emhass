@@ -1,12 +1,10 @@
 [project]
 name = "emhass"
-version = "0.14.1"
+version = "0.15.5"
 description = "An Energy Management System for Home Assistant"
 readme = "README.md"
 requires-python = ">=3.10, <3.13"
-authors = [
-    { name = "David HERNANDEZ", email = "davidusb@gmail.com" },
-]
+authors = [{ name = "David HERNANDEZ TORRES", email = "davidusb@gmail.com" }]
 license = { text = "MIT" }
 keywords = ["energy", "management", "optimization", "hass"]
 classifiers = [
@@ -27,17 +25,23 @@ dependencies = [
     "pvlib>=0.11.0",
     "protobuf>=5.29.3",
     "pytz>=2024.2",
-    "requests>=2.32.2",
     "h5py>=3.12.1",
     "highspy>=1.10.0",
     "pulp>=2.8.0",
     "pyyaml>=6.0.2",
     "tables>=3.10.0",
-    "skforecast>=0.14.0",
-    "flask>=3.1.0",
+    "skforecast>=0.19.1,<0.20.0",
     "waitress>=3.0.2",
     "plotly>=6.0.0",
     "gunicorn>=23.0.0",
+    "quart",
+    "aiofiles",
+    "jinja2",
+    "asyncio",
+    "aiohttp",
+    "orjson",
+    "websockets",
+    "uvicorn>=0.30.0",
     "influxdb>=5.3.1",
 ]
 [build-system]
@@ -56,8 +60,17 @@ default-groups = "all"
 package = true
 
 [project.optional-dependencies]
-docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
-test = ["requests-mock", "pytest", "pytz", "coverage", "snakeviz", "ruff", "tabulate", "hatchling"]
+docs = ["sphinx", "pydata-sphinx-theme", "sphinx-design", "myst-parser"]
+test = [
+    "pytest",
+    "pytz",
+    "coverage",
+    "snakeviz",
+    "ruff",
+    "tabulate",
+    "hatchling",
+    "aioresponses"
+]
 dev = ["ruff"]
 
 [tool.hatch.build.targets.wheel]
@@ -69,7 +82,8 @@ package-data = { "emhass" = [
     "data/cec_modules.pbz2",
     "data/cec_inverters.pbz2",
     "data/associations.csv",
-    "data/config_defaults.json"]}
+    "data/config_defaults.json",
+] }
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -84,24 +98,26 @@ include = [
 ]
 
 [project.scripts]
-emhass = "emhass.command_line:main"
+emhass = "emhass.command_line:main_sync"
 
 [project.urls]
 Homepage = "https://github.com/davidusb-geek/emhass"
 Source = "https://github.com/davidusb-geek/emhass"
 Issues = "https://github.com/davidusb-geek/emhass/issues"
 Documentation = "https://emhass.readthedocs.io/en/latest/"
-Community = "https://community.home-assistant.io/t/emhass-an-energy-management-for-home-assistant" 
+Community = "https://community.home-assistant.io/t/emhass-an-energy-management-for-home-assistant"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "C", "B", "Q", "UP", "YTT", "PYI"]
-ignore = ["E501", "B008", "B905", "C901"] 
+ignore = ["E501", "B008", "B905", "C901"]
 
 [dependency-groups]
-dev = [
-    "emhass",
-]
+dev = ["emhass"]
 
 [tool.ruff]
-target-version = "py311" 
+target-version = "py311"
 src = ["src", "tests"]
+fix = true
+show-fixes = true
+
+line-length = 100

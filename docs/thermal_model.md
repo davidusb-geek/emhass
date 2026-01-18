@@ -56,18 +56,21 @@ You can define the following parameters inside the `thermal_config` dictionary:
 It is recommended to use `min_temperatures` and `max_temperatures` to define a "Comfort Range". This allows the optimizer to "float" the temperature within this range to find the cheapest time to operate, resulting in clear On/Off blocks.
 
 For example, if we have just **two** deferrable loads and the **second** load is a **thermal load** (functioning as a heater) then we will define `def_load_config` as:
+
 ```json
-'def_load_config': {
+"def_load_config": [
     {},
-    {'thermal_config': {
-        'heating_rate': 5.0,
-        'cooling_constant': 0.1,
-        'overshoot_temperature': 24.0,
-        'start_temperature': 20,
-        'sense': 'heat',
-        'desired_temperatures': [...]
+    {"thermal_config": {
+        "heating_rate": 5.0,
+        "cooling_constant": 0.1,
+        "overshoot_temperature": 24.0,
+        "start_temperature": 20,
+        "sense": "heat",
+        "desired_temperatures": [20, 21, 20, 19]
     }}
-}
+]
+```
+
 Here the desired_temperatures is a list of float values for each time step.
 
 Now we also need to define the other needed input, the `outdoor_temperature_forecast`, which is a list of float values. The list of floats for `desired_temperatures` and the list in `outdoor_temperature_forecast` should have proper lengths, if using MPC the length should be at least equal to the prediction horizon.
@@ -134,7 +137,22 @@ shell_command:
   publish_data: 'curl -i -H "Content-Type: application/json" -X POST -d ''{"def_load_config": [{"thermal_config": {}}]}'' http://localhost:5000/action/publish-data'
 ```
 
-As we can see the thermal configuration can be left empty as what is needed is the `thermal_config` key. This is needed if using the add-on, for user using a `config_emhass.yaml` configuration file this is not needed if the `def_load_config` dictionary is directly defined there. 
+Or the equivalent using the `rest_command` integration:
+```yaml
+rest_command:
+  publish_data:
+    url: http://localhost:5000/action/publish-data
+    method: post
+    timeout: 300
+    headers:
+      content-type: application/json
+    payload: >
+      {
+        "def_load_config": [{"thermal_config": {}}]
+      }
+```
+
+As we can see the thermal configuration can be left empty as what is needed is the `thermal_config` key. This is needed if using the add-on; for users using a `config_emhass.yaml` configuration file this is not needed if the `def_load_config` dictionary is directly defined there. 
 
 For a configuration with **three** deferrable loads where the **second** load is a thermal load the payload would have been:
 ```

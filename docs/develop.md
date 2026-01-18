@@ -63,7 +63,7 @@ To activate the virtualenv, created by either uv or pip:
   source .venv/bin/activate
   ```
 - windows:
-  ```cmd
+  ```console
   .venv\Scripts\activate.bat
   ```
 
@@ -291,12 +291,12 @@ When enhancing EMHASS, users may like to add or modify the EMHASS parameters. To
 
 Append a line into `associations.csv` :
 *So that build_params() knows what config catagorie to allocate the parameter*
-```csv
+```text
 ...
 retrieve_hass_conf,,this_parameter_is_amazing
 ```
  - Alternatively if you want to support this parameter with the yaml conversion *(Ie. allow the parameter to be converted from config_emhass.yaml)*
-    ```csv
+    ```text
     ...
     retrieve_hass_conf,his_parameter_is_amazing,this_parameter_is_amazing
     ```

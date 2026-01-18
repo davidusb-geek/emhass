@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
+import asyncio
 import pathlib
 import pickle
 
+import aiofiles
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -29,14 +31,13 @@ emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=True)
 
 
-def load_forecast(data, forecast_date, freq, template):
+def load_forecast(data, forecast_date, template):
     """
     Forecast the load profile for the next day based on historic data.
 
     Parameters:
     - data: pd.DataFrame with a DateTimeIndex containing the historic load data. Must include a 'load' column.
     - forecast_date: pd.Timestamp for the date of the forecast.
-    - freq: frequency of the time series (e.g., '1H' for hourly).
 
     Returns:
     - forecast: pd.Series with the forecasted load profile for the next day.
@@ -49,9 +50,7 @@ def load_forecast(data, forecast_date, freq, template):
     # Filter historic data for the same month and day of the week
     month = forecast_date.month
     day_of_week = forecast_date.dayofweek
-    historic_data = data[
-        (data.index.month == month) & (data.index.dayofweek == day_of_week)
-    ]
+    historic_data = data[(data.index.month == month) & (data.index.dayofweek == day_of_week)]
     used_days = np.unique(historic_data.index.date)
 
     # Align all historic data to the forecast day
@@ -119,15 +118,16 @@ def load_forecast(data, forecast_date, freq, template):
     return forecast, used_days
 
 
-if __name__ == "__main__":
+async def main():
     model_type = "long_train_data"
     data_path = emhass_conf["data_path"] / str(model_type + ".pkl")
     template = "presentation"
 
     if data_path.is_file():
         logger.info("Loading a previous data file")
-        with open(data_path, "rb") as fid:
-            data, var_model = pickle.load(fid)
+        async with aiofiles.open(data_path, "rb") as fid:
+            content = await fid.read()
+            data, _ = pickle.loads(content)
     else:
         error_msg = f"Data file {model_type}.pkl does not exist. Use the test_retrieve_hass.py to save a data file."
         logger.error(error_msg)
@@ -145,8 +145,11 @@ if __name__ == "__main__":
 
     # Define forecast date and frequency
     forecast_date = pd.Timestamp("2023-07-15")
-    freq = pd.to_timedelta(30, "minutes")
 
     # Call the forecasting method
     data.columns = ["load"]
-    forecast, used_days = load_forecast(data, forecast_date, freq, template)
+    _, _ = load_forecast(data, forecast_date, template)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

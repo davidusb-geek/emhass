@@ -1,7 +1,9 @@
+import asyncio
 import pathlib
 import pickle
 import random
 
+import aiofiles
 import pandas as pd
 import plotly.io as pio
 
@@ -32,14 +34,15 @@ emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations
 # create logger
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
-if __name__ == "__main__":
+
+async def main():
     get_data_from_file = True
     show_figures = True
     template = "presentation"
 
     # Build params with default config (no secrets)
-    config = build_config(emhass_conf, logger, emhass_conf["defaults_path"])
-    params = build_params(emhass_conf, {}, config, logger)
+    config = await build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+    params = await build_params(emhass_conf, {}, config, logger)
     retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(params, logger)
     retrieve_hass_conf, optim_conf, plant_conf = (
         retrieve_hass_conf,
@@ -56,8 +59,9 @@ if __name__ == "__main__":
         logger,
     )
     if get_data_from_file:
-        with open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
-            rh.df_final, days_list, var_list = pickle.load(inp)
+        async with aiofiles.open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
+            contents = await inp.read()
+            rh.df_final, days_list, var_list = pickle.loads(contents)
         retrieve_hass_conf["sensor_power_load_no_var_loads"] = str(var_list[0])
         retrieve_hass_conf["sensor_power_photovoltaics"] = str(var_list[1])
         retrieve_hass_conf["sensor_linear_interp"] = [
@@ -73,7 +77,7 @@ if __name__ == "__main__":
             retrieve_hass_conf["sensor_power_load_no_var_loads"],
             retrieve_hass_conf["sensor_power_photovoltaics"],
         ]
-        rh.get_data(
+        await rh.get_data(
             days_list, var_list, minimal_response=False, significant_changes_only=False
         )
     rh.prepare_data(
@@ -83,8 +87,6 @@ if __name__ == "__main__":
         var_replace_zero=retrieve_hass_conf["sensor_replace_zero"],
         var_interp=retrieve_hass_conf["sensor_linear_interp"],
     )
-    df_input_data = rh.df_final.copy()
-
     fcst = Forecast(
         retrieve_hass_conf,
         optim_conf,
@@ -94,15 +96,14 @@ if __name__ == "__main__":
         logger,
         get_data_from_file=get_data_from_file,
     )
-    df_weather = fcst.get_weather_forecast(method="csv")
-    P_PV_forecast = fcst.get_power_from_weather(df_weather)
-    P_load_forecast = fcst.get_load_forecast(method=optim_conf["load_forecast_method"])
-    df_input_data = pd.concat([P_PV_forecast, P_load_forecast], axis=1)
-    df_input_data.columns = ["P_PV_forecast", "P_load_forecast"]
+    df_weather = await fcst.get_weather_forecast(method="csv")
+    p_pv_forecast = fcst.get_power_from_weather(df_weather)
+    p_load_forecast = await fcst.get_load_forecast(method=optim_conf["load_forecast_method"])
+    df_input_data = pd.concat([p_pv_forecast, p_load_forecast], axis=1)
+    df_input_data.columns = ["p_pv_forecast", "P_load_forecast"]
 
     df_input_data = fcst.get_load_cost_forecast(df_input_data)
     df_input_data = fcst.get_prod_price_forecast(df_input_data)
-    input_data_dict = {"retrieve_hass_conf": retrieve_hass_conf}
 
     # Set special debug cases
 
@@ -156,19 +157,17 @@ if __name__ == "__main__":
         emhass_conf,
         logger,
     )
-    P_PV_forecast.loc[:] = 0
-    P_load_forecast.loc[:] = 0
+    p_pv_forecast.loc[:] = 0
+    p_load_forecast.loc[:] = 0
 
-    df_input_data.loc[df_input_data.index[25:30], "unit_load_cost"] = (
-        2.0  # A price peak
-    )
+    df_input_data.loc[df_input_data.index[25:30], "unit_load_cost"] = 2.0  # A price peak
     unit_load_cost = df_input_data[opt.var_load_cost].values  # €/kWh
     unit_prod_price = df_input_data[opt.var_prod_price].values  # €/kWh
 
     opt_res_dayahead = opt.perform_optimization(
         df_input_data,
-        P_PV_forecast.values.ravel(),
-        P_load_forecast.values.ravel(),
+        p_pv_forecast.values.ravel(),
+        p_load_forecast.values.ravel(),
         unit_load_cost,
         unit_prod_price,
         debug=True,
@@ -212,3 +211,7 @@ if __name__ == "__main__":
     )
 
     print(opt_res_dayahead[vars_to_plot])
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

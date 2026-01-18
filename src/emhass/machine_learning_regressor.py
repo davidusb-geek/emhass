@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 import warnings
 from typing import TYPE_CHECKING
@@ -10,14 +11,19 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import (
     AdaBoostRegressor,
+    ExtraTreesRegressor,
     GradientBoostingRegressor,
     RandomForestRegressor,
 )
-from sklearn.linear_model import Lasso, LinearRegression, Ridge
+from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
 from sklearn.metrics import r2_score
 from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.neural_network import MLPRegressor
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVR
+from sklearn.tree import DecisionTreeRegressor
 
 from emhass import utils
 
@@ -26,6 +32,15 @@ if TYPE_CHECKING:
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
+
+# AUTHORITATIVE SOURCE: Supported regression models for MLRegressor and adjust_pv_forecast
+# When adding/removing models, also update:
+# - src/emhass/static/data/param_definitions.json (adjusted_pv_regression_model select_options)
+# - docs/config.md (adjusted_pv_regression_model description)
+# - docs/forecasts.md (Model Training section)
+# - src/emhass/forecast.py (adjust_pv_forecast_fit docstring)
+# Define a seed for reproducibility
+seed = 42
 REGRESSION_METHODS = {
     "LinearRegression": {
         "model": LinearRegression(),
@@ -39,25 +54,76 @@ REGRESSION_METHODS = {
         "param_grid": {"ridge__alpha": [1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100]},
     },
     "LassoRegression": {
-        "model": Lasso(),
+        "model": Lasso(random_state=seed),
         "param_grid": {"lasso__alpha": [1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100]},
     },
-    "RandomForestRegression": {
-        "model": RandomForestRegressor(),
-        "param_grid": {"randomforestregressor__n_estimators": [50, 100, 200]},
+    "ElasticNet": {
+        "model": ElasticNet(alpha=1.0, l1_ratio=0.5, random_state=seed),
+        "param_grid": {
+            "elasticnet__alpha": [1e-4, 1e-3, 1e-2, 1e-1, 1, 10, 100],
+            "elasticnet__l1_ratio": [0.1, 0.5, 0.7, 0.9, 0.95, 0.99, 1],
+        },
     },
-    "GradientBoostingRegression": {
-        "model": GradientBoostingRegressor(),
+    "KNeighborsRegressor": {
+        "model": KNeighborsRegressor(),
+        "param_grid": {
+            "kneighborsregressor__n_neighbors": [3, 5, 7, 10, 15],
+            "kneighborsregressor__weights": ["uniform", "distance"],
+        },
+    },
+    "DecisionTreeRegressor": {
+        "model": DecisionTreeRegressor(ccp_alpha=0.0, random_state=seed),
+        "param_grid": {
+            "decisiontreeregressor__max_depth": [None, 5, 10, 20],
+            "decisiontreeregressor__min_samples_split": [2, 5, 10],
+        },
+    },
+    "SVR": {
+        "model": SVR(),
+        "param_grid": {
+            "svr__C": [0.1, 1, 10, 100],
+            "svr__gamma": ["scale", "auto"],
+            "svr__kernel": ["rbf", "linear"],
+        },
+    },
+    "RandomForestRegressor": {
+        "model": RandomForestRegressor(min_samples_leaf=1, max_features=1.0, random_state=seed),
+        "param_grid": {
+            "randomforestregressor__n_estimators": [50, 100, 200],
+            "randomforestregressor__max_depth": [None, 10, 20],
+            "randomforestregressor__max_features": ["sqrt", "log2", None],
+        },
+    },
+    "ExtraTreesRegressor": {
+        "model": ExtraTreesRegressor(min_samples_leaf=1, max_features=1.0, random_state=seed),
+        "param_grid": {
+            "extratreesregressor__n_estimators": [50, 100, 200],
+            "extratreesregressor__max_depth": [None, 10, 20],
+            "extratreesregressor__max_features": ["sqrt", "log2", None],
+        },
+    },
+    "GradientBoostingRegressor": {
+        "model": GradientBoostingRegressor(learning_rate=0.1, random_state=seed),
         "param_grid": {
             "gradientboostingregressor__n_estimators": [50, 100, 200],
             "gradientboostingregressor__learning_rate": [0.01, 0.1, 0.2],
+            "gradientboostingregressor__max_depth": [3, 5, 10],
         },
     },
-    "AdaBoostRegression": {
-        "model": AdaBoostRegressor(),
+    "AdaBoostRegressor": {
+        "model": AdaBoostRegressor(learning_rate=1.0, random_state=seed),
         "param_grid": {
             "adaboostregressor__n_estimators": [50, 100, 200],
             "adaboostregressor__learning_rate": [0.01, 0.1, 0.2],
+        },
+    },
+    "MLPRegressor": {
+        "model": MLPRegressor(hidden_layer_sizes=(100,), random_state=seed),
+        "param_grid": {
+            "mlpregressor__hidden_layer_sizes": [(50,), (100,), (50, 50)],
+            "mlpregressor__activation": ["relu", "tanh"],
+            "mlpregressor__alpha": [1e-4, 1e-3],
+            "mlpregressor__max_iter": [500],
         },
     },
 }
@@ -82,7 +148,7 @@ class MLRegressor:
         data: pd.DataFrame,
         model_type: str,
         regression_model: str,
-        features: list,
+        features: list[str],
         target: str,
         timestamp: str,
         logger: logging.Logger,
@@ -110,21 +176,45 @@ class MLRegressor:
         :param logger: The passed logger object
         :type logger: logging.Logger
         """
-        self.data = data
+        self.data = data.sort_index()
         self.features = features
         self.target = target
         self.timestamp = timestamp
         self.model_type = model_type
         self.regression_model = regression_model
         self.logger = logger
-        self.data = self.data.sort_index()
-        self.data = self.data[~self.data.index.duplicated(keep="first")]
-        self.data_exo = None
-        self.steps = None
-        self.model = None
-        self.grid_search = None
 
-    def get_regression_model(self: MLRegressor) -> tuple[str, str]:
+        self.data = self.data[~self.data.index.duplicated(keep="first")]
+        self.data_exo: pd.DataFrame | None = None
+        self.steps: int | None = None
+        self.model = None
+        self.grid_search: GridSearchCV | None = None
+
+    def _prepare_data(self, date_features: list[str] | None) -> tuple[pd.DataFrame, pd.Series]:
+        self.data_exo = self.data.copy()
+        self.data_exo[self.features] = self.data[self.features]
+        self.data_exo[self.target] = self.data[self.target]
+
+        keep_columns = list(self.features)
+        if self.timestamp:
+            keep_columns.append(self.timestamp)
+        keep_columns.append(self.target)
+        self.data_exo = self.data_exo[keep_columns].reset_index(drop=True)
+
+        if date_features and self.timestamp:
+            self.data_exo = utils.add_date_features(
+                self.data_exo, timestamp=self.timestamp, date_features=date_features
+            )
+        elif date_features:
+            self.logger.warning("Timestamp is required for date_features. Skipping date features.")
+
+        y = self.data_exo[self.target]
+        X = self.data_exo.drop(
+            columns=[self.target, self.timestamp] if self.timestamp else [self.target]
+        )
+        return X, y
+
+    def _get_model_and_params(self) -> tuple[GridSearchCV, dict] | tuple[None, None]:
         r"""
         Get the base model and parameter grid for the specified regression model.
         Returns a tuple containing the base model and parameter grid corresponding to \
@@ -135,33 +225,16 @@ class MLRegressor:
         :return: A tuple containing the base model and parameter grid.
         :rtype: tuple[str, str]
         """
-        if self.regression_model == "LinearRegression":
-            base_model = REGRESSION_METHODS["LinearRegression"]["model"]
-            param_grid = REGRESSION_METHODS["LinearRegression"]["param_grid"]
-        elif self.regression_model == "RidgeRegression":
-            base_model = REGRESSION_METHODS["RidgeRegression"]["model"]
-            param_grid = REGRESSION_METHODS["RidgeRegression"]["param_grid"]
-        elif self.regression_model == "LassoRegression":
-            base_model = REGRESSION_METHODS["LassoRegression"]["model"]
-            param_grid = REGRESSION_METHODS["LassoRegression"]["param_grid"]
-        elif self.regression_model == "RandomForestRegression":
-            base_model = REGRESSION_METHODS["RandomForestRegression"]["model"]
-            param_grid = REGRESSION_METHODS["RandomForestRegression"]["param_grid"]
-        elif self.regression_model == "GradientBoostingRegression":
-            base_model = REGRESSION_METHODS["GradientBoostingRegression"]["model"]
-            param_grid = REGRESSION_METHODS["GradientBoostingRegression"]["param_grid"]
-        elif self.regression_model == "AdaBoostRegression":
-            base_model = REGRESSION_METHODS["AdaBoostRegression"]["model"]
-            param_grid = REGRESSION_METHODS["AdaBoostRegression"]["param_grid"]
-        else:
-            self.logger.error(
-                "Passed model %s is not valid",
-                self.regression_model,
-            )
+        method = REGRESSION_METHODS.get(self.regression_model)
+        if not method:
+            self.logger.error("Invalid regression model: %s", self.regression_model)
             return None, None
-        return base_model, param_grid
 
-    def fit(self: MLRegressor, date_features: list | None = None) -> bool:
+        pipeline = make_pipeline(StandardScaler(), method["model"])
+        param_grid = method["param_grid"]
+        return pipeline, param_grid
+
+    async def fit(self: MLRegressor, date_features: list[str] | None = None) -> bool:
         r"""Fit the model using the provided data.
 
         :param date_features: A list of 'date_features' to take into account when \
@@ -170,43 +243,18 @@ class MLRegressor:
         :return: bool if successful
         :rtype: bool
         """
-        self.logger.info("Performing a MLRegressor fit for %s", self.model_type)
-        self.data_exo = pd.DataFrame(self.data)
-        self.data_exo[self.features] = self.data[self.features]
-        self.data_exo[self.target] = self.data[self.target]
-        keep_columns = []
-        keep_columns.extend(self.features)
-        if self.timestamp is not None:
-            keep_columns.append(self.timestamp)
-        keep_columns.append(self.target)
-        self.data_exo = self.data_exo[self.data_exo.columns.intersection(keep_columns)]
-        self.data_exo = self.data_exo.reset_index(drop=True)
-        if date_features is not None:
-            if self.timestamp is not None:
-                self.data_exo = utils.add_date_features(
-                    self.data_exo, timestamp=self.timestamp, date_features=date_features
-                )
-            else:
-                self.logger.error(
-                    "If no timestamp provided, you can't use date_features, going \
-                    further without date_features.",
-                )
-        y = self.data_exo[self.target]
-        self.data_exo = self.data_exo.drop(self.target, axis=1)
-        if self.timestamp is not None:
-            self.data_exo = self.data_exo.drop(self.timestamp, axis=1)
-        X = self.data_exo
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
+        self.logger.info("Fitting MLRegressor model for %s", self.model_type)
+
+        X, y = self._prepare_data(date_features)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         self.steps = len(X_test)
-        base_model, param_grid = self.get_regression_model()
-        if base_model is None:
+
+        model_pipeline, param_grid = self._get_model_and_params()
+        if model_pipeline is None:
             return False
-        self.model = make_pipeline(StandardScaler(), base_model)
-        # Create a grid search object
+
         self.grid_search = GridSearchCV(
-            self.model,
+            model_pipeline,
             param_grid,
             cv=5,
             scoring="neg_mean_squared_error",
@@ -214,23 +262,20 @@ class MLRegressor:
             verbose=0,
             n_jobs=-1,
         )
-        # Fit the grid search object to the data
-        self.logger.info("Training a %s model", self.regression_model)
-        start_time = time.time()
-        self.grid_search.fit(X_train.values, y_train.values)
-        self.logger.info("Elapsed time for model fit: %s", time.time() - start_time)
+
+        self.logger.info("Training model: %s", self.regression_model)
+        start = time.time()
+        await asyncio.to_thread(self.grid_search.fit, X_train.values, y_train.values)
+        self.logger.info("Model fit completed in %.2f seconds", time.time() - start)
+
         self.model = self.grid_search.best_estimator_
-        # Make predictions
-        predictions = self.model.predict(X_test.values)
-        predictions = pd.Series(predictions, index=X_test.index)
-        pred_metric = r2_score(y_test, predictions)
-        self.logger.info(
-            "Prediction R2 score of fitted model on test data: %s",
-            pred_metric,
-        )
+
+        predictions = await asyncio.to_thread(self.model.predict, X_test.values)
+        r2 = r2_score(y_test, predictions)
+        self.logger.info("R2 score on test set: %.4f", r2)
         return True
 
-    def predict(self: MLRegressor, new_values: list) -> np.ndarray:
+    async def predict(self: MLRegressor, new_values: list[float]) -> np.ndarray:
         """Predict a new value.
 
         :param new_values: The new values for the features \
@@ -240,6 +285,7 @@ class MLRegressor:
         :return: The np.ndarray containing the predicted value.
         :rtype: np.ndarray
         """
-        self.logger.info("Performing a prediction for %s", self.model_type)
-        new_values = np.array([new_values])
-        return self.model.predict(new_values)
+        self.logger.info("Making prediction with model %s", self.model_type)
+        new_values_array = np.array([new_values])
+        prediction = await asyncio.to_thread(self.model.predict, new_values_array)
+        return prediction

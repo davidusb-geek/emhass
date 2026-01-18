@@ -29,12 +29,8 @@ if __name__ == "__main__":
     emhass_conf["root_path"] = root / "src/emhass/"
     emhass_conf["docs_path"] = root / "docs/"
     emhass_conf["config_path"] = root / "config.json"
-    emhass_conf["defaults_path"] = (
-        emhass_conf["root_path"] / "data/config_defaults.json"
-    )
-    emhass_conf["associations_path"] = (
-        emhass_conf["root_path"] / "data/associations.csv"
-    )
+    emhass_conf["defaults_path"] = emhass_conf["root_path"] / "data/config_defaults.json"
+    emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations.csv"
 
     # create logger
     logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
@@ -64,12 +60,10 @@ if __name__ == "__main__":
     data = pd.DataFrame(index=data_cost.index, columns=cols_to_plot)
     data["P_PV"] = data_cost["P_PV"]
     data["P_Load"] = data_cost["P_Load"]
-    data["P_def_sum_cost"] = (
-        data_cost["P_deferrable0"] + data_cost["P_deferrable1"]
-    ).clip(lower=0)
-    data["P_def_sum_profit"] = (
-        data_profit["P_deferrable0"] + data_profit["P_deferrable1"]
-    ).clip(lower=0)
+    data["P_def_sum_cost"] = (data_cost["P_deferrable0"] + data_cost["P_deferrable1"]).clip(lower=0)
+    data["P_def_sum_profit"] = (data_profit["P_deferrable0"] + data_profit["P_deferrable1"]).clip(
+        lower=0
+    )
     data["P_def_sum_selfcons"] = (
         data_selfcons["P_deferrable0"] + data_selfcons["P_deferrable1"]
     ).clip(lower=0)
@@ -99,9 +93,7 @@ if __name__ == "__main__":
         x_title="Date",
     )
 
-    fig = px.line(
-        data, x=data.index, y=cols_to_plot[0:3], markers=True, template=template
-    )
+    fig = px.line(data, x=data.index, y=cols_to_plot[0:3], markers=True, template=template)
 
     fig.update_traces(marker={"size": symbol_size})
 
@@ -159,9 +151,7 @@ if __name__ == "__main__":
     for traces in fig_traces:
         this_figure.append_trace(traces, row=3, col=1)
 
-    fig4 = px.line(
-        data, x=data.index, y=cols_to_plot[5:], markers=False, template=template
-    )
+    fig4 = px.line(data, x=data.index, y=cols_to_plot[5:], markers=False, template=template)
 
     fig4.update_traces(marker={"size": symbol_size}, line={"dash": "solid"})
 
@@ -178,18 +168,14 @@ if __name__ == "__main__":
 
     if save_figs:
         fig_filename = emhass_conf["docs_path"] / "images/optim_results"
-        this_figure.write_image(
-            str(fig_filename) + ".png", width=1.5 * 768, height=1.5 * 1.5 * 768
-        )
+        this_figure.write_image(str(fig_filename) + ".png", width=1.5 * 768, height=1.5 * 1.5 * 768)
 
     fig_bar = px.bar(
         np.arange(len(cf)),
         x=[
             c
             + " (+"
-            + "{:.2f}".format(
-                np.sum(data["gain_" + c]) * 100 / np.sum(data["gain_profit"]) - 100
-            )
+            + "{:.2f}".format(np.sum(data["gain_" + c]) * 100 / np.sum(data["gain_profit"]) - 100)
             + "%)"
             for c in cf
         ],

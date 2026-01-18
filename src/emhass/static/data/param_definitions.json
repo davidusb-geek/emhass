@@ -4,11 +4,7 @@
       "friendly_name": "Cost function",
       "Description": "Define the type of cost function.",
       "input": "select",
-      "select_options": [
-        "profit",
-        "cost",
-        "self-consumption"
-      ],
+      "select_options": ["profit", "cost", "self-consumption"],
       "default_value": "profit"
     },
     "sensor_power_photovoltaics": {
@@ -40,6 +36,18 @@
       "Description": "The list of retrieved variables that we would want to interpolate NANs values using linear interpolation",
       "input": "array.string",
       "default_value": "sensor.power_photovoltaics"
+    },
+    "ssl_no_verify": {
+      "friendly_name": "SSL no verify",
+      "Description": "Set to true to disable SSL verification when connecting to Home Assistant. Useful if using self-signed certificates (HTTPS with IP address).",
+      "input": "boolean",
+      "default_value": false
+    },
+    "use_websocket": {
+      "friendly_name": "Use Home Assistant websocket for data retrieval",
+      "Description": "Enable Home Assistant websocket as data source instead of Home Assistant API. This allows for longer historical data retention and better performance for machine learning models.",
+      "input": "boolean",
+      "default_value": false
     },
     "use_influxdb": {
       "friendly_name": "Use InfluxDB (1.x) for data retrieval",
@@ -111,12 +119,7 @@
       "friendly_name": "Logging level",
       "Description": "DEBUG provides detailed diagnostic information, INFO gives general operational messages, WARNING highlights potential issues, and ERROR indicates critical problems that may disrupt functionality.",
       "input": "select",
-      "select_options": [
-        "INFO",
-        "DEBUG",  
-        "WARNING",
-        "ERROR"
-      ],
+      "select_options": ["INFO", "DEBUG", "WARNING", "ERROR"],
       "default_value": "INFO"
     }
   },
@@ -149,11 +152,7 @@
       "friendly_name": "Timestamp rounding method",
       "Description": "Set the method for timestamp rounding, options are: first, last and nearest.",
       "input": "select",
-      "select_options": [
-        "nearest",
-        "first",
-        "last"
-      ],
+      "select_options": ["nearest", "first", "last"],
       "default_value": "nearest"
     },
     "delta_forecast_daily": {
@@ -166,12 +165,7 @@
       "friendly_name": "Load forecast method",
       "Description": "The load forecast method that will be used. The options are ‘csv’ to load a CSV file or ‘naive’ for a simple 1-day persistence model.",
       "input": "select",
-      "select_options": [
-        "typical",
-        "naive",
-        "mlforecaster",
-        "csv"
-      ],
+      "select_options": ["typical", "naive", "mlforecaster", "csv"],
       "default_value": "typical"
     },
     "set_total_pv_sell": {
@@ -215,12 +209,7 @@
       "friendly_name": "Weather forecast method",
       "Description": "This will define the weather forecast method that will be used. options are 'open-meteo', 'Solcast', 'solar.forecast' (forecast.solar) and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts.",
       "input": "select",
-      "select_options": [
-        "open-meteo",
-        "solcast",
-        "solar.forecast",
-        "csv"
-      ],
+      "select_options": ["open-meteo", "solcast", "solar.forecast", "csv"],
       "default_value": "open-meteo"
     },
     "open_meteo_cache_max_age": {
@@ -271,6 +260,18 @@
       "input": "float",
       "default_value": 1.0
     },
+    "inverter_stress_cost": {
+      "friendly_name": "Hybrid Inverter Stress Cost",
+      "Description": "A virtual cost (Currency/kWh) applied at the inverter's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows.",
+      "input": "float",
+      "default_value": 0.0
+    },
+    "inverter_stress_segments": {
+      "friendly_name": "Hybrid Inverter Stress Segments",
+      "Description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time.",
+      "input": "int",
+      "default_value": 10
+    },
     "compute_curtailment": {
       "friendly_name": "Set compute curtailment (grid export limit)",
       "Description": "Set to True to compute a special PV curtailment variable (Default False)",
@@ -283,10 +284,7 @@
       "friendly_name": "Load cost method",
       "Description": "Define the method that will be used for load cost forecast. The options are ‘hp_hc_periods’ for peak and non-peak hours contracts, and ‘csv’ to load custom cost from CSV file.",
       "input": "select",
-      "select_options": [
-        "hp_hc_periods",
-        "csv"
-      ],
+      "select_options": ["hp_hc_periods", "csv"],
       "default_value": "hp_hc_periods"
     },
     "load_peak_hour_periods": {
@@ -294,7 +292,7 @@
       "Description": "A list of peak hour periods for load consumption from the grid. This is useful if you have a contract with peak and non-peak hours.",
       "input": "array.time",
       "default_value": {
-        "period_hp_template": [{"start": "02:54"},{"end": "15:24"}]
+        "period_hp_template": [{ "start": "02:54" }, { "end": "15:24" }]
       },
       "requires": {
         "load_cost_forecast_method": "hp_hc_periods"
@@ -322,10 +320,7 @@
       "friendly_name": "PV power production price forecast method",
       "Description": "Define the method that will be used for PV power production price forecast. This is the price that is paid by the utility for energy injected into the grid. The options are ‘constant’ for a constant fixed value or ‘csv’ to load custom price forecasts from a CSV file.",
       "input": "select",
-      "select_options": [
-        "constant",
-        "csv"
-      ],
+      "select_options": ["constant", "csv"],
       "default_value": "constant"
     },
     "photovoltaic_production_sell_price": {
@@ -353,15 +348,21 @@
     },
     "adjusted_pv_regression_model": {
       "friendly_name": "Regression model for adjusted PV",
-      "Description": "Set the type of regression model that will be used to adjust the solr PV production to local conditions. Defaults to LassoRegression",
+      "Description": "Set the type of regression model that will be used to adjust the solar PV production to local conditions. Available models are defined in REGRESSION_METHODS (machine_learning_regressor.py). Defaults to LassoRegression",
       "input": "select",
       "select_options": [
         "LinearRegression",
         "RidgeRegression",
         "LassoRegression",
-        "RandomForestRegression",
-        "GradientBoostingRegression",
-        "AdaBoostRegression"
+        "ElasticNet",
+        "KNeighborsRegressor",
+        "DecisionTreeRegressor",
+        "SVR",
+        "RandomForestRegressor",
+        "ExtraTreesRegressor",
+        "GradientBoostingRegressor",
+        "AdaBoostRegressor",
+        "MLPRegressor"
       ],
       "default_value": "LassoRegression"
     },
@@ -371,16 +372,22 @@
       "input": "int",
       "default_value": 10
     },
+    "adjusted_pv_model_max_age": {
+      "friendly_name": "Adjusted PV model maximum age",
+      "Description": "Maximum age in hours before the adjusted PV regression model is re-fitted. If the saved model is older than this value, a new model will be trained using fresh historical data. Set to 0 to force re-fitting on every call. Defaults to 24 hours (1 day).",
+      "input": "int",
+      "default_value": 24
+    },
     "pv_module_model": {
-      "friendly_name": "PV module model name",
-      "Description": "The PV module model. This parameter can be a list of items to enable the simulation of mixed orientation systems.",
+      "friendly_name": "PV module model",
+      "Description": "The PV module model. You can provide the model name from the CEC database or the nominal power in Watts (e.g., 300). This parameter can be a list of items to enable the simulation of mixed orientation systems.",
       "input": "array.string",
       "input_attributes": "_'s",
       "default_value": "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M"
     },
     "pv_inverter_model": {
-      "friendly_name": "The PV inverter model name",
-      "Description": "The PV inverter model.  This parameter can be a list of items to enable the simulation of mixed orientation systems.",
+      "friendly_name": "PV inverter model",
+      "Description": "The PV inverter model. You can provide the model name from the CEC database or the nominal power in Watts (e.g., 5000). This parameter can be a list of items to enable the simulation of mixed orientation systems.",
       "input": "array.string",
       "input_attributes": "_'s",
       "default_value": "Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_"
@@ -449,7 +456,7 @@
     },
     "set_deferrable_startup_penalty": {
       "friendly_name": "Set deferrable startup penalty",
-      "Description": "For penalty P, each time the deferrable load turns on will incur an additional cost of P * number_of_deferrable_loads * cost_of_electricity at that time",
+      "Description": "For penalty P, each time the deferrable load turns on will incur an additional cost of nominal_power (kW) * cost_of_electricity * time step at that time",
       "input": "array.float",
       "default_value": 0.0
     },
@@ -568,6 +575,18 @@
       "Description": "The desired battery state of charge at the end of each optimization cycle. (percentage/100)",
       "input": "float",
       "default_value": 0.6
+    },
+    "battery_stress_cost": {
+      "friendly_name": "Battery Stress Cost",
+      "Description": "A virtual cost (Currency/kWh) applied at the battery's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows.",
+      "input": "float",
+      "default_value": 0.0
+    },
+    "battery_stress_segments": {
+      "friendly_name": "Battery Stress Segments",
+      "Description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time.",
+      "input": "int",
+      "default_value": 10
     },
     "ignore_pv_feedback_during_curtailment": {
       "friendly_name": "Ignore PV feedback during curtailment",

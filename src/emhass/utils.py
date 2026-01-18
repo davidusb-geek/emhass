@@ -3,19 +3,20 @@ from __future__ import annotations
 import ast
 import copy
 import csv
-import json
 import logging
 import os
 import pathlib
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+import aiofiles
+import aiohttp
 import numpy as np
+import orjson
 import pandas as pd
 import plotly.express as px
 import pytz
 import yaml
-from requests import get
 
 if TYPE_CHECKING:
     from emhass.machine_learning_forecaster import MLForecaster
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 pd.options.plotting.backend = "plotly"
 
 
-def get_root(file: str, num_parent: int | None = 3) -> str:
+def get_root(file: str, num_parent: int = 3) -> str:
     """
     Get the root absolute path of the working directory.
 
@@ -47,9 +48,9 @@ def get_root(file: str, num_parent: int | None = 3) -> str:
 
 def get_logger(
     fun_name: str,
-    emhass_conf: dict,
-    save_to_file: bool | None = True,
-    logging_level: str | None = "DEBUG",
+    emhass_conf: dict[str, pathlib.Path],
+    save_to_file: bool = True,
+    logging_level: str = "DEBUG",
 ) -> tuple[logging.Logger, logging.StreamHandler]:
     """
     Create a simple logger object.
@@ -90,9 +91,7 @@ def get_logger(
     else:
         logger.setLevel(logging.DEBUG)
         ch.setLevel(logging.DEBUG)
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     ch.setFormatter(formatter)
     logger.addHandler(ch)
 
@@ -126,13 +125,9 @@ def get_forecast_dates(
     freq = pd.to_timedelta(freq, "minutes")
     start_time = _get_now()
 
-    start_forecast = (
-        pd.Timestamp(start_time, tz=time_zone).replace(microsecond=0).floor(freq=freq)
-    )
+    start_forecast = pd.Timestamp(start_time, tz=time_zone).replace(microsecond=0).floor(freq=freq)
     end_forecast = start_forecast + pd.tseries.offsets.DateOffset(days=delta_forecast)
-    final_end_date = (
-        end_forecast + pd.tseries.offsets.DateOffset(days=timedelta_days) - freq
-    )
+    final_end_date = end_forecast + pd.tseries.offsets.DateOffset(days=timedelta_days) - freq
 
     forecast_dates = pd.date_range(
         start=start_forecast,
@@ -142,6 +137,324 @@ def get_forecast_dates(
     )
 
     return [ts.isoformat() for ts in forecast_dates]
+
+
+def calculate_cop_heatpump(
+    supply_temperature: float,
+    carnot_efficiency: float,
+    outdoor_temperature_forecast: np.ndarray | pd.Series,
+) -> np.ndarray:
+    r"""
+    Calculate heat pump Coefficient of Performance (COP) for each timestep in the prediction horizon.
+
+    The COP is calculated using a Carnot-based formula:
+
+    .. math::
+        COP(h) = \eta_{carnot} \times \frac{T_{supply\_K}}{|T_{supply\_K} - T_{outdoor\_K}(h)|}
+
+    Where temperatures are converted to Kelvin (K = °C + 273.15).
+
+    This formula models real heat pump behavior where COP decreases as the temperature lift
+    (difference between supply and outdoor temperature) increases. The carnot_efficiency factor
+    represents the real-world efficiency as a fraction of the ideal Carnot cycle efficiency.
+
+    :param supply_temperature: The heat pump supply temperature in degrees Celsius (constant value). \
+        Typical values: 30-40°C for underfloor heating, 50-70°C for radiator systems.
+    :type supply_temperature: float
+    :param carnot_efficiency: Real-world efficiency factor as fraction of ideal Carnot cycle. \
+        Typical range: 0.35-0.50 (35-50%). Default in thermal battery config: 0.4 (40%). \
+        Higher values represent more efficient heat pumps.
+    :type carnot_efficiency: float
+    :param outdoor_temperature_forecast: Array of outdoor temperature forecasts in degrees Celsius, \
+        one value per timestep in the prediction horizon.
+    :type outdoor_temperature_forecast: np.ndarray or pd.Series
+    :return: Array of COP values for each timestep, same length as outdoor_temperature_forecast. \
+        Typical COP range: 2-6 for normal operating conditions.
+    :rtype: np.ndarray
+
+    Example:
+        >>> supply_temp = 35.0  # °C, underfloor heating
+        >>> carnot_eff = 0.4  # 40% of ideal Carnot efficiency
+        >>> outdoor_temps = np.array([0.0, 5.0, 10.0, 15.0, 20.0])
+        >>> cops = calculate_cop_heatpump(supply_temp, carnot_eff, outdoor_temps)
+        >>> cops
+        array([3.521..., 4.108..., 4.926..., 6.163..., 8.217...])
+        >>> # At 5°C outdoor: COP = 0.4 × 308.15K / 30K = 4.11
+
+    """
+    # Convert to numpy array if pandas Series
+    if isinstance(outdoor_temperature_forecast, pd.Series):
+        outdoor_temps = outdoor_temperature_forecast.values
+    else:
+        outdoor_temps = np.asarray(outdoor_temperature_forecast)
+
+    # Convert temperatures from Celsius to Kelvin for Carnot formula
+    supply_temperature_kelvin = supply_temperature + 273.15
+    outdoor_temperature_kelvin = outdoor_temps + 273.15
+
+    # Calculate temperature difference (supply - outdoor)
+    # For heating, supply temperature should be higher than outdoor temperature
+    temperature_diff = supply_temperature_kelvin - outdoor_temperature_kelvin
+
+    # Check for non-physical scenarios where outdoor temp >= supply temp
+    # This indicates cooling mode or invalid configuration for heating
+    if np.any(temperature_diff <= 0):
+        # Log warning about non-physical temperature scenario
+        logger = logging.getLogger(__name__)
+        num_invalid = np.sum(temperature_diff <= 0)
+        invalid_indices = np.nonzero(temperature_diff <= 0)[0]
+        logger.warning(
+            f"COP calculation: {num_invalid} timestep(s) have outdoor temperature >= supply temperature. "
+            f"This is non-physical for heating mode. Indices: {invalid_indices.tolist()[:5]}{'...' if len(invalid_indices) > 5 else ''}. "
+            f"Supply temp: {supply_temperature:.1f}°C. Setting COP to 1.0 (direct electric heating) for these periods."
+        )
+
+    # Vectorized Carnot-based COP calculation
+    # COP = carnot_efficiency × T_supply / (T_supply - T_outdoor)
+    # For non-physical cases (outdoor >= supply), we use a neutral COP of 1.0
+    # This prevents the optimizer from exploiting unrealistic high COP values
+
+    # Avoid division by zero: use a mask to only calculate for valid cases
+    cop_values = np.ones_like(outdoor_temperature_kelvin)  # Default to 1.0 everywhere
+    valid_mask = temperature_diff > 0
+    if np.any(valid_mask):
+        cop_values[valid_mask] = (
+            carnot_efficiency * supply_temperature_kelvin / temperature_diff[valid_mask]
+        )
+
+    # Apply realistic bounds: minimum 1.0, maximum 8.0
+    # - Lower bound: 1.0 means direct electric heating (no efficiency gain)
+    # - Upper bound: 8.0 is an optimistic but reasonable maximum for modern heat pumps
+    #   (prevents numerical instability from very small temperature differences)
+    cop_values = np.clip(cop_values, 1.0, 8.0)
+
+    return cop_values
+
+
+def calculate_thermal_loss_signed(
+    outdoor_temperature_forecast: np.ndarray | pd.Series,
+    indoor_temperature: float,
+    base_loss: float,
+) -> np.ndarray:
+    r"""
+    Calculate signed thermal loss factor based on indoor/outdoor temperature difference.
+
+    **SIGN CONVENTION:**
+    - **Positive** (+loss): outdoor < indoor → heat loss, building cools, heating required
+    - **Negative** (-loss): outdoor ≥ indoor → heat gain, building warms passively
+
+    Formula: loss * (1 - 2 * Hot(h)), where Hot(h) = 1 if outdoor ≥ indoor, else 0.
+    Based on Langer & Volling (2020) Equation B.13.
+
+    :param outdoor_temperature_forecast: Outdoor temperature forecast (°C)
+    :type outdoor_temperature_forecast: np.ndarray or pd.Series
+    :param indoor_temperature: Indoor/target temperature threshold (°C)
+    :type indoor_temperature: float
+    :param base_loss: Base thermal loss coefficient in kW
+    :type base_loss: float
+    :return: Signed loss array (positive = heat loss, negative = heat gain)
+    :rtype: np.ndarray
+
+    """
+    # Convert to numpy array if pandas Series
+    if isinstance(outdoor_temperature_forecast, pd.Series):
+        outdoor_temps = outdoor_temperature_forecast.values
+    else:
+        outdoor_temps = np.asarray(outdoor_temperature_forecast)
+
+    # Create binary hot indicator: 1 if outdoor temp >= indoor temp, 0 otherwise
+    hot_indicator = (outdoor_temps >= indoor_temperature).astype(float)
+
+    return base_loss * (1.0 - 2.0 * hot_indicator)
+
+
+def calculate_heating_demand(
+    specific_heating_demand: float,
+    floor_area: float,
+    outdoor_temperature_forecast: np.ndarray | pd.Series,
+    base_temperature: float = 18.0,
+    annual_reference_hdd: float = 3000.0,
+    optimization_time_step: int | None = None,
+) -> np.ndarray:
+    """
+    Calculate heating demand per timestep based on heating degree days method.
+
+    Uses heating degree days (HDD) to calculate heating demand based on outdoor temperature
+    forecast, specific heating demand, and floor area. The specific heating demand should be
+    calibrated to the annual reference HDD value.
+
+    :param specific_heating_demand: Specific heating demand in kWh/m²/year (calibrated to annual_reference_hdd)
+    :type specific_heating_demand: float
+    :param floor_area: Floor area in m²
+    :type floor_area: float
+    :param outdoor_temperature_forecast: Outdoor temperature forecast in °C for each timestep
+    :type outdoor_temperature_forecast: np.ndarray | pd.Series
+    :param base_temperature: Base temperature for HDD calculation in °C, defaults to 18.0 (European standard)
+    :type base_temperature: float, optional
+    :param annual_reference_hdd: Annual reference HDD value for normalization, defaults to 3000.0 (Central Europe)
+    :type annual_reference_hdd: float, optional
+    :param optimization_time_step: Optimization time step in minutes. If None, automatically infers from
+        pandas Series DatetimeIndex frequency. Falls back to 30 minutes if not inferrable.
+    :type optimization_time_step: int | None, optional
+    :return: Array of heating demand values (kWh) per timestep
+    :rtype: np.ndarray
+
+    """
+
+    # Convert outdoor temperature forecast to numpy array if pandas Series
+    outdoor_temps = (
+        outdoor_temperature_forecast.values
+        if isinstance(outdoor_temperature_forecast, pd.Series)
+        else np.asarray(outdoor_temperature_forecast)
+    )
+
+    # Calculate heating degree days per timestep
+    # HDD = max(base_temperature - outdoor_temperature, 0)
+    hdd_per_timestep = np.maximum(base_temperature - outdoor_temps, 0.0)
+
+    # Determine timestep duration in hours
+    if optimization_time_step is None:
+        # Try to infer from pandas Series DatetimeIndex
+        if isinstance(outdoor_temperature_forecast, pd.Series) and isinstance(
+            outdoor_temperature_forecast.index, pd.DatetimeIndex
+        ):
+            if len(outdoor_temperature_forecast.index) > 1:
+                freq_minutes = (
+                    outdoor_temperature_forecast.index[1] - outdoor_temperature_forecast.index[0]
+                ).total_seconds() / 60.0
+                hours_per_timestep = freq_minutes / 60.0
+            else:
+                # Single datapoint, fallback to default 30 min
+                hours_per_timestep = 0.5
+        else:
+            # Cannot infer, use default 30 minutes
+            hours_per_timestep = 0.5
+    else:
+        # Convert minutes to hours
+        hours_per_timestep = optimization_time_step / 60.0
+
+    # Scale HDD to timestep duration (standard HDD is per 24 hours)
+    hdd_per_timestep_scaled = hdd_per_timestep * (hours_per_timestep / 24.0)
+
+    return specific_heating_demand * floor_area * (hdd_per_timestep_scaled / annual_reference_hdd)
+
+
+def calculate_heating_demand_physics(
+    u_value: float,
+    envelope_area: float,
+    ventilation_rate: float,
+    heated_volume: float,
+    indoor_target_temperature: float,
+    outdoor_temperature_forecast: np.ndarray | pd.Series,
+    optimization_time_step: int,
+    solar_irradiance_forecast: np.ndarray | pd.Series | None = None,
+    window_area: float | None = None,
+    shgc: float = 0.6,
+) -> np.ndarray:
+    """
+    Calculate heating demand per timestep based on building physics heat loss model.
+
+    More accurate than HDD method as it directly calculates transmission and ventilation
+    losses based on building thermal properties. Optionally accounts for solar gains
+    through windows to reduce heating demand.
+
+    :param u_value: Overall thermal transmittance (U-value) in W/(m²·K). Typical values:
+        - 0.2-0.3: Well-insulated modern building
+        - 0.4-0.6: Average insulation
+        - 0.8-1.2: Poor insulation / old building
+    :type u_value: float
+    :param envelope_area: Total building envelope area (walls + roof + floor + windows) in m²
+    :type envelope_area: float
+    :param ventilation_rate: Air changes per hour (ACH). Typical values:
+        - 0.3-0.5: Well-sealed modern building with controlled ventilation
+        - 0.5-1.0: Average building
+        - 1.0-2.0: Leaky old building
+    :type ventilation_rate: float
+    :param heated_volume: Total heated volume in m³
+    :type heated_volume: float
+    :param indoor_target_temperature: Target indoor temperature in °C
+    :type indoor_target_temperature: float
+    :param outdoor_temperature_forecast: Outdoor temperature forecast in °C for each timestep
+    :type outdoor_temperature_forecast: np.ndarray | pd.Series
+    :param optimization_time_step: Optimization time step in minutes
+    :type optimization_time_step: int
+    :param solar_irradiance_forecast: Global Horizontal Irradiance (GHI) in W/m² for each timestep.
+        If provided along with window_area, solar gains will be subtracted from heating demand.
+    :type solar_irradiance_forecast: np.ndarray | pd.Series | None, optional
+    :param window_area: Total window area in m². If provided along with solar_irradiance_forecast,
+        solar gains will reduce heating demand. Typical values: 15-25% of floor area.
+    :type window_area: float | None, optional
+    :param shgc: Solar Heat Gain Coefficient (dimensionless, 0-1). Fraction of solar radiation
+        that becomes heat inside the building. Typical values:
+        - 0.5-0.6: Modern low-e double-glazed windows
+        - 0.6-0.7: Standard double-glazed windows
+        - 0.7-0.8: Single-glazed windows
+        Default: 0.6
+    :type shgc: float, optional
+    :return: Array of heating demand values (kWh) per timestep
+    :rtype: np.ndarray
+
+    Example:
+        >>> outdoor_temps = np.array([5, 8, 12, 15])
+        >>> ghi = np.array([0, 100, 400, 600])  # W/m²
+        >>> demand = calculate_heating_demand_physics(
+        ...     u_value=0.3,
+        ...     envelope_area=400,
+        ...     ventilation_rate=0.5,
+        ...     heated_volume=250,
+        ...     indoor_target_temperature=20,
+        ...     outdoor_temperature_forecast=outdoor_temps,
+        ...     optimization_time_step=30,
+        ...     solar_irradiance_forecast=ghi,
+        ...     window_area=50,
+        ...     shgc=0.6
+        ... )
+    """
+
+    # Convert outdoor temperature forecast to numpy array if pandas Series
+    outdoor_temps = (
+        outdoor_temperature_forecast.values
+        if isinstance(outdoor_temperature_forecast, pd.Series)
+        else np.asarray(outdoor_temperature_forecast)
+    )
+
+    # Calculate temperature difference (only heat when outdoor < indoor)
+    temp_diff = indoor_target_temperature - outdoor_temps
+    temp_diff = np.maximum(temp_diff, 0.0)
+
+    # Transmission losses: Q_trans = U * A * ΔT (W to kW)
+    transmission_loss_kw = u_value * envelope_area * temp_diff / 1000.0
+
+    # Ventilation losses: Q_vent = V * ρ * c * n * ΔT / 3600
+    # ρ = air density (kg/m³), c = specific heat capacity (kJ/(kg·K)), n = ACH
+    air_density = 1.2  # kg/m³ at 20°C
+    air_heat_capacity = 1.005  # kJ/(kg·K)
+    ventilation_loss_kw = (
+        ventilation_rate * heated_volume * air_density * air_heat_capacity * temp_diff / 3600.0
+    )
+
+    # Total heat loss in kW
+    total_loss_kw = transmission_loss_kw + ventilation_loss_kw
+
+    # Calculate solar gains if irradiance and window area are provided
+    if solar_irradiance_forecast is not None and window_area is not None:
+        # Convert solar irradiance to numpy array if pandas Series
+        solar_irradiance = (
+            solar_irradiance_forecast.values
+            if isinstance(solar_irradiance_forecast, pd.Series)
+            else np.asarray(solar_irradiance_forecast)
+        )
+
+        # Solar gains: Q_solar = window_area * SHGC * GHI (W to kW)
+        # GHI is in W/m², so multiply by window_area (m²) gives W, then divide by 1000 for kW
+        solar_gains_kw = window_area * shgc * solar_irradiance / 1000.0
+
+        # Subtract solar gains from heat loss (but never go negative)
+        total_loss_kw = np.maximum(total_loss_kw - solar_gains_kw, 0.0)
+
+    # Convert to kWh for the timestep
+    hours_per_timestep = optimization_time_step / 60.0
+    return total_loss_kw * hours_per_timestep
 
 
 def update_params_with_ha_config(
@@ -164,7 +477,7 @@ def update_params_with_ha_config(
         The updated params.
     """
     # Load serialized params
-    params = json.loads(params)
+    params = orjson.loads(params)
     # Update params
     currency_to_symbol = {
         "EUR": "€",
@@ -212,20 +525,20 @@ def update_params_with_ha_config(
     for key, value in updated_passed_dict.items():
         params["passed_data"][key]["unit_of_measurement"] = value["unit_of_measurement"]
     # Serialize the final params
-    params = json.dumps(params, default=str)
+    params = orjson.dumps(params, default=str).decode("utf-8")
     return params
 
 
-def treat_runtimeparams(
+async def treat_runtimeparams(
     runtimeparams: str,
-    params: str,
-    retrieve_hass_conf: dict,
-    optim_conf: dict,
-    plant_conf: dict,
+    params: dict[str, dict],
+    retrieve_hass_conf: dict[str, str],
+    optim_conf: dict[str, str],
+    plant_conf: dict[str, str],
     set_type: str,
     logger: logging.Logger,
-    emhass_conf: dict,
-) -> tuple[str, dict]:
+    emhass_conf: dict[str, pathlib.Path],
+) -> tuple[str, dict[str, dict]]:
     """
     Treat the passed optimization runtime parameters.
 
@@ -252,7 +565,7 @@ def treat_runtimeparams(
     # Check if passed params is a dict
     if (params is not None) and (params != "null"):
         if type(params) is str:
-            params = json.loads(params)
+            params = orjson.loads(params)
     else:
         params = {}
 
@@ -268,6 +581,7 @@ def treat_runtimeparams(
     # Some default data needed
     custom_deferrable_forecast_id = []
     custom_predicted_temperature_id = []
+    custom_heating_demand_id = []
     for k in range(params["optim_conf"]["number_of_deferrable_loads"]):
         custom_deferrable_forecast_id.append(
             {
@@ -283,6 +597,14 @@ def treat_runtimeparams(
                 "device_class": "temperature",
                 "unit_of_measurement": default_temperature_unit,
                 "friendly_name": f"Predicted temperature {k}",
+            }
+        )
+        custom_heating_demand_id.append(
+            {
+                "entity_id": f"sensor.heating_demand{k}",
+                "device_class": "energy",
+                "unit_of_measurement": "kWh",
+                "friendly_name": f"Heating demand {k}",
             }
         )
     default_passed_dict = {
@@ -354,6 +676,7 @@ def treat_runtimeparams(
         },
         "custom_deferrable_forecast_id": custom_deferrable_forecast_id,
         "custom_predicted_temperature_id": custom_predicted_temperature_id,
+        "custom_heating_demand_id": custom_heating_demand_id,
         "publish_prefix": "",
     }
     if "passed_data" in params.keys():
@@ -365,13 +688,14 @@ def treat_runtimeparams(
     # If any runtime parameters where passed in action call
     if runtimeparams is not None:
         if type(runtimeparams) is str:
-            runtimeparams = json.loads(runtimeparams)
+            runtimeparams = orjson.loads(runtimeparams)
 
         # Loop though parameters stored in association file, Check to see if any stored in runtime
         # If true, set runtime parameter to params
         if emhass_conf["associations_path"].exists():
-            with emhass_conf["associations_path"].open("r") as data:
-                associations = list(csv.reader(data, delimiter=","))
+            async with aiofiles.open(emhass_conf["associations_path"]) as data:
+                content = await data.read()
+                associations = list(csv.reader(content.splitlines(), delimiter=","))
                 # Association file key reference
                 # association[0] = config categories
                 # association[1] = legacy parameter name
@@ -380,14 +704,10 @@ def treat_runtimeparams(
                 for association in associations:
                     # Check parameter name exists in runtime
                     if runtimeparams.get(association[2], None) is not None:
-                        params[association[0]][association[2]] = runtimeparams[
-                            association[2]
-                        ]
+                        params[association[0]][association[2]] = runtimeparams[association[2]]
                     # Check Legacy parameter name runtime
                     elif runtimeparams.get(association[1], None) is not None:
-                        params[association[0]][association[2]] = runtimeparams[
-                            association[1]
-                        ]
+                        params[association[0]][association[2]] = runtimeparams[association[1]]
         else:
             logger.warning(
                 "Cant find associations file (associations.csv) in: "
@@ -395,13 +715,14 @@ def treat_runtimeparams(
             )
 
         # Generate forecast_dates
-        if (
-            "optimization_time_step" in runtimeparams.keys()
-            or "freq" in runtimeparams.keys()
-        ):
-            optimization_time_step = int(
-                runtimeparams.get("optimization_time_step", runtimeparams.get("freq"))
+        # Force update optimization_time_step if present in runtimeparams
+        if "optimization_time_step" in runtimeparams:
+            optimization_time_step = int(runtimeparams["optimization_time_step"])
+            params["retrieve_hass_conf"]["optimization_time_step"] = pd.to_timedelta(
+                optimization_time_step, "minutes"
             )
+        elif "freq" in runtimeparams:
+            optimization_time_step = int(runtimeparams["freq"])
             params["retrieve_hass_conf"]["optimization_time_step"] = pd.to_timedelta(
                 optimization_time_step, "minutes"
             )
@@ -409,6 +730,7 @@ def treat_runtimeparams(
             optimization_time_step = int(
                 params["retrieve_hass_conf"]["optimization_time_step"].seconds / 60.0
             )
+
         if (
             runtimeparams.get("delta_forecast_daily", None) is not None
             or runtimeparams.get("delta_forecast", None) is not None
@@ -436,9 +758,7 @@ def treat_runtimeparams(
                     delta_forecast,
                 )
                 delta_forecast = 1
-            params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(
-                days=delta_forecast
-            )
+            params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(days=delta_forecast)
         else:
             delta_forecast = int(params["optim_conf"]["delta_forecast_daily"].days)
         if runtimeparams.get("time_zone", None) is not None:
@@ -447,9 +767,7 @@ def treat_runtimeparams(
         else:
             time_zone = params["retrieve_hass_conf"]["time_zone"]
 
-        forecast_dates = get_forecast_dates(
-            optimization_time_step, delta_forecast, time_zone
-        )
+        forecast_dates = get_forecast_dates(optimization_time_step, delta_forecast, time_zone)
 
         # Add runtime exclusive (not in config) parameters to params
         # regressor-model-fit
@@ -549,13 +867,13 @@ def treat_runtimeparams(
                 params["passed_data"]["operating_timesteps_of_each_deferrable_load"] = (
                     runtimeparams["operating_timesteps_of_each_deferrable_load"]
                 )
-                params["optim_conf"]["operating_timesteps_of_each_deferrable_load"] = (
-                    runtimeparams["operating_timesteps_of_each_deferrable_load"]
-                )
+                params["optim_conf"]["operating_timesteps_of_each_deferrable_load"] = runtimeparams[
+                    "operating_timesteps_of_each_deferrable_load"
+                ]
             if "operating_hours_of_each_deferrable_load" in params["optim_conf"].keys():
-                params["passed_data"]["operating_hours_of_each_deferrable_load"] = (
-                    params["optim_conf"]["operating_hours_of_each_deferrable_load"]
-                )
+                params["passed_data"]["operating_hours_of_each_deferrable_load"] = params[
+                    "optim_conf"
+                ]["operating_hours_of_each_deferrable_load"]
             params["passed_data"]["start_timesteps_of_each_deferrable_load"] = params[
                 "optim_conf"
             ].get("start_timesteps_of_each_deferrable_load", None)
@@ -564,37 +882,35 @@ def treat_runtimeparams(
             ].get("end_timesteps_of_each_deferrable_load", None)
 
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
-
-            # Load the default config
-            if "def_load_config" in runtimeparams:
-                params["optim_conf"]["def_load_config"] = runtimeparams[
-                    "def_load_config"
-                ]
-            if "def_load_config" in params["optim_conf"]:
-                for k in range(len(params["optim_conf"]["def_load_config"])):
-                    if "thermal_config" in params["optim_conf"]["def_load_config"][k]:
-                        if (
-                            "heater_desired_temperatures" in runtimeparams
-                            and len(runtimeparams["heater_desired_temperatures"]) > k
-                        ):
-                            params["optim_conf"]["def_load_config"][k][
-                                "thermal_config"
-                            ]["desired_temperatures"] = runtimeparams[
-                                "heater_desired_temperatures"
-                            ][k]
-                        if (
-                            "heater_start_temperatures" in runtimeparams
-                            and len(runtimeparams["heater_start_temperatures"]) > k
-                        ):
-                            params["optim_conf"]["def_load_config"][k][
-                                "thermal_config"
-                            ]["start_temperature"] = runtimeparams[
-                                "heater_start_temperatures"
-                            ][k]
         else:
             params["passed_data"]["prediction_horizon"] = None
             params["passed_data"]["soc_init"] = None
             params["passed_data"]["soc_final"] = None
+
+        # Parsing the thermal model parameters
+        # Load the default config
+        if "def_load_config" in runtimeparams:
+            params["optim_conf"]["def_load_config"] = runtimeparams["def_load_config"]
+            params["optim_conf"]["number_of_deferrable_loads"] = len(
+                runtimeparams["def_load_config"]
+            )
+        if "def_load_config" in params["optim_conf"]:
+            for k in range(len(params["optim_conf"]["def_load_config"])):
+                if "thermal_config" in params["optim_conf"]["def_load_config"][k]:
+                    if (
+                        "heater_desired_temperatures" in runtimeparams
+                        and len(runtimeparams["heater_desired_temperatures"]) > k
+                    ):
+                        params["optim_conf"]["def_load_config"][k]["thermal_config"][
+                            "desired_temperatures"
+                        ] = runtimeparams["heater_desired_temperatures"][k]
+                    if (
+                        "heater_start_temperatures" in runtimeparams
+                        and len(runtimeparams["heater_start_temperatures"]) > k
+                    ):
+                        params["optim_conf"]["def_load_config"][k]["thermal_config"][
+                            "start_temperature"
+                        ] = runtimeparams["heater_start_temperatures"][k]
 
         # Treat passed forecast data lists
         list_forecast_key = [
@@ -634,13 +950,9 @@ def treat_runtimeparams(
                         .aggregate({"value": "mean"})
                         .reindex(forecast_dates, method="nearest")
                     )
-                    forecast_data_df["value"] = (
-                        forecast_data_df["value"].ffill().bfill()
-                    )
+                    forecast_data_df["value"] = forecast_data_df["value"].ffill().bfill()
                     forecast_input = forecast_data_df["value"].tolist()
-                if isinstance(forecast_input, list) and len(forecast_input) >= len(
-                    forecast_dates
-                ):
+                if isinstance(forecast_input, list) and len(forecast_input) >= len(forecast_dates):
                     params["passed_data"][forecast_key] = forecast_input
                     params["optim_conf"][forecast_methods[method]] = "list"
                 else:
@@ -651,14 +963,13 @@ def treat_runtimeparams(
                         f"Passed type is {str(type(runtimeparams[forecast_key]))} and length is {str(len(runtimeparams[forecast_key]))}"
                     )
                 # Check if string contains list, if so extract
-                if isinstance(forecast_input, str):
-                    if isinstance(ast.literal_eval(forecast_input), list):
-                        forecast_input = ast.literal_eval(forecast_input)
-                        runtimeparams[forecast_key] = forecast_input
+                if isinstance(forecast_input, str) and isinstance(
+                    ast.literal_eval(forecast_input), list
+                ):
+                    forecast_input = ast.literal_eval(forecast_input)
+                    runtimeparams[forecast_key] = forecast_input
                 list_non_digits = [
-                    x
-                    for x in forecast_input
-                    if not (isinstance(x, int) or isinstance(x, float))
+                    x for x in forecast_input if not (isinstance(x, int) or isinstance(x, float))
                 ]
                 if len(list_non_digits) > 0:
                     logger.warning(
@@ -671,6 +982,12 @@ def treat_runtimeparams(
             else:
                 params["passed_data"][forecast_key] = None
 
+        # Explicitly handle historic_days_to_retrieve from runtimeparams BEFORE validation
+        if "historic_days_to_retrieve" in runtimeparams:
+            params["retrieve_hass_conf"]["historic_days_to_retrieve"] = int(
+                runtimeparams["historic_days_to_retrieve"]
+            )
+
         # Treat passed data for forecast model fit/predict/tune at runtime
         if (
             params["passed_data"].get("historic_days_to_retrieve", None) is not None
@@ -679,57 +996,72 @@ def treat_runtimeparams(
             logger.warning(
                 "warning `days_to_retrieve` is set to a value less than 9, this could cause an error with the fit"
             )
-            logger.warning(
-                "setting`passed_data:days_to_retrieve` to 9 for fit/predict/tune"
-            )
+            logger.warning("setting`passed_data:days_to_retrieve` to 9 for fit/predict/tune")
             params["passed_data"]["historic_days_to_retrieve"] = 9
         else:
             if params["retrieve_hass_conf"].get("historic_days_to_retrieve", 0) < 9:
-                logger.debug(
-                    "setting`passed_data:days_to_retrieve` to 9 for fit/predict/tune"
-                )
+                logger.debug("setting`passed_data:days_to_retrieve` to 9 for fit/predict/tune")
                 params["passed_data"]["historic_days_to_retrieve"] = 9
             else:
-                params["passed_data"]["historic_days_to_retrieve"] = params[
-                    "retrieve_hass_conf"
-                ]["historic_days_to_retrieve"]
-        if "model_type" not in runtimeparams.keys():
-            model_type = "long_train_data"
-        else:
-            model_type = runtimeparams["model_type"]
-        params["passed_data"]["model_type"] = model_type
-        if "var_model" not in runtimeparams.keys():
-            var_model = params["retrieve_hass_conf"]["sensor_power_load_no_var_loads"]
-        else:
-            var_model = runtimeparams["var_model"]
-        params["passed_data"]["var_model"] = var_model
-        if "sklearn_model" not in runtimeparams.keys():
-            sklearn_model = "KNeighborsRegressor"
-        else:
-            sklearn_model = runtimeparams["sklearn_model"]
-        params["passed_data"]["sklearn_model"] = sklearn_model
-        if "regression_model" not in runtimeparams.keys():
-            regression_model = "AdaBoostRegression"
-        else:
-            regression_model = runtimeparams["regression_model"]
-        params["passed_data"]["regression_model"] = regression_model
-        if "num_lags" not in runtimeparams.keys():
-            num_lags = 48
-        else:
-            num_lags = runtimeparams["num_lags"]
-        params["passed_data"]["num_lags"] = num_lags
-        if "split_date_delta" not in runtimeparams.keys():
-            split_date_delta = "48h"
-        else:
-            split_date_delta = runtimeparams["split_date_delta"]
-        params["passed_data"]["split_date_delta"] = split_date_delta
-        if "perform_backtest" not in runtimeparams.keys():
-            perform_backtest = False
-        else:
-            perform_backtest = ast.literal_eval(
-                str(runtimeparams["perform_backtest"]).capitalize()
+                params["passed_data"]["historic_days_to_retrieve"] = params["retrieve_hass_conf"][
+                    "historic_days_to_retrieve"
+                ]
+
+        # UPDATED ML PARAMETER HANDLING
+        # Define Helper Functions
+        def _cast_bool(value):
+            """Helper to cast string inputs to boolean safely."""
+            try:
+                return ast.literal_eval(str(value).capitalize())
+            except (ValueError, SyntaxError):
+                return False
+
+        def _get_ml_param(name, params, runtimeparams, default=None, cast=None):
+            """
+            Prioritize Runtime Params -> Config Params (optim_conf) -> Default.
+            """
+            if name in runtimeparams:
+                value = runtimeparams[name]
+            else:
+                value = params["optim_conf"].get(name, default)
+
+            if cast is not None and value is not None:
+                try:
+                    value = cast(value)
+                except Exception:
+                    pass
+            return value
+
+        # Compute dynamic defaults
+        # Default for var_model falls back to the configured load sensor
+        default_var_model = params["retrieve_hass_conf"].get(
+            "sensor_power_load_no_var_loads", "sensor.power_load_no_var_loads"
+        )
+
+        # Define Configuration Table
+        # Format: (parameter_name, default_value, cast_function)
+        ml_param_defs = [
+            ("model_type", "long_train_data", None),
+            ("var_model", default_var_model, None),
+            ("sklearn_model", "KNeighborsRegressor", None),
+            ("regression_model", "AdaBoostRegression", None),
+            ("num_lags", 48, None),
+            ("split_date_delta", "48h", None),
+            ("n_trials", 10, int),
+            ("perform_backtest", False, _cast_bool),
+        ]
+
+        # Apply Configuration
+        for name, default, caster in ml_param_defs:
+            params["passed_data"][name] = _get_ml_param(
+                name=name,
+                params=params,
+                runtimeparams=runtimeparams,
+                default=default,
+                cast=caster,
             )
-        params["passed_data"]["perform_backtest"] = perform_backtest
+
+        # Other non-dynamic options
         if "model_predict_publish" not in runtimeparams.keys():
             model_predict_publish = False
         else:
@@ -750,9 +1082,7 @@ def treat_runtimeparams(
         if "model_predict_unit_of_measurement" not in runtimeparams.keys():
             model_predict_unit_of_measurement = "W"
         else:
-            model_predict_unit_of_measurement = runtimeparams[
-                "model_predict_unit_of_measurement"
-            ]
+            model_predict_unit_of_measurement = runtimeparams["model_predict_unit_of_measurement"]
         params["passed_data"]["model_predict_unit_of_measurement"] = (
             model_predict_unit_of_measurement
         )
@@ -760,9 +1090,7 @@ def treat_runtimeparams(
             model_predict_friendly_name = "Load Power Forecast custom ML model"
         else:
             model_predict_friendly_name = runtimeparams["model_predict_friendly_name"]
-        params["passed_data"]["model_predict_friendly_name"] = (
-            model_predict_friendly_name
-        )
+        params["passed_data"]["model_predict_friendly_name"] = model_predict_friendly_name
         if "mlr_predict_entity_id" not in runtimeparams.keys():
             mlr_predict_entity_id = "sensor.mlr_predict"
         else:
@@ -776,12 +1104,8 @@ def treat_runtimeparams(
         if "mlr_predict_unit_of_measurement" not in runtimeparams.keys():
             mlr_predict_unit_of_measurement = None
         else:
-            mlr_predict_unit_of_measurement = runtimeparams[
-                "mlr_predict_unit_of_measurement"
-            ]
-        params["passed_data"]["mlr_predict_unit_of_measurement"] = (
-            mlr_predict_unit_of_measurement
-        )
+            mlr_predict_unit_of_measurement = runtimeparams["mlr_predict_unit_of_measurement"]
+        params["passed_data"]["mlr_predict_unit_of_measurement"] = mlr_predict_unit_of_measurement
         if "mlr_predict_friendly_name" not in runtimeparams.keys():
             mlr_predict_friendly_name = "mlr predictor"
         else:
@@ -812,9 +1136,7 @@ def treat_runtimeparams(
             weather_forecast_cache_only = False
         else:
             weather_forecast_cache_only = runtimeparams["weather_forecast_cache_only"]
-        params["passed_data"]["weather_forecast_cache_only"] = (
-            weather_forecast_cache_only
-        )
+        params["passed_data"]["weather_forecast_cache_only"] = weather_forecast_cache_only
 
         # A condition to manually save entity data under data_path/entities after optimization
         if "entity_save" not in runtimeparams.keys():
@@ -839,22 +1161,14 @@ def treat_runtimeparams(
         # Treat retrieve data from Home Assistant (retrieve_hass_conf) configuration parameters passed at runtime
         # Secrets passed at runtime
         if "solcast_api_key" in runtimeparams.keys():
-            params["retrieve_hass_conf"]["solcast_api_key"] = runtimeparams[
-                "solcast_api_key"
-            ]
+            params["retrieve_hass_conf"]["solcast_api_key"] = runtimeparams["solcast_api_key"]
         if "solcast_rooftop_id" in runtimeparams.keys():
-            params["retrieve_hass_conf"]["solcast_rooftop_id"] = runtimeparams[
-                "solcast_rooftop_id"
-            ]
+            params["retrieve_hass_conf"]["solcast_rooftop_id"] = runtimeparams["solcast_rooftop_id"]
         if "solar_forecast_kwp" in runtimeparams.keys():
-            params["retrieve_hass_conf"]["solar_forecast_kwp"] = runtimeparams[
-                "solar_forecast_kwp"
-            ]
+            params["retrieve_hass_conf"]["solar_forecast_kwp"] = runtimeparams["solar_forecast_kwp"]
         # Treat custom entities id's and friendly names for variables
         if "custom_pv_forecast_id" in runtimeparams.keys():
-            params["passed_data"]["custom_pv_forecast_id"] = runtimeparams[
-                "custom_pv_forecast_id"
-            ]
+            params["passed_data"]["custom_pv_forecast_id"] = runtimeparams["custom_pv_forecast_id"]
         if "custom_load_forecast_id" in runtimeparams.keys():
             params["passed_data"]["custom_load_forecast_id"] = runtimeparams[
                 "custom_load_forecast_id"
@@ -880,9 +1194,7 @@ def treat_runtimeparams(
                 "custom_grid_forecast_id"
             ]
         if "custom_cost_fun_id" in runtimeparams.keys():
-            params["passed_data"]["custom_cost_fun_id"] = runtimeparams[
-                "custom_cost_fun_id"
-            ]
+            params["passed_data"]["custom_cost_fun_id"] = runtimeparams["custom_cost_fun_id"]
         if "custom_optim_status_id" in runtimeparams.keys():
             params["passed_data"]["custom_optim_status_id"] = runtimeparams[
                 "custom_optim_status_id"
@@ -903,6 +1215,10 @@ def treat_runtimeparams(
             params["passed_data"]["custom_predicted_temperature_id"] = runtimeparams[
                 "custom_predicted_temperature_id"
             ]
+        if "custom_heating_demand_id" in runtimeparams.keys():
+            params["passed_data"]["custom_heating_demand_id"] = runtimeparams[
+                "custom_heating_demand_id"
+            ]
 
     # split config categories from params
     retrieve_hass_conf = params["retrieve_hass_conf"]
@@ -910,16 +1226,16 @@ def treat_runtimeparams(
     plant_conf = params["plant_conf"]
 
     # Serialize the final params
-    params = json.dumps(params, default=str)
+    params = orjson.dumps(params, default=str).decode()
     return params, retrieve_hass_conf, optim_conf, plant_conf
 
 
-def get_yaml_parse(params: str, logger: logging.Logger) -> tuple[dict, dict, dict]:
+def get_yaml_parse(params: str | dict, logger: logging.Logger) -> tuple[dict, dict, dict]:
     """
     Perform parsing of the params into the configuration catagories
 
     :param params: Built configuration parameters
-    :type params: str
+    :type params: str or dict
     :param logger: The logger object
     :type logger: logging.Logger
     :return: A tuple with the dictionaries containing the parsed data
@@ -928,7 +1244,7 @@ def get_yaml_parse(params: str, logger: logging.Logger) -> tuple[dict, dict, dic
     """
     if params:
         if type(params) is str:
-            input_conf = json.loads(params)
+            input_conf = orjson.loads(params)
         else:
             input_conf = params
     else:
@@ -942,9 +1258,7 @@ def get_yaml_parse(params: str, logger: logging.Logger) -> tuple[dict, dict, dic
 
     # Format time parameters
     if optim_conf.get("delta_forecast_daily", None) is not None:
-        optim_conf["delta_forecast_daily"] = pd.Timedelta(
-            days=optim_conf["delta_forecast_daily"]
-        )
+        optim_conf["delta_forecast_daily"] = pd.Timedelta(days=optim_conf["delta_forecast_daily"])
     if retrieve_hass_conf.get("optimization_time_step", None) is not None:
         retrieve_hass_conf["optimization_time_step"] = pd.to_timedelta(
             retrieve_hass_conf["optimization_time_step"], "minutes"
@@ -976,9 +1290,10 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     df[cols_p] = df[cols_p].astype(int)
     df[cols_else] = df[cols_else].round(3)
     # Create plots
+    # Figure 0: Systems Powers
     n_colors = len(cols_p)
     colors = px.colors.sample_colorscale(
-        "jet", [n / (n_colors - 1) for n in range(n_colors)]
+        "jet", [n / (n_colors - 1) if n_colors > 1 else 0 for n in range(n_colors)]
     )
     fig_0 = px.line(
         df[cols_p],
@@ -989,6 +1304,9 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         render_mode="svg",
     )
     fig_0.update_layout(xaxis_title="Timestamp", yaxis_title="System powers (W)")
+    image_path_0 = fig_0.to_html(full_html=False, default_width="75%")
+    # Figure 1: Battery SOC (Optional)
+    image_path_1 = None
     if "SOC_opt" in df.columns.to_list():
         fig_1 = px.line(
             df["SOC_opt"],
@@ -999,10 +1317,33 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
             render_mode="svg",
         )
         fig_1.update_layout(xaxis_title="Timestamp", yaxis_title="Battery SOC (%)")
+        image_path_1 = fig_1.to_html(full_html=False, default_width="75%")
+    # Figure Thermal: Temperatures (Optional)
+    # Detect columns for predicted or target temperatures
+    cols_temp = [
+        i for i in df.columns.to_list() if "predicted_temp_heater" in i or "target_temp_heater" in i
+    ]
+    image_path_temp = None
+    if len(cols_temp) > 0:
+        n_colors = len(cols_temp)
+        colors = px.colors.sample_colorscale(
+            "jet", [n / (n_colors - 1) if n_colors > 1 else 0 for n in range(n_colors)]
+        )
+        fig_temp = px.line(
+            df[cols_temp],
+            title="Thermal loads temperature schedule",
+            template="presentation",
+            line_shape="hv",
+            color_discrete_sequence=colors,
+            render_mode="svg",
+        )
+        fig_temp.update_layout(xaxis_title="Timestamp", yaxis_title="Temperature (&deg;C)")
+        image_path_temp = fig_temp.to_html(full_html=False, default_width="75%")
+    # Figure 2: Costs
     cols_cost = [i for i in df.columns.to_list() if "cost_" in i or "unit_" in i]
     n_colors = len(cols_cost)
     colors = px.colors.sample_colorscale(
-        "jet", [n / (n_colors - 1) for n in range(n_colors)]
+        "jet", [n / (n_colors - 1) if n_colors > 1 else 0 for n in range(n_colors)]
     )
     fig_2 = px.line(
         df[cols_cost],
@@ -1013,12 +1354,8 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         render_mode="svg",
     )
     fig_2.update_layout(xaxis_title="Timestamp", yaxis_title="System costs (currency)")
-    # Get full path to image
-    image_path_0 = fig_0.to_html(full_html=False, default_width="75%")
-    if "SOC_opt" in df.columns.to_list():
-        image_path_1 = fig_1.to_html(full_html=False, default_width="75%")
     image_path_2 = fig_2.to_html(full_html=False, default_width="75%")
-    # The tables
+    # Tables
     table1 = df.reset_index().to_html(classes="mystyle", index=False)
     cost_cols = [i for i in df.columns if "cost_" in i]
     table2 = df[cost_cols].reset_index().sum(numeric_only=True)
@@ -1028,26 +1365,28 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         .reset_index(names="Variable")
         .to_html(classes="mystyle", index=False)
     )
-    # The dict of plots
+    # Construct Injection Dict
     injection_dict = {}
     injection_dict["title"] = "<h2>EMHASS optimization results</h2>"
     injection_dict["subsubtitle0"] = "<h4>Plotting latest optimization results</h4>"
+    # Add Powers
     injection_dict["figure_0"] = image_path_0
-    if "SOC_opt" in df.columns.to_list():
+    # Add Thermal
+    if image_path_temp is not None:
+        injection_dict["figure_thermal"] = image_path_temp
+    # Add SOC
+    if image_path_1 is not None:
         injection_dict["figure_1"] = image_path_1
+    # Add Costs
     injection_dict["figure_2"] = image_path_2
     injection_dict["subsubtitle1"] = "<h4>Last run optimization results table</h4>"
     injection_dict["table1"] = table1
-    injection_dict["subsubtitle2"] = (
-        "<h4>Summary table for latest optimization results</h4>"
-    )
+    injection_dict["subsubtitle2"] = "<h4>Summary table for latest optimization results</h4>"
     injection_dict["table2"] = table2
     return injection_dict
 
 
-def get_injection_dict_forecast_model_fit(
-    df_fit_pred: pd.DataFrame, mlf: MLForecaster
-) -> dict:
+def get_injection_dict_forecast_model_fit(df_fit_pred: pd.DataFrame, mlf: MLForecaster) -> dict:
     """
     Build a dictionary with graphs and tables for the webui for special MLF fit case.
 
@@ -1067,18 +1406,18 @@ def get_injection_dict_forecast_model_fit(
     injection_dict = {}
     injection_dict["title"] = "<h2>Custom machine learning forecast model fit</h2>"
     injection_dict["subsubtitle0"] = (
-        "<h4>Plotting train/test forecast model results for " + mlf.model_type + "</h4>"
-    )
-    injection_dict["subsubtitle0"] = (
-        "<h4>Forecasting variable " + mlf.var_model + "</h4>"
+        "<h4>Plotting train/test forecast model results for "
+        + mlf.model_type
+        + "<br>"
+        + "Forecasting variable "
+        + mlf.var_model
+        + "</h4>"
     )
     injection_dict["figure_0"] = image_path_0
     return injection_dict
 
 
-def get_injection_dict_forecast_model_tune(
-    df_pred_optim: pd.DataFrame, mlf: MLForecaster
-) -> dict:
+def get_injection_dict_forecast_model_tune(df_pred_optim: pd.DataFrame, mlf: MLForecaster) -> dict:
     """
     Build a dictionary with graphs and tables for the webui for special MLF tune case.
 
@@ -1100,16 +1439,16 @@ def get_injection_dict_forecast_model_tune(
     injection_dict["subsubtitle0"] = (
         "<h4>Performed a tuning routine using bayesian optimization for "
         + mlf.model_type
+        + "<br>"
+        + "Forecasting variable "
+        + mlf.var_model
         + "</h4>"
-    )
-    injection_dict["subsubtitle0"] = (
-        "<h4>Forecasting variable " + mlf.var_model + "</h4>"
     )
     injection_dict["figure_0"] = image_path_0
     return injection_dict
 
 
-def build_config(
+async def build_config(
     emhass_conf: dict,
     logger: logging.Logger,
     defaults_path: str,
@@ -1136,32 +1475,33 @@ def build_config(
 
     # Read default parameters (default root_path/data/config_defaults.json)
     if defaults_path and pathlib.Path(defaults_path).is_file():
-        with defaults_path.open("r") as data:
-            config = json.load(data)
+        async with aiofiles.open(defaults_path) as data:
+            content = await data.read()
+            config = orjson.loads(content)
     else:
         logger.error("config_defaults.json. does not exist ")
         return False
 
     # Read user config parameters if provided (default /share/config.json)
     if config_path and pathlib.Path(config_path).is_file():
-        with config_path.open("r") as data:
+        async with aiofiles.open(config_path) as data:
+            content = await data.read()
             # Set override default parameters (config_defaults) with user given parameters (config.json)
             logger.info("Obtaining parameters from config.json:")
-            config.update(json.load(data))
+            config.update(orjson.loads(content))
     else:
         logger.info(
             "config.json does not exist, or has not been passed. config parameters may default to config_defaults.json"
         )
-        logger.info(
-            "you may like to generate the config.json file on the configuration page"
-        )
+        logger.info("you may like to generate the config.json file on the configuration page")
 
     # Check to see if legacy config_emhass.yaml was provided (default /app/config_emhass.yaml)
     # Convert legacy parameter definitions/format to match config.json
     if legacy_config_path and pathlib.Path(legacy_config_path).is_file():
-        with open(legacy_config_path) as data:
-            legacy_config = yaml.load(data, Loader=yaml.FullLoader)
-            legacy_config_parameters = build_legacy_config_params(
+        async with aiofiles.open(legacy_config_path) as data:
+            content = await data.read()
+            legacy_config = yaml.safe_load(content)
+            legacy_config_parameters = await build_legacy_config_params(
                 emhass_conf, legacy_config, logger
             )
             if type(legacy_config_parameters) is not bool:
@@ -1173,9 +1513,11 @@ def build_config(
     return config
 
 
-def build_legacy_config_params(
-    emhass_conf: dict, legacy_config: dict, logger: logging.Logger
-) -> dict:
+async def build_legacy_config_params(
+    emhass_conf: dict[str, pathlib.Path],
+    legacy_config: dict[str, str],
+    logger: logging.Logger,
+) -> dict[str, str]:
     """
     Build a config dictionary with legacy config_emhass.yaml file.
     Uses the associations file to convert parameter naming conventions (to config.json/config_defaults.json).
@@ -1205,8 +1547,9 @@ def build_legacy_config_params(
 
     # Use associations list to map legacy parameter name with config.json parameter name
     if emhass_conf["associations_path"].exists():
-        with emhass_conf["associations_path"].open("r") as data:
-            associations = list(csv.reader(data, delimiter=","))
+        async with aiofiles.open(emhass_conf["associations_path"]) as data:
+            content = await data.read()
+            associations = list(csv.reader(content.splitlines(), delimiter=","))
     else:
         logger.error(
             "Cant find associations file (associations.csv) in: "
@@ -1219,42 +1562,36 @@ def build_legacy_config_params(
     for association in associations:
         # if legacy config catagories exists and if legacy parameter exists in config catagories
         if (
-            legacy_config.get(association[0], None) is not None
+            legacy_config.get(association[0]) is not None
             and legacy_config[association[0]].get(association[1], None) is not None
         ):
             config[association[2]] = legacy_config[association[0]][association[1]]
 
             # If config now has load_peak_hour_periods, extract from list of dict
-            if (
-                association[2] == "load_peak_hour_periods"
-                and type(config[association[2]]) is list
-            ):
-                config[association[2]] = {
-                    key: d[key] for d in config[association[2]] for key in d
-                }
+            if association[2] == "load_peak_hour_periods" and type(config[association[2]]) is list:
+                config[association[2]] = {key: d[key] for d in config[association[2]] for key in d}
 
     return config
-    # params['associations_dict'] = associations_dict
 
 
-def param_to_config(param: dict, logger: logging.Logger) -> dict:
+def param_to_config(param: dict[str, dict], logger: logging.Logger) -> dict[str, str]:
     """
     A function that extracts the parameters from param back to the config.json format.
     Extracts parameters from config catagories.
     Attempts to exclude secrets hosed in retrieve_hass_conf.
 
     :param params: Built configuration parameters
-    :type param: dict
+    :type param: dict[str, dict]
     :param logger: The logger object
     :type logger: logging.Logger
     :return: The built config dictionary
-    :rtype: dict
+    :rtype: dict[str, str]
     """
     logger.debug("Converting param to config")
 
     return_config = {}
 
-    config_catagories = ["retrieve_hass_conf", "optim_conf", "plant_conf"]
+    config_categories = ["retrieve_hass_conf", "optim_conf", "plant_conf"]
     secret_params = [
         "hass_url",
         "time_zone",
@@ -1265,10 +1602,12 @@ def param_to_config(param: dict, logger: logging.Logger) -> dict:
         "solcast_api_key",
         "solcast_rooftop_id",
         "solar_forecast_kwp",
+        "influxdb_username",
+        "influxdb_password",
     ]
 
     # Loop through config catagories that contain config params, and extract
-    for config in config_catagories:
+    for config in config_categories:
         for parameter in param[config]:
             # If parameter is not a secret, append to return_config
             if parameter not in secret_params:
@@ -1277,14 +1616,14 @@ def param_to_config(param: dict, logger: logging.Logger) -> dict:
     return return_config
 
 
-def build_secrets(
-    emhass_conf: dict,
+async def build_secrets(
+    emhass_conf: dict[str, pathlib.Path],
     logger: logging.Logger,
-    argument: dict | None = None,
+    argument: dict[str, str] | None = None,
     options_path: str | None = None,
     secrets_path: str | None = None,
-    no_response: bool | None = False,
-) -> tuple[dict, dict]:
+    no_response: bool = False,
+) -> tuple[dict[str, pathlib.Path], dict[str, str | float]]:
     """
     Retrieve and build parameters from secrets locations (ENV, ARG, Secrets file (secrets_emhass.yaml/options.json) and/or Home Assistant (via API))
     priority order (lwo to high) = Defaults (written in function), ENV, Options json file, Home Assistant API,  Secrets yaml file, Arguments
@@ -1304,7 +1643,6 @@ def build_secrets(
     :return: Updated emhass_conf, the built secrets dictionary
     :rtype: Tuple[dict, dict]:
     """
-
     # Set defaults to be overwritten
     if argument is None:
         argument = {}
@@ -1334,8 +1672,9 @@ def build_secrets(
     # Use local supervisor API to obtain secrets from Home Assistant if hass_url in options.json is empty and SUPERVISOR_TOKEN ENV exists (provided by Home Assistant when running the container as addon)
     options = {}
     if options_path and pathlib.Path(options_path).is_file():
-        with options_path.open("r") as data:
-            options = json.load(data)
+        async with aiofiles.open(options_path) as data:
+            content = await data.read()
+            options = orjson.loads(content)
 
             # Obtain secrets from Home Assistant?
             url_from_options = options.get("hass_url", "empty")
@@ -1349,63 +1688,61 @@ def build_secrets(
                 emhass_conf["data_path"] = pathlib.Path(options["data_path"])
 
             # Check to use Home Assistant local API
-            if (
-                not no_response
-                and (
-                    url_from_options == "empty"
-                    or url_from_options == ""
-                    or url_from_options == "http://supervisor/core/api"
-                )
-                and os.getenv("SUPERVISOR_TOKEN", None) is not None
-            ):
+            if not no_response and os.getenv("SUPERVISOR_TOKEN", None) is not None:
                 params_secrets["long_lived_token"] = os.getenv("SUPERVISOR_TOKEN", None)
-                params_secrets["hass_url"] = "http://supervisor/core/api"
+                # Use hass_url from options.json if available, otherwise use supervisor API for addon
+                if url_from_options != "empty" and url_from_options != "":
+                    params_secrets["hass_url"] = url_from_options
+                else:
+                    # For addons, use supervisor API for both REST and WebSocket access
+                    params_secrets["hass_url"] = "http://supervisor/core/api"
                 headers = {
                     "Authorization": "Bearer " + params_secrets["long_lived_token"],
                     "content-type": "application/json",
                 }
                 # Obtain secrets from Home Assistant via API
                 logger.debug("Obtaining secrets from Home Assistant Supervisor API")
-                response = get(
-                    (params_secrets["hass_url"] + "/config"), headers=headers
-                )
-                if response.status_code < 400:
-                    config_hass = response.json()
-                    params_secrets = {
-                        "hass_url": params_secrets["hass_url"],
-                        "long_lived_token": params_secrets["long_lived_token"],
-                        "time_zone": config_hass["time_zone"],
-                        "Latitude": config_hass["latitude"],
-                        "Longitude": config_hass["longitude"],
-                        "Altitude": config_hass["elevation"],
-                    }
-                else:
-                    # Obtain the url and key secrets if any from options.json (default /app/options.json)
-                    logger.warning(
-                        "Error obtaining secrets from Home Assistant Supervisor API"
-                    )
-                    logger.debug("Obtaining url and key secrets from options.json")
-                    if url_from_options != "empty" and url_from_options != "":
-                        params_secrets["hass_url"] = url_from_options
-                    if key_from_options != "empty" and key_from_options != "":
-                        params_secrets["long_lived_token"] = key_from_options
-                    if (
-                        options.get("time_zone", "empty") != "empty"
-                        and options["time_zone"] != ""
-                    ):
-                        params_secrets["time_zone"] = options["time_zone"]
-                    if options.get("Latitude", None) is not None and bool(
-                        options["Latitude"]
-                    ):
-                        params_secrets["Latitude"] = options["Latitude"]
-                    if options.get("Longitude", None) is not None and bool(
-                        options["Longitude"]
-                    ):
-                        params_secrets["Longitude"] = options["Longitude"]
-                    if options.get("Altitude", None) is not None and bool(
-                        options["Altitude"]
-                    ):
-                        params_secrets["Altitude"] = options["Altitude"]
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        params_secrets["hass_url"] + "/config", headers=headers
+                    ) as response:
+                        if response.status < 400:
+                            config_hass = await response.json()
+                            params_secrets = {
+                                "hass_url": params_secrets["hass_url"],
+                                "long_lived_token": params_secrets["long_lived_token"],
+                                "time_zone": config_hass["time_zone"],
+                                "Latitude": config_hass["latitude"],
+                                "Longitude": config_hass["longitude"],
+                                "Altitude": config_hass["elevation"],
+                            }
+                        else:
+                            # Obtain the url and key secrets if any from options.json (default /app/options.json)
+                            logger.warning(
+                                "Error obtaining secrets from Home Assistant Supervisor API"
+                            )
+                            logger.debug("Obtaining url and key secrets from options.json")
+                            if url_from_options != "empty" and url_from_options != "":
+                                params_secrets["hass_url"] = url_from_options
+                            if key_from_options != "empty" and key_from_options != "":
+                                params_secrets["long_lived_token"] = key_from_options
+                            if (
+                                options.get("time_zone", "empty") != "empty"
+                                and options["time_zone"] != ""
+                            ):
+                                params_secrets["time_zone"] = options["time_zone"]
+                            if options.get("Latitude", None) is not None and bool(
+                                options["Latitude"]
+                            ):
+                                params_secrets["Latitude"] = options["Latitude"]
+                            if options.get("Longitude", None) is not None and bool(
+                                options["Longitude"]
+                            ):
+                                params_secrets["Longitude"] = options["Longitude"]
+                            if options.get("Altitude", None) is not None and bool(
+                                options["Altitude"]
+                            ):
+                                params_secrets["Altitude"] = options["Altitude"]
             else:
                 # Obtain the url and key secrets if any from options.json (default /app/options.json)
                 logger.debug("Obtaining url and key secrets from options.json")
@@ -1413,22 +1750,13 @@ def build_secrets(
                     params_secrets["hass_url"] = url_from_options
                 if key_from_options != "empty" and key_from_options != "":
                     params_secrets["long_lived_token"] = key_from_options
-                if (
-                    options.get("time_zone", "empty") != "empty"
-                    and options["time_zone"] != ""
-                ):
+                if options.get("time_zone", "empty") != "empty" and options["time_zone"] != "":
                     params_secrets["time_zone"] = options["time_zone"]
-                if options.get("Latitude", None) is not None and bool(
-                    options["Latitude"]
-                ):
+                if options.get("Latitude", None) is not None and bool(options["Latitude"]):
                     params_secrets["Latitude"] = options["Latitude"]
-                if options.get("Longitude", None) is not None and bool(
-                    options["Longitude"]
-                ):
+                if options.get("Longitude", None) is not None and bool(options["Longitude"]):
                     params_secrets["Longitude"] = options["Longitude"]
-                if options.get("Altitude", None) is not None and bool(
-                    options["Altitude"]
-                ):
+                if options.get("Altitude", None) is not None and bool(options["Altitude"]):
                     params_secrets["Altitude"] = options["Altitude"]
 
             # Obtain the forecast secrets (if any) from options.json (default /app/options.json)
@@ -1449,47 +1777,49 @@ def build_secrets(
                     and options["solcast_rooftop_id"] != ""
                 ):
                     params_secrets["solcast_rooftop_id"] = options["solcast_rooftop_id"]
-                if options.get("solar_forecast_kwp", None) and bool(
-                    options["solar_forecast_kwp"]
-                ):
+                if options.get("solar_forecast_kwp", None) and bool(options["solar_forecast_kwp"]):
                     params_secrets["solar_forecast_kwp"] = options["solar_forecast_kwp"]
 
     # Obtain secrets from secrets_emhass.yaml? (default /app/secrets_emhass.yaml)
     if secrets_path and pathlib.Path(secrets_path).is_file():
         logger.debug("Obtaining secrets from secrets file")
-        with open(pathlib.Path(secrets_path)) as file:
-            params_secrets.update(yaml.load(file, Loader=yaml.FullLoader))
+        async with aiofiles.open(pathlib.Path(secrets_path)) as file:
+            content = await file.read()
+            params_secrets.update(yaml.safe_load(content))
 
     # Receive key and url from ARG/arguments?
-    if argument.get("url", None) is not None:
+    if argument.get("url") is not None:
         params_secrets["hass_url"] = argument["url"]
         logger.debug("Obtaining url from passed argument")
-    if argument.get("key", None) is not None:
+    if argument.get("key") is not None:
         params_secrets["long_lived_token"] = argument["key"]
         logger.debug("Obtaining long_lived_token from passed argument")
 
     return emhass_conf, params_secrets
 
 
-def build_params(
-    emhass_conf: dict, params_secrets: dict, config: dict, logger: logging.Logger
-) -> dict:
+async def build_params(
+    emhass_conf: dict[str, pathlib.Path],
+    params_secrets: dict[str, str | float],
+    config: dict[str, str],
+    logger: logging.Logger,
+) -> dict[str, dict]:
     """
     Build the main params dictionary from the config and secrets
     Appends configuration catagories used by emhass to the parameters. (with use of the associations file as a reference)
 
     :param emhass_conf: Dictionary containing the needed emhass paths
-    :type emhass_conf: dict
+    :type emhass_conf: dict[str, pathlib.Path]
     :param params_secrets: The dictionary containing the built secret variables
-    :type params_secrets: dict
+    :type params_secrets: dict[str, str | float]
     :param config: The dictionary of built config parameters
-    :type config: dict
+    :type config: dict[str, str]
     :param logger: The logger object
     :type logger: logging.Logger
     :return: The built param dictionary
-    :rtype: dict
+    :rtype: dict[str, dict]
     """
-    if type(params_secrets) is not dict:
+    if not isinstance(params_secrets, dict):
         params_secrets = {}
 
     params = {}
@@ -1503,8 +1833,9 @@ def build_params(
     if emhass_conf.get(
         "associations_path", get_root(__file__, num_parent=2) / "data/associations.csv"
     ).exists():
-        with emhass_conf["associations_path"].open("r") as data:
-            associations = list(csv.reader(data, delimiter=","))
+        async with aiofiles.open(emhass_conf["associations_path"]) as data:
+            content = await data.read()
+            associations = list(csv.reader(content.splitlines(), delimiter=","))
     else:
         logger.error(
             "Unable to obtain the associations file (associations.csv) in: "
@@ -1521,7 +1852,7 @@ def build_params(
     for association in associations:
         # If parameter has list_ name and parameter in config is presented with its list name
         # (ie, config parameter is in legacy options.json format)
-        if len(association) == 4 and config.get(association[3], None) is not None:
+        if len(association) == 4 and config.get(association[3]) is not None:
             # Extract lists of dictionaries
             if config[association[3]] and type(config[association[3]][0]) is dict:
                 params[association[0]][association[2]] = [
@@ -1530,22 +1861,21 @@ def build_params(
             else:
                 params[association[0]][association[2]] = config[association[3]]
         # Else, directly set value of config parameter to param
-        elif config.get(association[2], None) is not None:
+        elif config.get(association[2]) is not None:
             params[association[0]][association[2]] = config[association[2]]
 
     # Check if we need to create `list_hp_periods` from config (ie. legacy options.json format)
     if (
-        params.get("optim_conf", None) is not None
-        and config.get("list_peak_hours_periods_start_hours", None) is not None
-        and config.get("list_peak_hours_periods_end_hours", None) is not None
+        params.get("optim_conf") is not None
+        and config.get("list_peak_hours_periods_start_hours") is not None
+        and config.get("list_peak_hours_periods_end_hours") is not None
     ):
         start_hours_list = [
             i["peak_hours_periods_start_hours"]
             for i in config["list_peak_hours_periods_start_hours"]
         ]
         end_hours_list = [
-            i["peak_hours_periods_end_hours"]
-            for i in config["list_peak_hours_periods_end_hours"]
+            i["peak_hours_periods_end_hours"] for i in config["list_peak_hours_periods_end_hours"]
         ]
         num_peak_hours = len(start_hours_list)
         list_hp_periods_list = {
@@ -1559,32 +1889,26 @@ def build_params(
     else:
         # Else, check param already contains load_peak_hour_periods from config
         if params["optim_conf"].get("load_peak_hour_periods", None) is None:
-            logger.warning(
-                "Unable to detect or create load_peak_hour_periods parameter"
-            )
+            logger.warning("Unable to detect or create load_peak_hour_periods parameter")
 
     # Format load_peak_hour_periods list to dict if necessary
-    if params["optim_conf"].get(
-        "load_peak_hour_periods", None
-    ) is not None and isinstance(params["optim_conf"]["load_peak_hour_periods"], list):
+    if params["optim_conf"].get("load_peak_hour_periods", None) is not None and isinstance(
+        params["optim_conf"]["load_peak_hour_periods"], list
+    ):
         params["optim_conf"]["load_peak_hour_periods"] = {
-            key: d[key]
-            for d in params["optim_conf"]["load_peak_hour_periods"]
-            for key in d
+            key: d[key] for d in params["optim_conf"]["load_peak_hour_periods"] for key in d
         }
 
     # Call function to check parameter lists that require the same length as deferrable loads
     # If not, set defaults it fill in gaps
     if params["optim_conf"].get("number_of_deferrable_loads", None) is not None:
         num_def_loads = params["optim_conf"]["number_of_deferrable_loads"]
-        params["optim_conf"]["start_timesteps_of_each_deferrable_load"] = (
-            check_def_loads(
-                num_def_loads,
-                params["optim_conf"],
-                0,
-                "start_timesteps_of_each_deferrable_load",
-                logger,
-            )
+        params["optim_conf"]["start_timesteps_of_each_deferrable_load"] = check_def_loads(
+            num_def_loads,
+            params["optim_conf"],
+            0,
+            "start_timesteps_of_each_deferrable_load",
+            logger,
         )
         params["optim_conf"]["end_timesteps_of_each_deferrable_load"] = check_def_loads(
             num_def_loads,
@@ -1614,14 +1938,12 @@ def build_params(
             "set_deferrable_startup_penalty",
             logger,
         )
-        params["optim_conf"]["operating_hours_of_each_deferrable_load"] = (
-            check_def_loads(
-                num_def_loads,
-                params["optim_conf"],
-                0,
-                "operating_hours_of_each_deferrable_load",
-                logger,
-            )
+        params["optim_conf"]["operating_hours_of_each_deferrable_load"] = check_def_loads(
+            num_def_loads,
+            params["optim_conf"],
+            0,
+            "operating_hours_of_each_deferrable_load",
+            logger,
         )
         params["optim_conf"]["nominal_power_of_deferrable_loads"] = check_def_loads(
             num_def_loads,
@@ -1644,14 +1966,12 @@ def build_params(
 
     # Configure secrets, set params to correct config categorie
     # retrieve_hass_conf
-    params["retrieve_hass_conf"]["hass_url"] = params_secrets.get("hass_url", None)
-    params["retrieve_hass_conf"]["long_lived_token"] = params_secrets.get(
-        "long_lived_token", None
-    )
-    params["retrieve_hass_conf"]["time_zone"] = params_secrets.get("time_zone", None)
-    params["retrieve_hass_conf"]["Latitude"] = params_secrets.get("Latitude", None)
-    params["retrieve_hass_conf"]["Longitude"] = params_secrets.get("Longitude", None)
-    params["retrieve_hass_conf"]["Altitude"] = params_secrets.get("Altitude", None)
+    params["retrieve_hass_conf"]["hass_url"] = params_secrets.get("hass_url")
+    params["retrieve_hass_conf"]["long_lived_token"] = params_secrets.get("long_lived_token")
+    params["retrieve_hass_conf"]["time_zone"] = params_secrets.get("time_zone")
+    params["retrieve_hass_conf"]["Latitude"] = params_secrets.get("Latitude")
+    params["retrieve_hass_conf"]["Longitude"] = params_secrets.get("Longitude")
+    params["retrieve_hass_conf"]["Altitude"] = params_secrets.get("Altitude")
     # Update optional param secrets
     if params["optim_conf"].get("weather_forecast_method", None) is not None:
         if params["optim_conf"]["weather_forecast_method"] == "solcast":
@@ -1685,9 +2005,7 @@ def build_params(
         4807.8,
     ]
     if any(x in secret_params for x in params["retrieve_hass_conf"].values()):
-        logger.warning(
-            "Some secret parameters values are still matching their defaults"
-        )
+        logger.warning("Some secret parameters values are still matching their defaults")
 
     # Set empty dict objects for params passed_data
     # To be latter populated with runtime parameters (treat_runtimeparams)
@@ -1704,31 +2022,33 @@ def build_params(
         "end_timesteps_of_each_deferrable_load": None,
         "alpha": None,
         "beta": None,
-        "ignore_pv_feedback_during_curtailment": None,
     }
 
     return params
 
 
 def check_def_loads(
-    num_def_loads: int, parameter: list[dict], default, parameter_name: str, logger
-):
+    num_def_loads: int,
+    parameter: list[dict],
+    default: str | float,
+    parameter_name: str,
+    logger: logging.Logger,
+) -> list[dict]:
     """
     Check parameter lists with deferrable loads number, if they do not match, enlarge to fit.
 
     :param num_def_loads: Total number deferrable loads
     :type num_def_loads: int
     :param parameter: parameter config dict containing paramater
-    :type: list[dict]
+    :type parameter: list[dict]
     :param default: default value for parameter to pad missing
-    :type: obj
+    :type default: str | int | float
     :param parameter_name: name of parameter
-    :type logger: str
+    :type parameter_name: str
     :param logger: The logger object
     :type logger: logging.Logger
-    return: parameter list
+    :return: parameter list
     :rtype: list[dict]
-
     """
     if (
         parameter.get(parameter_name, None) is not None
@@ -1746,14 +2066,14 @@ def check_def_loads(
     return parameter[parameter_name]
 
 
-def get_days_list(days_to_retrieve: int) -> pd.date_range:
+def get_days_list(days_to_retrieve: int) -> pd.DatetimeIndex:
     """
     Get list of past days from today to days_to_retrieve.
 
     :param days_to_retrieve: Total number of days to retrieve from the past
     :type days_to_retrieve: int
     :return: The list of days
-    :rtype: pd.date_range
+    :rtype: pd.DatetimeIndex
 
     """
     today = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
@@ -1791,9 +2111,7 @@ def add_date_features(
         source = df[timestamp].dt
     else:
         if not isinstance(df.index, pd.DatetimeIndex):
-            raise ValueError(
-                "DataFrame must have a DateTimeIndex or a valid timestamp column."
-            )
+            raise ValueError("DataFrame must have a DateTimeIndex or a valid timestamp column.")
         source = df.index
 
     # Extract date features
@@ -1917,9 +2235,7 @@ def handle_nan_values(
     if nan_count_before == 0:
         return df
 
-    logger.info(
-        f"Found {nan_count_before} NaN values, applying handle_nan method: {handle_nan}"
-    )
+    logger.info(f"Found {nan_count_before} NaN values, applying handle_nan method: {handle_nan}")
 
     if handle_nan == "drop":
         df = df.dropna()
@@ -1933,9 +2249,7 @@ def handle_nan_values(
         numeric_cols = df.select_dtypes(include=[np.number]).columns
         # Exclude timestamp_col from interpolation
         interp_cols = [col for col in numeric_cols if col != timestamp_col]
-        df[interp_cols] = df[interp_cols].interpolate(
-            method="linear", limit_direction="both"
-        )
+        df[interp_cols] = df[interp_cols].interpolate(method="linear", limit_direction="both")
         df[interp_cols] = df[interp_cols].ffill().bfill()
         logger.info("Interpolated NaN values (excluding timestamp)")
     elif handle_nan == "forward_fill":
@@ -1981,16 +2295,12 @@ def resample_and_filter_data(
     """
     # Validate that DataFrame index is datetime and properly localized
     if not isinstance(df.index, pd.DatetimeIndex):
-        logger.error(
-            f"DataFrame index must be DatetimeIndex, got {type(df.index).__name__}"
-        )
+        logger.error(f"DataFrame index must be DatetimeIndex, got {type(df.index).__name__}")
         return False
 
     # Check if timezone aware and matches expected timezone
     if df.index.tz is None:
-        logger.warning(
-            "DataFrame index is timezone-naive, localizing to match start/end times"
-        )
+        logger.warning("DataFrame index is timezone-naive, localizing to match start/end times")
         df = df.copy()
         df.index = df.index.tz_localize(start_dt.tz)
     elif df.index.tz != start_dt.tz:
@@ -2016,9 +2326,7 @@ def resample_and_filter_data(
         df_resampled = df_resampled.dropna(how="all")
 
         if df_resampled.empty:
-            logger.error(
-                "No data after resampling. Check frequency and data availability."
-            )
+            logger.error("No data after resampling. Check frequency and data availability.")
             return False
 
         logger.info(f"After resampling: {len(df_resampled)} data points")
