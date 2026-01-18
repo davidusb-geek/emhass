@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.15.6 - 2026-01-18
 ### Improvement
 - New feature that allows users to disable SSL communication with Home Assistant
 ### Fix
