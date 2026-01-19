@@ -1161,6 +1161,9 @@ class Optimization:
                         if "ghi" in data_opt.columns and window_area is not None:
                             solar_irradiance = data_opt["ghi"]
 
+                        # Extract optional internal gains parameter
+                        internal_gains_factor = hc.get("internal_gains_factor", 0.0)
+
                         heating_demand = utils.calculate_heating_demand_physics(
                             u_value=hc["u_value"],
                             envelope_area=hc["envelope_area"],
@@ -1172,41 +1175,35 @@ class Optimization:
                             solar_irradiance_forecast=solar_irradiance,
                             window_area=window_area,
                             shgc=shgc,
+                            internal_gains_forecast=p_load if internal_gains_factor > 0 else None,
+                            internal_gains_factor=internal_gains_factor,
                         )
 
-                        # Log with solar gains info if applicable
+                        # Build log message with optional gains info
+                        gains_info = []
                         if solar_irradiance is not None:
-                            self.logger.debug(
-                                "Load %s: Using physics-based heating demand with solar gains "
-                                "(u_value=%.2f, envelope_area=%.1f, ventilation_rate=%.2f, heated_volume=%.1f, "
-                                "indoor_target_temp=%.1f%s, window_area=%.1f, shgc=%.2f)",
-                                k,
-                                hc["u_value"],
-                                hc["envelope_area"],
-                                hc["ventilation_rate"],
-                                hc["heated_volume"],
-                                indoor_target_temp,
-                                " (defaulted to min_temp)"
-                                if "indoor_target_temperature" not in hc
-                                else "",
-                                window_area,
-                                shgc,
+                            gains_info.append(
+                                f"solar (window_area={window_area:.1f}, shgc={shgc:.2f})"
                             )
-                        else:
-                            self.logger.debug(
-                                "Load %s: Using physics-based heating demand calculation "
-                                "(u_value=%.2f, envelope_area=%.1f, ventilation_rate=%.2f, heated_volume=%.1f, "
-                                "indoor_target_temp=%.1f%s)",
-                                k,
-                                hc["u_value"],
-                                hc["envelope_area"],
-                                hc["ventilation_rate"],
-                                hc["heated_volume"],
-                                indoor_target_temp,
-                                " (defaulted to min_temp)"
-                                if "indoor_target_temperature" not in hc
-                                else "",
-                            )
+                        if internal_gains_factor > 0:
+                            gains_info.append(f"internal (factor={internal_gains_factor:.2f})")
+
+                        gains_str = " with " + " and ".join(gains_info) if gains_info else ""
+                        self.logger.debug(
+                            "Load %s: Using physics-based heating demand%s "
+                            "(u_value=%.2f, envelope_area=%.1f, ventilation_rate=%.2f, heated_volume=%.1f, "
+                            "indoor_target_temp=%.1f%s)",
+                            k,
+                            gains_str,
+                            hc["u_value"],
+                            hc["envelope_area"],
+                            hc["ventilation_rate"],
+                            hc["heated_volume"],
+                            indoor_target_temp,
+                            " (defaulted to min_temp)"
+                            if "indoor_target_temperature" not in hc
+                            else "",
+                        )
                     else:
                         # HDD method (backward compatible) with configurable parameters
                         base_temperature = hc.get("base_temperature", 18.0)
