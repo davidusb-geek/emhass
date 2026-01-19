@@ -1822,39 +1822,21 @@ class TestHeatingDemand(unittest.TestCase):
 
         self.assertIn("internal_gains_factor must be between 0 and 1", str(context.exception))
 
-        # Test factor < 0 (note: factor <= 0 skips the block, so we need a small negative)
-        # Actually, the condition is `internal_gains_factor > 0`, so negative values
-        # won't enter the validation block. Let's verify this behavior is correct:
-        # A negative factor should be treated as "no internal gains" (same as 0)
-        demand_negative_factor = utils.calculate_heating_demand_physics(
-            u_value=u_value,
-            envelope_area=envelope_area,
-            ventilation_rate=ventilation_rate,
-            heated_volume=heated_volume,
-            indoor_target_temperature=indoor_temp,
-            outdoor_temperature_forecast=outdoor_temps,
-            optimization_time_step=optimization_time_step,
-            internal_gains_forecast=load_forecast,
-            internal_gains_factor=-0.5,  # Negative factor treated as 0
-        )
+        # Test factor < 0 should also raise ValueError
+        with self.assertRaises(ValueError) as context_neg:
+            utils.calculate_heating_demand_physics(
+                u_value=u_value,
+                envelope_area=envelope_area,
+                ventilation_rate=ventilation_rate,
+                heated_volume=heated_volume,
+                indoor_target_temperature=indoor_temp,
+                outdoor_temperature_forecast=outdoor_temps,
+                optimization_time_step=optimization_time_step,
+                internal_gains_forecast=load_forecast,
+                internal_gains_factor=-0.5,  # Invalid: < 0
+            )
 
-        demand_no_gains = utils.calculate_heating_demand_physics(
-            u_value=u_value,
-            envelope_area=envelope_area,
-            ventilation_rate=ventilation_rate,
-            heated_volume=heated_volume,
-            indoor_target_temperature=indoor_temp,
-            outdoor_temperature_forecast=outdoor_temps,
-            optimization_time_step=optimization_time_step,
-        )
-
-        # Negative factor should be treated same as no internal gains
-        np.testing.assert_array_almost_equal(
-            demand_negative_factor,
-            demand_no_gains,
-            decimal=10,
-            err_msg="Negative factor should be treated as no internal gains",
-        )
+        self.assertIn("internal_gains_factor must be between 0 and 1", str(context_neg.exception))
 
     def test_calculate_cop_heatpump(self):
         """Test heat pump COP calculation utility function with Carnot-based formula."""
