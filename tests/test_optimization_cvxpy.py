@@ -14,7 +14,7 @@ import pandas as pd
 from pandas.testing import assert_series_equal
 
 from emhass.forecast import Forecast
-from emhass.optimization import Optimization
+from emhass.optimization_cvxpy import Optimization
 from emhass.retrieve_hass import RetrieveHass
 from emhass.utils import (
     build_config,
@@ -55,9 +55,6 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             )
         params_json = orjson.dumps(params).decode("utf-8")
         retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(params_json, logger)
-        # Force HIGHS solver
-        optim_conf["lp_solver"] = "HiGHS"
-        optim_conf["lp_solver_path"] = "empty"
         self.retrieve_hass_conf, self.optim_conf, self.plant_conf = (
             retrieve_hass_conf,
             optim_conf,
