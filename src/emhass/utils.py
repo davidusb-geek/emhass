@@ -708,6 +708,47 @@ async def treat_runtimeparams(
                     # Check Legacy parameter name runtime
                     elif runtimeparams.get(association[1], None) is not None:
                         params[association[0]][association[2]] = runtimeparams[association[1]]
+        
+        # Special handling for power limit parameters - they can be vectors (Tier 1a)
+        # Parse maximum_power_from_grid (can be scalar or list/array)
+        if "maximum_power_from_grid" in runtimeparams:
+            import ast
+            value = runtimeparams["maximum_power_from_grid"]
+            try:
+                # If it's a string representation of a list, parse it
+                if isinstance(value, str):
+                    parsed = ast.literal_eval(value)
+                    params["plant_conf"]["maximum_power_from_grid"] = parsed
+                # If already a list/array, use it directly
+                elif isinstance(value, (list, tuple)):
+                    params["plant_conf"]["maximum_power_from_grid"] = list(value)
+                # If scalar, use as-is
+                else:
+                    params["plant_conf"]["maximum_power_from_grid"] = value
+            except (ValueError, SyntaxError) as e:
+                logger.warning(
+                    f"Could not parse maximum_power_from_grid: {e}. Using default."
+                )
+        
+        # Parse maximum_power_to_grid (can be scalar or list/array)
+        if "maximum_power_to_grid" in runtimeparams:
+            import ast
+            value = runtimeparams["maximum_power_to_grid"]
+            try:
+                # If it's a string representation of a list, parse it
+                if isinstance(value, str):
+                    parsed = ast.literal_eval(value)
+                    params["plant_conf"]["maximum_power_to_grid"] = parsed
+                # If already a list/array, use it directly
+                elif isinstance(value, (list, tuple)):
+                    params["plant_conf"]["maximum_power_to_grid"] = list(value)
+                # If scalar, use as-is
+                else:
+                    params["plant_conf"]["maximum_power_to_grid"] = value
+            except (ValueError, SyntaxError) as e:
+                logger.warning(
+                    f"Could not parse maximum_power_to_grid: {e}. Using default."
+                )
         else:
             logger.warning(
                 "Cant find associations file (associations.csv) in: "
