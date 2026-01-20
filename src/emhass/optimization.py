@@ -1,6 +1,8 @@
+import bz2
 import copy
 import logging
 import os
+import pickle
 from math import ceil
 
 import cvxpy as cp
@@ -118,12 +120,12 @@ class Optimization:
         self.logger.debug(f"Plant configuration: {plant_conf}")
         self.logger.debug(f"Number of threads: {self.num_threads}")
 
-        # --- CVXPY Initialization ---
-        # 1. Calculate the fixed number of time steps (N)
+        # CVXPY Initialization
+        # Calculate the fixed number of time steps (N)
         self.num_timesteps = int(self.time_delta / self.freq)
         self.logger.debug(f"CVXPY: Initialization with {self.num_timesteps} time steps.")
 
-        # 2. Define Parameters (Data holders)
+        # Define Parameters (Data holders)
         # These will be updated in perform_optimization without rebuilding the problem
         self.param_pv_forecast = cp.Parameter(self.num_timesteps, name="pv_forecast")
         self.param_load_forecast = cp.Parameter(self.num_timesteps, name="load_forecast")
@@ -134,11 +136,10 @@ class Optimization:
         self.param_soc_init = cp.Parameter(nonneg=True, name="soc_init")
         self.param_soc_final = cp.Parameter(nonneg=True, name="soc_final")
 
-        # 3. Initialize Variables & Bound Constraints
+        # Initialize Variables & Bound Constraints
         self.vars, self.constraints = self._initialize_decision_variables()
 
         # Note: The self.prob object will be constructed in a subsequent step
-        # once the constraint helper methods are migrated to return lists of constraints.
         self.prob = None
 
     def _setup_stress_cost(self, cost_conf_key, max_power, var_name_prefix):
@@ -154,7 +155,6 @@ class Optimization:
                 f"Stress cost enabled for {var_name_prefix}. "
                 f"Unit Cost: {stress_unit_cost}/kWh at full load {max_power}W."
             )
-            # CVXPY: Vector variable for all time steps
             stress_cost_var = cp.Variable(
                 self.num_timesteps, nonneg=True, name=f"{var_name_prefix}_stress_cost"
             )
@@ -222,7 +222,7 @@ class Optimization:
         constraints = []
         n = self.num_timesteps
 
-        # -- Grid power variables --
+        # Grid power variables
         # P_grid_neg <= 0
         vars_dict["p_grid_neg"] = cp.Variable(n, nonpos=True, name="p_grid_neg")
         constraints.append(vars_dict["p_grid_neg"] >= -self.plant_conf["maximum_power_to_grid"])
@@ -231,7 +231,7 @@ class Optimization:
         vars_dict["p_grid_pos"] = cp.Variable(n, nonneg=True, name="p_grid_pos")
         constraints.append(vars_dict["p_grid_pos"] <= self.plant_conf["maximum_power_from_grid"])
 
-        # -- Deferrable load variables --
+        # Deferrable load variables
         num_deferrable_loads = self.optim_conf["number_of_deferrable_loads"]
         p_deferrable = []
         p_def_bin1 = []
@@ -262,11 +262,11 @@ class Optimization:
         vars_dict["p_def_start"] = p_def_start
         vars_dict["p_def_bin2"] = p_def_bin2
 
-        # -- Binary indicators for Grid and Battery direction --
+        # Binary indicators for Grid and Battery direction
         vars_dict["D"] = cp.Variable(n, boolean=True, name="D")
         vars_dict["E"] = cp.Variable(n, boolean=True, name="E")
 
-        # -- Battery power variables --
+        # Battery power variables
         if self.optim_conf["set_use_battery"]:
             vars_dict["p_sto_pos"] = cp.Variable(n, nonneg=True, name="p_sto_pos")
             constraints.append(
@@ -284,18 +284,18 @@ class Optimization:
             constraints.append(vars_dict["p_sto_pos"] == 0)
             constraints.append(vars_dict["p_sto_neg"] == 0)
 
-        # -- Self-consumption variable --
+        # Self-consumption variable
         if self.costfun == "self-consumption":
             vars_dict["SC"] = cp.Variable(n, nonneg=True, name="SC")
 
-        # -- Hybrid Inverter variable --
+        # Hybrid Inverter variable
         if self.plant_conf["inverter_is_hybrid"]:
             vars_dict["p_hybrid_inverter"] = cp.Variable(n, name="p_hybrid_inverter")
 
-        # -- Curtailment variable --
+        # Curtailment variable
         vars_dict["p_pv_curtailment"] = cp.Variable(n, nonneg=True, name="p_pv_curtailment")
 
-        # -- Sum of deferrable loads --
+        # Sum of deferrable loads
         if num_deferrable_loads > 0:
             # Create an expression for the sum
             vars_dict["p_def_sum"] = sum(p_deferrable)
@@ -335,7 +335,7 @@ class Optimization:
         # Initialize objective expression
         objective_terms = []
 
-        # --- Base Cost Function ---
+        # Base Cost Function
         if self.costfun == "profit":
             # Profit = Export Income - Import Cost
             # formulated as: -Cost - (Export_Neg_Value * Price)
@@ -372,7 +372,7 @@ class Optimization:
                 # Maximize SC
                 objective_terms.append(scale * cp.sum(cp.multiply(unit_load_cost, SC)))
 
-        # --- Battery Cycle Cost Penalty ---
+        # Battery Cycle Cost Penalty
         if self.optim_conf["set_use_battery"]:
             # p_sto_neg is negative. -weight*p_sto_neg is a positive penalty value.
             # We subtract this positive penalty from the maximization objective.
@@ -382,7 +382,7 @@ class Optimization:
             cycle_cost = (weight_dis * p_sto_pos) - (weight_chg * p_sto_neg)
             objective_terms.append(-scale * cp.sum(cycle_cost))
 
-        # --- Deferrable Load Startup Penalties ---
+        # Deferrable Load Startup Penalties
         if (
             "set_deferrable_startup_penalty" in self.optim_conf
             and self.optim_conf["set_deferrable_startup_penalty"]
@@ -399,7 +399,7 @@ class Optimization:
                     term = -scale * penalty * nominal_power * total_startup_cost
                     objective_terms.append(term)
 
-        # --- Stress Costs ---
+        # Stress Costs
         # These variables represent a cost to be minimized.
         # Since we are Maximizing the objective, we subtract them.
         if inv_stress_conf and inv_stress_conf["active"]:
@@ -428,7 +428,7 @@ class Optimization:
         p_pv = self.param_pv_forecast
         p_load = self.param_load_forecast
 
-        # 1. Main Power Balance Constraints
+        # Main Power Balance Constraints
         # Note: In CVXPY, '==' applies element-wise to vectors
         if self.plant_conf["inverter_is_hybrid"]:
             constraints.append(
@@ -452,7 +452,7 @@ class Optimization:
                     p_pv - p_def_sum - p_load + p_grid_neg + p_grid_pos + p_sto_pos + p_sto_neg == 0
                 )
 
-        # 2. Grid Constraints (Simultaneous import/export prevention)
+        # Grid Constraints (Simultaneous import/export prevention)
         # These are Big-M style constraints using the binary variable D
         # D=1 implies Grid Import is allowed (Export forced to 0)
         # D=0 implies Grid Export is allowed (Import forced to 0)
@@ -476,16 +476,38 @@ class Optimization:
         p_sto_neg = self.vars["p_sto_neg"]
         p_pv = self.param_pv_forecast
 
-        # --- 1. Determine Inverter Capacity (Configuration Logic) ---
+        # Determine Inverter Capacity (Configuration Logic)
         p_nom_inverter_output = self.plant_conf.get("inverter_ac_output_max", None)
         p_nom_inverter_input = self.plant_conf.get("inverter_ac_input_max", None)
 
         # (Legacy lookup logic preserved but runs once during setup)
         if p_nom_inverter_output is None:
             if "pv_inverter_model" in self.plant_conf:
-                # ... [Existing lookup logic omitted for brevity, assumes p_nom_inverter_output calculated] ...
-                # For refactor context, we assume this value is resolved here as per original code
-                pass
+                if isinstance(self.plant_conf["pv_inverter_model"], list):
+                    p_nom_inverter_output = 0.0
+                    for i in range(len(self.plant_conf["pv_inverter_model"])):
+                        if isinstance(self.plant_conf["pv_inverter_model"][i], str):
+                            with bz2.BZ2File(
+                                self.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2",
+                                "rb",
+                            ) as f:
+                                cec_inverters = pickle.load(f)
+                            inverter = cec_inverters[self.plant_conf["pv_inverter_model"][i]]
+                            p_nom_inverter_output += inverter.Paco
+                        else:
+                            p_nom_inverter_output += self.plant_conf["pv_inverter_model"][i]
+                else:
+                    if isinstance(self.plant_conf["pv_inverter_model"], str):
+                        with bz2.BZ2File(
+                            self.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2",
+                            "rb",
+                        ) as f:
+                            cec_inverters = pickle.load(f)
+                        inverter = cec_inverters[self.plant_conf["pv_inverter_model"]]
+                        p_nom_inverter_output = inverter.Paco
+                    else:
+                        p_nom_inverter_output = self.plant_conf["pv_inverter_model"]
+
             if p_nom_inverter_output is None:
                 p_nom_inverter_output = 0  # Fallback
 
@@ -500,7 +522,7 @@ class Optimization:
 
         n = self.num_timesteps
 
-        # --- 2. Define Internal Variables ---
+        # Define Internal Variables
         # We define them here and attach to self.vars so they persist for result extraction
         p_dc_ac = cp.Variable(n, nonneg=True, name="p_dc_ac")
         p_ac_dc = cp.Variable(n, nonneg=True, name="p_ac_dc")
@@ -510,7 +532,7 @@ class Optimization:
         self.vars["p_ac_dc"] = p_ac_dc
         self.vars["is_dc_sourcing"] = is_dc_sourcing
 
-        # --- 3. Power Balance Constraints (Vectorized) ---
+        # Power Balance Constraints (Vectorized)
 
         # DC Bus Balance
         if self.plant_conf["compute_curtailment"]:
@@ -530,7 +552,7 @@ class Optimization:
         constraints.append(p_ac_dc <= (1 - is_dc_sourcing) * p_ac_dc_max)
         constraints.append(p_dc_ac <= is_dc_sourcing * p_dc_ac_max)
 
-        # --- 4. Stress Cost ---
+        # Stress Cost
         if inv_stress_conf and inv_stress_conf["active"]:
             seg_params = self._build_stress_segments(
                 inv_stress_conf["max_power"],
@@ -566,7 +588,7 @@ class Optimization:
         max_dis = self.plant_conf["battery_discharge_power_max"]
         max_chg = self.plant_conf["battery_charge_power_max"]  # This is usually positive in config
 
-        # --- 1. Grid Interaction Constraints ---
+        # Grid Interaction Constraints
 
         # No charge from grid: Charging power (neg) + PV must be positive (net surplus)
         if self.optim_conf["set_nocharge_from_grid"]:
@@ -576,7 +598,7 @@ class Optimization:
         if self.optim_conf["set_nodischarge_to_grid"]:
             constraints.append(p_grid_neg + p_pv >= 0)
 
-        # --- 2. Dynamic Power Limits (Ramp Rate) ---
+        # Dynamic Power Limits (Ramp Rate)
         if self.optim_conf["set_battery_dynamic"]:
             # Use slicing for vectorized ramp constraints: var[t+1] - var[t]
             # p_sto_pos ramp
@@ -595,7 +617,7 @@ class Optimization:
             constraints.append(diff_neg <= ramp_up_limit_neg)
             constraints.append(diff_neg >= ramp_down_limit_neg)
 
-        # --- 3. Power & Binary Constraints ---
+        # Power & Binary Constraints
         # Discharge limit based on binary E
         constraints.append(p_sto_pos <= eff_dis * max_dis * E)
 
@@ -603,7 +625,7 @@ class Optimization:
         # p_sto_neg >= -1/eff * max * (1-E)  --> (p_sto_neg is negative)
         constraints.append(p_sto_neg >= -(1 / eff_chg) * max_chg * (1 - E))
 
-        # --- 4. SOC Constraints (Vectorized Accumulation) ---
+        # SOC Constraints (Vectorized Accumulation)
 
         # Calculate Energy Change per timestep (kWh)
         # Energy out = p_sto_pos / eff_dis
@@ -633,7 +655,7 @@ class Optimization:
         total_energy_change = cp.sum(energy_change)
         constraints.append(total_energy_change == (soc_init - soc_final) * cap)
 
-        # --- 5. Stress Cost ---
+        # Stress Cost
         if batt_stress_conf and batt_stress_conf["active"]:
             seg_params = self._build_stress_segments(
                 batt_stress_conf["max_power"],
@@ -655,7 +677,7 @@ class Optimization:
         p_deferrable = self.vars["p_deferrable"][k]
         p_def_bin2 = self.vars["p_def_bin2"][k]
 
-        # ... [Config retrieval same as before] ...
+        # Config retrieval
         def_load_config = self.optim_conf["def_load_config"][k]
         hc = def_load_config["thermal_config"]
 
@@ -664,7 +686,7 @@ class Optimization:
         )
         start_temperature = float(start_temperature) if start_temperature is not None else 20.0
 
-        # ... [Outdoor temp handling same as before] ...
+        # Outdoor temp handling
         outdoor_temp = self._get_clean_list("outdoor_temperature_forecast", data_opt)
         if not outdoor_temp or all(x is None for x in outdoor_temp):
             outdoor_temp = self._get_clean_list("temp_air", data_opt)
@@ -691,20 +713,10 @@ class Optimization:
         sense_coeff = 1 if sense == "heat" else -1
         nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
 
-        # --- 1. Define Temperature State Variable ---
+        # Define Temperature State Variable
         predicted_temp = cp.Variable(required_len, name=f"temp_load_{k}")
 
-        # --- LEGACY BEHAVIOR REPLICATION ---
-        # The original code skipped index 0 in the loop.
-        # This implies predicted_temp[0] was just the initial value.
-        # And predicted_temp[1] was calculated from predicted_temp[0] using physics.
-
         constraints.append(predicted_temp[0] == start_temperature)
-
-        # Physics for t=1..N-1
-        # T[t] = T[t-1] + Heat[t-1] - Cool[t-1]
-        # Note indices: The original code used `index-1` for inputs.
-        # So T[1] uses P_def[0], Outdoor[0].
 
         heat_factor = (heating_rate * self.time_step) / nominal_power
         cool_factor = cooling_constant * self.time_step
@@ -716,26 +728,14 @@ class Optimization:
             - (cool_factor * (predicted_temp[:-1] - outdoor_temp[:-1]))
         )
 
-        # --- 2. Min/Max Temperature Constraints ---
-        # Note: In legacy, these applied to indices where loop ran (likely 1..N?)
-        # Or did it check min_temp[index]?
-        # Original: if len > index... check predicted_temp[index]
-        # Since loop ran 1..N-1, it checked indices 1..N-1.
-        # Index 0 (fixed to start_temp) was NOT checked against constraints in loop.
-        # We replicate this by applying constraints to predicted_temp[1:]
-
+        # Min/Max Temperature Constraints
         def enforce_limit(limit_list, relation_op):
-            # We only check from index 1 onwards to match legacy loop "if index==0: continue"
-            # Limit list is usually aligned with data.
-            # So we check limit_list[i] against predicted_temp[i] for i=1..N-1
-
             # Filter for valid indices > 0
             valid_indices = [
                 i
                 for i, val in enumerate(limit_list)
                 if val is not None and i < required_len and i > 0
             ]
-
             if valid_indices:
                 limit_vals = np.array([limit_list[i] for i in valid_indices])
                 constraints.append(relation_op(predicted_temp[valid_indices], limit_vals))
@@ -745,16 +745,10 @@ class Optimization:
         if max_temperatures:
             enforce_limit(max_temperatures, lambda x, y: x <= y)
 
-        # --- 3. Overshoot Logic ---
+        # Overshoot Logic
         penalty_expr = 0
         if desired_temperatures and overshoot_temperature is not None:
             is_overshoot = cp.Variable(required_len, boolean=True, name=f"is_overshoot_{k}")
-
-            # Legacy logic applied these constraints inside the loop (index 1..N-1).
-            # We should probably apply to all N for correctness, but to match legacy test results...
-            # The test failures imply we might need to be careful.
-            # Let's apply to all, as it's safer, but use the correct physics T.
-
             big_m = 100
             if sense == "heat":
                 constraints.append(
@@ -771,22 +765,6 @@ class Optimization:
                     predicted_temp - overshoot_temperature + (-big_m * (1 - is_overshoot)) <= 0
                 )
 
-            # Note: Legacy used p_def_bin2[index-1] for overshoot constraint.
-            # constraint: is_overshoot + p_def_bin2[index-1] <= 1
-            # For index 1, it used bin2[0].
-            # This shifts the logic.
-            # Let's try direct current timestep logic first: `is_overshoot <= p_def_bin2`
-            # If that fails (which it might have, confusing the solver), we revert to shift.
-            # Logic: You cannot be OVERSHOOTING if you are not ON?
-            # Original: `is_overshoot + p_def_bin2[index-1] <= 1`
-            # If Bin[prev] is 1, is_overshoot MUST be 0.
-            # This implies "If we were ON, we cannot be in Overshoot state now"?
-            # That sounds like "Stop if overshoot".
-            # Correct: If Overshoot=1, then Bin[prev] MUST be 0 (Force OFF).
-
-            # Vectorized Shifted Constraint:
-            # is_overshoot[1:] + p_def_bin2[:-1] <= 1
-            # What about index 0? Original loop skipped it.
             constraints.append(is_overshoot[1:] + p_def_bin2[:-1] <= 1)
 
             # Penalty Calculation
@@ -803,17 +781,9 @@ class Optimization:
 
                 deviation = (predicted_temp[valid_idx] - des_temps) * sense_coeff
 
-                # Penalty logic:
-                # Original: penalty_var <= (T-Target)*factor*sense
-                # And penalty_var <= 0.
-                # Maximizing objective (which includes penalty_var).
-                # Effectively: Maximize min(0, Deviation).
-                # Deviation < 0 (Under-shoot/Under-cool) is penalized.
-                # We replicate this term.
-
                 penalty_expr = -cp.pos(-deviation * penalty_factor)
 
-        # --- 4. Semi-Continuous Constraint ---
+        # Semi-Continuous Constraint
         if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
             constraints.append(p_deferrable == p_def_bin2 * nominal_power)
 
@@ -824,23 +794,26 @@ class Optimization:
         """Handle constraints for thermal battery loads (Vectorized, Legacy Match)."""
         p_deferrable = self.vars["p_deferrable"][k]
 
-        # ... [Inputs & Config same as before] ...
-        # (Assuming imports/constants are set)
         def_load_config = self.optim_conf["def_load_config"][k]
         hc = def_load_config["thermal_battery"]
 
         start_temperature = hc.get("start_temperature", 20.0)
         start_temperature = float(start_temperature) if start_temperature is not None else 20.0
 
-        # ... [Outdoor temp, etc.] ...
+        # Robust Outdoor Temp Cleaning (Handle NaN)
         outdoor_temp = self._get_clean_list("outdoor_temperature_forecast", data_opt)
-        # ... [Cleanup logic] ...
-        # (Same as previous snippet)
+        if not outdoor_temp or all(x is None for x in outdoor_temp):
+            outdoor_temp = self._get_clean_list("temp_air", data_opt)
+
         required_len = self.num_timesteps
         if not outdoor_temp or all(x is None for x in outdoor_temp):
             outdoor_temp = np.full(required_len, 15.0)
         else:
-            outdoor_temp = np.array([15.0 if x is None else float(x) for x in outdoor_temp])
+            # Added pd.isna(x) check to handle NaNs from DataFrames
+            outdoor_temp = np.array(
+                [15.0 if (x is None or pd.isna(x)) else float(x) for x in outdoor_temp]
+            )
+
         if len(outdoor_temp) < required_len:
             pad = np.full(required_len - len(outdoor_temp), 15.0)
             outdoor_temp = np.concatenate((outdoor_temp, pad))
@@ -850,6 +823,11 @@ class Optimization:
         volume = hc["volume"]
         min_temperatures = hc["min_temperatures"]
         max_temperatures = hc["max_temperatures"]
+
+        if not min_temperatures:
+            raise ValueError(f"Load {k}: thermal_battery requires non-empty 'min_temperatures'")
+        if not max_temperatures:
+            raise ValueError(f"Load {k}: thermal_battery requires non-empty 'max_temperatures'")
 
         p_concr = 2400
         c_concr = 0.88
@@ -870,18 +848,31 @@ class Optimization:
         )
         thermal_losses = np.array(thermal_losses[:required_len])
 
-        # Heating demand... (Same logic)
-        # ...
         if all(
-            key in hc for key in ["u_value", "envelope_area", "ventilation_rate", "heated_volume"]
+            key in hc
+            for key in [
+                "u_value",
+                "envelope_area",
+                "ventilation_rate",
+                "heated_volume",
+            ]
         ):
-            # ... physics calc ...
             indoor_target_temp = hc.get(
-                "indoor_target_temperature", min_temperatures[0] if min_temperatures else 20.0
+                "indoor_target_temperature",
+                min_temperatures[0] if min_temperatures else 20.0,
             )
-            # ...
+            window_area = hc.get("window_area", None)
+            shgc = hc.get("shgc", 0.6)
+            solar_irradiance = None
+            if "ghi" in data_opt.columns and window_area is not None:
+                # Ensure solar_irradiance matches length
+                vals = data_opt["ghi"].values
+                if len(vals) < required_len:
+                    vals = np.concatenate((vals, np.zeros(required_len - len(vals))))
+                # Convert to list for utils compatibility
+                solar_irradiance = vals[:required_len].tolist()
+
             heating_demand = utils.calculate_heating_demand_physics(
-                # ...
                 u_value=hc["u_value"],
                 envelope_area=hc["envelope_area"],
                 ventilation_rate=hc["ventilation_rate"],
@@ -889,30 +880,27 @@ class Optimization:
                 indoor_target_temperature=indoor_target_temp,
                 outdoor_temperature_forecast=outdoor_temp.tolist(),
                 optimization_time_step=int(self.freq.total_seconds() / 60),
-                solar_irradiance_forecast=None,  # Simplified for snippet
-                window_area=hc.get("window_area"),
-                shgc=hc.get("shgc", 0.6),
+                solar_irradiance_forecast=solar_irradiance,
+                window_area=window_area,
+                shgc=shgc,
             )
         else:
-            # ...
+            base_temperature = hc.get("base_temperature", 18.0)
+            annual_reference_hdd = hc.get("annual_reference_hdd", 3000.0)
             heating_demand = utils.calculate_heating_demand(
                 specific_heating_demand=hc["specific_heating_demand"],
                 floor_area=hc["area"],
                 outdoor_temperature_forecast=outdoor_temp.tolist(),
-                base_temperature=hc.get("base_temperature", 18.0),
-                annual_reference_hdd=hc.get("annual_reference_hdd", 3000.0),
+                base_temperature=base_temperature,
+                annual_reference_hdd=annual_reference_hdd,
                 optimization_time_step=int(self.freq.total_seconds() / 60),
             )
         heating_demand = np.array(heating_demand[:required_len])
 
-        # --- State Variables ---
         predicted_temp_thermal = cp.Variable(required_len, name=f"temp_thermal_batt_{k}")
 
-        # --- Legacy Behavior: T[0] fixed, Physics starts t=1 using inputs[0] ---
         constraints.append(predicted_temp_thermal[0] == start_temperature)
 
-        # T[t] = T[t-1] + conv * (COP[t-1]*P[t-1] - Demand[t-1] - Loss[t-1])
-        # Indices: 1..N-1 on LHS, 0..N-2 on RHS
         constraints.append(
             predicted_temp_thermal[1:]
             == predicted_temp_thermal[:-1]
@@ -924,7 +912,6 @@ class Optimization:
             )
         )
 
-        # Min/Max Limits (Index > 0)
         def enforce_limit(limit_list, relation_op):
             valid_indices = [
                 i
@@ -961,7 +948,7 @@ class Optimization:
 
         predicted_temps = {}
         heating_demands = {}
-        penalty_terms_total = 0  # Can be expression
+        penalty_terms_total = 0
         M = 100000
         n = self.num_timesteps
 
@@ -976,7 +963,7 @@ class Optimization:
         for k in range(self.optim_conf["number_of_deferrable_loads"]):
             self.logger.debug(f"Processing deferrable load {k}")
 
-            # --- 1. Sequence-based Deferrable Load ---
+            # Sequence-based Deferrable Load
             if isinstance(self.optim_conf["nominal_power_of_deferrable_loads"][k], list):
                 power_sequence = self.optim_conf["nominal_power_of_deferrable_loads"][k]
                 sequence_length = len(power_sequence)
@@ -1007,7 +994,7 @@ class Optimization:
 
                 constraints.append(p_deferrable[k] == cp.matmul(y, mat_np))
 
-            # --- 2. Thermal Deferrable Load ---
+            # Thermal Deferrable Load
             elif (
                 "def_load_config" in self.optim_conf.keys()
                 and len(self.optim_conf["def_load_config"]) > k
@@ -1020,7 +1007,7 @@ class Optimization:
                 if penalty_term is not None:
                     penalty_terms_total += penalty_term
 
-            # --- 3. Thermal Battery Load ---
+            # Thermal Battery Load
             elif (
                 "def_load_config" in self.optim_conf.keys()
                 and len(self.optim_conf["def_load_config"]) > k
@@ -1032,7 +1019,7 @@ class Optimization:
                 predicted_temps[k] = pred_temp
                 heating_demands[k] = heat_demand
 
-            # --- 4. Standard Deferrable Load ---
+            # Standard Deferrable Load
             elif (def_total_timestep and def_total_timestep[k] > 0) or (
                 len(def_total_hours) > k and def_total_hours[k] > 0
             ):
@@ -1049,7 +1036,7 @@ class Optimization:
                 # Total Energy Constraint
                 constraints.append(cp.sum(p_deferrable[k]) * self.time_step == target_energy)
 
-            # --- Time Window Logic ---
+            # Time Window Logic
             # Calculate Valid Window
             if def_total_timestep and def_total_timestep[k] > 0:
                 def_start, def_end, warning = Optimization.validate_def_timewindow(
@@ -1077,13 +1064,13 @@ class Optimization:
             if def_end > 0 and def_end < n:
                 constraints.append(p_deferrable[k][def_end:] == 0)
 
-            # --- Minimum Power ---
+            # Minimum Power
             if min_power_of_deferrable_loads[k] > 0:
                 constraints.append(
                     p_deferrable[k] >= min_power_of_deferrable_loads[k] * p_def_bin2[k]
                 )
 
-            # --- Startup Logic (Vectorized) ---
+            # Startup Logic (Vectorized)
             # Retrieve State
             current_state = 0
             if (
@@ -1092,23 +1079,23 @@ class Optimization:
             ):
                 current_state = 1 if self.optim_conf["def_current_state"][k] else 0
 
-            # 1. Status consistency: P_def <= M * Bin2 (Bin2 is "Are we running?")
+            # Status consistency: P_def <= M * Bin2 (Bin2 is "Are we running?")
             constraints.append(p_deferrable[k] <= M * p_def_bin2[k])
 
-            # 2. Startup Detection: Start[t] >= Bin[t] - Bin[t-1]
+            # Startup Detection: Start[t] >= Bin[t] - Bin[t-1]
             # t=0
             constraints.append(p_def_start[k][0] >= p_def_bin2[k][0] - current_state)
             # t=1..N
             constraints.append(p_def_start[k][1:] >= p_def_bin2[k][1:] - p_def_bin2[k][:-1])
 
-            # 3. Startup Limit: Start[t] + Bin[t-1] <= 1
+            # Startup Limit: Start[t] + Bin[t-1] <= 1
             # If we were ON yesterday (Bin[t-1]=1), we CANNOT Start today (Start[t]=0).
             # t=0
             constraints.append(p_def_start[k][0] + current_state <= 1)
             # t=1..N
             constraints.append(p_def_start[k][1:] + p_def_bin2[k][:-1] <= 1)
 
-            # --- Single Constant Start ---
+            # Single Constant Start
             # If set, we must switch ON exactly once, and stay ON for the duration.
             if self.optim_conf["set_deferrable_load_single_constant"][k]:
                 # Sum(Starts) == 1
@@ -1122,14 +1109,14 @@ class Optimization:
                 )
                 constraints.append(cp.sum(p_def_bin2[k]) == rhs_val)
 
-            # --- Semi-continuous ---
+            # Semi-continuous
             if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
                 nominal = self.optim_conf["nominal_power_of_deferrable_loads"][k]
 
                 # P_def == Nominal * Bin1
                 constraints.append(p_deferrable[k] == nominal * p_def_bin1[k])
 
-                # CRITICAL FIX: Link Bin1 (Power) to Bin2 (Status) to enforce startup penalties on power gaps
+                # Link Bin1 (Power) to Bin2 (Status) to enforce startup penalties on power gaps
                 constraints.append(p_def_bin1[k] == p_def_bin2[k])
 
         return predicted_temps, heating_demands, penalty_terms_total
@@ -1155,7 +1142,7 @@ class Optimization:
             val = var.value
             return val if val is not None else np.zeros(self.num_timesteps)
 
-        # 1. Main Power Variables
+        # Main Power Variables
         opt_tp["P_PV"] = get_val(
             self.vars.get("p_pv_curtailment")
         )  # Logic filled in main for actual PV
@@ -1164,11 +1151,11 @@ class Optimization:
         opt_tp["P_grid_neg"] = get_val(self.vars["p_grid_neg"])
         opt_tp["P_grid"] = opt_tp["P_grid_pos"] + opt_tp["P_grid_neg"]
 
-        # 2. Deferrable Loads
+        # Deferrable Loads
         for k in range(self.optim_conf["number_of_deferrable_loads"]):
             opt_tp[f"P_deferrable{k}"] = get_val(self.vars["p_deferrable"][k])
 
-        # 3. Battery Results
+        # Battery Results
         if self.optim_conf["set_use_battery"]:
             p_sto_pos = get_val(self.vars["p_sto_pos"])
             p_sto_neg = get_val(self.vars["p_sto_neg"])
@@ -1179,30 +1166,21 @@ class Optimization:
             eff_chg = self.plant_conf["battery_charge_efficiency"]
             cap = self.plant_conf["battery_nominal_energy_capacity"]
 
-            # Energy Change (kWh) = (Discharge/eff + Charge*eff) * dt
-            # Note: Charge is negative power, so adding (Neg * eff) reduces energy.
-            # But here we want the change in STORED energy.
-            # Stored Energy Change = (Charge_Power_Pos * eff) - (Discharge_Power_Pos / eff)
-            # My constraint logic was: stored = init - cumsum( (P_pos/eff) + (P_neg*eff) )
-            # Because P_pos is discharge (reduces stored), P_neg is charge (reduces stored? No)
-            # P_neg is negative. (P_neg * eff) is negative.
-            # So subtracting a negative adds to stored. Correct.
-
             power_flow = (p_sto_pos * (1 / eff_dis)) + (p_sto_neg * eff_chg)
             energy_change = power_flow * self.time_step
             cumulative_change = np.cumsum(energy_change)
 
             opt_tp["SOC_opt"] = soc_init - (cumulative_change / cap)
 
-        # 4. Hybrid Inverter Results
+        # Hybrid Inverter Results
         if self.plant_conf["inverter_is_hybrid"]:
             opt_tp["P_hybrid_inverter"] = get_val(self.vars["p_hybrid_inverter"])
 
-        # 5. Curtailment
+        # Curtailment
         if self.plant_conf["compute_curtailment"]:
             opt_tp["P_PV_curtailment"] = get_val(self.vars["p_pv_curtailment"])
 
-        # 6. Thermal Details
+        # Thermal Details
         for k, pred_temp_var in predicted_temps.items():
             # pred_temp_var is a cvxpy Variable, get .value
             temp_values = get_val(pred_temp_var)
@@ -1224,7 +1202,7 @@ class Optimization:
         for k, heat_demand in heating_demands.items():
             opt_tp[f"heating_demand_heater{k}"] = heat_demand
 
-        # 7. Debug Columns
+        # Debug Columns
         if debug:
             for k in range(self.optim_conf["number_of_deferrable_loads"]):
                 opt_tp[f"P_def_start_{k}"] = get_val(self.vars["p_def_start"][k])
@@ -1251,7 +1229,7 @@ class Optimization:
         r"""
         Perform the actual optimization using Convex Programming (CVXPY).
         """
-        # --- 0. Dynamic Resizing (Fix for ValueError: Invalid dimensions) ---
+        # 0. Dynamic Resizing (Fix for ValueError: Invalid dimensions)
         # If the input data length differs from the initialized N, we must rebuild the problem.
         current_n = len(data_opt)
         if current_n != self.num_timesteps:
@@ -1272,7 +1250,7 @@ class Optimization:
             # Force problem rebuild
             self.prob = None
 
-        # --- 1. Data Validation & Defaults ---
+        # 1. Data Validation & Defaults
         if self.optim_conf["set_use_battery"]:
             if soc_init is None:
                 if soc_final is not None:
@@ -1321,7 +1299,7 @@ class Optimization:
         def_start_timestep = pad_list(def_start_timestep, num_deferrable_loads)
         def_end_timestep = pad_list(def_end_timestep, num_deferrable_loads)
 
-        # --- 2. Parameter Updates ---
+        # 2. Parameter Updates
         self.param_pv_forecast.value = p_pv
         self.param_load_forecast.value = p_load
         self.param_load_cost.value = unit_load_cost
@@ -1331,7 +1309,7 @@ class Optimization:
             self.param_soc_init.value = soc_init
             self.param_soc_final.value = soc_final
 
-        # --- 3. Build Problem (Lazy Construction) ---
+        # 3. Build Problem (Lazy Construction)
         if self.prob is None:
             self.logger.info("Building CVXPY problem structure...")
 
@@ -1405,22 +1383,54 @@ class Optimization:
 
             self.prob = cp.Problem(objective_expr, constraints)
 
-        # --- 4. Solve ---
+        # 4. Solve
         solver_opts = {"verbose": False}
 
-        # Robust Solver Selection
-        # If COIN/CBC requested but not available, fallback to HiGHS
-        if (
-            self.lp_solver == "COIN_CMD" or self.lp_solver == "PULP_CBC_CMD"
-        ) and "CBC" in cp.installed_solvers():
-            selected_solver = cp.CBC
-        elif self.lp_solver == "GLPK_CMD" and "GLPK_MI" in cp.installed_solvers():
-            selected_solver = cp.GLPK_MI
-        else:
-            selected_solver = cp.HIGHS  # Default/Fallback
-
+        # 1. Retrieve Constraints (Time & Threads)
+        # We keep these config parameters as they are useful for everyone
+        threads = self.optim_conf.get("num_threads", 0)
         timeout = self.optim_conf.get("lp_solver_timeout", 180)
 
+        # 2. Select Solver
+        # We strictly default to HiGHS.
+        # Advanced users can override this by setting the 'LP_SOLVER' environment variable.
+        requested_solver = os.environ.get("LP_SOLVER", "HIGHS").upper()
+        selected_solver = cp.HIGHS
+
+        if requested_solver == "GUROBI":
+            if "GUROBI" in cp.installed_solvers():
+                selected_solver = cp.GUROBI
+                # Gurobi specific options
+                solver_opts["TimeLimit"] = timeout
+                if threads > 0:
+                    solver_opts["Threads"] = threads
+            else:
+                self.logger.warning(
+                    "Solver 'GUROBI' requested via Env Var but not found. Falling back to HiGHS."
+                )
+
+        elif requested_solver == "CPLEX":
+            if "CPLEX" in cp.installed_solvers():
+                selected_solver = cp.CPLEX
+                # CPLEX specific options
+                cplex_params = {"timelimit": timeout}
+                if threads > 0:
+                    cplex_params["threads"] = threads
+                solver_opts["cplex_params"] = cplex_params
+            else:
+                self.logger.warning(
+                    "Solver 'CPLEX' requested via Env Var but not found. Falling back to HiGHS."
+                )
+
+        # 3. Configure HiGHS (The Default)
+        if selected_solver == cp.HIGHS:
+            solver_opts["time_limit"] = float(timeout)
+            if threads > 0:
+                solver_opts["threads"] = int(threads)
+            # 'run_crossover' ensures a cleaner solution (closer to simplex vertex)
+            solver_opts["run_crossover"] = "on"
+
+        # 4. Execute Solve
         try:
             self.prob.solve(solver=selected_solver, warm_start=True, **solver_opts)
         except Exception as e:
@@ -1447,7 +1457,7 @@ class Optimization:
                 self.prob.value,
             )
 
-        # --- 5. Results Extraction ---
+        # 5. Results Extraction
         opt_tp = self._build_results_dataframe(
             data_opt,
             unit_load_cost,
