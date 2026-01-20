@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 
-import os
 import pathlib
 import pickle
 import random
@@ -411,9 +410,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
         self.assertEqual(self.opt.optim_status, "Optimal")
-        # Test with different default solver, debug mode and batt SOC conditions
-        del self.optim_conf["lp_solver"]
-        del self.optim_conf["lp_solver_path"]
+        # Test with debug mode and batt SOC conditions
         self.optim_conf["set_use_battery"] = True
         soc_init = None
         soc_final = 0.3
@@ -485,31 +482,6 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
-        # Test dayahead optimization using different solvers
-        import pulp as pl
-
-        solver_list = pl.listSolvers(onlyAvailable=True)
-        for solver in solver_list:
-            self.optim_conf["lp_solver"] = solver
-            if os.getenv("lp_solver_path", default=None) is None:
-                self.optim_conf["lp_solver_path"] = os.getenv("lp_solver_path", default=None)
-            self.opt = self.create_optimization()
-            self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
-                self.df_input_data_dayahead
-            )
-            self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(
-                self.df_input_data_dayahead
-            )
-            self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
-                self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
-            )
-            self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-            self.assertIsInstance(
-                self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex
-            )
-            self.assertIsInstance(
-                self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-            )
 
     # Check minimum deferrable load power
     def test_perform_dayahead_forecast_optim_min_def_load_power(self):

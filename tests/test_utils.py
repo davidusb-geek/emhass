@@ -81,8 +81,6 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         # Test with defaults
         config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
         params = await utils.build_params(emhass_conf, {}, config, logger)
-        self.assertEqual(params["optim_conf"]["lp_solver"], "default")
-        self.assertEqual(params["optim_conf"]["lp_solver_path"], "empty")
         self.assertEqual(
             config["load_peak_hour_periods"],
             {
@@ -102,8 +100,6 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
             emhass_conf["config_path"],
         )
         params = await utils.build_params(emhass_conf, {}, config, logger)
-        self.assertEqual(params["optim_conf"]["lp_solver"], "default")
-        self.assertEqual(params["optim_conf"]["lp_solver_path"], "empty")
         # Test with legacy config_emhass yaml
         config = await utils.build_config(
             emhass_conf,
