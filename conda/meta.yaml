@@ -32,7 +32,7 @@ requirements:
     - pytz >=2024.2
     - h5py >=3.12.1
     - highspy >=1.10.0
-    - pulp >=2.8.0
+    - cvxpy >=1.6.0
     - pyyaml >=6.0.2
     - pytables >=3.10.0
     - skforecast >=0.19.1,<0.20.0
@@ -42,6 +42,7 @@ requirements:
     - quart
     - aiofiles
     - jinja2
+    - asyncio
     - aiohttp
     - orjson
     - websockets
