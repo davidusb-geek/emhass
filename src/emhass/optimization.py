@@ -1127,6 +1127,7 @@ class Optimization:
         unit_load_cost,
         unit_prod_price,
         p_load,
+        p_pv,
         soc_init,
         predicted_temps,
         heating_demands,
@@ -1143,17 +1144,23 @@ class Optimization:
             return val if val is not None else np.zeros(self.num_timesteps)
 
         # Main Power Variables
-        opt_tp["P_PV"] = get_val(
-            self.vars.get("p_pv_curtailment")
-        )  # Logic filled in main for actual PV
+        opt_tp["P_PV"] = p_pv
+        opt_tp["P_Load"] = p_load
+
+        if self.plant_conf["compute_curtailment"]:
+            opt_tp["P_PV_curtailment"] = get_val(self.vars.get("p_pv_curtailment"))
 
         opt_tp["P_grid_pos"] = get_val(self.vars["p_grid_pos"])
         opt_tp["P_grid_neg"] = get_val(self.vars["p_grid_neg"])
         opt_tp["P_grid"] = opt_tp["P_grid_pos"] + opt_tp["P_grid_neg"]
 
         # Deferrable Loads
+        # We calculate the sum manually from the extracted results to ensure consistency
+        p_def_sum = np.zeros(self.num_timesteps)
         for k in range(self.optim_conf["number_of_deferrable_loads"]):
-            opt_tp[f"P_deferrable{k}"] = get_val(self.vars["p_deferrable"][k])
+            p_def_k = get_val(self.vars["p_deferrable"][k])
+            opt_tp[f"P_deferrable{k}"] = p_def_k
+            p_def_sum += p_def_k
 
         # Battery Results
         if self.optim_conf["set_use_battery"]:
@@ -1161,7 +1168,7 @@ class Optimization:
             p_sto_neg = get_val(self.vars["p_sto_neg"])
             opt_tp["P_batt"] = p_sto_pos + p_sto_neg
 
-            # Reconstruct SOC vector from power flows (Same logic as constraints)
+            # Reconstruct SOC
             eff_dis = self.plant_conf["battery_discharge_efficiency"]
             eff_chg = self.plant_conf["battery_charge_efficiency"]
             cap = self.plant_conf["battery_nominal_energy_capacity"]
@@ -1169,31 +1176,69 @@ class Optimization:
             power_flow = (p_sto_pos * (1 / eff_dis)) + (p_sto_neg * eff_chg)
             energy_change = power_flow * self.time_step
             cumulative_change = np.cumsum(energy_change)
-
             opt_tp["SOC_opt"] = soc_init - (cumulative_change / cap)
+
+            # Stress Cost
+            if "batt_stress_cost" in self.vars:
+                opt_tp["batt_stress_cost"] = get_val(self.vars["batt_stress_cost"])
 
         # Hybrid Inverter Results
         if self.plant_conf["inverter_is_hybrid"]:
             opt_tp["P_hybrid_inverter"] = get_val(self.vars["p_hybrid_inverter"])
+            if "inv_stress_cost" in self.vars:
+                opt_tp["inv_stress_cost"] = get_val(self.vars["inv_stress_cost"])
 
-        # Curtailment
-        if self.plant_conf["compute_curtailment"]:
-            opt_tp["P_PV_curtailment"] = get_val(self.vars["p_pv_curtailment"])
+        # Costs & Prices
+        opt_tp["unit_load_cost"] = unit_load_cost
+        opt_tp["unit_prod_price"] = unit_prod_price
+
+        # Cost scaling factor (kW conversion and sign flip for minimization -> profit)
+        scale = -0.001 * self.time_step
+
+        if self.optim_conf["set_total_pv_sell"]:
+            cost_profit = scale * (
+                unit_load_cost * (p_load + p_def_sum) + unit_prod_price * opt_tp["P_grid_neg"]
+            )
+        else:
+            cost_profit = scale * (
+                unit_load_cost * opt_tp["P_grid_pos"] + unit_prod_price * opt_tp["P_grid_neg"]
+            )
+
+        opt_tp["cost_profit"] = cost_profit
+
+        # Specific Cost Function Breakdown
+        if self.costfun == "profit":
+            opt_tp["cost_fun_profit"] = cost_profit
+
+        elif self.costfun == "cost":
+            if self.optim_conf["set_total_pv_sell"]:
+                opt_tp["cost_fun_cost"] = scale * unit_load_cost * (p_load + p_def_sum)
+            else:
+                opt_tp["cost_fun_cost"] = scale * unit_load_cost * opt_tp["P_grid_pos"]
+
+        elif self.costfun == "self-consumption":
+            if "SC" in self.vars:
+                opt_tp["cost_fun_selfcons"] = scale * unit_load_cost * get_val(self.vars["SC"])
+            else:
+                opt_tp["cost_fun_selfcons"] = cost_profit
+
+        # Optimization Status
+        opt_tp["optim_status"] = self.optim_status
 
         # Thermal Details
         for k, pred_temp_var in predicted_temps.items():
-            # pred_temp_var is a cvxpy Variable, get .value
             temp_values = get_val(pred_temp_var)
             opt_tp[f"predicted_temp_heater{k}"] = np.round(temp_values, 2)
 
-            # Add targets if available
-            if "def_load_config" in self.optim_conf:  # Safety check
+            if "def_load_config" in self.optim_conf:
                 conf = self.optim_conf["def_load_config"][k].get("thermal_config", {})
-                targets = conf.get("desired_temperatures") or conf.get("min_temperatures")
+                targets = (
+                    conf.get("desired_temperatures")
+                    or conf.get("min_temperatures")
+                    or conf.get("max_temperatures")
+                )
                 if targets:
-                    # Handle case where targets list length != dataframe length
                     tgt_series = pd.Series(targets)
-                    # Reindex or slice to match
                     if len(tgt_series) > len(opt_tp):
                         tgt_series = tgt_series.iloc[: len(opt_tp)]
                     tgt_series.index = opt_tp.index[: len(tgt_series)]
@@ -1250,7 +1295,7 @@ class Optimization:
             # Force problem rebuild
             self.prob = None
 
-        # 1. Data Validation & Defaults
+        # Data Validation & Defaults
         if self.optim_conf["set_use_battery"]:
             if soc_init is None:
                 if soc_final is not None:
@@ -1299,7 +1344,7 @@ class Optimization:
         def_start_timestep = pad_list(def_start_timestep, num_deferrable_loads)
         def_end_timestep = pad_list(def_end_timestep, num_deferrable_loads)
 
-        # 2. Parameter Updates
+        # Parameter Updates
         self.param_pv_forecast.value = p_pv
         self.param_load_forecast.value = p_load
         self.param_load_cost.value = unit_load_cost
@@ -1309,7 +1354,7 @@ class Optimization:
             self.param_soc_init.value = soc_init
             self.param_soc_final.value = soc_final
 
-        # 3. Build Problem (Lazy Construction)
+        # Build Problem (Lazy Construction)
         if self.prob is None:
             self.logger.info("Building CVXPY problem structure...")
 
@@ -1376,22 +1421,22 @@ class Optimization:
                 inv_stress_conf,
             )
 
-            # Fix for "Cannot evaluate truth value": Add penalty term if it exists (not 0)
+            # Add penalty term if it exists (not 0)
             # We assume penalty_terms_total is either 0 (int) or a cvxpy expression
             if not isinstance(penalty_terms_total, int) or penalty_terms_total != 0:
                 objective_expr.args[0] += penalty_terms_total
 
             self.prob = cp.Problem(objective_expr, constraints)
 
-        # 4. Solve
+        # Solve
         solver_opts = {"verbose": False}
 
-        # 1. Retrieve Constraints (Time & Threads)
+        # Retrieve Constraints (Time & Threads)
         # We keep these config parameters as they are useful for everyone
         threads = self.optim_conf.get("num_threads", 0)
         timeout = self.optim_conf.get("lp_solver_timeout", 180)
 
-        # 2. Select Solver
+        # Select Solver
         # We strictly default to HiGHS.
         # Advanced users can override this by setting the 'LP_SOLVER' environment variable.
         requested_solver = os.environ.get("LP_SOLVER", "HIGHS").upper()
@@ -1422,7 +1467,7 @@ class Optimization:
                     "Solver 'CPLEX' requested via Env Var but not found. Falling back to HiGHS."
                 )
 
-        # 3. Configure HiGHS (The Default)
+        # Configure HiGHS (The Default)
         if selected_solver == cp.HIGHS:
             solver_opts["time_limit"] = float(timeout)
             if threads > 0:
@@ -1430,7 +1475,7 @@ class Optimization:
             # 'run_crossover' ensures a cleaner solution (closer to simplex vertex)
             solver_opts["run_crossover"] = "on"
 
-        # 4. Execute Solve
+        # Execute Solve
         try:
             self.prob.solve(solver=selected_solver, warm_start=True, **solver_opts)
         except Exception as e:
@@ -1457,73 +1502,18 @@ class Optimization:
                 self.prob.value,
             )
 
-        # 5. Results Extraction
-        opt_tp = self._build_results_dataframe(
+        # Results Extraction
+        return self._build_results_dataframe(
             data_opt,
             unit_load_cost,
             unit_prod_price,
             p_load,
+            p_pv,
             soc_init,
             self.predicted_temps,
             self.heating_demands,
             debug,
         )
-
-        opt_tp["P_PV"] = p_pv
-        opt_tp["P_Load"] = p_load
-
-        if "batt_stress_cost" in self.vars:
-            val = self.vars["batt_stress_cost"].value
-            opt_tp["batt_stress_cost"] = val if val is not None else 0
-        if "inv_stress_cost" in self.vars:
-            val = self.vars["inv_stress_cost"].value
-            opt_tp["inv_stress_cost"] = val if val is not None else 0
-
-        # Vectorized Cost Calculations
-        p_grid_pos = self.vars["p_grid_pos"].value
-        p_grid_neg = self.vars["p_grid_neg"].value
-        p_def_sum = (
-            self.vars["p_def_sum"].value
-            if isinstance(self.vars["p_def_sum"], cp.Expression)
-            else self.vars["p_def_sum"]
-        )
-
-        if p_grid_pos is None:
-            p_grid_pos = np.zeros(len(p_load))
-        if p_grid_neg is None:
-            p_grid_neg = np.zeros(len(p_load))
-        if p_def_sum is None:
-            p_def_sum = np.zeros(len(p_load))
-
-        opt_tp["unit_load_cost"] = unit_load_cost
-        opt_tp["unit_prod_price"] = unit_prod_price
-
-        scale = -0.001 * self.time_step
-
-        if self.optim_conf["set_total_pv_sell"]:
-            cost_profit = scale * (
-                unit_load_cost * (p_load + p_def_sum) + unit_prod_price * p_grid_neg
-            )
-        else:
-            cost_profit = scale * (unit_load_cost * p_grid_pos + unit_prod_price * p_grid_neg)
-
-        opt_tp["cost_profit"] = cost_profit
-
-        if self.costfun == "profit":
-            opt_tp["cost_fun_profit"] = cost_profit
-        elif self.costfun == "cost":
-            if self.optim_conf["set_total_pv_sell"]:
-                opt_tp["cost_fun_cost"] = scale * unit_load_cost * (p_load + p_def_sum)
-            else:
-                opt_tp["cost_fun_cost"] = scale * unit_load_cost * p_grid_pos
-        elif self.costfun == "self-consumption":
-            if self.vars.get("SC") is not None:
-                opt_tp["cost_fun_selfcons"] = scale * unit_load_cost * self.vars["SC"].value
-            else:
-                opt_tp["cost_fun_selfcons"] = cost_profit
-
-        opt_tp["optim_status"] = self.optim_status
-        return opt_tp
 
     def perform_perfect_forecast_optim(
         self, df_input_data: pd.DataFrame, days_list: pd.date_range
