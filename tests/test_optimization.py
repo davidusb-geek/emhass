@@ -55,9 +55,6 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             )
         params_json = orjson.dumps(params).decode("utf-8")
         retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(params_json, logger)
-        # Force HIGHS solver
-        optim_conf["lp_solver"] = "HiGHS"
-        optim_conf["lp_solver_path"] = "empty"
         self.retrieve_hass_conf, self.optim_conf, self.plant_conf = (
             retrieve_hass_conf,
             optim_conf,
