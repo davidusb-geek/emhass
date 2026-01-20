@@ -1287,10 +1287,10 @@ class Optimization:
             "minimum_power_of_deferrable_loads", [0] * num_deferrable_loads
         )
 
-        def pad_list(l, target_len, fill=0):
-            if l is None:
+        def pad_list(input_list, target_len, fill=0):
+            if input_list is None:
                 return [fill] * target_len
-            return l + [fill] * (target_len - len(l))
+            return input_list + [fill] * (target_len - len(input_list))
 
         min_power_of_deferrable_loads = pad_list(
             min_power_of_deferrable_loads, num_deferrable_loads
@@ -1705,8 +1705,6 @@ class Optimization:
             )
 
         # Slice data to horizon
-        # Note: df.index[k] retrieves the label. Slicing by label includes the end.
-        end_idx = prediction_horizon - 1
         subset_data = copy.deepcopy(df_input_data).iloc[:prediction_horizon]
 
         # Extract inputs as arrays
