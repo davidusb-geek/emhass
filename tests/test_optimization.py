@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import copy
 import pathlib
 import pickle
 import random
@@ -2279,6 +2280,156 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             np.all(to_grid_values == to_grid_values.astype(int)),
             "to_grid values should be integers",
         )
+
+    def test_perform_naive_mpc_optim_complex_case(self):
+        """
+        Test a complex case with 7 deferrable loads, including thermal and sequence loads,
+        over a long horizon (288 steps) to verify performance fixes (Dynamic Big-M).
+        """
+
+        # Reuse existing helper to get base data structure
+        df_base = self.prepare_forecast_data()
+
+        # Extend data to 288 steps (6 days @ 30min)
+        n_steps = 288
+
+        # Create new index
+        idx = pd.date_range(start=df_base.index[0], periods=n_steps, freq=self.opt.freq)
+
+        # Create extended DataFrame by tiling the base data
+        tile_count = (n_steps // len(df_base)) + 1
+        df_extended = pd.concat([df_base] * tile_count).iloc[:n_steps]
+        df_extended.index = idx
+
+        # Update inputs with specific test values (as Series)
+        P_PV = pd.Series(1000 * np.random.rand(n_steps), index=idx)
+        P_Load = pd.Series(500 * np.random.rand(n_steps), index=idx)
+
+        # Add thermal-specific columns if they don't exist
+        temp_profile = 10 + 5 * np.sin(np.linspace(0, 8 * np.pi, n_steps))
+        if "temperature_forecast" not in df_extended.columns:
+            df_extended["temperature_forecast"] = temp_profile
+        if "outdoor_temperature_forecast" not in df_extended.columns:
+            df_extended["outdoor_temperature_forecast"] = temp_profile
+
+        if "solar_irradiance_forecast" not in df_extended.columns:
+            df_extended["solar_irradiance_forecast"] = 800 * np.clip(
+                np.sin(np.linspace(0, 8 * np.pi, n_steps)), 0, 1
+            )
+
+        # Ensure the column used for cost exists
+        if self.opt.var_load_cost not in df_extended.columns:
+            df_extended[self.opt.var_load_cost] = 0.20
+
+        # Configure Optimization for 7 loads
+        complex_optim_conf = copy.deepcopy(self.optim_conf)
+        complex_optim_conf["number_of_deferrable_loads"] = 7
+        complex_optim_conf["nominal_power_of_deferrable_loads"] = [
+            3000,
+            2000,
+            1500,
+            7000,
+            2000,
+            500,
+            1000,
+        ]
+        complex_optim_conf["operating_hours_of_each_deferrable_load"] = [0] * 7
+        complex_optim_conf["treat_deferrable_load_as_semi_cont"] = [
+            True,
+            True,
+            True,
+            True,
+            False,
+            True,
+            False,
+        ]
+        complex_optim_conf["set_deferrable_load_single_constant"] = [
+            True,
+            True,
+            True,
+            False,
+            False,
+            False,
+            False,
+        ]
+        complex_optim_conf["set_deferrable_startup_penalty"] = [0.0] * 7
+
+        # Setup Thermal Configs
+        def_load_config = [{} for _ in range(7)]
+        def_load_config[4] = {
+            "thermal_config": {
+                "heating_rate": 5.0,
+                "cooling_constant": 0.1,
+                "start_temperature": 45,
+                "desired_temperatures": [50] * n_steps,
+                "min_temperatures": [40] * n_steps,
+                "max_temperatures": [60] * n_steps,
+            }
+        }
+        def_load_config[6] = {
+            "thermal_battery": {
+                "capacity": 10.0,
+                "volume": 500.0,
+                "u_value": 0.23,
+                "envelope_area": 314.0,
+                "ventilation_rate": 0.41,
+                "heated_volume": 356.0,
+                "indoor_target_temp": 21,
+                "window_area": 29.0,
+                "shgc": 0.50,
+                "start_temperature": 20,
+                "min_temperatures": [18] * n_steps,
+                "max_temperatures": [24] * n_steps,
+                "supply_temperature": 35.0,
+                "cop_carnot_efficiency": 0.4,
+            }
+        }
+        complex_optim_conf["def_load_config"] = def_load_config
+
+        # Initialize Optimization
+        opt = Optimization(
+            self.retrieve_hass_conf,
+            complex_optim_conf,
+            self.plant_conf,
+            self.opt.var_load_cost,
+            self.opt.var_prod_price,
+            self.opt.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        # Runtime Definitions
+        def_total_timestep = [24, 8, 0, 0, 0, 0, 0]
+        def_start_timestep = [0] * 7
+        def_end_timestep = [n_steps] * 7
+
+        # Run Optimization
+        try:
+            opt_res = opt.perform_naive_mpc_optim(
+                df_extended,
+                P_PV,
+                P_Load,
+                prediction_horizon=n_steps,
+                def_total_timestep=def_total_timestep,
+                def_start_timestep=def_start_timestep,
+                def_end_timestep=def_end_timestep,
+            )
+
+            # Assertions
+            self.assertEqual(opt_res["optim_status"].iloc[0], "Optimal")
+
+            # Check Load 0
+            p_def_0 = opt_res["P_deferrable0"]
+            steps_active = (p_def_0 > 1.0).sum()
+            self.assertEqual(steps_active, 24, "Load 0 should be active for exactly 24 timesteps")
+
+            max_power = p_def_0.max()
+            self.assertAlmostEqual(max_power, 3000.0, delta=1.0)
+
+            self.assertIn("predicted_temp_heater6", opt_res.columns)
+
+        except Exception as e:
+            self.fail(f"Complex optimization failed with error: {e}")
 
 
 if __name__ == "__main__":
