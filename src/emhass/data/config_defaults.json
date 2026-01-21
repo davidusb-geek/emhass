@@ -29,8 +29,6 @@
   "use_influxdb": false,
   "influxdb_host": "localhost",
   "influxdb_port": 8086,
-  "influxdb_username": "",
-  "influxdb_password": "",
   "influxdb_database": "homeassistant",
   "influxdb_measurement": "W",
   "influxdb_retention_policy": "autogen",

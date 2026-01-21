@@ -138,12 +138,13 @@ Then on the EMHASS configuration you need to set:
   "influxdb_port": 8086,
   "influxdb_measurement": "state",
   "influxdb_retention_policy": "autogen",
-  "influxdb_password": "influxdb_password",
-  "influxdb_username": "influxdb_user",
   "influxdb_use_ssl": false,
   "influxdb_verify_ssl": false,
 }
 ```
+
+Finally, if using the Add-on, you need to fill both "influxdb_password" and "influxdb_username" in the Add-on **Configuration** pane.
+If using the Docker standalone or legacy installation method, then you need to set these in the `secrets_emhass.yaml` file.
 
 
 ## Passing in secret parameters

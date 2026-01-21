@@ -28,15 +28,15 @@ We will need to define these parameters to retrieve data from Home Assistant. Th
 - `use_influxdb`: Enable InfluxDB (version 1.x) as a data source instead of the Home Assistant API. This allows for longer historical data retention and better performance for machine learning models. InfluxDB v2 is not currently supported.
 - `influxdb_host`: The IP address or hostname of your InfluxDB instance. Defaults to `localhost`.
 - `influxdb_port`: The port number for your InfluxDB instance. Defaults to 8086.
-- `influxdb_username`: Username for authenticating with InfluxDB. Leave empty if no authentication is required.
-- `influxdb_password`: Password for authenticating with InfluxDB. Leave empty if no authentication is required.
 - `influxdb_database`: The name of the InfluxDB database containing your Home Assistant data. Defaults to `homeassistant`.
 - `influxdb_measurement`: The measurement name where your sensor data is stored. Defaults to `W` for the Home Assistant integration.
 - `influxdb_retention_policy`: The retention policy to use for InfluxDB queries. Defaults to `autogen`.
 
-A second part of this section is given by some privacy-sensitive parameters that should be included in a `secrets_emhass.yaml` file alongside the `config_emhass.yaml` file.
+A second part of this section is given by some privacy-sensitive parameters that should be included as:
+- The list of secrets parameters filled in the form on the Add-on **Configuration** pane if using the Add-on installatin method.
+- A `secrets_emhass.yaml` file alongside the `config_emhass.yaml` file if using the Docker standalone or legacy installation method.
 
-The parameters in the `secrets_emhass.yaml` file are:
+The **secrets** parameters are:
 
 - `hass_url`: The URL to your Home Assistant instance. For example: https://myhass.duckdns.org/
 - `long_lived_token`: A Long-Lived Access Token from the Lovelace profile page.
@@ -44,6 +44,11 @@ The parameters in the `secrets_emhass.yaml` file are:
 - `lat`: The latitude. For example: 45.0.
 - `lon`: The longitude. For example: 6.0
 - `alt`: The altitude in meters. For example: 100.0
+- `solcast_api_key`: The solcast API key (weather_forecast_method=solcast)
+- `solcast_rooftop_id`: The solcast rooftop ID (weather_forecast_method=solcast)
+- `solar_forecast_kwp`: The PV peak installed power in kW used for the 'solar.forecast' API call (weather_forecast_method=solar.forecast)
+- `influxdb_username`: Username for authenticating with InfluxDB. Leave empty if no authentication is required.
+- `influxdb_password`: Password for authenticating with InfluxDB. Leave empty if no authentication is required.
 
 ## Optimization configuration parameters
 
