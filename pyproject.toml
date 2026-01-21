@@ -1,6 +1,6 @@
 [project]
 name = "emhass"
-version = "0.15.6"
+version = "0.16.0"
 description = "An Energy Management System for Home Assistant"
 readme = "README.md"
 requires-python = ">=3.10, <3.13"
