@@ -1838,6 +1838,40 @@ class TestHeatingDemand(unittest.TestCase):
 
         self.assertIn("internal_gains_factor must be between 0 and 1", str(context_neg.exception))
 
+    def test_calculate_heating_demand_physics_internal_gains_warns_on_low_values(self):
+        """Warning should be raised when values look like kW instead of W."""
+        import warnings
+
+        indoor_temp = 21.0
+        outdoor_temps = np.array([0.0, 0.0, 0.0, 0.0])
+        optimization_time_step = 60
+        u_value = 0.35
+        envelope_area = 380.0
+        ventilation_rate = 0.4
+        heated_volume = 240.0
+        # Values that look like kW (1-5 range) instead of W (1000-5000 range)
+        load_forecast_kw_mistake = np.array([1.0, 2.0, 3.0, 1.5])
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            utils.calculate_heating_demand_physics(
+                u_value=u_value,
+                envelope_area=envelope_area,
+                ventilation_rate=ventilation_rate,
+                heated_volume=heated_volume,
+                indoor_target_temperature=indoor_temp,
+                outdoor_temperature_forecast=outdoor_temps,
+                optimization_time_step=optimization_time_step,
+                internal_gains_forecast=load_forecast_kw_mistake,
+                internal_gains_factor=0.7,
+            )
+
+            # Verify warning was raised
+            self.assertEqual(len(w), 1)
+            self.assertTrue(issubclass(w[0].category, UserWarning))
+            self.assertIn("very low", str(w[0].message))
+            self.assertIn("Watts, not kilowatts", str(w[0].message))
+
     def test_calculate_cop_heatpump(self):
         """Test heat pump COP calculation utility function with Carnot-based formula."""
         # Test basic calculation with example outdoor temperatures
