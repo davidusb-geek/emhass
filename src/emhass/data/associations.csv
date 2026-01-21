@@ -49,8 +49,6 @@ optim_conf,load_cost_hc,load_offpeak_hours_cost
 optim_conf,prod_price_forecast_method,production_price_forecast_method
 optim_conf,prod_sell_price,photovoltaic_production_sell_price
 optim_conf,set_total_pv_sell,set_total_pv_sell
-optim_conf,lp_solver,lp_solver
-optim_conf,lp_solver_path,lp_solver_path
 optim_conf,lp_solver_timeout,lp_solver_timeout
 optim_conf,num_threads,num_threads
 optim_conf,set_nocharge_from_grid,set_nocharge_from_grid

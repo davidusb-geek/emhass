@@ -5,4 +5,5 @@
 config
 passing_data
 publish_data
+advanced_solvers
 ```

@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.16.0 - 2026-01-21
+
+### 🚀 Major Optimization Engine Overhaul
+
+This release marks a significant milestone in the evolution of EMHASS. We have completely re-engineered the core optimization backend, moving from **PuLP** to **CVXPY**. This modern, vectorized architecture unlocks substantial performance improvements and paves the way for advanced energy management features.
+
+### Key Highlights
+
+* **⚡ CVXPY & Vectorization:** The constraint generation logic has been rewritten using vectorization. This mathematical streamlining allows EMHASS to construct optimization problems significantly faster, reducing overhead especially for complex configurations or long prediction horizons. Benchmarks show optimization times are 4-5x faster, clocking in at approximately 0.1s per iteration for standard use cases compared to previous implementation.
+* **🏎️ HiGHS Solver Standard:** We have adopted **HiGHS** as the new default solver. HiGHS is a state-of-the-art, open-source linear optimization solver that offers vastly superior performance and stability compared to the legacy CBC/GLPK solvers.
+* **📦 Simplified Dependencies:** No more system-level dependencies! Because HiGHS is bundled as a Python wheel, the Docker image is lighter, and installation is more robust—you no longer need to install `coinor-cbc` or `glpk` via apt.
+* **🔧 Commercial Solver Support:** Power users with licenses for **Gurobi** or **CPLEX** can now easily plug them in via environment variables (`LP_SOLVER=GUROBI`) without code modifications, thanks to the standardized interface of CVXPY.
+* **🏗️ Modular Architecture:** The optimization class has been refactored into smaller, testable helper methods, improving code maintainability and making it easier for contributors to add new constraints (like the new internal gains logic for thermal batteries) without breaking existing features.
+
+### Improvement
+- Refactor optimization.py to use cvxpy
+- Added internal gains factor to heating demand calculation (@sokorn)
+- Add vector support for maximum power to or from grid (@mk2lehe)
+
+### ⚠️ BREAKING CHANGE: Solver Configuration
+
+We have modernized the optimization backend to use CVXPY. As a result, the solver configuration has been simplified and **both** `lp_solver` and `lp_solver_path` parameters have been **removed**.
+
+* **Removed:** `lp_solver` and `lp_solver_path` are no longer supported in the configuration.
+* **New Default:** The application now defaults to the **HiGHS** solver, which is bundled directly with EMHASS. No external binary paths or apt packages are required.
+* **Commercial Solvers:** If you wish to use **Gurobi** or **CPLEX** (requiring your own license), you must now specify this using the `LP_SOLVER` environment variable (e.g., `LP_SOLVER=GUROBI`), rather than the configuration file.
+
+**Action Required:**
+
+1. **Remove** `lp_solver` and `lp_solver_path` from your configuration files (`config.json` or `options.json`) to avoid validation warnings.
+2. If you previously relied on a custom solver path, ensure you are satisfied with the new default HiGHS solver (recommended) or configure the environment variable for a commercial alternative.
+
 ## 0.15.6 - 2026-01-18
 ### Improvement
 - New feature that allows users to disable SSL communication with Home Assistant

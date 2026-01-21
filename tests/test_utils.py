@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 
+import json
 import pathlib
 import unittest
+from copy import deepcopy
 from datetime import datetime
 from unittest.mock import patch
 
@@ -11,6 +13,7 @@ import pandas as pd
 import pytz
 
 from emhass import utils
+from emhass.utils import treat_runtimeparams
 
 # The root folder
 root = pathlib.Path(utils.get_root(__file__, num_parent=2))
@@ -31,7 +34,7 @@ emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations
 logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
 
-class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
+class TestUtils(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     async def get_test_params():
         print(emhass_conf["legacy_config_path"])
@@ -50,7 +53,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         return params
 
     async def asyncSetUp(self):
-        params = await TestCommandLineUtils.get_test_params()
+        params = await TestUtils.get_test_params()
         # Add runtime parameters for forecast lists
         runtimeparams = {
             "pv_power_forecast": [i + 1 for i in range(48)],
@@ -81,8 +84,6 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         # Test with defaults
         config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
         params = await utils.build_params(emhass_conf, {}, config, logger)
-        self.assertEqual(params["optim_conf"]["lp_solver"], "default")
-        self.assertEqual(params["optim_conf"]["lp_solver_path"], "empty")
         self.assertEqual(
             config["load_peak_hour_periods"],
             {
@@ -102,8 +103,6 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
             emhass_conf["config_path"],
         )
         params = await utils.build_params(emhass_conf, {}, config, logger)
-        self.assertEqual(params["optim_conf"]["lp_solver"], "default")
-        self.assertEqual(params["optim_conf"]["lp_solver_path"], "empty")
         # Test with legacy config_emhass yaml
         config = await utils.build_config(
             emhass_conf,
@@ -348,7 +347,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
 
     async def test_treat_runtimeparams_failed(self):
         # Test treatment of nan values
-        params = await TestCommandLineUtils.get_test_params()
+        params = await TestUtils.get_test_params()
         runtimeparams = {
             "pv_power_forecast": [1, 2, 3, 4, 5, "nan", 7, 8, 9, 10],
             "load_power_forecast": [1, 2, "nan", 4, 5, 6, 7, 8, 9, 10],
@@ -391,7 +390,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
             len([x for x in runtimeparams["prod_price_forecast"] if not str(x).isdigit()]), 0
         )
         # Test list embedded into a string
-        params = await TestCommandLineUtils.get_test_params()
+        params = await TestUtils.get_test_params()
         runtimeparams = {
             "pv_power_forecast": "[1,2,3,4,5,6,7,8,9,10]",
             "load_power_forecast": "[1,2,3,4,5,6,7,8,9,10]",
@@ -425,7 +424,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(runtimeparams["load_cost_forecast"], list)
         self.assertIsInstance(runtimeparams["prod_price_forecast"], list)
         # Test string of numbers
-        params = await TestCommandLineUtils.get_test_params()
+        params = await TestUtils.get_test_params()
         runtimeparams = {
             "pv_power_forecast": "1,2,3,4,5,6,7,8,9,10",
             "load_power_forecast": "1,2,3,4,5,6,7,8,9,10",
@@ -986,7 +985,7 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
 
     async def test_build_secrets(self):
         # Test the build_secrets defaults from get_test_params()
-        params = await TestCommandLineUtils.get_test_params()
+        params = await TestUtils.get_test_params()
         expected_keys = [
             "retrieve_hass_conf",
             "params_secrets",
@@ -1129,6 +1128,109 @@ class TestCommandLineUtils(unittest.IsolatedAsyncioTestCase):
             26,
             "If provided value is >= 9, it should be respected",
         )
+
+    async def test_treat_runtimeparams_power_limits_parsing(self):
+        """Test parsing of power limits (scalar, list, stringified list)."""
+        params = await TestUtils.get_test_params()
+        params["retrieve_hass_conf"]["optimization_time_step"] = pd.to_timedelta(
+            params["retrieve_hass_conf"]["optimization_time_step"], "minutes"
+        )
+        params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(
+            days=params["optim_conf"]["delta_forecast_daily"]
+        )
+        retrieve_hass_conf = params["retrieve_hass_conf"]
+        optim_conf = params["optim_conf"]
+        plant_conf = params["plant_conf"]
+
+        # 1. Test Scalars (should remain scalars)
+        runtimeparams = json.dumps(
+            {"maximum_power_from_grid": 5000, "maximum_power_to_grid": 2000.5}
+        )
+        _, _, _, plant_conf_out = await treat_runtimeparams(
+            runtimeparams,
+            deepcopy(params),
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+        self.assertEqual(plant_conf_out["maximum_power_from_grid"], 5000)
+        self.assertEqual(plant_conf_out["maximum_power_to_grid"], 2000.5)
+
+        # 2. Test Lists (should remain lists)
+        runtimeparams = json.dumps(
+            {"maximum_power_from_grid": [1000, 2000, 3000], "maximum_power_to_grid": [4000, 5000]}
+        )
+        _, _, _, plant_conf_out = await treat_runtimeparams(
+            runtimeparams,
+            deepcopy(params),
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+        self.assertIsInstance(plant_conf_out["maximum_power_from_grid"], list)
+        self.assertListEqual(plant_conf_out["maximum_power_from_grid"], [1000, 2000, 3000])
+        self.assertListEqual(plant_conf_out["maximum_power_to_grid"], [4000, 5000])
+
+        # 3. Test Stringified Lists (should be parsed into lists)
+        runtimeparams = json.dumps(
+            {"maximum_power_from_grid": "[100, 200, 300]", "maximum_power_to_grid": "[400, 500]"}
+        )
+        _, _, _, plant_conf_out = await treat_runtimeparams(
+            runtimeparams,
+            deepcopy(params),
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+        self.assertIsInstance(plant_conf_out["maximum_power_from_grid"], list)
+        self.assertListEqual(plant_conf_out["maximum_power_from_grid"], [100, 200, 300])
+        self.assertListEqual(plant_conf_out["maximum_power_to_grid"], [400, 500])
+
+    async def test_treat_runtimeparams_power_limits_invalid(self):
+        """Test invalid power limit strings triggers warning but doesn't crash."""
+        params = await TestUtils.get_test_params()
+        params["retrieve_hass_conf"]["optimization_time_step"] = pd.to_timedelta(
+            params["retrieve_hass_conf"]["optimization_time_step"], "minutes"
+        )
+        params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(
+            days=params["optim_conf"]["delta_forecast_daily"]
+        )
+        retrieve_hass_conf = params["retrieve_hass_conf"]
+        optim_conf = params["optim_conf"]
+        plant_conf = params["plant_conf"]
+
+        # Default values from config to verify fallback
+        default_from_grid = plant_conf.get("maximum_power_from_grid")
+
+        runtimeparams = json.dumps({"maximum_power_from_grid": "this-is-not-a-list"})
+
+        # Capture logs to verify warning
+        with self.assertLogs(logger, level="WARNING") as cm:
+            _, _, _, plant_conf_out = await treat_runtimeparams(
+                runtimeparams,
+                deepcopy(params),
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                "dayahead-optim",
+                logger,
+                emhass_conf,
+            )
+
+        # Verify the warning message was logged
+        self.assertTrue(any("Could not parse maximum_power_from_grid" in o for o in cm.output))
+
+        # Verify it fell back to default or kept original value (depending on logic, usually implies no change)
+        self.assertEqual(plant_conf_out["maximum_power_from_grid"], default_from_grid)
 
 
 class TestHeatingDemand(unittest.TestCase):

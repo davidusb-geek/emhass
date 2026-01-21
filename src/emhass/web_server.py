@@ -199,12 +199,72 @@ async def index():
     return await make_response(template.render(injection_dict=injection_dict))
 
 
-@app.route("/configuration")
+@app.route("/configuration", methods=["GET", "POST"])
 async def configuration():
     """
     Configuration page actions:
     Render and serve configuration page html
     """
+    # Define the list of secret parameters managed by the UI
+    secret_params = [
+        "influxdb_username",
+        "influxdb_password",
+        "influxdb_token",
+        "solcast_api_key",
+        "solcast_rooftop_id",
+        "long_lived_token",
+        "time_zone",
+        "Latitude",
+        "Longitude",
+        "Altitude",
+    ]
+
+    if request.method == "POST":
+        app.logger.info("Saving configuration/secrets...")
+        form_data = await request.form
+
+        # Load existing secrets
+        secrets = {}
+        # Ensure we have the path from config, fallback to default if missing
+        secrets_path = emhass_conf.get("secrets_path", Path("/app/secrets_emhass.yaml"))
+
+        # Try to load existing secrets to preserve others (Async)
+        if secrets_path.exists():
+            try:
+                async with aiofiles.open(secrets_path) as file:
+                    content = await file.read()
+                    loaded = yaml.safe_load(content)
+                    if loaded:
+                        secrets = loaded
+            except Exception as e:
+                app.logger.error(f"Error reading secrets file: {e}")
+
+        # Update secrets with form data
+        updated = False
+        for key in secret_params:
+            if key in form_data:
+                value = form_data[key]
+                if value != "***":
+                    secrets[key] = value
+                    updated = True
+
+        # Save to file if changes were made (Async)
+        if updated:
+            try:
+                async with aiofiles.open(secrets_path, "w") as file:
+                    # dump returns string if stream is None
+                    content = yaml.dump(secrets, default_flow_style=False)
+                    await file.write(content)
+
+                app.logger.info("Secrets saved successfully.")
+
+                # Update the global params_secrets
+                global params_secrets
+                params_secrets.update(secrets)
+
+            except Exception as e:
+                app.logger.error(f"Error saving secrets file: {e}")
+
     app.logger.info("serving configuration.html...")
 
     # get params
@@ -213,7 +273,6 @@ async def configuration():
             content = await fid.read()
             emhass_conf["config_path"], params = pickle.loads(content)
     else:
-        # Safe fallback if params.pkl doesn't exist
         params = {}
 
     template = templates.get_template("configuration.html")
@@ -688,12 +747,19 @@ async def _setup_secrets(args: dict | None, options_path: Path) -> str:
             argument["key"] = args["key"]
         if args.get("no_response", None):
             no_response = args["no_response"]
-    # Combine secrets from ENV, Arguments/ARG, Secrets file (secrets_emhass.yaml), options (options.json from addon configuration file) and/or Home Assistant Standalone API (if exist)
+
+    # Define secrets_path and save to emhass_conf
+    secrets_path = Path(os.getenv("SECRETS_PATH", default="/app/secrets_emhass.yaml"))
+
+    # Store it in the global config so configuration() can use it later
     global emhass_conf
+    emhass_conf["secrets_path"] = secrets_path
+
+    # Combine secrets from ENV, Arguments/ARG, Secrets file (secrets_emhass.yaml), options (options.json from addon configuration file) and/or Home Assistant Standalone API (if exist)
     emhass_conf, secrets = await build_secrets(
         emhass_conf,
         app.logger,
-        secrets_path=os.getenv("SECRETS_PATH", default="/app/secrets_emhass.yaml"),
+        secrets_path=secrets_path,  # Use the variable we defined above
         options_path=str(options_path),
         argument=argument,
         no_response=bool(no_response),

@@ -7,8 +7,6 @@
   "continual_publish": false,
   "data_path": "default",
   "set_total_pv_sell": false,
-  "lp_solver": "default",
-  "lp_solver_path": "empty",
   "lp_solver_timeout": 45,
   "num_threads": 0,
   "ssl_no_verify": false,
