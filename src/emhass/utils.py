@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 
 pd.options.plotting.backend = "plotly"
 
+# Unit conversion constants
+W_TO_KW = 1000  # Watts to kilowatts conversion factor
+
 
 def get_root(file: str, num_parent: int = 3) -> str:
     """
@@ -393,7 +396,7 @@ def calculate_heating_demand_physics(
         - 0.7-0.8: Single-glazed windows
         Default: 0.6
     :type shgc: float, optional
-    :param internal_gains_forecast: Electrical load power forecast in kW for each timestep.
+    :param internal_gains_forecast: Electrical load power forecast in W for each timestep.
         If provided along with internal_gains_factor > 0, internal gains from electrical
         appliances will be subtracted from heating demand.
     :type internal_gains_forecast: np.ndarray | pd.Series | None, optional
@@ -490,9 +493,23 @@ def calculate_heating_demand_physics(
                 f"outdoor_temperature_forecast length ({len(outdoor_temps)})"
             )
 
+        # Warn if values seem like they might be in kW instead of W
+        # Typical household load is 100-10000W; values below 10 suggest kW was passed
+        max_load = np.max(internal_gains)
+        if max_load > 0 and max_load < 10:
+            import warnings
+
+            warnings.warn(
+                f"internal_gains_forecast max value ({max_load:.2f}) is very low. "
+                "Expected values in W (e.g., 500-5000), but received values that "
+                "look like kW. Please ensure you're passing Watts, not kilowatts.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         # Internal gains: Q_internal = load_power * factor
-        # load_power is already in kW, factor is dimensionless (0-1)
-        internal_gains_kw = internal_gains * internal_gains_factor
+        # load_power is in W, convert to kW; factor is dimensionless (0-1)
+        internal_gains_kw = internal_gains * internal_gains_factor / W_TO_KW
 
         # Subtract internal gains from heat loss (but never go negative)
         total_loss_kw = np.maximum(total_loss_kw - internal_gains_kw, 0.0)
