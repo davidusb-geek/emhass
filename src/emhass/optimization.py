@@ -142,6 +142,42 @@ class Optimization:
         # Note: The self.prob object will be constructed in a subsequent step
         self.prob = None
 
+    def _prepare_power_limit_array(self, limit_value, limit_name, data_length):
+        """
+        Convert power limit to numpy array for time-varying constraints.
+
+        Args:
+            limit_value: Scalar, list, or array of power limit values
+            limit_name: Name of the limit (for logging)
+            data_length: Expected length of optimization horizon
+
+        Returns:
+            numpy.ndarray: Array of power limits with length = data_length
+        """
+        if limit_value is None:
+            self.logger.error(f"{limit_name} is None, using default value 9000 W")
+            return np.full(data_length, 9000.0)
+
+        # Convert to numpy array if it's a list
+        if isinstance(limit_value, list):
+            limit_array = np.array(limit_value, dtype=float)
+        elif isinstance(limit_value, np.ndarray):
+            limit_array = limit_value.astype(float)
+        else:
+            # Scalar value - broadcast to all timesteps
+            return np.full(data_length, float(limit_value))
+
+        # Validate length
+        if len(limit_array) != data_length:
+            self.logger.warning(
+                f"{limit_name} length ({len(limit_array)}) doesn't match "
+                f"optimization horizon ({data_length}). Using scalar from first value."
+            )
+            return np.full(data_length, float(limit_array[0]) if len(limit_array) > 0 else 9000.0)
+
+        self.logger.info(f"{limit_name} configured as time-varying with {data_length} values")
+        return limit_array
+
     def _setup_stress_cost(self, cost_conf_key, max_power, var_name_prefix):
         """
         Generic setup for a stress cost (battery or inverter).
@@ -222,14 +258,24 @@ class Optimization:
         constraints = []
         n = self.num_timesteps
 
+        # Prepare Power Limits
+        max_power_from_grid_arr = self._prepare_power_limit_array(
+            self.plant_conf.get("maximum_power_from_grid", 9000), "maximum_power_from_grid", n
+        )
+        max_power_to_grid_arr = self._prepare_power_limit_array(
+            self.plant_conf.get("maximum_power_to_grid", 9000), "maximum_power_to_grid", n
+        )
+
         # Grid power variables
         # P_grid_neg <= 0
         vars_dict["p_grid_neg"] = cp.Variable(n, nonpos=True, name="p_grid_neg")
-        constraints.append(vars_dict["p_grid_neg"] >= -self.plant_conf["maximum_power_to_grid"])
+        # Apply vectorized lower bound constraint
+        constraints.append(vars_dict["p_grid_neg"] >= -max_power_to_grid_arr)
 
         # P_grid_pos >= 0
         vars_dict["p_grid_pos"] = cp.Variable(n, nonneg=True, name="p_grid_pos")
-        constraints.append(vars_dict["p_grid_pos"] <= self.plant_conf["maximum_power_from_grid"])
+        # Apply vectorized upper bound constraint
+        constraints.append(vars_dict["p_grid_pos"] <= max_power_from_grid_arr)
 
         # Deferrable load variables
         num_deferrable_loads = self.optim_conf["number_of_deferrable_loads"]
@@ -414,7 +460,7 @@ class Optimization:
 
     def _add_main_power_balance_constraints(self, constraints):
         """Add the main power balance constraints (Vectorized)."""
-        # Retrieve variables from the dictionary populated during init
+        # Retrieve variables
         p_hybrid_inverter = self.vars.get("p_hybrid_inverter")
         p_def_sum = self.vars["p_def_sum"]
         p_grid_neg = self.vars["p_grid_neg"]
@@ -424,12 +470,21 @@ class Optimization:
         p_sto_neg = self.vars["p_sto_neg"]
         D = self.vars["D"]
 
-        # Retrieve parameters (symbolic placeholders for data)
+        # Retrieve parameters
         p_pv = self.param_pv_forecast
         p_load = self.param_load_forecast
 
+        # Prepare Time-Varying Limits
+        # We re-calculate them here to ensure we use the correct time-varying limits
+        n = self.num_timesteps
+        max_power_from_grid_arr = self._prepare_power_limit_array(
+            self.plant_conf.get("maximum_power_from_grid", 9000), "maximum_power_from_grid", n
+        )
+        max_power_to_grid_arr = self._prepare_power_limit_array(
+            self.plant_conf.get("maximum_power_to_grid", 9000), "maximum_power_to_grid", n
+        )
+
         # Main Power Balance Constraints
-        # Note: In CVXPY, '==' applies element-wise to vectors
         if self.plant_conf["inverter_is_hybrid"]:
             constraints.append(
                 p_hybrid_inverter - p_def_sum - p_load + p_grid_neg + p_grid_pos == 0
@@ -452,17 +507,12 @@ class Optimization:
                     p_pv - p_def_sum - p_load + p_grid_neg + p_grid_pos + p_sto_pos + p_sto_neg == 0
                 )
 
-        # Grid Constraints (Simultaneous import/export prevention)
-        # These are Big-M style constraints using the binary variable D
-        # D=1 implies Grid Import is allowed (Export forced to 0)
-        # D=0 implies Grid Export is allowed (Import forced to 0)
+        # Grid Constraints (Vectorized with Time-Varying Limits)
+        # p_grid_pos <= max_from_grid[t] * D[t]
+        constraints.append(p_grid_pos <= cp.multiply(max_power_from_grid_arr, D))
 
-        # p_grid_pos <= max_from_grid * D
-        constraints.append(p_grid_pos <= self.plant_conf["maximum_power_from_grid"] * D)
-
-        # -p_grid_neg <= max_to_grid * (1 - D)
-        # (Note: p_grid_neg is defined as negative, so -p_grid_neg is positive magnitude)
-        constraints.append(-p_grid_neg <= self.plant_conf["maximum_power_to_grid"] * (1 - D))
+        # -p_grid_neg <= max_to_grid[t] * (1 - D[t])
+        constraints.append(-p_grid_neg <= cp.multiply(max_power_to_grid_arr, (1 - D)))
 
     def _add_hybrid_inverter_constraints(self, constraints, inv_stress_conf):
         """Add constraints specific to hybrid inverters (Vectorized)."""
@@ -1189,7 +1239,6 @@ class Optimization:
         opt_tp["P_grid"] = opt_tp["P_grid_pos"] + opt_tp["P_grid_neg"]
 
         # Deferrable Loads
-        # We calculate the sum manually from the extracted results to ensure consistency
         p_def_sum = np.zeros(self.num_timesteps)
         for k in range(self.optim_conf["number_of_deferrable_loads"]):
             p_def_k = get_val(self.vars["p_deferrable"][k])
@@ -1225,6 +1274,15 @@ class Optimization:
         # Costs & Prices
         opt_tp["unit_load_cost"] = unit_load_cost
         opt_tp["unit_prod_price"] = unit_prod_price
+
+        # Add Power Limits to Results (Required for Validation/Tests)
+        n = self.num_timesteps
+        opt_tp["maximum_power_from_grid"] = self._prepare_power_limit_array(
+            self.plant_conf.get("maximum_power_from_grid", 9000), "maximum_power_from_grid", n
+        )
+        opt_tp["maximum_power_to_grid"] = self._prepare_power_limit_array(
+            self.plant_conf.get("maximum_power_to_grid", 9000), "maximum_power_to_grid", n
+        )
 
         # Cost scaling factor (kW conversion and sign flip for minimization -> profit)
         scale = -0.001 * self.time_step

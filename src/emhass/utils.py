@@ -747,6 +747,12 @@ async def treat_runtimeparams(
     else:
         params["passed_data"] = default_passed_dict
 
+    # Capture defaults for power limits before association loop
+    power_limit_defaults = {
+        "maximum_power_from_grid": params["plant_conf"].get("maximum_power_from_grid"),
+        "maximum_power_to_grid": params["plant_conf"].get("maximum_power_to_grid"),
+    }
+
     # If any runtime parameters where passed in action call
     if runtimeparams is not None:
         if type(runtimeparams) is str:
@@ -770,52 +776,37 @@ async def treat_runtimeparams(
                     # Check Legacy parameter name runtime
                     elif runtimeparams.get(association[1], None) is not None:
                         params[association[0]][association[2]] = runtimeparams[association[1]]
-        
-        # Special handling for power limit parameters - they can be vectors (Tier 1a)
-        # Parse maximum_power_from_grid (can be scalar or list/array)
-        if "maximum_power_from_grid" in runtimeparams:
-            import ast
-            value = runtimeparams["maximum_power_from_grid"]
-            try:
-                # If it's a string representation of a list, parse it
-                if isinstance(value, str):
-                    parsed = ast.literal_eval(value)
-                    params["plant_conf"]["maximum_power_from_grid"] = parsed
-                # If already a list/array, use it directly
-                elif isinstance(value, (list, tuple)):
-                    params["plant_conf"]["maximum_power_from_grid"] = list(value)
-                # If scalar, use as-is
-                else:
-                    params["plant_conf"]["maximum_power_from_grid"] = value
-            except (ValueError, SyntaxError) as e:
-                logger.warning(
-                    f"Could not parse maximum_power_from_grid: {e}. Using default."
-                )
-        
-        # Parse maximum_power_to_grid (can be scalar or list/array)
-        if "maximum_power_to_grid" in runtimeparams:
-            import ast
-            value = runtimeparams["maximum_power_to_grid"]
-            try:
-                # If it's a string representation of a list, parse it
-                if isinstance(value, str):
-                    parsed = ast.literal_eval(value)
-                    params["plant_conf"]["maximum_power_to_grid"] = parsed
-                # If already a list/array, use it directly
-                elif isinstance(value, (list, tuple)):
-                    params["plant_conf"]["maximum_power_to_grid"] = list(value)
-                # If scalar, use as-is
-                else:
-                    params["plant_conf"]["maximum_power_to_grid"] = value
-            except (ValueError, SyntaxError) as e:
-                logger.warning(
-                    f"Could not parse maximum_power_to_grid: {e}. Using default."
-                )
         else:
             logger.warning(
                 "Cant find associations file (associations.csv) in: "
                 + str(emhass_conf["associations_path"])
             )
+
+        # Special handling for power limit parameters - they can be vectors (Tier 1a)
+        def _parse_power_limit(key: str) -> None:
+            """Helper to parse list/scalar power limits safely."""
+            if key in runtimeparams:
+                value = runtimeparams[key]
+                try:
+                    # If it's a string representation of a list, parse it
+                    if isinstance(value, str):
+                        parsed = ast.literal_eval(value)
+                        params["plant_conf"][key] = parsed
+                    # If already a list/array, use it directly
+                    # Ruff preferred bitwise OR '|' for union types
+                    elif isinstance(value, list | tuple):
+                        params["plant_conf"][key] = list(value)
+                    # If scalar, use as-is
+                    else:
+                        params["plant_conf"][key] = value
+                except (ValueError, SyntaxError) as e:
+                    logger.warning(f"Could not parse {key}: {e}. Using default.")
+                    if power_limit_defaults.get(key) is not None:
+                        params["plant_conf"][key] = power_limit_defaults[key]
+
+        # Apply the helper
+        _parse_power_limit("maximum_power_from_grid")
+        _parse_power_limit("maximum_power_to_grid")
 
         # Generate forecast_dates
         # Force update optimization_time_step if present in runtimeparams
