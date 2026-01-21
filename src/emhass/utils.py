@@ -393,7 +393,7 @@ def calculate_heating_demand_physics(
         - 0.7-0.8: Single-glazed windows
         Default: 0.6
     :type shgc: float, optional
-    :param internal_gains_forecast: Electrical load power forecast in kW for each timestep.
+    :param internal_gains_forecast: Electrical load power forecast in W for each timestep.
         If provided along with internal_gains_factor > 0, internal gains from electrical
         appliances will be subtracted from heating demand.
     :type internal_gains_forecast: np.ndarray | pd.Series | None, optional
@@ -491,8 +491,8 @@ def calculate_heating_demand_physics(
             )
 
         # Internal gains: Q_internal = load_power * factor
-        # load_power is already in kW, factor is dimensionless (0-1)
-        internal_gains_kw = internal_gains * internal_gains_factor
+        # load_power is in W, convert to kW; factor is dimensionless (0-1)
+        internal_gains_kw = internal_gains * internal_gains_factor / 1000
 
         # Subtract internal gains from heat loss (but never go negative)
         total_loss_kw = np.maximum(total_loss_kw - internal_gains_kw, 0.0)
