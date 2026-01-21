@@ -4,6 +4,11 @@ By default, EMHASS uses the high-performance open-source solver **HiGHS**. It is
 
 If you possess a license for a commercial solver like **Gurobi** or **CPLEX**, you can enable them by building a custom Docker image.
 
+```{note} 
+
+This functionality is intended for advanced users. This will assume using the Docker Standalone installation method. See [Installation methods](installation_methods) section for more details.
+```
+
 ## 1. Create a Custom Dockerfile
 
 Create a file named `Dockerfile.custom` that extends the official EMHASS image.
