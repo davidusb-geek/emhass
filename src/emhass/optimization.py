@@ -134,6 +134,43 @@ class Optimization:
         )
         self.logger.debug(f"Number of threads: {self.num_threads}")
 
+    def _prepare_power_limit_array(self, limit_value, limit_name, data_length):
+        """
+        Convert power limit to numpy array for time-varying constraints.
+        
+        Args:
+            limit_value: Scalar, list, or array of power limit values
+            limit_name: Name of the limit (for logging)
+            data_length: Expected length of optimization horizon
+            
+        Returns:
+            numpy.ndarray: Array of power limits with length = data_length
+        """
+        if limit_value is None:
+            self.logger.error(f"{limit_name} is None, using default value 9000 W")
+            return np.full(data_length, 9000.0)
+        
+        # Convert to numpy array if it's a list
+        if isinstance(limit_value, list):
+            limit_array = np.array(limit_value, dtype=float)
+        elif isinstance(limit_value, np.ndarray):
+            limit_array = limit_value.astype(float)
+        else:
+            # Scalar value - broadcast to all timesteps
+            return np.full(data_length, float(limit_value))
+        
+        # Validate length
+        if len(limit_array) != data_length:
+            self.logger.warning(
+                f"{limit_name} length ({len(limit_array)}) doesn't match "
+                f"optimization horizon ({data_length}). Using scalar from first value."
+            )
+            return np.full(data_length, float(limit_array[0]) if len(limit_array) > 0 else 9000.0)
+        
+        self.logger.info(f"{limit_name} configured as time-varying with {data_length} values")
+        return limit_array
+
+
     def _setup_stress_cost(self, set_i, cost_conf_key, max_power, var_name_prefix):
         """
         Generic setup for a stress cost (battery or inverter).
@@ -322,13 +359,26 @@ class Optimization:
 
         n = len(data_opt.index)
         set_i = range(n)
+
+        # Prepare power limit arrays - allows time-varying limits (Tier 1a)
+        max_power_from_grid_array = self._prepare_power_limit_array(
+            self.plant_conf.get("maximum_power_from_grid", 9000),
+            "maximum_power_from_grid",
+            n
+        )
+        max_power_to_grid_array = self._prepare_power_limit_array(
+            self.plant_conf.get("maximum_power_to_grid", 9000),
+            "maximum_power_to_grid",
+            n
+        )
+
         M = 100000
 
         ## Add decision variables
         p_grid_neg = {
             (i): plp.LpVariable(
                 cat="Continuous",
-                lowBound=-self.plant_conf["maximum_power_to_grid"],
+                lowBound=-float(max_power_to_grid_array[i]),
                 upBound=0,
                 name=f"P_grid_neg{i}",
             )
@@ -338,7 +388,7 @@ class Optimization:
             (i): plp.LpVariable(
                 cat="Continuous",
                 lowBound=0,
-                upBound=self.plant_conf["maximum_power_from_grid"],
+                upBound=float(max_power_from_grid_array[i]),
                 name=f"P_grid_pos{i}",
             )
             for i in set_i
@@ -795,7 +845,7 @@ class Optimization:
         constraints.update(
             {
                 f"constraint_pgridpos_{i}": plp.LpConstraint(
-                    e=p_grid_pos[i] - self.plant_conf["maximum_power_from_grid"] * D[i],
+                    e=p_grid_pos[i] - float(max_power_from_grid_array[i]) * D[i],
                     sense=plp.LpConstraintLE,
                     rhs=0,
                 )
@@ -805,7 +855,7 @@ class Optimization:
         constraints.update(
             {
                 f"constraint_pgridneg_{i}": plp.LpConstraint(
-                    e=-p_grid_neg[i] - self.plant_conf["maximum_power_to_grid"] * (1 - D[i]),
+                    e=-p_grid_neg[i] - float(max_power_to_grid_array[i]) * (1 - D[i]),
                     sense=plp.LpConstraintLE,
                     rhs=0,
                 )
@@ -1716,6 +1766,11 @@ class Optimization:
         if self.plant_conf["compute_curtailment"]:
             opt_tp["P_PV_curtailment"] = [p_pv_curtailment[i].varValue for i in set_i]
         opt_tp.index = data_opt.index
+
+        # Add power limit columns to output (Tier 1a)
+        opt_tp["maximum_power_from_grid"] = max_power_from_grid_array.astype(int).tolist()
+        opt_tp["maximum_power_to_grid"] = max_power_to_grid_array.astype(int).tolist()
+
 
         # Lets compute the optimal cost function
         p_def_sum_tp = []
