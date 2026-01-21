@@ -350,6 +350,8 @@ def calculate_heating_demand_physics(
     solar_irradiance_forecast: np.ndarray | pd.Series | None = None,
     window_area: float | None = None,
     shgc: float = 0.6,
+    internal_gains_forecast: np.ndarray | pd.Series | None = None,
+    internal_gains_factor: float = 0.0,
 ) -> np.ndarray:
     """
     Calculate heating demand per timestep based on building physics heat loss model.
@@ -391,6 +393,18 @@ def calculate_heating_demand_physics(
         - 0.7-0.8: Single-glazed windows
         Default: 0.6
     :type shgc: float, optional
+    :param internal_gains_forecast: Electrical load power forecast in kW for each timestep.
+        If provided along with internal_gains_factor > 0, internal gains from electrical
+        appliances will be subtracted from heating demand.
+    :type internal_gains_forecast: np.ndarray | pd.Series | None, optional
+    :param internal_gains_factor: Factor (0-1) representing what fraction of electrical load
+        becomes useful internal heat gains. Typical values:
+        - 0.0: No internal gains considered (default, backwards compatible)
+        - 0.5-0.7: Conservative estimate (some heat lost to ventilation/drains)
+        - 0.8-0.9: Most electrical energy becomes heat (well-insulated building)
+        - 1.0: All electrical energy becomes internal heat (theoretical maximum)
+        Default: 0.0
+    :type internal_gains_factor: float, optional
     :return: Array of heating demand values (kWh) per timestep
     :rtype: np.ndarray
 
@@ -451,6 +465,37 @@ def calculate_heating_demand_physics(
 
         # Subtract solar gains from heat loss (but never go negative)
         total_loss_kw = np.maximum(total_loss_kw - solar_gains_kw, 0.0)
+
+    # Validate internal_gains_factor is in expected range [0, 1]
+    if internal_gains_factor < 0 or internal_gains_factor > 1:
+        raise ValueError(
+            f"internal_gains_factor must be between 0 and 1, got {internal_gains_factor}"
+        )
+
+    # Calculate internal gains from electrical load if provided and applicable
+    if internal_gains_forecast is not None and internal_gains_factor > 0:
+        # Convert internal gains forecast to numpy array and normalize to 1D
+        # to align with other forecast inputs and avoid broadcast surprises
+        internal_gains = (
+            internal_gains_forecast.values
+            if isinstance(internal_gains_forecast, pd.Series)
+            else internal_gains_forecast
+        )
+        internal_gains = np.asarray(internal_gains).reshape(-1)
+
+        # Validate that internal gains forecast length matches outdoor temperature forecast
+        if len(internal_gains) != len(outdoor_temps):
+            raise ValueError(
+                f"internal_gains_forecast length ({len(internal_gains)}) must match "
+                f"outdoor_temperature_forecast length ({len(outdoor_temps)})"
+            )
+
+        # Internal gains: Q_internal = load_power * factor
+        # load_power is already in kW, factor is dimensionless (0-1)
+        internal_gains_kw = internal_gains * internal_gains_factor
+
+        # Subtract internal gains from heat loss (but never go negative)
+        total_loss_kw = np.maximum(total_loss_kw - internal_gains_kw, 0.0)
 
     # Convert to kWh for the timestep
     hours_per_timestep = optimization_time_step / 60.0
