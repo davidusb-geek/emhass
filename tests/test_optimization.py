@@ -2381,7 +2381,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 "min_temperatures": [18] * n_steps,
                 "max_temperatures": [24] * n_steps,
                 "supply_temperature": 35.0,
-                "cop_carnot_efficiency": 0.4,
+                "carnot_efficiency": 0.4,
             }
         }
         complex_optim_conf["def_load_config"] = def_load_config

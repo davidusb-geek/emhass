@@ -1416,7 +1416,7 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         fig_1.update_layout(xaxis_title="Timestamp", yaxis_title="Battery SOC (%)")
         image_path_1 = fig_1.to_html(full_html=False, default_width="75%")
     # Figure Thermal: Temperatures (Optional)
-    # Detect columns for predicted or target temperatures
+    # Detect columns for predicted, target, min, or max temperatures
     cols_temp = [
         i
         for i in df.columns.to_list()
