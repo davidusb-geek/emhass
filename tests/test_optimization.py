@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 
-import os
 import pathlib
 import pickle
 import random
@@ -411,9 +410,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
         self.assertEqual(self.opt.optim_status, "Optimal")
-        # Test with different default solver, debug mode and batt SOC conditions
-        del self.optim_conf["lp_solver"]
-        del self.optim_conf["lp_solver_path"]
+        # Test with debug mode and batt SOC conditions
         self.optim_conf["set_use_battery"] = True
         soc_init = None
         soc_final = 0.3
@@ -485,31 +482,6 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(
             self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
         )
-        # Test dayahead optimization using different solvers
-        import pulp as pl
-
-        solver_list = pl.listSolvers(onlyAvailable=True)
-        for solver in solver_list:
-            self.optim_conf["lp_solver"] = solver
-            if os.getenv("lp_solver_path", default=None) is None:
-                self.optim_conf["lp_solver_path"] = os.getenv("lp_solver_path", default=None)
-            self.opt = self.create_optimization()
-            self.df_input_data_dayahead = self.fcst.get_load_cost_forecast(
-                self.df_input_data_dayahead
-            )
-            self.df_input_data_dayahead = self.fcst.get_prod_price_forecast(
-                self.df_input_data_dayahead
-            )
-            self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
-                self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
-            )
-            self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-            self.assertIsInstance(
-                self.opt_res_dayahead.index, pd.core.indexes.datetimes.DatetimeIndex
-            )
-            self.assertIsInstance(
-                self.opt_res_dayahead.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype
-            )
 
     # Check minimum deferrable load power
     def test_perform_dayahead_forecast_optim_min_def_load_power(self):
@@ -2139,13 +2111,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "Battery stress cost should reduce variance in charging power",
         )
 
-
-
     def test_prepare_power_limit_array_scalar(self):
         """Test _prepare_power_limit_array with scalar input (existing behavior)"""
         # Test scalar input should broadcast to all timesteps
         result = self.opt._prepare_power_limit_array(9000, "test_scalar", 10)
-        
+
         self.assertIsInstance(result, np.ndarray, "Should return numpy array")
         self.assertEqual(len(result), 10, "Array length should match data_length")
         self.assertTrue(np.all(result == 9000), "All values should equal the scalar input")
@@ -2155,7 +2125,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # Test list input with correct length
         input_list = [9000, 8000, 7000, 6000, 5000]
         result = self.opt._prepare_power_limit_array(input_list, "test_list", 5)
-        
+
         self.assertIsInstance(result, np.ndarray, "Should return numpy array")
         self.assertEqual(len(result), 5, "Array length should match input list length")
         self.assertEqual(result[0], 9000, "First value should be preserved")
@@ -2166,7 +2136,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # Test numpy array input
         input_array = np.array([7000, 6000, 5000])
         result = self.opt._prepare_power_limit_array(input_array, "test_array", 3)
-        
+
         self.assertIsInstance(result, np.ndarray, "Should return numpy array")
         self.assertEqual(len(result), 3, "Array length should match input")
         self.assertTrue(np.array_equal(result, input_array), "Should preserve numpy array values")
@@ -2176,7 +2146,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # Test list with wrong length should fallback to scalar (first value)
         input_list = [9000, 8000]
         result = self.opt._prepare_power_limit_array(input_list, "test_wrong_len", 5)
-        
+
         self.assertIsInstance(result, np.ndarray, "Should return numpy array")
         self.assertEqual(len(result), 5, "Should fallback to correct length")
         self.assertTrue(np.all(result == 9000), "Should use first value as scalar fallback")
@@ -2185,7 +2155,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         """Test _prepare_power_limit_array with None input"""
         # Test None input should use default value
         result = self.opt._prepare_power_limit_array(None, "test_none", 5)
-        
+
         self.assertIsInstance(result, np.ndarray, "Should return numpy array")
         self.assertEqual(len(result), 5, "Should have correct length")
         self.assertTrue(np.all(result == 9000), "Should use default value of 9000")
@@ -2196,24 +2166,22 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         df_input_data_dayahead = self.prepare_forecast_data()
         P_PV = df_input_data_dayahead["p_pv_forecast"]
         P_load = df_input_data_dayahead["p_load_forecast"]
-        
+
         # Run optimization with scalar limits (default behavior)
-        opt_res = self.opt.perform_dayahead_forecast_optim(
-            df_input_data_dayahead, P_PV, P_load
-        )
-        
+        opt_res = self.opt.perform_dayahead_forecast_optim(df_input_data_dayahead, P_PV, P_load)
+
         # Verify optimization succeeded
         self.assertIsNotNone(opt_res, "Optimization should return results")
         self.assertIsInstance(opt_res, pd.DataFrame, "Should return DataFrame")
-        
+
         # Verify power limit columns exist
         self.assertIn("maximum_power_from_grid", opt_res.columns, "Should have from_grid column")
         self.assertIn("maximum_power_to_grid", opt_res.columns, "Should have to_grid column")
-        
+
         # Verify scalar values are consistent (all same value)
         from_grid_values = opt_res["maximum_power_from_grid"].unique()
         to_grid_values = opt_res["maximum_power_to_grid"].unique()
-        
+
         self.assertEqual(len(from_grid_values), 1, "Scalar should have single unique value")
         self.assertEqual(len(to_grid_values), 1, "Scalar should have single unique value")
 
@@ -2221,28 +2189,24 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         """Test full optimization with time-varying power limits (new feature)"""
         df_input_data_dayahead = self.prepare_forecast_data()
         n = len(df_input_data_dayahead)
-        
+
         # Create time-varying limits: lower during middle hours
         vector_from_grid = [9000] * n
         for i in range(n // 4, 3 * n // 4):  # Middle half has lower limit
             vector_from_grid[i] = 5000
-        
+
         # Update config temporarily
         original_from_grid = self.plant_conf["maximum_power_from_grid"]
         self.plant_conf["maximum_power_from_grid"] = vector_from_grid
-        
+
         # Recreate optimization object with new config
-        from emhass.optimization import Optimization
-        from emhass.utils import get_root
-        import pathlib
-        
         # Setup emhass_conf for the test
         root = pathlib.Path(get_root(__file__, num_parent=2))
         emhass_conf = {
             "data_path": root / "data/",
             "root_path": root / "src/emhass/",
         }
-        
+
         opt_temp = Optimization(
             self.retrieve_hass_conf,
             self.optim_conf,
@@ -2253,40 +2217,42 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             emhass_conf,
             logger,
         )
-        
+
         try:
             P_PV = df_input_data_dayahead["p_pv_forecast"]
             P_load = df_input_data_dayahead["p_load_forecast"]
-            
+
             # Run optimization with vector limits
-            opt_res = opt_temp.perform_dayahead_forecast_optim(
-                df_input_data_dayahead, P_PV, P_load
-            )
-            
+            opt_res = opt_temp.perform_dayahead_forecast_optim(df_input_data_dayahead, P_PV, P_load)
+
             # Verify optimization succeeded
             self.assertIsNotNone(opt_res, "Optimization should return results")
             self.assertIsInstance(opt_res, pd.DataFrame, "Should return DataFrame")
-            
+
             # Verify power limit columns exist
-            self.assertIn("maximum_power_from_grid", opt_res.columns, "Should have from_grid column")
-            
+            self.assertIn(
+                "maximum_power_from_grid", opt_res.columns, "Should have from_grid column"
+            )
+
             # Verify vector values are present
             from_grid_values = opt_res["maximum_power_from_grid"].values
             self.assertEqual(len(from_grid_values), n, "Should have value for each timestep")
             self.assertIn(5000, from_grid_values, "Should contain lower limit values")
             self.assertIn(9000, from_grid_values, "Should contain higher limit values")
-            
+
             # Verify the pattern matches our input
             for i in range(n // 4, 3 * n // 4):
-                self.assertEqual(from_grid_values[i], 5000, 
-                               f"Timestep {i} should have lower limit")
-            
+                self.assertEqual(from_grid_values[i], 5000, f"Timestep {i} should have lower limit")
+
             # Verify optimization respects the limits
             p_grid_pos = opt_res["P_grid_pos"].values
             for i in range(n):
-                self.assertLessEqual(p_grid_pos[i], from_grid_values[i] + 0.1,
-                                   f"Grid import at timestep {i} should not exceed limit")
-        
+                self.assertLessEqual(
+                    p_grid_pos[i],
+                    from_grid_values[i] + 0.1,
+                    f"Grid import at timestep {i} should not exceed limit",
+                )
+
         finally:
             # Restore original config
             self.plant_conf["maximum_power_from_grid"] = original_from_grid
@@ -2296,24 +2262,22 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         df_input_data_dayahead = self.prepare_forecast_data()
         P_PV = df_input_data_dayahead["p_pv_forecast"]
         P_load = df_input_data_dayahead["p_load_forecast"]
-        
+
         # Run optimization
-        opt_res = self.opt.perform_dayahead_forecast_optim(
-            df_input_data_dayahead, P_PV, P_load
-        )
-        
+        opt_res = self.opt.perform_dayahead_forecast_optim(df_input_data_dayahead, P_PV, P_load)
+
         # Check that values are integers
         from_grid_values = opt_res["maximum_power_from_grid"].values
         to_grid_values = opt_res["maximum_power_to_grid"].values
-        
+
         # All values should be whole numbers (no decimals)
         self.assertTrue(
             np.all(from_grid_values == from_grid_values.astype(int)),
-            "from_grid values should be integers"
+            "from_grid values should be integers",
         )
         self.assertTrue(
             np.all(to_grid_values == to_grid_values.astype(int)),
-            "to_grid values should be integers"
+            "to_grid values should be integers",
         )
 
 

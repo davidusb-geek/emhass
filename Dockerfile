@@ -39,11 +39,6 @@ RUN apt-get update \
     libhdf5-103-1 \
     libhdf5-dev \
     libhdf5-serial-dev \
-    # cbc
-    coinor-cbc \
-    coinor-libcbc-dev \
-    # glpk
-    glpk-utils \
     # build packages
     gcc \
     g++ \
@@ -135,13 +130,3 @@ WORKER_CLASS=${WORKER_CLASS:-uvicorn.workers.UvicornWorker} && \
 PORT=${PORT:-5000} && \
 IP=${IP:-0.0.0.0} && \
 exec uv run --frozen gunicorn emhass.web_server:app -c gunicorn.conf.py -k \"$WORKER_CLASS\""]
-
-# for running Unittest
-#COPY tests/ /app/tests
-#RUN apt-get update &&  apt-get install python3-requests-mock -y
-#COPY data/ /app/data/
-#ENTRYPOINT ["uv","run","unittest","discover","-s","./tests","-p","test_*.py"]
-
-# Example of 32 bit specific
-# try, symlink apt cbc, to pulp cbc, in python directory (for 32bit)
-#RUN [[ "${TARGETARCH}" == "armhf" || "${TARGETARCH}" == "armv7"  ]] &&  ln -sf /usr/bin/cbc /usr/local/lib/python3.11/dist-packages/pulp/solverdir/cbc/linux/32/cbc || echo "cbc symlink didnt work/not required"
