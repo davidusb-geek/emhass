@@ -170,6 +170,41 @@ Run easily as a Home Assistant Add-on or a standalone Docker container.
 
 :::{container} text-center mb-3
 
+<h3>🚀 Under the Hood</h3>
+The latest EMHASS core has been completely re-engineered for speed and stability.
+:::
+
+::::{grid} 1 2 2 2
+:gutter: 2
+
+:::{grid-item-card} ⚡ **Turbocharged Performance**
+:class-header: bg-light
+
+The optimization engine has been rewritten using **CVXPY** and **vectorization**. Benchmarks show optimization times are **4-5x faster** (approx. 0.1s per iteration).
+:::
+
+:::{grid-item-card} 🏎️ **Next-Gen Solvers**
+:class-header: bg-light
+
+We have adopted **HiGHS** as the default: a state-of-the-art, open-source linear solver offering superior stability.
+:::
+
+:::{grid-item-card} 📦 **Simplified Deployment**
+:class-header: bg-light
+
+No more system-level dependencies! Because the new solver stack is bundled as Python wheels, the Docker image is lighter, and installation is more robust.
+:::
+
+:::{grid-item-card} 🏗️ **Modular Architecture**
+:class-header: bg-light
+
+The codebase now features a modular architecture with testable helper methods. This improves maintainability and code updates reliability.
+:::
+
+::::
+
+:::{container} text-center mb-3
+
 <h3>Quick overview of EMHASS</h3>
 :::
 
@@ -181,6 +216,19 @@ Run easily as a Home Assistant Add-on or a standalone Docker container.
 :::
 
 ![](./images/workflow.png)
+
+:::{container} text-center mb-3
+
+<h3>❤️ Acknowledgements & Inspirations</h3>
+
+:::
+
+We gratefully acknowledge the following projects that inspired this work or provide the critical foundations for our optimization engine:
+
+* **OMEGAlpes**: For the initial inspiration on energy systems modeling and linear programming formulations. [Docs](https://omegalpes.readthedocs.io/)
+* **CVXPY**: For the powerful, convex optimization modeling language that powers our new vectorized backend. [Website](https://www.cvxpy.org/)
+* **HiGHS**: For the high-performance, open-source linear optimization solver now standard in EMHASS. [Website](https://highs.dev/)
+* **skforecast**: For the robust machine learning framework used in our forecasting modules. [Docs](https://skforecast.org/)
 
 ```{toctree}
 :hidden: true

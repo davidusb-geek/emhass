@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.16.0 - 2026-01-21
 
 ### 🚀 Major Optimization Engine Overhaul
 
@@ -18,6 +18,19 @@ This release marks a significant milestone in the evolution of EMHASS. We have c
 - Refactor optimization.py to use cvxpy
 - Added internal gains factor to heating demand calculation (@sokorn)
 - Add vector support for maximum power to or from grid (@mk2lehe)
+
+### ⚠️ BREAKING CHANGE: Solver Configuration
+
+We have modernized the optimization backend to use CVXPY. As a result, the solver configuration has been simplified and **both** `lp_solver` and `lp_solver_path` parameters have been **removed**.
+
+* **Removed:** `lp_solver` and `lp_solver_path` are no longer supported in the configuration.
+* **New Default:** The application now defaults to the **HiGHS** solver, which is bundled directly with EMHASS. No external binary paths or apt packages are required.
+* **Commercial Solvers:** If you wish to use **Gurobi** or **CPLEX** (requiring your own license), you must now specify this using the `LP_SOLVER` environment variable (e.g., `LP_SOLVER=GUROBI`), rather than the configuration file.
+
+**Action Required:**
+
+1. **Remove** `lp_solver` and `lp_solver_path` from your configuration files (`config.json` or `options.json`) to avoid validation warnings.
+2. If you previously relied on a custom solver path, ensure you are satisfied with the new default HiGHS solver (recommended) or configure the environment variable for a commercial alternative.
 
 ## 0.15.6 - 2026-01-18
 ### Improvement
