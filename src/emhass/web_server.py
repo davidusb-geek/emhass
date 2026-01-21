@@ -43,6 +43,7 @@ from emhass.utils import (
     get_injection_dict,
     get_injection_dict_forecast_model_fit,
     get_injection_dict_forecast_model_tune,
+    get_keys_to_mask,
     param_to_config,
 )
 
@@ -206,17 +207,7 @@ async def configuration():
     Render and serve configuration page html
     """
     # Define the list of secret parameters managed by the UI
-    secret_params = [
-        "influxdb_username",
-        "influxdb_password",
-        "solcast_api_key",
-        "solcast_rooftop_id",
-        "long_lived_token",
-        "time_zone",
-        "Latitude",
-        "Longitude",
-        "Altitude",
-    ]
+    secret_params = get_keys_to_mask()
 
     if request.method == "POST":
         app.logger.info("Saving configuration/secrets...")
