@@ -225,34 +225,37 @@ async def configuration():
 
         # Load existing secrets
         secrets = {}
-        secrets_path = Path(emhass_conf.get("secrets_path", "/app/secrets_emhass.yaml"))
+        # Ensure we have the path from config, fallback to default if missing
+        secrets_path = emhass_conf.get("secrets_path", Path("/app/secrets_emhass.yaml"))
 
-        # Try to load existing secrets to preserve others
+        # Try to load existing secrets to preserve others (Async)
         if secrets_path.exists():
             try:
-                with open(secrets_path) as file:
-                    loaded = yaml.safe_load(file)
+                async with aiofiles.open(secrets_path) as file:
+                    content = await file.read()
+                    loaded = yaml.safe_load(content)
                     if loaded:
                         secrets = loaded
             except Exception as e:
                 app.logger.error(f"Error reading secrets file: {e}")
 
         # Update secrets with form data
-        # Iterate over ALL possible secret keys, not just existing ones
         updated = False
         for key in secret_params:
             if key in form_data:
                 value = form_data[key]
-                # Only update if the value is not the masked '***' string
                 if value != "***":
                     secrets[key] = value
                     updated = True
 
-        # Save to file if changes were made
+        # Save to file if changes were made (Async)
         if updated:
             try:
-                with open(secrets_path, "w") as file:
-                    yaml.dump(secrets, file, default_flow_style=False)
+                async with aiofiles.open(secrets_path, "w") as file:
+                    # dump returns string if stream is None
+                    content = yaml.dump(secrets, default_flow_style=False)
+                    await file.write(content)
+
                 app.logger.info("Secrets saved successfully.")
 
                 # Update the global params_secrets
@@ -262,9 +265,6 @@ async def configuration():
             except Exception as e:
                 app.logger.error(f"Error saving secrets file: {e}")
 
-        # After saving, we might want to reload params or redirect
-        # For now, we fall through to render the page again with updated values
-
     app.logger.info("serving configuration.html...")
 
     # get params
@@ -273,7 +273,6 @@ async def configuration():
             content = await fid.read()
             emhass_conf["config_path"], params = pickle.loads(content)
     else:
-        # Safe fallback if params.pkl doesn't exist
         params = {}
 
     template = templates.get_template("configuration.html")

@@ -20,7 +20,7 @@ intro.md
 publish_data.md
 passing_data.md
 differences.md
-lpems.md
+advanced_math_model.md
 forecasts.md
 mlforecaster.md
 mlregressor.md
@@ -48,7 +48,7 @@ develop.md
 * *Files:* `config.md`, `passing_data.md`, `publish_data.md`
 
 * **🧠 Core Concepts:** How the optimization and forecasting works.
-* *Files:* `lpems.md`, `forecasts.md`, `mlforecaster.md`, `mlregressor.md`
+* *Files:* `advanced_math_model.md`, `forecasts.md`, `mlforecaster.md`, `mlregressor.md`
 
 * **🔥 Thermal Integration:** Specifics on thermal models.
 * *Files:* `thermal_model.md`, `thermal_battery.md`
@@ -125,7 +125,7 @@ EMHASS is a Python module designed to optimize your home energy interfacing with
 :gutter: 2
 
 :::{grid-item-card} 💰 **Cost Optimization**
-:link: lpems
+:link: advanced_math_model
 :link-type: doc
 
 Save money by scheduling loads during low-cost tariff periods or high PV production windows using Linear Programming.

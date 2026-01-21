@@ -2,7 +2,8 @@
 
 ```{toctree}
 :maxdepth: 2
-lpems
+main_core_concepts
+advanced_math_model
 forecasts
 mlforecaster
 mlregressor
