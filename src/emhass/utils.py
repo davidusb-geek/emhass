@@ -1377,7 +1377,10 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     """
     cols_p = [i for i in df.columns.to_list() if "P_" in i]
     # Let's round the data in the DF
-    optim_status = df["optim_status"].unique().item()
+    if "optim_status" in df.columns:
+        optim_status = df["optim_status"].iloc[0]
+    else:
+        optim_status = "Status not available"
     df.drop("optim_status", axis=1, inplace=True)
     cols_else = [i for i in df.columns.to_list() if "P_" not in i]
     df = df.apply(pd.to_numeric)
@@ -1415,7 +1418,12 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     # Figure Thermal: Temperatures (Optional)
     # Detect columns for predicted or target temperatures
     cols_temp = [
-        i for i in df.columns.to_list() if "predicted_temp_heater" in i or "target_temp_heater" in i
+        i
+        for i in df.columns.to_list()
+        if "predicted_temp_heater" in i
+        or "target_temp_heater" in i
+        or "min_temp_heater" in i
+        or "max_temp_heater" in i
     ]
     image_path_temp = None
     if len(cols_temp) > 0:
