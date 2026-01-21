@@ -1527,8 +1527,8 @@ class TestHeatingDemand(unittest.TestCase):
         ventilation_rate = 0.4  # ACH
         heated_volume = 240.0  # m³
 
-        # Electrical load profile in kW
-        load_forecast = np.array([1.0, 2.0, 3.0, 1.5])
+        # Electrical load profile in W
+        load_forecast = np.array([1000.0, 2000.0, 3000.0, 1500.0])
         internal_gains_factor = 0.7  # 70% of electrical load becomes heat
 
         demand_no_internal = utils.calculate_heating_demand_physics(
@@ -1587,7 +1587,7 @@ class TestHeatingDemand(unittest.TestCase):
 
         # Solar and load profiles
         solar_irradiance = np.array([0.0, 200.0, 400.0, 0.0])  # W/m²
-        load_forecast = np.array([1.0, 2.0, 2.5, 1.0])  # kW
+        load_forecast = np.array([1000.0, 2000.0, 2500.0, 1000.0])  # W
         internal_gains_factor = 0.7
 
         demand_no_gains = utils.calculate_heating_demand_physics(
@@ -1689,7 +1689,7 @@ class TestHeatingDemand(unittest.TestCase):
         envelope_area = 380.0
         ventilation_rate = 0.4
         heated_volume = 240.0
-        load_forecast = np.array([2.0, 3.0, 4.0, 2.5])  # kW
+        load_forecast = np.array([2000.0, 3000.0, 4000.0, 2500.0])  # W
 
         demand_no_internal = utils.calculate_heating_demand_physics(
             u_value=u_value,
@@ -1730,7 +1730,7 @@ class TestHeatingDemand(unittest.TestCase):
         envelope_area = 380.0
         ventilation_rate = 0.4
         heated_volume = 240.0
-        load_array = np.array([2.0, 3.0, 4.0, 2.5])
+        load_array = np.array([2000.0, 3000.0, 4000.0, 2500.0])  # W
         load_series = pd.Series(load_array)
         internal_gains_factor = 0.8
 
@@ -1776,7 +1776,7 @@ class TestHeatingDemand(unittest.TestCase):
         heated_volume = 240.0
 
         # Internal gains forecast with different length (3 instead of 4)
-        load_forecast_wrong_length = np.array([1.0, 2.0, 3.0])  # 3 elements
+        load_forecast_wrong_length = np.array([1000.0, 2000.0, 3000.0])  # 3 elements (W)
         internal_gains_factor = 0.7
 
         with self.assertRaises(ValueError) as context:
@@ -1804,7 +1804,7 @@ class TestHeatingDemand(unittest.TestCase):
         envelope_area = 380.0
         ventilation_rate = 0.4
         heated_volume = 240.0
-        load_forecast = np.array([1.0, 2.0, 3.0, 1.5])
+        load_forecast = np.array([1000.0, 2000.0, 3000.0, 1500.0])  # W
 
         # Test factor > 1
         with self.assertRaises(ValueError) as context:
