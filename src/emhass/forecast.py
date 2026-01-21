@@ -1191,6 +1191,8 @@ class Forecast:
             forecast_out = pd.concat(forecast_parts, axis=0)
         else:
             forecast_out = pd.DataFrame()
+        if not forecast_out.empty and forecast_out.index.dtype != df_final.index.dtype:
+            forecast_out.index = forecast_out.index.astype(df_final.index.dtype)
         # Merge with final DataFrame to align indices
         merged = pd.merge_asof(
             df_final.sort_index(),
