@@ -103,17 +103,7 @@ class Optimization:
 
         # Mask sensitive data before logging
         conf_to_log = retrieve_hass_conf.copy()
-        keys_to_mask = [
-            "influxdb_username",
-            "influxdb_password",
-            "solcast_api_key",
-            "solcast_rooftop_id",
-            "long_lived_token",
-            "time_zone",
-            "Latitude",
-            "Longitude",
-            "Altitude",
-        ]
+        keys_to_mask = utils.get_keys_to_mask()
         for key in keys_to_mask:
             if key in conf_to_log:
                 conf_to_log[key] = "***"
