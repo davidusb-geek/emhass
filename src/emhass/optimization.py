@@ -1040,7 +1040,7 @@ class Optimization:
         for k in range(self.optim_conf["number_of_deferrable_loads"]):
             self.logger.debug(f"Processing deferrable load {k}")
 
-            # Determine Load Type & Dynamic Big-M
+            # --- 1. Determine Load Type & Dynamic Big-M ---
             # Calculate a tight Big-M value for this specific load.
             # M must be >= max possible power to allow the binary variable to work.
             # Using a dynamic tight M significantly speeds up the solver (HiGHS/CBC).
@@ -1053,11 +1053,11 @@ class Optimization:
                 M = self.optim_conf["nominal_power_of_deferrable_loads"][k]
                 is_sequence_load = False
 
-            # Safety fallback if M is 0 (e.g., mock load) to prevent constraint errors
+            # Safety fallback if M is 0 (e.g., mock load)
             if M <= 0:
                 M = 10.0
 
-            # Load Specific Constraints
+            # --- 2. Load Specific Constraints ---
 
             # Sequence-based Deferrable Load
             if is_sequence_load:
@@ -1067,17 +1067,19 @@ class Optimization:
                 # Binary variable y: which sequence to choose?
                 # We essentially slice the sequence over the horizon
                 y_len = n - sequence_length + 1
+
+                # Handle case where Horizon < Sequence Length
                 if y_len < 1:
-                    # Edge case: Horizon shorter than sequence
+                    self.logger.warning(
+                        f"Deferrable load {k}: Sequence length ({sequence_length}) is longer than "
+                        f"optimization horizon ({n}). The sequence will be truncated."
+                    )
                     y_len = 1
 
                 y = cp.Variable(y_len, boolean=True, name=f"y_seq_{k}")
 
                 # Constraint: Choose exactly one start time
                 constraints.append(cp.sum(y) == 1)
-
-                # Total Energy constraint
-                constraints.append(cp.sum(p_deferrable[k]) == np.sum(power_sequence))
 
                 # Detailed power shape constraint (Convolution-like)
                 # We build the matrix explicitly here
@@ -1333,7 +1335,10 @@ class Optimization:
             opt_tp[f"predicted_temp_heater{k}"] = np.round(temp_values, 2)
 
             if "def_load_config" in self.optim_conf:
-                conf = self.optim_conf["def_load_config"][k].get("thermal_config", {})
+                # Robustly get config (support both thermal_config and thermal_battery)
+                load_conf = self.optim_conf["def_load_config"][k]
+                conf = load_conf.get("thermal_config") or load_conf.get("thermal_battery") or {}
+                # Store Target/Desired Temperatures (Legacy behavior)
                 targets = (
                     conf.get("desired_temperatures")
                     or conf.get("min_temperatures")
@@ -1345,6 +1350,16 @@ class Optimization:
                         tgt_series = tgt_series.iloc[: len(opt_tp)]
                     tgt_series.index = opt_tp.index[: len(tgt_series)]
                     opt_tp[f"target_temp_heater{k}"] = tgt_series
+                # Store Explicit Min/Max Constraints (New request)
+                for bound in ["min", "max"]:
+                    key = f"{bound}_temperatures"
+                    if conf.get(key):
+                        bound_series = pd.Series(conf[key])
+                        # Align length with optimization horizon
+                        if len(bound_series) > len(opt_tp):
+                            bound_series = bound_series.iloc[: len(opt_tp)]
+                        bound_series.index = opt_tp.index[: len(bound_series)]
+                        opt_tp[f"{bound}_temp_heater{k}"] = bound_series
 
         for k, heat_demand in heating_demands.items():
             opt_tp[f"heating_demand_heater{k}"] = heat_demand
