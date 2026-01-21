@@ -1030,7 +1030,7 @@ class Optimization:
         for k in range(self.optim_conf["number_of_deferrable_loads"]):
             self.logger.debug(f"Processing deferrable load {k}")
 
-            # --- 1. Determine Load Type & Dynamic Big-M ---
+            # Determine Load Type & Dynamic Big-M
             # Calculate a tight Big-M value for this specific load.
             # M must be >= max possible power to allow the binary variable to work.
             # Using a dynamic tight M significantly speeds up the solver (HiGHS/CBC).
@@ -1047,7 +1047,7 @@ class Optimization:
             if M <= 0:
                 M = 10.0
 
-            # --- 2. Load Specific Constraints ---
+            # Load Specific Constraints
 
             # Sequence-based Deferrable Load
             if is_sequence_load:
@@ -1127,7 +1127,7 @@ class Optimization:
                 # Total Energy Constraint
                 constraints.append(cp.sum(p_deferrable[k]) * self.time_step == target_energy)
 
-            # Generic Constraints (Window, Startup, Status)
+            # Generic Constraints (Window)
 
             # Time Window Logic
             # Calculate Valid Window
@@ -1154,56 +1154,84 @@ class Optimization:
             if def_end > 0 and def_end < n:
                 constraints.append(p_deferrable[k][def_end:] == 0)
 
-            # Minimum Power
-            if min_power_of_deferrable_loads[k] > 0:
-                constraints.append(
-                    p_deferrable[k] >= min_power_of_deferrable_loads[k] * p_def_bin2[k]
-                )
+            # Optimization: Skip Binary Logic if Possible
+            # If a load is:
+            # 1. Not Sequence (handled above)
+            # 2. Not Semi-Continuous (variable power allowed)
+            # 3. No Min Power (min=0)
+            # 4. No Startup Penalty
+            # 5. Not Single Constant Start
+            # Then it is a pure Continuous Variable. We can skip creating/linking binary variables.
+            # This dramatically speeds up solving for thermal loads which are often continuous.
 
-            # Startup Logic (Vectorized)
-            # Retrieve State
-            current_state = 0
-            if (
-                "def_current_state" in self.optim_conf
-                and len(self.optim_conf["def_current_state"]) > k
-            ):
-                current_state = 1 if self.optim_conf["def_current_state"][k] else 0
+            is_semi_cont = self.optim_conf["treat_deferrable_load_as_semi_cont"][k]
+            is_single_const = self.optim_conf["set_deferrable_load_single_constant"][k]
+            has_min_power = min_power_of_deferrable_loads[k] > 0
+            has_startup_penalty = (
+                "set_deferrable_startup_penalty" in self.optim_conf
+                and self.optim_conf["set_deferrable_startup_penalty"][k] > 0
+            )
 
-            # Status consistency: P_def <= M * Bin2
-            # Use the Dynamic M calculated above (Critical for performance)
-            constraints.append(p_deferrable[k] <= M * p_def_bin2[k])
+            # Check if we MUST use binary logic
+            use_binary_logic = (
+                is_sequence_load
+                or is_semi_cont
+                or is_single_const
+                or has_min_power
+                or has_startup_penalty
+            )
 
-            # Startup Detection: Start[t] >= Bin[t] - Bin[t-1]
-            constraints.append(p_def_start[k][0] >= p_def_bin2[k][0] - current_state)
-            constraints.append(p_def_start[k][1:] >= p_def_bin2[k][1:] - p_def_bin2[k][:-1])
+            if use_binary_logic:
+                # Standard Binary/Mixed-Integer Constraints
 
-            # Startup Limit: Start[t] + Bin[t-1] <= 1
-            constraints.append(p_def_start[k][0] + current_state <= 1)
-            constraints.append(p_def_start[k][1:] + p_def_bin2[k][:-1] <= 1)
-
-            # Logic Constraints (Excluded for Sequence Loads)
-            # Sequence loads define their own strict shape via the 'y' matrix above.
-            # Applying constant/semi-continuous constraints to them creates conflict/redundancy.
-
-            if not is_sequence_load:
-                # Single Constant Start
-                if self.optim_conf["set_deferrable_load_single_constant"][k]:
-                    constraints.append(cp.sum(p_def_start[k]) == 1)
-
-                    # Duration check
-                    rhs_val = (
-                        def_total_timestep[k]
-                        if (def_total_timestep and def_total_timestep[k] > 0)
-                        else def_total_hours[k] / self.time_step
+                # Minimum Power (if active)
+                if has_min_power:
+                    constraints.append(
+                        p_deferrable[k] >= min_power_of_deferrable_loads[k] * p_def_bin2[k]
                     )
-                    constraints.append(cp.sum(p_def_bin2[k]) == rhs_val)
 
-                # Semi-continuous (Binary * Nominal)
-                # Only applies if NOT a sequence load, as sequences have varying power
-                if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
-                    nominal = self.optim_conf["nominal_power_of_deferrable_loads"][k]
-                    constraints.append(p_deferrable[k] == nominal * p_def_bin1[k])
-                    constraints.append(p_def_bin1[k] == p_def_bin2[k])
+                # Status consistency: P_def <= M * Bin2
+                # Use the Dynamic M calculated above (Critical for performance)
+                constraints.append(p_deferrable[k] <= M * p_def_bin2[k])
+
+                # Startup Detection: Start[t] >= Bin[t] - Bin[t-1]
+                # Retrieve State
+                current_state = 0
+                if (
+                    "def_current_state" in self.optim_conf
+                    and len(self.optim_conf["def_current_state"]) > k
+                ):
+                    current_state = 1 if self.optim_conf["def_current_state"][k] else 0
+
+                constraints.append(p_def_start[k][0] >= p_def_bin2[k][0] - current_state)
+                constraints.append(p_def_start[k][1:] >= p_def_bin2[k][1:] - p_def_bin2[k][:-1])
+
+                # Startup Limit: Start[t] + Bin[t-1] <= 1
+                constraints.append(p_def_start[k][0] + current_state <= 1)
+                constraints.append(p_def_start[k][1:] + p_def_bin2[k][:-1] <= 1)
+
+                if not is_sequence_load:
+                    # Single Constant Start
+                    if is_single_const:
+                        constraints.append(cp.sum(p_def_start[k]) == 1)
+                        rhs_val = (
+                            def_total_timestep[k]
+                            if (def_total_timestep and def_total_timestep[k] > 0)
+                            else def_total_hours[k] / self.time_step
+                        )
+                        constraints.append(cp.sum(p_def_bin2[k]) == rhs_val)
+
+                    # Semi-continuous
+                    if is_semi_cont:
+                        nominal = self.optim_conf["nominal_power_of_deferrable_loads"][k]
+                        constraints.append(p_deferrable[k] == nominal * p_def_bin1[k])
+                        constraints.append(p_def_bin1[k] == p_def_bin2[k])
+
+            else:
+                # Pure Continuous Constraints (Faster!)
+                # Just bound by nominal power. No binary variables involved.
+                constraints.append(p_deferrable[k] >= 0)
+                constraints.append(p_deferrable[k] <= M)
 
         return predicted_temps, heating_demands, penalty_terms_total
 
@@ -1328,18 +1356,18 @@ class Optimization:
                 # Robustly get config (support both thermal_config and thermal_battery)
                 load_conf = self.optim_conf["def_load_config"][k]
                 conf = load_conf.get("thermal_config") or load_conf.get("thermal_battery") or {}
+
                 # Store Target/Desired Temperatures (Legacy behavior)
-                targets = (
-                    conf.get("desired_temperatures")
-                    or conf.get("min_temperatures")
-                    or conf.get("max_temperatures")
-                )
+                # Only look for 'desired_temperatures'.
+                targets = conf.get("desired_temperatures")
+
                 if targets:
                     tgt_series = pd.Series(targets)
                     if len(tgt_series) > len(opt_tp):
                         tgt_series = tgt_series.iloc[: len(opt_tp)]
                     tgt_series.index = opt_tp.index[: len(tgt_series)]
                     opt_tp[f"target_temp_heater{k}"] = tgt_series
+
                 # Store Explicit Min/Max Constraints (New request)
                 for bound in ["min", "max"]:
                     key = f"{bound}_temperatures"
