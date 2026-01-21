@@ -209,7 +209,6 @@ async def configuration():
     secret_params = [
         "influxdb_username",
         "influxdb_password",
-        "influxdb_token",
         "solcast_api_key",
         "solcast_rooftop_id",
         "long_lived_token",

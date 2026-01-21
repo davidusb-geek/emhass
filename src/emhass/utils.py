@@ -1750,6 +1750,8 @@ async def build_secrets(
         "solcast_api_key": "yoursecretsolcastapikey",
         "solcast_rooftop_id": "yourrooftopid",
         "solar_forecast_kwp": 5,
+        "influxdb_username": "yourinfluxdbusername",
+        "influxdb_password": "yourinfluxdbpassword",
     }
 
     # Obtain Secrets from ENV?
@@ -1809,6 +1811,11 @@ async def build_secrets(
                                 "Latitude": config_hass["latitude"],
                                 "Longitude": config_hass["longitude"],
                                 "Altitude": config_hass["elevation"],
+                                "solcast_api_key": config_hass["solcast_api_key"],
+                                "solcast_rooftop_id": config_hass["solcast_rooftop_id"],
+                                "solar_forecast_kwp": config_hass["solar_forecast_kwp"],
+                                "influxdb_username": config_hass["influxdb_username"],
+                                "influxdb_password": config_hass["influxdb_password"],
                             }
                         else:
                             # Obtain the url and key secrets if any from options.json (default /app/options.json)
@@ -1837,6 +1844,26 @@ async def build_secrets(
                                 options["Altitude"]
                             ):
                                 params_secrets["Altitude"] = options["Altitude"]
+                            if options.get("solcast_api_key", None) is not None and bool(
+                                options["solcast_api_key"]
+                            ):
+                                params_secrets["solcast_api_key"] = options["solcast_api_key"]
+                            if options.get("solcast_rooftop_id", None) is not None and bool(
+                                options["solcast_rooftop_id"]
+                            ):
+                                params_secrets["solcast_rooftop_id"] = options["solcast_rooftop_id"]
+                            if options.get("solar_forecast_kwp", None) is not None and bool(
+                                options["solar_forecast_kwp"]
+                            ):
+                                params_secrets["solar_forecast_kwp"] = options["solar_forecast_kwp"]
+                            if options.get("influxdb_username", None) is not None and bool(
+                                options["influxdb_username"]
+                            ):
+                                params_secrets["influxdb_username"] = options["influxdb_username"]
+                            if options.get("influxdb_password", None) is not None and bool(
+                                options["influxdb_password"]
+                            ):
+                                params_secrets["influxdb_password"] = options["influxdb_password"]
             else:
                 # Obtain the url and key secrets if any from options.json (default /app/options.json)
                 logger.debug("Obtaining url and key secrets from options.json")
@@ -1852,6 +1879,26 @@ async def build_secrets(
                     params_secrets["Longitude"] = options["Longitude"]
                 if options.get("Altitude", None) is not None and bool(options["Altitude"]):
                     params_secrets["Altitude"] = options["Altitude"]
+                if options.get("solcast_api_key", None) is not None and bool(
+                    options["solcast_api_key"]
+                ):
+                    params_secrets["solcast_api_key"] = options["solcast_api_key"]
+                if options.get("solcast_rooftop_id", None) is not None and bool(
+                    options["solcast_rooftop_id"]
+                ):
+                    params_secrets["solcast_rooftop_id"] = options["solcast_rooftop_id"]
+                if options.get("solar_forecast_kwp", None) is not None and bool(
+                    options["solar_forecast_kwp"]
+                ):
+                    params_secrets["solar_forecast_kwp"] = options["solar_forecast_kwp"]
+                if options.get("influxdb_username", None) is not None and bool(
+                    options["influxdb_username"]
+                ):
+                    params_secrets["influxdb_username"] = options["influxdb_username"]
+                if options.get("influxdb_password", None) is not None and bool(
+                    options["influxdb_password"]
+                ):
+                    params_secrets["influxdb_password"] = options["influxdb_password"]
 
             # Obtain the forecast secrets (if any) from options.json (default /app/options.json)
             forecast_secrets = [
@@ -1873,6 +1920,21 @@ async def build_secrets(
                     params_secrets["solcast_rooftop_id"] = options["solcast_rooftop_id"]
                 if options.get("solar_forecast_kwp", None) and bool(options["solar_forecast_kwp"]):
                     params_secrets["solar_forecast_kwp"] = options["solar_forecast_kwp"]
+
+            # Obtain InfluxDB secrets from options.json
+            influx_secrets = ["influxdb_username", "influxdb_password"]
+            if any(x in influx_secrets for x in list(options.keys())):
+                logger.debug("Obtaining InfluxDB secrets from options.json")
+                if (
+                    options.get("influxdb_username", "empty") != "empty"
+                    and options["influxdb_username"] != ""
+                ):
+                    params_secrets["influxdb_username"] = options["influxdb_username"]
+                if (
+                    options.get("influxdb_password", "empty") != "empty"
+                    and options["influxdb_password"] != ""
+                ):
+                    params_secrets["influxdb_password"] = options["influxdb_password"]
 
     # Obtain secrets from secrets_emhass.yaml? (default /app/secrets_emhass.yaml)
     if secrets_path and pathlib.Path(secrets_path).is_file():

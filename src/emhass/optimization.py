@@ -106,7 +106,6 @@ class Optimization:
         keys_to_mask = [
             "influxdb_username",
             "influxdb_password",
-            "influxdb_token",
             "solcast_api_key",
             "solcast_rooftop_id",
             "long_lived_token",
@@ -1036,39 +1035,52 @@ class Optimization:
         predicted_temps = {}
         heating_demands = {}
         penalty_terms_total = 0
-        M = 100000
         n = self.num_timesteps
-
-        # Helper for sequence matrix (kept local as it's specific)
-        def create_matrix(input_list, n_steps):
-            mat = []
-            for i in range(n_steps + 1):
-                row = [0] * i + input_list + [0] * (n_steps - i)
-                mat.append(row[: n_steps * 2])
-            return mat
 
         for k in range(self.optim_conf["number_of_deferrable_loads"]):
             self.logger.debug(f"Processing deferrable load {k}")
 
-            # Sequence-based Deferrable Load
+            # Determine Load Type & Dynamic Big-M
+            # Calculate a tight Big-M value for this specific load.
+            # M must be >= max possible power to allow the binary variable to work.
+            # Using a dynamic tight M significantly speeds up the solver (HiGHS/CBC).
             if isinstance(self.optim_conf["nominal_power_of_deferrable_loads"][k], list):
+                # Sequence load: M = max peak of the sequence
+                M = np.max(self.optim_conf["nominal_power_of_deferrable_loads"][k])
+                is_sequence_load = True
+            else:
+                # Standard load: M = nominal power
+                M = self.optim_conf["nominal_power_of_deferrable_loads"][k]
+                is_sequence_load = False
+
+            # Safety fallback if M is 0 (e.g., mock load) to prevent constraint errors
+            if M <= 0:
+                M = 10.0
+
+            # Load Specific Constraints
+
+            # Sequence-based Deferrable Load
+            if is_sequence_load:
                 power_sequence = self.optim_conf["nominal_power_of_deferrable_loads"][k]
                 sequence_length = len(power_sequence)
 
-                # Create selection matrix
-                # Rows = Possible start times, Cols = Timesteps
-                matrix_data = create_matrix(power_sequence, n - sequence_length)
-
                 # Binary variable y: which sequence to choose?
-                y_len = len(matrix_data)
+                # We essentially slice the sequence over the horizon
+                y_len = n - sequence_length + 1
+                if y_len < 1:
+                    # Edge case: Horizon shorter than sequence
+                    y_len = 1
+
                 y = cp.Variable(y_len, boolean=True, name=f"y_seq_{k}")
 
+                # Constraint: Choose exactly one start time
                 constraints.append(cp.sum(y) == 1)
 
                 # Total Energy constraint
                 constraints.append(cp.sum(p_deferrable[k]) == np.sum(power_sequence))
 
-                # Detailed power shape constraint
+                # Detailed power shape constraint (Convolution-like)
+                # We build the matrix explicitly here
                 mat_rows = []
                 for start_t in range(y_len):
                     row = np.zeros(n)
@@ -1123,6 +1135,8 @@ class Optimization:
                 # Total Energy Constraint
                 constraints.append(cp.sum(p_deferrable[k]) * self.time_step == target_energy)
 
+            # Generic Constraints (Window, Startup, Status)
+
             # Time Window Logic
             # Calculate Valid Window
             if def_total_timestep and def_total_timestep[k] > 0:
@@ -1143,11 +1157,8 @@ class Optimization:
                 self.logger.warning(f"Deferrable load {k} : {warning}")
 
             # Apply Window Constraints (Force 0 outside window)
-            # 0 to def_start
             if def_start > 0:
                 constraints.append(p_deferrable[k][:def_start] == 0)
-
-            # def_end to n
             if def_end > 0 and def_end < n:
                 constraints.append(p_deferrable[k][def_end:] == 0)
 
@@ -1166,45 +1177,41 @@ class Optimization:
             ):
                 current_state = 1 if self.optim_conf["def_current_state"][k] else 0
 
-            # Status consistency: P_def <= M * Bin2 (Bin2 is "Are we running?")
+            # Status consistency: P_def <= M * Bin2
+            # Use the Dynamic M calculated above (Critical for performance)
             constraints.append(p_deferrable[k] <= M * p_def_bin2[k])
 
             # Startup Detection: Start[t] >= Bin[t] - Bin[t-1]
-            # t=0
             constraints.append(p_def_start[k][0] >= p_def_bin2[k][0] - current_state)
-            # t=1..N
             constraints.append(p_def_start[k][1:] >= p_def_bin2[k][1:] - p_def_bin2[k][:-1])
 
             # Startup Limit: Start[t] + Bin[t-1] <= 1
-            # If we were ON yesterday (Bin[t-1]=1), we CANNOT Start today (Start[t]=0).
-            # t=0
             constraints.append(p_def_start[k][0] + current_state <= 1)
-            # t=1..N
             constraints.append(p_def_start[k][1:] + p_def_bin2[k][:-1] <= 1)
 
-            # Single Constant Start
-            # If set, we must switch ON exactly once, and stay ON for the duration.
-            if self.optim_conf["set_deferrable_load_single_constant"][k]:
-                # Sum(Starts) == 1
-                constraints.append(cp.sum(p_def_start[k]) == 1)
+            # Logic Constraints (Excluded for Sequence Loads)
+            # Sequence loads define their own strict shape via the 'y' matrix above.
+            # Applying constant/semi-continuous constraints to them creates conflict/redundancy.
 
-                # Sum(Duration) == Required Hours/Steps
-                rhs_val = (
-                    def_total_timestep[k]
-                    if (def_total_timestep and def_total_timestep[k] > 0)
-                    else def_total_hours[k] / self.time_step
-                )
-                constraints.append(cp.sum(p_def_bin2[k]) == rhs_val)
+            if not is_sequence_load:
+                # Single Constant Start
+                if self.optim_conf["set_deferrable_load_single_constant"][k]:
+                    constraints.append(cp.sum(p_def_start[k]) == 1)
 
-            # Semi-continuous
-            if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
-                nominal = self.optim_conf["nominal_power_of_deferrable_loads"][k]
+                    # Duration check
+                    rhs_val = (
+                        def_total_timestep[k]
+                        if (def_total_timestep and def_total_timestep[k] > 0)
+                        else def_total_hours[k] / self.time_step
+                    )
+                    constraints.append(cp.sum(p_def_bin2[k]) == rhs_val)
 
-                # P_def == Nominal * Bin1
-                constraints.append(p_deferrable[k] == nominal * p_def_bin1[k])
-
-                # Link Bin1 (Power) to Bin2 (Status) to enforce startup penalties on power gaps
-                constraints.append(p_def_bin1[k] == p_def_bin2[k])
+                # Semi-continuous (Binary * Nominal)
+                # Only applies if NOT a sequence load, as sequences have varying power
+                if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
+                    nominal = self.optim_conf["nominal_power_of_deferrable_loads"][k]
+                    constraints.append(p_deferrable[k] == nominal * p_def_bin1[k])
+                    constraints.append(p_def_bin1[k] == p_def_bin2[k])
 
         return predicted_temps, heating_demands, penalty_terms_total
 
