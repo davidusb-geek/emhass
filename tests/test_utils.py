@@ -1527,8 +1527,8 @@ class TestHeatingDemand(unittest.TestCase):
         ventilation_rate = 0.4  # ACH
         heated_volume = 240.0  # m³
 
-        # Electrical load profile in kW
-        load_forecast = np.array([1.0, 2.0, 3.0, 1.5])
+        # Electrical load profile in W
+        load_forecast = np.array([1000.0, 2000.0, 3000.0, 1500.0])
         internal_gains_factor = 0.7  # 70% of electrical load becomes heat
 
         demand_no_internal = utils.calculate_heating_demand_physics(
@@ -1587,7 +1587,7 @@ class TestHeatingDemand(unittest.TestCase):
 
         # Solar and load profiles
         solar_irradiance = np.array([0.0, 200.0, 400.0, 0.0])  # W/m²
-        load_forecast = np.array([1.0, 2.0, 2.5, 1.0])  # kW
+        load_forecast = np.array([1000.0, 2000.0, 2500.0, 1000.0])  # W
         internal_gains_factor = 0.7
 
         demand_no_gains = utils.calculate_heating_demand_physics(
@@ -1689,7 +1689,7 @@ class TestHeatingDemand(unittest.TestCase):
         envelope_area = 380.0
         ventilation_rate = 0.4
         heated_volume = 240.0
-        load_forecast = np.array([2.0, 3.0, 4.0, 2.5])  # kW
+        load_forecast = np.array([2000.0, 3000.0, 4000.0, 2500.0])  # W
 
         demand_no_internal = utils.calculate_heating_demand_physics(
             u_value=u_value,
@@ -1730,7 +1730,7 @@ class TestHeatingDemand(unittest.TestCase):
         envelope_area = 380.0
         ventilation_rate = 0.4
         heated_volume = 240.0
-        load_array = np.array([2.0, 3.0, 4.0, 2.5])
+        load_array = np.array([2000.0, 3000.0, 4000.0, 2500.0])  # W
         load_series = pd.Series(load_array)
         internal_gains_factor = 0.8
 
@@ -1776,7 +1776,7 @@ class TestHeatingDemand(unittest.TestCase):
         heated_volume = 240.0
 
         # Internal gains forecast with different length (3 instead of 4)
-        load_forecast_wrong_length = np.array([1.0, 2.0, 3.0])  # 3 elements
+        load_forecast_wrong_length = np.array([1000.0, 2000.0, 3000.0])  # 3 elements (W)
         internal_gains_factor = 0.7
 
         with self.assertRaises(ValueError) as context:
@@ -1804,7 +1804,7 @@ class TestHeatingDemand(unittest.TestCase):
         envelope_area = 380.0
         ventilation_rate = 0.4
         heated_volume = 240.0
-        load_forecast = np.array([1.0, 2.0, 3.0, 1.5])
+        load_forecast = np.array([1000.0, 2000.0, 3000.0, 1500.0])  # W
 
         # Test factor > 1
         with self.assertRaises(ValueError) as context:
@@ -1837,6 +1837,40 @@ class TestHeatingDemand(unittest.TestCase):
             )
 
         self.assertIn("internal_gains_factor must be between 0 and 1", str(context_neg.exception))
+
+    def test_calculate_heating_demand_physics_internal_gains_warns_on_low_values(self):
+        """Warning should be raised when values look like kW instead of W."""
+        import warnings
+
+        indoor_temp = 21.0
+        outdoor_temps = np.array([0.0, 0.0, 0.0, 0.0])
+        optimization_time_step = 60
+        u_value = 0.35
+        envelope_area = 380.0
+        ventilation_rate = 0.4
+        heated_volume = 240.0
+        # Values that look like kW (1-5 range) instead of W (1000-5000 range)
+        load_forecast_kw_mistake = np.array([1.0, 2.0, 3.0, 1.5])
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            utils.calculate_heating_demand_physics(
+                u_value=u_value,
+                envelope_area=envelope_area,
+                ventilation_rate=ventilation_rate,
+                heated_volume=heated_volume,
+                indoor_target_temperature=indoor_temp,
+                outdoor_temperature_forecast=outdoor_temps,
+                optimization_time_step=optimization_time_step,
+                internal_gains_forecast=load_forecast_kw_mistake,
+                internal_gains_factor=0.7,
+            )
+
+            # Verify warning was raised
+            self.assertEqual(len(w), 1)
+            self.assertTrue(issubclass(w[0].category, UserWarning))
+            self.assertIn("very low", str(w[0].message))
+            self.assertIn("Watts, not kilowatts", str(w[0].message))
 
     def test_calculate_cop_heatpump(self):
         """Test heat pump COP calculation utility function with Carnot-based formula."""
