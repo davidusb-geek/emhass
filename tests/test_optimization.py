@@ -2112,6 +2112,183 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
 
 
+
+    def test_prepare_power_limit_array_scalar(self):
+        """Test _prepare_power_limit_array with scalar input (existing behavior)"""
+        # Test scalar input should broadcast to all timesteps
+        result = self.opt._prepare_power_limit_array(9000, "test_scalar", 10)
+        
+        self.assertIsInstance(result, np.ndarray, "Should return numpy array")
+        self.assertEqual(len(result), 10, "Array length should match data_length")
+        self.assertTrue(np.all(result == 9000), "All values should equal the scalar input")
+
+    def test_prepare_power_limit_array_list(self):
+        """Test _prepare_power_limit_array with list input (new feature)"""
+        # Test list input with correct length
+        input_list = [9000, 8000, 7000, 6000, 5000]
+        result = self.opt._prepare_power_limit_array(input_list, "test_list", 5)
+        
+        self.assertIsInstance(result, np.ndarray, "Should return numpy array")
+        self.assertEqual(len(result), 5, "Array length should match input list length")
+        self.assertEqual(result[0], 9000, "First value should be preserved")
+        self.assertEqual(result[4], 5000, "Last value should be preserved")
+
+    def test_prepare_power_limit_array_numpy(self):
+        """Test _prepare_power_limit_array with numpy array input"""
+        # Test numpy array input
+        input_array = np.array([7000, 6000, 5000])
+        result = self.opt._prepare_power_limit_array(input_array, "test_array", 3)
+        
+        self.assertIsInstance(result, np.ndarray, "Should return numpy array")
+        self.assertEqual(len(result), 3, "Array length should match input")
+        self.assertTrue(np.array_equal(result, input_array), "Should preserve numpy array values")
+
+    def test_prepare_power_limit_array_wrong_length(self):
+        """Test _prepare_power_limit_array with mismatched list length"""
+        # Test list with wrong length should fallback to scalar (first value)
+        input_list = [9000, 8000]
+        result = self.opt._prepare_power_limit_array(input_list, "test_wrong_len", 5)
+        
+        self.assertIsInstance(result, np.ndarray, "Should return numpy array")
+        self.assertEqual(len(result), 5, "Should fallback to correct length")
+        self.assertTrue(np.all(result == 9000), "Should use first value as scalar fallback")
+
+    def test_prepare_power_limit_array_none(self):
+        """Test _prepare_power_limit_array with None input"""
+        # Test None input should use default value
+        result = self.opt._prepare_power_limit_array(None, "test_none", 5)
+        
+        self.assertIsInstance(result, np.ndarray, "Should return numpy array")
+        self.assertEqual(len(result), 5, "Should have correct length")
+        self.assertTrue(np.all(result == 9000), "Should use default value of 9000")
+
+    def test_optimization_with_scalar_power_limits(self):
+        """Test full optimization with scalar power limits (backward compatibility)"""
+        # This tests that existing behavior still works
+        df_input_data_dayahead = self.prepare_forecast_data()
+        P_PV = df_input_data_dayahead["p_pv_forecast"]
+        P_load = df_input_data_dayahead["p_load_forecast"]
+        
+        # Run optimization with scalar limits (default behavior)
+        opt_res = self.opt.perform_dayahead_forecast_optim(
+            df_input_data_dayahead, P_PV, P_load
+        )
+        
+        # Verify optimization succeeded
+        self.assertIsNotNone(opt_res, "Optimization should return results")
+        self.assertIsInstance(opt_res, pd.DataFrame, "Should return DataFrame")
+        
+        # Verify power limit columns exist
+        self.assertIn("maximum_power_from_grid", opt_res.columns, "Should have from_grid column")
+        self.assertIn("maximum_power_to_grid", opt_res.columns, "Should have to_grid column")
+        
+        # Verify scalar values are consistent (all same value)
+        from_grid_values = opt_res["maximum_power_from_grid"].unique()
+        to_grid_values = opt_res["maximum_power_to_grid"].unique()
+        
+        self.assertEqual(len(from_grid_values), 1, "Scalar should have single unique value")
+        self.assertEqual(len(to_grid_values), 1, "Scalar should have single unique value")
+
+    def test_optimization_with_vector_power_limits(self):
+        """Test full optimization with time-varying power limits (new feature)"""
+        df_input_data_dayahead = self.prepare_forecast_data()
+        n = len(df_input_data_dayahead)
+        
+        # Create time-varying limits: lower during middle hours
+        vector_from_grid = [9000] * n
+        for i in range(n // 4, 3 * n // 4):  # Middle half has lower limit
+            vector_from_grid[i] = 5000
+        
+        # Update config temporarily
+        original_from_grid = self.plant_conf["maximum_power_from_grid"]
+        self.plant_conf["maximum_power_from_grid"] = vector_from_grid
+        
+        # Recreate optimization object with new config
+        from emhass.optimization import Optimization
+        from emhass.utils import get_root
+        import pathlib
+        
+        # Setup emhass_conf for the test
+        root = pathlib.Path(get_root(__file__, num_parent=2))
+        emhass_conf = {
+            "data_path": root / "data/",
+            "root_path": root / "src/emhass/",
+        }
+        
+        opt_temp = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            "unit_load_cost",
+            "unit_prod_price",
+            "profit",
+            emhass_conf,
+            logger,
+        )
+        
+        try:
+            P_PV = df_input_data_dayahead["p_pv_forecast"]
+            P_load = df_input_data_dayahead["p_load_forecast"]
+            
+            # Run optimization with vector limits
+            opt_res = opt_temp.perform_dayahead_forecast_optim(
+                df_input_data_dayahead, P_PV, P_load
+            )
+            
+            # Verify optimization succeeded
+            self.assertIsNotNone(opt_res, "Optimization should return results")
+            self.assertIsInstance(opt_res, pd.DataFrame, "Should return DataFrame")
+            
+            # Verify power limit columns exist
+            self.assertIn("maximum_power_from_grid", opt_res.columns, "Should have from_grid column")
+            
+            # Verify vector values are present
+            from_grid_values = opt_res["maximum_power_from_grid"].values
+            self.assertEqual(len(from_grid_values), n, "Should have value for each timestep")
+            self.assertIn(5000, from_grid_values, "Should contain lower limit values")
+            self.assertIn(9000, from_grid_values, "Should contain higher limit values")
+            
+            # Verify the pattern matches our input
+            for i in range(n // 4, 3 * n // 4):
+                self.assertEqual(from_grid_values[i], 5000, 
+                               f"Timestep {i} should have lower limit")
+            
+            # Verify optimization respects the limits
+            p_grid_pos = opt_res["P_grid_pos"].values
+            for i in range(n):
+                self.assertLessEqual(p_grid_pos[i], from_grid_values[i] + 0.1,
+                                   f"Grid import at timestep {i} should not exceed limit")
+        
+        finally:
+            # Restore original config
+            self.plant_conf["maximum_power_from_grid"] = original_from_grid
+
+    def test_power_limit_columns_are_integers(self):
+        """Test that power limit columns are displayed as integers, not floats"""
+        df_input_data_dayahead = self.prepare_forecast_data()
+        P_PV = df_input_data_dayahead["p_pv_forecast"]
+        P_load = df_input_data_dayahead["p_load_forecast"]
+        
+        # Run optimization
+        opt_res = self.opt.perform_dayahead_forecast_optim(
+            df_input_data_dayahead, P_PV, P_load
+        )
+        
+        # Check that values are integers
+        from_grid_values = opt_res["maximum_power_from_grid"].values
+        to_grid_values = opt_res["maximum_power_to_grid"].values
+        
+        # All values should be whole numbers (no decimals)
+        self.assertTrue(
+            np.all(from_grid_values == from_grid_values.astype(int)),
+            "from_grid values should be integers"
+        )
+        self.assertTrue(
+            np.all(to_grid_values == to_grid_values.astype(int)),
+            "to_grid values should be integers"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
     ch.close()
