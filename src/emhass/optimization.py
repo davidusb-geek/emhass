@@ -790,7 +790,7 @@ class Optimization:
         total_penalty = cp.sum(penalty_expr) if not isinstance(penalty_expr, int) else 0
         return predicted_temp, None, total_penalty
 
-    def _add_thermal_battery_constraints(self, constraints, k, data_opt):
+    def _add_thermal_battery_constraints(self, constraints, k, data_opt, p_load):
         """Handle constraints for thermal battery loads (Vectorized, Legacy Match)."""
         p_deferrable = self.vars["p_deferrable"][k]
 
@@ -863,14 +863,23 @@ class Optimization:
             )
             window_area = hc.get("window_area", None)
             shgc = hc.get("shgc", 0.6)
+
+            # Extract optional internal gains parameter
+            internal_gains_factor = hc.get("internal_gains_factor", 0.0)
+
+            # Use p_load directly
+            internal_gains_forecast = None
+            if internal_gains_factor > 0:
+                internal_gains_forecast = p_load
+
+            # Solar Irradiance Logic (Numpy Array)
             solar_irradiance = None
             if "ghi" in data_opt.columns and window_area is not None:
-                # Ensure solar_irradiance matches length
                 vals = data_opt["ghi"].values
-                if len(vals) < required_len:
-                    vals = np.concatenate((vals, np.zeros(required_len - len(vals))))
-                # Convert to list for utils compatibility
-                solar_irradiance = vals[:required_len].tolist()
+                # Handle padding if necessary
+                if len(vals) < self.num_timesteps:
+                    vals = np.concatenate((vals, np.zeros(self.num_timesteps - len(vals))))
+                solar_irradiance = vals[: self.num_timesteps]
 
             heating_demand = utils.calculate_heating_demand_physics(
                 u_value=hc["u_value"],
@@ -883,7 +892,31 @@ class Optimization:
                 solar_irradiance_forecast=solar_irradiance,
                 window_area=window_area,
                 shgc=shgc,
+                internal_gains_forecast=internal_gains_forecast,
+                internal_gains_factor=internal_gains_factor,
             )
+
+            # Improved Logging
+            gains_info = []
+            if solar_irradiance is not None:
+                gains_info.append(f"solar (window_area={window_area:.1f}, shgc={shgc:.2f})")
+            if internal_gains_factor > 0:
+                gains_info.append(f"internal (factor={internal_gains_factor:.2f})")
+
+            gains_str = " with " + " and ".join(gains_info) if gains_info else ""
+            self.logger.debug(
+                "Load %s: Using physics-based heating demand%s "
+                "(u_value=%.2f, envelope_area=%.1f, ventilation_rate=%.2f, heated_volume=%.1f, "
+                "indoor_target_temp=%.1f)",
+                k,
+                gains_str,
+                hc["u_value"],
+                hc["envelope_area"],
+                hc["ventilation_rate"],
+                hc["heated_volume"],
+                indoor_target_temp,
+            )
+            # --- END PORTED LOGIC ---
         else:
             base_temperature = hc.get("base_temperature", 18.0)
             annual_reference_hdd = hc.get("annual_reference_hdd", 3000.0)
@@ -939,6 +972,7 @@ class Optimization:
         def_end_timestep,
         def_init_temp,
         min_power_of_deferrable_loads,
+        p_load,
     ):
         """Master helper for all deferrable load constraints (Vectorized)."""
         p_deferrable = self.vars["p_deferrable"]
@@ -1014,7 +1048,7 @@ class Optimization:
                 and "thermal_battery" in self.optim_conf["def_load_config"][k]
             ):
                 pred_temp, heat_demand = self._add_thermal_battery_constraints(
-                    constraints, k, data_opt
+                    constraints, k, data_opt, p_load
                 )
                 predicted_temps[k] = pred_temp
                 heating_demands[k] = heat_demand
@@ -1412,6 +1446,7 @@ class Optimization:
                     def_end_timestep,
                     def_init_temp,
                     min_power_of_deferrable_loads,
+                    p_load,
                 )
             )
 
