@@ -106,11 +106,14 @@ class Optimization:
         keys_to_mask = [
             "influxdb_username",
             "influxdb_password",
-            "long_lived_token",
-            "Latitude",
-            "Longitude",
+            "influxdb_token",
             "solcast_api_key",
             "solcast_rooftop_id",
+            "long_lived_token",
+            "time_zone",
+            "Latitude",
+            "Longitude",
+            "Altitude",
         ]
         for key in keys_to_mask:
             if key in conf_to_log:
