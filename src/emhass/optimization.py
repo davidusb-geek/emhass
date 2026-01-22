@@ -1404,12 +1404,14 @@ class Optimization:
         def_start_timestep: list | None = None,
         def_end_timestep: list | None = None,
         def_init_temp: list | None = None,
+        min_power_of_deferrable_loads: list | None = None,
         debug: bool | None = False,
     ) -> pd.DataFrame:
         r"""
         Perform the actual optimization using Convex Programming (CVXPY).
+        Includes automatic fallback to relaxed LP if MILP fails or times out.
         """
-        # 0. Dynamic Resizing (Fix for ValueError: Invalid dimensions)
+        # Dynamic Resizing
         # If the input data length differs from the initialized N, we must rebuild the problem.
         current_n = len(data_opt)
         if current_n != self.num_timesteps:
@@ -1423,6 +1425,11 @@ class Optimization:
             self.param_load_forecast = cp.Parameter(current_n, name="load_forecast")
             self.param_load_cost = cp.Parameter(current_n, name="load_cost")
             self.param_prod_price = cp.Parameter(current_n, name="prod_price")
+
+            # Re-initialize other size-dependent parameters if they exist
+            if hasattr(self, "param_soc_init"):
+                # SOC params are scalar, but constraints depend on N
+                pass
 
             # Re-initialize Variables & Constraints
             self.vars, self.constraints = self._initialize_decision_variables()
@@ -1463,9 +1470,12 @@ class Optimization:
             def_init_temp = [None] * self.optim_conf["number_of_deferrable_loads"]
 
         num_deferrable_loads = self.optim_conf["number_of_deferrable_loads"]
-        min_power_of_deferrable_loads = self.optim_conf.get(
-            "minimum_power_of_deferrable_loads", [0] * num_deferrable_loads
-        )
+
+        # Ensure min_power_of_deferrable_loads is available
+        if min_power_of_deferrable_loads is None:
+            min_power_of_deferrable_loads = self.optim_conf.get(
+                "minimum_power_of_deferrable_loads", [0] * num_deferrable_loads
+            )
 
         def pad_list(input_list, target_len, fill=0):
             if input_list is None:
@@ -1558,30 +1568,28 @@ class Optimization:
             )
 
             # Add penalty term if it exists (not 0)
-            # We assume penalty_terms_total is either 0 (int) or a cvxpy expression
             if not isinstance(penalty_terms_total, int) or penalty_terms_total != 0:
                 objective_expr.args[0] += penalty_terms_total
 
             self.prob = cp.Problem(objective_expr, constraints)
 
-        # Solve
+        # Solver Configuration
         solver_opts = {"verbose": False}
+        if debug:
+            solver_opts["verbose"] = True
 
         # Retrieve Constraints (Time & Threads)
-        # We keep these config parameters as they are useful for everyone
         threads = self.optim_conf.get("num_threads", 0)
         timeout = self.optim_conf.get("lp_solver_timeout", 180)
 
         # Select Solver
         # We strictly default to HiGHS.
-        # Advanced users can override this by setting the 'LP_SOLVER' environment variable.
         requested_solver = os.environ.get("LP_SOLVER", "HIGHS").upper()
         selected_solver = cp.HIGHS
 
         if requested_solver == "GUROBI":
             if "GUROBI" in cp.installed_solvers():
                 selected_solver = cp.GUROBI
-                # Gurobi specific options
                 solver_opts["TimeLimit"] = timeout
                 if threads > 0:
                     solver_opts["Threads"] = threads
@@ -1593,7 +1601,6 @@ class Optimization:
         elif requested_solver == "CPLEX":
             if "CPLEX" in cp.installed_solvers():
                 selected_solver = cp.CPLEX
-                # CPLEX specific options
                 cplex_params = {"timelimit": timeout}
                 if threads > 0:
                     cplex_params["threads"] = threads
@@ -1611,26 +1618,114 @@ class Optimization:
             # 'run_crossover' ensures a cleaner solution (closer to simplex vertex)
             solver_opts["run_crossover"] = "on"
 
-        # Execute Solve
+        # Solve Execution with Fallback
         try:
             self.prob.solve(solver=selected_solver, warm_start=True, **solver_opts)
         except Exception as e:
             self.logger.warning(
-                f"Solver {selected_solver} failed: {e}. Retrying with default settings."
+                f"Solver {selected_solver} failed: {e}. Checking status for fallback..."
             )
-            # Fallback retry
+
+        # Check for failure or "bad" status
+        # Note: "user_limit" often means timeout. "infeasible" means configuration conflict.
+        fail_statuses = ["infeasible", "unbounded", "user_limit", None]
+        if self.prob.status in fail_statuses or self.prob.value is None:
+            self.logger.warning(
+                f"Optimization failed with status: '{self.prob.status}'. "
+                "Retrying with relaxed constraints (Continuous LP)..."
+            )
+
+            # Backup Configuration
+            original_semi_cont = copy.deepcopy(
+                self.optim_conf.get("treat_deferrable_load_as_semi_cont", [])
+            )
+            original_single_const = copy.deepcopy(
+                self.optim_conf.get("set_deferrable_load_single_constant", [])
+            )
+
+            # Relax Configuration: Disable Binary Logic
+            n_def = self.optim_conf["number_of_deferrable_loads"]
+            self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False] * n_def
+            self.optim_conf["set_deferrable_load_single_constant"] = [False] * n_def
+
+            # Re-build Constraints (Clean Slate)
+            constraints_relaxed = self.constraints[:]  # Start with base bound constraints
+
+            # Re-apply main constraints
+            self._add_main_power_balance_constraints(constraints_relaxed)
+            # (Note: We reuse previous stress configs as they don't change with relaxation)
+            if inv_stress_conf:
+                self._add_hybrid_inverter_constraints(constraints_relaxed, inv_stress_conf)
+            if batt_stress_conf:
+                self._add_battery_constraints(constraints_relaxed, batt_stress_conf)
+
+            if self.plant_conf["compute_curtailment"]:
+                constraints_relaxed.append(self.vars["p_pv_curtailment"] <= self.param_pv_forecast)
+            if self.costfun == "self-consumption" and "SC" in self.vars:
+                constraints_relaxed.append(self.vars["SC"] <= self.param_pv_forecast)
+                constraints_relaxed.append(
+                    self.vars["SC"] <= self.param_load_forecast + self.vars["p_def_sum"]
+                )
+
+            # Re-call deferrable load constraints (Skipping binary logic due to config change)
+            self.predicted_temps, self.heating_demands, penalty_terms_total = (
+                self._add_deferrable_load_constraints(
+                    constraints_relaxed,
+                    data_opt,
+                    def_total_hours,
+                    def_total_timestep,
+                    def_start_timestep,
+                    def_end_timestep,
+                    def_init_temp,
+                    min_power_of_deferrable_loads,
+                    p_load,
+                )
+            )
+
+            # Re-build Objective
+            objective_expr = self._build_objective_function(batt_stress_conf, inv_stress_conf)
+            if not isinstance(penalty_terms_total, int) or penalty_terms_total != 0:
+                objective_expr.args[0] += penalty_terms_total
+
+            # Solve Relaxed Problem
+            prob_relaxed = cp.Problem(objective_expr, constraints_relaxed)
             try:
-                self.prob.solve(solver=cp.HIGHS)
-            except Exception:
-                pass  # Status check below will catch failure
+                self.logger.info("Solving relaxed problem (LP)...")
+                prob_relaxed.solve(solver=selected_solver, **solver_opts)
+
+                if prob_relaxed.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+                    self.logger.info("Relaxed optimization successful!")
+                    self.prob = prob_relaxed  # Use this result
+                    # Mark status so user knows it was relaxed
+                    self.prob._status = "Optimal (Relaxed)"
+                else:
+                    self.logger.error(
+                        f"Relaxed optimization also failed with status: {prob_relaxed.status}"
+                    )
+                    self.prob = prob_relaxed
+            except Exception as e:
+                self.logger.error(f"Relaxed optimization crashed: {e}")
+
+            # 5. Restore Configuration
+            self.optim_conf["treat_deferrable_load_as_semi_cont"] = original_semi_cont
+            self.optim_conf["set_deferrable_load_single_constant"] = original_single_const
 
         # Fix for Status Case: Map "optimal" -> "Optimal"
-        self.optim_status = self.prob.status.title() if self.prob.status else "Failure"
+        status_raw = self.prob.status
+        self.optim_status = status_raw.title() if status_raw else "Failure"
+
+        # Helper: Ensure we return "Optimal" for tests if it was "Optimal (Relaxed)" or "Optimal_Inaccurate"
+        if "Optimal" in self.optim_status:
+            pass  # Keep it as is (e.g. "Optimal (Relaxed)")
+
         self.logger.info("Status: " + self.optim_status)
 
-        if self.prob.value is None or self.prob.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+        if self.prob.value is None or self.prob.status not in [
+            cp.OPTIMAL,
+            cp.OPTIMAL_INACCURATE,
+            "Optimal (Relaxed)",
+        ]:
             self.logger.warning("Cost function cannot be evaluated or Infeasible/Unbounded")
-            # Return valid empty DF to match original behavior
             return pd.DataFrame()
         else:
             self.logger.info(
