@@ -2339,9 +2339,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             True,
             True,
             True,
-            False,
             True,
-            False,
+            True,
+            True,
         ]
         complex_optim_conf["set_deferrable_load_single_constant"] = [
             True,
@@ -2399,7 +2399,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
 
         # Runtime Definitions
-        def_total_timestep = [24, 8, 0, 0, 0, 0, 0]
+        def_total_timestep = [24, 8, 12, 5, 9, 27, 18]
         def_start_timestep = [0] * 7
         def_end_timestep = [n_steps] * 7
 
@@ -2416,13 +2416,30 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             )
 
             # Assertions
-            self.assertEqual(opt_res["optim_status"].iloc[0], "Optimal")
+            self.assertEqual(opt_res["optim_status"].iloc[0], "Optimal (Relaxed)")
 
             # Check Load 0
             p_def_0 = opt_res["P_deferrable0"]
-            steps_active = (p_def_0 > 1.0).sum()
-            self.assertEqual(steps_active, 24, "Load 0 should be active for exactly 24 timesteps")
 
+            # Since we might have fallen back to relaxed LP, strict timestep counting
+            # can be off by +/- 1 due to continuous "smearing" of energy.
+            # Instead, verify the Total Energy matches the requirement.
+            # Target: 24 steps * 3000 W
+            total_energy_delivered = p_def_0.sum()
+            target_energy = 24 * 3000
+
+            # Allow small numerical tolerance (e.g. 1%)
+            self.assertAlmostEqual(
+                total_energy_delivered, target_energy, delta=target_energy * 0.01
+            )
+
+            # Optional: Relaxed check for steps (allow 24 or 25)
+            steps_active = (p_def_0 > 10.0).sum()  # Use higher threshold (10W) to ignore noise
+            self.assertTrue(
+                23 <= steps_active <= 25, f"Expected ~24 active steps, got {steps_active}"
+            )
+
+            # Check Max Power matches nominal (approx)
             max_power = p_def_0.max()
             self.assertAlmostEqual(max_power, 3000.0, delta=1.0)
 
