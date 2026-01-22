@@ -42,7 +42,6 @@ requirements:
     - quart
     - aiofiles
     - jinja2
-    - asyncio
     - aiohttp
     - orjson
     - websockets
