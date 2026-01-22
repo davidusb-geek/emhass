@@ -1377,7 +1377,10 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     """
     cols_p = [i for i in df.columns.to_list() if "P_" in i]
     # Let's round the data in the DF
-    optim_status = df["optim_status"].unique().item()
+    if "optim_status" in df.columns:
+        optim_status = df["optim_status"].iloc[0]
+    else:
+        optim_status = "Status not available"
     df.drop("optim_status", axis=1, inplace=True)
     cols_else = [i for i in df.columns.to_list() if "P_" not in i]
     df = df.apply(pd.to_numeric)
@@ -1413,9 +1416,14 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         fig_1.update_layout(xaxis_title="Timestamp", yaxis_title="Battery SOC (%)")
         image_path_1 = fig_1.to_html(full_html=False, default_width="75%")
     # Figure Thermal: Temperatures (Optional)
-    # Detect columns for predicted or target temperatures
+    # Detect columns for predicted, target, min, or max temperatures
     cols_temp = [
-        i for i in df.columns.to_list() if "predicted_temp_heater" in i or "target_temp_heater" in i
+        i
+        for i in df.columns.to_list()
+        if "predicted_temp_heater" in i
+        or "target_temp_heater" in i
+        or "min_temp_heater" in i
+        or "max_temp_heater" in i
     ]
     image_path_temp = None
     if len(cols_temp) > 0:
@@ -1668,6 +1676,26 @@ async def build_legacy_config_params(
     return config
 
 
+def get_keys_to_mask() -> list[str]:
+    """
+    Return a list of sensitive configuration keys that should be masked in logs
+    or treated specially in the UI (e.g., secrets).
+    """
+    return [
+        "influxdb_username",
+        "influxdb_password",
+        "solcast_api_key",
+        "solcast_rooftop_id",
+        "long_lived_token",
+        "time_zone",
+        "Latitude",
+        "Longitude",
+        "Altitude",
+        "hass_url",  # Ensure this is included if you want it masked everywhere
+        "solar_forecast_kwp",  # Ensure this is included if you want it masked everywhere
+    ]
+
+
 def param_to_config(param: dict[str, dict], logger: logging.Logger) -> dict[str, str]:
     """
     A function that extracts the parameters from param back to the config.json format.
@@ -1686,19 +1714,7 @@ def param_to_config(param: dict[str, dict], logger: logging.Logger) -> dict[str,
     return_config = {}
 
     config_categories = ["retrieve_hass_conf", "optim_conf", "plant_conf"]
-    secret_params = [
-        "hass_url",
-        "time_zone",
-        "Latitude",
-        "Longitude",
-        "Altitude",
-        "long_lived_token",
-        "solcast_api_key",
-        "solcast_rooftop_id",
-        "solar_forecast_kwp",
-        "influxdb_username",
-        "influxdb_password",
-    ]
+    secret_params = get_keys_to_mask()
 
     # Loop through config catagories that contain config params, and extract
     for config in config_categories:
@@ -1750,6 +1766,8 @@ async def build_secrets(
         "solcast_api_key": "yoursecretsolcastapikey",
         "solcast_rooftop_id": "yourrooftopid",
         "solar_forecast_kwp": 5,
+        "influxdb_username": "yourinfluxdbusername",
+        "influxdb_password": "yourinfluxdbpassword",
     }
 
     # Obtain Secrets from ENV?
@@ -1802,14 +1820,32 @@ async def build_secrets(
                     ) as response:
                         if response.status < 400:
                             config_hass = await response.json()
-                            params_secrets = {
-                                "hass_url": params_secrets["hass_url"],
-                                "long_lived_token": params_secrets["long_lived_token"],
-                                "time_zone": config_hass["time_zone"],
-                                "Latitude": config_hass["latitude"],
-                                "Longitude": config_hass["longitude"],
-                                "Altitude": config_hass["elevation"],
-                            }
+                            params_secrets.update(
+                                {
+                                    "hass_url": params_secrets["hass_url"],
+                                    "long_lived_token": params_secrets["long_lived_token"],
+                                    "time_zone": config_hass["time_zone"],
+                                    "Latitude": config_hass["latitude"],
+                                    "Longitude": config_hass["longitude"],
+                                    "Altitude": config_hass["elevation"],
+                                    # If defined in HA config, use them, otherwise keep defaults
+                                    "solcast_api_key": config_hass.get(
+                                        "solcast_api_key", params_secrets["solcast_api_key"]
+                                    ),
+                                    "solcast_rooftop_id": config_hass.get(
+                                        "solcast_rooftop_id", params_secrets["solcast_rooftop_id"]
+                                    ),
+                                    "solar_forecast_kwp": config_hass.get(
+                                        "solar_forecast_kwp", params_secrets["solar_forecast_kwp"]
+                                    ),
+                                    "influxdb_username": config_hass.get(
+                                        "influxdb_username", params_secrets.get("influxdb_username")
+                                    ),
+                                    "influxdb_password": config_hass.get(
+                                        "influxdb_password", params_secrets.get("influxdb_password")
+                                    ),
+                                }
+                            )
                         else:
                             # Obtain the url and key secrets if any from options.json (default /app/options.json)
                             logger.warning(
@@ -1837,23 +1873,10 @@ async def build_secrets(
                                 options["Altitude"]
                             ):
                                 params_secrets["Altitude"] = options["Altitude"]
-            else:
-                # Obtain the url and key secrets if any from options.json (default /app/options.json)
-                logger.debug("Obtaining url and key secrets from options.json")
-                if url_from_options != "empty" and url_from_options != "":
-                    params_secrets["hass_url"] = url_from_options
-                if key_from_options != "empty" and key_from_options != "":
-                    params_secrets["long_lived_token"] = key_from_options
-                if options.get("time_zone", "empty") != "empty" and options["time_zone"] != "":
-                    params_secrets["time_zone"] = options["time_zone"]
-                if options.get("Latitude", None) is not None and bool(options["Latitude"]):
-                    params_secrets["Latitude"] = options["Latitude"]
-                if options.get("Longitude", None) is not None and bool(options["Longitude"]):
-                    params_secrets["Longitude"] = options["Longitude"]
-                if options.get("Altitude", None) is not None and bool(options["Altitude"]):
-                    params_secrets["Altitude"] = options["Altitude"]
 
             # Obtain the forecast secrets (if any) from options.json (default /app/options.json)
+            # This logic runs regardless of whether HA API call above succeeded or failed,
+            # so we removed the duplicate logic from the 'else' block above.
             forecast_secrets = [
                 "solcast_api_key",
                 "solcast_rooftop_id",
@@ -1873,6 +1896,21 @@ async def build_secrets(
                     params_secrets["solcast_rooftop_id"] = options["solcast_rooftop_id"]
                 if options.get("solar_forecast_kwp", None) and bool(options["solar_forecast_kwp"]):
                     params_secrets["solar_forecast_kwp"] = options["solar_forecast_kwp"]
+
+            # Obtain InfluxDB secrets from options.json
+            influx_secrets = ["influxdb_username", "influxdb_password"]
+            if any(x in influx_secrets for x in list(options.keys())):
+                logger.debug("Obtaining InfluxDB secrets from options.json")
+                if (
+                    options.get("influxdb_username", "empty") != "empty"
+                    and options["influxdb_username"] != ""
+                ):
+                    params_secrets["influxdb_username"] = options["influxdb_username"]
+                if (
+                    options.get("influxdb_password", "empty") != "empty"
+                    and options["influxdb_password"] != ""
+                ):
+                    params_secrets["influxdb_password"] = options["influxdb_password"]
 
     # Obtain secrets from secrets_emhass.yaml? (default /app/secrets_emhass.yaml)
     if secrets_path and pathlib.Path(secrets_path).is_file():

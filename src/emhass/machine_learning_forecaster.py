@@ -622,7 +622,7 @@ class MLForecaster:
                 exog=self.data_test.drop(self.var_model, axis=1),
             )
 
-            freq_hours = self.data_exo.index.freq.delta.seconds / 3600
+            freq_hours = pd.to_timedelta(self.data_exo.index.freq).total_seconds() / 3600
             self.lags_opt = int(np.round(len(self.optimize_results.iloc[0]["lags"])))
             self.days_needed = int(np.round(self.lags_opt * freq_hours / 24))
 

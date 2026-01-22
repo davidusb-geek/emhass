@@ -1191,6 +1191,8 @@ class Forecast:
             forecast_out = pd.concat(forecast_parts, axis=0)
         else:
             forecast_out = pd.DataFrame()
+        if not forecast_out.empty and forecast_out.index.dtype != df_final.index.dtype:
+            forecast_out.index = forecast_out.index.astype(df_final.index.dtype)
         # Merge with final DataFrame to align indices
         merged = pd.merge_asof(
             df_final.sort_index(),
@@ -1581,6 +1583,8 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
+        if df_final.index.dtype != "datetime64[ns, " + str(self.time_zone) + "]":
+            df_final.index = df_final.index.astype("datetime64[ns, " + str(self.time_zone) + "]")
         csv_path = self.emhass_conf["data_path"] / csv_path
         if method == "hp_hc_periods":
             df_final[self.var_load_cost] = self.optim_conf["load_offpeak_hours_cost"]
@@ -1667,6 +1671,8 @@ class Forecast:
         :rtype: pd.DataFrame
 
         """
+        if df_final.index.dtype != "datetime64[ns, " + str(self.time_zone) + "]":
+            df_final.index = df_final.index.astype("datetime64[ns, " + str(self.time_zone) + "]")
         csv_path = self.emhass_conf["data_path"] / csv_path
         if method == "constant":
             df_final[self.var_prod_price] = self.optim_conf["photovoltaic_production_sell_price"]
