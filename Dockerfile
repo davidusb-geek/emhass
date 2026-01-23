@@ -45,6 +45,8 @@ RUN apt-get update \
     patchelf \
     cmake \
     ninja-build \
+    # Runtime dependencies
+    tini \
     # Cleanup apt caches to reduce image size
     && rm -rf /var/cache/apt/* \
     && rm -rf /var/lib/apt/lists/* \
@@ -117,7 +119,7 @@ ENV PORT=5000
 ENV IP=0.0.0.0
 
 # Entrypoint script inline
-ENTRYPOINT ["/bin/bash", "-c", "set -e && \
+ENTRYPOINT ["/usr/bin/tini", "--", "/bin/bash", "-c", "set -e && \
 if [ ! -f /data/long_train_data.pkl ]; then \
     echo 'Initializing data: Copying default PKL file...'; \
     cp /app/data/long_train_data.pkl /data/; \
