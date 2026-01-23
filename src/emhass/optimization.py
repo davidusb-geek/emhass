@@ -1727,18 +1727,21 @@ class Optimization:
         self.optim_status = status_raw.title() if status_raw else "Failure"
 
         # Helper: Ensure we return "Optimal" for tests if it was "Optimal (Relaxed)" or "Optimal_Inaccurate"
-        if "Optimal" in self.optim_status:
-            pass  # Keep it as is (e.g. "Optimal (Relaxed)")
-
-        self.logger.info("Status: " + self.optim_status)
-
         if self.prob.value is None or self.prob.status not in [
             cp.OPTIMAL,
             cp.OPTIMAL_INACCURATE,
             "Optimal (Relaxed)",
         ]:
             self.logger.warning("Cost function cannot be evaluated or Infeasible/Unbounded")
-            return pd.DataFrame()
+
+            # Create a DataFrame with the correct index (timestamps)
+            opt_tp = pd.DataFrame(index=data_opt.index)
+
+            # explicitely set the status column so downstream functions (like get_injection_dict)
+            # don't crash when trying to access or drop it.
+            opt_tp["optim_status"] = self.optim_status
+
+            return opt_tp
         else:
             self.logger.info(
                 "Total value of the Cost function = %.02f",
@@ -1797,7 +1800,7 @@ class Optimization:
             day_end = day + self.time_delta - self.freq
             if day_start.tzinfo != day_end.tzinfo:
                 self.logger.warning(
-                    f"Skipping day {day} as days have ddifferent timezone, probably because of DST."
+                    f"Skipping day {day} as days have different timezone, probably because of DST."
                 )
                 continue  # Skip this day and move to the next iteration
             else:
