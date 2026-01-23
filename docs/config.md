@@ -66,7 +66,6 @@ These are the parameters needed to properly define the optimization problem.
 	- 8
 - `start_timesteps_of_each_deferrable_load`: A list of integers defining the **earliest time step index** from which each deferrable load is allowed to start consuming power.
 	- **Value type:** Integer (Index of the time step, *not* the hour).
-	- **Calculation:** .
 	- **Default/Disable:** If a value of **0** (or negative) is provided, the constraint is disabled, and the load is allowed to start immediately from the beginning of the optimization window (Index 0).
 	- Example: With a `30 min` (0.5h) time step:
 		- `0`: Can start immediately (00:00).
@@ -78,12 +77,11 @@ Since `start_timesteps` are relative indexes starting from 0 (the moment the opt
 Example: 
 - Launch at 7:00 AM, allowed to start at 9:00 AM (2h delay).
 - Time step 30 min.
-- Value = $2 \text{ hours} / 0.5 = \mathbf{4}$.
+- Value = 2 hours / 0.5 = 4.
 ```
 
 - `end_timesteps_of_each_deferrable_load`: A list of integers defining the **deadline time step index** by which each deferrable load must stop consuming power. The load is strictly forbidden from operating at or after this time step.
 	- **Value type:** Integer (Index of the time step).
-	- **Calculation:** .
 	- **Default/Disable:** If a value of **0** (or negative) is provided, the constraint is disabled, and the load is allowed to operate up until the very end of the prediction horizon (e.g., the full 24h window).
 	- Example: With a `30 min` (0.5h) time step:
 		- `0`: Can run anytime until the end of the horizon.
