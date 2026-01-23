@@ -49,10 +49,23 @@ By default, running an optimization in EMHASS will output the results into the C
 ```bash
 # RUN dayahead
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/dayahead-optim
-# Then publish teh results of dayahead
+# Then publish the results of dayahead
 curl -i -H 'Content-Type:application/json' -X POST -d {} http://localhost:5000/action/publish-data
 ```
 *Note, the published entities from the publish-data action will not automatically update the entities' current state (current state being used to check when to turn on and off appliances via Home Assistant automations). To update the EMHASS entities state, another publish would have to be re-run later when the current time matches the next value's timestamp (e.g. every 30 minutes). See examples below for methods to automate the publish-action.*
+
+```{note}
+
+If your are using the thermal model, then for this manual publish implementation you need to indicate which of your deferrable loads are thermal.
+We do this with the `"def_load_config"` entry.
+
+If you have just one deferrable load which is a thermal load then the payload of `curl` publish command should look like:
+`{"def_load_config": [{"thermal_config": {}}]}`
+
+Similarly if you have three deferrable loads where the second load is a thermal load the payload would have been:
+`{"def_load_config": [{},{"thermal_config": {}},{}]}`
+
+```
 
 ### Continual_publish *(EMHASS Automation)*
 Setting `continual_publish` to `true` in the configuration saves the output of the optimization into the `data_path/entities` folder *(a .json file for each sensor/entity)*. A constant loop (in `optimization_time_step` minutes) will run, observe the .json files in that folder, and publish the saved files periodically (updating the current state of the entity by comparing date.now with the saved data value timestamps). 
