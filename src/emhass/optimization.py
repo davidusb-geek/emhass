@@ -75,7 +75,6 @@ class Optimization:
         self.freq = self.retrieve_hass_conf["optimization_time_step"]
         self.time_zone = self.retrieve_hass_conf["time_zone"]
         self.time_step = self.freq.seconds / 3600  # in hours
-        self.time_delta = pd.to_timedelta(opt_time_delta, "hours")  # The period of optimization
         self.var_pv = self.retrieve_hass_conf["sensor_power_photovoltaics"]
         self.var_load = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
         self.var_load_new = self.var_load + "_positive"
@@ -85,6 +84,19 @@ class Optimization:
         self.var_load_cost = var_load_cost
         self.var_prod_price = var_prod_price
         self.optim_status = None
+
+        # Prioritize config value over default arg
+        if "delta_forecast_daily" in self.optim_conf:
+            # If configured in days (int/float), convert to timedelta
+            val = self.optim_conf["delta_forecast_daily"]
+            if isinstance(val, int) or isinstance(val, float):
+                self.time_delta = pd.to_timedelta(val, "days")
+            else:
+                # Assume it is already a timedelta or compatible
+                self.time_delta = pd.to_timedelta(val)
+        else:
+            # Fallback to the argument (default 24h)
+            self.time_delta = pd.to_timedelta(opt_time_delta, "hours")
 
         # Configuration for Solver
         if "num_threads" in optim_conf.keys():
