@@ -64,12 +64,41 @@ These are the parameters needed to properly define the optimization problem.
 - `operating_hours_of_each_deferrable_load`: The total number of hours that each deferrable load should operate. For example:
 	- 5
 	- 8
-- `start_timesteps_of_each_deferrable_load`: The timestep as from which each deferrable load is allowed to operate (if you don't want the deferrable load to use the whole optimization time window). If you specify a value of 0 (or negative), the deferrable load will be optimized as from the beginning of the complete prediction horizon window. For example:
-    - 0
-    - 1 
-- `end_timesteps_of_each_deferrable_load`: The timestep before which each deferrable load should operate. The deferrable load is not allowed to operate after the specified time step. If a value of 0 (or negative) is provided, the deferrable load is allowed to operate in the complete optimization window). For example:
-	- 0
-	- 3
+- `start_timesteps_of_each_deferrable_load`: A list of integers defining the **earliest time step index** from which each deferrable load is allowed to start consuming power.
+	- **Value type:** Integer (Index of the time step, *not* the hour).
+	- **Calculation:** .
+	- **Default/Disable:** If a value of **0** (or negative) is provided, the constraint is disabled, and the load is allowed to start immediately from the beginning of the optimization window (Index 0).
+	- Example: With a `30 min` (0.5h) time step:
+		- `0`: Can start immediately (00:00).
+		- `4`: Can start after 2 hours (02:00).
+
+```{note} 
+
+Since `start_timesteps` are relative indexes starting from 0 (the moment the optimization begins), they are heavily dependent on your optimization launch time. So the index is relative to the start of the optimization window (Launch Time = Index 0).
+Example: 
+- Launch at 7:00 AM, allowed to start at 9:00 AM (2h delay).
+- Time step 30 min.
+- Value = $2 \text{ hours} / 0.5 = \mathbf{4}$.
+```
+
+- `end_timesteps_of_each_deferrable_load`: A list of integers defining the **deadline time step index** by which each deferrable load must stop consuming power. The load is strictly forbidden from operating at or after this time step.
+	- **Value type:** Integer (Index of the time step).
+	- **Calculation:** .
+	- **Default/Disable:** If a value of **0** (or negative) is provided, the constraint is disabled, and the load is allowed to operate up until the very end of the prediction horizon (e.g., the full 24h window).
+	- Example: With a `30 min` (0.5h) time step:
+		- `0`: Can run anytime until the end of the horizon.
+		- `21`: Must finish strictly before timestep 21 (i.e., must stop by 10.5 hours / 10:30 AM).
+
+```{note} 
+
+Since `end_timesteps` are relative indexes starting from 0 (the moment the optimization begins), they are heavily dependent on your optimization launch time. So the index is relative to the start of the optimization window.
+Example: 
+- Launch at 7:00 AM, must finish by 6:00 PM (18:00).
+- Duration = 11 hours.
+- Time step 30 min.
+- Value = 11 hours / 0.5 = 22.
+```
+
 - `treat_deferrable_load_as_semi_cont`: Define if we should treat each deferrable load as a semi-continuous variable. Semi-continuous variables (`True`) are variables that must take a value that can be either their maximum or minimum/zero (for example On = Maximum load, Off = 0 W). Non semi-continuous (which means continuous) variables (`False`) can take any values between their maximum and minimum. For example:
 	- True
 	- True
