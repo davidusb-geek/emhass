@@ -75,7 +75,6 @@ class Optimization:
         self.freq = self.retrieve_hass_conf["optimization_time_step"]
         self.time_zone = self.retrieve_hass_conf["time_zone"]
         self.time_step = self.freq.seconds / 3600  # in hours
-        self.time_delta = pd.to_timedelta(opt_time_delta, "hours")  # The period of optimization
         self.var_pv = self.retrieve_hass_conf["sensor_power_photovoltaics"]
         self.var_load = self.retrieve_hass_conf["sensor_power_load_no_var_loads"]
         self.var_load_new = self.var_load + "_positive"
@@ -85,6 +84,19 @@ class Optimization:
         self.var_load_cost = var_load_cost
         self.var_prod_price = var_prod_price
         self.optim_status = None
+
+        # Prioritize config value over default arg
+        if "delta_forecast_daily" in self.optim_conf:
+            # If configured in days (int/float), convert to timedelta
+            val = self.optim_conf["delta_forecast_daily"]
+            if isinstance(val, int) or isinstance(val, float):
+                self.time_delta = pd.to_timedelta(val, "days")
+            else:
+                # Assume it is already a timedelta or compatible
+                self.time_delta = pd.to_timedelta(val)
+        else:
+            # Fallback to the argument (default 24h)
+            self.time_delta = pd.to_timedelta(opt_time_delta, "hours")
 
         # Configuration for Solver
         if "num_threads" in optim_conf.keys():
@@ -1715,18 +1727,21 @@ class Optimization:
         self.optim_status = status_raw.title() if status_raw else "Failure"
 
         # Helper: Ensure we return "Optimal" for tests if it was "Optimal (Relaxed)" or "Optimal_Inaccurate"
-        if "Optimal" in self.optim_status:
-            pass  # Keep it as is (e.g. "Optimal (Relaxed)")
-
-        self.logger.info("Status: " + self.optim_status)
-
         if self.prob.value is None or self.prob.status not in [
             cp.OPTIMAL,
             cp.OPTIMAL_INACCURATE,
             "Optimal (Relaxed)",
         ]:
             self.logger.warning("Cost function cannot be evaluated or Infeasible/Unbounded")
-            return pd.DataFrame()
+
+            # Create a DataFrame with the correct index (timestamps)
+            opt_tp = pd.DataFrame(index=data_opt.index)
+
+            # explicitely set the status column so downstream functions (like get_injection_dict)
+            # don't crash when trying to access or drop it.
+            opt_tp["optim_status"] = self.optim_status
+
+            return opt_tp
         else:
             self.logger.info(
                 "Total value of the Cost function = %.02f",
@@ -1785,7 +1800,7 @@ class Optimization:
             day_end = day + self.time_delta - self.freq
             if day_start.tzinfo != day_end.tzinfo:
                 self.logger.warning(
-                    f"Skipping day {day} as days have ddifferent timezone, probably because of DST."
+                    f"Skipping day {day} as days have different timezone, probably because of DST."
                 )
                 continue  # Skip this day and move to the next iteration
             else:
