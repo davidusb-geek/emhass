@@ -2104,6 +2104,12 @@ async def build_params(
     params["retrieve_hass_conf"]["Latitude"] = params_secrets.get("Latitude")
     params["retrieve_hass_conf"]["Longitude"] = params_secrets.get("Longitude")
     params["retrieve_hass_conf"]["Altitude"] = params_secrets.get("Altitude")
+    if params_secrets.get("influxdb_username") is not None:
+        params["retrieve_hass_conf"]["influxdb_username"] = params_secrets.get("influxdb_username")
+        params["params_secrets"]["influxdb_username"] = params_secrets.get("influxdb_username")
+    if params_secrets.get("influxdb_password") is not None:
+        params["retrieve_hass_conf"]["influxdb_password"] = params_secrets.get("influxdb_password")
+        params["params_secrets"]["influxdb_password"] = params_secrets.get("influxdb_password")
     # Update optional param secrets
     if params["optim_conf"].get("weather_forecast_method", None) is not None:
         if params["optim_conf"]["weather_forecast_method"] == "solcast":

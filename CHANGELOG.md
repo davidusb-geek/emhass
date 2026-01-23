@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.1 - 2026-01-23
+### Fix
+- Hot fix for InfluxDB not passed credentials
+- Fixed optimization window size mismatch issue
+- Fixed optim_status key not found error when falling back to LP problem
+
 ## 0.16.0 - 2026-01-21
 
 ### 🚀 Major Optimization Engine Overhaul
