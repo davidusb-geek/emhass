@@ -429,7 +429,15 @@ class Optimization:
             weight_dis = self.optim_conf["weight_battery_discharge"]
             weight_chg = self.optim_conf["weight_battery_charge"]
 
-            cycle_cost = (weight_dis * p_sto_pos) - (weight_chg * p_sto_neg)
+            # Handle time-varying weights with slicing for resized horizons
+            if isinstance(weight_dis, (list, np.ndarray)) and len(weight_dis) > self.num_timesteps:
+                weight_dis = weight_dis[: self.num_timesteps]
+            if isinstance(weight_chg, (list, np.ndarray)) and len(weight_chg) > self.num_timesteps:
+                weight_chg = weight_chg[: self.num_timesteps]
+
+            cycle_cost = cp.multiply(np.array(weight_dis), p_sto_pos) - cp.multiply(
+                np.array(weight_chg), p_sto_neg
+            )
             objective_terms.append(-scale * cp.sum(cycle_cost))
 
         # Deferrable Load Startup Penalties
