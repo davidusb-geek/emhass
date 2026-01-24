@@ -82,7 +82,10 @@ This will tell continual_publish to loop every 5 minutes based on the optimizati
 
 </br>
 
+```{note} 
+
 *It is recommended to use the 2 other options below once you have a more advanced understanding of EMHASS and/or Home Assistant.*
+```
 
 ### Mixture of continual_publish and manual *(Home Assistant Automation for Publish)*
 

@@ -31,7 +31,21 @@ test_df_literal = "test_df_final.pkl"
 
 @dataclass
 class SetupContext:
-    """Context object for optimization preparation helpers."""
+    """
+    A dataclass that serves as a context container for optimization preparation helpers.
+    This context object encapsulates all necessary configuration and utility objects
+    required for setting up and preparing optimization tasks.
+    Attributes:
+        retrieve_hass_conf (dict): Configuration dictionary for Home Assistant data retrieval.
+        optim_conf (dict): Configuration dictionary for optimization parameters.
+        plant_conf (dict): Configuration dictionary for plant/system parameters.
+        emhass_conf (dict): Configuration dictionary for EMHASS settings.
+        params (dict): Additional parameters dictionary.
+        logger (logging.Logger): Logger instance for logging messages.
+        get_data_from_file (bool): Flag indicating whether to retrieve data from file instead of live source.
+        rh (RetrieveHass): RetrieveHass instance for retrieving Home Assistant data.
+        fcst (Forecast | None): Optional Forecast object for weather or energy forecasting. Defaults to None.
+    """
 
     retrieve_hass_conf: dict
     optim_conf: dict
@@ -45,6 +59,21 @@ class SetupContext:
 
 
 @dataclass
+def __init__(
+    self, input_data_dict: dict, params: dict, idx: int, common_kwargs: dict, logger: logging.Logger
+) -> None:
+    """
+    Initialize a PublishContext instance.
+    Args:
+        input_data_dict (dict): Dictionary containing input data with keys 'rh' (RetrieveHass),
+            'opt' (Optimization), and 'fcst' (Forecast) objects.
+        params (dict): Parameters dictionary for publishing configuration.
+        idx (int): Index identifier for the current publishing operation.
+        common_kwargs (dict): Common keyword arguments shared across publishing helpers.
+        logger (logging.Logger): Logger instance for recording publishing operations.
+    """
+
+
 class PublishContext:
     """Context object for data publishing helpers."""
 

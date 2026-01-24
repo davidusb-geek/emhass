@@ -63,7 +63,8 @@ EMHASS generates a plan (a schedule) for your devices. There are two main ways t
 * **When to run it:** Frequently (e.g., every 5, 10, or 15 minutes).
 * **What it does:** Forecasts are never perfect. Clouds move, and you might turn on the kettle unexpectedly. MPC updates the plan based on what is *actually* happening right now. It keeps the long-term goal in mind but adjusts the immediate actions to handle reality.
 
-> **Analogy:** > * **Day-Ahead** is checking Google Maps before you leave your house to see the route.
+> **Analogy:** 
+> * **Day-Ahead** is checking Google Maps before you leave your house to see the route.
 > * **MPC** is the GPS re-routing you while you drive because of a traffic jam.
 
 

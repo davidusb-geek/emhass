@@ -98,7 +98,7 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 ### Passing forecast data
 
-There is a complete dedicated section in the [Forecast section](https://emhass.readthedocs.io/en/latest/forecasts.html).
+There is a complete dedicated section in the [Forecast](forecasts) section.
 
 Specifically the [Passing your own forecast data](https://emhass.readthedocs.io/en/latest/forecasts.html#passing-your-own-forecast-data) section.
 
@@ -170,7 +170,7 @@ Some environment variables include: `TIME_ZONE`, `LAT`, `LON`, `ALT`, `EMHASS_UR
 
 _Note: As of writing, EMHASS will override ENV secret parameters if the file is present._
 
-For more information on passing arguments and environment variables using docker, have a look at some examples from [Configuration and Installation](https://emhass.readthedocs.io/en/latest/intro.html#configuration-and-installation) and [EMHASS Development](https://emhass.readthedocs.io/en/latest/develop.html) pages. 
+For more information on passing arguments and environment variables using docker, have a look at some examples from [EMHASS Development](develop) section. 
 
 ### EMHASS-Add-on *(Emhass Add-on)*
 By default, the `URL` and `KEY` parameters have been set to `empty`/blank in the Home Assistant configuration page for EMHASS addon. This results in EMHASS calling its Local `Supervisor API` to gain access. This is the easiest method, as there is no user input necessary.  
