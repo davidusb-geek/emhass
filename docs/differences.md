@@ -9,8 +9,8 @@ The resulting change saw a migration of the parameter naming conventions.
 *Many of the new parameter definitions seen in `config.json` are copied from the Add-on, however not all.*
 
 To simply convert from the legacy method (EMHASS>=0.10.6) to the new `config.json` method, see this video guide:  
-- Standalone Mode: https://youtu.be/T85DAdXnGFY?feature=shared&t=938
-- Addon Mode: https://youtu.be/T85DAdXnGFY?feature=shared&t=1341
+- Standalone Mode: [https://youtu.be/T85DAdXnGFY?feature=shared&t=938](https://youtu.be/T85DAdXnGFY?feature=shared&t=938)
+- Addon Mode: [https://youtu.be/T85DAdXnGFY?feature=shared&t=1341](https://youtu.be/T85DAdXnGFY?feature=shared&t=1341)
 
 See below for a list of associations between the parameters from `config_emhass.yaml` *(Legacy Standalone mode)*, `options.json` *(Legacy Add-on mode)* and the `config.json` parameter definitions:  
 
@@ -85,5 +85,5 @@ See below for a list of associations between the parameters from `config_emhass.
 | plant_conf |  SOCtarget |  battery_target_state_of_charge | |
 
 Descriptions of each parameter can be found at:
--  [`Configuration Documentation`](https://emhass.readthedocs.io/en/latest/config.html) 
+-  [Configuration](config) section 
 - Configuration page on EMHASS web server (E.g. http://localhost:5000/configuration)

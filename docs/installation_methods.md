@@ -8,7 +8,10 @@ You can find the add-on with the installation instructions here: [https://github
 
 These architectures are supported: `amd64` and `aarch64` (currently `armv7` and `armhf` are not supported).
 
-_Note: Both EMHASS via Docker and EMHASS-Add-on contain the same Docker image. The EMHASS-Add-on repository however, stores Home Assistant addon specific configuration information and maintains EMHASS image version control._
+```{note} 
+
+_Both EMHASS via Docker and EMHASS-Add-on contain the same Docker image. The EMHASS-Add-on repository however, stores Home Assistant addon specific configuration information and maintains EMHASS image version control._
+```
 
 ## Method 2) Running EMHASS in Docker
 
@@ -20,7 +23,11 @@ docker pull ghcr.io/davidusb-geek/emhass:latest
 # run Docker image, mounting the dir storing config.json and secrets_emhass.yaml from host
 docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v /emhass/share:/share/ -v /emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml ghcr.io/davidusb-geek/emhass:latest
 ```
-*Note it is not recommended to install the latest EMHASS image with `:latest` *(as you would likely want to control when you update EMHASS version)*. Instead, find the [latest version tag](https://github.com/davidusb-geek/emhass/pkgs/container/emhass) (E.g: `v0.2.1`) and replace `latest`*
+
+```{note} 
+
+*It is not recommended to install the latest EMHASS image with `:latest` *(as you would likely want to control when you update EMHASS version)*. Instead, find the [latest version tag](https://github.com/davidusb-geek/emhass/pkgs/container/emhass) (E.g: `v0.2.1`) and replace `latest`*
+```
 
 You can also build your image locally. For this clone this repository, and build the image from the Dockerfile:
 ```bash

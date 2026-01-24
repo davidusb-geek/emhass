@@ -10,9 +10,9 @@ With this web server, you can perform RESTful POST commands on multiple ENDPOINT
 - A POST call to `action/dayahead-optim` to perform a day-ahead optimization task of your home energy.
 - A POST call to `action/naive-mpc-optim` to perform a naive Model Predictive Controller optimization task. If using this option you will need to define the correct `runtimeparams` (see "Passing data to EMHASS" section).
 - A POST call to `action/publish-data` to publish the optimization results data for the current timestamp.
-- A POST call to `action/forecast-model-fit` to train a machine learning forecaster model with the passed data (see the [dedicated section](https://emhass.readthedocs.io/en/latest/mlforecaster.html) for more help).
-- A POST call to `action/forecast-model-predict` to obtain a forecast from a pre-trained machine learning forecaster model (see the [dedicated section](https://emhass.readthedocs.io/en/latest/mlforecaster.html) for more help).
-- A POST call to `action/forecast-model-tune` to optimize the machine learning forecaster models hyperparameters using Bayesian optimization (see the [dedicated section](https://emhass.readthedocs.io/en/latest/mlforecaster.html) for more help).
+- A POST call to `action/forecast-model-fit` to train a machine learning forecaster model with the passed data (see the [ML Forecaster](mlforecaster) section for more help).
+- A POST call to `action/forecast-model-predict` to obtain a forecast from a pre-trained machine learning forecaster model (see the [ML Forecaster](mlforecaster) section for more help).
+- A POST call to `action/forecast-model-tune` to optimize the machine learning forecaster models hyperparameters using Bayesian optimization (see the [ML Forecaster](mlforecaster) section for more help).
 
 A `curl` command can then be used to launch an optimization task like this: `curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/dayahead-optim`.
 
@@ -36,4 +36,4 @@ For example, the following line command can be used to perform a day-ahead optim
 ```bash
 emhass --action 'dayahead-optim' --config ~/emhass/config.json --costfun 'profit'
 ```
-Before running any valuable command you need to modify the `config.json` and `secrets_emhass.yaml` files. These files should contain the information adapted to your own system. To do this take a look at the special section for this in the [documentation](https://emhass.readthedocs.io/en/latest/config.html).
+Before running any valuable command you need to modify the `config.json` and `secrets_emhass.yaml` files. These files should contain the information adapted to your own system. To do this take a look at the special section for this in the [Configuration](config) section.
