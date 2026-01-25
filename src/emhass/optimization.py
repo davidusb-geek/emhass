@@ -749,7 +749,9 @@ class Optimization:
         if not outdoor_temp or all(x is None for x in outdoor_temp):
             outdoor_temp = np.full(required_len, 15.0)
         else:
-            outdoor_temp = np.array([15.0 if x is None else float(x) for x in outdoor_temp])
+            outdoor_temp = np.array(
+                [15.0 if (x is None or pd.isna(x)) else float(x) for x in outdoor_temp]
+            )
 
         if len(outdoor_temp) < required_len:
             pad = np.full(required_len - len(outdoor_temp), 15.0)
