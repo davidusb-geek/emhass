@@ -228,11 +228,11 @@ async def main():
     lags_opt = int(np.round(len(results.iloc[0]["lags"])))
     int(np.round(lags_opt * freq_hours / 24))
     shift = int(24 / freq_hours)
-    P_load_forecast_naive = pd.concat([data_exo.iloc[-shift:], data_exo.iloc[:-shift]])
+    p_load_forecast_naive = pd.concat([data_exo.iloc[-shift:], data_exo.iloc[:-shift]])
     df["train"] = data_train[var_model]
     df["test"] = data_test[var_model]
     df["pred"] = predictions
-    df["pred_naive"] = P_load_forecast_naive[var_model].values
+    df["pred_naive"] = p_load_forecast_naive[var_model].values
     df["pred_optim"] = predictions_loaded
     fig = df.plot()
     fig.layout.template = template

@@ -1,5 +1,94 @@
 # Changelog
 
+## 0.16.1 - 2026-01-23
+### Fix
+- Hot fix for InfluxDB not passed credentials
+- Fixed optimization window size mismatch issue
+- Fixed optim_status key not found error when falling back to LP problem
+
+## 0.16.0 - 2026-01-21
+
+### 🚀 Major Optimization Engine Overhaul
+
+This release marks a significant milestone in the evolution of EMHASS. We have completely re-engineered the core optimization backend, moving from **PuLP** to **CVXPY**. This modern, vectorized architecture unlocks substantial performance improvements and paves the way for advanced energy management features.
+
+### Key Highlights
+
+* **⚡ CVXPY & Vectorization:** The constraint generation logic has been rewritten using vectorization. This mathematical streamlining allows EMHASS to construct optimization problems significantly faster, reducing overhead especially for complex configurations or long prediction horizons. Benchmarks show optimization times are 4-5x faster, clocking in at approximately 0.1s per iteration for standard use cases compared to previous implementation.
+* **🏎️ HiGHS Solver Standard:** We have adopted **HiGHS** as the new default solver. HiGHS is a state-of-the-art, open-source linear optimization solver that offers vastly superior performance and stability compared to the legacy CBC/GLPK solvers.
+* **📦 Simplified Dependencies:** No more system-level dependencies! Because HiGHS is bundled as a Python wheel, the Docker image is lighter, and installation is more robust—you no longer need to install `coinor-cbc` or `glpk` via apt.
+* **🔧 Commercial Solver Support:** Power users with licenses for **Gurobi** or **CPLEX** can now easily plug them in via environment variables (`LP_SOLVER=GUROBI`) without code modifications, thanks to the standardized interface of CVXPY.
+* **🏗️ Modular Architecture:** The optimization class has been refactored into smaller, testable helper methods, improving code maintainability and making it easier for contributors to add new constraints (like the new internal gains logic for thermal batteries) without breaking existing features.
+
+### Improvement
+- Refactor optimization.py to use cvxpy
+- Added internal gains factor to heating demand calculation (@sokorn)
+- Add vector support for maximum power to or from grid (@mk2lehe)
+
+### ⚠️ BREAKING CHANGE: Solver Configuration
+
+We have modernized the optimization backend to use CVXPY. As a result, the solver configuration has been simplified and **both** `lp_solver` and `lp_solver_path` parameters have been **removed**.
+
+* **Removed:** `lp_solver` and `lp_solver_path` are no longer supported in the configuration.
+* **New Default:** The application now defaults to the **HiGHS** solver, which is bundled directly with EMHASS. No external binary paths or apt packages are required.
+* **Commercial Solvers:** If you wish to use **Gurobi** or **CPLEX** (requiring your own license), you must now specify this using the `LP_SOLVER` environment variable (e.g., `LP_SOLVER=GUROBI`), rather than the configuration file.
+
+**Action Required:**
+
+1. **Remove** `lp_solver` and `lp_solver_path` from your configuration files (`config.json` or `options.json`) to avoid validation warnings.
+2. If you previously relied on a custom solver path, ensure you are satisfied with the new default HiGHS solver (recommended) or configure the environment variable for a commercial alternative.
+
+## 0.15.6 - 2026-01-18
+### Improvement
+- New feature that allows users to disable SSL communication with Home Assistant
+### Fix
+- Fix issues with missing `long_train_data.pkl` file and load power sensor name updated by the user
+- Fix broken MLRegressor by removing unnecessary loading of a CSV file
+- Fix missing outdoor temperature data for thermal model
+
+## 0.15.5 - 2026-01-16
+### Fix
+- Fix the thermal load parsing to use it on any type of optimization
+
+## 0.15.4 - 2026-01-13
+### Improvement
+- Support selecting PV module and inverter models by approximate power rating in addition to explicit database names
+- Introduce helper contexts and structured helpers for optimization setup, publishing, and forecast preparation
+- Add explicit SonarCloud analysis and Codecov integration in CI workflow
+- Added support to publish emhass package to conda repository
+- Improved documentation: Reorganize and expand documentation sections, including for using InfluxDB as a data source and for passing secret parameters, clarifying differences between Docker/Python deployments and the Home Assistant add-on, and moving this content into the passing_data guide. Change theme to PyData Sphinx Theme
+- Added extensive unit tests around Home Assistant data retrieval helpers, PV adjustment behavior, regressor preparation errors, weather forecast method branching, thermal loads publishing, and web server runtime parameter handling
+- Update existing optimization and CLI tests to use mocks for heavy optimization routines allowing faster tests
+### Fix
+- Ensure InfluxDB is prioritized over WebSocket and REST when configured as a data source to avoid redundant queries to Home Assistant
+- Fix runtime parameter parsing in the web server to properly handle malformed JSON payloads and default safely to empty parameters
+
+## 0.15.3 - 2026-01-07
+### Improvement
+- Added new thermal model plots
+- Implement thermal battery for underfloor heating from Langer & Volling (2020) (@sokorn)
+- Add hybrid inverter stress cost (@rmounce)
+- Introduce dynamic frontend visibility toggles for `InfluxDB` and machine-learning forecaster options in the web configuration UI
+- Greatly improved coverage for the whole project. Added a new long-awaited unit testing suite for the web server
+- Allow configuring the number of Bayesian optimization trials in the machine-learning forecaster tune API (@gieljnssns)
+- Improve logging for non-hybrid systems to clarify that `inverter_ac_input_max` is ignored and `battery_charge_power_max` is used as the charge limit
+- Expand and update configuration documentation for weather, load, load cost, and production price forecast methods, including references to dedicated forecast documentation and external data inputs
+### Fix
+- Solved issue with `historic_days_to_retrieve` not taken into account
+- Clarify initialization logging for WebSocket, InfluxDB, and REST API data retrieval modes
+- Fixed problem with missing prepare data method on MLForecaster workflow
+- Always use the configured `battery_charge_power_max` as the effective battery DC charge limit, avoiding unintended constraint tightening from `inverter_ac_input_max` on non-hybrid systems
+
+## 0.15.2 - 2025-12-19
+### Improvement
+- Update documentation and parameter definitions for adjusted PV regression models to include all available scikit-learn options (@sokorn)
+- Removed device class and unit of measurement for optim status (@mime24)
+### Fix
+- Fixing some docs math mode and rearrange sections 
+- Refactor REST API data retrieval to reuse one aiohttp ClientSession, solve issue #648 (@gieljnssns)
+- Change regressor parameter to estimator in forecaster
+- Remove warning log for runtime parameters parsing
+
 ## 0.15.1 - 2025-12-09
 ### Fix
 - Hot fix for thermal model semi-continuous mode and continual publish caped to 60s

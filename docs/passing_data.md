@@ -26,6 +26,20 @@ For example, if using the add-on or the standalone docker installation you can p
 ```bash
 curl -i -H 'Content-Type:application/json' -X POST -d '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}' http://localhost:5000/action/dayahead-optim
 ```
+
+Or the equivalent `rest_command` implementation:
+```yaml
+rest_command:
+  dayahead_optim:
+    url: http://localhost:5000/action/dayahead-optim
+    method: post
+    content_type: application/json
+    payload: >
+      {
+        "pv_power_forecast": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+```
+
 Or if using the legacy method using a Python virtual environment:
 ```bash
 emhass --action 'dayahead-optim' --config ~/emhass/config.json --runtimeparams '{"pv_power_forecast":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 70, 141.22, 246.18, 513.5, 753.27, 1049.89, 1797.93, 1697.3, 3078.93, 1164.33, 1046.68, 1559.1, 2091.26, 1556.76, 1166.73, 1516.63, 1391.13, 1720.13, 820.75, 804.41, 251.63, 79.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}'
@@ -81,3 +95,92 @@ Here is the list of the other additional dictionary keys that can be passed at r
 - `battery_charge_power_max` for the maximum battery charge power.
 
 - `publish_prefix` use this key to pass a common prefix to all published data. This will add a prefix to the sensor name but also the forecast attribute keys within the sensor.
+
+### Passing forecast data
+
+There is a complete dedicated section in the [Forecast](forecasts) section.
+
+Specifically the [Passing your own forecast data](https://emhass.readthedocs.io/en/latest/forecasts.html#passing-your-own-forecast-data) section.
+
+
+## InfluxDB as a data source
+A new feature allows using **InfluxDB** as an alternative data source to the Home Assistant recorder database. This is beneficial for users who want to treat longer data retention periods for training machine learning models or to reduce the query load on their main Home Assistant instance.
+
+When `use_influxdb: true` is set, EMHASS will fetch sensor data directly from your InfluxDB instance using the provided connection parameters. The `influxdb_username` and `influxdb_password` are treated as secrets.
+
+If you are using the Influxdb official Home Assistant Add-on, then if you have set the integration via the `configuration.yaml` it will look like this: 
+
+```yaml
+  influxdb:
+  host: xxxxxxxx-influxdb
+  port: 8086
+  database: homeassistant
+  username: !secret influxdb_user
+  password: !secret influxdb_password
+  max_retries: 3
+  default_measurement: state
+  include:
+    domains:
+      - sensor
+```
+
+```{note} 
+
+Here yo need to set your own values for: `xxxxxxxx-influxdb`, `influxdb_user` and `influxdb_password`
+```
+
+Then on the EMHASS configuration you need to set:
+
+```json
+{
+  "influxdb_database": "homeassistant",
+  "influxdb_host": "xxxxxxxx-influxdb",
+  "influxdb_port": 8086,
+  "influxdb_measurement": "state",
+  "influxdb_retention_policy": "autogen",
+  "influxdb_use_ssl": false,
+  "influxdb_verify_ssl": false,
+}
+```
+
+Finally, if using the Add-on, you need to fill both "influxdb_password" and "influxdb_username" in the Add-on **Configuration** pane.
+If using the Docker standalone or legacy installation method, then you need to set these in the `secrets_emhass.yaml` file.
+
+
+## Passing in secret parameters
+Secret parameters are passed differently, depending on which method you choose. Alternative options are also present for passing secrets, if you are running EMHASS separately from Home Assistant. _(I.e. not via EMHASS-Add-on)_ 
+
+### EMHASS with Docker or Python
+Running EMHASS in Docker or Python by default retrieves all secret parameters via a passed `secrets_emhass.yaml` file. An example template has been provided under the name `secrets_emhass(example).yaml` on the EMHASS repo.
+
+To pass the the secrets file:
+- On Docker: *(via volume mount)*
+```bash
+Docker run ... -v ./secrets_emhass.yaml:/app/secrets_emhass.yaml ...
+```
+- On Python: *(optional: specify path as a argument)*
+```bash
+emhass ... --secrets=./secrets_emhass.yaml ...
+```
+
+#### Alternative Options
+For users who are running EMHASS with methods other than EMHASS-Add-on, secret parameters can be passed with the use of environment variables. _(instead of `secrets_emhass.yaml`)_
+
+Some environment variables include: `TIME_ZONE`, `LAT`, `LON`, `ALT`, `EMHASS_URL`, `EMHASS_KEY`
+
+_Note: As of writing, EMHASS will override ENV secret parameters if the file is present._
+
+For more information on passing arguments and environment variables using docker, have a look at some examples from [EMHASS Development](develop) section. 
+
+### EMHASS-Add-on *(Emhass Add-on)*
+By default, the `URL` and `KEY` parameters have been set to `empty`/blank in the Home Assistant configuration page for EMHASS addon. This results in EMHASS calling its Local `Supervisor API` to gain access. This is the easiest method, as there is no user input necessary.  
+
+However, if you wish to receive/send sensor data to a different Home Assistant environment, set url and key values in the `hass_url` & `long_lived_token` hidden parameters on the Home Assistant EMHASS addon configuration page. *(E.g. http://localhost:8123/hassio/addon/emhass/config)*
+-  `hass_url` example: `https://192.168.1.2:8123/`  
+-  `long_lived_token` generated from the `Long-lived access tokens` section in your user profile settings
+</br></br>
+
+Secret Parameters such as: `solcast_api_key`, `solcast_rooftop_id` and `solar_forecast_kwp` _(used by their respective `weather_forecast_method` parameter values)_, can also be set via hidden parameters in the addon configuration page.
+
+Secret Parameters such as: `time_zone`, `lon`, `lat` and `alt` are also automatically passed in via the Home Assistants `Supervisor API`. _(Values set in the Home Assistants config/general page)_  
+_Note: Local currency could also be obtained via the Home Assistant environment, however as of writing, this functionality has not yet been developed._

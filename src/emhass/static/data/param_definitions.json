@@ -37,6 +37,12 @@
       "input": "array.string",
       "default_value": "sensor.power_photovoltaics"
     },
+    "ssl_no_verify": {
+      "friendly_name": "SSL no verify",
+      "Description": "Set to true to disable SSL verification when connecting to Home Assistant. Useful if using self-signed certificates (HTTPS with IP address).",
+      "input": "boolean",
+      "default_value": false
+    },
     "use_websocket": {
       "friendly_name": "Use Home Assistant websocket for data retrieval",
       "Description": "Enable Home Assistant websocket as data source instead of Home Assistant API. This allows for longer historical data retention and better performance for machine learning models.",
@@ -60,18 +66,6 @@
       "Description": "The port number for your InfluxDB instance. Defaults to 8086.",
       "input": "int",
       "default_value": 8086
-    },
-    "influxdb_username": {
-      "friendly_name": "InfluxDB username",
-      "Description": "Username for authenticating with InfluxDB. Leave empty if no authentication is required.",
-      "input": "secrets.string",
-      "default_value": ""
-    },
-    "influxdb_password": {
-      "friendly_name": "InfluxDB password",
-      "Description": "Password for authenticating with InfluxDB. Leave empty if no authentication is required.",
-      "input": "secrets.string",
-      "default_value": ""
     },
     "influxdb_database": {
       "friendly_name": "InfluxDB database name",
@@ -168,25 +162,6 @@
       "input": "boolean",
       "default_value": false
     },
-    "lp_solver": {
-      "friendly_name": "Linear programming solver",
-      "Description": "Set the name of the linear programming solver that will be used. Defaults to ‘COIN_CMD’. The options are ‘PULP_CBC_CMD’, ‘GLPK_CMD’, ‘HiGHS’, and ‘COIN_CMD’.",
-      "input": "select",
-      "select_options": [
-        "default",
-        "COIN_CMD",
-        "PULP_CBC_CMD",
-        "GLPK_CMD",
-        "HiGHS"
-      ],
-      "default_value": "COIN_CMD"
-    },
-    "lp_solver_path": {
-      "friendly_name": "Linear programming solver program path",
-      "Description": "Set the path to the LP solver. Defaults to ‘/usr/bin/cbc’.",
-      "input": "text",
-      "default_value": "/usr/bin/cbc"
-    },
     "num_threads": {
       "friendly_name": "Number of threads to use for the LP solver",
       "Description": "Set the number of threads for the LP solver to use, when supported by the solver. Defaults to 0 (autodetect)",
@@ -253,6 +228,18 @@
       "Description": "Hybrid inverter efficiency when charging from the AC input to DC bus. (percentage/100)",
       "input": "float",
       "default_value": 1.0
+    },
+    "inverter_stress_cost": {
+      "friendly_name": "Hybrid Inverter Stress Cost",
+      "Description": "A virtual cost (Currency/kWh) applied at the inverter's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows.",
+      "input": "float",
+      "default_value": 0.0
+    },
+    "inverter_stress_segments": {
+      "friendly_name": "Hybrid Inverter Stress Segments",
+      "Description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time.",
+      "input": "int",
+      "default_value": 10
     },
     "compute_curtailment": {
       "friendly_name": "Set compute curtailment (grid export limit)",
@@ -361,15 +348,15 @@
       "default_value": 24
     },
     "pv_module_model": {
-      "friendly_name": "PV module model name",
-      "Description": "The PV module model. This parameter can be a list of items to enable the simulation of mixed orientation systems.",
+      "friendly_name": "PV module model",
+      "Description": "The PV module model. You can provide the model name from the CEC database or the nominal power in Watts (e.g., 300). This parameter can be a list of items to enable the simulation of mixed orientation systems.",
       "input": "array.string",
       "input_attributes": "_'s",
       "default_value": "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M"
     },
     "pv_inverter_model": {
-      "friendly_name": "The PV inverter model name",
-      "Description": "The PV inverter model.  This parameter can be a list of items to enable the simulation of mixed orientation systems.",
+      "friendly_name": "PV inverter model",
+      "Description": "The PV inverter model. You can provide the model name from the CEC database or the nominal power in Watts (e.g., 5000). This parameter can be a list of items to enable the simulation of mixed orientation systems.",
       "input": "array.string",
       "input_attributes": "_'s",
       "default_value": "Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_"
@@ -557,6 +544,18 @@
       "Description": "The desired battery state of charge at the end of each optimization cycle. (percentage/100)",
       "input": "float",
       "default_value": 0.6
+    },
+    "battery_stress_cost": {
+      "friendly_name": "Battery Stress Cost",
+      "Description": "A virtual cost (Currency/kWh) applied at the battery's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows.",
+      "input": "float",
+      "default_value": 0.0
+    },
+    "battery_stress_segments": {
+      "friendly_name": "Battery Stress Segments",
+      "Description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time.",
+      "input": "int",
+      "default_value": 10
     },
     "ignore_pv_feedback_during_curtailment": {
       "friendly_name": "Ignore PV feedback during curtailment",

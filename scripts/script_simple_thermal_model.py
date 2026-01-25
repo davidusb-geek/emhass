@@ -87,8 +87,6 @@ async def main():
         var_replace_zero=retrieve_hass_conf["sensor_replace_zero"],
         var_interp=retrieve_hass_conf["sensor_linear_interp"],
     )
-    df_input_data = rh.df_final.copy()
-
     fcst = Forecast(
         retrieve_hass_conf,
         optim_conf,
@@ -100,8 +98,8 @@ async def main():
     )
     df_weather = await fcst.get_weather_forecast(method="csv")
     p_pv_forecast = fcst.get_power_from_weather(df_weather)
-    P_load_forecast = await fcst.get_load_forecast(method=optim_conf["load_forecast_method"])
-    df_input_data = pd.concat([p_pv_forecast, P_load_forecast], axis=1)
+    p_load_forecast = await fcst.get_load_forecast(method=optim_conf["load_forecast_method"])
+    df_input_data = pd.concat([p_pv_forecast, p_load_forecast], axis=1)
     df_input_data.columns = ["p_pv_forecast", "P_load_forecast"]
 
     df_input_data = fcst.get_load_cost_forecast(df_input_data)
@@ -160,7 +158,7 @@ async def main():
         logger,
     )
     p_pv_forecast.loc[:] = 0
-    P_load_forecast.loc[:] = 0
+    p_load_forecast.loc[:] = 0
 
     df_input_data.loc[df_input_data.index[25:30], "unit_load_cost"] = 2.0  # A price peak
     unit_load_cost = df_input_data[opt.var_load_cost].values  # €/kWh
@@ -169,7 +167,7 @@ async def main():
     opt_res_dayahead = opt.perform_optimization(
         df_input_data,
         p_pv_forecast.values.ravel(),
-        P_load_forecast.values.ravel(),
+        p_load_forecast.values.ravel(),
         unit_load_cost,
         unit_prod_price,
         debug=True,

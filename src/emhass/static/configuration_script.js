@@ -126,7 +126,7 @@ function loadConfigurationListView(param_definitions, config, list_html) {
   //get the main container and append list template html
   document.getElementById("configuration-container").innerHTML = list_html;
 
-  //loop though configuration sections ('Local','System','Tariff','Solar System (PV)') in definitions file
+  //loop through configuration sections ('Local','System','Tariff','Solar System (PV)') in definitions file
   for (let section in param_definitions) {
     // build each section by adding parameters with their corresponding input elements
     buildParamContainers(
@@ -162,6 +162,74 @@ function loadConfigurationListView(param_definitions, config, list_html) {
           headerElement(header_input_element, param_definitions, config);
         }
       }
+    }
+  }
+
+  // Dynamic hiding for InfluxDB options
+  const use_influx_param = "use_influxdb";
+  const influx_related_params = [
+    "influxdb_host",
+    "influxdb_port",
+    "influxdb_username",
+    "influxdb_password",
+    "influxdb_database",
+    "influxdb_measurement",
+    "influxdb_retention_policy",
+    "influxdb_use_ssl",
+    "influxdb_verify_ssl"
+  ];
+
+  const influx_toggle_div = document.getElementById(use_influx_param);
+  if (influx_toggle_div) {
+    // The actual input is inside the div with the ID
+    const influx_input = influx_toggle_div.querySelector("input");
+    if (influx_input) {
+      const toggleInfluxVisibility = () => {
+        const isChecked = influx_input.checked;
+        influx_related_params.forEach(paramId => {
+          const paramDiv = document.getElementById(paramId);
+          if (paramDiv) {
+            paramDiv.style.display = isChecked ? "" : "none";
+          }
+        });
+      };
+
+      // Add listener and set initial state
+      influx_input.addEventListener("change", toggleInfluxVisibility);
+      toggleInfluxVisibility();
+    }
+  }
+
+  // ML Forecaster Visibility Logic
+  const forecast_method_param = "load_forecast_method";
+  const ml_related_params = [
+    "model_type",
+    "var_model",
+    "sklearn_model",
+    "regression_model",
+    "num_lags",
+    "split_date_delta",
+    "n_trials",
+    "perform_backtest"
+  ];
+
+  const forecast_method_div = document.getElementById(forecast_method_param);
+  if (forecast_method_div) {
+    const method_select = forecast_method_div.querySelector("select, input");
+    if (method_select) {
+      const toggleMLVisibility = () => {
+        const isML = method_select.value === "mlforecaster";
+        ml_related_params.forEach(paramId => {
+          const paramDiv = document.getElementById(paramId);
+          if (paramDiv) {
+            paramDiv.style.display = isML ? "" : "none";
+          }
+        });
+      };
+      // Add listener and set initial state
+      method_select.addEventListener("change", toggleMLVisibility);
+      method_select.addEventListener("input", toggleMLVisibility); // Handle both select and text input types
+      toggleMLVisibility();
     }
   }
 }
@@ -346,12 +414,12 @@ function buildParamElement(
     //number
     case "int":
       type = "number";
-      placeholder = parseInt(parameter_definition_object["default_value"]);
+      placeholder = Number.parseInt(parameter_definition_object["default_value"]);
       break;
     case "array.float":
     case "float":
       type = "number";
-      placeholder = parseFloat(parameter_definition_object["default_value"]);
+      placeholder = Number.parseFloat(parameter_definition_object["default_value"]);
       break;
     //text (string)
     case "array.string":
@@ -586,7 +654,7 @@ function headerElement(element, param_definitions, config) {
       }
       //calculate how much off the fist parameters input elements amount to is, compering to the number_of_deferrable_loads value
       difference =
-        parseInt(element.value) -
+        Number.parseInt(element.value) -
         param_container.firstElementChild.querySelectorAll("input").length;
       //add elements based on how many elements are missing
       if (difference > 0) {
@@ -636,7 +704,7 @@ async function saveConfiguration(param_definitions) {
   if (Boolean(config_card.length)) {
     //retrieve params and their input/s by looping though param_definitions list
     //loop through the sections
-    for (var [section_name, section_object] of Object.entries(
+    for (const [, section_object] of Object.entries(
       param_definitions
     )) {
       //loop through parameters
@@ -668,7 +736,7 @@ async function saveConfiguration(param_definitions) {
           for (let input of param_inputs) {
             switch (input.type) {
               case "number":
-                param_values.push(parseFloat(input.value));
+                param_values.push(Number.parseFloat(input.value));
                 break;
               case "checkbox":
                 param_values.push(input.checked);
