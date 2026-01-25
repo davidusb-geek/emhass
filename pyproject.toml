@@ -1,10 +1,10 @@
 [project]
 name = "emhass"
-version = "0.15.1"
+version = "0.16.1"
 description = "An Energy Management System for Home Assistant"
 readme = "README.md"
 requires-python = ">=3.10, <3.13"
-authors = [{ name = "David HERNANDEZ", email = "davidusb@gmail.com" }]
+authors = [{ name = "David HERNANDEZ TORRES", email = "davidusb@gmail.com" }]
 license = { text = "MIT" }
 keywords = ["energy", "management", "optimization", "hass"]
 classifiers = [
@@ -27,10 +27,10 @@ dependencies = [
     "pytz>=2024.2",
     "h5py>=3.12.1",
     "highspy>=1.10.0",
-    "pulp>=2.8.0",
+    "cvxpy>=1.6.0",
     "pyyaml>=6.0.2",
     "tables>=3.10.0",
-    "skforecast>=0.18.0,<0.20.0",
+    "skforecast>=0.19.1,<0.20.0",
     "waitress>=3.0.2",
     "plotly>=6.0.0",
     "gunicorn>=23.0.0",
@@ -44,23 +44,9 @@ dependencies = [
     "uvicorn>=0.30.0",
     "influxdb>=5.3.1",
 ]
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-
-[tool.uv.workspace]
-members = ["emhass"]
-
-[tool.uv.sources]
-emhass = { workspace = true }
-
-[tool.uv]
-default-groups = "all"
-package = true
 
 [project.optional-dependencies]
-docs = ["sphinx", "sphinx-rtd-theme", "myst-parser"]
+docs = ["sphinx", "pydata-sphinx-theme", "sphinx-design", "myst-parser"]
 test = [
     "pytest",
     "pytz",
@@ -72,6 +58,20 @@ test = [
     "aioresponses"
 ]
 dev = ["ruff"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.workspace]
+members = ["emhass"]
+
+[tool.uv.sources]
+emhass = { workspace = true }
+
+[tool.uv]
+default-groups = "all"
+package = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/emhass"]

@@ -1,0 +1,65 @@
+name: Upload Conda Package
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Setup Conda Environment
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+          python-version: "3.12"
+          # Important: Install build tools and the upload client here
+          activate-environment: build_env
+          channels: conda-forge,defaults
+          
+      # Install Build Dependencies
+      - name: Install Build Tools
+        shell: bash -l {0}
+        run: |
+          conda install -y conda-build anaconda-client
+          # Install your project dependencies needed for the recipe (host requirements)
+          conda install -y setuptools wheel hatchling pip
+
+      # Build the Package
+      - name: Build Conda Package
+        shell: bash -l {0}
+        run: |
+          mkdir -p build_output
+          conda build ./conda --output-folder ./build_output
+
+      # Debug: List generated files (Helps verify where the file actually went)
+      - name: Debug Build Output
+        run: ls -R ./build_output
+
+      # Upload to Anaconda
+      - name: Upload to Anaconda
+        shell: bash -l {0}
+        env:
+          ANACONDA_TOKEN: ${{ secrets.ANACONDA_TOKEN }}
+          ANACONDA_USER: davidusb
+        run: |
+          # Find the package file (targeting .conda specifically based on your debug output)
+          # We use `find` to handle the path cleanly
+          PACKAGE_FILE=$(find ./build_output -name "*.conda" | head -n 1)
+
+          # Safety check
+          if [ -z "$PACKAGE_FILE" ]; then
+            echo "::error::No .conda package file found!"
+            ls -R ./build_output
+            exit 1
+          fi
+
+          echo "Found package: $PACKAGE_FILE"
+
+          # Upload
+          anaconda -t $ANACONDA_TOKEN upload -u $ANACONDA_USER "$PACKAGE_FILE" --force

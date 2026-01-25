@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 
 pd.options.plotting.backend = "plotly"
 
+# Unit conversion constants
+W_TO_KW = 1000  # Watts to kilowatts conversion factor
+
 
 def get_root(file: str, num_parent: int = 3) -> str:
     """
@@ -137,6 +140,383 @@ def get_forecast_dates(
     )
 
     return [ts.isoformat() for ts in forecast_dates]
+
+
+def calculate_cop_heatpump(
+    supply_temperature: float,
+    carnot_efficiency: float,
+    outdoor_temperature_forecast: np.ndarray | pd.Series,
+) -> np.ndarray:
+    r"""
+    Calculate heat pump Coefficient of Performance (COP) for each timestep in the prediction horizon.
+
+    The COP is calculated using a Carnot-based formula:
+
+    .. math::
+        COP(h) = \eta_{carnot} \times \frac{T_{supply\_K}}{|T_{supply\_K} - T_{outdoor\_K}(h)|}
+
+    Where temperatures are converted to Kelvin (K = °C + 273.15).
+
+    This formula models real heat pump behavior where COP decreases as the temperature lift
+    (difference between supply and outdoor temperature) increases. The carnot_efficiency factor
+    represents the real-world efficiency as a fraction of the ideal Carnot cycle efficiency.
+
+    :param supply_temperature: The heat pump supply temperature in degrees Celsius (constant value). \
+        Typical values: 30-40°C for underfloor heating, 50-70°C for radiator systems.
+    :type supply_temperature: float
+    :param carnot_efficiency: Real-world efficiency factor as fraction of ideal Carnot cycle. \
+        Typical range: 0.35-0.50 (35-50%). Default in thermal battery config: 0.4 (40%). \
+        Higher values represent more efficient heat pumps.
+    :type carnot_efficiency: float
+    :param outdoor_temperature_forecast: Array of outdoor temperature forecasts in degrees Celsius, \
+        one value per timestep in the prediction horizon.
+    :type outdoor_temperature_forecast: np.ndarray or pd.Series
+    :return: Array of COP values for each timestep, same length as outdoor_temperature_forecast. \
+        Typical COP range: 2-6 for normal operating conditions.
+    :rtype: np.ndarray
+
+    Example:
+        >>> supply_temp = 35.0  # °C, underfloor heating
+        >>> carnot_eff = 0.4  # 40% of ideal Carnot efficiency
+        >>> outdoor_temps = np.array([0.0, 5.0, 10.0, 15.0, 20.0])
+        >>> cops = calculate_cop_heatpump(supply_temp, carnot_eff, outdoor_temps)
+        >>> cops
+        array([3.521..., 4.108..., 4.926..., 6.163..., 8.217...])
+        >>> # At 5°C outdoor: COP = 0.4 × 308.15K / 30K = 4.11
+
+    """
+    # Convert to numpy array if pandas Series
+    if isinstance(outdoor_temperature_forecast, pd.Series):
+        outdoor_temps = outdoor_temperature_forecast.values
+    else:
+        outdoor_temps = np.asarray(outdoor_temperature_forecast)
+
+    # Convert temperatures from Celsius to Kelvin for Carnot formula
+    supply_temperature_kelvin = supply_temperature + 273.15
+    outdoor_temperature_kelvin = outdoor_temps + 273.15
+
+    # Calculate temperature difference (supply - outdoor)
+    # For heating, supply temperature should be higher than outdoor temperature
+    temperature_diff = supply_temperature_kelvin - outdoor_temperature_kelvin
+
+    # Check for non-physical scenarios where outdoor temp >= supply temp
+    # This indicates cooling mode or invalid configuration for heating
+    if np.any(temperature_diff <= 0):
+        # Log warning about non-physical temperature scenario
+        logger = logging.getLogger(__name__)
+        num_invalid = np.sum(temperature_diff <= 0)
+        invalid_indices = np.nonzero(temperature_diff <= 0)[0]
+        logger.warning(
+            f"COP calculation: {num_invalid} timestep(s) have outdoor temperature >= supply temperature. "
+            f"This is non-physical for heating mode. Indices: {invalid_indices.tolist()[:5]}{'...' if len(invalid_indices) > 5 else ''}. "
+            f"Supply temp: {supply_temperature:.1f}°C. Setting COP to 1.0 (direct electric heating) for these periods."
+        )
+
+    # Vectorized Carnot-based COP calculation
+    # COP = carnot_efficiency × T_supply / (T_supply - T_outdoor)
+    # For non-physical cases (outdoor >= supply), we use a neutral COP of 1.0
+    # This prevents the optimizer from exploiting unrealistic high COP values
+
+    # Avoid division by zero: use a mask to only calculate for valid cases
+    cop_values = np.ones_like(outdoor_temperature_kelvin)  # Default to 1.0 everywhere
+    valid_mask = temperature_diff > 0
+    if np.any(valid_mask):
+        cop_values[valid_mask] = (
+            carnot_efficiency * supply_temperature_kelvin / temperature_diff[valid_mask]
+        )
+
+    # Apply realistic bounds: minimum 1.0, maximum 8.0
+    # - Lower bound: 1.0 means direct electric heating (no efficiency gain)
+    # - Upper bound: 8.0 is an optimistic but reasonable maximum for modern heat pumps
+    #   (prevents numerical instability from very small temperature differences)
+    cop_values = np.clip(cop_values, 1.0, 8.0)
+
+    return cop_values
+
+
+def calculate_thermal_loss_signed(
+    outdoor_temperature_forecast: np.ndarray | pd.Series,
+    indoor_temperature: float,
+    base_loss: float,
+) -> np.ndarray:
+    r"""
+    Calculate signed thermal loss factor based on indoor/outdoor temperature difference.
+
+    **SIGN CONVENTION:**
+    - **Positive** (+loss): outdoor < indoor → heat loss, building cools, heating required
+    - **Negative** (-loss): outdoor ≥ indoor → heat gain, building warms passively
+
+    Formula: loss * (1 - 2 * Hot(h)), where Hot(h) = 1 if outdoor ≥ indoor, else 0.
+    Based on Langer & Volling (2020) Equation B.13.
+
+    :param outdoor_temperature_forecast: Outdoor temperature forecast (°C)
+    :type outdoor_temperature_forecast: np.ndarray or pd.Series
+    :param indoor_temperature: Indoor/target temperature threshold (°C)
+    :type indoor_temperature: float
+    :param base_loss: Base thermal loss coefficient in kW
+    :type base_loss: float
+    :return: Signed loss array (positive = heat loss, negative = heat gain)
+    :rtype: np.ndarray
+
+    """
+    # Convert to numpy array if pandas Series
+    if isinstance(outdoor_temperature_forecast, pd.Series):
+        outdoor_temps = outdoor_temperature_forecast.values
+    else:
+        outdoor_temps = np.asarray(outdoor_temperature_forecast)
+
+    # Create binary hot indicator: 1 if outdoor temp >= indoor temp, 0 otherwise
+    hot_indicator = (outdoor_temps >= indoor_temperature).astype(float)
+
+    return base_loss * (1.0 - 2.0 * hot_indicator)
+
+
+def calculate_heating_demand(
+    specific_heating_demand: float,
+    floor_area: float,
+    outdoor_temperature_forecast: np.ndarray | pd.Series,
+    base_temperature: float = 18.0,
+    annual_reference_hdd: float = 3000.0,
+    optimization_time_step: int | None = None,
+) -> np.ndarray:
+    """
+    Calculate heating demand per timestep based on heating degree days method.
+
+    Uses heating degree days (HDD) to calculate heating demand based on outdoor temperature
+    forecast, specific heating demand, and floor area. The specific heating demand should be
+    calibrated to the annual reference HDD value.
+
+    :param specific_heating_demand: Specific heating demand in kWh/m²/year (calibrated to annual_reference_hdd)
+    :type specific_heating_demand: float
+    :param floor_area: Floor area in m²
+    :type floor_area: float
+    :param outdoor_temperature_forecast: Outdoor temperature forecast in °C for each timestep
+    :type outdoor_temperature_forecast: np.ndarray | pd.Series
+    :param base_temperature: Base temperature for HDD calculation in °C, defaults to 18.0 (European standard)
+    :type base_temperature: float, optional
+    :param annual_reference_hdd: Annual reference HDD value for normalization, defaults to 3000.0 (Central Europe)
+    :type annual_reference_hdd: float, optional
+    :param optimization_time_step: Optimization time step in minutes. If None, automatically infers from
+        pandas Series DatetimeIndex frequency. Falls back to 30 minutes if not inferrable.
+    :type optimization_time_step: int | None, optional
+    :return: Array of heating demand values (kWh) per timestep
+    :rtype: np.ndarray
+
+    """
+
+    # Convert outdoor temperature forecast to numpy array if pandas Series
+    outdoor_temps = (
+        outdoor_temperature_forecast.values
+        if isinstance(outdoor_temperature_forecast, pd.Series)
+        else np.asarray(outdoor_temperature_forecast)
+    )
+
+    # Calculate heating degree days per timestep
+    # HDD = max(base_temperature - outdoor_temperature, 0)
+    hdd_per_timestep = np.maximum(base_temperature - outdoor_temps, 0.0)
+
+    # Determine timestep duration in hours
+    if optimization_time_step is None:
+        # Try to infer from pandas Series DatetimeIndex
+        if isinstance(outdoor_temperature_forecast, pd.Series) and isinstance(
+            outdoor_temperature_forecast.index, pd.DatetimeIndex
+        ):
+            if len(outdoor_temperature_forecast.index) > 1:
+                freq_minutes = (
+                    outdoor_temperature_forecast.index[1] - outdoor_temperature_forecast.index[0]
+                ).total_seconds() / 60.0
+                hours_per_timestep = freq_minutes / 60.0
+            else:
+                # Single datapoint, fallback to default 30 min
+                hours_per_timestep = 0.5
+        else:
+            # Cannot infer, use default 30 minutes
+            hours_per_timestep = 0.5
+    else:
+        # Convert minutes to hours
+        hours_per_timestep = optimization_time_step / 60.0
+
+    # Scale HDD to timestep duration (standard HDD is per 24 hours)
+    hdd_per_timestep_scaled = hdd_per_timestep * (hours_per_timestep / 24.0)
+
+    return specific_heating_demand * floor_area * (hdd_per_timestep_scaled / annual_reference_hdd)
+
+
+def calculate_heating_demand_physics(
+    u_value: float,
+    envelope_area: float,
+    ventilation_rate: float,
+    heated_volume: float,
+    indoor_target_temperature: float,
+    outdoor_temperature_forecast: np.ndarray | pd.Series,
+    optimization_time_step: int,
+    solar_irradiance_forecast: np.ndarray | pd.Series | None = None,
+    window_area: float | None = None,
+    shgc: float = 0.6,
+    internal_gains_forecast: np.ndarray | pd.Series | None = None,
+    internal_gains_factor: float = 0.0,
+) -> np.ndarray:
+    """
+    Calculate heating demand per timestep based on building physics heat loss model.
+
+    More accurate than HDD method as it directly calculates transmission and ventilation
+    losses based on building thermal properties. Optionally accounts for solar gains
+    through windows to reduce heating demand.
+
+    :param u_value: Overall thermal transmittance (U-value) in W/(m²·K). Typical values:
+        - 0.2-0.3: Well-insulated modern building
+        - 0.4-0.6: Average insulation
+        - 0.8-1.2: Poor insulation / old building
+    :type u_value: float
+    :param envelope_area: Total building envelope area (walls + roof + floor + windows) in m²
+    :type envelope_area: float
+    :param ventilation_rate: Air changes per hour (ACH). Typical values:
+        - 0.3-0.5: Well-sealed modern building with controlled ventilation
+        - 0.5-1.0: Average building
+        - 1.0-2.0: Leaky old building
+    :type ventilation_rate: float
+    :param heated_volume: Total heated volume in m³
+    :type heated_volume: float
+    :param indoor_target_temperature: Target indoor temperature in °C
+    :type indoor_target_temperature: float
+    :param outdoor_temperature_forecast: Outdoor temperature forecast in °C for each timestep
+    :type outdoor_temperature_forecast: np.ndarray | pd.Series
+    :param optimization_time_step: Optimization time step in minutes
+    :type optimization_time_step: int
+    :param solar_irradiance_forecast: Global Horizontal Irradiance (GHI) in W/m² for each timestep.
+        If provided along with window_area, solar gains will be subtracted from heating demand.
+    :type solar_irradiance_forecast: np.ndarray | pd.Series | None, optional
+    :param window_area: Total window area in m². If provided along with solar_irradiance_forecast,
+        solar gains will reduce heating demand. Typical values: 15-25% of floor area.
+    :type window_area: float | None, optional
+    :param shgc: Solar Heat Gain Coefficient (dimensionless, 0-1). Fraction of solar radiation
+        that becomes heat inside the building. Typical values:
+        - 0.5-0.6: Modern low-e double-glazed windows
+        - 0.6-0.7: Standard double-glazed windows
+        - 0.7-0.8: Single-glazed windows
+        Default: 0.6
+    :type shgc: float, optional
+    :param internal_gains_forecast: Electrical load power forecast in W for each timestep.
+        If provided along with internal_gains_factor > 0, internal gains from electrical
+        appliances will be subtracted from heating demand.
+    :type internal_gains_forecast: np.ndarray | pd.Series | None, optional
+    :param internal_gains_factor: Factor (0-1) representing what fraction of electrical load
+        becomes useful internal heat gains. Typical values:
+        - 0.0: No internal gains considered (default, backwards compatible)
+        - 0.5-0.7: Conservative estimate (some heat lost to ventilation/drains)
+        - 0.8-0.9: Most electrical energy becomes heat (well-insulated building)
+        - 1.0: All electrical energy becomes internal heat (theoretical maximum)
+        Default: 0.0
+    :type internal_gains_factor: float, optional
+    :return: Array of heating demand values (kWh) per timestep
+    :rtype: np.ndarray
+
+    Example:
+        >>> outdoor_temps = np.array([5, 8, 12, 15])
+        >>> ghi = np.array([0, 100, 400, 600])  # W/m²
+        >>> demand = calculate_heating_demand_physics(
+        ...     u_value=0.3,
+        ...     envelope_area=400,
+        ...     ventilation_rate=0.5,
+        ...     heated_volume=250,
+        ...     indoor_target_temperature=20,
+        ...     outdoor_temperature_forecast=outdoor_temps,
+        ...     optimization_time_step=30,
+        ...     solar_irradiance_forecast=ghi,
+        ...     window_area=50,
+        ...     shgc=0.6
+        ... )
+    """
+
+    # Convert outdoor temperature forecast to numpy array if pandas Series
+    outdoor_temps = (
+        outdoor_temperature_forecast.values
+        if isinstance(outdoor_temperature_forecast, pd.Series)
+        else np.asarray(outdoor_temperature_forecast)
+    )
+
+    # Calculate temperature difference (only heat when outdoor < indoor)
+    temp_diff = indoor_target_temperature - outdoor_temps
+    temp_diff = np.maximum(temp_diff, 0.0)
+
+    # Transmission losses: Q_trans = U * A * ΔT (W to kW)
+    transmission_loss_kw = u_value * envelope_area * temp_diff / 1000.0
+
+    # Ventilation losses: Q_vent = V * ρ * c * n * ΔT / 3600
+    # ρ = air density (kg/m³), c = specific heat capacity (kJ/(kg·K)), n = ACH
+    air_density = 1.2  # kg/m³ at 20°C
+    air_heat_capacity = 1.005  # kJ/(kg·K)
+    ventilation_loss_kw = (
+        ventilation_rate * heated_volume * air_density * air_heat_capacity * temp_diff / 3600.0
+    )
+
+    # Total heat loss in kW
+    total_loss_kw = transmission_loss_kw + ventilation_loss_kw
+
+    # Calculate solar gains if irradiance and window area are provided
+    if solar_irradiance_forecast is not None and window_area is not None:
+        # Convert solar irradiance to numpy array if pandas Series
+        solar_irradiance = (
+            solar_irradiance_forecast.values
+            if isinstance(solar_irradiance_forecast, pd.Series)
+            else np.asarray(solar_irradiance_forecast)
+        )
+
+        # Solar gains: Q_solar = window_area * SHGC * GHI (W to kW)
+        # GHI is in W/m², so multiply by window_area (m²) gives W, then divide by 1000 for kW
+        solar_gains_kw = window_area * shgc * solar_irradiance / 1000.0
+
+        # Subtract solar gains from heat loss (but never go negative)
+        total_loss_kw = np.maximum(total_loss_kw - solar_gains_kw, 0.0)
+
+    # Validate internal_gains_factor is in expected range [0, 1]
+    if internal_gains_factor < 0 or internal_gains_factor > 1:
+        raise ValueError(
+            f"internal_gains_factor must be between 0 and 1, got {internal_gains_factor}"
+        )
+
+    # Calculate internal gains from electrical load if provided and applicable
+    if internal_gains_forecast is not None and internal_gains_factor > 0:
+        # Convert internal gains forecast to numpy array and normalize to 1D
+        # to align with other forecast inputs and avoid broadcast surprises
+        internal_gains = (
+            internal_gains_forecast.values
+            if isinstance(internal_gains_forecast, pd.Series)
+            else internal_gains_forecast
+        )
+        internal_gains = np.asarray(internal_gains).reshape(-1)
+
+        # Validate that internal gains forecast length matches outdoor temperature forecast
+        if len(internal_gains) != len(outdoor_temps):
+            raise ValueError(
+                f"internal_gains_forecast length ({len(internal_gains)}) must match "
+                f"outdoor_temperature_forecast length ({len(outdoor_temps)})"
+            )
+
+        # Warn if values seem like they might be in kW instead of W
+        # Typical household load is 100-10000W; values below 10 suggest kW was passed
+        max_load = np.max(internal_gains)
+        if max_load > 0 and max_load < 10:
+            import warnings
+
+            warnings.warn(
+                f"internal_gains_forecast max value ({max_load:.2f}) is very low. "
+                "Expected values in W (e.g., 500-5000), but received values that "
+                "look like kW. Please ensure you're passing Watts, not kilowatts.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # Internal gains: Q_internal = load_power * factor
+        # load_power is in W, convert to kW; factor is dimensionless (0-1)
+        internal_gains_kw = internal_gains * internal_gains_factor / W_TO_KW
+
+        # Subtract internal gains from heat loss (but never go negative)
+        total_loss_kw = np.maximum(total_loss_kw - internal_gains_kw, 0.0)
+
+    # Convert to kWh for the timestep
+    hours_per_timestep = optimization_time_step / 60.0
+    return total_loss_kw * hours_per_timestep
 
 
 def update_params_with_ha_config(
@@ -263,6 +643,7 @@ async def treat_runtimeparams(
     # Some default data needed
     custom_deferrable_forecast_id = []
     custom_predicted_temperature_id = []
+    custom_heating_demand_id = []
     for k in range(params["optim_conf"]["number_of_deferrable_loads"]):
         custom_deferrable_forecast_id.append(
             {
@@ -278,6 +659,14 @@ async def treat_runtimeparams(
                 "device_class": "temperature",
                 "unit_of_measurement": default_temperature_unit,
                 "friendly_name": f"Predicted temperature {k}",
+            }
+        )
+        custom_heating_demand_id.append(
+            {
+                "entity_id": f"sensor.heating_demand{k}",
+                "device_class": "energy",
+                "unit_of_measurement": "kWh",
+                "friendly_name": f"Heating demand {k}",
             }
         )
     default_passed_dict = {
@@ -349,6 +738,7 @@ async def treat_runtimeparams(
         },
         "custom_deferrable_forecast_id": custom_deferrable_forecast_id,
         "custom_predicted_temperature_id": custom_predicted_temperature_id,
+        "custom_heating_demand_id": custom_heating_demand_id,
         "publish_prefix": "",
     }
     if "passed_data" in params.keys():
@@ -356,6 +746,12 @@ async def treat_runtimeparams(
             params["passed_data"][key] = value
     else:
         params["passed_data"] = default_passed_dict
+
+    # Capture defaults for power limits before association loop
+    power_limit_defaults = {
+        "maximum_power_from_grid": params["plant_conf"].get("maximum_power_from_grid"),
+        "maximum_power_to_grid": params["plant_conf"].get("maximum_power_to_grid"),
+    }
 
     # If any runtime parameters where passed in action call
     if runtimeparams is not None:
@@ -385,6 +781,32 @@ async def treat_runtimeparams(
                 "Cant find associations file (associations.csv) in: "
                 + str(emhass_conf["associations_path"])
             )
+
+        # Special handling for power limit parameters - they can be vectors (Tier 1a)
+        def _parse_power_limit(key: str) -> None:
+            """Helper to parse list/scalar power limits safely."""
+            if key in runtimeparams:
+                value = runtimeparams[key]
+                try:
+                    # If it's a string representation of a list, parse it
+                    if isinstance(value, str):
+                        parsed = ast.literal_eval(value)
+                        params["plant_conf"][key] = parsed
+                    # If already a list/array, use it directly
+                    # Ruff preferred bitwise OR '|' for union types
+                    elif isinstance(value, list | tuple):
+                        params["plant_conf"][key] = list(value)
+                    # If scalar, use as-is
+                    else:
+                        params["plant_conf"][key] = value
+                except (ValueError, SyntaxError) as e:
+                    logger.warning(f"Could not parse {key}: {e}. Using default.")
+                    if power_limit_defaults.get(key) is not None:
+                        params["plant_conf"][key] = power_limit_defaults[key]
+
+        # Apply the helper
+        _parse_power_limit("maximum_power_from_grid")
+        _parse_power_limit("maximum_power_to_grid")
 
         # Generate forecast_dates
         # Force update optimization_time_step if present in runtimeparams
@@ -554,31 +976,35 @@ async def treat_runtimeparams(
             ].get("end_timesteps_of_each_deferrable_load", None)
 
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
-
-            # Load the default config
-            if "def_load_config" in runtimeparams:
-                params["optim_conf"]["def_load_config"] = runtimeparams["def_load_config"]
-            if "def_load_config" in params["optim_conf"]:
-                for k in range(len(params["optim_conf"]["def_load_config"])):
-                    if "thermal_config" in params["optim_conf"]["def_load_config"][k]:
-                        if (
-                            "heater_desired_temperatures" in runtimeparams
-                            and len(runtimeparams["heater_desired_temperatures"]) > k
-                        ):
-                            params["optim_conf"]["def_load_config"][k]["thermal_config"][
-                                "desired_temperatures"
-                            ] = runtimeparams["heater_desired_temperatures"][k]
-                        if (
-                            "heater_start_temperatures" in runtimeparams
-                            and len(runtimeparams["heater_start_temperatures"]) > k
-                        ):
-                            params["optim_conf"]["def_load_config"][k]["thermal_config"][
-                                "start_temperature"
-                            ] = runtimeparams["heater_start_temperatures"][k]
         else:
             params["passed_data"]["prediction_horizon"] = None
             params["passed_data"]["soc_init"] = None
             params["passed_data"]["soc_final"] = None
+
+        # Parsing the thermal model parameters
+        # Load the default config
+        if "def_load_config" in runtimeparams:
+            params["optim_conf"]["def_load_config"] = runtimeparams["def_load_config"]
+            params["optim_conf"]["number_of_deferrable_loads"] = len(
+                runtimeparams["def_load_config"]
+            )
+        if "def_load_config" in params["optim_conf"]:
+            for k in range(len(params["optim_conf"]["def_load_config"])):
+                if "thermal_config" in params["optim_conf"]["def_load_config"][k]:
+                    if (
+                        "heater_desired_temperatures" in runtimeparams
+                        and len(runtimeparams["heater_desired_temperatures"]) > k
+                    ):
+                        params["optim_conf"]["def_load_config"][k]["thermal_config"][
+                            "desired_temperatures"
+                        ] = runtimeparams["heater_desired_temperatures"][k]
+                    if (
+                        "heater_start_temperatures" in runtimeparams
+                        and len(runtimeparams["heater_start_temperatures"]) > k
+                    ):
+                        params["optim_conf"]["def_load_config"][k]["thermal_config"][
+                            "start_temperature"
+                        ] = runtimeparams["heater_start_temperatures"][k]
 
         # Treat passed forecast data lists
         list_forecast_key = [
@@ -650,6 +1076,12 @@ async def treat_runtimeparams(
             else:
                 params["passed_data"][forecast_key] = None
 
+        # Explicitly handle historic_days_to_retrieve from runtimeparams BEFORE validation
+        if "historic_days_to_retrieve" in runtimeparams:
+            params["retrieve_hass_conf"]["historic_days_to_retrieve"] = int(
+                runtimeparams["historic_days_to_retrieve"]
+            )
+
         # Treat passed data for forecast model fit/predict/tune at runtime
         if (
             params["passed_data"].get("historic_days_to_retrieve", None) is not None
@@ -668,41 +1100,62 @@ async def treat_runtimeparams(
                 params["passed_data"]["historic_days_to_retrieve"] = params["retrieve_hass_conf"][
                     "historic_days_to_retrieve"
                 ]
-        if "model_type" not in runtimeparams.keys():
-            model_type = "long_train_data"
-        else:
-            model_type = runtimeparams["model_type"]
-        params["passed_data"]["model_type"] = model_type
-        if "var_model" not in runtimeparams.keys():
-            var_model = params["retrieve_hass_conf"]["sensor_power_load_no_var_loads"]
-        else:
-            var_model = runtimeparams["var_model"]
-        params["passed_data"]["var_model"] = var_model
-        if "sklearn_model" not in runtimeparams.keys():
-            sklearn_model = "KNeighborsRegressor"
-        else:
-            sklearn_model = runtimeparams["sklearn_model"]
-        params["passed_data"]["sklearn_model"] = sklearn_model
-        if "regression_model" not in runtimeparams.keys():
-            regression_model = "AdaBoostRegression"
-        else:
-            regression_model = runtimeparams["regression_model"]
-        params["passed_data"]["regression_model"] = regression_model
-        if "num_lags" not in runtimeparams.keys():
-            num_lags = 48
-        else:
-            num_lags = runtimeparams["num_lags"]
-        params["passed_data"]["num_lags"] = num_lags
-        if "split_date_delta" not in runtimeparams.keys():
-            split_date_delta = "48h"
-        else:
-            split_date_delta = runtimeparams["split_date_delta"]
-        params["passed_data"]["split_date_delta"] = split_date_delta
-        if "perform_backtest" not in runtimeparams.keys():
-            perform_backtest = False
-        else:
-            perform_backtest = ast.literal_eval(str(runtimeparams["perform_backtest"]).capitalize())
-        params["passed_data"]["perform_backtest"] = perform_backtest
+
+        # UPDATED ML PARAMETER HANDLING
+        # Define Helper Functions
+        def _cast_bool(value):
+            """Helper to cast string inputs to boolean safely."""
+            try:
+                return ast.literal_eval(str(value).capitalize())
+            except (ValueError, SyntaxError):
+                return False
+
+        def _get_ml_param(name, params, runtimeparams, default=None, cast=None):
+            """
+            Prioritize Runtime Params -> Config Params (optim_conf) -> Default.
+            """
+            if name in runtimeparams:
+                value = runtimeparams[name]
+            else:
+                value = params["optim_conf"].get(name, default)
+
+            if cast is not None and value is not None:
+                try:
+                    value = cast(value)
+                except Exception:
+                    pass
+            return value
+
+        # Compute dynamic defaults
+        # Default for var_model falls back to the configured load sensor
+        default_var_model = params["retrieve_hass_conf"].get(
+            "sensor_power_load_no_var_loads", "sensor.power_load_no_var_loads"
+        )
+
+        # Define Configuration Table
+        # Format: (parameter_name, default_value, cast_function)
+        ml_param_defs = [
+            ("model_type", "long_train_data", None),
+            ("var_model", default_var_model, None),
+            ("sklearn_model", "KNeighborsRegressor", None),
+            ("regression_model", "AdaBoostRegression", None),
+            ("num_lags", 48, None),
+            ("split_date_delta", "48h", None),
+            ("n_trials", 10, int),
+            ("perform_backtest", False, _cast_bool),
+        ]
+
+        # Apply Configuration
+        for name, default, caster in ml_param_defs:
+            params["passed_data"][name] = _get_ml_param(
+                name=name,
+                params=params,
+                runtimeparams=runtimeparams,
+                default=default,
+                cast=caster,
+            )
+
+        # Other non-dynamic options
         if "model_predict_publish" not in runtimeparams.keys():
             model_predict_publish = False
         else:
@@ -856,6 +1309,10 @@ async def treat_runtimeparams(
             params["passed_data"]["custom_predicted_temperature_id"] = runtimeparams[
                 "custom_predicted_temperature_id"
             ]
+        if "custom_heating_demand_id" in runtimeparams.keys():
+            params["passed_data"]["custom_heating_demand_id"] = runtimeparams[
+                "custom_heating_demand_id"
+            ]
 
     # split config categories from params
     retrieve_hass_conf = params["retrieve_hass_conf"]
@@ -867,12 +1324,12 @@ async def treat_runtimeparams(
     return params, retrieve_hass_conf, optim_conf, plant_conf
 
 
-def get_yaml_parse(params: str, logger: logging.Logger) -> tuple[dict, dict, dict]:
+def get_yaml_parse(params: str | dict, logger: logging.Logger) -> tuple[dict, dict, dict]:
     """
     Perform parsing of the params into the configuration catagories
 
     :param params: Built configuration parameters
-    :type params: str
+    :type params: str or dict
     :param logger: The logger object
     :type logger: logging.Logger
     :return: A tuple with the dictionaries containing the parsed data
@@ -920,15 +1377,21 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
     """
     cols_p = [i for i in df.columns.to_list() if "P_" in i]
     # Let's round the data in the DF
-    optim_status = df["optim_status"].unique().item()
+    if "optim_status" in df.columns:
+        optim_status = df["optim_status"].iloc[0]
+    else:
+        optim_status = "Status not available"
     df.drop("optim_status", axis=1, inplace=True)
     cols_else = [i for i in df.columns.to_list() if "P_" not in i]
     df = df.apply(pd.to_numeric)
     df[cols_p] = df[cols_p].astype(int)
     df[cols_else] = df[cols_else].round(3)
     # Create plots
+    # Figure 0: Systems Powers
     n_colors = len(cols_p)
-    colors = px.colors.sample_colorscale("jet", [n / (n_colors - 1) for n in range(n_colors)])
+    colors = px.colors.sample_colorscale(
+        "jet", [n / (n_colors - 1) if n_colors > 1 else 0 for n in range(n_colors)]
+    )
     fig_0 = px.line(
         df[cols_p],
         title="Systems powers schedule after optimization results",
@@ -938,6 +1401,9 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         render_mode="svg",
     )
     fig_0.update_layout(xaxis_title="Timestamp", yaxis_title="System powers (W)")
+    image_path_0 = fig_0.to_html(full_html=False, default_width="75%")
+    # Figure 1: Battery SOC (Optional)
+    image_path_1 = None
     if "SOC_opt" in df.columns.to_list():
         fig_1 = px.line(
             df["SOC_opt"],
@@ -948,9 +1414,39 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
             render_mode="svg",
         )
         fig_1.update_layout(xaxis_title="Timestamp", yaxis_title="Battery SOC (%)")
+        image_path_1 = fig_1.to_html(full_html=False, default_width="75%")
+    # Figure Thermal: Temperatures (Optional)
+    # Detect columns for predicted, target, min, or max temperatures
+    cols_temp = [
+        i
+        for i in df.columns.to_list()
+        if "predicted_temp_heater" in i
+        or "target_temp_heater" in i
+        or "min_temp_heater" in i
+        or "max_temp_heater" in i
+    ]
+    image_path_temp = None
+    if len(cols_temp) > 0:
+        n_colors = len(cols_temp)
+        colors = px.colors.sample_colorscale(
+            "jet", [n / (n_colors - 1) if n_colors > 1 else 0 for n in range(n_colors)]
+        )
+        fig_temp = px.line(
+            df[cols_temp],
+            title="Thermal loads temperature schedule",
+            template="presentation",
+            line_shape="hv",
+            color_discrete_sequence=colors,
+            render_mode="svg",
+        )
+        fig_temp.update_layout(xaxis_title="Timestamp", yaxis_title="Temperature (&deg;C)")
+        image_path_temp = fig_temp.to_html(full_html=False, default_width="75%")
+    # Figure 2: Costs
     cols_cost = [i for i in df.columns.to_list() if "cost_" in i or "unit_" in i]
     n_colors = len(cols_cost)
-    colors = px.colors.sample_colorscale("jet", [n / (n_colors - 1) for n in range(n_colors)])
+    colors = px.colors.sample_colorscale(
+        "jet", [n / (n_colors - 1) if n_colors > 1 else 0 for n in range(n_colors)]
+    )
     fig_2 = px.line(
         df[cols_cost],
         title="Systems costs obtained from optimization results",
@@ -960,12 +1456,8 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         render_mode="svg",
     )
     fig_2.update_layout(xaxis_title="Timestamp", yaxis_title="System costs (currency)")
-    # Get full path to image
-    image_path_0 = fig_0.to_html(full_html=False, default_width="75%")
-    if "SOC_opt" in df.columns.to_list():
-        image_path_1 = fig_1.to_html(full_html=False, default_width="75%")
     image_path_2 = fig_2.to_html(full_html=False, default_width="75%")
-    # The tables
+    # Tables
     table1 = df.reset_index().to_html(classes="mystyle", index=False)
     cost_cols = [i for i in df.columns if "cost_" in i]
     table2 = df[cost_cols].reset_index().sum(numeric_only=True)
@@ -975,13 +1467,19 @@ def get_injection_dict(df: pd.DataFrame, plot_size: int | None = 1366) -> dict:
         .reset_index(names="Variable")
         .to_html(classes="mystyle", index=False)
     )
-    # The dict of plots
+    # Construct Injection Dict
     injection_dict = {}
     injection_dict["title"] = "<h2>EMHASS optimization results</h2>"
     injection_dict["subsubtitle0"] = "<h4>Plotting latest optimization results</h4>"
+    # Add Powers
     injection_dict["figure_0"] = image_path_0
-    if "SOC_opt" in df.columns.to_list():
+    # Add Thermal
+    if image_path_temp is not None:
+        injection_dict["figure_thermal"] = image_path_temp
+    # Add SOC
+    if image_path_1 is not None:
         injection_dict["figure_1"] = image_path_1
+    # Add Costs
     injection_dict["figure_2"] = image_path_2
     injection_dict["subsubtitle1"] = "<h4>Last run optimization results table</h4>"
     injection_dict["table1"] = table1
@@ -1010,9 +1508,13 @@ def get_injection_dict_forecast_model_fit(df_fit_pred: pd.DataFrame, mlf: MLFore
     injection_dict = {}
     injection_dict["title"] = "<h2>Custom machine learning forecast model fit</h2>"
     injection_dict["subsubtitle0"] = (
-        "<h4>Plotting train/test forecast model results for " + mlf.model_type + "</h4>"
+        "<h4>Plotting train/test forecast model results for "
+        + mlf.model_type
+        + "<br>"
+        + "Forecasting variable "
+        + mlf.var_model
+        + "</h4>"
     )
-    injection_dict["subsubtitle0"] = "<h4>Forecasting variable " + mlf.var_model + "</h4>"
     injection_dict["figure_0"] = image_path_0
     return injection_dict
 
@@ -1174,6 +1676,26 @@ async def build_legacy_config_params(
     return config
 
 
+def get_keys_to_mask() -> list[str]:
+    """
+    Return a list of sensitive configuration keys that should be masked in logs
+    or treated specially in the UI (e.g., secrets).
+    """
+    return [
+        "influxdb_username",
+        "influxdb_password",
+        "solcast_api_key",
+        "solcast_rooftop_id",
+        "long_lived_token",
+        "time_zone",
+        "Latitude",
+        "Longitude",
+        "Altitude",
+        "hass_url",  # Ensure this is included if you want it masked everywhere
+        "solar_forecast_kwp",  # Ensure this is included if you want it masked everywhere
+    ]
+
+
 def param_to_config(param: dict[str, dict], logger: logging.Logger) -> dict[str, str]:
     """
     A function that extracts the parameters from param back to the config.json format.
@@ -1191,21 +1713,11 @@ def param_to_config(param: dict[str, dict], logger: logging.Logger) -> dict[str,
 
     return_config = {}
 
-    config_catagories = ["retrieve_hass_conf", "optim_conf", "plant_conf"]
-    secret_params = [
-        "hass_url",
-        "time_zone",
-        "Latitude",
-        "Longitude",
-        "Altitude",
-        "long_lived_token",
-        "solcast_api_key",
-        "solcast_rooftop_id",
-        "solar_forecast_kwp",
-    ]
+    config_categories = ["retrieve_hass_conf", "optim_conf", "plant_conf"]
+    secret_params = get_keys_to_mask()
 
     # Loop through config catagories that contain config params, and extract
-    for config in config_catagories:
+    for config in config_categories:
         for parameter in param[config]:
             # If parameter is not a secret, append to return_config
             if parameter not in secret_params:
@@ -1254,6 +1766,8 @@ async def build_secrets(
         "solcast_api_key": "yoursecretsolcastapikey",
         "solcast_rooftop_id": "yourrooftopid",
         "solar_forecast_kwp": 5,
+        "influxdb_username": "yourinfluxdbusername",
+        "influxdb_password": "yourinfluxdbpassword",
     }
 
     # Obtain Secrets from ENV?
@@ -1311,14 +1825,32 @@ async def build_secrets(
                     ) as response:
                         if response.status < 400:
                             config_hass = await response.json()
-                            params_secrets = {
-                                "hass_url": params_secrets["hass_url"],
-                                "long_lived_token": params_secrets["long_lived_token"],
-                                "time_zone": config_hass["time_zone"],
-                                "Latitude": config_hass["latitude"],
-                                "Longitude": config_hass["longitude"],
-                                "Altitude": config_hass["elevation"],
-                            }
+                            params_secrets.update(
+                                {
+                                    "hass_url": params_secrets["hass_url"],
+                                    "long_lived_token": params_secrets["long_lived_token"],
+                                    "time_zone": config_hass["time_zone"],
+                                    "Latitude": config_hass["latitude"],
+                                    "Longitude": config_hass["longitude"],
+                                    "Altitude": config_hass["elevation"],
+                                    # If defined in HA config, use them, otherwise keep defaults
+                                    "solcast_api_key": config_hass.get(
+                                        "solcast_api_key", params_secrets["solcast_api_key"]
+                                    ),
+                                    "solcast_rooftop_id": config_hass.get(
+                                        "solcast_rooftop_id", params_secrets["solcast_rooftop_id"]
+                                    ),
+                                    "solar_forecast_kwp": config_hass.get(
+                                        "solar_forecast_kwp", params_secrets["solar_forecast_kwp"]
+                                    ),
+                                    "influxdb_username": config_hass.get(
+                                        "influxdb_username", params_secrets.get("influxdb_username")
+                                    ),
+                                    "influxdb_password": config_hass.get(
+                                        "influxdb_password", params_secrets.get("influxdb_password")
+                                    ),
+                                }
+                            )
                         else:
                             # Obtain the url and key secrets if any from options.json (default /app/options.json)
                             logger.warning(
@@ -1346,23 +1878,10 @@ async def build_secrets(
                                 options["Altitude"]
                             ):
                                 params_secrets["Altitude"] = options["Altitude"]
-            else:
-                # Obtain the url and key secrets if any from options.json (default /app/options.json)
-                logger.debug("Obtaining url and key secrets from options.json")
-                if url_from_options != "empty" and url_from_options != "":
-                    params_secrets["hass_url"] = url_from_options
-                if key_from_options != "empty" and key_from_options != "":
-                    params_secrets["long_lived_token"] = key_from_options
-                if options.get("time_zone", "empty") != "empty" and options["time_zone"] != "":
-                    params_secrets["time_zone"] = options["time_zone"]
-                if options.get("Latitude", None) is not None and bool(options["Latitude"]):
-                    params_secrets["Latitude"] = options["Latitude"]
-                if options.get("Longitude", None) is not None and bool(options["Longitude"]):
-                    params_secrets["Longitude"] = options["Longitude"]
-                if options.get("Altitude", None) is not None and bool(options["Altitude"]):
-                    params_secrets["Altitude"] = options["Altitude"]
 
             # Obtain the forecast secrets (if any) from options.json (default /app/options.json)
+            # This logic runs regardless of whether HA API call above succeeded or failed,
+            # so we removed the duplicate logic from the 'else' block above.
             forecast_secrets = [
                 "solcast_api_key",
                 "solcast_rooftop_id",
@@ -1382,6 +1901,21 @@ async def build_secrets(
                     params_secrets["solcast_rooftop_id"] = options["solcast_rooftop_id"]
                 if options.get("solar_forecast_kwp", None) and bool(options["solar_forecast_kwp"]):
                     params_secrets["solar_forecast_kwp"] = options["solar_forecast_kwp"]
+
+            # Obtain InfluxDB secrets from options.json
+            influx_secrets = ["influxdb_username", "influxdb_password"]
+            if any(x in influx_secrets for x in list(options.keys())):
+                logger.debug("Obtaining InfluxDB secrets from options.json")
+                if (
+                    options.get("influxdb_username", "empty") != "empty"
+                    and options["influxdb_username"] != ""
+                ):
+                    params_secrets["influxdb_username"] = options["influxdb_username"]
+                if (
+                    options.get("influxdb_password", "empty") != "empty"
+                    and options["influxdb_password"] != ""
+                ):
+                    params_secrets["influxdb_password"] = options["influxdb_password"]
 
     # Obtain secrets from secrets_emhass.yaml? (default /app/secrets_emhass.yaml)
     if secrets_path and pathlib.Path(secrets_path).is_file():
@@ -1575,6 +2109,12 @@ async def build_params(
     params["retrieve_hass_conf"]["Latitude"] = params_secrets.get("Latitude")
     params["retrieve_hass_conf"]["Longitude"] = params_secrets.get("Longitude")
     params["retrieve_hass_conf"]["Altitude"] = params_secrets.get("Altitude")
+    if params_secrets.get("influxdb_username") is not None:
+        params["retrieve_hass_conf"]["influxdb_username"] = params_secrets.get("influxdb_username")
+        params["params_secrets"]["influxdb_username"] = params_secrets.get("influxdb_username")
+    if params_secrets.get("influxdb_password") is not None:
+        params["retrieve_hass_conf"]["influxdb_password"] = params_secrets.get("influxdb_password")
+        params["params_secrets"]["influxdb_password"] = params_secrets.get("influxdb_password")
     # Update optional param secrets
     if params["optim_conf"].get("weather_forecast_method", None) is not None:
         if params["optim_conf"]["weather_forecast_method"] == "solcast":

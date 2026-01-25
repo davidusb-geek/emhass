@@ -35,7 +35,7 @@ The minimum number of `historic_days_to_retrieve` is hard coded to 9 by default.
 - `perform_backtest`: if `True` then a backtesting routine is performed to evaluate the performance of the model on the complete train set.
 
 The default values for these parameters are:
-```yaml
+```python
 runtimeparams = {
     'historic_days_to_retrieve': 9,
     "model_type": "long_train_data",
@@ -108,7 +108,7 @@ The list of parameters needed to set the data publish task is:
 - `model_predict_friendly_name`: the `friendly_name` to be used.
 
 The default values for these parameters are:
-```yaml
+```python
 runtimeparams = {
     "model_predict_publish": False,
     "model_predict_entity_id": "sensor.p_load_forecast_custom_model",
@@ -124,6 +124,13 @@ With a previously fitted model, you can use the `forecast-model-tune` endpoint t
 You can pass the same parameter you defined during the fit step, but `var_model` has to be defined at least. According to the example, the syntax will be:
 ```bash
 curl -i -H "Content-Type:application/json" -X POST -d '{"var_model": "sensor.power_load_no_var_loads"}' http://localhost:5000/action/forecast-model-tune
+```
+It is possible to pass the `n_trials` parameter to define the number of trials to perform during the optimization.
+The default value for this parameter is:
+```python
+runtimeparams = {
+    "n_trials": 10
+}
 ```
 This will launch the optimization routine and optimize the internal hyperparameters of the `scikit-learn` regressor and it will find the optimal number of lags.
 The following are the logs with the results obtained after the optimization for a KNN regressor:

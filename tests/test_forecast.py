@@ -10,6 +10,7 @@ import re
 import unittest
 
 import aiofiles
+import numpy as np
 import orjson
 import pandas as pd
 from aioresponses import aioresponses
@@ -131,6 +132,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.p_load_forecast = await self.fcst.get_load_forecast(
             method=optim_conf["load_forecast_method"]
         )
+        self.p_pv_forecast = self.p_pv_forecast[~self.p_pv_forecast.index.duplicated(keep="first")]
+        self.p_load_forecast = self.p_load_forecast[
+            ~self.p_load_forecast.index.duplicated(keep="first")
+        ]
         self.df_input_data_dayahead = pd.concat([self.p_pv_forecast, self.p_load_forecast], axis=1)
         self.df_input_data_dayahead.columns = ["p_pv_forecast", "p_load_forecast"]
         self.opt = Optimization(
@@ -172,7 +177,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             len(self.df_weather_csv),
             int(
-                self.optim_conf["delta_forecast_daily"].total_seconds() / 3600 / self.fcst.timeStep
+                self.optim_conf["delta_forecast_daily"].total_seconds()
+                / 3600
+                / (self.fcst.freq.seconds / 3600)
             ),
         )
         # Test dataframe from get power from weather
@@ -198,7 +205,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # Call data preparation method
         self.fcst.adjust_pv_forecast_data_prep(data)
         self.assertIsInstance(self.fcst.data_adjust_pv, pd.DataFrame)
-        self.assertIsInstance(self.fcst.X_adjust_pv, pd.DataFrame)
+        self.assertIsInstance(self.fcst.x_adjust_pv, pd.DataFrame)
         self.assertIsInstance(self.fcst.y_adjust_pv, pd.core.series.Series)
         # Call the fit method
         await self.fcst.adjust_pv_forecast_fit(
@@ -206,14 +213,14 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         )
         # Call the predict method
         p_pv_forecast = self.fcst.adjust_pv_forecast_predict()
-        self.assertEqual(len(p_pv_forecast), len(self.fcst.P_PV_forecast_validation))
+        self.assertEqual(len(p_pv_forecast), len(self.fcst.p_pv_forecast_validation))
         self.assertFalse(p_pv_forecast.isna().any().any(), "Adjusted forecast contains NaN values")
         self.assertGreaterEqual(self.fcst.validation_rmse, 0.0, "RMSE should be non-negative")
         self.assertLessEqual(self.fcst.validation_r2, 1.0, "R² score should be at most 1")
         self.assertGreaterEqual(self.fcst.validation_r2, -1.0, "R² score should be at least -1")
 
         # import plotly.express as px
-        # data_to_plot = self.fcst.P_PV_forecast_validation[["forecast", "adjusted_forecast"]].reset_index()
+        # data_to_plot = self.fcst.p_pv_forecast_validation[["forecast", "adjusted_forecast"]].reset_index()
         # fig = px.line(
         #     data_to_plot,
         #     x="index",  # Assuming the index is the timestamp
@@ -252,7 +259,6 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             + "diffuse_radiation_instant,"
             + "direct_normal_irradiance_instant"
         )
-        get_url = "https://api.open-meteo.com/v1/forecast"
 
         with aioresponses() as mocked:
             mocked.get(get_url, payload=data)
@@ -273,7 +279,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 int(
                     self.optim_conf["delta_forecast_daily"].total_seconds()
                     / 3600
-                    / self.fcst.timeStep
+                    / (self.fcst.freq.seconds / 3600)
                 ),
             )
             # Test the legacy code using PVLib module methods
@@ -362,7 +368,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 int(
                     self.optim_conf["delta_forecast_daily"].total_seconds()
                     / 3600
-                    / self.fcst.timeStep
+                    / (self.fcst.freq.seconds / 3600)
                 ),
             )
             if os.path.isfile(emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"):
@@ -411,7 +417,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 int(
                     self.optim_conf["delta_forecast_daily"].total_seconds()
                     / 3600
-                    / self.fcst.timeStep
+                    / (self.fcst.freq.seconds / 3600)
                 ),
             )
             if os.path.isfile(emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"):
@@ -467,7 +473,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                     int(
                         self.optim_conf["delta_forecast_daily"].total_seconds()
                         / 3600
-                        / self.fcst.timeStep
+                        / (self.fcst.freq.seconds / 3600)
                     ),
                 )
 
@@ -1066,21 +1072,21 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # Test naive load forecast during DST transition
         # This should not raise NonExistentTimeError
         try:
-            P_load_forecast_dst = await dst_fcst.get_load_forecast(method="naive")
-            self.assertIsInstance(P_load_forecast_dst, pd.core.series.Series)
-            self.assertEqual(len(P_load_forecast_dst), len(dst_fcst.forecast_dates))
+            p_load_forecast_dst = await dst_fcst.get_load_forecast(method="naive")
+            self.assertIsInstance(p_load_forecast_dst, pd.core.series.Series)
+            self.assertEqual(len(p_load_forecast_dst), len(dst_fcst.forecast_dates))
             # Check that index is properly timezone-aware
-            self.assertEqual(P_load_forecast_dst.index.tz, sydney_tz)
+            self.assertEqual(p_load_forecast_dst.index.tz, sydney_tz)
             logger.info("DST forward transition test for naive method: PASSED")
         except Exception as e:
             self.fail(f"Naive forecast failed during DST forward transition: {e}")
 
         # Test typical load forecast during DST transition
         try:
-            P_load_forecast_typical = await dst_fcst.get_load_forecast(method="typical")
-            self.assertIsInstance(P_load_forecast_typical, pd.core.series.Series)
-            self.assertEqual(len(P_load_forecast_typical), len(dst_fcst.forecast_dates))
-            self.assertEqual(P_load_forecast_typical.index.tz, sydney_tz)
+            p_load_forecast_typical = await dst_fcst.get_load_forecast(method="typical")
+            self.assertIsInstance(p_load_forecast_typical, pd.core.series.Series)
+            self.assertEqual(len(p_load_forecast_typical), len(dst_fcst.forecast_dates))
+            self.assertEqual(p_load_forecast_typical.index.tz, sydney_tz)
             logger.info("DST forward transition test for typical method: PASSED")
         except Exception as e:
             self.fail(f"Typical forecast failed during DST forward transition: {e}")
@@ -1157,10 +1163,10 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         )
 
         try:
-            us_P_load_forecast = await us_dst_fcst.get_load_forecast(method="naive")
-            self.assertIsInstance(us_P_load_forecast, pd.core.series.Series)
-            self.assertEqual(len(us_P_load_forecast), len(us_dst_fcst.forecast_dates))
-            self.assertEqual(us_P_load_forecast.index.tz, eastern_tz)
+            us_p_load_forecast = await us_dst_fcst.get_load_forecast(method="naive")
+            self.assertIsInstance(us_p_load_forecast, pd.core.series.Series)
+            self.assertEqual(len(us_p_load_forecast), len(us_dst_fcst.forecast_dates))
+            self.assertEqual(us_p_load_forecast.index.tz, eastern_tz)
             logger.info("US Eastern DST forward transition test: PASSED")
         except Exception as e:
             self.fail(f"US Eastern DST forecast failed during forward transition: {e}")
@@ -1210,11 +1216,11 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
         # Test naive load forecast during DST backward transition
         try:
-            P_load_forecast_dst = await dst_fcst.get_load_forecast(method="naive")
-            self.assertIsInstance(P_load_forecast_dst, pd.core.series.Series)
-            self.assertEqual(len(P_load_forecast_dst), len(dst_fcst.forecast_dates))
+            p_load_forecast_dst = await dst_fcst.get_load_forecast(method="naive")
+            self.assertIsInstance(p_load_forecast_dst, pd.core.series.Series)
+            self.assertEqual(len(p_load_forecast_dst), len(dst_fcst.forecast_dates))
             # Check that index is properly timezone-aware
-            self.assertEqual(P_load_forecast_dst.index.tz, sydney_tz)
+            self.assertEqual(p_load_forecast_dst.index.tz, sydney_tz)
             logger.info("DST backward transition test for naive method: PASSED")
         except Exception as e:
             self.fail(f"Naive forecast failed during DST backward transition: {e}")
@@ -1295,13 +1301,175 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         )
 
         try:
-            us_P_load_forecast = await us_dst_fcst.get_load_forecast(method="naive")
-            self.assertIsInstance(us_P_load_forecast, pd.core.series.Series)
-            self.assertEqual(len(us_P_load_forecast), len(us_dst_fcst.forecast_dates))
-            self.assertEqual(us_P_load_forecast.index.tz, eastern_tz)
+            us_p_load_forecast = await us_dst_fcst.get_load_forecast(method="naive")
+            self.assertIsInstance(us_p_load_forecast, pd.core.series.Series)
+            self.assertEqual(len(us_p_load_forecast), len(us_dst_fcst.forecast_dates))
+            self.assertEqual(us_p_load_forecast.index.tz, eastern_tz)
             logger.info("US Eastern DST backward transition test: PASSED")
         except Exception as e:
             self.fail(f"US Eastern DST forecast failed during backward transition: {e}")
+
+    async def test_solcast_caching_and_errors(self):
+        """Test Solcast caching logic and API error handling."""
+        w_forecast_cache_path = emhass_conf["data_path"] / "weather_forecast_data.pkl"
+        # Test Cache Hit
+        data = pd.DataFrame(index=self.fcst.forecast_dates)
+        data["yhat"] = 1000.0
+        # Caching logic uses pickle, so we can save whatever we want
+        await self.fcst.set_cached_forecast_data(w_forecast_cache_path, data)
+        # Force method="solcast" to hit the cache check
+        res = await self.fcst.get_weather_forecast(method="solcast")
+        self.assertIsInstance(res, pd.DataFrame)
+        # Ensure it loaded our dummy data
+        self.assertTrue(np.all(np.isclose(res["yhat"], 1000.0)))
+        # Test API Errors
+        # Remove cache to force API call
+        if os.path.exists(w_forecast_cache_path):
+            os.remove(w_forecast_cache_path)
+        self.fcst.retrieve_hass_conf["solcast_api_key"] = "TEST_KEY"
+        self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "TEST_ID"
+        # Test 429 (Too Many Requests)
+        with aioresponses() as mocked:
+            # We mock ANY URL starting with solcast
+            mocked.get(re.compile(r"https://api\.solcast\.com\.au/.*"), status=429)
+            res = await self.fcst.get_weather_forecast(method="solcast")
+            self.assertFalse(res)
+        # Test 500 (Server Error)
+        with aioresponses() as mocked:
+            mocked.get(re.compile(r"https://api\.solcast\.com\.au/.*"), status=500)
+            res = await self.fcst.get_weather_forecast(method="solcast")
+            self.assertFalse(res)
+
+    async def test_open_meteo_legacy_pvlib(self):
+        """Test the use_legacy_pvlib=True path in open-meteo."""
+        # Load mock data
+        test_data_path = emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2"
+        async with aiofiles.open(test_data_path, "rb") as f:
+            compressed = await f.read()
+        data = bz2.decompress(compressed)
+        data = cPickle.loads(data)
+        data = orjson.loads(data.content)
+        with aioresponses() as mocked:
+            mocked.get(re.compile(r"https://api\.open-meteo\.com/.*"), payload=data)
+            # Call with legacy=True
+            df = await self.fcst.get_weather_forecast(method="open-meteo", use_legacy_pvlib=True)
+            self.assertIsInstance(df, pd.DataFrame)
+            # Verify columns exist (calculated by cloud_cover_to_irradiance)
+            self.assertIn("ghi", df.columns)
+            self.assertIn("dni", df.columns)
+            self.assertIn("dhi", df.columns)
+
+    def test_cloud_cover_to_irradiance(self):
+        """Test the manual irradiance calculation from cloud cover."""
+        # Create dummy cloud cover data
+        cloud_cover = pd.Series(
+            [0, 50, 100], index=pd.date_range("2021-01-01", periods=3, freq="1h")
+        )
+        cloud_cover = cloud_cover.tz_localize(self.fcst.time_zone)
+        res = self.fcst.cloud_cover_to_irradiance(cloud_cover)
+        self.assertIsInstance(res, pd.DataFrame)
+        self.assertIn("ghi", res.columns)
+        self.assertIn("dni", res.columns)
+        self.assertIn("dhi", res.columns)
+        # Check basic physics: 0 cloud cover should have higher GHI than 100
+        # (Assuming daytime, but solar position depends on lat/lon/time.
+        #  Just checking structure is usually enough for coverage).
+
+    def test_get_power_from_weather_single_system(self):
+        """Test get_power_from_weather with a single PV system configuration."""
+        # Force single string configuration (not list)
+        self.plant_conf["pv_module_model"] = (
+            "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M"
+        )
+        self.plant_conf["pv_inverter_model"] = (
+            "Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_"
+        )
+        self.plant_conf["surface_tilt"] = 30
+        self.plant_conf["surface_azimuth"] = 180
+        self.plant_conf["modules_per_string"] = 8
+        self.plant_conf["strings_per_inverter"] = 1
+        # Re-initialize Forecast to apply new plant_conf
+        self.fcst = Forecast(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            orjson.dumps(self.fcst.params).decode("utf-8"),
+            emhass_conf,
+            logger,
+            get_data_from_file=self.get_data_from_file,
+        )
+        if not hasattr(self.fcst, "weather_forecast_method"):
+            self.fcst.weather_forecast_method = self.optim_conf.get(
+                "weather_forecast_method", "scrapper"
+            )
+        self.df_weather_scrap["ghi"] = 1000.0
+        self.df_weather_scrap["dni"] = 900.0
+        self.df_weather_scrap["dhi"] = 100.0
+        self.df_weather_scrap["temp_air"] = 25.0
+        self.df_weather_scrap["wind_speed"] = 2.0
+        self.df_weather_scrap["precipitable_water"] = 0.5
+        p_pv_forecast = self.fcst.get_power_from_weather(self.df_weather_scrap)
+        self.assertIsInstance(p_pv_forecast, pd.Series)
+        self.assertEqual(len(p_pv_forecast), len(self.df_weather_scrap))
+
+    def test_get_model_selection(self):
+        """
+        Test the _get_model and _find_closest_model methods using the actual CEC databases.
+        """
+        # Load the databases using the configuration paths
+        # We use self.fcst.emhass_conf to ensure we get the correct root path
+        cec_modules_path = self.fcst.emhass_conf["root_path"] / "data" / "cec_modules.pbz2"
+        cec_inverters_path = self.fcst.emhass_conf["root_path"] / "data" / "cec_inverters.pbz2"
+        # Load Modules
+        with bz2.BZ2File(cec_modules_path, "rb") as f:
+            cec_modules = cPickle.load(f)
+        # Load Inverters
+        with bz2.BZ2File(cec_inverters_path, "rb") as f:
+            cec_inverters = cPickle.load(f)
+        # TEST 1: Retrieve Module by Exact Name
+        # Using a specific known module from the database: 300W module
+        target_module = "MEMC_Singapore_MEMC_M300AMC_27"
+        model = self.fcst._get_model(target_module, cec_modules, "module")
+        self.assertIsNotNone(model, "Should return a model for a valid name string")
+        self.assertEqual(model.name, target_module, "Model name should match the requested string")
+        self.assertAlmostEqual(model["STC"], 300.0, msg="Expected STC around 300W for this module")
+        # TEST 2: Retrieve Module by Wattage (Integer)
+        # Request a 300W module by integer. Should find the closest one (likely the one above or similar)
+        model = self.fcst._get_model(300, cec_modules, "module")
+        self.assertIsNotNone(model, "Should return a model for a valid integer power")
+        # Verify the power is reasonably close to 300W (STC)
+        self.assertAlmostEqual(
+            model["STC"], 300.0, delta=10.0, msg="Selected module should be close to 300W"
+        )
+        # TEST 3: Retrieve Module by Wattage (String)
+        # Request a "300" W module (string input). Logic should convert to float and find closest.
+        model = self.fcst._get_model("300", cec_modules, "module")
+        self.assertIsNotNone(model, "Should return a model for a valid string number")
+        self.assertAlmostEqual(
+            model["STC"], 300.0, delta=10.0, msg="Selected module should be close to 300W"
+        )
+        # TEST 4: Retrieve Inverter by Exact Name
+        # Using a specific known inverter: ~5000W
+        target_inverter = "INGETEAM_POWER_TECHNOLOGY_S_A___Ingecon_Sun_5U__208V_"
+        model = self.fcst._get_model(target_inverter, cec_inverters, "inverter")
+        self.assertIsNotNone(model, "Should return an inverter for a valid name string")
+        self.assertEqual(model.name, target_inverter)
+        # TEST 5: Retrieve Inverter by Wattage (Float)
+        # Request 5000W inverter
+        model = self.fcst._get_model(5000.0, cec_inverters, "inverter")
+        self.assertIsNotNone(model, "Should return an inverter for a valid float power")
+        # Check power (Paco is typical for AC power, Pdco for DC)
+        power = model.get("Paco", model.get("Pdco", 0))
+        self.assertAlmostEqual(
+            power, 5000.0, delta=100.0, msg="Selected inverter should be close to 5000W"
+        )
+        # TEST 6: Test Fallback / Closest Match Logic
+        # Request 292W. Should match 300W or 290W module.
+        model = self.fcst._get_model(292, cec_modules, "module")
+        self.assertIsNotNone(model)
+        self.assertLess(
+            abs(model["STC"] - 292), 50, "Should find a module within reasonable range of 292W"
+        )
 
 
 if __name__ == "__main__":

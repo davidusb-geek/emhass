@@ -13,6 +13,7 @@ from pathlib import Path
 import aiofiles
 import jinja2
 import orjson
+import uvicorn
 import yaml
 from markupsafe import Markup
 from quart import Quart, make_response, request
@@ -33,11 +34,7 @@ from emhass.command_line import (
     set_input_data_dict,
     weather_forecast_cache,
 )
-from emhass.connection_manager import (
-    close_global_connection,
-    get_websocket_client,
-    is_connected,
-)
+from emhass.connection_manager import close_global_connection, get_websocket_client, is_connected
 from emhass.utils import (
     build_config,
     build_legacy_config_params,
@@ -46,6 +43,7 @@ from emhass.utils import (
     get_injection_dict,
     get_injection_dict_forecast_model_fit,
     get_injection_dict_forecast_model_tune,
+    get_keys_to_mask,
     param_to_config,
 )
 
@@ -61,6 +59,11 @@ templates = jinja2.Environment(
     autoescape=True,
     loader=jinja2.PackageLoader("emhass", "templates"),
 )
+
+action_log_str = "action_logs.txt"
+injection_dict_file = "injection_dict.pkl"
+params_file = "params.pkl"
+error_msg_associations_file = "Unable to obtain associations file"
 
 
 # Add custom filter for trusted HTML content
@@ -104,60 +107,60 @@ async def after_serving():
     app.logger.info("Quart shutdown complete")
 
 
-async def check_file_log(refString: str | None = None) -> bool:
+async def check_file_log(ref_string: str | None = None) -> bool:
     """
     Check logfile for error, anything after string match if provided.
 
-    :param refString: String to reduce log area to check for errors. Use to reduce log to check anything after string match (ie. an action).
-    :type refString: str
+    :param ref_string: String to reduce log area to check for errors. Use to reduce log to check anything after string match (ie. an action).
+    :type ref_string: str
     :return: Boolean return if error was found in logs
     :rtype: bool
 
     """
     log_array: list[str] = []
 
-    if refString is not None:
-        log_array = await grabLog(
-            refString
+    if ref_string is not None:
+        log_array = await grab_log(
+            ref_string
         )  # grab reduced log array (everything after string match)
     else:
-        if (emhass_conf["data_path"] / "actionLogs.txt").exists():
-            async with aiofiles.open(str(emhass_conf["data_path"] / "actionLogs.txt")) as fp:
+        if (emhass_conf["data_path"] / action_log_str).exists():
+            async with aiofiles.open(str(emhass_conf["data_path"] / action_log_str)) as fp:
                 content = await fp.read()
                 log_array = content.splitlines()
         else:
-            app.logger.debug("Unable to obtain actionLogs.txt")
+            app.logger.debug("Unable to obtain {action_log_str}")
             return False
 
-    for logString in log_array:
-        if logString.split(" ", 1)[0] == "ERROR":
+    for log_string in log_array:
+        if log_string.split(" ", 1)[0] == "ERROR":
             return True
     return False
 
 
-async def grabLog(refString: str | None = None) -> list[str]:
+async def grab_log(ref_string: str | None = None) -> list[str]:
     """
     Find string in logs, append all lines after into list to return.
 
-    :param refString: String used to string match log.
-    :type refString: str
+    :param ref_string: String used to string match log.
+    :type ref_string: str
     :return: List of lines in log after string match.
     :rtype: list
 
     """
-    isFound = []
+    is_found = []
     output = []
-    if (emhass_conf["data_path"] / "actionLogs.txt").exists():
-        async with aiofiles.open(str(emhass_conf["data_path"] / "actionLogs.txt")) as fp:
+    if (emhass_conf["data_path"] / action_log_str).exists():
+        async with aiofiles.open(str(emhass_conf["data_path"] / action_log_str)) as fp:
             content = await fp.read()
             log_array = content.splitlines()
-        # Find all string matches, log key (line Number) in isFound
+        # Find all string matches, log key (line Number) in is_found
         for x in range(len(log_array) - 1):
-            if re.search(refString, log_array[x]):
-                isFound.append(x)
-        if len(isFound) != 0:
-            # Use last item in isFound to extract action logs
-            for x in range(isFound[-1], len(log_array)):
+            if re.search(ref_string, log_array[x]):
+                is_found.append(x)
+        if len(is_found) != 0:
+            # Use last item in is_found to extract action logs
+            for x in range(is_found[-1], len(log_array)):
                 output.append(log_array[x])
     return output
 
@@ -165,11 +168,11 @@ async def grabLog(refString: str | None = None) -> list[str]:
 # Clear the log file
 async def clear_file_log():
     """
-    Clear the contents of the log file (actionLogs.txt)
+    Clear the contents of the log file
 
     """
-    if (emhass_conf["data_path"] / "actionLogs.txt").exists():
-        async with aiofiles.open(str(emhass_conf["data_path"] / "actionLogs.txt"), "w") as fp:
+    if (emhass_conf["data_path"] / action_log_str).exists():
+        async with aiofiles.open(str(emhass_conf["data_path"] / action_log_str), "w") as fp:
             await fp.write("")
 
 
@@ -183,8 +186,8 @@ async def index():
     app.logger.info("EMHASS server online, serving index.html...")
 
     # Load cached dict (if exists), to present generated plot tables
-    if (emhass_conf["data_path"] / "injection_dict.pkl").exists():
-        async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "rb") as fid:
+    if (emhass_conf["data_path"] / injection_dict_file).exists():
+        async with aiofiles.open(str(emhass_conf["data_path"] / injection_dict_file), "rb") as fid:
             content = await fid.read()
             injection_dict = pickle.loads(content)
     else:
@@ -197,19 +200,70 @@ async def index():
     return await make_response(template.render(injection_dict=injection_dict))
 
 
-@app.route("/configuration")
+@app.route("/configuration", methods=["GET", "POST"])
 async def configuration():
     """
     Configuration page actions:
     Render and serve configuration page html
     """
+    # Define the list of secret parameters managed by the UI
+    secret_params = get_keys_to_mask()
+
+    if request.method == "POST":
+        app.logger.info("Saving configuration/secrets...")
+        form_data = await request.form
+
+        # Load existing secrets
+        secrets = {}
+        # Ensure we have the path from config, fallback to default if missing
+        secrets_path = emhass_conf.get("secrets_path", Path("/app/secrets_emhass.yaml"))
+
+        # Try to load existing secrets to preserve others (Async)
+        if secrets_path.exists():
+            try:
+                async with aiofiles.open(secrets_path) as file:
+                    content = await file.read()
+                    loaded = yaml.safe_load(content)
+                    if loaded:
+                        secrets = loaded
+            except Exception as e:
+                app.logger.error(f"Error reading secrets file: {e}")
+
+        # Update secrets with form data
+        updated = False
+        for key in secret_params:
+            if key in form_data:
+                value = form_data[key]
+                if value != "***":
+                    secrets[key] = value
+                    updated = True
+
+        # Save to file if changes were made (Async)
+        if updated:
+            try:
+                async with aiofiles.open(secrets_path, "w") as file:
+                    # dump returns string if stream is None
+                    content = yaml.dump(secrets, default_flow_style=False)
+                    await file.write(content)
+
+                app.logger.info("Secrets saved successfully.")
+
+                # Update the global params_secrets
+                global params_secrets
+                params_secrets.update(secrets)
+
+            except Exception as e:
+                app.logger.error(f"Error saving secrets file: {e}")
+
     app.logger.info("serving configuration.html...")
 
     # get params
-    if (emhass_conf["data_path"] / "params.pkl").exists():
-        async with aiofiles.open(str(emhass_conf["data_path"] / "params.pkl"), "rb") as fid:
+    if (emhass_conf["data_path"] / params_file).exists():
+        async with aiofiles.open(str(emhass_conf["data_path"] / params_file), "rb") as fid:
             content = await fid.read()
             emhass_conf["config_path"], params = pickle.loads(content)
+    else:
+        params = {}
 
     template = templates.get_template("configuration.html")
     return await make_response(template.render(config=params))
@@ -223,12 +277,12 @@ async def template_action():
     """
     app.logger.info(" >> Sending rendered template data")
 
-    if (emhass_conf["data_path"] / "injection_dict.pkl").exists():
-        async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "rb") as fid:
+    if (emhass_conf["data_path"] / injection_dict_file).exists():
+        async with aiofiles.open(str(emhass_conf["data_path"] / injection_dict_file), "rb") as fid:
             content = await fid.read()
             injection_dict = pickle.loads(content)
     else:
-        app.logger.warning("Unable to obtain plot data from injection_dict.pkl")
+        app.logger.warning("Unable to obtain plot data from {injection_dict_file}")
         app.logger.warning("Try running an launch an optimization task")
         injection_dict = {}
 
@@ -256,7 +310,7 @@ async def parameter_get():
     # Format parameters in config with params (converting legacy json parameters from options.json if any)
     params = await build_params(emhass_conf, {}, config, app.logger)
     if type(params) is bool and not params:
-        return await make_response(["Unable to obtain associations file"], 500)
+        return await make_response([error_msg_associations_file], 500)
     # Covert formatted parameters from params back into config.json format
     return_config = param_to_config(params, app.logger)
     # Send config
@@ -278,7 +332,7 @@ async def config_get():
     # Format parameters in config with params
     params = await build_params(emhass_conf, {}, config, app.logger)
     if type(params) is bool and not params:
-        return await make_response(["Unable to obtain associations file"], 500)
+        return await make_response([error_msg_associations_file], 500)
     # Covert formatted parameters from params back into config.json format
     return_config = param_to_config(params, app.logger)
     # Send params
@@ -306,7 +360,7 @@ async def json_convert():
     # Format YAML to params (format params. check if params match legacy option.json format)
     params = await build_params(emhass_conf, {}, yaml_config, app.logger)
     if type(params) is bool and not params:
-        return await make_response(["Unable to obtain associations file"], 500)
+        return await make_response([error_msg_associations_file], 500)
     # Covert formatted parameters from params back into config.json format
     config = param_to_config(params, app.logger)
     # convert json to str
@@ -351,7 +405,7 @@ async def parameter_set():
     # Format config by converting to params (format params. check if params match legacy option.json format. If so format)
     params = await build_params(emhass_conf, params_secrets, request_data, app.logger)
     if type(params) is bool and not params:
-        return await make_response(["Unable to obtain associations file"], 500)
+        return await make_response([error_msg_associations_file], 500)
 
     # Covert formatted parameters from params back into config.json format.
     # Overwrite existing default parameters in config
@@ -366,7 +420,7 @@ async def parameter_set():
 
     # Save params with updated config
     if os.path.exists(emhass_conf["data_path"]):
-        async with aiofiles.open(str(emhass_conf["data_path"] / "params.pkl"), "wb") as fid:
+        async with aiofiles.open(str(emhass_conf["data_path"] / params_file), "wb") as fid:
             content = pickle.dumps(
                 (
                     emhass_conf["config_path"],
@@ -392,7 +446,7 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
     # Load params.pkl
     params = None
     costfun = "profit"
-    params_path = emhass_conf["data_path"] / "params.pkl"
+    params_path = emhass_conf["data_path"] / params_file
 
     if params_path.exists():
         async with aiofiles.open(str(params_path), "rb") as fid:
@@ -407,10 +461,15 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
         return None, None, None
 
     # Load runtime params
-    runtimeparams = await request.get_json(force=True, silent=True)
-    if runtimeparams and runtimeparams != "{}":
-        logger.info("Passed runtime parameters: " + str(runtimeparams))
-    else:
+    try:
+        runtimeparams = await request.get_json(force=True)
+        if runtimeparams:
+            logger.info("Passed runtime parameters: " + str(runtimeparams))
+        else:
+            runtimeparams = {}
+    except Exception as e:
+        logger.error(f"Error parsing runtime params JSON: {e}")
+        logger.error("Check your payload for syntax errors (e.g., use 'false' instead of 'False')")
         runtimeparams = {}
 
     runtimeparams = orjson.dumps(runtimeparams).decode()
@@ -438,7 +497,7 @@ async def _handle_action_dispatch(
         success = await export_influxdb_to_csv(None, logger, emhass_conf, params, runtimeparams)
         if success:
             return "EMHASS >> Action export-influxdb-to-csv executed successfully... \n", 201
-        return await grabLog(action_str), 400
+        return await grab_log(action_str), 400
 
     # Actions requiring input_data_dict
     if action_name == "publish-data":
@@ -492,7 +551,7 @@ async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
         logger.info(action_str)
         df_pred = await forecast_model_predict(input_data_dict, logger)
         if df_pred is None:
-            return await grabLog(action_str), 400
+            return await grab_log(action_str), 400
 
         table1 = df_pred.reset_index().to_html(classes="mystyle", index=False)
         injection_dict = {
@@ -509,7 +568,7 @@ async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
         logger.info(action_str)
         df_pred_optim, mlf = await forecast_model_tune(input_data_dict, logger)
         if df_pred_optim is None or mlf is None:
-            return await grabLog(action_str), 400
+            return await grab_log(action_str), 400
 
         injection_dict = get_injection_dict_forecast_model_tune(df_pred_optim, mlf)
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
@@ -534,7 +593,7 @@ async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
 
 async def _save_injection_dict(injection_dict, data_path):
     """Helper to save injection dict to pickle."""
-    async with aiofiles.open(str(data_path / "injection_dict.pkl"), "wb") as fid:
+    async with aiofiles.open(str(data_path / injection_dict_file), "wb") as fid:
         content = pickle.dumps(injection_dict)
         await fid.write(content)
 
@@ -552,7 +611,7 @@ async def action_call(action_name: str):
         request, emhass_conf, app.logger
     )
     if params is None:
-        return await make_response(await grabLog(" >> Obtaining params: "), 400)
+        return await make_response(await grab_log(" >> Obtaining params: "), 400)
 
     # Check for actions that do not need input_data_dict
     if action_name in ["weather-forecast-cache", "export-influxdb-to-csv"]:
@@ -566,7 +625,7 @@ async def action_call(action_name: str):
         action_str = f" >> Performing {action_name}..."
         if not await check_file_log(action_str):
             return await make_response(msg, status)
-        return await make_response(await grabLog(action_str), 400)
+        return await make_response(await grab_log(action_str), 400)
 
     # Set Input Data Dict (Common for all other actions)
     action_str = " >> Setting input data dict"
@@ -576,18 +635,18 @@ async def action_call(action_name: str):
     )
 
     if not input_data_dict:
-        return await make_response(await grabLog(action_str), 400)
+        return await make_response(await grab_log(action_str), 400)
 
     # Handle Continual Publish Threading
     if len(continual_publish_thread) == 0 and input_data_dict["retrieve_hass_conf"].get(
         "continual_publish", False
     ):
-        continualLoop = threading.Thread(
+        continual_loop = threading.Thread(
             name="continual_publish",
             target=lambda: asyncio.run(continual_publish(input_data_dict, entity_path, app.logger)),
         )
-        continualLoop.start()
-        continual_publish_thread.append(continualLoop)
+        continual_loop.start()
+        continual_publish_thread.append(continual_loop)
 
     # Execute Action
     msg, status = await _handle_action_dispatch(
@@ -598,17 +657,13 @@ async def action_call(action_name: str):
     if status == 201:
         if not await check_file_log(" >> "):
             return await make_response(msg, 201)
-        return await make_response(await grabLog(" >> "), 400)
+        return await make_response(await grab_log(" >> "), 400)
 
     return await make_response(msg, status)
 
 
-async def initialize(args: dict | None = None):
-    global emhass_conf, params_secrets, continual_publish_thread, injection_dict, entity_path
-
-    config = {}
-    params = None
-
+async def _setup_paths() -> tuple[Path, Path, Path, Path, Path, Path]:
+    """Helper to set up environment paths and update emhass_conf."""
     # Find env's, not not set defaults
     DATA_PATH = os.getenv("DATA_PATH", default="/data/")
     ROOT_PATH = os.getenv("ROOT_PATH", default=str(Path(__file__).parent))
@@ -617,7 +672,6 @@ async def initialize(args: dict | None = None):
     DEFAULTS_PATH = os.getenv("DEFAULTS_PATH", default=ROOT_PATH + "/data/config_defaults.json")
     ASSOCIATIONS_PATH = os.getenv("ASSOCIATIONS_PATH", default=ROOT_PATH + "/data/associations.csv")
     LEGACY_CONFIG_PATH = os.getenv("LEGACY_CONFIG_PATH", default="/app/config_emhass.yaml")
-
     # Define the paths
     config_path = Path(CONFIG_PATH)
     options_path = Path(OPTIONS_PATH)
@@ -634,7 +688,21 @@ async def initialize(args: dict | None = None):
     emhass_conf["legacy_config_path"] = legacy_config_path
     emhass_conf["data_path"] = data_path
     emhass_conf["root_path"] = root_path
+    return (
+        config_path,
+        options_path,
+        defaults_path,
+        associations_path,
+        legacy_config_path,
+        root_path,
+    )
 
+
+async def _build_configuration(
+    config_path: Path, legacy_config_path: Path, defaults_path: Path
+) -> tuple[dict, str, str]:
+    """Helper to build configuration and local variables."""
+    config = {}
     # Combine parameters from configuration sources (if exists)
     config.update(
         await build_config(
@@ -647,14 +715,17 @@ async def initialize(args: dict | None = None):
     )
     if type(config) is bool and not config:
         raise Exception("Failed to find default config")
-
     # Set local variables
     costfun = os.getenv("LOCAL_COSTFUN", config.get("costfun", "profit"))
     logging_level = os.getenv("LOGGING_LEVEL", config.get("logging_level", "INFO"))
     # Temporary set logging level if debug
     if logging_level == "DEBUG":
         app.logger.setLevel(logging.DEBUG)
+    return config, costfun, logging_level
 
+
+async def _setup_secrets(args: dict | None, options_path: Path) -> str:
+    """Helper to parse arguments and build secrets."""
     ## Secrets
     # Argument
     argument = {}
@@ -667,19 +738,28 @@ async def initialize(args: dict | None = None):
         if args.get("no_response", None):
             no_response = args["no_response"]
 
+    # Define secrets_path and save to emhass_conf
+    secrets_path = Path(os.getenv("SECRETS_PATH", default="/app/secrets_emhass.yaml"))
+
+    # Store it in the global config so configuration() can use it later
+    global emhass_conf
+    emhass_conf["secrets_path"] = secrets_path
+
     # Combine secrets from ENV, Arguments/ARG, Secrets file (secrets_emhass.yaml), options (options.json from addon configuration file) and/or Home Assistant Standalone API (if exist)
     emhass_conf, secrets = await build_secrets(
         emhass_conf,
         app.logger,
-        secrets_path=os.getenv("SECRETS_PATH", default="/app/secrets_emhass.yaml"),
+        secrets_path=secrets_path,  # Use the variable we defined above
         options_path=str(options_path),
         argument=argument,
         no_response=bool(no_response),
     )
     params_secrets.update(secrets)
+    return params_secrets.get("server_ip", "0.0.0.0")
 
-    server_ip = params_secrets.get("server_ip", "0.0.0.0")
 
+def _validate_data_path(root_path: Path) -> None:
+    """Helper to validate and create the data path if necessary."""
     # Check if data path exists
     if not os.path.isdir(emhass_conf["data_path"]):
         app.logger.warning("Unable to find data_path: " + str(emhass_conf["data_path"]))
@@ -690,14 +770,22 @@ async def initialize(args: dict | None = None):
             emhass_conf["data_path"] = root_path / "data/"
         app.logger.info("data_path has been set to " + str(emhass_conf["data_path"]))
 
-    # Initialize this global dict
-    if (emhass_conf["data_path"] / "injection_dict.pkl").exists():
-        async with aiofiles.open(str(emhass_conf["data_path"] / "injection_dict.pkl"), "rb") as fid:
-            content = await fid.read()
-            injection_dict = pickle.loads(content)
-    else:
-        injection_dict = None
 
+async def _load_injection_dict() -> dict | None:
+    """Helper to load the injection dictionary."""
+    # Initialize this global dict
+    if (emhass_conf["data_path"] / injection_dict_file).exists():
+        async with aiofiles.open(str(emhass_conf["data_path"] / injection_dict_file), "rb") as fid:
+            content = await fid.read()
+            return pickle.loads(content)
+    else:
+        return None
+
+
+async def _build_and_save_params(
+    config: dict, costfun: str, logging_level: str, config_path: Path
+) -> dict:
+    """Helper to build parameters and save them to a pickle file."""
     # Build params from config and param_secrets (migrate params to correct config catagories), save result to params.pkl
     params = await build_params(emhass_conf, params_secrets, config, app.logger)
     if type(params) is bool:
@@ -705,53 +793,118 @@ async def initialize(args: dict | None = None):
     # Update params with local variables
     params["optim_conf"]["costfun"] = costfun
     params["optim_conf"]["logging_level"] = logging_level
-
     # Save params to file for later reference
     if os.path.exists(str(emhass_conf["data_path"])):
-        async with aiofiles.open(str(emhass_conf["data_path"] / "params.pkl"), "wb") as fid:
+        async with aiofiles.open(str(emhass_conf["data_path"] / params_file), "wb") as fid:
             content = pickle.dumps((config_path, params))
             await fid.write(content)
     else:
         raise Exception("missing: " + str(emhass_conf["data_path"]))
+    return params
 
+
+async def _configure_logging(logging_level: str) -> None:
+    """Helper to configure logging handlers and levels."""
     # Define loggers
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     log.default_handler.setFormatter(formatter)
     # Action file logger
-    fileLogger = logging.FileHandler(str(emhass_conf["data_path"] / "actionLogs.txt"))
+    file_logger = logging.FileHandler(str(emhass_conf["data_path"] / action_log_str))
     formatter = logging.Formatter("%(levelname)s - %(name)s - %(message)s")
-    fileLogger.setFormatter(formatter)  # add format to Handler
+    file_logger.setFormatter(formatter)  # add format to Handler
     if logging_level == "DEBUG":
         app.logger.setLevel(logging.DEBUG)
-        fileLogger.setLevel(logging.DEBUG)
+        file_logger.setLevel(logging.DEBUG)
     elif logging_level == "INFO":
         app.logger.setLevel(logging.INFO)
-        fileLogger.setLevel(logging.INFO)
+        file_logger.setLevel(logging.INFO)
     elif logging_level == "WARNING":
         app.logger.setLevel(logging.WARNING)
-        fileLogger.setLevel(logging.WARNING)
+        file_logger.setLevel(logging.WARNING)
     elif logging_level == "ERROR":
         app.logger.setLevel(logging.ERROR)
-        fileLogger.setLevel(logging.ERROR)
+        file_logger.setLevel(logging.ERROR)
     else:
         app.logger.setLevel(logging.DEBUG)
-        fileLogger.setLevel(logging.DEBUG)
+        file_logger.setLevel(logging.DEBUG)
     app.logger.propagate = False
-    app.logger.addHandler(fileLogger)
+    app.logger.addHandler(file_logger)
     # Clear Action File logger file, ready for new instance
     await clear_file_log()
 
-    # If entity_path exists, remove any entity/metadata files
-    entity_path = emhass_conf["data_path"] / "entities"
-    if os.path.exists(entity_path):
-        entity_pathContents = os.listdir(entity_path)
-        if len(entity_pathContents) > 0:
-            for entity in entity_pathContents:
-                os.remove(entity_path / entity)
 
+def _cleanup_entities() -> Path:
+    """Helper to remove entity/metadata files."""
+    # If entity_path exists, remove any entity/metadata files
+    ent_path = emhass_conf["data_path"] / "entities"
+    if os.path.exists(ent_path):
+        entity_path_contents = os.listdir(ent_path)
+        if len(entity_path_contents) > 0:
+            for entity in entity_path_contents:
+                os.remove(ent_path / entity)
+    return ent_path
+
+
+async def _initialize_connections(params: dict) -> None:
+    """Helper to initialize WebSocket or InfluxDB connections."""
+    # Initialize persistent WebSocket connection only if use_websocket is enabled
+    use_websocket = params.get("retrieve_hass_conf", {}).get("use_websocket", False)
+    use_influxdb = params.get("retrieve_hass_conf", {}).get("use_influxdb", False)
+    # Initialize persistent WebSocket connection if enabled
+    if use_websocket:
+        app.logger.info("WebSocket mode enabled - initializing connection...")
+        try:
+            await get_websocket_client(
+                hass_url=params_secrets["hass_url"],
+                token=params_secrets["long_lived_token"],
+                logger=app.logger,
+            )
+            app.logger.info("WebSocket connection established")
+            # WebSocket shutdown is already handled by @app.after_serving
+        except Exception as ws_error:
+            app.logger.warning(f"WebSocket connection failed: {ws_error}")
+            app.logger.info("Continuing without WebSocket connection...")
+            # Re-raise the exception so before_serving can handle it
+            raise
+    # Log InfluxDB mode if enabled (No persistent connection init required here)
+    elif use_influxdb:
+        app.logger.info("InfluxDB mode enabled - using InfluxDB for data retrieval")
+    # Default to REST API if neither is enabled
+    else:
+        app.logger.info("WebSocket and InfluxDB modes disabled - using REST API for data retrieval")
+
+
+async def initialize(args: dict | None = None):
+    global emhass_conf, params_secrets, continual_publish_thread, injection_dict, entity_path
+    # Setup paths
+    (
+        config_path,
+        options_path,
+        defaults_path,
+        _,
+        legacy_config_path,
+        root_path,
+    ) = await _setup_paths()
+    # Build configuration
+    config, costfun, logging_level = await _build_configuration(
+        config_path, legacy_config_path, defaults_path
+    )
+    # Setup Secrets
+    server_ip = await _setup_secrets(args, options_path)
+    # Validate Data Path
+    _validate_data_path(root_path)
+    # Load Injection Dict
+    injection_dict = await _load_injection_dict()
+    # Build and Save Params
+    params = await _build_and_save_params(config, costfun, logging_level, config_path)
+    # Configure Logging
+    await _configure_logging(logging_level)
+    # Cleanup Entities
+    entity_path = _cleanup_entities()
+    # Initialize Continual Publish Thread
     # Initialise continual publish thread list
     continual_publish_thread = []
-
+    # Log Startup Info
     # Logging
     port = int(os.environ.get("PORT", 5000))
     app.logger.info("Launching the emhass webserver at: http://" + server_ip + ":" + str(port))
@@ -764,30 +917,8 @@ async def initialize(args: dict | None = None):
         app.logger.info("Using core emhass version: " + version("emhass"))
     except PackageNotFoundError:
         app.logger.info("Using development emhass version")
-
-    # Initialize persistent WebSocket connection only if use_websocket is enabled
-    use_websocket = params.get("retrieve_hass_conf", {}).get("use_websocket", False)
-
-    if use_websocket:
-        app.logger.info("WebSocket mode enabled - initializing connection...")
-        try:
-            await get_websocket_client(
-                hass_url=params_secrets["hass_url"],
-                token=params_secrets["long_lived_token"],
-                logger=app.logger,
-            )
-            app.logger.info("WebSocket connection established")
-
-            # WebSocket shutdown is already handled by @app.after_serving
-            # No need for atexit handler
-        except Exception as ws_error:
-            app.logger.warning(f"WebSocket connection failed: {ws_error}")
-            app.logger.info("Continuing without WebSocket connection...")
-            # Re-raise the exception so before_serving can handle it
-            raise
-    else:
-        app.logger.info("WebSocket mode disabled - using REST API only")
-
+    # Initialize Connections (WebSocket/InfluxDB)
+    await _initialize_connections(params)
     app.logger.info("Initialization complete")
 
 
@@ -804,18 +935,12 @@ async def main() -> None:
     parser.add_argument("--no_response", action="store_true")
     args = parser.parse_args()
     args_dict = {k: v for k, v in vars(args).items() if v is not None}
-
     # Initialize the app before starting server
     await initialize(args_dict)
-
     # For direct execution (development/testing), use uvicorn programmatically
-    import uvicorn
-
     host = params_secrets.get("server_ip", "0.0.0.0")
     port = int(os.getenv("PORT", 5000))
-
     app.logger.info(f"Starting server directly on {host}:{port}")
-
     # Use uvicorn.Server to run within existing event loop
     config = uvicorn.Config(app, host=host, port=port, log_level="warning")
     server = uvicorn.Server(config)

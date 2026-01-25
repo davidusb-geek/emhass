@@ -5,7 +5,7 @@ import datetime
 import pathlib
 import pickle
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiofiles
 import numpy as np
@@ -34,6 +34,8 @@ logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
 class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        emhass_conf["data_path"] = root / "data/"
+
         self.get_data_from_file = True
         save_data_to_file = False
         model_type = "test_df_final"  # Options: "test_df_final" or "long_train_data"
@@ -198,7 +200,6 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             data = orjson.loads(data.content)
             days_list = get_days_list(1)
             var_list = [self.retrieve_hass_conf["sensor_power_load_no_var_loads"]]
-            get_url = self.retrieve_hass_conf["hass_url"]
             # with aioresponses() as mocked:
             get_url = self.retrieve_hass_conf["hass_url"]
             mocked.get(get_url, payload=data, repeat=True)
@@ -487,6 +488,204 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(data["attributes"]["unit_of_measurement"], "%")
         self.assertEqual(data["attributes"]["friendly_name"], "Battery SOC Forecast")
+
+    @patch("emhass.retrieve_hass.get_websocket_client")
+    async def test_get_ha_config(self, mock_get_ws):
+        # Test REST API success
+        with aioresponses() as mocked:
+            mocked.get(
+                self.retrieve_hass_conf["hass_url"] + "api/config",
+                payload={"time_zone": "Europe/Paris", "currency": "EUR"},
+                status=200,
+            )
+            self.rh.use_websocket = False
+            result = await self.rh.get_ha_config()
+            self.assertTrue(result)
+            self.assertEqual(self.rh.ha_config["time_zone"], "Europe/Paris")
+
+        # Test REST API failure (401)
+        with aioresponses() as mocked:
+            mocked.get(
+                self.retrieve_hass_conf["hass_url"] + "api/config",
+                status=401,
+            )
+            result = await self.rh.get_ha_config()
+            self.assertFalse(result)
+
+        # Test WebSocket success
+        self.rh.use_websocket = True
+        mock_client = MagicMock()
+        mock_client.get_config = AsyncMock(return_value={"time_zone": "Asia/Tokyo"})
+        mock_get_ws.return_value = mock_client
+
+        result = await self.rh.get_ha_config()
+        self.assertEqual(result, {"time_zone": "Asia/Tokyo"})
+
+        # Reset for other tests
+        self.rh.use_websocket = False
+
+    @patch("emhass.retrieve_hass.get_websocket_client", new_callable=AsyncMock)
+    @patch("emhass.retrieve_hass.RetrieveHass._get_data_rest_api")
+    async def test_get_data_websocket(self, mock_rest_fallback, mock_get_ws):
+        # Setup common vars
+        days_list = pd.date_range(start="2024-01-01", periods=2, freq="D", tz="UTC")
+        var_list = ["sensor.power_load"]
+
+        # Test Successful WebSocket Retrieval
+        self.rh.use_websocket = True
+
+        # Configure the mock client
+        mock_client = MagicMock()
+        mock_get_ws.return_value = mock_client
+
+        # Mock statistics return data with ISO timestamp to ensure robust parsing
+        start_iso = days_list[0].isoformat()
+        mock_stats = {
+            "sensor.power_load": [
+                {"start": start_iso, "mean": 1000.0},
+                # Add more data points to ensure valid resampling
+                {"start": (days_list[0] + pd.Timedelta("30min")).isoformat(), "mean": 1500.0},
+            ]
+        }
+        mock_client.get_statistics = AsyncMock(return_value=mock_stats)
+
+        success = await self.rh.get_data_websocket(days_list, var_list)
+
+        self.assertTrue(success, "get_data_websocket returned False")
+        self.assertFalse(self.rh.df_final.empty, "Resulting DataFrame is empty")
+        self.assertIn("sensor.power_load", self.rh.df_final.columns)
+
+        # Test Connection Failure -> Fallback to REST
+        mock_get_ws.side_effect = Exception("Connection refused")
+        mock_rest_fallback.return_value = True  # Mock REST success
+
+        success = await self.rh.get_data(days_list, var_list)
+
+        self.assertTrue(success)
+        mock_rest_fallback.assert_called_once()
+
+        # Reset side effect
+        mock_get_ws.side_effect = None
+        self.rh.use_websocket = False
+
+    async def test_get_data_rest_api_errors(self):
+        days_list = pd.date_range(start="2024-01-01", periods=1, freq="D", tz="UTC")
+        var_list = ["sensor.test"]
+        url = (
+            self.retrieve_hass_conf["hass_url"]
+            + "api/history/period/"
+            + days_list[0].isoformat()
+            + "?filter_entity_id=sensor.test"
+        )
+
+        # Test Connection Error (Exception)
+        with aioresponses() as mocked:
+            mocked.get(url, exception=Exception("Network down"))
+            result = await self.rh._get_data_rest_api(days_list, var_list)
+            self.assertFalse(result)
+
+        # Test 401 Unauthorized
+        with aioresponses() as mocked:
+            mocked.get(url, status=401)
+            result = await self.rh._get_data_rest_api(days_list, var_list)
+            self.assertFalse(result)
+
+        # Test Empty JSON Response (IndexError)
+        with aioresponses() as mocked:
+            mocked.get(url, payload=[], status=200)
+            result = await self.rh._get_data_rest_api(days_list, var_list)
+            self.assertFalse(result)
+
+    @patch("aiofiles.open")
+    async def test_post_data_extended(self, mock_aio_open):
+        self.rh.get_data_from_file = False
+
+        # Setup mock file context for save_entities=True
+        mock_f = AsyncMock()
+        mock_aio_open.return_value.__aenter__.return_value = mock_f
+
+        # Create dummy data
+        idx = 0
+        entity_id = "sensor.p_pv_forecast"
+        data_df = pd.Series(
+            [100.55, 200.00], index=pd.date_range("2024-01-01", periods=2, freq="30min")
+        )
+        data_df.name = "test_data"
+
+        # Test "cost_fun" type
+        response, data = await self.rh.post_data(
+            data_df, idx, entity_id, "monetary", "EUR", "Cost Function", "cost_fun"
+        )
+        self.assertEqual(data["state"], f"{data_df.sum():.2f}")
+
+        # Test "optim_status" type
+        status_df = pd.Series(["Optimal"], index=[0])
+        response, data = await self.rh.post_data(
+            status_df, 0, "sensor.optim_status", "none", "", "Status", "optim_status"
+        )
+        self.assertEqual(data["state"], "Optimal")
+
+        # Test "deferrable" type (complex attributes)
+        response, data = await self.rh.post_data(
+            data_df, idx, entity_id, "power", "W", "Deferrable", "deferrable"
+        )
+        self.assertIn("deferrables_schedule", data["attributes"])
+
+        # Test "unit_load_cost" (4 decimals)
+        response, data = await self.rh.post_data(
+            data_df, idx, entity_id, "monetary", "EUR/kWh", "Load Cost", "unit_load_cost"
+        )
+        self.assertEqual(data["state"], f"{data_df.iloc[0]:.4f}")
+        self.assertIn("unit_load_cost_forecasts", data["attributes"])
+
+        # Test save_entities=True
+        # Save old path to restore later
+        original_path = self.rh.emhass_conf["data_path"]
+        try:
+            self.rh.emhass_conf["data_path"] = pathlib.Path("/tmp")
+
+            # Mock os.path.isfile to return False (triggers new metadata file creation)
+            with patch("os.path.isfile", return_value=False):
+                # Mock pathlib.Path.mkdir to avoid file system errors
+                with patch("pathlib.Path.mkdir"):
+                    # FIX: Pass dont_post=True to bypass network failure and force response_ok=True
+                    # This ensures the save_entities logic block is actually reached
+                    response, data = await self.rh.post_data(
+                        data_df,
+                        idx,
+                        entity_id,
+                        "power",
+                        "W",
+                        "PV",
+                        "power",
+                        save_entities=True,
+                        dont_post=True,
+                    )
+        finally:
+            # Restore path to prevent polluting other tests
+            self.rh.emhass_conf["data_path"] = original_path
+
+        # Verify file write called (once for data, once for metadata)
+        self.assertTrue(mock_f.write.called)
+        self.assertGreaterEqual(mock_f.write.call_count, 2)
+
+        # Test Error Handling (response_ok = False)
+        # We need to un-patch the aioresponses or create a new specific patch for client session
+        with patch("aiohttp.ClientSession.post") as mock_post:
+            mock_resp = AsyncMock()
+            mock_resp.ok = False
+            mock_resp.status = 500
+            mock_resp.__aenter__.return_value = mock_resp
+            mock_post.return_value = mock_resp
+
+            # Use dont_post=False to force network attempt
+            # Ensure get_data_from_file is False (set at start of test)
+            response, _ = await self.rh.post_data(
+                data_df, idx, entity_id, "power", "W", "Fail", "power", dont_post=False
+            )
+
+            self.assertFalse(response.ok)
+            self.assertEqual(response.status_code, 500)
 
 
 if __name__ == "__main__":

@@ -31,14 +31,13 @@ emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=True)
 
 
-def load_forecast(data, forecast_date, freq, template):
+def load_forecast(data, forecast_date, template):
     """
     Forecast the load profile for the next day based on historic data.
 
     Parameters:
     - data: pd.DataFrame with a DateTimeIndex containing the historic load data. Must include a 'load' column.
     - forecast_date: pd.Timestamp for the date of the forecast.
-    - freq: frequency of the time series (e.g., '1H' for hourly).
 
     Returns:
     - forecast: pd.Series with the forecasted load profile for the next day.
@@ -146,11 +145,10 @@ async def main():
 
     # Define forecast date and frequency
     forecast_date = pd.Timestamp("2023-07-15")
-    freq = pd.to_timedelta(30, "minutes")
 
     # Call the forecasting method
     data.columns = ["load"]
-    _, _ = load_forecast(data, forecast_date, freq, template)
+    _, _ = load_forecast(data, forecast_date, template)
 
 
 if __name__ == "__main__":
