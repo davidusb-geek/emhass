@@ -35,6 +35,7 @@ class SetupContext:
     A dataclass that serves as a context container for optimization preparation helpers.
     This context object encapsulates all necessary configuration and utility objects
     required for setting up and preparing optimization tasks.
+
     Attributes:
         retrieve_hass_conf (dict): Configuration dictionary for Home Assistant data retrieval.
         optim_conf (dict): Configuration dictionary for optimization parameters.
@@ -59,12 +60,11 @@ class SetupContext:
 
 
 @dataclass
-def __init__(
-    self, input_data_dict: dict, params: dict, idx: int, common_kwargs: dict, logger: logging.Logger
-) -> None:
+class PublishContext:
     """
-    Initialize a PublishContext instance.
-    Args:
+    Context object for data publishing helpers.
+
+    Attributes:
         input_data_dict (dict): Dictionary containing input data with keys 'rh' (RetrieveHass),
             'opt' (Optimization), and 'fcst' (Forecast) objects.
         params (dict): Parameters dictionary for publishing configuration.
@@ -72,10 +72,6 @@ def __init__(
         common_kwargs (dict): Common keyword arguments shared across publishing helpers.
         logger (logging.Logger): Logger instance for recording publishing operations.
     """
-
-
-class PublishContext:
-    """Context object for data publishing helpers."""
 
     input_data_dict: dict
     params: dict
