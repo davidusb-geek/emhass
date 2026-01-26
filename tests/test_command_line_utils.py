@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import copy
+import json
 import os
 import pathlib
 import pickle
@@ -28,6 +29,7 @@ from emhass.command_line import (
     main,
     naive_mpc_optim,
     perfect_forecast_optim,
+    prepare_forecast_and_weather_data,
     publish_data,
     regressor_model_fit,
     regressor_model_predict,
@@ -1717,6 +1719,100 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(thermal_config["start_temperature"], 25.5)
         # Verify desired_temperatures override applied (21.0 -> 22.5)
         self.assertEqual(thermal_config["desired_temperatures"], [22.5] * 48)
+
+    def test_prepare_forecast_and_weather_data_with_open_meteo(self):
+        """
+        Test that Open-Meteo weather data (Timezone Aware) is correctly aligned
+        with the Optimization Index (Timezone Naive) to avoid NaNs.
+        """
+        # 1. Mock the Forecast object (needed by the function)
+        fcst = Forecast(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            json.loads(self.params_json),
+            emhass_conf,
+            logger,
+        )
+
+        # 2. Simulate "Dayahead" Data (The Optimization Window)
+        # CASE: Timezone Naive Index (Simulating what often happens in Optimization)
+        # 48 steps of 30 mins = 24 hours
+        now_naive = pd.Timestamp.now().floor("30min").tz_localize(None)
+        index_naive = pd.date_range(start=now_naive, periods=48, freq="30min")
+
+        df_input_data_dayahead = pd.DataFrame(index=index_naive)
+        df_input_data_dayahead["p_load_forecast"] = 1000
+        df_input_data_dayahead["p_pv_forecast"] = 0
+
+        # 3. Simulate "Open-Meteo" Weather Data
+        # CASE: Timezone Aware Index (Open-Meteo always returns TZ-aware)
+        # We also shift it slightly (e.g., +15 seconds) to test the robust reindexing logic
+        tz = "Europe/Paris"
+        # We start roughly at the same time but "aware"
+        now_aware = pd.Timestamp.now(tz=tz).floor("30min") + pd.Timedelta(seconds=15)
+        index_aware = pd.date_range(start=now_aware, periods=48, freq="30min")
+
+        df_weather = pd.DataFrame(index=index_aware)
+        # Fill with a recognizable pattern (20.0, 20.5, 21.0...)
+        df_weather["temp_air"] = [20 + (i * 0.5) for i in range(48)]
+        df_weather["ghi"] = 0  # GHI is also required/processed by the function
+
+        # 4. Construct the Input Dictionary
+        input_data_dict = {
+            "fcst": fcst,
+            "df_input_data_dayahead": df_input_data_dayahead,
+            "df_weather": df_weather,
+            "params": {"passed_data": {}},  # No explicit outdoor_temp passed, forcing fallback
+        }
+
+        # 5. EXECUTE THE FUNCTION
+        df_result = prepare_forecast_and_weather_data(
+            input_data_dict, logger, warn_on_resolution=False
+        )
+
+        # 6. ASSERTIONS
+
+        # A. Function should not return False (failure)
+        self.assertFalse(
+            isinstance(df_result, bool) and not df_result,
+            "Function returned False, indicating failure.",
+        )
+
+        # B. Check column existence
+        self.assertIn(
+            "outdoor_temperature_forecast",
+            df_result.columns,
+            "Output DataFrame missing 'outdoor_temperature_forecast' column",
+        )
+
+        # C. Check for NaNs
+        # If the Timezone alignment fix is missing, reindex() produces NaNs
+        nan_count = df_result["outdoor_temperature_forecast"].isna().sum()
+        self.assertEqual(
+            0,
+            nan_count,
+            f"Found {nan_count} NaNs in outdoor_temperature_forecast. "
+            "Timezone alignment or reindexing failed.",
+        )
+
+        # D. Check Data Integrity
+        # The first value in df_weather was 20.0.
+        # Since we shifted by only 15 seconds, the interpolated value should be very close to 20.0
+        first_val = df_result["outdoor_temperature_forecast"].iloc[0]
+        self.assertAlmostEqual(
+            20.0,
+            first_val,
+            delta=0.5,
+            msg="Mapped temperature value diverged significantly from source.",
+        )
+
+        # E. Check Index Type Preservation
+        # The output index should match the input dayahead index (naive)
+        self.assertIsNone(
+            df_result.index.tz,
+            "Output index should remain timezone-naive matching the input dayahead index.",
+        )
 
 
 if __name__ == "__main__":
