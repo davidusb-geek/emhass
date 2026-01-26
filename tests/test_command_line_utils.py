@@ -1732,9 +1732,10 @@ class TestCommandLineTimezoneLogic(unittest.TestCase):
         root = pathlib.Path(utils.get_root(__file__, num_parent=2))
         emhass_conf = {"data_path": root / "data/", "root_path": root / "src/emhass/"}
 
+        # Main configuration with objects (needed for Forecast class init)
         self.retrieve_hass_conf = {
             "time_zone": "Europe/Paris",
-            "optimization_time_step": pd.Timedelta(minutes=30),
+            "optimization_time_step": pd.Timedelta(minutes=30),  # Object required here
             "historic_days_to_retrieve": 2,
             "hass_url": "http://localhost:8123",
             "long_lived_token": "token",
@@ -1742,13 +1743,22 @@ class TestCommandLineTimezoneLogic(unittest.TestCase):
             "lon": 6.86,
             "alt": 4807.8,
         }
+
         self.optim_conf = {
             "load_forecast_method": "naive",
             "production_price_forecast_method": "constant",
             "load_cost_forecast_method": "constant",
         }
         self.plant_conf = {}
-        self.params_json = json.dumps({"params_secrets": self.retrieve_hass_conf})
+
+        # Prepare JSON-serializable config (Fix for TypeError)
+        json_serializable_conf = self.retrieve_hass_conf.copy()
+        # Convert Timedelta to integer minutes for JSON
+        json_serializable_conf["optimization_time_step"] = int(
+            self.retrieve_hass_conf["optimization_time_step"].total_seconds() // 60
+        )
+
+        self.params_json = json.dumps({"params_secrets": json_serializable_conf})
         self.emhass_conf = emhass_conf
         self.logger = utils.get_logger(__name__, emhass_conf, save_to_file=False)[0]
 
@@ -1757,7 +1767,7 @@ class TestCommandLineTimezoneLogic(unittest.TestCase):
         Test that Open-Meteo weather data (Timezone Aware) is correctly aligned
         with the Optimization Index (Timezone Naive) to avoid NaNs.
         """
-        # 1. Mock Forecast
+        # Mock Forecast
         fcst = Forecast(
             self.retrieve_hass_conf,
             self.optim_conf,
@@ -1767,7 +1777,7 @@ class TestCommandLineTimezoneLogic(unittest.TestCase):
             self.logger,
         )
 
-        # 2. Simulate "Dayahead" Data (Optimization Window) - Naive TZ
+        # Simulate "Dayahead" Data (Optimization Window) - Naive TZ
         now_naive = pd.Timestamp.now().floor("30min").tz_localize(None)
         index_naive = pd.date_range(start=now_naive, periods=48, freq="30min")
 
@@ -1775,7 +1785,7 @@ class TestCommandLineTimezoneLogic(unittest.TestCase):
         df_input_data_dayahead["p_load_forecast"] = 1000
         df_input_data_dayahead["p_pv_forecast"] = 0
 
-        # 3. Simulate "Open-Meteo" Weather Data - Aware TZ + slight offset
+        # Simulate "Open-Meteo" Weather Data - Aware TZ + slight offset
         tz = "Europe/Paris"
         now_aware = pd.Timestamp.now(tz=tz).floor("30min") + pd.Timedelta(seconds=15)
         index_aware = pd.date_range(start=now_aware, periods=48, freq="30min")
@@ -1784,7 +1794,7 @@ class TestCommandLineTimezoneLogic(unittest.TestCase):
         df_weather["temp_air"] = [20 + (i * 0.5) for i in range(48)]
         df_weather["ghi"] = 0
 
-        # 4. Construct Input
+        # Construct Input
         input_data_dict = {
             "fcst": fcst,
             "df_input_data_dayahead": df_input_data_dayahead,
@@ -1792,12 +1802,12 @@ class TestCommandLineTimezoneLogic(unittest.TestCase):
             "params": {"passed_data": {}},
         }
 
-        # 5. Execute
+        # Execute
         df_result = prepare_forecast_and_weather_data(
             input_data_dict, self.logger, warn_on_resolution=False
         )
 
-        # 6. Assert
+        # Assert
         self.assertFalse(isinstance(df_result, bool) and not df_result)
         self.assertIn("outdoor_temperature_forecast", df_result.columns)
 
