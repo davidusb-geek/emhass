@@ -958,12 +958,36 @@ def prepare_forecast_and_weather_data(
         and "temp_air" in input_data_dict["df_weather"].columns
     ):
         dayahead_index = df_input_data_dayahead.index
-        # Align temp_air data to dayahead index using interpolation
-        df_input_data_dayahead["outdoor_temperature_forecast"] = (
-            input_data_dict["df_weather"]["temp_air"]
-            .reindex(dayahead_index)
-            .interpolate(method="time", limit_direction="both")
-        )
+        weather_series = input_data_dict["df_weather"]["temp_air"].copy()
+
+        # Handle Timezone Mismatches
+        # Ensure weather data timezone matches the optimization index exactly
+        if dayahead_index.tz is None and weather_series.index.tz is not None:
+            # Optimization is naive; strip TZ from weather
+            weather_series.index = weather_series.index.tz_localize(None)
+        elif dayahead_index.tz is not None and weather_series.index.tz is None:
+            # Optimization is aware; localize weather to match
+            weather_series.index = weather_series.index.tz_localize(dayahead_index.tz)
+        elif dayahead_index.tz is not None and weather_series.index.tz is not None:
+            # Both aware; convert weather to optimization TZ
+            weather_series.index = weather_series.index.tz_convert(dayahead_index.tz)
+
+        # Robust Reindexing
+        # 1. Use reindex with tolerance (e.g. 1 min) to catch slight timestamp drifts
+        # 2. Then interpolate to fill any remaining gaps (e.g. if weather is hourly but optim is 30min)
+        df_input_data_dayahead["outdoor_temperature_forecast"] = weather_series.reindex(
+            dayahead_index, method=None
+        ).interpolate(  # Start with exact/NaN
+            method="time", limit_direction="both"
+        )  # Fill gaps (e.g. 10:30 between 10:00 and 11:00)
+
+        # Final safety fill for edges that interpolate might miss
+        if df_input_data_dayahead["outdoor_temperature_forecast"].isnull().any():
+            df_input_data_dayahead["outdoor_temperature_forecast"] = (
+                df_input_data_dayahead["outdoor_temperature_forecast"]
+                .fillna(method="ffill")
+                .fillna(method="bfill")
+            )
 
     # Merge GHI (Global Horizontal Irradiance) from weather forecast if available
     if input_data_dict["df_weather"] is not None and "ghi" in input_data_dict["df_weather"].columns:
