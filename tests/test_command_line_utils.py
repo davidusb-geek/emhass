@@ -1743,6 +1743,13 @@ class TestCommandLineTimezoneLogic(unittest.TestCase):
             "lon": 6.86,
             "alt": 4807.8,
             "method_ts_round": "nearest",
+            "sensor_power_photovoltaics": "sensor.power_photovoltaics",
+            "sensor_power_load_no_var_loads": "sensor.power_load_no_var_loads",
+            "sensor_linear_interp": [
+                "sensor.power_photovoltaics",
+                "sensor.power_load_no_var_loads",
+            ],
+            "sensor_replace_zero": ["sensor.power_photovoltaics"],
         }
 
         self.optim_conf = {
