@@ -1735,13 +1735,14 @@ class TestCommandLineTimezoneLogic(unittest.TestCase):
         # Main configuration with objects (needed for Forecast class init)
         self.retrieve_hass_conf = {
             "time_zone": "Europe/Paris",
-            "optimization_time_step": pd.Timedelta(minutes=30),  # Object required here
+            "optimization_time_step": pd.Timedelta(minutes=30),
             "historic_days_to_retrieve": 2,
             "hass_url": "http://localhost:8123",
             "long_lived_token": "token",
             "lat": 45.83,
             "lon": 6.86,
             "alt": 4807.8,
+            "method_ts_round": "nearest",
         }
 
         self.optim_conf = {
@@ -1751,7 +1752,7 @@ class TestCommandLineTimezoneLogic(unittest.TestCase):
         }
         self.plant_conf = {}
 
-        # Prepare JSON-serializable config (Fix for TypeError)
+        # Prepare JSON-serializable config
         json_serializable_conf = self.retrieve_hass_conf.copy()
         # Convert Timedelta to integer minutes for JSON
         json_serializable_conf["optimization_time_step"] = int(
@@ -1811,7 +1812,7 @@ class TestCommandLineTimezoneLogic(unittest.TestCase):
         self.assertFalse(isinstance(df_result, bool) and not df_result)
         self.assertIn("outdoor_temperature_forecast", df_result.columns)
 
-        # Check for NaNs (The critical check)
+        # Check for NaNs
         nan_count = df_result["outdoor_temperature_forecast"].isna().sum()
         self.assertEqual(0, nan_count, f"Found {nan_count} NaNs. Fix failed.")
 
