@@ -1804,6 +1804,16 @@ async def build_secrets(
                         f"cannot create data_path directory provided via options. keeping default. . Error: {e}"
                     )
 
+           # If config path specified by options.json, overwrite emhass_conf['config_path']
+            if options.get("config_path", None) is not None:
+                try: 
+                    config_path = pathlib.Path(options["config_path"])
+                    emhass_conf["config_path"] = config_path
+                except Exception as e:
+                    logger.warning(
+                        f"cannot create config_path directory provided via options. keeping default. . Error: {e}"
+                    )
+
             # Check to use Home Assistant local API
             if not no_response and os.getenv("SUPERVISOR_TOKEN", None) is not None:
                 params_secrets["long_lived_token"] = os.getenv("SUPERVISOR_TOKEN", None)
