@@ -961,27 +961,24 @@ def prepare_forecast_and_weather_data(
         weather_series = input_data_dict["df_weather"]["temp_air"].copy()
 
         # Handle Timezone Mismatches
-        # Ensure weather data timezone matches the optimization index exactly
+        # If optimization is naive but weather is aware -> Strip weather TZ
         if dayahead_index.tz is None and weather_series.index.tz is not None:
-            # Optimization is naive; strip TZ from weather
             weather_series.index = weather_series.index.tz_localize(None)
+        # If optimization is aware but weather is naive -> Localize weather
         elif dayahead_index.tz is not None and weather_series.index.tz is None:
-            # Optimization is aware; localize weather to match
             weather_series.index = weather_series.index.tz_localize(dayahead_index.tz)
+        # If both are aware -> Convert weather to optimization TZ
         elif dayahead_index.tz is not None and weather_series.index.tz is not None:
-            # Both aware; convert weather to optimization TZ
             weather_series.index = weather_series.index.tz_convert(dayahead_index.tz)
 
-        # Robust Reindexing
-        # 1. Use reindex with tolerance (e.g. 1 min) to catch slight timestamp drifts
-        # 2. Then interpolate to fill any remaining gaps (e.g. if weather is hourly but optim is 30min)
+        # Robust Reindexing (The fix for "Found 48 NaNs")
+        # method='nearest' snaps 10:00:15 to 10:00:00
+        # tolerance='1h' prevents filling data from too far away
         df_input_data_dayahead["outdoor_temperature_forecast"] = weather_series.reindex(
-            dayahead_index, method=None
-        ).interpolate(  # Start with exact/NaN
-            method="time", limit_direction="both"
-        )  # Fill gaps (e.g. 10:30 between 10:00 and 11:00)
+            dayahead_index, method="nearest", tolerance=pd.Timedelta("1h")
+        )
 
-        # Final safety fill for edges that interpolate might miss
+        # Final safety fill (forward/backward) for any remaining gaps
         if df_input_data_dayahead["outdoor_temperature_forecast"].isnull().any():
             df_input_data_dayahead["outdoor_temperature_forecast"] = (
                 df_input_data_dayahead["outdoor_temperature_forecast"]
@@ -992,6 +989,15 @@ def prepare_forecast_and_weather_data(
     # Merge GHI (Global Horizontal Irradiance) from weather forecast if available
     if input_data_dict["df_weather"] is not None and "ghi" in input_data_dict["df_weather"].columns:
         dayahead_index = df_input_data_dayahead.index
+        ghi_series = input_data_dict["df_weather"]["ghi"].copy()
+
+        # 1. Handle Timezone Mismatches (Same as above)
+        if dayahead_index.tz is None and ghi_series.index.tz is not None:
+            ghi_series.index = ghi_series.index.tz_localize(None)
+        elif dayahead_index.tz is not None and ghi_series.index.tz is None:
+            ghi_series.index = ghi_series.index.tz_localize(dayahead_index.tz)
+        elif dayahead_index.tz is not None and ghi_series.index.tz is not None:
+            ghi_series.index = ghi_series.index.tz_convert(dayahead_index.tz)
 
         # Check time resolution if requested
         if (
@@ -1010,12 +1016,17 @@ def prepare_forecast_and_weather_data(
                     dayahead_freq,
                 )
 
-        # Align GHI data to dayahead index using interpolation
-        df_input_data_dayahead["ghi"] = (
-            input_data_dict["df_weather"]["ghi"]
-            .reindex(dayahead_index)
-            .interpolate(method="time", limit_direction="both")
+        # Robust Reindexing
+        df_input_data_dayahead["ghi"] = ghi_series.reindex(
+            dayahead_index, method="nearest", tolerance=pd.Timedelta("1h")
         )
+
+        # Final safety fill
+        if df_input_data_dayahead["ghi"].isnull().any():
+            df_input_data_dayahead["ghi"] = (
+                df_input_data_dayahead["ghi"].fillna(method="ffill").fillna(method="bfill")
+            )
+
         logger.debug(
             "Merged GHI data into optimization input: mean=%.1f W/m², max=%.1f W/m²",
             df_input_data_dayahead["ghi"].mean(),

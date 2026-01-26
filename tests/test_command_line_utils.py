@@ -1755,11 +1755,10 @@ class TestCommandLineTimezoneLogic(unittest.IsolatedAsyncioTestCase):
 
     def test_prepare_forecast_and_weather_data_with_open_meteo(self):
         """
-        Test that Open-Meteo weather data (Timezone Aware) is correctly aligned
-        with the Optimization Index (Timezone Naive) to avoid NaNs.
+        Test that Open-Meteo weather data is correctly aligned with the Optimization Index
+        even when timestamps do not match perfectly (e.g. 15s drift).
         """
         # Initialize Forecast object using the REAL loaded configurations
-        # This guarantees all keys (Latitude, sensors, etc.) are present
         fcst = Forecast(
             self.retrieve_hass_conf,
             self.optim_conf,
@@ -1769,23 +1768,23 @@ class TestCommandLineTimezoneLogic(unittest.IsolatedAsyncioTestCase):
             self.logger,
         )
 
-        # Simulate "Dayahead" Data (Optimization Window) - Naive TZ
-        # Optimization start time (Naive)
-        now_naive = pd.Timestamp.now().floor("30min").tz_localize(None)
-        index_naive = pd.date_range(start=now_naive, periods=48, freq="30min")
+        # Simulate "Dayahead" Data (Optimization Window)
+        # CRITICAL FIX: Must be Timezone-Aware to pass get_load_cost_forecast validations
+        tz = self.retrieve_hass_conf["time_zone"]
+        now_optim = pd.Timestamp.now(tz=tz).floor("30min")
+        index_optim = pd.date_range(start=now_optim, periods=48, freq="30min")
 
-        df_input_data_dayahead = pd.DataFrame(index=index_naive)
+        df_input_data_dayahead = pd.DataFrame(index=index_optim)
         df_input_data_dayahead["p_load_forecast"] = 1000
         df_input_data_dayahead["p_pv_forecast"] = 0
 
-        # Simulate "Open-Meteo" Weather Data - Aware TZ + slight offset
-        # Use the timezone defined in the loaded config
-        tz = self.retrieve_hass_conf["time_zone"]
-        # Start roughly at the same time but "aware" and shifted by 15s to test robust reindexing
-        now_aware = pd.Timestamp.now(tz=tz).floor("30min") + pd.Timedelta(seconds=15)
-        index_aware = pd.date_range(start=now_aware, periods=48, freq="30min")
+        # Simulate "Open-Meteo" Weather Data
+        # We shift it by 15 seconds to simulate the misalignment that causes NaNs
+        # without the new robust reindexing logic.
+        now_weather = now_optim + pd.Timedelta(seconds=15)
+        index_weather = pd.date_range(start=now_weather, periods=48, freq="30min")
 
-        df_weather = pd.DataFrame(index=index_aware)
+        df_weather = pd.DataFrame(index=index_weather)
         # Fill with a recognizable pattern (20.0, 20.5, 21.0...)
         df_weather["temp_air"] = [20 + (i * 0.5) for i in range(48)]
         # GHI is required by the function logic
@@ -1806,7 +1805,7 @@ class TestCommandLineTimezoneLogic(unittest.IsolatedAsyncioTestCase):
             input_data_dict, self.logger, warn_on_resolution=False
         )
 
-        # Assertions
+        # 6. Assertions
         # A. Function should not return False
         self.assertFalse(isinstance(df_result, bool) and not df_result)
 
@@ -1818,11 +1817,12 @@ class TestCommandLineTimezoneLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             0,
             nan_count,
-            f"Found {nan_count} NaNs. The timezone alignment fix in command_line.py is not working.",
+            f"Found {nan_count} NaNs. The alignment fix in command_line.py is not working.",
         )
 
         # D. Check Data Integrity
-        # The first value should be close to 20.0
+        # Since we offset by 15s (very small vs 30min step), the interpolated value
+        # should be extremely close to the source value (20.0).
         first_val = df_result["outdoor_temperature_forecast"].iloc[0]
         self.assertAlmostEqual(
             20.0,
