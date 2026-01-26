@@ -1721,63 +1721,45 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(thermal_config["desired_temperatures"], [22.5] * 48)
 
 
-class TestCommandLineTimezoneLogic(unittest.TestCase):
+class TestCommandLineTimezoneLogic(unittest.IsolatedAsyncioTestCase):
     """
-    Separate test class to verify Timezone alignment in command_line.py
-    independent of the async test suite structure.
+    Test class to verify Timezone alignment in command_line.py.
+    Uses real configuration loading to ensure all Forecast parameters are present.
     """
 
-    def setUp(self):
-        # Create a minimal mock configuration
-        root = pathlib.Path(utils.get_root(__file__, num_parent=2))
-        emhass_conf = {"data_path": root / "data/", "root_path": root / "src/emhass/"}
+    @staticmethod
+    async def get_test_params():
+        params = {}
+        if emhass_conf["defaults_path"].exists():
+            config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+            _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
+            params = await utils.build_params(emhass_conf, secrets, config, logger)
+        else:
+            raise Exception(
+                "config_defaults.json does not exist in path: " + str(emhass_conf["defaults_path"])
+            )
+        return params
 
-        # Main configuration with objects (needed for Forecast class init)
-        self.retrieve_hass_conf = {
-            "time_zone": "Europe/Paris",
-            "optimization_time_step": pd.Timedelta(minutes=30),
-            "historic_days_to_retrieve": 2,
-            "hass_url": "http://localhost:8123",
-            "long_lived_token": "token",
-            "lat": 45.83,
-            "lon": 6.86,
-            "alt": 4807.8,
-            "method_ts_round": "nearest",
-            "sensor_power_photovoltaics": "sensor.power_photovoltaics",
-            "sensor_power_photovoltaics_forecast": "sensor.power_photovoltaics_forecast",
-            "sensor_power_load_no_var_loads": "sensor.power_load_no_var_loads",
-            "sensor_power_load_no_var_loads_forecast": "sensor.power_load_no_var_loads_forecast",
-            "sensor_linear_interp": [
-                "sensor.power_photovoltaics",
-                "sensor.power_load_no_var_loads",
-            ],
-            "sensor_replace_zero": ["sensor.power_photovoltaics"],
-        }
-
-        self.optim_conf = {
-            "load_forecast_method": "naive",
-            "production_price_forecast_method": "constant",
-            "load_cost_forecast_method": "constant",
-        }
-        self.plant_conf = {}
-
-        # Prepare JSON-serializable config
-        json_serializable_conf = self.retrieve_hass_conf.copy()
-        # Convert Timedelta to integer minutes for JSON
-        json_serializable_conf["optimization_time_step"] = int(
-            self.retrieve_hass_conf["optimization_time_step"].total_seconds() // 60
+    async def asyncSetUp(self):
+        # Load real parameters and configuration
+        params = await self.get_test_params()
+        self.params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
+        self.retrieve_hass_conf, self.optim_conf, self.plant_conf = (
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
         )
-
-        self.params_json = json.dumps({"params_secrets": json_serializable_conf})
         self.emhass_conf = emhass_conf
-        self.logger = utils.get_logger(__name__, emhass_conf, save_to_file=False)[0]
+        self.logger = logger
 
     def test_prepare_forecast_and_weather_data_with_open_meteo(self):
         """
         Test that Open-Meteo weather data (Timezone Aware) is correctly aligned
         with the Optimization Index (Timezone Naive) to avoid NaNs.
         """
-        # Mock Forecast
+        # Initialize Forecast object using the REAL loaded configurations
+        # This guarantees all keys (Latitude, sensors, etc.) are present
         fcst = Forecast(
             self.retrieve_hass_conf,
             self.optim_conf,
@@ -1788,6 +1770,7 @@ class TestCommandLineTimezoneLogic(unittest.TestCase):
         )
 
         # Simulate "Dayahead" Data (Optimization Window) - Naive TZ
+        # Optimization start time (Naive)
         now_naive = pd.Timestamp.now().floor("30min").tz_localize(None)
         index_naive = pd.date_range(start=now_naive, periods=48, freq="30min")
 
@@ -1796,38 +1779,57 @@ class TestCommandLineTimezoneLogic(unittest.TestCase):
         df_input_data_dayahead["p_pv_forecast"] = 0
 
         # Simulate "Open-Meteo" Weather Data - Aware TZ + slight offset
-        tz = "Europe/Paris"
+        # Use the timezone defined in the loaded config
+        tz = self.retrieve_hass_conf["time_zone"]
+        # Start roughly at the same time but "aware" and shifted by 15s to test robust reindexing
         now_aware = pd.Timestamp.now(tz=tz).floor("30min") + pd.Timedelta(seconds=15)
         index_aware = pd.date_range(start=now_aware, periods=48, freq="30min")
 
         df_weather = pd.DataFrame(index=index_aware)
+        # Fill with a recognizable pattern (20.0, 20.5, 21.0...)
         df_weather["temp_air"] = [20 + (i * 0.5) for i in range(48)]
+        # GHI is required by the function logic
         df_weather["ghi"] = 0
 
-        # Construct Input
+        # Construct Input Dictionary
         input_data_dict = {
             "fcst": fcst,
             "df_input_data_dayahead": df_input_data_dayahead,
             "df_weather": df_weather,
-            "params": {"passed_data": {}},
+            "params": {
+                "passed_data": {}
+            },  # No explicit outdoor_temp passed, forcing fallback logic
         }
 
-        # Execute
+        # Execute the function under test
         df_result = prepare_forecast_and_weather_data(
             input_data_dict, self.logger, warn_on_resolution=False
         )
 
-        # Assert
+        # Assertions
+        # A. Function should not return False
         self.assertFalse(isinstance(df_result, bool) and not df_result)
+
+        # B. Check column existence
         self.assertIn("outdoor_temperature_forecast", df_result.columns)
 
-        # Check for NaNs
+        # C. Check for NaNs (The Critical Fix Verification)
         nan_count = df_result["outdoor_temperature_forecast"].isna().sum()
-        self.assertEqual(0, nan_count, f"Found {nan_count} NaNs. Fix failed.")
+        self.assertEqual(
+            0,
+            nan_count,
+            f"Found {nan_count} NaNs. The timezone alignment fix in command_line.py is not working.",
+        )
 
-        # Check value mapping
+        # D. Check Data Integrity
+        # The first value should be close to 20.0
         first_val = df_result["outdoor_temperature_forecast"].iloc[0]
-        self.assertAlmostEqual(20.0, first_val, delta=0.5)
+        self.assertAlmostEqual(
+            20.0,
+            first_val,
+            delta=0.5,
+            msg="Mapped temperature value diverged significantly from source.",
+        )
 
 
 if __name__ == "__main__":
