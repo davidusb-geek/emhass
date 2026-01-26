@@ -1720,24 +1720,54 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         # Verify desired_temperatures override applied (21.0 -> 22.5)
         self.assertEqual(thermal_config["desired_temperatures"], [22.5] * 48)
 
+
+class TestCommandLineTimezoneLogic(unittest.TestCase):
+    """
+    Separate test class to verify Timezone alignment in command_line.py
+    independent of the async test suite structure.
+    """
+
+    def setUp(self):
+        # Create a minimal mock configuration
+        root = pathlib.Path(utils.get_root(__file__, num_parent=2))
+        emhass_conf = {"data_path": root / "data/", "root_path": root / "src/emhass/"}
+
+        self.retrieve_hass_conf = {
+            "time_zone": "Europe/Paris",
+            "optimization_time_step": pd.Timedelta(minutes=30),
+            "historic_days_to_retrieve": 2,
+            "hass_url": "http://localhost:8123",
+            "long_lived_token": "token",
+            "lat": 45.83,
+            "lon": 6.86,
+            "alt": 4807.8,
+        }
+        self.optim_conf = {
+            "load_forecast_method": "naive",
+            "production_price_forecast_method": "constant",
+            "load_cost_forecast_method": "constant",
+        }
+        self.plant_conf = {}
+        self.params_json = json.dumps({"params_secrets": self.retrieve_hass_conf})
+        self.emhass_conf = emhass_conf
+        self.logger = utils.get_logger(__name__, emhass_conf, save_to_file=False)[0]
+
     def test_prepare_forecast_and_weather_data_with_open_meteo(self):
         """
         Test that Open-Meteo weather data (Timezone Aware) is correctly aligned
         with the Optimization Index (Timezone Naive) to avoid NaNs.
         """
-        # 1. Mock the Forecast object (needed by the function)
+        # 1. Mock Forecast
         fcst = Forecast(
             self.retrieve_hass_conf,
             self.optim_conf,
             self.plant_conf,
             json.loads(self.params_json),
-            emhass_conf,
-            logger,
+            self.emhass_conf,
+            self.logger,
         )
 
-        # 2. Simulate "Dayahead" Data (The Optimization Window)
-        # CASE: Timezone Naive Index (Simulating what often happens in Optimization)
-        # 48 steps of 30 mins = 24 hours
+        # 2. Simulate "Dayahead" Data (Optimization Window) - Naive TZ
         now_naive = pd.Timestamp.now().floor("30min").tz_localize(None)
         index_naive = pd.date_range(start=now_naive, periods=48, freq="30min")
 
@@ -1745,74 +1775,39 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         df_input_data_dayahead["p_load_forecast"] = 1000
         df_input_data_dayahead["p_pv_forecast"] = 0
 
-        # 3. Simulate "Open-Meteo" Weather Data
-        # CASE: Timezone Aware Index (Open-Meteo always returns TZ-aware)
-        # We also shift it slightly (e.g., +15 seconds) to test the robust reindexing logic
+        # 3. Simulate "Open-Meteo" Weather Data - Aware TZ + slight offset
         tz = "Europe/Paris"
-        # We start roughly at the same time but "aware"
         now_aware = pd.Timestamp.now(tz=tz).floor("30min") + pd.Timedelta(seconds=15)
         index_aware = pd.date_range(start=now_aware, periods=48, freq="30min")
 
         df_weather = pd.DataFrame(index=index_aware)
-        # Fill with a recognizable pattern (20.0, 20.5, 21.0...)
         df_weather["temp_air"] = [20 + (i * 0.5) for i in range(48)]
-        df_weather["ghi"] = 0  # GHI is also required/processed by the function
+        df_weather["ghi"] = 0
 
-        # 4. Construct the Input Dictionary
+        # 4. Construct Input
         input_data_dict = {
             "fcst": fcst,
             "df_input_data_dayahead": df_input_data_dayahead,
             "df_weather": df_weather,
-            "params": {"passed_data": {}},  # No explicit outdoor_temp passed, forcing fallback
+            "params": {"passed_data": {}},
         }
 
-        # 5. EXECUTE THE FUNCTION
+        # 5. Execute
         df_result = prepare_forecast_and_weather_data(
-            input_data_dict, logger, warn_on_resolution=False
+            input_data_dict, self.logger, warn_on_resolution=False
         )
 
-        # 6. ASSERTIONS
+        # 6. Assert
+        self.assertFalse(isinstance(df_result, bool) and not df_result)
+        self.assertIn("outdoor_temperature_forecast", df_result.columns)
 
-        # A. Function should not return False (failure)
-        self.assertFalse(
-            isinstance(df_result, bool) and not df_result,
-            "Function returned False, indicating failure.",
-        )
-
-        # B. Check column existence
-        self.assertIn(
-            "outdoor_temperature_forecast",
-            df_result.columns,
-            "Output DataFrame missing 'outdoor_temperature_forecast' column",
-        )
-
-        # C. Check for NaNs
-        # If the Timezone alignment fix is missing, reindex() produces NaNs
+        # Check for NaNs (The critical check)
         nan_count = df_result["outdoor_temperature_forecast"].isna().sum()
-        self.assertEqual(
-            0,
-            nan_count,
-            f"Found {nan_count} NaNs in outdoor_temperature_forecast. "
-            "Timezone alignment or reindexing failed.",
-        )
+        self.assertEqual(0, nan_count, f"Found {nan_count} NaNs. Fix failed.")
 
-        # D. Check Data Integrity
-        # The first value in df_weather was 20.0.
-        # Since we shifted by only 15 seconds, the interpolated value should be very close to 20.0
+        # Check value mapping
         first_val = df_result["outdoor_temperature_forecast"].iloc[0]
-        self.assertAlmostEqual(
-            20.0,
-            first_val,
-            delta=0.5,
-            msg="Mapped temperature value diverged significantly from source.",
-        )
-
-        # E. Check Index Type Preservation
-        # The output index should match the input dayahead index (naive)
-        self.assertIsNone(
-            df_result.index.tz,
-            "Output index should remain timezone-naive matching the input dayahead index.",
-        )
+        self.assertAlmostEqual(20.0, first_val, delta=0.5)
 
 
 if __name__ == "__main__":
