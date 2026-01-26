@@ -1744,7 +1744,9 @@ class TestCommandLineTimezoneLogic(unittest.TestCase):
             "alt": 4807.8,
             "method_ts_round": "nearest",
             "sensor_power_photovoltaics": "sensor.power_photovoltaics",
+            "sensor_power_photovoltaics_forecast": "sensor.power_photovoltaics_forecast",
             "sensor_power_load_no_var_loads": "sensor.power_load_no_var_loads",
+            "sensor_power_load_no_var_loads_forecast": "sensor.power_load_no_var_loads_forecast",
             "sensor_linear_interp": [
                 "sensor.power_photovoltaics",
                 "sensor.power_load_no_var_loads",
