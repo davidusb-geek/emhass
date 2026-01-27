@@ -912,6 +912,7 @@ async def initialize(args: dict | None = None):
         "Home Assistant data fetch will be performed using url: " + params_secrets["hass_url"]
     )
     app.logger.info("The data path is: " + str(emhass_conf["data_path"]))
+    app.logger.info("The config path is: " + str(emhass_conf["config_path"]))
     app.logger.info("The logging is: " + str(logging_level))
     try:
         app.logger.info("Using core emhass version: " + version("emhass"))
