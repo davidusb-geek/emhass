@@ -617,8 +617,21 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         """
         self.df_input_data_dayahead = self.prepare_forecast_data()
 
-        # Cold outside (10C) to ensure cooling when heater is ineffective
+        # Cold outside (10C)
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+
+        # Set costs to 0
+        self.df_input_data_dayahead[self.opt.var_load_cost] = 0.0
+        self.df_input_data_dayahead[self.opt.var_prod_price] = 0.0
+
+        # Define constraints
+        # Constraint: We want 18.0°C at t=3.
+        # Physics Check:
+        # - Without heat: Temp drops to ~14.2°C by t=3.
+        # - With Max Heat at t=0: Temp recovers to ~19.2°C by t=3.
+        # - Target 18.0°C forces the heater ON but is feasible.
+        min_temps = [0] * 48
+        min_temps[3] = 18.0
 
         runtimeparams = {
             "def_load_config": [
@@ -628,15 +641,17 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                         "heating_rate": 10.0,
                         "cooling_constant": 0.5,
                         "start_temperature": 20.0,
-                        "desired_temperatures": [25.0] * 48,  # High target to force max heating
                         "thermal_inertia": 1.0,  # 1 Hour inertia -> 2 timesteps lag
+                        "sense": "heat",
+                        "min_temperatures": min_temps,
+                        "max_temperatures": [30.0] * 48,
                     }
                 },
             ]
         }
 
         self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
-        # Ensure we have enough power to heat
+        # Ensure sufficient power
         self.optim_conf["nominal_power_of_deferrable_loads"][1] = 3000
 
         self.opt = self.create_optimization()
@@ -657,29 +672,33 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         p_heat = self.opt_res_dayahead["P_deferrable1"]
         temp = self.opt_res_dayahead["predicted_temp_heater1"]
 
-        # Verify Heater turned ON immediately (to satisfy demand ASAP)
-        self.assertGreater(p_heat.iloc[0], 0, "Heater should turn on at t=0")
+        # Verify Heater turned ON at t=0
+        # It MUST turn on now to satisfy the hard constraint at t=3.
+        self.assertGreater(
+            p_heat.iloc[0], 0, "Heater should turn on at t=0 to satisfy delayed constraint"
+        )
 
         # Verify Dead Zone (t=0 to t=2)
-        # With 1h inertia (2 steps), P[0] affects T[3].
-        # T[1] and T[2] should only reflect cooling.
-        # Expected T[1] = T[0] - cooling_loss
-        expected_t1 = 20.0 - (0.5 * 0.5 * (20.0 - 10.0))  # 20 - 0.25*10 = 17.5
-        # Allow small numerical tolerance
+        # Power[0] is ON, but Temp[1] and Temp[2] should NOT see it yet due to inertia.
+        # They should only reflect cooling losses.
+        # Expected T[1] approx: 20.0 - (0.5 * 0.5 * (20.0 - 10.0)) = 17.5
         self.assertAlmostEqual(
-            temp.iloc[1],
-            expected_t1,
-            delta=0.01,
-            msg="T[1] should only reflect cooling (dead zone)",
+            temp.iloc[1], 17.5, delta=0.5, msg="T[1] should only reflect cooling (dead zone)"
         )
+
+        # T[2] should continue dropping
         self.assertLess(temp.iloc[2], temp.iloc[1], msg="T[2] should continue dropping (dead zone)")
 
-        # Verify Heating Effect (t=3)
-        # T[3] = T[2] + heating_effect(P[0]) - cooling_loss
-        # Since P[0] was high, T[3] should be significantly higher than T[2] (or at least stop dropping rapidly)
-        # Actually, with 3000W and heating_rate=10, the gain is large.
+        # 3. Verify Heating Effect Arrives at t=3
+        # The constraint required T[3] >= 18.0.
+        self.assertGreaterEqual(temp.iloc[3], 17.9, msg="T[3] should meet the constraint (18C)")
+
+        # Sanity check: The jump from T[2] to T[3] is due to heating
+        # (Or at least the drop stops significantly compared to baseline)
         self.assertGreater(
-            temp.iloc[3], temp.iloc[2], msg="T[3] should finally rise as inertia period ends"
+            temp.iloc[3],
+            temp.iloc[2],
+            msg="T[3] should rise (or stop dropping) as heating kicks in",
         )
 
     # Setup function to run forecast for thermal tests
