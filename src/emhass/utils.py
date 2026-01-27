@@ -1793,25 +1793,31 @@ async def build_secrets(
             key_from_options = options.get("long_lived_token", "empty")
 
             # If data path specified by options.json, overwrite emhass_conf['data_path']
-            if options.get("data_path", None) is not None:
+            data_path_value = options.get("data_path", None)
+            if data_path_value is not None and data_path_value != "" and data_path_value != "default":
                 # Try to create directory if it doesn't exist. if successful set data_path in emhass_conf
                 try: 
-                    data_path = pathlib.Path(options["data_path"])
-                    data_path.mkdir(parents=False, exist_ok=True)
+                    data_path = pathlib.Path(data_path_value)
+                    # Use parents=True to create nested directories
+                    data_path.mkdir(parents=True, exist_ok=True)
                     emhass_conf["data_path"] = data_path
+                    logger.info(f"Using custom data_path: {data_path}")
                 except Exception as e:
                     logger.warning(
-                        f"cannot create data_path directory provided via options. keeping default. . Error: {e}"
+                        f"Cannot create data_path directory '{data_path_value}' provided via options. Keeping default. Error: {e}"
                     )
 
            # If config path specified by options.json, overwrite emhass_conf['config_path']
-            if options.get("config_path", None) is not None:
+            config_path_value = options.get("config_path", None)
+            if config_path_value is not None and config_path_value != "" and config_path_value != "default":
                 try: 
-                    config_path = pathlib.Path(options["config_path"])
+                    config_path = pathlib.Path(config_path_value)
+                    # Ensure parent directory exists (config_path is typically a file path like /share/config.json)
                     emhass_conf["config_path"] = config_path
+                    logger.info(f"Using emhass config_path from addon settings: {config_path}")
                 except Exception as e:
                     logger.warning(
-                        f"cannot create config_path directory provided via options. keeping default. . Error: {e}"
+                        f"Cannot set config_path '{config_path_value}' provided via options. Keeping default. Error: {e}"
                     )
 
             # Check to use Home Assistant local API
