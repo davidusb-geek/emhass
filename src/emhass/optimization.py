@@ -726,7 +726,7 @@ class Optimization:
     def _add_thermal_load_constraints(self, constraints, k, data_opt, def_init_temp):
         """
         Handle constraints for thermal deferrable loads (Vectorized).
-        Replicates legacy behavior: Timestep 0 is fixed to start_temp; physics starts at t=1.
+        Includes thermal inertia (lag) logic.
         """
         p_deferrable = self.vars["p_deferrable"][k]
         p_def_bin2 = self.vars["p_def_bin2"][k]
@@ -749,7 +749,9 @@ class Optimization:
         if not outdoor_temp or all(x is None for x in outdoor_temp):
             outdoor_temp = np.full(required_len, 15.0)
         else:
-            outdoor_temp = np.array([15.0 if x is None else float(x) for x in outdoor_temp])
+            outdoor_temp = np.array(
+                [15.0 if (x is None or pd.isna(x)) else float(x) for x in outdoor_temp]
+            )
 
         if len(outdoor_temp) < required_len:
             pad = np.full(required_len - len(outdoor_temp), 15.0)
@@ -767,6 +769,12 @@ class Optimization:
         sense_coeff = 1 if sense == "heat" else -1
         nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
 
+        # Thermal Inertia Logic
+        # Default to 0.0 if not present (Backwards Compatible)
+        thermal_inertia = hc.get("thermal_inertia", 0.0)
+        # Calculate Lag L in timesteps. self.time_step is in hours.
+        L = int(thermal_inertia / self.time_step)
+
         # Define Temperature State Variable
         predicted_temp = cp.Variable(required_len, name=f"temp_load_{k}")
 
@@ -775,16 +783,27 @@ class Optimization:
         heat_factor = (heating_rate * self.time_step) / nominal_power
         cool_factor = cooling_constant * self.time_step
 
+        # Main Dynamics (Delayed Power)
+        # T[t+1] depends on T[t] and P[t-L]
+        # Applies from timestep L to the end
         constraints.append(
-            predicted_temp[1:]
-            == predicted_temp[:-1]
-            + (p_deferrable[:-1] * heat_factor)
-            - (cool_factor * (predicted_temp[:-1] - outdoor_temp[:-1]))
+            predicted_temp[1 + L :]
+            == predicted_temp[L:-1]
+            + (p_deferrable[: -1 - L] * heat_factor)
+            - (cool_factor * (predicted_temp[L:-1] - outdoor_temp[L:-1]))
         )
+
+        # Startup "Dead Zone" Dynamics
+        # For the first L steps, the heater's effect hasn't arrived yet.
+        # Temperature evolves purely based on cooling/losses.
+        if L > 0:
+            constraints.append(
+                predicted_temp[1 : 1 + L]
+                == predicted_temp[:L] - (cool_factor * (predicted_temp[:L] - outdoor_temp[:L]))
+            )
 
         # Min/Max Temperature Constraints
         def enforce_limit(limit_list, relation_op):
-            # Filter for valid indices > 0
             valid_indices = [
                 i
                 for i, val in enumerate(limit_list)
@@ -822,7 +841,6 @@ class Optimization:
             constraints.append(is_overshoot[1:] + p_def_bin2[:-1] <= 1)
 
             # Penalty Calculation
-            # Only for valid indices > 0
             valid_indices = [
                 i
                 for i, val in enumerate(desired_temperatures)

@@ -610,6 +610,78 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIn("cost_fun_" + self.costfun, self.opt_res_dayahead.columns)
         self.assertEqual(self.opt.optim_status, "Optimal")
 
+    def test_thermal_inertia(self):
+        """
+        Test that the thermal_inertia parameter correctly delays the heating effect.
+        Scenario: 1 hour inertia (L=2 steps).
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+
+        # Cold outside (10C) to ensure cooling when heater is ineffective
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+
+        runtimeparams = {
+            "def_load_config": [
+                {},
+                {
+                    "thermal_config": {
+                        "heating_rate": 10.0,
+                        "cooling_constant": 0.5,
+                        "start_temperature": 20.0,
+                        "desired_temperatures": [25.0] * 48,  # High target to force max heating
+                        "thermal_inertia": 1.0,  # 1 Hour inertia -> 2 timesteps lag
+                    }
+                },
+            ]
+        }
+
+        self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
+        # Ensure we have enough power to heat
+        self.optim_conf["nominal_power_of_deferrable_loads"][1] = 3000
+
+        self.opt = self.create_optimization()
+        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
+
+        self.opt_res_dayahead = self.opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+
+        self.assertEqual(self.opt.optim_status, "Optimal")
+
+        # Get results
+        p_heat = self.opt_res_dayahead["P_deferrable1"]
+        temp = self.opt_res_dayahead["predicted_temp_heater1"]
+
+        # Verify Heater turned ON immediately (to satisfy demand ASAP)
+        self.assertGreater(p_heat.iloc[0], 0, "Heater should turn on at t=0")
+
+        # Verify Dead Zone (t=0 to t=2)
+        # With 1h inertia (2 steps), P[0] affects T[3].
+        # T[1] and T[2] should only reflect cooling.
+        # Expected T[1] = T[0] - cooling_loss
+        expected_t1 = 20.0 - (0.5 * 0.5 * (20.0 - 10.0))  # 20 - 0.25*10 = 17.5
+        # Allow small numerical tolerance
+        self.assertAlmostEqual(
+            temp.iloc[1],
+            expected_t1,
+            delta=0.01,
+            msg="T[1] should only reflect cooling (dead zone)",
+        )
+        self.assertLess(temp.iloc[2], temp.iloc[1], msg="T[2] should continue dropping (dead zone)")
+
+        # Verify Heating Effect (t=3)
+        # T[3] = T[2] + heating_effect(P[0]) - cooling_loss
+        # Since P[0] was high, T[3] should be significantly higher than T[2] (or at least stop dropping rapidly)
+        # Actually, with 3000W and heating_rate=10, the gain is large.
+        self.assertGreater(
+            temp.iloc[3], temp.iloc[2], msg="T[3] should finally rise as inertia period ends"
+        )
+
     # Setup function to run forecast for thermal tests
     def run_test_forecast(
         self,
