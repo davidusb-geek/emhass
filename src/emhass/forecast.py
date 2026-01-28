@@ -1387,11 +1387,23 @@ class Forecast:
         forecast_out = forecast.loc[forecast.index.intersection(self.forecast_dates)]
         forecast_out.index = self.forecast_dates
         forecast_out.index.name = "ts"
-        # Apply scaling here on the full dataframe
-        # This handles both scalar values and lists (arrays)
-        forecast_out["load"] = (
-            forecast_out["load"] * self.plant_conf["maximum_power_from_grid"] / 9000
-        )
+        max_power = self.plant_conf["maximum_power_from_grid"]
+        # Normalize list/array inputs to a Series aligned with forecast index
+        if isinstance(max_power, list | tuple | np.ndarray):
+            # Validate length to prevent confusing errors later
+            if len(max_power) != len(forecast_out):
+                raise ValueError(
+                    f"The length of 'maximum_power_from_grid' ({len(max_power)}) "
+                    f"does not match the forecast horizon length ({len(forecast_out)})."
+                )
+            # Create Series for explicit temporal alignment
+            scaling_factor = pd.Series(max_power, index=forecast_out.index)
+        else:
+            # Assume scalar (int/float)
+            scaling_factor = max_power
+        # Apply scaling
+        # The '9000' divisor appears to be a normalization constant specific to the 'typical' model data
+        forecast_out["load"] = forecast_out["load"] * scaling_factor / 9000
         return forecast_out.rename(columns={"load": "yhat"})
 
     def _get_load_forecast_naive(self, df: pd.DataFrame) -> pd.DataFrame:
