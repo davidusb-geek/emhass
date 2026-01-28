@@ -571,6 +571,131 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             soc_final,
         )
 
+    def test_perform_naive_mpc_optim_weight_scaling(self):
+        """
+        Regression test: Ensure weights are applied element-wise, not as matrix multiplication.
+        Also verifies that time-dependent weights correctly influence discharge timing.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.optim_conf.update({"set_use_battery": True})
+        self.optim_conf.update({"set_total_pv_sell": False})
+        self.optim_conf.update({"number_of_deferrable_loads": 0})
+        self.optim_conf.update({"set_nodischarge_to_grid": False})  # Allow export to grid
+
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "maximum_power_to_grid": 50000,
+                "maximum_power_from_grid": 50000,
+                "battery_stress_cost": 0.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        self.optim_conf.update({"set_battery_dynamic": False})
+
+        prediction_horizon = 10
+
+        # Scenario:
+        # Price at t=0 is high (Profit 50). Weight is 10.
+        # Correct: 10 < 50 -> Discharge should happen at t=0.
+        # Bug (10x magnification): 100 > 50 -> Discharge would be avoided at t=0 if possible.
+
+        self.df_input_data_dayahead["unit_prod_price"] = 1.0  # Low default
+        self.df_input_data_dayahead.iloc[
+            0, self.df_input_data_dayahead.columns.get_loc("unit_prod_price")
+        ] = 50.0
+        self.df_input_data_dayahead["unit_load_cost"] = 0.0
+
+        weights = [10.0] * 10
+        self.optim_conf.update({"weight_battery_discharge": weights})
+
+        self.opt = self.create_optimization()
+        self.opt_res_dayahead = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            soc_init=1.0,
+            soc_final=0.9,  # Discharge only a bit (concentrated at t=0)
+        )
+
+        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+        self.assertEqual(self.opt.optim_status, "Optimal", "Optimization should be feasible")
+
+        p_batt = self.opt_res_dayahead["P_batt"]
+        # Check first step
+        discharge_step_0 = p_batt.iloc[0]
+
+        # With fix: discharge_step_0 should be high because profit(50) > penalty(10).
+        # Without fix: profit(50) < penalty(100), so it would avoid step 0.
+        self.assertGreater(
+            discharge_step_0,
+            100.0,
+            f"Discharge at t=0 should be high with fix. Got {discharge_step_0}",
+        )
+
+    def test_perform_naive_mpc_optim_weight_scaling_scalar(self):
+        """
+        Regression test: Ensure scalar weights also work correctly with resizing.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.optim_conf.update({"set_use_battery": True})
+        self.optim_conf.update({"set_total_pv_sell": False})
+        self.optim_conf.update({"number_of_deferrable_loads": 0})
+        self.optim_conf.update({"set_nodischarge_to_grid": False})
+
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "maximum_power_to_grid": 50000,
+                "maximum_power_from_grid": 50000,
+                "battery_stress_cost": 0.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        self.optim_conf.update({"set_battery_dynamic": False})
+
+        prediction_horizon = 10
+        self.df_input_data_dayahead["unit_prod_price"] = 1.0
+        self.df_input_data_dayahead.iloc[
+            0, self.df_input_data_dayahead.columns.get_loc("unit_prod_price")
+        ] = 50.0
+        self.df_input_data_dayahead["unit_load_cost"] = 0.0
+
+        # Scenario: Scalar Weight = 10.0
+        self.optim_conf.update({"weight_battery_discharge": 10.0})
+
+        self.opt = self.create_optimization()
+        self.opt_res_dayahead = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            soc_init=1.0,
+            soc_final=0.9,
+        )
+
+        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+        self.assertEqual(self.opt.optim_status, "Optimal")
+
+        p_batt = self.opt_res_dayahead["P_batt"]
+        discharge_step_0 = p_batt.iloc[0]
+        self.assertGreater(
+            discharge_step_0,
+            100.0,
+            f"Scalar: Discharge at t=0 should be high. Got {discharge_step_0}",
+        )
+
     # Test format output of dayahead optimization with a thermal deferrable load
     def test_thermal_load_optim(self):
         self.df_input_data_dayahead = self.prepare_forecast_data()
