@@ -846,15 +846,23 @@ class RetrieveHass:
     ) -> list | None:
         """Helper to map old variable names to new ones (if renaming occurred)."""
         if not target_list:
-            self.logger.warning(f"Unable to find all the sensors in {param_name} parameter")
+            # Dynamic Warning Message
+            # Don't hardcode "sensor_power_photovoltaics". Use the actual parameter name.
+            self.logger.warning(f"The list of sensors for parameter '{param_name}' is empty.")
             self.logger.warning(
-                f"Confirm sure all sensors in {param_name} are sensor_power_photovoltaics and/or sensor_power_load_no_var_loads"
+                f"Please verify that the sensors defined in '{param_name}' match "
+                "the sensors connected to EMHASS."
             )
             return None
         new_list = []
         for string in target_list:
             if not skip_renaming:
-                new_list.append(string.replace(var_load, var_load + "_positive"))
+                # Exact Match Logic
+                # Prevent dangerous substring replacements (e.g. 'sensor.power' inside 'sensor.power_meter')
+                if string == var_load:
+                    new_list.append(var_load + "_positive")
+                else:
+                    new_list.append(string)
             else:
                 new_list.append(string)
         return new_list
@@ -896,8 +904,13 @@ class RetrieveHass:
         # Instead of calling self._validate_sensor_list (which warns),
         # we silently drop sensors that are not in the current fetched data.
         if var_replace_zero:
+            # Optional: Log if we are dropping items to help debugging
+            missing_sensors = [x for x in var_replace_zero if x not in self.var_list]
+            if missing_sensors:
+                self.logger.debug(
+                    f"Sensors in 'sensor_replace_zero' not found in data: {missing_sensors}"
+                )
             var_replace_zero = [x for x in var_replace_zero if x in self.var_list]
-
         if var_interp:
             var_interp = [x for x in var_interp if x in self.var_list]
         # Rename Load Columns (Handle sign change)
@@ -908,17 +921,19 @@ class RetrieveHass:
             self.df_final.clip(lower=0.0, inplace=True, axis=1)
             self.df_final.replace(to_replace=0.0, value=np.nan, inplace=True)
         # Map Variable Names (Update lists to match new column names)
-        # Note: We still use _map_variable_names to handle the renaming logic
-        # (e.g. adding '_positive' suffix), but the input lists are now clean.
-        new_var_replace_zero = self._map_variable_names(
-            var_replace_zero, var_load, skip_renaming, "sensor_replace_zero"
-        )
-        new_var_interp = self._map_variable_names(
-            var_interp, var_load, skip_renaming, "sensor_linear_interp"
-        )
+        # Only call mapping if the list is not empty to avoid spurious warnings
+        new_var_replace_zero = None
+        if var_replace_zero:
+            new_var_replace_zero = self._map_variable_names(
+                var_replace_zero, var_load, skip_renaming, "sensor_replace_zero"
+            )
+        new_var_interp = None
+        if var_interp:
+            new_var_interp = self._map_variable_names(
+                var_interp, var_load, skip_renaming, "sensor_linear_interp"
+            )
         # Apply Data Cleaning (FillNA / Interpolate)
         if new_var_replace_zero:
-            # Intersection check to ensure columns exist before assigning
             cols_to_fix = [c for c in new_var_replace_zero if c in self.df_final.columns]
             if cols_to_fix:
                 self.df_final[cols_to_fix] = self.df_final[cols_to_fix].fillna(0.0)

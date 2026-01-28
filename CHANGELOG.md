@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+### Improvement
+- Added support for a thermal inertia parameter for the basic thermal model
+### Fix
+- Fix Docker signal handling with tini and pin uvicorn version (@rmounce)
+- Fix "typical" load forecast method fails with maximum_power_from_grid as vector (list)
+- Fix warning logging messages on sensor_replace_zero
+
 ## 0.16.1 - 2026-01-23
 ### Fix
 - Hot fix for InfluxDB not passed credentials
