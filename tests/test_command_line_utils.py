@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import copy
+import json
 import os
 import pathlib
 import pickle
@@ -28,6 +29,7 @@ from emhass.command_line import (
     main,
     naive_mpc_optim,
     perfect_forecast_optim,
+    prepare_forecast_and_weather_data,
     publish_data,
     regressor_model_fit,
     regressor_model_predict,
@@ -1717,6 +1719,117 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(thermal_config["start_temperature"], 25.5)
         # Verify desired_temperatures override applied (21.0 -> 22.5)
         self.assertEqual(thermal_config["desired_temperatures"], [22.5] * 48)
+
+
+class TestCommandLineTimezoneLogic(unittest.IsolatedAsyncioTestCase):
+    """
+    Test class to verify Timezone alignment in command_line.py.
+    Uses real configuration loading to ensure all Forecast parameters are present.
+    """
+
+    @staticmethod
+    async def get_test_params():
+        params = {}
+        if emhass_conf["defaults_path"].exists():
+            config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+            _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
+            params = await utils.build_params(emhass_conf, secrets, config, logger)
+        else:
+            raise Exception(
+                "config_defaults.json does not exist in path: " + str(emhass_conf["defaults_path"])
+            )
+        return params
+
+    async def asyncSetUp(self):
+        # Load real parameters and configuration
+        params = await self.get_test_params()
+        self.params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(self.params_json, logger)
+        self.retrieve_hass_conf, self.optim_conf, self.plant_conf = (
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+        )
+        self.emhass_conf = emhass_conf
+        self.logger = logger
+
+    def test_prepare_forecast_and_weather_data_with_open_meteo(self):
+        """
+        Test that Open-Meteo weather data is correctly aligned with the Optimization Index
+        even when timestamps do not match perfectly (e.g. 15s drift).
+        """
+        # Initialize Forecast object using the REAL loaded configurations
+        fcst = Forecast(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            json.loads(self.params_json),
+            self.emhass_conf,
+            self.logger,
+        )
+
+        # Simulate "Dayahead" Data (Optimization Window)
+        # CRITICAL FIX: Must be Timezone-Aware to pass get_load_cost_forecast validations
+        tz = self.retrieve_hass_conf["time_zone"]
+        now_optim = pd.Timestamp.now(tz=tz).floor("30min")
+        index_optim = pd.date_range(start=now_optim, periods=48, freq="30min")
+
+        df_input_data_dayahead = pd.DataFrame(index=index_optim)
+        df_input_data_dayahead["p_load_forecast"] = 1000
+        df_input_data_dayahead["p_pv_forecast"] = 0
+
+        # Simulate "Open-Meteo" Weather Data
+        # We shift it by 15 seconds to simulate the misalignment that causes NaNs
+        # without the new robust reindexing logic.
+        now_weather = now_optim + pd.Timedelta(seconds=15)
+        index_weather = pd.date_range(start=now_weather, periods=48, freq="30min")
+
+        df_weather = pd.DataFrame(index=index_weather)
+        # Fill with a recognizable pattern (20.0, 20.5, 21.0...)
+        df_weather["temp_air"] = [20 + (i * 0.5) for i in range(48)]
+        # GHI is required by the function logic
+        df_weather["ghi"] = 0
+
+        # Construct Input Dictionary
+        input_data_dict = {
+            "fcst": fcst,
+            "df_input_data_dayahead": df_input_data_dayahead,
+            "df_weather": df_weather,
+            "params": {
+                "passed_data": {}
+            },  # No explicit outdoor_temp passed, forcing fallback logic
+        }
+
+        # Execute the function under test
+        df_result = prepare_forecast_and_weather_data(
+            input_data_dict, self.logger, warn_on_resolution=False
+        )
+
+        # 6. Assertions
+        # A. Function should not return False
+        self.assertFalse(isinstance(df_result, bool) and not df_result)
+
+        # B. Check column existence
+        self.assertIn("outdoor_temperature_forecast", df_result.columns)
+
+        # C. Check for NaNs (The Critical Fix Verification)
+        nan_count = df_result["outdoor_temperature_forecast"].isna().sum()
+        self.assertEqual(
+            0,
+            nan_count,
+            f"Found {nan_count} NaNs. The alignment fix in command_line.py is not working.",
+        )
+
+        # D. Check Data Integrity
+        # Since we offset by 15s (very small vs 30min step), the interpolated value
+        # should be extremely close to the source value (20.0).
+        first_val = df_result["outdoor_temperature_forecast"].iloc[0]
+        self.assertAlmostEqual(
+            20.0,
+            first_val,
+            delta=0.5,
+            msg="Mapped temperature value diverged significantly from source.",
+        )
 
 
 if __name__ == "__main__":
