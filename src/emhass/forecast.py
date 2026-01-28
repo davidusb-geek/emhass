@@ -1380,7 +1380,6 @@ class Forecast:
             data.columns = ["load"]
             forecast_tmp, used_days = Forecast.get_typical_load_forecast(data, forecast_date)
             self.logger.debug(f"Using {len(used_days)} days of data to generate the forecast.")
-            forecast_tmp = forecast_tmp * self.plant_conf["maximum_power_from_grid"] / 9000
             if len(forecast) == 0:
                 forecast = forecast_tmp
             else:
@@ -1388,6 +1387,11 @@ class Forecast:
         forecast_out = forecast.loc[forecast.index.intersection(self.forecast_dates)]
         forecast_out.index = self.forecast_dates
         forecast_out.index.name = "ts"
+        # Apply scaling here on the full dataframe
+        # This handles both scalar values and lists (arrays)
+        forecast_out["load"] = (
+            forecast_out["load"] * self.plant_conf["maximum_power_from_grid"] / 9000
+        )
         return forecast_out.rename(columns={"load": "yhat"})
 
     def _get_load_forecast_naive(self, df: pd.DataFrame) -> pd.DataFrame:
