@@ -2737,6 +2737,100 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         except Exception as e:
             self.fail(f"Complex optimization failed with error: {e}")
 
+    def test_thermal_optimization_with_nan_temperatures(self):
+        """
+        Test thermal optimization robustness when outdoor_temperature_forecast contains NaNs.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+
+        # Create a temperature profile with NaNs to simulate corrupted data
+        nan_temps = [np.nan] * 48
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = nan_temps
+
+        runtimeparams = {
+            "def_load_config": [
+                {
+                    "thermal_config": {
+                        "start_temperature": 20,
+                        "cooling_constant": 0.1,
+                        "heating_rate": 5.0,
+                        "desired_temperatures": [21] * 48,
+                        "sense": "heat",
+                    }
+                }
+            ]
+        }
+
+        self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
+        self.opt = self.create_optimization()
+
+        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
+
+        try:
+            self.opt_res_dayahead = self.opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                unit_load_cost,
+                unit_prod_price,
+            )
+
+            # SUCCESS CRITERIA: The optimization finished without crashing
+            self.assertEqual(self.opt.optim_status, "Optimal")
+            self.assertIn("P_deferrable0", self.opt_res_dayahead.columns)
+
+            # We use GreaterEqual because 0 is a valid result if costs are high
+            # The important part is that we got a result, not what the result is.
+            self.assertGreaterEqual(self.opt_res_dayahead["P_deferrable0"].sum(), 0)
+
+        except Exception as e:
+            self.fail(f"Optimization failed when handling NaN temperatures: {e}")
+
+    def test_thermal_battery_with_partial_nan_data(self):
+        """Test thermal battery optimization where some (but not all) temperature data is missing."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+
+        # Create a mix of valid data and NaNs
+        temps = [10.0] * 48
+        temps[10] = np.nan  # Missing single value
+        temps[11] = np.nan
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = temps
+
+        runtimeparams = {
+            "def_load_config": [
+                {
+                    "thermal_battery": {
+                        "start_temperature": 20.0,
+                        "supply_temperature": 35.0,
+                        "volume": 50.0,
+                        "specific_heating_demand": 100.0,
+                        "area": 100.0,
+                        "min_temperatures": [18.0] * 48,
+                        "max_temperatures": [22.0] * 48,
+                    }
+                }
+            ]
+        }
+
+        self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
+        self.opt = self.create_optimization()
+
+        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
+
+        try:
+            self.opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                unit_load_cost,
+                unit_prod_price,
+            )
+            self.assertEqual(self.opt.optim_status, "Optimal")
+        except Exception as e:
+            self.fail(f"Optimization failed with partial NaN data: {e}")
+
 
 if __name__ == "__main__":
     unittest.main()
