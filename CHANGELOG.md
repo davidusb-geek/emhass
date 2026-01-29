@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.16.2 - 2026-01-29
 ### Improvement
 - Added support for a thermal inertia parameter for the basic thermal model
 - Handle time-dependent battery weights (@rmounce)
