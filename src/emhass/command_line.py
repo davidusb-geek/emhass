@@ -93,6 +93,32 @@ class PublishContext:
         return self.input_data_dict["fcst"]
 
 
+@dataclass(frozen=True)
+class OptimizationCacheKey:
+    """
+    Frozen dataclass representing configuration fields that affect optimization structure.
+
+    Changes to any of these fields require rebuilding the optimization problem.
+    Using a frozen dataclass makes the cache key explicit, hashable, and easy to extend.
+    """
+
+    number_of_deferrable_loads: int
+    set_use_battery: bool
+    set_use_pv: bool
+    treat_deferrable_load_as_semi_cont: tuple
+    set_deferrable_load_single_constant: tuple
+    set_deferrable_startup_penalty: tuple
+    set_deferrable_load_as_timeseries: tuple
+    nominal_power_of_deferrable_loads: tuple
+    def_load_config_structure: tuple  # (index, type) tuples for each load
+    battery_capacity: float
+    inverter_is_hybrid: bool
+    compute_curtailment: bool
+    optimization_time_step_s: float | None
+    delta_forecast_daily_s: float | None
+    costfun: str
+
+
 class OptimizationCache:
     """
     In-memory cache for Optimization objects to enable warm-starting.
@@ -109,7 +135,7 @@ class OptimizationCache:
     """
 
     _instance: "Optimization | None" = None
-    _cache_key: str | None = None
+    _cache_key: OptimizationCacheKey | None = None
     _last_used: datetime | None = None
     _lock: threading.Lock = threading.Lock()
 
@@ -120,90 +146,74 @@ class OptimizationCache:
         plant_conf: dict,
         costfun: str,
         retrieve_hass_conf: dict,
-    ) -> str:
+    ) -> OptimizationCacheKey:
         """
         Compute a cache key from configuration that affects optimization structure.
 
-        Changes to these parameters require rebuilding the optimization problem
-        (different variables, constraints, or objective function structure).
+        Returns a frozen dataclass that can be directly compared for equality.
+        Changes to any field require rebuilding the optimization problem.
         """
-        import hashlib
 
-        # Helper to convert Timedelta/timedelta to seconds for JSON serialization
         def to_seconds(val):
+            """Convert Timedelta/timedelta to seconds."""
             if val is None:
                 return None
-            if hasattr(val, "total_seconds"):
-                return val.total_seconds()
-            return val
+            return val.total_seconds() if hasattr(val, "total_seconds") else float(val)
 
-        # Helper to convert numpy arrays to lists for JSON serialization
-        def to_list(val):
+        def to_tuple(val):
+            """Convert lists/arrays to tuples for hashability."""
             if val is None:
-                return None
+                return ()
             if hasattr(val, "tolist"):
-                return val.tolist()
-            return val
+                val = val.tolist()
+            if isinstance(val, (list, tuple)):
+                # Handle nested lists (e.g., nominal_power with sequences)
+                return tuple(tuple(v) if isinstance(v, (list, tuple)) else v for v in val)
+            return (val,)
 
-        # Helper to extract structure-relevant parts of def_load_config
-        # The presence of thermal_config or thermal_battery changes the constraint structure
-        def extract_def_load_config_structure(def_load_config):
-            if not def_load_config:
-                return None
-            structure = []
-            for i, config in enumerate(def_load_config):
-                if not config:
-                    structure.append({"index": i, "type": "standard"})
-                elif "thermal_config" in config:
-                    structure.append({"index": i, "type": "thermal_config"})
-                elif "thermal_battery" in config:
-                    structure.append({"index": i, "type": "thermal_battery"})
-                else:
-                    structure.append({"index": i, "type": "standard"})
-            return structure
+        # Extract def_load_config structure (which loads are thermal/thermal_battery/standard)
+        def_load_config = optim_conf.get("def_load_config", []) or []
+        def_structure = []
+        for i, cfg in enumerate(def_load_config):
+            cfg = cfg or {}
+            if "thermal_config" in cfg:
+                load_type = "thermal_config"
+            elif "thermal_battery" in cfg:
+                load_type = "thermal_battery"
+            else:
+                load_type = "standard"
+            def_structure.append((i, load_type))
 
-        # Extract only the configuration keys that affect optimization structure
-        structure_affecting_keys = {
-            # Optimization structure
-            "number_of_deferrable_loads": optim_conf.get("number_of_deferrable_loads", 0),
-            "set_use_battery": optim_conf.get("set_use_battery", False),
-            "set_use_pv": optim_conf.get("set_use_pv", True),
-            "treat_deferrable_load_as_semi_cont": optim_conf.get(
-                "treat_deferrable_load_as_semi_cont", []
+        return OptimizationCacheKey(
+            number_of_deferrable_loads=optim_conf.get("number_of_deferrable_loads", 0),
+            set_use_battery=optim_conf.get("set_use_battery", False),
+            set_use_pv=optim_conf.get("set_use_pv", True),
+            treat_deferrable_load_as_semi_cont=to_tuple(
+                optim_conf.get("treat_deferrable_load_as_semi_cont", [])
             ),
-            "set_deferrable_load_single_constant": optim_conf.get(
-                "set_deferrable_load_single_constant", []
+            set_deferrable_load_single_constant=to_tuple(
+                optim_conf.get("set_deferrable_load_single_constant", [])
             ),
-            "set_deferrable_startup_penalty": optim_conf.get("set_deferrable_startup_penalty", []),
-            "set_deferrable_load_as_timeseries": optim_conf.get(
-                "set_deferrable_load_as_timeseries", []
+            set_deferrable_startup_penalty=to_tuple(
+                optim_conf.get("set_deferrable_startup_penalty", [])
             ),
-            # Deferrable load parameters that affect constraint structure
-            # Note: The following are now parameterized and don't require rebuild:
+            set_deferrable_load_as_timeseries=to_tuple(
+                optim_conf.get("set_deferrable_load_as_timeseries", [])
+            ),
+            # Note: The following are parameterized and don't require rebuild:
             # - start_timesteps and end_timesteps (via window masks)
             # - operating_hours_of_each_deferrable_load (via Big-M energy constraints)
-            "nominal_power_of_deferrable_loads": to_list(
+            nominal_power_of_deferrable_loads=to_tuple(
                 optim_conf.get("nominal_power_of_deferrable_loads", [])
             ),
-            # Deferrable load type configuration (thermal, thermal_battery, standard)
-            # Changes to this affect which constraint branches are taken
-            "def_load_config_structure": extract_def_load_config_structure(
-                optim_conf.get("def_load_config", [])
-            ),
-            # Battery structure
-            "battery_capacity": plant_conf.get("battery_capacity", 0),
-            "inverter_is_hybrid": plant_conf.get("inverter_is_hybrid", False),
-            "compute_curtailment": plant_conf.get("compute_curtailment", False),
-            # Timing (affects number of timesteps) - convert to seconds for serialization
-            "optimization_time_step": to_seconds(retrieve_hass_conf.get("optimization_time_step")),
-            "delta_forecast_daily": to_seconds(optim_conf.get("delta_forecast_daily")),
-            # Objective function
-            "costfun": costfun,
-        }
-
-        # Create a deterministic string representation and hash it
-        key_str = orjson.dumps(structure_affecting_keys, option=orjson.OPT_SORT_KEYS).decode()
-        return hashlib.sha256(key_str.encode()).hexdigest()[:16]
+            def_load_config_structure=tuple(def_structure),
+            battery_capacity=plant_conf.get("battery_capacity", 0),
+            inverter_is_hybrid=plant_conf.get("inverter_is_hybrid", False),
+            compute_curtailment=plant_conf.get("compute_curtailment", False),
+            optimization_time_step_s=to_seconds(retrieve_hass_conf.get("optimization_time_step")),
+            delta_forecast_daily_s=to_seconds(optim_conf.get("delta_forecast_daily")),
+            costfun=costfun,
+        )
 
     @classmethod
     def get(
@@ -227,17 +237,13 @@ class OptimizationCache:
                 age = datetime.now() - cls._last_used if cls._last_used else timedelta(0)
                 logger.debug(
                     f"OptimizationCache HIT: Reusing cached optimization object "
-                    f"(key={cache_key[:8]}..., age={age.seconds}s) - warm-start enabled"
+                    f"(age={age.total_seconds():.1f}s) - warm-start enabled"
                 )
                 cls._last_used = datetime.now()
                 return cls._instance
 
             if cls._instance is not None:
-                logger.debug(
-                    f"OptimizationCache MISS: Config changed, rebuilding optimization "
-                    f"(old_key={cls._cache_key[:8] if cls._cache_key else 'None'}..., "
-                    f"new_key={cache_key[:8]}...)"
-                )
+                logger.debug("OptimizationCache MISS: Config changed, rebuilding optimization")
             else:
                 logger.debug("OptimizationCache MISS: Empty cache, building new optimization")
 
@@ -259,7 +265,10 @@ class OptimizationCache:
             cls._instance = opt
             cls._cache_key = cache_key
             cls._last_used = datetime.now()
-            logger.debug(f"OptimizationCache: Stored optimization object (key={cache_key[:8]}...)")
+            logger.debug(
+                f"OptimizationCache: Stored optimization object "
+                f"(loads={cache_key.number_of_deferrable_loads}, battery={cache_key.set_use_battery})"
+            )
 
     @classmethod
     def clear(cls, logger: logging.Logger | None = None) -> None:
@@ -277,7 +286,7 @@ class OptimizationCache:
         with cls._lock:
             return {
                 "has_instance": cls._instance is not None,
-                "cache_key": cls._cache_key[:8] + "..." if cls._cache_key else None,
+                "cache_key": cls._cache_key,
                 "last_used": cls._last_used.isoformat() if cls._last_used else None,
             }
 

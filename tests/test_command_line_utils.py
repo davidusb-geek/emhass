@@ -18,6 +18,7 @@ import pandas as pd
 from emhass import utils
 from emhass.command_line import (
     OptimizationCache,
+    OptimizationCacheKey,
     SetupContext,
     _prepare_dayahead_optim,
     adjust_pv_forecast,
@@ -2166,7 +2167,8 @@ class TestOptimizationCache(unittest.TestCase):
         )
 
         self.assertEqual(key1, key2)
-        self.assertEqual(len(key1), 16)  # SHA256 truncated to 16 chars
+        # Key should be an OptimizationCacheKey dataclass instance
+        self.assertIsInstance(key1, OptimizationCacheKey)
 
     def test_cache_key_different_for_different_config(self):
         """Test that different configs produce different cache keys."""
@@ -2250,6 +2252,8 @@ class TestOptimizationCache(unittest.TestCase):
 
     def test_cache_last_used_updated_on_hit(self):
         """Test that last_used timestamp is updated on cache hit."""
+        from datetime import datetime, timedelta
+
         mock_opt = MagicMock()
         OptimizationCache.put(
             mock_opt,
@@ -2260,14 +2264,11 @@ class TestOptimizationCache(unittest.TestCase):
             self.logger,
         )
 
-        first_used = OptimizationCache._last_used
+        # Set _last_used to a known earlier time (1 hour ago) to avoid timing issues
+        past_time = datetime.now() - timedelta(hours=1)
+        OptimizationCache._last_used = past_time
 
-        # Small delay to ensure timestamp difference
-        import time
-
-        time.sleep(0.01)
-
-        # Access cache (hit)
+        # Access cache (hit) - this should update _last_used to current time
         OptimizationCache.get(
             self.optim_conf,
             self.plant_conf,
@@ -2278,7 +2279,10 @@ class TestOptimizationCache(unittest.TestCase):
 
         second_used = OptimizationCache._last_used
 
-        self.assertGreater(second_used, first_used)
+        # second_used should be much more recent than our artificially set past_time
+        self.assertGreater(second_used, past_time)
+        # And it should be within the last few seconds (not the 1 hour ago we set)
+        self.assertLess((datetime.now() - second_used).total_seconds(), 5)
 
     def test_cache_handles_none_values_in_config(self):
         """Test that cache handles None values in configuration gracefully."""
@@ -2296,7 +2300,8 @@ class TestOptimizationCache(unittest.TestCase):
             retrieve_conf_with_none,
         )
         self.assertIsNotNone(key)
-        self.assertEqual(len(key), 16)
+        # Key should be an OptimizationCacheKey dataclass instance
+        self.assertIsInstance(key, OptimizationCacheKey)
 
     def test_cache_miss_def_load_config_changed(self):
         """Test that changing def_load_config structure invalidates the cache.
@@ -2362,6 +2367,310 @@ class TestOptimizationCache(unittest.TestCase):
 
         # Should be cache MISS because def_load_config structure changed
         self.assertIsNone(result)
+
+
+class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
+    """Integration tests for CLI warm-start flow using actual naive_mpc_optim calls."""
+
+    @staticmethod
+    async def get_test_params():
+        """Build params with default config."""
+        if emhass_conf["defaults_path"].exists():
+            config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+            _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
+            params = await utils.build_params(emhass_conf, secrets, config, logger)
+            params["optim_conf"]["set_use_pv"] = True
+        else:
+            raise Exception(
+                "config_defaults does not exist in path: " + str(emhass_conf["defaults_path"])
+            )
+        return params
+
+    async def asyncSetUp(self):
+        """Set up test fixtures and clear the cache."""
+        OptimizationCache.clear()
+        self.params = await TestOptimizationCacheIntegration.get_test_params()
+
+    def tearDown(self):
+        """Clear cache after each test."""
+        OptimizationCache.clear()
+
+    async def test_mpc_cache_hit_on_repeated_calls(self):
+        """Test that repeated MPC calls with same config reuse the cached Optimization object.
+
+        Note: set_input_data_dict creates and caches the Optimization object, so the cache
+        is populated after the first set_input_data_dict call, not after naive_mpc_optim.
+        """
+        costfun = "profit"
+        action = "naive-mpc-optim"
+
+        # Set up runtime parameters for a 10-step MPC
+        runtimeparams = {
+            "pv_power_forecast": [100 * (i + 1) for i in range(10)],
+            "load_power_forecast": [200 + i * 10 for i in range(10)],
+            "load_cost_forecast": [0.15 + i * 0.01 for i in range(10)],
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+        }
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+
+        params = copy.deepcopy(self.params)
+        params["passed_data"] = runtimeparams
+        params["optim_conf"]["weather_forecast_method"] = "list"
+        params["optim_conf"]["load_forecast_method"] = "list"
+        params["optim_conf"]["load_cost_forecast_method"] = "list"
+        params["optim_conf"]["production_price_forecast_method"] = "list"
+        params_json = orjson.dumps(params).decode("utf-8")
+
+        # Verify cache is empty before first call
+        stats_before = OptimizationCache.get_stats()
+        self.assertFalse(stats_before["has_instance"])
+
+        # First call - set_input_data_dict creates and caches the Optimization object
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+
+        # Cache should now be populated (set_input_data_dict creates the Optimization)
+        stats_after_setup = OptimizationCache.get_stats()
+        self.assertTrue(stats_after_setup["has_instance"])
+        first_cache_key = stats_after_setup["cache_key"]
+
+        opt_res1 = await naive_mpc_optim(input_data_dict, logger, debug=True)
+        self.assertIsInstance(opt_res1, pd.DataFrame)
+
+        # Second call with same config - should reuse cached Optimization (cache hit)
+        # Change forecast values slightly (these don't affect problem structure)
+        runtimeparams2 = {
+            "pv_power_forecast": [150 * (i + 1) for i in range(10)],  # Different values
+            "load_power_forecast": [250 + i * 10 for i in range(10)],
+            "load_cost_forecast": [0.20 + i * 0.01 for i in range(10)],
+            "prod_price_forecast": [0.08] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.6,  # Different SOC
+            "soc_final": 0.6,
+        }
+        runtimeparams_json2 = orjson.dumps(runtimeparams2).decode("utf-8")
+        params["passed_data"] = runtimeparams2
+        params_json2 = orjson.dumps(params).decode("utf-8")
+
+        input_data_dict2 = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json2,
+            runtimeparams_json2,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+
+        opt_res2 = await naive_mpc_optim(input_data_dict2, logger, debug=True)
+        self.assertIsInstance(opt_res2, pd.DataFrame)
+
+        stats_after_second = OptimizationCache.get_stats()
+        self.assertTrue(stats_after_second["has_instance"])
+        # Cache key should be the same (hit)
+        self.assertEqual(stats_after_second["cache_key"], first_cache_key)
+
+    async def test_mpc_cache_hit_with_different_time_windows(self):
+        """Test that changing start/end timesteps results in cache HIT (parameterized)."""
+        costfun = "profit"
+        action = "naive-mpc-optim"
+
+        runtimeparams = {
+            "pv_power_forecast": [100 * (i + 1) for i in range(10)],
+            "load_power_forecast": [200] * 10,
+            "load_cost_forecast": [0.15] * 10,
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+            "operating_hours_of_each_deferrable_load": [2, 3],
+            "start_timesteps_of_each_deferrable_load": [0, 0],
+            "end_timesteps_of_each_deferrable_load": [10, 10],
+        }
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+
+        params = copy.deepcopy(self.params)
+        params["passed_data"] = runtimeparams
+        params["optim_conf"]["weather_forecast_method"] = "list"
+        params["optim_conf"]["load_forecast_method"] = "list"
+        params["optim_conf"]["load_cost_forecast_method"] = "list"
+        params["optim_conf"]["production_price_forecast_method"] = "list"
+        params_json = orjson.dumps(params).decode("utf-8")
+
+        # First call
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_res1 = await naive_mpc_optim(input_data_dict, logger, debug=True)
+        self.assertIsInstance(opt_res1, pd.DataFrame)
+
+        stats_after_first = OptimizationCache.get_stats()
+        first_cache_key = stats_after_first["cache_key"]
+
+        # Second call with different time windows (simulating MPC rolling horizon)
+        runtimeparams2 = {
+            "pv_power_forecast": [100 * (i + 1) for i in range(10)],
+            "load_power_forecast": [200] * 10,
+            "load_cost_forecast": [0.15] * 10,
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+            "operating_hours_of_each_deferrable_load": [2, 3],
+            "start_timesteps_of_each_deferrable_load": [2, 1],  # Changed!
+            "end_timesteps_of_each_deferrable_load": [8, 9],  # Changed!
+        }
+        runtimeparams_json2 = orjson.dumps(runtimeparams2).decode("utf-8")
+        params["passed_data"] = runtimeparams2
+        params_json2 = orjson.dumps(params).decode("utf-8")
+
+        input_data_dict2 = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json2,
+            runtimeparams_json2,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_res2 = await naive_mpc_optim(input_data_dict2, logger, debug=True)
+        self.assertIsInstance(opt_res2, pd.DataFrame)
+
+        stats_after_second = OptimizationCache.get_stats()
+        # Cache key should be the same (time windows are parameterized, not in key)
+        self.assertEqual(stats_after_second["cache_key"], first_cache_key)
+
+    async def test_mpc_cache_miss_on_structural_change(self):
+        """Test that changing structural config (e.g., costfun) causes cache MISS."""
+        action = "naive-mpc-optim"
+
+        runtimeparams = {
+            "pv_power_forecast": [100 * (i + 1) for i in range(10)],
+            "load_power_forecast": [200] * 10,
+            "load_cost_forecast": [0.15] * 10,
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+        }
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+
+        params = copy.deepcopy(self.params)
+        params["passed_data"] = runtimeparams
+        params["optim_conf"]["weather_forecast_method"] = "list"
+        params["optim_conf"]["load_forecast_method"] = "list"
+        params["optim_conf"]["load_cost_forecast_method"] = "list"
+        params["optim_conf"]["production_price_forecast_method"] = "list"
+        params_json = orjson.dumps(params).decode("utf-8")
+
+        # First call with costfun="profit"
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            "profit",
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_res1 = await naive_mpc_optim(input_data_dict, logger, debug=True)
+        self.assertIsInstance(opt_res1, pd.DataFrame)
+
+        stats_after_first = OptimizationCache.get_stats()
+        first_cache_key = stats_after_first["cache_key"]
+
+        # Second call with costfun="cost" - should cause cache miss
+        # Note: costfun from optim_conf takes precedence, so we must update it in params
+        params2 = copy.deepcopy(self.params)
+        params2["passed_data"] = runtimeparams
+        params2["optim_conf"]["weather_forecast_method"] = "list"
+        params2["optim_conf"]["load_forecast_method"] = "list"
+        params2["optim_conf"]["load_cost_forecast_method"] = "list"
+        params2["optim_conf"]["production_price_forecast_method"] = "list"
+        params2["optim_conf"]["costfun"] = "cost"  # This is what changes the costfun
+        params_json2 = orjson.dumps(params2).decode("utf-8")
+
+        input_data_dict2 = await set_input_data_dict(
+            emhass_conf,
+            "cost",
+            params_json2,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_res2 = await naive_mpc_optim(input_data_dict2, logger, debug=True)
+        self.assertIsInstance(opt_res2, pd.DataFrame)
+
+        stats_after_second = OptimizationCache.get_stats()
+        # Cache key should be different (costfun changed)
+        self.assertNotEqual(stats_after_second["cache_key"], first_cache_key)
+
+    async def test_mpc_multiple_iterations_simulate_rolling_horizon(self):
+        """Simulate multiple MPC iterations as in real rolling-horizon operation."""
+        costfun = "profit"
+        action = "naive-mpc-optim"
+
+        params = copy.deepcopy(self.params)
+        params["optim_conf"]["weather_forecast_method"] = "list"
+        params["optim_conf"]["load_forecast_method"] = "list"
+        params["optim_conf"]["load_cost_forecast_method"] = "list"
+        params["optim_conf"]["production_price_forecast_method"] = "list"
+
+        # Simulate 4 MPC iterations with shifting time windows
+        cache_keys = []
+        for iteration in range(4):
+            runtimeparams = {
+                "pv_power_forecast": [100 * (i + 1 + iteration) for i in range(10)],
+                "load_power_forecast": [200 + iteration * 5] * 10,
+                "load_cost_forecast": [0.15 + iteration * 0.01] * 10,
+                "prod_price_forecast": [0.05] * 10,
+                "prediction_horizon": 10,
+                "soc_init": 0.5 + iteration * 0.05,
+                "soc_final": 0.5,
+                "operating_hours_of_each_deferrable_load": [2, 3],
+                # Simulate rolling horizon: windows shift each iteration
+                "start_timesteps_of_each_deferrable_load": [iteration, iteration],
+                "end_timesteps_of_each_deferrable_load": [10, 10],
+            }
+            runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+            params["passed_data"] = runtimeparams
+            params_json = orjson.dumps(params).decode("utf-8")
+
+            input_data_dict = await set_input_data_dict(
+                emhass_conf,
+                costfun,
+                params_json,
+                runtimeparams_json,
+                action,
+                logger,
+                get_data_from_file=True,
+            )
+            opt_res = await naive_mpc_optim(input_data_dict, logger, debug=True)
+            self.assertIsInstance(opt_res, pd.DataFrame)
+            self.assertEqual(len(opt_res), 10)
+
+            stats = OptimizationCache.get_stats()
+            cache_keys.append(stats["cache_key"])
+
+        # All iterations should have the same cache key (cache was reused)
+        self.assertTrue(all(key == cache_keys[0] for key in cache_keys))
 
 
 if __name__ == "__main__":
