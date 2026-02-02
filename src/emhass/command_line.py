@@ -174,9 +174,7 @@ class OptimizationCache:
             "set_deferrable_load_single_constant": optim_conf.get(
                 "set_deferrable_load_single_constant", []
             ),
-            "set_deferrable_startup_penalty": optim_conf.get(
-                "set_deferrable_startup_penalty", []
-            ),
+            "set_deferrable_startup_penalty": optim_conf.get("set_deferrable_startup_penalty", []),
             "set_deferrable_load_as_timeseries": optim_conf.get(
                 "set_deferrable_load_as_timeseries", []
             ),
@@ -197,18 +195,14 @@ class OptimizationCache:
             "inverter_is_hybrid": plant_conf.get("inverter_is_hybrid", False),
             "compute_curtailment": plant_conf.get("compute_curtailment", False),
             # Timing (affects number of timesteps) - convert to seconds for serialization
-            "optimization_time_step": to_seconds(
-                retrieve_hass_conf.get("optimization_time_step")
-            ),
+            "optimization_time_step": to_seconds(retrieve_hass_conf.get("optimization_time_step")),
             "delta_forecast_daily": to_seconds(optim_conf.get("delta_forecast_daily")),
             # Objective function
             "costfun": costfun,
         }
 
         # Create a deterministic string representation and hash it
-        key_str = orjson.dumps(
-            structure_affecting_keys, option=orjson.OPT_SORT_KEYS
-        ).decode()
+        key_str = orjson.dumps(structure_affecting_keys, option=orjson.OPT_SORT_KEYS).decode()
         return hashlib.sha256(key_str.encode()).hexdigest()[:16]
 
     @classmethod
@@ -226,9 +220,7 @@ class OptimizationCache:
         Returns None if cache is empty or configuration has changed.
         Thread-safe via internal locking.
         """
-        cache_key = cls._compute_cache_key(
-            optim_conf, plant_conf, costfun, retrieve_hass_conf
-        )
+        cache_key = cls._compute_cache_key(optim_conf, plant_conf, costfun, retrieve_hass_conf)
 
         with cls._lock:
             if cls._instance is not None and cls._cache_key == cache_key:
@@ -262,9 +254,7 @@ class OptimizationCache:
         logger: logging.Logger,
     ) -> None:
         """Store Optimization object in cache. Thread-safe via internal locking."""
-        cache_key = cls._compute_cache_key(
-            optim_conf, plant_conf, costfun, retrieve_hass_conf
-        )
+        cache_key = cls._compute_cache_key(optim_conf, plant_conf, costfun, retrieve_hass_conf)
         with cls._lock:
             cls._instance = opt
             cls._cache_key = cache_key
@@ -925,9 +915,7 @@ async def set_input_data_dict(
         get_data_from_file=get_data_from_file,
     )
     # Try to get cached Optimization object for warm-starting
-    opt = OptimizationCache.get(
-        optim_conf, plant_conf, costfun, retrieve_hass_conf, logger
-    )
+    opt = OptimizationCache.get(optim_conf, plant_conf, costfun, retrieve_hass_conf, logger)
     if opt is None:
         # Cache miss - create new Optimization object
         opt = Optimization(
@@ -941,9 +929,7 @@ async def set_input_data_dict(
             logger,
         )
         # Store in cache for future warm-starts
-        OptimizationCache.put(
-            opt, optim_conf, plant_conf, costfun, retrieve_hass_conf, logger
-        )
+        OptimizationCache.put(opt, optim_conf, plant_conf, costfun, retrieve_hass_conf, logger)
     else:
         # Cache hit - update references that may have changed
         # (logger, var names from forecast)

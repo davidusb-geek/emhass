@@ -1214,7 +1214,12 @@ class Optimization:
             # - Sequence loads (defined by power profile)
             # - Thermal loads (controlled by temperature targets)
             # - Thermal battery loads (controlled by heat demand)
-            if k < len(self.param_target_energy) and not is_sequence_load and not is_thermal_load and not is_thermal_battery:
+            if (
+                k < len(self.param_target_energy)
+                and not is_sequence_load
+                and not is_thermal_load
+                and not is_thermal_battery
+            ):
                 # Big-M value: maximum possible energy consumption
                 # = max_power * num_timesteps * time_step
                 nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
@@ -1226,10 +1231,12 @@ class Optimization:
                 # Relaxed to: target_energy - M*(1-active) <= sum(p)*dt <= target_energy + M*(1-active)
                 total_energy_expr = cp.sum(p_deferrable[k]) * self.time_step
                 constraints.append(
-                    total_energy_expr >= self.param_target_energy[k] - M_energy * (1 - self.param_energy_active[k])
+                    total_energy_expr
+                    >= self.param_target_energy[k] - M_energy * (1 - self.param_energy_active[k])
                 )
                 constraints.append(
-                    total_energy_expr <= self.param_target_energy[k] + M_energy * (1 - self.param_energy_active[k])
+                    total_energy_expr
+                    <= self.param_target_energy[k] + M_energy * (1 - self.param_energy_active[k])
                 )
 
             # Generic Constraints (Window)
@@ -1263,9 +1270,7 @@ class Optimization:
                 if isinstance(nominal_power, list):
                     # For time-series nominal power, use the max value for the constraint
                     nominal_power = max(nominal_power)
-                constraints.append(
-                    p_deferrable[k] <= nominal_power * self.param_window_masks[k]
-                )
+                constraints.append(p_deferrable[k] <= nominal_power * self.param_window_masks[k])
 
             # Optimization: Skip Binary Logic if Possible
             # If a load is:
@@ -1335,10 +1340,14 @@ class Optimization:
                             M_timesteps = n * 2  # Max possible timesteps * safety
                             sum_bin2 = cp.sum(p_def_bin2[k])
                             constraints.append(
-                                sum_bin2 >= self.param_required_timesteps[k] - M_timesteps * (1 - self.param_timesteps_active[k])
+                                sum_bin2
+                                >= self.param_required_timesteps[k]
+                                - M_timesteps * (1 - self.param_timesteps_active[k])
                             )
                             constraints.append(
-                                sum_bin2 <= self.param_required_timesteps[k] + M_timesteps * (1 - self.param_timesteps_active[k])
+                                sum_bin2
+                                <= self.param_required_timesteps[k]
+                                + M_timesteps * (1 - self.param_timesteps_active[k])
                             )
 
                     # Semi-continuous
