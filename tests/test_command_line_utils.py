@@ -2286,6 +2286,71 @@ class TestOptimizationCache(unittest.TestCase):
         self.assertIsNotNone(key)
         self.assertEqual(len(key), 16)
 
+    def test_cache_miss_def_load_config_changed(self):
+        """Test that changing def_load_config structure invalidates the cache.
+
+        def_load_config determines which constraint branches are taken
+        (standard vs thermal_config vs thermal_battery), so changes to it
+        require rebuilding the optimization problem.
+        """
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Add a thermal_config to a load - this changes constraint structure
+        modified_optim_conf = copy.deepcopy(self.optim_conf)
+        modified_optim_conf["def_load_config"] = [
+            {"thermal_config": {"heating_rate": 5.0}},  # Changed: now has thermal_config
+            {},  # Standard load
+        ]
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Should be cache MISS because def_load_config structure changed
+        self.assertIsNone(result)
+
+    def test_cache_miss_def_load_config_thermal_battery_added(self):
+        """Test that adding thermal_battery to def_load_config invalidates the cache."""
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Add a thermal_battery to a load - this changes constraint structure
+        modified_optim_conf = copy.deepcopy(self.optim_conf)
+        modified_optim_conf["def_load_config"] = [
+            {},  # Standard load
+            {"thermal_battery": {"volume": 10.0}},  # Changed: now has thermal_battery
+        ]
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Should be cache MISS because def_load_config structure changed
+        self.assertIsNone(result)
+
 
 if __name__ == "__main__":
     unittest.main()
