@@ -17,6 +17,7 @@ import pandas as pd
 
 from emhass import utils
 from emhass.command_line import (
+    OptimizationCache,
     SetupContext,
     _prepare_dayahead_optim,
     adjust_pv_forecast,
@@ -1830,6 +1831,537 @@ class TestCommandLineTimezoneLogic(unittest.IsolatedAsyncioTestCase):
             delta=0.5,
             msg="Mapped temperature value diverged significantly from source.",
         )
+
+
+class TestOptimizationCache(unittest.TestCase):
+    """Unit tests for the OptimizationCache warm-starting functionality."""
+
+    def setUp(self):
+        """Clear the cache before each test."""
+        OptimizationCache.clear()
+        self.logger = logger
+
+        # Base configuration for testing
+        self.optim_conf = {
+            "number_of_deferrable_loads": 2,
+            "set_use_battery": True,
+            "set_use_pv": True,
+            "treat_deferrable_load_as_semi_cont": [False, False],
+            "set_deferrable_load_single_constant": [False, False],
+            "set_deferrable_startup_penalty": [0, 0],
+            "set_deferrable_load_as_timeseries": [False, False],
+            "delta_forecast_daily": pd.Timedelta(days=1),
+            # Deferrable load constraint parameters
+            "nominal_power_of_deferrable_loads": [1000, 2000],
+            "operating_hours_of_each_deferrable_load": [3, 5],
+            "start_timesteps_of_each_deferrable_load": [0, 0],
+            "end_timesteps_of_each_deferrable_load": [48, 48],
+        }
+        self.plant_conf = {
+            "battery_capacity": 10.0,
+            "inverter_is_hybrid": False,
+            "compute_curtailment": False,
+        }
+        self.retrieve_hass_conf = {
+            "optimization_time_step": pd.Timedelta(minutes=30),
+        }
+        self.costfun = "profit"
+
+    def tearDown(self):
+        """Clear the cache after each test."""
+        OptimizationCache.clear()
+
+    def test_cache_miss_empty(self):
+        """Test that an empty cache returns None."""
+        result = OptimizationCache.get(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+        self.assertIsNone(result)
+
+    def test_cache_hit_same_config(self):
+        """Test that the same config returns the cached object."""
+        # Create a mock Optimization object
+        mock_opt = MagicMock()
+        mock_opt.name = "test_optimization"
+
+        # Store in cache
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Retrieve from cache
+        result = OptimizationCache.get(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertIs(result, mock_opt)
+        self.assertEqual(result.name, "test_optimization")
+
+    def test_cache_miss_config_changed(self):
+        """Test that changing config invalidates the cache."""
+        # Store with original config
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Modify config - change number of deferrable loads
+        modified_optim_conf = self.optim_conf.copy()
+        modified_optim_conf["number_of_deferrable_loads"] = 5
+
+        # Should return None (cache miss due to config change)
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        self.assertIsNone(result)
+
+    def test_cache_miss_battery_config_changed(self):
+        """Test that changing battery config invalidates the cache."""
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Modify plant config - change battery capacity
+        modified_plant_conf = self.plant_conf.copy()
+        modified_plant_conf["battery_capacity"] = 20.0
+
+        result = OptimizationCache.get(
+            self.optim_conf,
+            modified_plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        self.assertIsNone(result)
+
+    def test_cache_miss_costfun_changed(self):
+        """Test that changing cost function invalidates the cache."""
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Change cost function
+        result = OptimizationCache.get(
+            self.optim_conf,
+            self.plant_conf,
+            "self-consumption",  # Different costfun
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        self.assertIsNone(result)
+
+    def test_cache_miss_time_step_changed(self):
+        """Test that changing optimization time step invalidates the cache."""
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Modify time step
+        modified_retrieve_conf = self.retrieve_hass_conf.copy()
+        modified_retrieve_conf["optimization_time_step"] = pd.Timedelta(minutes=15)
+
+        result = OptimizationCache.get(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            modified_retrieve_conf,
+            self.logger,
+        )
+
+        self.assertIsNone(result)
+
+    def test_cache_miss_nominal_power_changed(self):
+        """Test that changing nominal power of deferrable loads invalidates the cache."""
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Modify nominal power for load 0
+        modified_optim_conf = copy.deepcopy(self.optim_conf)
+        modified_optim_conf["nominal_power_of_deferrable_loads"] = [
+            1500,
+            2000,
+        ]  # Changed from [1000, 2000]
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        self.assertIsNone(result)
+
+    def test_cache_hit_operating_hours_changed(self):
+        """Test that changing operating hours does NOT invalidate the cache.
+
+        Operating hours are now parameterized via Big-M energy constraints, so the
+        cached problem can be reused even when operating hours change. The actual
+        operating hours are passed as parameter values before solving.
+        """
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Modify operating hours for load 1
+        modified_optim_conf = copy.deepcopy(self.optim_conf)
+        modified_optim_conf["operating_hours_of_each_deferrable_load"] = [
+            3,
+            8,
+        ]  # Changed from [3, 5]
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Should still return cached object since operating hours are parameterized
+        self.assertEqual(result, mock_opt)
+
+    def test_cache_hit_start_timestep_changed(self):
+        """Test that changing start timesteps does NOT invalidate the cache.
+
+        Start/end timesteps are now parameterized via window masks, so the
+        problem structure doesn't change when they change. This enables
+        warm-starting for MPC where time windows shift each iteration.
+        """
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Modify start timestep for load 0 - should still hit cache
+        modified_optim_conf = copy.deepcopy(self.optim_conf)
+        modified_optim_conf["start_timesteps_of_each_deferrable_load"] = [
+            10,
+            0,
+        ]  # Changed from [0, 0]
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Cache should HIT because start_timesteps are now parameterized
+        self.assertIsNotNone(result)
+        self.assertIs(result, mock_opt)
+
+    def test_cache_hit_end_timestep_changed(self):
+        """Test that changing end timesteps does NOT invalidate the cache.
+
+        Start/end timesteps are now parameterized via window masks, so the
+        problem structure doesn't change when they change. This enables
+        warm-starting for MPC where time windows shift each iteration.
+        """
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Modify end timestep for load 1 - should still hit cache
+        modified_optim_conf = copy.deepcopy(self.optim_conf)
+        modified_optim_conf["end_timesteps_of_each_deferrable_load"] = [
+            48,
+            24,
+        ]  # Changed from [48, 48]
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Cache should HIT because end_timesteps are now parameterized
+        self.assertIsNotNone(result)
+        self.assertIs(result, mock_opt)
+
+    def test_cache_key_deterministic(self):
+        """Test that the same config produces the same cache key."""
+        key1 = OptimizationCache._compute_cache_key(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+        )
+        key2 = OptimizationCache._compute_cache_key(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+        )
+
+        self.assertEqual(key1, key2)
+        self.assertEqual(len(key1), 16)  # SHA256 truncated to 16 chars
+
+    def test_cache_key_different_for_different_config(self):
+        """Test that different configs produce different cache keys."""
+        key1 = OptimizationCache._compute_cache_key(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+        )
+
+        modified_optim_conf = self.optim_conf.copy()
+        modified_optim_conf["set_use_battery"] = False
+
+        key2 = OptimizationCache._compute_cache_key(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+        )
+
+        self.assertNotEqual(key1, key2)
+
+    def test_cache_clear(self):
+        """Test that clear() empties the cache."""
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Verify it's cached
+        result = OptimizationCache.get(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+        self.assertIsNotNone(result)
+
+        # Clear the cache
+        OptimizationCache.clear(self.logger)
+
+        # Verify cache is empty
+        result = OptimizationCache.get(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+        self.assertIsNone(result)
+
+    def test_cache_get_stats(self):
+        """Test that get_stats() returns correct information."""
+        # Empty cache stats
+        stats = OptimizationCache.get_stats()
+        self.assertFalse(stats["has_instance"])
+        self.assertIsNone(stats["cache_key"])
+        self.assertIsNone(stats["last_used"])
+
+        # After storing
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        stats = OptimizationCache.get_stats()
+        self.assertTrue(stats["has_instance"])
+        self.assertIsNotNone(stats["cache_key"])
+        self.assertIsNotNone(stats["last_used"])
+
+    def test_cache_last_used_updated_on_hit(self):
+        """Test that last_used timestamp is updated on cache hit."""
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        first_used = OptimizationCache._last_used
+
+        # Small delay to ensure timestamp difference
+        import time
+
+        time.sleep(0.01)
+
+        # Access cache (hit)
+        OptimizationCache.get(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        second_used = OptimizationCache._last_used
+
+        self.assertGreater(second_used, first_used)
+
+    def test_cache_handles_none_values_in_config(self):
+        """Test that cache handles None values in configuration gracefully."""
+        optim_conf_with_none = self.optim_conf.copy()
+        optim_conf_with_none["delta_forecast_daily"] = None
+
+        retrieve_conf_with_none = self.retrieve_hass_conf.copy()
+        retrieve_conf_with_none["optimization_time_step"] = None
+
+        # Should not raise an exception
+        key = OptimizationCache._compute_cache_key(
+            optim_conf_with_none,
+            self.plant_conf,
+            self.costfun,
+            retrieve_conf_with_none,
+        )
+        self.assertIsNotNone(key)
+        self.assertEqual(len(key), 16)
+
+    def test_cache_miss_def_load_config_changed(self):
+        """Test that changing def_load_config structure invalidates the cache.
+
+        def_load_config determines which constraint branches are taken
+        (standard vs thermal_config vs thermal_battery), so changes to it
+        require rebuilding the optimization problem.
+        """
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Add a thermal_config to a load - this changes constraint structure
+        modified_optim_conf = copy.deepcopy(self.optim_conf)
+        modified_optim_conf["def_load_config"] = [
+            {"thermal_config": {"heating_rate": 5.0}},  # Changed: now has thermal_config
+            {},  # Standard load
+        ]
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Should be cache MISS because def_load_config structure changed
+        self.assertIsNone(result)
+
+    def test_cache_miss_def_load_config_thermal_battery_added(self):
+        """Test that adding thermal_battery to def_load_config invalidates the cache."""
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Add a thermal_battery to a load - this changes constraint structure
+        modified_optim_conf = copy.deepcopy(self.optim_conf)
+        modified_optim_conf["def_load_config"] = [
+            {},  # Standard load
+            {"thermal_battery": {"volume": 10.0}},  # Changed: now has thermal_battery
+        ]
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Should be cache MISS because def_load_config structure changed
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":
