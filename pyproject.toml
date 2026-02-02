@@ -41,7 +41,7 @@ dependencies = [
     "aiohttp",
     "orjson",
     "websockets",
-    "uvicorn==0.30.6",
+    "uvicorn==0.40.0",
     "influxdb>=5.3.1",
 ]
 
