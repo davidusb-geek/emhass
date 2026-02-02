@@ -2028,7 +2028,10 @@ class TestOptimizationCache(unittest.TestCase):
 
         # Modify nominal power for load 0
         modified_optim_conf = copy.deepcopy(self.optim_conf)
-        modified_optim_conf["nominal_power_of_deferrable_loads"] = [1500, 2000]  # Changed from [1000, 2000]
+        modified_optim_conf["nominal_power_of_deferrable_loads"] = [
+            1500,
+            2000,
+        ]  # Changed from [1000, 2000]
 
         result = OptimizationCache.get(
             modified_optim_conf,
@@ -2059,7 +2062,10 @@ class TestOptimizationCache(unittest.TestCase):
 
         # Modify operating hours for load 1
         modified_optim_conf = copy.deepcopy(self.optim_conf)
-        modified_optim_conf["operating_hours_of_each_deferrable_load"] = [3, 8]  # Changed from [3, 5]
+        modified_optim_conf["operating_hours_of_each_deferrable_load"] = [
+            3,
+            8,
+        ]  # Changed from [3, 5]
 
         result = OptimizationCache.get(
             modified_optim_conf,
@@ -2091,7 +2097,10 @@ class TestOptimizationCache(unittest.TestCase):
 
         # Modify start timestep for load 0 - should still hit cache
         modified_optim_conf = copy.deepcopy(self.optim_conf)
-        modified_optim_conf["start_timesteps_of_each_deferrable_load"] = [10, 0]  # Changed from [0, 0]
+        modified_optim_conf["start_timesteps_of_each_deferrable_load"] = [
+            10,
+            0,
+        ]  # Changed from [0, 0]
 
         result = OptimizationCache.get(
             modified_optim_conf,
@@ -2124,7 +2133,10 @@ class TestOptimizationCache(unittest.TestCase):
 
         # Modify end timestep for load 1 - should still hit cache
         modified_optim_conf = copy.deepcopy(self.optim_conf)
-        modified_optim_conf["end_timesteps_of_each_deferrable_load"] = [48, 24]  # Changed from [48, 48]
+        modified_optim_conf["end_timesteps_of_each_deferrable_load"] = [
+            48,
+            24,
+        ]  # Changed from [48, 48]
 
         result = OptimizationCache.get(
             modified_optim_conf,
