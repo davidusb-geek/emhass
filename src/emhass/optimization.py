@@ -140,23 +140,44 @@ class Optimization:
         self.param_soc_init = cp.Parameter(nonneg=True, name="soc_init")
         self.param_soc_final = cp.Parameter(nonneg=True, name="soc_final")
 
+        # Initialize deferrable load parameters (window masks and energy constraints)
+        self._init_deferrable_load_params()
+
+        # Initialize Variables & Bound Constraints
+        self.vars, self.constraints = self._initialize_decision_variables()
+
+        # Note: The self.prob object will be constructed in a subsequent step
+        self.prob = None
+
+    def _init_deferrable_load_params(self) -> None:
+        """
+        Initialize CVXPY parameters for deferrable loads (window masks and energy constraints).
+
+        This method creates:
+        - param_window_masks: Allow changing time windows without rebuilding the problem
+        - param_target_energy: Target energy for Big-M energy constraints
+        - param_energy_active: Flags to enable/disable energy constraints
+        - param_required_timesteps: Required timesteps for binary loads
+        - param_timesteps_active: Flags to enable/disable timestep constraints
+
+        Called from __init__ and when resizing the optimization problem.
+        """
+        num_def_loads = self.optim_conf.get("number_of_deferrable_loads", 0)
+        n = self.num_timesteps
+
         # Window Mask Parameters for Deferrable Loads
-        # These allow changing time windows without rebuilding the problem
         # mask[t] = 0 means load must be off at timestep t
         # mask[t] = 1 means load can operate at timestep t
-        num_def_loads = self.optim_conf.get("number_of_deferrable_loads", 0)
         self.param_window_masks = []
         for k in range(num_def_loads):
-            mask = cp.Parameter(self.num_timesteps, nonneg=True, name=f"window_mask_{k}")
-            # Initialize to all ones (no restriction) - will be set properly before solve
-            mask.value = np.ones(self.num_timesteps)
+            mask = cp.Parameter(n, nonneg=True, name=f"window_mask_{k}")
+            mask.value = np.ones(n)  # Default: no restriction
             self.param_window_masks.append(mask)
 
         # Energy Constraint Parameters for Deferrable Loads
-        # These allow changing operating hours without rebuilding the problem
         # Uses Big-M formulation to enable/disable the constraint
         self.param_target_energy = []  # Target energy in Wh
-        self.param_energy_active = []  # 1 = constraint active, 0 = inactive
+        self.param_energy_active = []  # 1 = constraint active, 0 = inactive (relaxed via Big-M)
         self.param_required_timesteps = []  # For binary loads: number of timesteps to run
         self.param_timesteps_active = []  # 1 = timestep constraint active, 0 = inactive
         for k in range(num_def_loads):
@@ -165,7 +186,7 @@ class Optimization:
             energy_param.value = 0.0
             self.param_target_energy.append(energy_param)
 
-            # Energy constraint active flag (1 = active, 0 = relaxed via Big-M)
+            # Energy constraint active flag
             energy_active = cp.Parameter(nonneg=True, name=f"energy_active_{k}")
             energy_active.value = 0.0
             self.param_energy_active.append(energy_active)
@@ -179,12 +200,6 @@ class Optimization:
             timesteps_active = cp.Parameter(nonneg=True, name=f"timesteps_active_{k}")
             timesteps_active.value = 0.0
             self.param_timesteps_active.append(timesteps_active)
-
-        # Initialize Variables & Bound Constraints
-        self.vars, self.constraints = self._initialize_decision_variables()
-
-        # Note: The self.prob object will be constructed in a subsequent step
-        self.prob = None
 
     def _prepare_power_limit_array(self, limit_value, limit_name, data_length):
         """
@@ -1555,35 +1570,8 @@ class Optimization:
             self.param_load_cost = cp.Parameter(current_n, name="load_cost")
             self.param_prod_price = cp.Parameter(current_n, name="prod_price")
 
-            # Re-initialize Window Mask Parameters with new shape
-            num_def_loads = self.optim_conf.get("number_of_deferrable_loads", 0)
-            self.param_window_masks = []
-            for k in range(num_def_loads):
-                mask = cp.Parameter(current_n, nonneg=True, name=f"window_mask_{k}")
-                mask.value = np.ones(current_n)
-                self.param_window_masks.append(mask)
-
-            # Re-initialize Energy Constraint Parameters (scalar, not affected by timestep count)
-            self.param_target_energy = []
-            self.param_energy_active = []
-            self.param_required_timesteps = []
-            self.param_timesteps_active = []
-            for k in range(num_def_loads):
-                energy_param = cp.Parameter(nonneg=True, name=f"target_energy_{k}")
-                energy_param.value = 0.0
-                self.param_target_energy.append(energy_param)
-
-                energy_active = cp.Parameter(nonneg=True, name=f"energy_active_{k}")
-                energy_active.value = 0.0
-                self.param_energy_active.append(energy_active)
-
-                timesteps_param = cp.Parameter(nonneg=True, name=f"required_timesteps_{k}")
-                timesteps_param.value = 0.0
-                self.param_required_timesteps.append(timesteps_param)
-
-                timesteps_active = cp.Parameter(nonneg=True, name=f"timesteps_active_{k}")
-                timesteps_active.value = 0.0
-                self.param_timesteps_active.append(timesteps_active)
+            # Re-initialize deferrable load parameters (window masks and energy constraints)
+            self._init_deferrable_load_params()
 
             # Re-initialize Variables & Constraints
             self.vars, self.constraints = self._initialize_decision_variables()
