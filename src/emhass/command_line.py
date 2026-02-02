@@ -7,6 +7,7 @@ import logging
 import os
 import pathlib
 import pickle
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
@@ -90,6 +91,195 @@ class PublishContext:
     @property
     def fcst(self) -> Forecast:
         return self.input_data_dict["fcst"]
+
+
+class OptimizationCache:
+    """
+    In-memory cache for Optimization objects to enable warm-starting.
+
+    Warm-starting reuses the previous solution as a starting point for the solver,
+    which can significantly speed up repeated MPC optimizations where consecutive
+    problems are similar.
+
+    The cache is invalidated when configuration changes that affect the optimization
+    structure (number of variables, constraints, etc.).
+
+    Thread-safe: Uses a lock to prevent race conditions when multiple optimizations
+    run concurrently in async code.
+    """
+
+    _instance: "Optimization | None" = None
+    _cache_key: str | None = None
+    _last_used: datetime | None = None
+    _lock: threading.Lock = threading.Lock()
+
+    @classmethod
+    def _compute_cache_key(
+        cls,
+        optim_conf: dict,
+        plant_conf: dict,
+        costfun: str,
+        retrieve_hass_conf: dict,
+    ) -> str:
+        """
+        Compute a cache key from configuration that affects optimization structure.
+
+        Changes to these parameters require rebuilding the optimization problem
+        (different variables, constraints, or objective function structure).
+        """
+        import hashlib
+
+        # Helper to convert Timedelta/timedelta to seconds for JSON serialization
+        def to_seconds(val):
+            if val is None:
+                return None
+            if hasattr(val, "total_seconds"):
+                return val.total_seconds()
+            return val
+
+        # Helper to convert numpy arrays to lists for JSON serialization
+        def to_list(val):
+            if val is None:
+                return None
+            if hasattr(val, "tolist"):
+                return val.tolist()
+            return val
+
+        # Helper to extract structure-relevant parts of def_load_config
+        # The presence of thermal_config or thermal_battery changes the constraint structure
+        def extract_def_load_config_structure(def_load_config):
+            if not def_load_config:
+                return None
+            structure = []
+            for i, config in enumerate(def_load_config):
+                if not config:
+                    structure.append({"index": i, "type": "standard"})
+                elif "thermal_config" in config:
+                    structure.append({"index": i, "type": "thermal_config"})
+                elif "thermal_battery" in config:
+                    structure.append({"index": i, "type": "thermal_battery"})
+                else:
+                    structure.append({"index": i, "type": "standard"})
+            return structure
+
+        # Extract only the configuration keys that affect optimization structure
+        structure_affecting_keys = {
+            # Optimization structure
+            "number_of_deferrable_loads": optim_conf.get("number_of_deferrable_loads", 0),
+            "set_use_battery": optim_conf.get("set_use_battery", False),
+            "set_use_pv": optim_conf.get("set_use_pv", True),
+            "treat_deferrable_load_as_semi_cont": optim_conf.get(
+                "treat_deferrable_load_as_semi_cont", []
+            ),
+            "set_deferrable_load_single_constant": optim_conf.get(
+                "set_deferrable_load_single_constant", []
+            ),
+            "set_deferrable_startup_penalty": optim_conf.get("set_deferrable_startup_penalty", []),
+            "set_deferrable_load_as_timeseries": optim_conf.get(
+                "set_deferrable_load_as_timeseries", []
+            ),
+            # Deferrable load parameters that affect constraint structure
+            # Note: The following are now parameterized and don't require rebuild:
+            # - start_timesteps and end_timesteps (via window masks)
+            # - operating_hours_of_each_deferrable_load (via Big-M energy constraints)
+            "nominal_power_of_deferrable_loads": to_list(
+                optim_conf.get("nominal_power_of_deferrable_loads", [])
+            ),
+            # Deferrable load type configuration (thermal, thermal_battery, standard)
+            # Changes to this affect which constraint branches are taken
+            "def_load_config_structure": extract_def_load_config_structure(
+                optim_conf.get("def_load_config", [])
+            ),
+            # Battery structure
+            "battery_capacity": plant_conf.get("battery_capacity", 0),
+            "inverter_is_hybrid": plant_conf.get("inverter_is_hybrid", False),
+            "compute_curtailment": plant_conf.get("compute_curtailment", False),
+            # Timing (affects number of timesteps) - convert to seconds for serialization
+            "optimization_time_step": to_seconds(retrieve_hass_conf.get("optimization_time_step")),
+            "delta_forecast_daily": to_seconds(optim_conf.get("delta_forecast_daily")),
+            # Objective function
+            "costfun": costfun,
+        }
+
+        # Create a deterministic string representation and hash it
+        key_str = orjson.dumps(structure_affecting_keys, option=orjson.OPT_SORT_KEYS).decode()
+        return hashlib.sha256(key_str.encode()).hexdigest()[:16]
+
+    @classmethod
+    def get(
+        cls,
+        optim_conf: dict,
+        plant_conf: dict,
+        costfun: str,
+        retrieve_hass_conf: dict,
+        logger: logging.Logger,
+    ) -> "Optimization | None":
+        """
+        Get cached Optimization object if configuration matches.
+
+        Returns None if cache is empty or configuration has changed.
+        Thread-safe via internal locking.
+        """
+        cache_key = cls._compute_cache_key(optim_conf, plant_conf, costfun, retrieve_hass_conf)
+
+        with cls._lock:
+            if cls._instance is not None and cls._cache_key == cache_key:
+                age = datetime.now() - cls._last_used if cls._last_used else timedelta(0)
+                logger.debug(
+                    f"OptimizationCache HIT: Reusing cached optimization object "
+                    f"(key={cache_key[:8]}..., age={age.seconds}s) - warm-start enabled"
+                )
+                cls._last_used = datetime.now()
+                return cls._instance
+
+            if cls._instance is not None:
+                logger.debug(
+                    f"OptimizationCache MISS: Config changed, rebuilding optimization "
+                    f"(old_key={cls._cache_key[:8] if cls._cache_key else 'None'}..., "
+                    f"new_key={cache_key[:8]}...)"
+                )
+            else:
+                logger.debug("OptimizationCache MISS: Empty cache, building new optimization")
+
+            return None
+
+    @classmethod
+    def put(
+        cls,
+        opt: "Optimization",
+        optim_conf: dict,
+        plant_conf: dict,
+        costfun: str,
+        retrieve_hass_conf: dict,
+        logger: logging.Logger,
+    ) -> None:
+        """Store Optimization object in cache. Thread-safe via internal locking."""
+        cache_key = cls._compute_cache_key(optim_conf, plant_conf, costfun, retrieve_hass_conf)
+        with cls._lock:
+            cls._instance = opt
+            cls._cache_key = cache_key
+            cls._last_used = datetime.now()
+            logger.debug(f"OptimizationCache: Stored optimization object (key={cache_key[:8]}...)")
+
+    @classmethod
+    def clear(cls, logger: logging.Logger | None = None) -> None:
+        """Clear the cache (e.g., for testing or explicit invalidation). Thread-safe."""
+        with cls._lock:
+            cls._instance = None
+            cls._cache_key = None
+            cls._last_used = None
+            if logger:
+                logger.debug("OptimizationCache: CLEARED")
+
+    @classmethod
+    def get_stats(cls) -> dict:
+        """Get cache statistics for debugging. Thread-safe."""
+        with cls._lock:
+            return {
+                "has_instance": cls._instance is not None,
+                "cache_key": cls._cache_key[:8] + "..." if cls._cache_key else None,
+                "last_used": cls._last_used.isoformat() if cls._last_used else None,
+            }
 
 
 async def _retrieve_from_file(
@@ -724,16 +914,28 @@ async def set_input_data_dict(
         logger,
         get_data_from_file=get_data_from_file,
     )
-    opt = Optimization(
-        retrieve_hass_conf,
-        optim_conf,
-        plant_conf,
-        fcst.var_load_cost,
-        fcst.var_prod_price,
-        costfun,
-        emhass_conf,
-        logger,
-    )
+    # Try to get cached Optimization object for warm-starting
+    opt = OptimizationCache.get(optim_conf, plant_conf, costfun, retrieve_hass_conf, logger)
+    if opt is None:
+        # Cache miss - create new Optimization object
+        opt = Optimization(
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            fcst.var_load_cost,
+            fcst.var_prod_price,
+            costfun,
+            emhass_conf,
+            logger,
+        )
+        # Store in cache for future warm-starts
+        OptimizationCache.put(opt, optim_conf, plant_conf, costfun, retrieve_hass_conf, logger)
+    else:
+        # Cache hit - update references that may have changed
+        # (logger, var names from forecast)
+        opt.logger = logger
+        opt.var_load_cost = fcst.var_load_cost
+        opt.var_prod_price = fcst.var_prod_price
     # Create SetupContext
     ctx = SetupContext(
         retrieve_hass_conf=retrieve_hass_conf,

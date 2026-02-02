@@ -140,6 +140,46 @@ class Optimization:
         self.param_soc_init = cp.Parameter(nonneg=True, name="soc_init")
         self.param_soc_final = cp.Parameter(nonneg=True, name="soc_final")
 
+        # Window Mask Parameters for Deferrable Loads
+        # These allow changing time windows without rebuilding the problem
+        # mask[t] = 0 means load must be off at timestep t
+        # mask[t] = 1 means load can operate at timestep t
+        num_def_loads = self.optim_conf.get("number_of_deferrable_loads", 0)
+        self.param_window_masks = []
+        for k in range(num_def_loads):
+            mask = cp.Parameter(self.num_timesteps, nonneg=True, name=f"window_mask_{k}")
+            # Initialize to all ones (no restriction) - will be set properly before solve
+            mask.value = np.ones(self.num_timesteps)
+            self.param_window_masks.append(mask)
+
+        # Energy Constraint Parameters for Deferrable Loads
+        # These allow changing operating hours without rebuilding the problem
+        # Uses Big-M formulation to enable/disable the constraint
+        self.param_target_energy = []  # Target energy in Wh
+        self.param_energy_active = []  # 1 = constraint active, 0 = inactive
+        self.param_required_timesteps = []  # For binary loads: number of timesteps to run
+        self.param_timesteps_active = []  # 1 = timestep constraint active, 0 = inactive
+        for k in range(num_def_loads):
+            # Target energy parameter
+            energy_param = cp.Parameter(nonneg=True, name=f"target_energy_{k}")
+            energy_param.value = 0.0
+            self.param_target_energy.append(energy_param)
+
+            # Energy constraint active flag (1 = active, 0 = relaxed via Big-M)
+            energy_active = cp.Parameter(nonneg=True, name=f"energy_active_{k}")
+            energy_active.value = 0.0
+            self.param_energy_active.append(energy_active)
+
+            # Required timesteps for binary loads
+            timesteps_param = cp.Parameter(nonneg=True, name=f"required_timesteps_{k}")
+            timesteps_param.value = 0.0
+            self.param_required_timesteps.append(timesteps_param)
+
+            # Timesteps constraint active flag
+            timesteps_active = cp.Parameter(nonneg=True, name=f"timesteps_active_{k}")
+            timesteps_active.value = 0.0
+            self.param_timesteps_active.append(timesteps_active)
+
         # Initialize Variables & Bound Constraints
         self.vars, self.constraints = self._initialize_decision_variables()
 
@@ -1148,22 +1188,56 @@ class Optimization:
                 predicted_temps[k] = pred_temp
                 heating_demands[k] = heat_demand
 
-            # Standard Deferrable Load
-            elif (def_total_timestep and def_total_timestep[k] > 0) or (
-                len(def_total_hours) > k and def_total_hours[k] > 0
-            ):
-                target_energy = 0
-                if def_total_timestep and def_total_timestep[k] > 0:
-                    target_energy = (self.time_step * def_total_timestep[k]) * self.optim_conf[
-                        "nominal_power_of_deferrable_loads"
-                    ][k]
-                else:
-                    target_energy = (
-                        def_total_hours[k] * self.optim_conf["nominal_power_of_deferrable_loads"][k]
-                    )
+            # Detect special load types that have their own energy/operation constraints
+            is_thermal_load = (
+                "def_load_config" in self.optim_conf.keys()
+                and len(self.optim_conf["def_load_config"]) > k
+                and "thermal_config" in self.optim_conf["def_load_config"][k]
+            )
+            is_thermal_battery = (
+                "def_load_config" in self.optim_conf.keys()
+                and len(self.optim_conf["def_load_config"]) > k
+                and "thermal_battery" in self.optim_conf["def_load_config"][k]
+            )
 
-                # Total Energy Constraint
-                constraints.append(cp.sum(p_deferrable[k]) * self.time_step == target_energy)
+            # Standard Deferrable Load - Energy Constraint
+            # Now using parameterized Big-M formulation to allow changing operating hours
+            # without rebuilding the problem. The constraint is always added but relaxed
+            # via Big-M when param_energy_active = 0.
+            #
+            # When active=1: sum(p) * dt >= target_energy AND sum(p) * dt <= target_energy
+            #                (equivalent to equality constraint)
+            # When active=0: sum(p) * dt >= target_energy - M AND sum(p) * dt <= target_energy + M
+            #                (effectively unconstrained)
+            #
+            # Skip this constraint for special load types that have their own energy constraints:
+            # - Sequence loads (defined by power profile)
+            # - Thermal loads (controlled by temperature targets)
+            # - Thermal battery loads (controlled by heat demand)
+            if (
+                k < len(self.param_target_energy)
+                and not is_sequence_load
+                and not is_thermal_load
+                and not is_thermal_battery
+            ):
+                # Big-M value: maximum possible energy consumption
+                # = max_power * num_timesteps * time_step
+                nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
+                if isinstance(nominal_power, list):
+                    nominal_power = max(nominal_power)
+                M_energy = nominal_power * n * self.time_step * 2  # 2x for safety margin
+
+                # Energy constraint: sum(p) * dt == target_energy (when active)
+                # Relaxed to: target_energy - M*(1-active) <= sum(p)*dt <= target_energy + M*(1-active)
+                total_energy_expr = cp.sum(p_deferrable[k]) * self.time_step
+                constraints.append(
+                    total_energy_expr
+                    >= self.param_target_energy[k] - M_energy * (1 - self.param_energy_active[k])
+                )
+                constraints.append(
+                    total_energy_expr
+                    <= self.param_target_energy[k] + M_energy * (1 - self.param_energy_active[k])
+                )
 
             # Generic Constraints (Window)
 
@@ -1186,11 +1260,17 @@ class Optimization:
             if warning is not None:
                 self.logger.warning(f"Deferrable load {k} : {warning}")
 
-            # Apply Window Constraints (Force 0 outside window)
-            if def_start > 0:
-                constraints.append(p_deferrable[k][:def_start] == 0)
-            if def_end > 0 and def_end < n:
-                constraints.append(p_deferrable[k][def_end:] == 0)
+            # Apply Window Constraints using Parameterized Mask
+            # This allows changing time windows without rebuilding the problem
+            # The mask is set in perform_optimization() before solving
+            # mask[t] = 0 forces p_deferrable[k][t] <= 0 (must be off)
+            # mask[t] = 1 allows p_deferrable[k][t] <= nominal_power (can operate)
+            if k < len(self.param_window_masks):
+                nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
+                if isinstance(nominal_power, list):
+                    # For time-series nominal power, use the max value for the constraint
+                    nominal_power = max(nominal_power)
+                constraints.append(p_deferrable[k] <= nominal_power * self.param_window_masks[k])
 
             # Optimization: Skip Binary Logic if Possible
             # If a load is:
@@ -1252,12 +1332,23 @@ class Optimization:
                     # Single Constant Start
                     if is_single_const:
                         constraints.append(cp.sum(p_def_start[k]) == 1)
-                        rhs_val = (
-                            def_total_timestep[k]
-                            if (def_total_timestep and def_total_timestep[k] > 0)
-                            else def_total_hours[k] / self.time_step
-                        )
-                        constraints.append(cp.sum(p_def_bin2[k]) == rhs_val)
+
+                        # Required timesteps constraint using Big-M parameterization
+                        # When active=1: sum(bin2) == required_timesteps (tight)
+                        # When active=0: sum(bin2) can be anything (relaxed)
+                        if k < len(self.param_required_timesteps):
+                            M_timesteps = n * 2  # Max possible timesteps * safety
+                            sum_bin2 = cp.sum(p_def_bin2[k])
+                            constraints.append(
+                                sum_bin2
+                                >= self.param_required_timesteps[k]
+                                - M_timesteps * (1 - self.param_timesteps_active[k])
+                            )
+                            constraints.append(
+                                sum_bin2
+                                <= self.param_required_timesteps[k]
+                                + M_timesteps * (1 - self.param_timesteps_active[k])
+                            )
 
                     # Semi-continuous
                     if is_semi_cont:
@@ -1464,10 +1555,35 @@ class Optimization:
             self.param_load_cost = cp.Parameter(current_n, name="load_cost")
             self.param_prod_price = cp.Parameter(current_n, name="prod_price")
 
-            # Re-initialize other size-dependent parameters if they exist
-            if hasattr(self, "param_soc_init"):
-                # SOC params are scalar, but constraints depend on N
-                pass
+            # Re-initialize Window Mask Parameters with new shape
+            num_def_loads = self.optim_conf.get("number_of_deferrable_loads", 0)
+            self.param_window_masks = []
+            for k in range(num_def_loads):
+                mask = cp.Parameter(current_n, nonneg=True, name=f"window_mask_{k}")
+                mask.value = np.ones(current_n)
+                self.param_window_masks.append(mask)
+
+            # Re-initialize Energy Constraint Parameters (scalar, not affected by timestep count)
+            self.param_target_energy = []
+            self.param_energy_active = []
+            self.param_required_timesteps = []
+            self.param_timesteps_active = []
+            for k in range(num_def_loads):
+                energy_param = cp.Parameter(nonneg=True, name=f"target_energy_{k}")
+                energy_param.value = 0.0
+                self.param_target_energy.append(energy_param)
+
+                energy_active = cp.Parameter(nonneg=True, name=f"energy_active_{k}")
+                energy_active.value = 0.0
+                self.param_energy_active.append(energy_active)
+
+                timesteps_param = cp.Parameter(nonneg=True, name=f"required_timesteps_{k}")
+                timesteps_param.value = 0.0
+                self.param_required_timesteps.append(timesteps_param)
+
+                timesteps_active = cp.Parameter(nonneg=True, name=f"timesteps_active_{k}")
+                timesteps_active.value = 0.0
+                self.param_timesteps_active.append(timesteps_active)
 
             # Re-initialize Variables & Constraints
             self.vars, self.constraints = self._initialize_decision_variables()
@@ -1536,6 +1652,82 @@ class Optimization:
         if self.optim_conf["set_use_battery"]:
             self.param_soc_init.value = soc_init
             self.param_soc_final.value = soc_final
+
+        # Update Window Mask Parameters for Deferrable Loads
+        # This allows warm-starting even when time windows change
+        n = len(p_pv)
+        for k in range(min(num_deferrable_loads, len(self.param_window_masks))):
+            # Calculate validated window bounds
+            if def_total_timestep and def_total_timestep[k] > 0:
+                def_start, def_end, _ = Optimization.validate_def_timewindow(
+                    def_start_timestep[k],
+                    def_end_timestep[k],
+                    ceil(def_total_timestep[k]),
+                    n,
+                )
+            else:
+                def_start, def_end, _ = Optimization.validate_def_timewindow(
+                    def_start_timestep[k],
+                    def_end_timestep[k],
+                    ceil(def_total_hours[k] / self.time_step) if def_total_hours[k] > 0 else 0,
+                    n,
+                )
+
+            # Build the window mask: 0 outside window, 1 inside window
+            window_mask = np.zeros(n)
+            if def_end > def_start:
+                window_mask[def_start:def_end] = 1.0
+            else:
+                # If window is invalid or full horizon, allow operation everywhere
+                window_mask[:] = 1.0
+
+            self.param_window_masks[k].value = window_mask
+
+        # Update Energy Constraint Parameters for Deferrable Loads
+        # These control the Big-M relaxation of energy/timestep constraints
+        for k in range(min(num_deferrable_loads, len(self.param_target_energy))):
+            # Get nominal power
+            nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
+            if isinstance(nominal_power, list):
+                nominal_power = max(nominal_power)
+
+            # Determine operating requirement: def_total_timestep takes priority over def_total_hours
+            # def_total_timestep is specified in number of timesteps
+            # def_total_hours is specified in hours
+            if def_total_timestep and k < len(def_total_timestep) and def_total_timestep[k] > 0:
+                # Use timestep-based specification
+                required_timesteps = ceil(def_total_timestep[k])
+                # Convert to energy: power * timesteps * time_step (time_step is in hours)
+                target_energy = nominal_power * required_timesteps * self.time_step
+                constraint_active = True
+            elif def_total_hours and k < len(def_total_hours) and def_total_hours[k] > 0:
+                # Use hours-based specification
+                operating_hours = def_total_hours[k]
+                required_timesteps = ceil(operating_hours / self.time_step)
+                target_energy = nominal_power * operating_hours
+                constraint_active = True
+            else:
+                # No constraint specified
+                required_timesteps = 0
+                target_energy = 0.0
+                constraint_active = False
+
+            # Set energy constraint parameters
+            if constraint_active:
+                self.param_target_energy[k].value = target_energy
+                self.param_energy_active[k].value = 1.0  # Constraint is active
+            else:
+                self.param_target_energy[k].value = 0.0
+                self.param_energy_active[k].value = 0.0  # Constraint is relaxed (Big-M)
+
+            # For single-constant (binary) loads, set the required timesteps
+            is_single_const = self.optim_conf["set_deferrable_load_single_constant"][k]
+            if is_single_const and constraint_active:
+                self.param_required_timesteps[k].value = required_timesteps
+                self.param_timesteps_active[k].value = 1.0  # Constraint is active
+            else:
+                self.param_required_timesteps[k].value = 0.0
+                self.param_timesteps_active[k].value = 0.0  # Constraint is relaxed (Big-M)
 
         # Build Problem (Lazy Construction)
         if self.prob is None:
