@@ -7,6 +7,7 @@ import logging
 import os
 import pathlib
 import pickle
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
@@ -102,11 +103,15 @@ class OptimizationCache:
 
     The cache is invalidated when configuration changes that affect the optimization
     structure (number of variables, constraints, etc.).
+
+    Thread-safe: Uses a lock to prevent race conditions when multiple optimizations
+    run concurrently in async code.
     """
 
     _instance: "Optimization | None" = None
     _cache_key: str | None = None
     _last_used: datetime | None = None
+    _lock: threading.Lock = threading.Lock()
 
     @classmethod
     def _compute_cache_key(
@@ -140,6 +145,23 @@ class OptimizationCache:
                 return val.tolist()
             return val
 
+        # Helper to extract structure-relevant parts of def_load_config
+        # The presence of thermal_config or thermal_battery changes the constraint structure
+        def extract_def_load_config_structure(def_load_config):
+            if not def_load_config:
+                return None
+            structure = []
+            for i, config in enumerate(def_load_config):
+                if not config:
+                    structure.append({"index": i, "type": "standard"})
+                elif "thermal_config" in config:
+                    structure.append({"index": i, "type": "thermal_config"})
+                elif "thermal_battery" in config:
+                    structure.append({"index": i, "type": "thermal_battery"})
+                else:
+                    structure.append({"index": i, "type": "standard"})
+            return structure
+
         # Extract only the configuration keys that affect optimization structure
         structure_affecting_keys = {
             # Optimization structure
@@ -164,6 +186,11 @@ class OptimizationCache:
             # - operating_hours_of_each_deferrable_load (via Big-M energy constraints)
             "nominal_power_of_deferrable_loads": to_list(
                 optim_conf.get("nominal_power_of_deferrable_loads", [])
+            ),
+            # Deferrable load type configuration (thermal, thermal_battery, standard)
+            # Changes to this affect which constraint branches are taken
+            "def_load_config_structure": extract_def_load_config_structure(
+                optim_conf.get("def_load_config", [])
             ),
             # Battery structure
             "battery_capacity": plant_conf.get("battery_capacity", 0),
@@ -197,30 +224,32 @@ class OptimizationCache:
         Get cached Optimization object if configuration matches.
 
         Returns None if cache is empty or configuration has changed.
+        Thread-safe via internal locking.
         """
         cache_key = cls._compute_cache_key(
             optim_conf, plant_conf, costfun, retrieve_hass_conf
         )
 
-        if cls._instance is not None and cls._cache_key == cache_key:
-            age = datetime.now() - cls._last_used if cls._last_used else timedelta(0)
-            logger.debug(
-                f"OptimizationCache HIT: Reusing cached optimization object "
-                f"(key={cache_key[:8]}..., age={age.seconds}s) - warm-start enabled"
-            )
-            cls._last_used = datetime.now()
-            return cls._instance
+        with cls._lock:
+            if cls._instance is not None and cls._cache_key == cache_key:
+                age = datetime.now() - cls._last_used if cls._last_used else timedelta(0)
+                logger.debug(
+                    f"OptimizationCache HIT: Reusing cached optimization object "
+                    f"(key={cache_key[:8]}..., age={age.seconds}s) - warm-start enabled"
+                )
+                cls._last_used = datetime.now()
+                return cls._instance
 
-        if cls._instance is not None:
-            logger.debug(
-                f"OptimizationCache MISS: Config changed, rebuilding optimization "
-                f"(old_key={cls._cache_key[:8] if cls._cache_key else 'None'}..., "
-                f"new_key={cache_key[:8]}...)"
-            )
-        else:
-            logger.debug("OptimizationCache MISS: Empty cache, building new optimization")
+            if cls._instance is not None:
+                logger.debug(
+                    f"OptimizationCache MISS: Config changed, rebuilding optimization "
+                    f"(old_key={cls._cache_key[:8] if cls._cache_key else 'None'}..., "
+                    f"new_key={cache_key[:8]}...)"
+                )
+            else:
+                logger.debug("OptimizationCache MISS: Empty cache, building new optimization")
 
-        return None
+            return None
 
     @classmethod
     def put(
@@ -232,32 +261,35 @@ class OptimizationCache:
         retrieve_hass_conf: dict,
         logger: logging.Logger,
     ) -> None:
-        """Store Optimization object in cache."""
+        """Store Optimization object in cache. Thread-safe via internal locking."""
         cache_key = cls._compute_cache_key(
             optim_conf, plant_conf, costfun, retrieve_hass_conf
         )
-        cls._instance = opt
-        cls._cache_key = cache_key
-        cls._last_used = datetime.now()
-        logger.debug(f"OptimizationCache: Stored optimization object (key={cache_key[:8]}...)")
+        with cls._lock:
+            cls._instance = opt
+            cls._cache_key = cache_key
+            cls._last_used = datetime.now()
+            logger.debug(f"OptimizationCache: Stored optimization object (key={cache_key[:8]}...)")
 
     @classmethod
     def clear(cls, logger: logging.Logger | None = None) -> None:
-        """Clear the cache (e.g., for testing or explicit invalidation)."""
-        cls._instance = None
-        cls._cache_key = None
-        cls._last_used = None
-        if logger:
-            logger.debug("OptimizationCache: CLEARED")
+        """Clear the cache (e.g., for testing or explicit invalidation). Thread-safe."""
+        with cls._lock:
+            cls._instance = None
+            cls._cache_key = None
+            cls._last_used = None
+            if logger:
+                logger.debug("OptimizationCache: CLEARED")
 
     @classmethod
     def get_stats(cls) -> dict:
-        """Get cache statistics for debugging."""
-        return {
-            "has_instance": cls._instance is not None,
-            "cache_key": cls._cache_key[:8] + "..." if cls._cache_key else None,
-            "last_used": cls._last_used.isoformat() if cls._last_used else None,
-        }
+        """Get cache statistics for debugging. Thread-safe."""
+        with cls._lock:
+            return {
+                "has_instance": cls._instance is not None,
+                "cache_key": cls._cache_key[:8] + "..." if cls._cache_key else None,
+                "last_used": cls._last_used.isoformat() if cls._last_used else None,
+            }
 
 
 async def _retrieve_from_file(
