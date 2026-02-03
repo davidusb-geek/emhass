@@ -941,10 +941,20 @@ async def set_input_data_dict(
         OptimizationCache.put(opt, optim_conf, plant_conf, costfun, retrieve_hass_conf, logger)
     else:
         # Cache hit - update references that may have changed
-        # (logger, var names from forecast)
+        # (logger, var names from forecast, and runtime-configurable optim_conf values)
         opt.logger = logger
         opt.var_load_cost = fcst.var_load_cost
         opt.var_prod_price = fcst.var_prod_price
+        # Update runtime-configurable solver options from optim_conf
+        # These don't affect problem structure, so they're safe to update on cached object
+        runtime_solver_opts = [
+            "lp_solver_timeout",
+            "lp_solver_mip_rel_gap",
+            "num_threads",
+        ]
+        for key in runtime_solver_opts:
+            if key in optim_conf:
+                opt.optim_conf[key] = optim_conf[key]
     # Create SetupContext
     ctx = SetupContext(
         retrieve_hass_conf=retrieve_hass_conf,
