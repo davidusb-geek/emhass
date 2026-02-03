@@ -202,7 +202,11 @@ class OptimizationCache:
 
         # Runtime parameters that should NOT affect cache key
         # These change between MPC iterations but don't affect problem structure
-        thermal_runtime_keys = {"start_temperature", "desired_temperatures"}
+        thermal_runtime_keys = {
+            "start_temperature",
+            "desired_temperatures",
+            "indoor_target_temp",  # thermal_battery runtime param
+        }
 
         # Extract def_load_config structure (which loads are thermal/thermal_battery/standard)
         # Include hash of thermal config contents to detect parameter changes
@@ -1022,7 +1026,11 @@ async def set_input_data_dict(
                                 cached_cfg["thermal_config"][key] = new_cfg["thermal_config"][key]
                     # Update thermal_battery runtime parameters
                     if "thermal_battery" in new_cfg and "thermal_battery" in cached_cfg:
-                        for key in ("start_temperature", "desired_temperatures"):
+                        for key in (
+                            "start_temperature",
+                            "desired_temperatures",
+                            "indoor_target_temp",
+                        ):
                             if key in new_cfg["thermal_battery"]:
                                 cached_cfg["thermal_battery"][key] = new_cfg["thermal_battery"][key]
         # Update runtime-configurable solver options from optim_conf
