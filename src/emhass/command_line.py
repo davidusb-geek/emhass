@@ -181,15 +181,29 @@ class OptimizationCache:
                 return tuple(tuple(v) if isinstance(v, (list, tuple)) else v for v in val)
             return (val,)
 
+        def config_hash(cfg: dict) -> str:
+            """Create a stable hash of config dict for cache key comparison."""
+            import hashlib
+
+            # Sort keys for deterministic ordering, convert to string
+            sorted_items = sorted(cfg.items(), key=lambda x: str(x[0]))
+            config_str = str(sorted_items)
+            return hashlib.md5(config_str.encode()).hexdigest()[:8]
+
         # Extract def_load_config structure (which loads are thermal/thermal_battery/standard)
+        # Include hash of thermal config contents to detect parameter changes
         def_load_config = optim_conf.get("def_load_config", []) or []
         def_structure = []
         for i, cfg in enumerate(def_load_config):
             cfg = cfg or {}
             if "thermal_config" in cfg:
-                load_type = "thermal_config"
+                # Include hash of thermal_config contents to detect parameter changes
+                thermal_hash = config_hash(cfg["thermal_config"])
+                load_type = f"thermal_config:{thermal_hash}"
             elif "thermal_battery" in cfg:
-                load_type = "thermal_battery"
+                # Include hash of thermal_battery contents to detect parameter changes
+                thermal_hash = config_hash(cfg["thermal_battery"])
+                load_type = f"thermal_battery:{thermal_hash}"
             else:
                 load_type = "standard"
             def_structure.append((i, load_type))
@@ -978,8 +992,8 @@ async def set_input_data_dict(
             opt.logger = logger
             opt.var_load_cost = fcst.var_load_cost
             opt.var_prod_price = fcst.var_prod_price
-            # Update runtime-configurable solver options from optim_conf
-            # These don't affect problem structure, so they're safe to update on cached object
+        # Update runtime-configurable solver options from optim_conf
+        # These don't affect problem structure, so they're safe to update on cached object
         runtime_solver_opts = [
             "lp_solver_timeout",
             "lp_solver_mip_rel_gap",
