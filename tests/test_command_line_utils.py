@@ -2400,12 +2400,12 @@ class TestOptimizationCache(unittest.TestCase):
 
         # Change only the runtime parameters (start_temperature, desired_temperatures)
         modified_optim_conf = copy.deepcopy(optim_conf_with_thermal)
-        modified_optim_conf["def_load_config"][0]["thermal_config"][
-            "start_temperature"
-        ] = 42.5  # Different temperature
-        modified_optim_conf["def_load_config"][0]["thermal_config"][
-            "desired_temperatures"
-        ] = [55.0] * 10  # Different desired temps
+        modified_optim_conf["def_load_config"][0]["thermal_config"]["start_temperature"] = (
+            42.5  # Different temperature
+        )
+        modified_optim_conf["def_load_config"][0]["thermal_config"]["desired_temperatures"] = [
+            55.0
+        ] * 10  # Different desired temps
 
         result = OptimizationCache.get(
             modified_optim_conf,
@@ -2449,9 +2449,9 @@ class TestOptimizationCache(unittest.TestCase):
 
         # Change a structural parameter (heating_rate)
         modified_optim_conf = copy.deepcopy(optim_conf_with_thermal)
-        modified_optim_conf["def_load_config"][0]["thermal_config"][
-            "heating_rate"
-        ] = 10.0  # Different heating rate
+        modified_optim_conf["def_load_config"][0]["thermal_config"]["heating_rate"] = (
+            10.0  # Different heating rate
+        )
 
         result = OptimizationCache.get(
             modified_optim_conf,
