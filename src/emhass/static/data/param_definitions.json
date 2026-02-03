@@ -174,6 +174,12 @@
       "input": "int",
       "default_value": 45
     },
+    "lp_solver_mip_rel_gap": {
+      "friendly_name": "MIP relative gap tolerance",
+      "Description": "For mixed-integer problems (with binary variables), the solver stops when the solution is within this percentage of optimal. Valid range: 0 to 1 (0% to 100%). Higher values (e.g., 0.05 = 5%) solve faster with minimal quality loss. Recommended: 0.05 for ~2x speedup. Defaults to 0 (exact optimal).",
+      "input": "float",
+      "default_value": 0.00
+    },
     "weather_forecast_method": {
       "friendly_name": "Weather forecast method",
       "Description": "This will define the weather forecast method that will be used. options are 'open-meteo', 'Solcast', 'solar.forecast' (forecast.solar) and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts.",
