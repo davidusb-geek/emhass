@@ -38,6 +38,9 @@ emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations
 # create logger
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
+# Valid optimization statuses (some solvers return "Optimal (Relaxed)" for MIP problems)
+VALID_OPTIMAL_STATUSES = ["Optimal", "Optimal (Relaxed)"]
+
 
 class TestOptimization(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -2836,7 +2839,6 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         except Exception as e:
             self.fail(f"Optimization failed with partial NaN data: {e}")
 
-
     # Test MIP gap tolerance configuration
     def test_mip_gap_default_value(self):
         """Test that default MIP gap is 0 (exact optimal for backward compatibility)."""
@@ -2849,7 +2851,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertEqual(self.opt.optim_status, "Optimal")
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
 
     def test_mip_gap_zero_exact_optimal(self):
         """Test that MIP gap 0 gives exact optimal solution."""
@@ -2861,7 +2863,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertEqual(self.opt.optim_status, "Optimal")
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
 
     def test_mip_gap_custom_value(self):
         """Test that custom MIP gap values work correctly."""
@@ -2874,7 +2876,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertEqual(self.opt.optim_status, "Optimal")
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
 
     def test_mip_gap_with_binary_variables(self):
         """Test MIP gap with semi-continuous loads (binary variables)."""
@@ -2888,7 +2890,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
         self.assertIn("P_deferrable0", self.opt_res_dayahead.columns)
-        self.assertEqual(self.opt.optim_status, "Optimal")
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
 
     def test_mip_gap_solution_quality(self):
         """Test that MIP gap produces similar objective values."""
@@ -2911,8 +2913,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         obj_gap = opt_gap.prob.value
 
         # Both should succeed
-        self.assertEqual(opt_exact.optim_status, "Optimal")
-        self.assertEqual(opt_gap.optim_status, "Optimal")
+        self.assertIn(opt_exact.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertIn(opt_gap.optim_status, VALID_OPTIMAL_STATUSES)
 
         # Objective values should be within reasonable range
         # (gap solution should be within 10% of exact for this simple problem)
@@ -2941,7 +2943,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "Expected warning about negative MIP gap value",
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertEqual(self.opt.optim_status, "Optimal")
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
 
     def test_mip_gap_exceeds_one_clamped(self):
         """Test that MIP gap values > 1 are clamped to 1.0."""
@@ -2960,7 +2962,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "Expected warning about MIP gap exceeding 1.0",
         )
         self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
-        self.assertEqual(self.opt.optim_status, "Optimal")
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
 
     def test_mip_gap_boundary_values(self):
         """Test MIP gap at boundary values (0 and 1)."""
@@ -2972,7 +2974,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         opt_zero.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead.copy(), self.p_pv_forecast, self.p_load_forecast
         )
-        self.assertEqual(opt_zero.optim_status, "Optimal")
+        self.assertIn(opt_zero.optim_status, VALID_OPTIMAL_STATUSES)
 
         # Test gap = 1 (100% gap - any feasible solution)
         self.optim_conf["lp_solver_mip_rel_gap"] = 1.0
@@ -2980,7 +2982,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         opt_one.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead.copy(), self.p_pv_forecast, self.p_load_forecast
         )
-        self.assertEqual(opt_one.optim_status, "Optimal")
+        self.assertIn(opt_one.optim_status, VALID_OPTIMAL_STATUSES)
 
 
 if __name__ == "__main__":

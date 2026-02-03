@@ -1842,10 +1842,14 @@ class Optimization:
             mip_gap = self.optim_conf.get("lp_solver_mip_rel_gap", 0.0)
             # Validate MIP gap is within sensible bounds [0, 1]
             if mip_gap < 0:
-                self.logger.warning(f"lp_solver_mip_rel_gap={mip_gap} is negative, using 0 (exact optimal)")
+                self.logger.warning(
+                    f"lp_solver_mip_rel_gap={mip_gap} is negative, using 0 (exact optimal)"
+                )
                 mip_gap = 0.0
             elif mip_gap > 1:
-                self.logger.warning(f"lp_solver_mip_rel_gap={mip_gap} exceeds 1.0 (100%), clamping to 1.0")
+                self.logger.warning(
+                    f"lp_solver_mip_rel_gap={mip_gap} exceeds 1.0 (100%), clamping to 1.0"
+                )
                 mip_gap = 1.0
             if mip_gap > 0:
                 solver_opts["mip_rel_gap"] = float(mip_gap)
