@@ -2368,6 +2368,102 @@ class TestOptimizationCache(unittest.TestCase):
         # Should be cache MISS because def_load_config structure changed
         self.assertIsNone(result)
 
+    def test_cache_hit_thermal_start_temperature_changed(self):
+        """Test that changing start_temperature does NOT invalidate cache.
+
+        start_temperature is a runtime parameter that changes between MPC
+        iterations. It should not cause a cache miss - instead, the cached
+        object's optim_conf should be updated with the new value.
+        """
+        mock_opt = MagicMock()
+        # Set up a thermal_config with initial start_temperature
+        optim_conf_with_thermal = copy.deepcopy(self.optim_conf)
+        optim_conf_with_thermal["def_load_config"] = [
+            {
+                "thermal_config": {
+                    "heating_rate": 5.0,
+                    "cooling_constant": 0.1,
+                    "start_temperature": 45.0,  # Initial temperature
+                    "desired_temperatures": [50.0] * 10,
+                }
+            },
+        ]
+
+        OptimizationCache.put(
+            mock_opt,
+            optim_conf_with_thermal,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Change only the runtime parameters (start_temperature, desired_temperatures)
+        modified_optim_conf = copy.deepcopy(optim_conf_with_thermal)
+        modified_optim_conf["def_load_config"][0]["thermal_config"][
+            "start_temperature"
+        ] = 42.5  # Different temperature
+        modified_optim_conf["def_load_config"][0]["thermal_config"][
+            "desired_temperatures"
+        ] = [55.0] * 10  # Different desired temps
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Should be cache HIT - runtime params don't affect structure
+        self.assertIsNotNone(result)
+        self.assertIs(result, mock_opt)
+
+    def test_cache_miss_thermal_structural_param_changed(self):
+        """Test that changing structural thermal params DOES invalidate cache.
+
+        Parameters like heating_rate, cooling_constant affect the constraint
+        structure and should cause a cache miss when changed.
+        """
+        mock_opt = MagicMock()
+        # Set up a thermal_config
+        optim_conf_with_thermal = copy.deepcopy(self.optim_conf)
+        optim_conf_with_thermal["def_load_config"] = [
+            {
+                "thermal_config": {
+                    "heating_rate": 5.0,
+                    "cooling_constant": 0.1,
+                    "start_temperature": 45.0,
+                }
+            },
+        ]
+
+        OptimizationCache.put(
+            mock_opt,
+            optim_conf_with_thermal,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Change a structural parameter (heating_rate)
+        modified_optim_conf = copy.deepcopy(optim_conf_with_thermal)
+        modified_optim_conf["def_load_config"][0]["thermal_config"][
+            "heating_rate"
+        ] = 10.0  # Different heating rate
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Should be cache MISS - structural param changed
+        self.assertIsNone(result)
+
 
 class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
     """Integration tests for CLI warm-start flow using actual naive_mpc_optim calls."""

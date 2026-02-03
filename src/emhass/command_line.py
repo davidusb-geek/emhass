@@ -181,14 +181,28 @@ class OptimizationCache:
                 return tuple(tuple(v) if isinstance(v, (list, tuple)) else v for v in val)
             return (val,)
 
-        def config_hash(cfg: dict) -> str:
-            """Create a stable hash of config dict for cache key comparison."""
+        def config_hash(cfg: dict, exclude_keys: set | None = None) -> str:
+            """Create a stable hash of config dict for cache key comparison.
+
+            Args:
+                cfg: The config dict to hash
+                exclude_keys: Keys to exclude from hash (runtime params)
+            """
             import hashlib
 
-            # Sort keys for deterministic ordering, convert to string
-            sorted_items = sorted(cfg.items(), key=lambda x: str(x[0]))
+            if exclude_keys is None:
+                exclude_keys = set()
+            # Sort keys for deterministic ordering, exclude runtime parameters
+            sorted_items = sorted(
+                ((k, v) for k, v in cfg.items() if k not in exclude_keys),
+                key=lambda x: str(x[0]),
+            )
             config_str = str(sorted_items)
             return hashlib.md5(config_str.encode()).hexdigest()[:8]
+
+        # Runtime parameters that should NOT affect cache key
+        # These change between MPC iterations but don't affect problem structure
+        thermal_runtime_keys = {"start_temperature", "desired_temperatures"}
 
         # Extract def_load_config structure (which loads are thermal/thermal_battery/standard)
         # Include hash of thermal config contents to detect parameter changes
@@ -198,11 +212,13 @@ class OptimizationCache:
             cfg = cfg or {}
             if "thermal_config" in cfg:
                 # Include hash of thermal_config contents to detect parameter changes
-                thermal_hash = config_hash(cfg["thermal_config"])
+                # Exclude runtime parameters (start_temperature, desired_temperatures) from hash
+                thermal_hash = config_hash(cfg["thermal_config"], thermal_runtime_keys)
                 load_type = f"thermal_config:{thermal_hash}"
             elif "thermal_battery" in cfg:
                 # Include hash of thermal_battery contents to detect parameter changes
-                thermal_hash = config_hash(cfg["thermal_battery"])
+                # Exclude runtime parameters (start_temperature, desired_temperatures) from hash
+                thermal_hash = config_hash(cfg["thermal_battery"], thermal_runtime_keys)
                 load_type = f"thermal_battery:{thermal_hash}"
             else:
                 load_type = "standard"
@@ -992,6 +1008,23 @@ async def set_input_data_dict(
             opt.logger = logger
             opt.var_load_cost = fcst.var_load_cost
             opt.var_prod_price = fcst.var_prod_price
+            # Update thermal runtime parameters (start_temperature, desired_temperatures)
+            # These change between MPC iterations and must be synced to cached object
+            new_def_load_config = optim_conf.get("def_load_config", [])
+            cached_def_load_config = opt.optim_conf.get("def_load_config", [])
+            for k, new_cfg in enumerate(new_def_load_config):
+                if k < len(cached_def_load_config) and new_cfg:
+                    cached_cfg = cached_def_load_config[k] or {}
+                    # Update thermal_config runtime parameters
+                    if "thermal_config" in new_cfg and "thermal_config" in cached_cfg:
+                        for key in ("start_temperature", "desired_temperatures"):
+                            if key in new_cfg["thermal_config"]:
+                                cached_cfg["thermal_config"][key] = new_cfg["thermal_config"][key]
+                    # Update thermal_battery runtime parameters
+                    if "thermal_battery" in new_cfg and "thermal_battery" in cached_cfg:
+                        for key in ("start_temperature", "desired_temperatures"):
+                            if key in new_cfg["thermal_battery"]:
+                                cached_cfg["thermal_battery"][key] = new_cfg["thermal_battery"][key]
         # Update runtime-configurable solver options from optim_conf
         # These don't affect problem structure, so they're safe to update on cached object
         runtime_solver_opts = [
