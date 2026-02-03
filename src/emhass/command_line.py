@@ -205,7 +205,7 @@ class OptimizationCache:
         thermal_runtime_keys = {
             "start_temperature",
             "desired_temperatures",
-            "indoor_target_temp",  # thermal_battery runtime param
+            "indoor_target_temperature",  # thermal_battery runtime param
         }
 
         # Extract def_load_config structure (which loads are thermal/thermal_battery/standard)
@@ -1029,7 +1029,7 @@ async def set_input_data_dict(
                         for key in (
                             "start_temperature",
                             "desired_temperatures",
-                            "indoor_target_temp",
+                            "indoor_target_temperature",
                         ):
                             if key in new_cfg["thermal_battery"]:
                                 cached_cfg["thermal_battery"][key] = new_cfg["thermal_battery"][key]
