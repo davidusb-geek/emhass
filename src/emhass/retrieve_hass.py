@@ -128,6 +128,30 @@ class RetrieveHass:
             )
         else:
             self.logger.debug("InfluxDB integration disabled, using Home Assistant API")
+        # Persistent HTTP session for connection reuse (lazy-initialized)
+        self._session: aiohttp.ClientSession | None = None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """
+        Get or create a persistent aiohttp session for HTTP requests.
+
+        This enables connection reuse and avoids the overhead of creating
+        a new TCP connection + TLS handshake for each request.
+        """
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def close(self) -> None:
+        """
+        Close the persistent HTTP session.
+
+        Should be called when the RetrieveHass instance is no longer needed
+        to properly release resources.
+        """
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+            self._session = None
 
     async def get_ha_config(self):
         """
@@ -175,15 +199,15 @@ class RetrieveHass:
                 self.hass_url = self.hass_url + "/"
             url = self.hass_url + "api/config"
 
-        # Attempt the connection
+        # Attempt the connection using persistent session for connection reuse
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, ssl=self.ssl_verify) as response:
-                    # Check for HTTP errors (404, 401, 500) before trying to parse JSON
-                    response.raise_for_status()
-                    data = await response.read()
-                    self.ha_config = orjson.loads(data)
-                    return True
+            session = await self._get_session()
+            async with session.get(url, headers=headers, ssl=self.ssl_verify) as response:
+                # Check for HTTP errors (404, 401, 500) before trying to parse JSON
+                response.raise_for_status()
+                data = await response.read()
+                self.ha_config = orjson.loads(data)
+                return True
 
         except Exception as e:
             # Granular Error Logging
@@ -1190,21 +1214,22 @@ class RetrieveHass:
             response_status_code = 200
         else:
             # Always use REST API for posting data, regardless of use_websocket setting
+            # Use persistent session for connection reuse (avoids TLS handshake per request)
             self.logger.debug(f"Posting data to URL: {url}")
             try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        url,
-                        headers=headers,
-                        data=orjson.dumps(data).decode("utf-8"),
-                        ssl=self.ssl_verify,
-                    ) as response:
-                        # Store response data since we need to access it after the context manager
-                        response_ok = response.ok
-                        response_status_code = response.status
-                        self.logger.debug(
-                            f"HTTP POST response: ok={response_ok}, status={response_status_code}"
-                        )
+                session = await self._get_session()
+                async with session.post(
+                    url,
+                    headers=headers,
+                    data=orjson.dumps(data).decode("utf-8"),
+                    ssl=self.ssl_verify,
+                ) as response:
+                    # Store response data since we need to access it after the context manager
+                    response_ok = response.ok
+                    response_status_code = response.status
+                    self.logger.debug(
+                        f"HTTP POST response: ok={response_ok}, status={response_status_code}"
+                    )
             except Exception as e:
                 self.logger.error(f"Failed to post data to {entity_id}: {e}")
                 response_ok = False

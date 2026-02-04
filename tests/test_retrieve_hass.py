@@ -155,6 +155,11 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
                     )
         self.df_raw = self.rh.df_final.copy()
 
+    async def asyncTearDown(self):
+        """Clean up after each test - close any open HTTP sessions."""
+        if hasattr(self, "rh") and self.rh is not None:
+            await self.rh.close()
+
     # Check yaml parse in setUp worked
     def test_get_yaml_parse(self):
         self.assertIsInstance(self.retrieve_hass_conf, dict)
@@ -686,6 +691,82 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
 
             self.assertFalse(response.ok)
             self.assertEqual(response.status_code, 500)
+
+    async def test_session_lazy_initialization(self):
+        """Test that session is lazily initialized on first use."""
+        # Session should be None initially
+        self.assertIsNone(self.rh._session)
+
+        # Get session should create one
+        session = await self.rh._get_session()
+        self.assertIsNotNone(session)
+        self.assertFalse(session.closed)
+
+        # Getting session again should return the same instance
+        session2 = await self.rh._get_session()
+        self.assertIs(session, session2)
+
+        # Clean up
+        await self.rh.close()
+
+    async def test_session_reuse_across_post_data_calls(self):
+        """Test that the same session is reused across multiple post_data calls."""
+        self.rh.get_data_from_file = False
+
+        # Create test data
+        data_df = pd.Series(
+            [100.0, 200.0], index=pd.date_range("2024-01-01", periods=2, freq="30min")
+        )
+
+        # Mock aiohttp session.post to track calls
+        with patch.object(self.rh, "_get_session") as mock_get_session:
+            mock_session = AsyncMock()
+            mock_response = AsyncMock()
+            mock_response.ok = True
+            mock_response.status = 200
+            mock_session.post.return_value.__aenter__.return_value = mock_response
+            mock_get_session.return_value = mock_session
+
+            # Make multiple post_data calls
+            await self.rh.post_data(data_df, 0, "sensor.test1", "power", "W", "Test 1", "power")
+            await self.rh.post_data(data_df, 0, "sensor.test2", "power", "W", "Test 2", "power")
+            await self.rh.post_data(data_df, 0, "sensor.test3", "power", "W", "Test 3", "power")
+
+            # _get_session should have been called 3 times (once per post_data)
+            # but it returns the same session each time
+            self.assertEqual(mock_get_session.call_count, 3)
+
+    async def test_session_close(self):
+        """Test that close() properly closes the session."""
+        # Create a session first
+        session = await self.rh._get_session()
+        self.assertIsNotNone(session)
+        self.assertFalse(session.closed)
+
+        # Close should work
+        await self.rh.close()
+        self.assertIsNone(self.rh._session)
+
+        # Closing again should be a no-op (no error)
+        await self.rh.close()
+
+    async def test_session_recreated_after_close(self):
+        """Test that a new session is created after closing the old one."""
+        # Create initial session
+        session1 = await self.rh._get_session()
+
+        # Close it
+        await self.rh.close()
+
+        # Get a new session
+        session2 = await self.rh._get_session()
+
+        # Should be a different session
+        self.assertIsNot(session1, session2)
+        self.assertFalse(session2.closed)
+
+        # Clean up
+        await self.rh.close()
 
 
 if __name__ == "__main__":

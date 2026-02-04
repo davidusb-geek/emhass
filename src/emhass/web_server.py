@@ -638,9 +638,11 @@ async def action_call(action_name: str):
         return await make_response(await grab_log(action_str), 400)
 
     # Handle Continual Publish Threading
+    continual_publish_active = False
     if len(continual_publish_thread) == 0 and input_data_dict["retrieve_hass_conf"].get(
         "continual_publish", False
     ):
+        continual_publish_active = True
         continual_loop = threading.Thread(
             name="continual_publish",
             target=lambda: asyncio.run(continual_publish(input_data_dict, entity_path, app.logger)),
@@ -649,9 +651,14 @@ async def action_call(action_name: str):
         continual_publish_thread.append(continual_loop)
 
     # Execute Action
-    msg, status = await _handle_action_dispatch(
-        action_name, input_data_dict, emhass_conf, params, runtimeparams, app.logger
-    )
+    try:
+        msg, status = await _handle_action_dispatch(
+            action_name, input_data_dict, emhass_conf, params, runtimeparams, app.logger
+        )
+    finally:
+        # Close HTTP session if not used by continual_publish
+        if not continual_publish_active and "rh" in input_data_dict:
+            await input_data_dict["rh"].close()
 
     # Final Log Check & Response
     if status == 201:
