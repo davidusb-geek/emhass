@@ -3300,9 +3300,9 @@ class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
         min_temps_first = opt.param_thermal[0]["min_temps"].value.copy()
 
         # Update min_temperatures in config and call update_thermal_params
-        opt.optim_conf["def_load_config"][0]["thermal_config"]["min_temperatures"] = (
-            [updated_min_temp] * n_timesteps
-        )
+        opt.optim_conf["def_load_config"][0]["thermal_config"]["min_temperatures"] = [
+            updated_min_temp
+        ] * n_timesteps
         opt.update_thermal_params(opt.optim_conf, data_opt, p_load)
 
         min_temps_second = opt.param_thermal[0]["min_temps"].value.copy()
