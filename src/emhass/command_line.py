@@ -1033,6 +1033,9 @@ async def set_input_data_dict(
                         ):
                             if key in new_cfg["thermal_battery"]:
                                 cached_cfg["thermal_battery"][key] = new_cfg["thermal_battery"][key]
+            # Update CVXPY Parameters for thermal start temperatures
+            # This is critical: updating optim_conf alone doesn't change baked-in constraint values
+            opt.update_thermal_start_temps(optim_conf)
         # Update runtime-configurable solver options from optim_conf
         # These don't affect problem structure, so they're safe to update on cached object
         runtime_solver_opts = [
