@@ -2053,6 +2053,10 @@ class Optimization:
         # On subsequent calls (cache hit), this ensures parameters reflect new forecasts
         if self.prob is not None and self.param_thermal:
             self.update_thermal_params(self.optim_conf, data_opt, p_load)
+            # Refresh heating_demands for result building (stale numpy refs from first call)
+            for k, params in self.param_thermal.items():
+                if params["type"] == "thermal_battery":
+                    self.heating_demands[k] = params["heating_demand"].value
 
         # Update Energy Constraint Parameters for Deferrable Loads
         # These control the Big-M relaxation of energy/timestep constraints
