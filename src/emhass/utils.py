@@ -1812,9 +1812,18 @@ async def build_secrets(
             if config_path_value is not None and config_path_value != "" and config_path_value != "default":
                 try: 
                     config_path = pathlib.Path(config_path_value)
-                    # Ensure parent directory exists (config_path is typically a file path like /share/config.json)
-                    emhass_conf["config_path"] = config_path
-                    logger.info(f"Using emhass config_path from addon settings: {config_path}")
+                    # Validate that the config file or its parent directory path is valid
+                    if config_path.exists():
+                        # File exists - use it
+                        emhass_conf["config_path"] = config_path
+                        logger.info(f"Using custom config_path from addon settings: {config_path}")
+                    elif config_path.parent.exists():
+                        # Parent directory exists but file doesn't - set path anyway (file may be created later)
+                        emhass_conf["config_path"] = config_path
+                        logger.warning(f"Config file does not exist yet: {config_path} (will use defaults until created)")
+                    else:
+                        # Neither file nor parent directory exists - this is likely an error
+                        logger.error(f"Invalid config_path '{config_path_value}': parent directory does not exist. Keeping default config_path.")
                 except Exception as e:
                     logger.warning(
                         f"Cannot set config_path '{config_path_value}' provided via options. Keeping default. Error: {e}"
