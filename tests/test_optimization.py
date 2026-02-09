@@ -571,6 +571,131 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             soc_final,
         )
 
+    def test_perform_naive_mpc_optim_weight_scaling(self):
+        """
+        Regression test: Ensure weights are applied element-wise, not as matrix multiplication.
+        Also verifies that time-dependent weights correctly influence discharge timing.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.optim_conf.update({"set_use_battery": True})
+        self.optim_conf.update({"set_total_pv_sell": False})
+        self.optim_conf.update({"number_of_deferrable_loads": 0})
+        self.optim_conf.update({"set_nodischarge_to_grid": False})  # Allow export to grid
+
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "maximum_power_to_grid": 50000,
+                "maximum_power_from_grid": 50000,
+                "battery_stress_cost": 0.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        self.optim_conf.update({"set_battery_dynamic": False})
+
+        prediction_horizon = 10
+
+        # Scenario:
+        # Price at t=0 is high (Profit 50). Weight is 10.
+        # Correct: 10 < 50 -> Discharge should happen at t=0.
+        # Bug (10x magnification): 100 > 50 -> Discharge would be avoided at t=0 if possible.
+
+        self.df_input_data_dayahead["unit_prod_price"] = 1.0  # Low default
+        self.df_input_data_dayahead.iloc[
+            0, self.df_input_data_dayahead.columns.get_loc("unit_prod_price")
+        ] = 50.0
+        self.df_input_data_dayahead["unit_load_cost"] = 0.0
+
+        weights = [10.0] * 10
+        self.optim_conf.update({"weight_battery_discharge": weights})
+
+        self.opt = self.create_optimization()
+        self.opt_res_dayahead = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            soc_init=1.0,
+            soc_final=0.9,  # Discharge only a bit (concentrated at t=0)
+        )
+
+        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+        self.assertEqual(self.opt.optim_status, "Optimal", "Optimization should be feasible")
+
+        p_batt = self.opt_res_dayahead["P_batt"]
+        # Check first step
+        discharge_step_0 = p_batt.iloc[0]
+
+        # With fix: discharge_step_0 should be high because profit(50) > penalty(10).
+        # Without fix: profit(50) < penalty(100), so it would avoid step 0.
+        self.assertGreater(
+            discharge_step_0,
+            100.0,
+            f"Discharge at t=0 should be high with fix. Got {discharge_step_0}",
+        )
+
+    def test_perform_naive_mpc_optim_weight_scaling_scalar(self):
+        """
+        Regression test: Ensure scalar weights also work correctly with resizing.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.optim_conf.update({"set_use_battery": True})
+        self.optim_conf.update({"set_total_pv_sell": False})
+        self.optim_conf.update({"number_of_deferrable_loads": 0})
+        self.optim_conf.update({"set_nodischarge_to_grid": False})
+
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "maximum_power_to_grid": 50000,
+                "maximum_power_from_grid": 50000,
+                "battery_stress_cost": 0.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        self.optim_conf.update({"set_battery_dynamic": False})
+
+        prediction_horizon = 10
+        self.df_input_data_dayahead["unit_prod_price"] = 1.0
+        self.df_input_data_dayahead.iloc[
+            0, self.df_input_data_dayahead.columns.get_loc("unit_prod_price")
+        ] = 50.0
+        self.df_input_data_dayahead["unit_load_cost"] = 0.0
+
+        # Scenario: Scalar Weight = 10.0
+        self.optim_conf.update({"weight_battery_discharge": 10.0})
+
+        self.opt = self.create_optimization()
+        self.opt_res_dayahead = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            soc_init=1.0,
+            soc_final=0.9,
+        )
+
+        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+        self.assertEqual(self.opt.optim_status, "Optimal")
+
+        p_batt = self.opt_res_dayahead["P_batt"]
+        discharge_step_0 = p_batt.iloc[0]
+        self.assertGreater(
+            discharge_step_0,
+            100.0,
+            f"Scalar: Discharge at t=0 should be high. Got {discharge_step_0}",
+        )
+
     # Test format output of dayahead optimization with a thermal deferrable load
     def test_thermal_load_optim(self):
         self.df_input_data_dayahead = self.prepare_forecast_data()
@@ -609,6 +734,170 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("cost_fun_" + self.costfun, self.opt_res_dayahead.columns)
         self.assertEqual(self.opt.optim_status, "Optimal")
+
+    def test_thermal_inertia(self):
+        """
+        Test that the thermal_inertia parameter correctly delays the heating effect.
+        Scenario: 1 hour inertia (L=2 steps).
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+
+        # Cold outside (10C)
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+
+        # Set costs to 0
+        self.df_input_data_dayahead[self.opt.var_load_cost] = 0.0
+        self.df_input_data_dayahead[self.opt.var_prod_price] = 0.0
+
+        # Define constraints
+        # Constraint: We want 18.0°C at t=3.
+        # Physics Check:
+        # - Without heat: Temp drops to ~14.2°C by t=3.
+        # - With Max Heat at t=0: Temp recovers to ~19.2°C by t=3.
+        # - Target 18.0°C forces the heater ON but is feasible.
+        min_temps = [0] * 48
+        min_temps[3] = 18.0
+
+        runtimeparams = {
+            "def_load_config": [
+                {},
+                {
+                    "thermal_config": {
+                        "heating_rate": 10.0,
+                        "cooling_constant": 0.5,
+                        "start_temperature": 20.0,
+                        "thermal_inertia": 1.0,  # 1 Hour inertia -> 2 timesteps lag
+                        "sense": "heat",
+                        "min_temperatures": min_temps,
+                        "max_temperatures": [30.0] * 48,
+                    }
+                },
+            ]
+        }
+
+        self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
+        # Ensure sufficient power
+        self.optim_conf["nominal_power_of_deferrable_loads"][1] = 3000
+
+        self.opt = self.create_optimization()
+        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
+
+        self.opt_res_dayahead = self.opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+
+        self.assertEqual(self.opt.optim_status, "Optimal")
+
+        # Get results
+        p_heat = self.opt_res_dayahead["P_deferrable1"]
+        temp = self.opt_res_dayahead["predicted_temp_heater1"]
+
+        # Verify Heater turned ON at t=0
+        # It MUST turn on now to satisfy the hard constraint at t=3.
+        self.assertGreater(
+            p_heat.iloc[0], 0, "Heater should turn on at t=0 to satisfy delayed constraint"
+        )
+
+        # Verify Dead Zone (t=0 to t=2)
+        # Power[0] is ON, but Temp[1] and Temp[2] should NOT see it yet due to inertia.
+        # They should only reflect cooling losses.
+        # Expected T[1] approx: 20.0 - (0.5 * 0.5 * (20.0 - 10.0)) = 17.5
+        self.assertAlmostEqual(
+            temp.iloc[1], 17.5, delta=0.5, msg="T[1] should only reflect cooling (dead zone)"
+        )
+
+        # T[2] should continue dropping
+        self.assertLess(temp.iloc[2], temp.iloc[1], msg="T[2] should continue dropping (dead zone)")
+
+        # 3. Verify Heating Effect Arrives at t=3
+        # The constraint required T[3] >= 18.0.
+        self.assertGreaterEqual(temp.iloc[3], 17.9, msg="T[3] should meet the constraint (18C)")
+
+        # Sanity check: The jump from T[2] to T[3] is due to heating
+        # (Or at least the drop stops significantly compared to baseline)
+        self.assertGreater(
+            temp.iloc[3],
+            temp.iloc[2],
+            msg="T[3] should rise (or stop dropping) as heating kicks in",
+        )
+
+    def test_thermal_inertia_no_regression(self):
+        """
+        Test backward compatibility: If thermal_inertia is 0 (or missing),
+        the heating effect should be IMMEDIATE (Legacy behavior).
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+
+        # Scenario: Cold outside (10C), start at 20C.
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+
+        # Set costs to 0 to encourage heating
+        self.df_input_data_dayahead[self.opt.var_load_cost] = 0.0
+        self.df_input_data_dayahead[self.opt.var_prod_price] = 0.0
+
+        # Define constraints
+        # We want 22C at t=1.
+        # In the Legacy model (Instant), heating at t=0 affects t=1.
+        # So this IS feasible. (In the delayed model, this would be impossible).
+        min_temps = [0] * 48
+        min_temps[1] = 22.0
+
+        runtimeparams = {
+            "def_load_config": [
+                {},
+                {
+                    "thermal_config": {
+                        "heating_rate": 10.0,
+                        "cooling_constant": 0.5,
+                        "start_temperature": 20.0,
+                        "sense": "heat",
+                        # "thermal_inertia": 0.0,  <-- IMPLIED DEFAULT
+                        "min_temperatures": min_temps,
+                        "max_temperatures": [30.0] * 48,
+                    }
+                },
+            ]
+        }
+
+        self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
+        self.optim_conf["nominal_power_of_deferrable_loads"][1] = 3000
+
+        self.opt = self.create_optimization()
+        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
+
+        self.opt_res_dayahead = self.opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+
+        self.assertEqual(self.opt.optim_status, "Optimal")
+
+        # Get results
+        p_heat = self.opt_res_dayahead["P_deferrable1"]
+        temp = self.opt_res_dayahead["predicted_temp_heater1"]
+
+        # Verify Heater turned ON at t=0
+        self.assertGreater(p_heat.iloc[0], 0, "Heater should turn on at t=0")
+
+        # Verify IMMEDIATE Effect (Legacy Behavior)
+        # Power[0] should raise Temp[1].
+        # If inertia was active, Temp[1] would only drop (cooling).
+        # Since Temp[1] meets the 22C target (rising from 20C), we know the effect was instant.
+        self.assertGreaterEqual(
+            temp.iloc[1], 21.9, msg="T[1] should rise immediately, matching legacy behavior"
+        )
+
+        # Sanity check: T[1] should be > T[0] (20C)
+        self.assertGreater(temp.iloc[1], 20.0, "Temperature should rise immediately at t=1")
 
     # Setup function to run forecast for thermal tests
     def run_test_forecast(
@@ -2447,6 +2736,100 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
         except Exception as e:
             self.fail(f"Complex optimization failed with error: {e}")
+
+    def test_thermal_optimization_with_nan_temperatures(self):
+        """
+        Test thermal optimization robustness when outdoor_temperature_forecast contains NaNs.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+
+        # Create a temperature profile with NaNs to simulate corrupted data
+        nan_temps = [np.nan] * 48
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = nan_temps
+
+        runtimeparams = {
+            "def_load_config": [
+                {
+                    "thermal_config": {
+                        "start_temperature": 20,
+                        "cooling_constant": 0.1,
+                        "heating_rate": 5.0,
+                        "desired_temperatures": [21] * 48,
+                        "sense": "heat",
+                    }
+                }
+            ]
+        }
+
+        self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
+        self.opt = self.create_optimization()
+
+        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
+
+        try:
+            self.opt_res_dayahead = self.opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                unit_load_cost,
+                unit_prod_price,
+            )
+
+            # SUCCESS CRITERIA: The optimization finished without crashing
+            self.assertEqual(self.opt.optim_status, "Optimal")
+            self.assertIn("P_deferrable0", self.opt_res_dayahead.columns)
+
+            # We use GreaterEqual because 0 is a valid result if costs are high
+            # The important part is that we got a result, not what the result is.
+            self.assertGreaterEqual(self.opt_res_dayahead["P_deferrable0"].sum(), 0)
+
+        except Exception as e:
+            self.fail(f"Optimization failed when handling NaN temperatures: {e}")
+
+    def test_thermal_battery_with_partial_nan_data(self):
+        """Test thermal battery optimization where some (but not all) temperature data is missing."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+
+        # Create a mix of valid data and NaNs
+        temps = [10.0] * 48
+        temps[10] = np.nan  # Missing single value
+        temps[11] = np.nan
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = temps
+
+        runtimeparams = {
+            "def_load_config": [
+                {
+                    "thermal_battery": {
+                        "start_temperature": 20.0,
+                        "supply_temperature": 35.0,
+                        "volume": 50.0,
+                        "specific_heating_demand": 100.0,
+                        "area": 100.0,
+                        "min_temperatures": [18.0] * 48,
+                        "max_temperatures": [22.0] * 48,
+                    }
+                }
+            ]
+        }
+
+        self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
+        self.opt = self.create_optimization()
+
+        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
+
+        try:
+            self.opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                unit_load_cost,
+                unit_prod_price,
+            )
+            self.assertEqual(self.opt.optim_status, "Optimal")
+        except Exception as e:
+            self.fail(f"Optimization failed with partial NaN data: {e}")
 
 
 if __name__ == "__main__":
