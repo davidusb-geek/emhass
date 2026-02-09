@@ -43,10 +43,13 @@ You can define the following parameters inside the `thermal_config` dictionary:
 
 * **heating_rate**: The rate at which the temperature changes per hour when the device is operating at nominal power.
 * **cooling_constant**: The rate at which temperature is lost to the environment (per hour per degree difference).
+* **thermal_inertia**: (Float, Default: 0.0) The thermal lag of the system in hours. This models the delay between the device turning on and the temperature effectively starting to change. For example, `1.0` means a 1-hour delay.
 * **start_temperature**: The initial room temperature.
 * **sense**: Defines the operation mode of the thermal load.
     * `'heat'`: (Default) The device adds heat (e.g., heater).
     * `'cool'`: The device removes heat (e.g., AC).
+
+
 * **min_temperatures**: (List of floats) The minimum allowed temperature per timestep.
 * **max_temperatures**: (List of floats) The maximum allowed temperature per timestep.
 * **desired_temperatures**: (Legacy) A specific target temperature per timestep. Used with `penalty_factor`.
@@ -63,25 +66,28 @@ For example, if we have just **two** deferrable loads and the **second** load is
     {"thermal_config": {
         "heating_rate": 5.0,
         "cooling_constant": 0.1,
+        "thermal_inertia": 1.0,
         "overshoot_temperature": 24.0,
         "start_temperature": 20,
         "sense": "heat",
         "desired_temperatures": [20, 21, 20, 19]
     }}
 ]
+
 ```
 
-Here the desired_temperatures is a list of float values for each time step.
+Here the `desired_temperatures` is a list of float values for each time step.
 
 Now we also need to define the other needed input, the `outdoor_temperature_forecast`, which is a list of float values. The list of floats for `desired_temperatures` and the list in `outdoor_temperature_forecast` should have proper lengths, if using MPC the length should be at least equal to the prediction horizon.
 
-```{note} 
+```{note}
 
 If you set `open-meteo` as the weather forecast method, then the `outdoor_temperature_forecast` will be retrieved automatically from the open-meteo API and you do not need to define it at runtime
+
 ```
 
 Here is an example modified from a working example provided by @werdnum to pass all the needed data at runtime.
-This example is given for the following configuration: just one deferrable load (a thermal load), no PV, no battery, an MPC application, and pre-defined heating intervals times. 
+This example is given for the following configuration: just one deferrable load (a thermal load), no PV, no battery, an MPC application, and pre-defined heating intervals times.
 
 ```yaml
 rest_command:
@@ -114,6 +120,7 @@ rest_command:
           {"thermal_config": {
             "heating_rate": 5.0,
             "cooling_constant": 0.1,
+            "thermal_inertia": 1.0,
             "start_temperature": {{ states('sensor.my_room_temperature') }},
             "sense": "heat",
             "max_temperatures": [24.0] * {{ horizon }}, 
@@ -133,6 +140,7 @@ rest_command:
         ],
         "outdoor_temperature_forecast": {{ ((state_attr("sensor.weather_hourly", "forecast") | map(attribute="temperature") | list)[:horizon] | tojson) }}
       }
+
 ```
 
 For the data publish command we need to provide the information about which deferrable loads are thermal loads.

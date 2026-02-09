@@ -1,5 +1,5 @@
 {% set name = "emhass" %}
-{% set version = "0.16.1" %}
+{% set version = "0.16.2" %}
 
 package:
   name: {{ name|lower }}
@@ -45,7 +45,7 @@ requirements:
     - aiohttp
     - orjson
     - websockets
-    - uvicorn >=0.30.0
+    - uvicorn==0.30.6
     - influxdb >=5.3.1
 
 test:
