@@ -1828,6 +1828,10 @@ async def build_secrets(
                     logger.warning(
                         f"Cannot set config_path '{config_path_value}' provided via options. Keeping default. Error: {e}"
                     )
+            else:
+                logger.debug("No custom config_path provided via options.json, using addon-mode default /config/config.json.")
+                emhass_conf["config_path"] = pathlib.Path("/config/config.json")
+
 
             # Check to use Home Assistant local API
             if not no_response and os.getenv("SUPERVISOR_TOKEN", None) is not None:
