@@ -261,7 +261,7 @@ async def configuration():
     if (emhass_conf["data_path"] / params_file).exists():
         async with aiofiles.open(str(emhass_conf["data_path"] / params_file), "rb") as fid:
             content = await fid.read()
-            emhass_conf["config_path"], params = pickle.loads(content)
+            _, params = pickle.loads(content)  # Don't overwrite emhass_conf["config_path"]
     else:
         params = {}
 
@@ -451,7 +451,7 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
     if params_path.exists():
         async with aiofiles.open(str(params_path), "rb") as fid:
             content = await fid.read()
-            emhass_conf["config_path"], params = pickle.loads(content)
+            _, params = pickle.loads(content)  # Don't overwrite emhass_conf["config_path"]
             # Set local costfun variable
             if params.get("optim_conf") is not None:
                 costfun = params["optim_conf"].get("costfun", "profit")
@@ -793,10 +793,10 @@ async def _build_and_save_params(
     # Update params with local variables
     params["optim_conf"]["costfun"] = costfun
     params["optim_conf"]["logging_level"] = logging_level
-    # Save params to file for later reference
+    # Save params to file for later reference (use emhass_conf["config_path"] which may have been updated by build_secrets)
     if os.path.exists(str(emhass_conf["data_path"])):
         async with aiofiles.open(str(emhass_conf["data_path"] / params_file), "wb") as fid:
-            content = pickle.dumps((config_path, params))
+            content = pickle.dumps((emhass_conf["config_path"], params))
             await fid.write(content)
     else:
         raise Exception("missing: " + str(emhass_conf["data_path"]))
