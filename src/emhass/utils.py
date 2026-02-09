@@ -1817,6 +1817,7 @@ async def build_secrets(
                         # File exists - use it
                         emhass_conf["config_path"] = config_path
                         logger.info(f"Using custom config_path from addon settings: {config_path}")
+                        print(f"Using custom config_path from addon settings: {config_path}")
                     elif config_path.parent.exists():
                         # Parent directory exists but file doesn't - set path anyway (file may be created later)
                         emhass_conf["config_path"] = config_path
@@ -1830,17 +1831,21 @@ async def build_secrets(
                     )
             elif config_path_value == "default":
                 logger.info("set config_path to addon-mode default /config/config.json.")
+                print("set config_path to addon-mode default /config/config.json.")
                 emhass_conf["config_path"] = pathlib.Path("/config/config.json")
             #elif config_path_value is None or config_path_value == "":
             else:
                 logger.info("No config_path provided via options.json, checking legacy path /share/config.json or using addon-mode default /config/config.json.")
+                print("No config_path provided via options.json, checking legacy path /share/config.json or using addon-mode default /config/config.json.")
                     # Check if legacy config path exists, if yes use it, otherwise use addon-mode default
                 legacy_config_path = pathlib.Path("/share/config.json")
                 if legacy_config_path.is_file():
                     logger.info("Found legacy config.json in /share, using this path for config_path.")
+                    print("Found legacy config.json in /share, using this path for config_path.")
                     emhass_conf["config_path"] = legacy_config_path
                 else:
-                    logger.info("No legacy config.json found in /share, using addon-mode default /config/config.json for config_path.")    
+                    logger.info("No legacy config.json found in /share, using addon-mode default /config/config.json for config_path.")
+                    print("No legacy config.json found in /share, using addon-mode default /config/config.json for config_path.")    
                 emhass_conf["config_path"] = pathlib.Path("/config/config.json")
 
 
