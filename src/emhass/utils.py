@@ -1831,7 +1831,8 @@ async def build_secrets(
             elif config_path_value == "default":
                 logger.info("set config_path to addon-mode default /config/config.json.")
                 emhass_conf["config_path"] = pathlib.Path("/config/config.json")
-            elif config_path_value is None or config_path_value == "":
+            #elif config_path_value is None or config_path_value == "":
+            else:
                 logger.info("No config_path provided via options.json, checking legacy path /share/config.json or using addon-mode default /config/config.json.")
                     # Check if legacy config path exists, if yes use it, otherwise use addon-mode default
                 legacy_config_path = pathlib.Path("/share/config.json")
