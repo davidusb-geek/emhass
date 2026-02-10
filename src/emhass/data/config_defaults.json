@@ -8,6 +8,7 @@
   "data_path": "default",
   "set_total_pv_sell": false,
   "lp_solver_timeout": 45,
+  "lp_solver_mip_rel_gap": 0,
   "num_threads": 0,
   "ssl_no_verify": false,
   "set_nocharge_from_grid": false,
