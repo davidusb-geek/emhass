@@ -1818,7 +1818,6 @@ async def build_secrets(
                         # File exists - use it
                         emhass_conf["config_path"] = config_path
                         logger.info(f"Using custom config_path from addon settings: {config_path}")
-                        print(f"Using custom config_path from addon settings: {config_path}")
                     elif config_path.parent.exists():
                         # Parent directory exists but file doesn't - set path anyway (file may be created later)
                         emhass_conf["config_path"] = config_path
@@ -1831,29 +1830,25 @@ async def build_secrets(
                         f"Cannot set config_path '{config_path_value}' provided via options. Keeping default. Error: {e}"
                     )
             else:
+                # No config path provided via options.json, check default and legacy paths
+                # This will move the config file to the addon_config_path if it is found in the legacy location.
                 logger.info("No config_path provided via options.json, checking default (/config/config.json) and legacy path (/share/config.json).")
-                print("No config_path provided via options.json, checking default (/config/config.json) and legacy path (/share/config.json).")
-                    # Check if legacy config path exists, if yes use it, otherwise use addon-mode default
                 default_config_path = pathlib.Path("/config/config.json")
                 legacy_config_path = pathlib.Path("/share/config.json")
                 if default_config_path.is_file():
                     logger.info("Found config.json in /config, using this path for config_path.")
-                    print("Found config.json in /config, using this path for config_path.")
                     emhass_conf["config_path"] = default_config_path
                 elif legacy_config_path.is_file():
                     # found legacy config path, move the file to the default addon-mode config path and use it for config_path
                     try:
                         shutil.move(str(legacy_config_path), str(default_config_path))
                         logger.info(f"Moved legacy config from {legacy_config_path} to {default_config_path} and using it for config_path.")
-                        print(f"Moved legacy config from {legacy_config_path} to {default_config_path} and using it for config_path.")
                         emhass_conf["config_path"] = default_config_path
                     except Exception as e:
                         logger.warning(f"Failed to move legacy config from {legacy_config_path} to {default_config_path}: {e}")
-                        print(f"Failed to move legacy config from {legacy_config_path} to {default_config_path}: {e}")
                         emhass_conf["config_path"] = legacy_config_path
                 else:
                     logger.info("No legacy config.json found in /share, using addon-mode default /config/config.json for config_path.")
-                    print("No legacy config.json found in /share, using addon-mode default /config/config.json for config_path.")
                     emhass_conf["config_path"] = default_config_path
 
 
