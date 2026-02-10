@@ -1833,7 +1833,6 @@ async def build_secrets(
                 logger.info("set config_path to addon-mode default /config/config.json.")
                 print("set config_path to addon-mode default /config/config.json.")
                 emhass_conf["config_path"] = pathlib.Path("/config/config.json")
-            #elif config_path_value is None or config_path_value == "":
             else:
                 logger.info("No config_path provided via options.json, checking legacy path /share/config.json or using addon-mode default /config/config.json.")
                 print("No config_path provided via options.json, checking legacy path /share/config.json or using addon-mode default /config/config.json.")
@@ -1845,8 +1844,8 @@ async def build_secrets(
                     emhass_conf["config_path"] = legacy_config_path
                 else:
                     logger.info("No legacy config.json found in /share, using addon-mode default /config/config.json for config_path.")
-                    print("No legacy config.json found in /share, using addon-mode default /config/config.json for config_path.")    
-                emhass_conf["config_path"] = pathlib.Path("/config/config.json")
+                    print("No legacy config.json found in /share, using addon-mode default /config/config.json for config_path.")
+                    emhass_conf["config_path"] = pathlib.Path("/config/config.json")
 
 
             # Check to use Home Assistant local API
