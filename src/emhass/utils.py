@@ -17,6 +17,7 @@ import pandas as pd
 import plotly.express as px
 import pytz
 import yaml
+import shutil
 
 if TYPE_CHECKING:
     from emhass.machine_learning_forecaster import MLForecaster
@@ -1840,13 +1841,20 @@ async def build_secrets(
                     print("Found config.json in /config, using this path for config_path.")
                     emhass_conf["config_path"] = default_config_path
                 elif legacy_config_path.is_file():
-                    logger.info("Found legacy config.json in /share, using this path for config_path.")
-                    print("Found legacy config.json in /share, using this path for config_path.")
-                    emhass_conf["config_path"] = legacy_config_path
+                    # found legacy config path, move the file to the default addon-mode config path and use it for config_path
+                    try:
+                        shutil.move(str(legacy_config_path), str(default_config_path))
+                        logger.info(f"Moved legacy config from {legacy_config_path} to {default_config_path} and using it for config_path.")
+                        print(f"Moved legacy config from {legacy_config_path} to {default_config_path} and using it for config_path.")
+                        emhass_conf["config_path"] = default_config_path
+                    except Exception as e:
+                        logger.warning(f"Failed to move legacy config from {legacy_config_path} to {default_config_path}: {e}")
+                        print(f"Failed to move legacy config from {legacy_config_path} to {default_config_path}: {e}")
+                        emhass_conf["config_path"] = legacy_config_path
                 else:
                     logger.info("No legacy config.json found in /share, using addon-mode default /config/config.json for config_path.")
                     print("No legacy config.json found in /share, using addon-mode default /config/config.json for config_path.")
-                    emhass_conf["config_path"] = pathlib.Path("/config/config.json")
+                    emhass_conf["config_path"] = default_config_path
 
 
             # Check to use Home Assistant local API
