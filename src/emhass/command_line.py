@@ -2039,19 +2039,6 @@ async def _publish_standard_forecasts(
 ) -> list[str]:
     """Publish PV, Load, Curtailment, and Hybrid Inverter data."""
     cols = []
-    # PV Forecast
-    custom_pv = ctx.params["passed_data"]["custom_pv_forecast_id"]
-    await ctx.rh.post_data(
-        opt_res_latest["P_PV"],
-        ctx.idx,
-        custom_pv["entity_id"],
-        "power",
-        custom_pv["unit_of_measurement"],
-        custom_pv["friendly_name"],
-        type_var="power",
-        **ctx.common_kwargs,
-    )
-    cols.append("P_PV")
     # Load Forecast
     custom_load = ctx.params["passed_data"]["custom_load_forecast_id"]
     await ctx.rh.post_data(
@@ -2065,6 +2052,20 @@ async def _publish_standard_forecasts(
         **ctx.common_kwargs,
     )
     cols.append("P_Load")
+    # PV Forecast
+    if "P_PV" in opt_res_latest.columns:
+        custom_pv = ctx.params["passed_data"]["custom_pv_forecast_id"]
+        await ctx.rh.post_data(
+            opt_res_latest["P_PV"],
+            ctx.idx,
+            custom_pv["entity_id"],
+            "power",
+            custom_pv["unit_of_measurement"],
+            custom_pv["friendly_name"],
+            type_var="power",
+            **ctx.common_kwargs,
+        )
+        cols.append("P_PV")
     # Curtailment
     if ctx.plant_conf["compute_curtailment"]:
         custom_curt = ctx.params["passed_data"]["custom_pv_curtailment_id"]
