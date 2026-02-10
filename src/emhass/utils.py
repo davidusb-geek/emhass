@@ -1829,16 +1829,17 @@ async def build_secrets(
                     logger.warning(
                         f"Cannot set config_path '{config_path_value}' provided via options. Keeping default. Error: {e}"
                     )
-            elif config_path_value == "default":
-                logger.info("set config_path to addon-mode default /config/config.json.")
-                print("set config_path to addon-mode default /config/config.json.")
-                emhass_conf["config_path"] = pathlib.Path("/config/config.json")
             else:
-                logger.info("No config_path provided via options.json, checking legacy path /share/config.json or using addon-mode default /config/config.json.")
-                print("No config_path provided via options.json, checking legacy path /share/config.json or using addon-mode default /config/config.json.")
+                logger.info("No config_path provided via options.json, checking default (/config/config.json) and legacy path (/share/config.json).")
+                print("No config_path provided via options.json, checking default (/config/config.json) and legacy path (/share/config.json).")
                     # Check if legacy config path exists, if yes use it, otherwise use addon-mode default
+                default_config_path = pathlib.Path("/config/config.json")
                 legacy_config_path = pathlib.Path("/share/config.json")
-                if legacy_config_path.is_file():
+                if default_config_path.is_file():
+                    logger.info("Found config.json in /config, using this path for config_path.")
+                    print("Found config.json in /config, using this path for config_path.")
+                    emhass_conf["config_path"] = default_config_path
+                elif legacy_config_path.is_file():
                     logger.info("Found legacy config.json in /share, using this path for config_path.")
                     print("Found legacy config.json in /share, using this path for config_path.")
                     emhass_conf["config_path"] = legacy_config_path
