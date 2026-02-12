@@ -17,6 +17,8 @@ import pandas as pd
 
 from emhass import utils
 from emhass.command_line import (
+    OptimizationCache,
+    OptimizationCacheKey,
     SetupContext,
     _prepare_dayahead_optim,
     adjust_pv_forecast,
@@ -1830,6 +1832,1484 @@ class TestCommandLineTimezoneLogic(unittest.IsolatedAsyncioTestCase):
             delta=0.5,
             msg="Mapped temperature value diverged significantly from source.",
         )
+
+
+class TestOptimizationCache(unittest.TestCase):
+    """Unit tests for the OptimizationCache warm-starting functionality."""
+
+    def setUp(self):
+        """Clear the cache before each test."""
+        OptimizationCache.clear()
+        self.logger = logger
+
+        # Base configuration for testing
+        self.optim_conf = {
+            "number_of_deferrable_loads": 2,
+            "set_use_battery": True,
+            "set_use_pv": True,
+            "treat_deferrable_load_as_semi_cont": [False, False],
+            "set_deferrable_load_single_constant": [False, False],
+            "set_deferrable_startup_penalty": [0, 0],
+            "set_deferrable_load_as_timeseries": [False, False],
+            "delta_forecast_daily": pd.Timedelta(days=1),
+            # Deferrable load constraint parameters
+            "nominal_power_of_deferrable_loads": [1000, 2000],
+            "operating_hours_of_each_deferrable_load": [3, 5],
+            "start_timesteps_of_each_deferrable_load": [0, 0],
+            "end_timesteps_of_each_deferrable_load": [48, 48],
+        }
+        self.plant_conf = {
+            "battery_capacity": 10.0,
+            "inverter_is_hybrid": False,
+            "compute_curtailment": False,
+        }
+        self.retrieve_hass_conf = {
+            "optimization_time_step": pd.Timedelta(minutes=30),
+        }
+        self.costfun = "profit"
+
+    def tearDown(self):
+        """Clear the cache after each test."""
+        OptimizationCache.clear()
+
+    def test_cache_miss_empty(self):
+        """Test that an empty cache returns None."""
+        result = OptimizationCache.get(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+        self.assertIsNone(result)
+
+    def test_cache_hit_same_config(self):
+        """Test that the same config returns the cached object."""
+        # Create a mock Optimization object
+        mock_opt = MagicMock()
+        mock_opt.name = "test_optimization"
+
+        # Store in cache
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Retrieve from cache
+        result = OptimizationCache.get(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertIs(result, mock_opt)
+        self.assertEqual(result.name, "test_optimization")
+
+    def test_cache_miss_config_changed(self):
+        """Test that changing config invalidates the cache."""
+        # Store with original config
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Modify config - change number of deferrable loads
+        modified_optim_conf = self.optim_conf.copy()
+        modified_optim_conf["number_of_deferrable_loads"] = 5
+
+        # Should return None (cache miss due to config change)
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        self.assertIsNone(result)
+
+    def test_cache_miss_battery_config_changed(self):
+        """Test that changing battery config invalidates the cache."""
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Modify plant config - change battery capacity
+        modified_plant_conf = self.plant_conf.copy()
+        modified_plant_conf["battery_capacity"] = 20.0
+
+        result = OptimizationCache.get(
+            self.optim_conf,
+            modified_plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        self.assertIsNone(result)
+
+    def test_cache_miss_costfun_changed(self):
+        """Test that changing cost function invalidates the cache."""
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Change cost function
+        result = OptimizationCache.get(
+            self.optim_conf,
+            self.plant_conf,
+            "self-consumption",  # Different costfun
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        self.assertIsNone(result)
+
+    def test_cache_miss_time_step_changed(self):
+        """Test that changing optimization time step invalidates the cache."""
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Modify time step
+        modified_retrieve_conf = self.retrieve_hass_conf.copy()
+        modified_retrieve_conf["optimization_time_step"] = pd.Timedelta(minutes=15)
+
+        result = OptimizationCache.get(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            modified_retrieve_conf,
+            self.logger,
+        )
+
+        self.assertIsNone(result)
+
+    def test_cache_miss_nominal_power_changed(self):
+        """Test that changing nominal power of deferrable loads invalidates the cache."""
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Modify nominal power for load 0
+        modified_optim_conf = copy.deepcopy(self.optim_conf)
+        modified_optim_conf["nominal_power_of_deferrable_loads"] = [
+            1500,
+            2000,
+        ]  # Changed from [1000, 2000]
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        self.assertIsNone(result)
+
+    def test_cache_hit_operating_hours_changed(self):
+        """Test that changing operating hours does NOT invalidate the cache.
+
+        Operating hours are now parameterized via Big-M energy constraints, so the
+        cached problem can be reused even when operating hours change. The actual
+        operating hours are passed as parameter values before solving.
+        """
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Modify operating hours for load 1
+        modified_optim_conf = copy.deepcopy(self.optim_conf)
+        modified_optim_conf["operating_hours_of_each_deferrable_load"] = [
+            3,
+            8,
+        ]  # Changed from [3, 5]
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Should still return cached object since operating hours are parameterized
+        self.assertEqual(result, mock_opt)
+
+    def test_cache_hit_start_timestep_changed(self):
+        """Test that changing start timesteps does NOT invalidate the cache.
+
+        Start/end timesteps are now parameterized via window masks, so the
+        problem structure doesn't change when they change. This enables
+        warm-starting for MPC where time windows shift each iteration.
+        """
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Modify start timestep for load 0 - should still hit cache
+        modified_optim_conf = copy.deepcopy(self.optim_conf)
+        modified_optim_conf["start_timesteps_of_each_deferrable_load"] = [
+            10,
+            0,
+        ]  # Changed from [0, 0]
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Cache should HIT because start_timesteps are now parameterized
+        self.assertIsNotNone(result)
+        self.assertIs(result, mock_opt)
+
+    def test_cache_hit_end_timestep_changed(self):
+        """Test that changing end timesteps does NOT invalidate the cache.
+
+        Start/end timesteps are now parameterized via window masks, so the
+        problem structure doesn't change when they change. This enables
+        warm-starting for MPC where time windows shift each iteration.
+        """
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Modify end timestep for load 1 - should still hit cache
+        modified_optim_conf = copy.deepcopy(self.optim_conf)
+        modified_optim_conf["end_timesteps_of_each_deferrable_load"] = [
+            48,
+            24,
+        ]  # Changed from [48, 48]
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Cache should HIT because end_timesteps are now parameterized
+        self.assertIsNotNone(result)
+        self.assertIs(result, mock_opt)
+
+    def test_cache_key_deterministic(self):
+        """Test that the same config produces the same cache key."""
+        key1 = OptimizationCache._compute_cache_key(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+        )
+        key2 = OptimizationCache._compute_cache_key(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+        )
+
+        self.assertEqual(key1, key2)
+        # Key should be an OptimizationCacheKey dataclass instance
+        self.assertIsInstance(key1, OptimizationCacheKey)
+
+    def test_cache_key_different_for_different_config(self):
+        """Test that different configs produce different cache keys."""
+        key1 = OptimizationCache._compute_cache_key(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+        )
+
+        modified_optim_conf = self.optim_conf.copy()
+        modified_optim_conf["set_use_battery"] = False
+
+        key2 = OptimizationCache._compute_cache_key(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+        )
+
+        self.assertNotEqual(key1, key2)
+
+    def test_cache_clear(self):
+        """Test that clear() empties the cache."""
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Verify it's cached
+        result = OptimizationCache.get(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+        self.assertIsNotNone(result)
+
+        # Clear the cache
+        OptimizationCache.clear(self.logger)
+
+        # Verify cache is empty
+        result = OptimizationCache.get(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+        self.assertIsNone(result)
+
+    def test_cache_get_stats(self):
+        """Test that get_stats() returns correct information."""
+        # Empty cache stats
+        stats = OptimizationCache.get_stats()
+        self.assertFalse(stats["has_instance"])
+        self.assertIsNone(stats["cache_key"])
+        self.assertIsNone(stats["last_used"])
+
+        # After storing
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        stats = OptimizationCache.get_stats()
+        self.assertTrue(stats["has_instance"])
+        self.assertIsNotNone(stats["cache_key"])
+        self.assertIsNotNone(stats["last_used"])
+
+    def test_cache_last_used_updated_on_hit(self):
+        """Test that last_used timestamp is updated on cache hit."""
+        from datetime import datetime, timedelta
+
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Set _last_used to a known earlier time (1 hour ago) to avoid timing issues
+        past_time = datetime.now() - timedelta(hours=1)
+        OptimizationCache._last_used = past_time
+
+        # Access cache (hit) - this should update _last_used to current time
+        OptimizationCache.get(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        second_used = OptimizationCache._last_used
+
+        # second_used should be much more recent than our artificially set past_time
+        self.assertGreater(second_used, past_time)
+        # And it should be within the last few seconds (not the 1 hour ago we set)
+        self.assertLess((datetime.now() - second_used).total_seconds(), 5)
+
+    def test_cache_handles_none_values_in_config(self):
+        """Test that cache handles None values in configuration gracefully."""
+        optim_conf_with_none = self.optim_conf.copy()
+        optim_conf_with_none["delta_forecast_daily"] = None
+
+        retrieve_conf_with_none = self.retrieve_hass_conf.copy()
+        retrieve_conf_with_none["optimization_time_step"] = None
+
+        # Should not raise an exception
+        key = OptimizationCache._compute_cache_key(
+            optim_conf_with_none,
+            self.plant_conf,
+            self.costfun,
+            retrieve_conf_with_none,
+        )
+        self.assertIsNotNone(key)
+        # Key should be an OptimizationCacheKey dataclass instance
+        self.assertIsInstance(key, OptimizationCacheKey)
+
+    def test_cache_miss_def_load_config_changed(self):
+        """Test that changing def_load_config structure invalidates the cache.
+
+        def_load_config determines which constraint branches are taken
+        (standard vs thermal_config vs thermal_battery), so changes to it
+        require rebuilding the optimization problem.
+        """
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Add a thermal_config to a load - this changes constraint structure
+        modified_optim_conf = copy.deepcopy(self.optim_conf)
+        modified_optim_conf["def_load_config"] = [
+            {"thermal_config": {"heating_rate": 5.0}},  # Changed: now has thermal_config
+            {},  # Standard load
+        ]
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Should be cache MISS because def_load_config structure changed
+        self.assertIsNone(result)
+
+    def test_cache_miss_def_load_config_thermal_battery_added(self):
+        """Test that adding thermal_battery to def_load_config invalidates the cache."""
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Add a thermal_battery to a load - this changes constraint structure
+        modified_optim_conf = copy.deepcopy(self.optim_conf)
+        modified_optim_conf["def_load_config"] = [
+            {},  # Standard load
+            {"thermal_battery": {"volume": 10.0}},  # Changed: now has thermal_battery
+        ]
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Should be cache MISS because def_load_config structure changed
+        self.assertIsNone(result)
+
+    def test_cache_hit_thermal_start_temperature_changed(self):
+        """Test that changing start_temperature does NOT invalidate cache.
+
+        start_temperature is a runtime parameter that changes between MPC
+        iterations. It should not cause a cache miss - instead, the cached
+        object's optim_conf should be updated with the new value.
+        """
+        mock_opt = MagicMock()
+        # Set up a thermal_config with initial start_temperature
+        optim_conf_with_thermal = copy.deepcopy(self.optim_conf)
+        optim_conf_with_thermal["def_load_config"] = [
+            {
+                "thermal_config": {
+                    "heating_rate": 5.0,
+                    "cooling_constant": 0.1,
+                    "start_temperature": 45.0,  # Initial temperature
+                    "desired_temperatures": [50.0] * 10,
+                }
+            },
+        ]
+
+        OptimizationCache.put(
+            mock_opt,
+            optim_conf_with_thermal,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Change only the runtime parameters (start_temperature, desired_temperatures)
+        modified_optim_conf = copy.deepcopy(optim_conf_with_thermal)
+        modified_optim_conf["def_load_config"][0]["thermal_config"]["start_temperature"] = (
+            42.5  # Different temperature
+        )
+        modified_optim_conf["def_load_config"][0]["thermal_config"]["desired_temperatures"] = [
+            55.0
+        ] * 10  # Different desired temps
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Should be cache HIT - runtime params don't affect structure
+        self.assertIsNotNone(result)
+        self.assertIs(result, mock_opt)
+
+    def test_cache_miss_thermal_structural_param_changed(self):
+        """Test that changing structural thermal params DOES invalidate cache.
+
+        Parameters like heating_rate, cooling_constant affect the constraint
+        structure and should cause a cache miss when changed.
+        """
+        mock_opt = MagicMock()
+        # Set up a thermal_config
+        optim_conf_with_thermal = copy.deepcopy(self.optim_conf)
+        optim_conf_with_thermal["def_load_config"] = [
+            {
+                "thermal_config": {
+                    "heating_rate": 5.0,
+                    "cooling_constant": 0.1,
+                    "start_temperature": 45.0,
+                }
+            },
+        ]
+
+        OptimizationCache.put(
+            mock_opt,
+            optim_conf_with_thermal,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Change a structural parameter (heating_rate)
+        modified_optim_conf = copy.deepcopy(optim_conf_with_thermal)
+        modified_optim_conf["def_load_config"][0]["thermal_config"]["heating_rate"] = (
+            10.0  # Different heating rate
+        )
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Should be cache MISS - structural param changed
+        self.assertIsNone(result)
+
+
+class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
+    """Integration tests for CLI warm-start flow using actual naive_mpc_optim calls."""
+
+    @staticmethod
+    async def get_test_params():
+        """Build params with default config."""
+        if emhass_conf["defaults_path"].exists():
+            config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+            _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
+            params = await utils.build_params(emhass_conf, secrets, config, logger)
+            params["optim_conf"]["set_use_pv"] = True
+        else:
+            raise Exception(
+                "config_defaults does not exist in path: " + str(emhass_conf["defaults_path"])
+            )
+        return params
+
+    async def asyncSetUp(self):
+        """Set up test fixtures and clear the cache."""
+        OptimizationCache.clear()
+        self.params = await TestOptimizationCacheIntegration.get_test_params()
+
+    def tearDown(self):
+        """Clear cache after each test."""
+        OptimizationCache.clear()
+
+    async def test_mpc_cache_hit_on_repeated_calls(self):
+        """Test that repeated MPC calls with same config reuse the cached Optimization object.
+
+        Note: set_input_data_dict creates and caches the Optimization object, so the cache
+        is populated after the first set_input_data_dict call, not after naive_mpc_optim.
+        """
+        costfun = "profit"
+        action = "naive-mpc-optim"
+
+        # Set up runtime parameters for a 10-step MPC
+        runtimeparams = {
+            "pv_power_forecast": [100 * (i + 1) for i in range(10)],
+            "load_power_forecast": [200 + i * 10 for i in range(10)],
+            "load_cost_forecast": [0.15 + i * 0.01 for i in range(10)],
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+        }
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+
+        params = copy.deepcopy(self.params)
+        params["passed_data"] = runtimeparams
+        params["optim_conf"]["weather_forecast_method"] = "list"
+        params["optim_conf"]["load_forecast_method"] = "list"
+        params["optim_conf"]["load_cost_forecast_method"] = "list"
+        params["optim_conf"]["production_price_forecast_method"] = "list"
+        params_json = orjson.dumps(params).decode("utf-8")
+
+        # Verify cache is empty before first call
+        stats_before = OptimizationCache.get_stats()
+        self.assertFalse(stats_before["has_instance"])
+
+        # First call - set_input_data_dict creates and caches the Optimization object
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+
+        # Cache should now be populated (set_input_data_dict creates the Optimization)
+        stats_after_setup = OptimizationCache.get_stats()
+        self.assertTrue(stats_after_setup["has_instance"])
+        first_cache_key = stats_after_setup["cache_key"]
+
+        opt_res1 = await naive_mpc_optim(input_data_dict, logger, debug=True)
+        self.assertIsInstance(opt_res1, pd.DataFrame)
+
+        # Second call with same config - should reuse cached Optimization (cache hit)
+        # Change forecast values slightly (these don't affect problem structure)
+        runtimeparams2 = {
+            "pv_power_forecast": [150 * (i + 1) for i in range(10)],  # Different values
+            "load_power_forecast": [250 + i * 10 for i in range(10)],
+            "load_cost_forecast": [0.20 + i * 0.01 for i in range(10)],
+            "prod_price_forecast": [0.08] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.6,  # Different SOC
+            "soc_final": 0.6,
+        }
+        runtimeparams_json2 = orjson.dumps(runtimeparams2).decode("utf-8")
+        params["passed_data"] = runtimeparams2
+        params_json2 = orjson.dumps(params).decode("utf-8")
+
+        input_data_dict2 = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json2,
+            runtimeparams_json2,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+
+        opt_res2 = await naive_mpc_optim(input_data_dict2, logger, debug=True)
+        self.assertIsInstance(opt_res2, pd.DataFrame)
+
+        stats_after_second = OptimizationCache.get_stats()
+        self.assertTrue(stats_after_second["has_instance"])
+        # Cache key should be the same (hit)
+        self.assertEqual(stats_after_second["cache_key"], first_cache_key)
+
+    async def test_mpc_cache_hit_with_different_time_windows(self):
+        """Test that changing start/end timesteps results in cache HIT (parameterized)."""
+        costfun = "profit"
+        action = "naive-mpc-optim"
+
+        runtimeparams = {
+            "pv_power_forecast": [100 * (i + 1) for i in range(10)],
+            "load_power_forecast": [200] * 10,
+            "load_cost_forecast": [0.15] * 10,
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+            "operating_hours_of_each_deferrable_load": [2, 3],
+            "start_timesteps_of_each_deferrable_load": [0, 0],
+            "end_timesteps_of_each_deferrable_load": [10, 10],
+        }
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+
+        params = copy.deepcopy(self.params)
+        params["passed_data"] = runtimeparams
+        params["optim_conf"]["weather_forecast_method"] = "list"
+        params["optim_conf"]["load_forecast_method"] = "list"
+        params["optim_conf"]["load_cost_forecast_method"] = "list"
+        params["optim_conf"]["production_price_forecast_method"] = "list"
+        params_json = orjson.dumps(params).decode("utf-8")
+
+        # First call
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_res1 = await naive_mpc_optim(input_data_dict, logger, debug=True)
+        self.assertIsInstance(opt_res1, pd.DataFrame)
+
+        stats_after_first = OptimizationCache.get_stats()
+        first_cache_key = stats_after_first["cache_key"]
+
+        # Second call with different time windows (simulating MPC rolling horizon)
+        runtimeparams2 = {
+            "pv_power_forecast": [100 * (i + 1) for i in range(10)],
+            "load_power_forecast": [200] * 10,
+            "load_cost_forecast": [0.15] * 10,
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+            "operating_hours_of_each_deferrable_load": [2, 3],
+            "start_timesteps_of_each_deferrable_load": [2, 1],  # Changed!
+            "end_timesteps_of_each_deferrable_load": [8, 9],  # Changed!
+        }
+        runtimeparams_json2 = orjson.dumps(runtimeparams2).decode("utf-8")
+        params["passed_data"] = runtimeparams2
+        params_json2 = orjson.dumps(params).decode("utf-8")
+
+        input_data_dict2 = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json2,
+            runtimeparams_json2,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_res2 = await naive_mpc_optim(input_data_dict2, logger, debug=True)
+        self.assertIsInstance(opt_res2, pd.DataFrame)
+
+        stats_after_second = OptimizationCache.get_stats()
+        # Cache key should be the same (time windows are parameterized, not in key)
+        self.assertEqual(stats_after_second["cache_key"], first_cache_key)
+
+    async def test_mpc_cache_miss_on_structural_change(self):
+        """Test that changing structural config (e.g., costfun) causes cache MISS."""
+        action = "naive-mpc-optim"
+
+        runtimeparams = {
+            "pv_power_forecast": [100 * (i + 1) for i in range(10)],
+            "load_power_forecast": [200] * 10,
+            "load_cost_forecast": [0.15] * 10,
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+        }
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+
+        params = copy.deepcopy(self.params)
+        params["passed_data"] = runtimeparams
+        params["optim_conf"]["weather_forecast_method"] = "list"
+        params["optim_conf"]["load_forecast_method"] = "list"
+        params["optim_conf"]["load_cost_forecast_method"] = "list"
+        params["optim_conf"]["production_price_forecast_method"] = "list"
+        params_json = orjson.dumps(params).decode("utf-8")
+
+        # First call with costfun="profit"
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            "profit",
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_res1 = await naive_mpc_optim(input_data_dict, logger, debug=True)
+        self.assertIsInstance(opt_res1, pd.DataFrame)
+
+        stats_after_first = OptimizationCache.get_stats()
+        first_cache_key = stats_after_first["cache_key"]
+
+        # Second call with costfun="cost" - should cause cache miss
+        # Note: costfun from optim_conf takes precedence, so we must update it in params
+        params2 = copy.deepcopy(self.params)
+        params2["passed_data"] = runtimeparams
+        params2["optim_conf"]["weather_forecast_method"] = "list"
+        params2["optim_conf"]["load_forecast_method"] = "list"
+        params2["optim_conf"]["load_cost_forecast_method"] = "list"
+        params2["optim_conf"]["production_price_forecast_method"] = "list"
+        params2["optim_conf"]["costfun"] = "cost"  # This is what changes the costfun
+        params_json2 = orjson.dumps(params2).decode("utf-8")
+
+        input_data_dict2 = await set_input_data_dict(
+            emhass_conf,
+            "cost",
+            params_json2,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_res2 = await naive_mpc_optim(input_data_dict2, logger, debug=True)
+        self.assertIsInstance(opt_res2, pd.DataFrame)
+
+        stats_after_second = OptimizationCache.get_stats()
+        # Cache key should be different (costfun changed)
+        self.assertNotEqual(stats_after_second["cache_key"], first_cache_key)
+
+    async def test_mpc_multiple_iterations_simulate_rolling_horizon(self):
+        """Simulate multiple MPC iterations as in real rolling-horizon operation."""
+        costfun = "profit"
+        action = "naive-mpc-optim"
+
+        params = copy.deepcopy(self.params)
+        params["optim_conf"]["weather_forecast_method"] = "list"
+        params["optim_conf"]["load_forecast_method"] = "list"
+        params["optim_conf"]["load_cost_forecast_method"] = "list"
+        params["optim_conf"]["production_price_forecast_method"] = "list"
+
+        # Simulate 4 MPC iterations with shifting time windows
+        cache_keys = []
+        for iteration in range(4):
+            runtimeparams = {
+                "pv_power_forecast": [100 * (i + 1 + iteration) for i in range(10)],
+                "load_power_forecast": [200 + iteration * 5] * 10,
+                "load_cost_forecast": [0.15 + iteration * 0.01] * 10,
+                "prod_price_forecast": [0.05] * 10,
+                "prediction_horizon": 10,
+                "soc_init": 0.5 + iteration * 0.05,
+                "soc_final": 0.5,
+                "operating_hours_of_each_deferrable_load": [2, 3],
+                # Simulate rolling horizon: windows shift each iteration
+                "start_timesteps_of_each_deferrable_load": [iteration, iteration],
+                "end_timesteps_of_each_deferrable_load": [10, 10],
+            }
+            runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+            params["passed_data"] = runtimeparams
+            params_json = orjson.dumps(params).decode("utf-8")
+
+            input_data_dict = await set_input_data_dict(
+                emhass_conf,
+                costfun,
+                params_json,
+                runtimeparams_json,
+                action,
+                logger,
+                get_data_from_file=True,
+            )
+            opt_res = await naive_mpc_optim(input_data_dict, logger, debug=True)
+            self.assertIsInstance(opt_res, pd.DataFrame)
+            self.assertEqual(len(opt_res), 10)
+
+            stats = OptimizationCache.get_stats()
+            cache_keys.append(stats["cache_key"])
+
+        # All iterations should have the same cache key (cache was reused)
+        self.assertTrue(all(key == cache_keys[0] for key in cache_keys))
+
+    async def test_thermal_start_temperature_constraint_updates_on_cache_hit(self):
+        """Verify that thermal start_temperature constraint value actually changes on cache hit.
+
+        This test ensures that:
+        1. The CVXPY constraint predicted_temp[0] == start_temperature uses a cp.Parameter
+        2. On cache hit, updating start_temperature actually changes the constraint result
+        3. The optimization result reflects the new start_temperature, not the old baked-in value
+
+        This catches the bug where start_temperature was a raw float baked into constraints
+        at problem build time, causing cache hits to use stale temperature values.
+        """
+        from emhass.optimization import Optimization
+
+        # Create minimal configs for a thermal load optimization
+        retrieve_hass_conf = {
+            "optimization_time_step": pd.Timedelta(minutes=30),
+            "time_zone": "UTC",
+            "sensor_power_photovoltaics": "pv",
+            "sensor_power_load_no_var_loads": "load",
+        }
+
+        plant_conf = {
+            "pv_module_model": None,
+            "pv_inverter_model": None,
+            "surface_tilt": 30,
+            "surface_azimuth": 180,
+            "modules_per_string": 10,
+            "strings_per_inverter": 1,
+            "inverter_is_hybrid": False,
+            "compute_curtailment": False,
+            "set_use_battery": False,
+            "battery_dynamic_max": 1.0,
+            "battery_dynamic_min": -1.0,
+            "battery_discharge_power_max": 1000,
+            "battery_charge_power_max": 1000,
+            "battery_nominal_energy_capacity": 5000,
+            "battery_minimum_state_of_charge": 0.1,
+            "battery_maximum_state_of_charge": 0.9,
+            "battery_discharge_efficiency": 0.95,
+            "battery_charge_efficiency": 0.95,
+        }
+
+        n_timesteps = 48
+        initial_start_temp = 22.0
+        updated_start_temp = 18.5
+
+        optim_conf = {
+            "number_of_deferrable_loads": 1,
+            "nominal_power_of_deferrable_loads": [2000],
+            "operating_hours_of_each_deferrable_load": [8],
+            "start_timesteps_of_each_deferrable_load": [0],
+            "end_timesteps_of_each_deferrable_load": [n_timesteps],
+            "treat_deferrable_load_as_semi_cont": [False],
+            "set_deferrable_load_single_constant": [False],
+            "set_deferrable_startup_penalty": [0],
+            "set_use_battery": False,
+            "set_total_pv_sell": False,
+            "delta_forecast_daily": 1,
+            "def_load_config": [
+                {
+                    "thermal_config": {
+                        "start_temperature": initial_start_temp,
+                        "cooling_constant": 0.1,
+                        "heating_rate": 2.0,
+                        "overshoot_temperature": None,
+                        "desired_temperatures": [],
+                        "min_temperatures": [19.0] * n_timesteps,
+                        "max_temperatures": [25.0] * n_timesteps,
+                        "sense": "heat",
+                        "thermal_inertia": 0.0,
+                    }
+                }
+            ],
+        }
+
+        # Create test data
+        start = pd.Timestamp.now(tz="UTC")
+        idx = pd.date_range(start=start, periods=n_timesteps, freq="30min", tz="UTC")
+        data_opt = pd.DataFrame(
+            {
+                "outdoor_temperature_forecast": [10.0] * n_timesteps,
+                "pv_forecast": [500.0] * n_timesteps,
+                "load_forecast": [1000.0] * n_timesteps,
+            },
+            index=idx,
+        )
+        p_pv = np.array([500.0] * n_timesteps)
+        p_load = np.array([1000.0] * n_timesteps)
+        unit_load_cost = np.array([0.15] * n_timesteps)
+        unit_prod_price = np.array([0.05] * n_timesteps)
+
+        # Create Optimization object
+        opt = Optimization(
+            retrieve_hass_conf=retrieve_hass_conf,
+            optim_conf=optim_conf,
+            plant_conf=plant_conf,
+            var_load_cost="unit_load_cost",
+            var_prod_price="unit_prod_price",
+            costfun="profit",
+            emhass_conf=emhass_conf,
+            logger=logger,
+        )
+
+        # First optimization with initial_start_temp
+        opt.perform_optimization(
+            data_opt=data_opt,
+            p_pv=p_pv,
+            p_load=p_load,
+            unit_load_cost=unit_load_cost,
+            unit_prod_price=unit_prod_price,
+        )
+
+        self.assertEqual(opt.optim_status, "Optimal")
+        temp_var_1 = opt.predicted_temps.get(0)
+        self.assertIsNotNone(temp_var_1)
+        # Capture the actual value (not just the Variable reference, which gets overwritten)
+        first_temp_value = float(temp_var_1.value[0])
+        self.assertAlmostEqual(
+            first_temp_value,
+            initial_start_temp,
+            places=2,
+            msg=f"First call: predicted_temp[0] should be {initial_start_temp}",
+        )
+
+        # Simulate cache hit: update optim_conf and call update_thermal_start_temps
+        # This is what command_line.py does on cache hit
+        opt.optim_conf["def_load_config"][0]["thermal_config"]["start_temperature"] = (
+            updated_start_temp
+        )
+        optim_conf_updated = copy.deepcopy(optim_conf)
+        optim_conf_updated["def_load_config"][0]["thermal_config"]["start_temperature"] = (
+            updated_start_temp
+        )
+        opt.update_thermal_start_temps(optim_conf_updated)
+
+        # Second optimization (reuses cached problem structure)
+        opt.perform_optimization(
+            data_opt=data_opt,
+            p_pv=p_pv,
+            p_load=p_load,
+            unit_load_cost=unit_load_cost,
+            unit_prod_price=unit_prod_price,
+        )
+
+        self.assertEqual(opt.optim_status, "Optimal")
+        temp_var_2 = opt.predicted_temps.get(0)
+        self.assertIsNotNone(temp_var_2)
+        second_temp_value = float(temp_var_2.value[0])
+        self.assertAlmostEqual(
+            second_temp_value,
+            updated_start_temp,
+            places=2,
+            msg=f"Second call (cache hit): predicted_temp[0] should be {updated_start_temp}, "
+            f"not the old baked-in value {initial_start_temp}",
+        )
+
+        # Verify the constraint actually changed (not just a coincidence)
+        self.assertNotAlmostEqual(
+            first_temp_value,
+            second_temp_value,
+            places=1,
+            msg="The two optimization results should have different starting temperatures",
+        )
+
+    async def test_thermal_outdoor_temp_updates_on_cache_hit(self):
+        """Verify that outdoor_temp forecast updates affect thermal dynamics on cache hit.
+
+        This test ensures that changing weather forecasts between MPC iterations
+        actually affects the thermal model behavior, not using stale baked-in values.
+        """
+        from emhass.optimization import Optimization
+
+        retrieve_hass_conf = {
+            "optimization_time_step": pd.Timedelta(minutes=30),
+            "time_zone": "UTC",
+            "sensor_power_photovoltaics": "pv",
+            "sensor_power_load_no_var_loads": "load",
+        }
+
+        plant_conf = {
+            "pv_module_model": None,
+            "pv_inverter_model": None,
+            "surface_tilt": 30,
+            "surface_azimuth": 180,
+            "modules_per_string": 10,
+            "strings_per_inverter": 1,
+            "inverter_is_hybrid": False,
+            "compute_curtailment": False,
+            "set_use_battery": False,
+            "battery_dynamic_max": 1.0,
+            "battery_dynamic_min": -1.0,
+            "battery_discharge_power_max": 1000,
+            "battery_charge_power_max": 1000,
+            "battery_nominal_energy_capacity": 5000,
+            "battery_minimum_state_of_charge": 0.1,
+            "battery_maximum_state_of_charge": 0.9,
+            "battery_discharge_efficiency": 0.95,
+            "battery_charge_efficiency": 0.95,
+        }
+
+        n_timesteps = 10
+
+        optim_conf = {
+            "number_of_deferrable_loads": 1,
+            "nominal_power_of_deferrable_loads": [2000],
+            "operating_hours_of_each_deferrable_load": [4],
+            "start_timesteps_of_each_deferrable_load": [0],
+            "end_timesteps_of_each_deferrable_load": [n_timesteps],
+            "treat_deferrable_load_as_semi_cont": [False],
+            "set_deferrable_load_single_constant": [False],
+            "set_deferrable_startup_penalty": [0],
+            "set_use_battery": False,
+            "set_total_pv_sell": False,
+            "delta_forecast_daily": 1,
+            "def_load_config": [
+                {
+                    "thermal_config": {
+                        "start_temperature": 20.0,
+                        "cooling_constant": 0.1,
+                        "heating_rate": 2.0,
+                        "min_temperatures": [18.0] * n_timesteps,
+                        "max_temperatures": [25.0] * n_timesteps,
+                        "sense": "heat",
+                        "thermal_inertia": 0.0,
+                    }
+                }
+            ],
+        }
+
+        # Create Optimization object
+        opt = Optimization(
+            retrieve_hass_conf=retrieve_hass_conf,
+            optim_conf=optim_conf,
+            plant_conf=plant_conf,
+            var_load_cost="unit_load_cost",
+            var_prod_price="unit_prod_price",
+            costfun="profit",
+            emhass_conf=emhass_conf,
+            logger=logger,
+        )
+
+        p_pv = np.array([500.0] * n_timesteps)
+        p_load = np.array([1000.0] * n_timesteps)
+        unit_load_cost = np.array([0.15] * n_timesteps)
+        unit_prod_price = np.array([0.05] * n_timesteps)
+
+        # First call with cold outdoor temp (10°C) - more heating needed
+        start1 = pd.Timestamp.now(tz="UTC")
+        idx1 = pd.date_range(start=start1, periods=n_timesteps, freq="30min", tz="UTC")
+        data_opt_cold = pd.DataFrame(
+            {"outdoor_temperature_forecast": [10.0] * n_timesteps},
+            index=idx1,
+        )
+
+        opt.perform_optimization(
+            data_opt=data_opt_cold,
+            p_pv=p_pv,
+            p_load=p_load,
+            unit_load_cost=unit_load_cost,
+            unit_prod_price=unit_prod_price,
+        )
+
+        # Capture outdoor_temp parameter value after first call
+        outdoor_temp_param_first = opt.param_thermal[0]["outdoor_temp"].value.copy()
+
+        # Second call with warm outdoor temp (25°C) - less heating needed
+        data_opt_warm = pd.DataFrame(
+            {"outdoor_temperature_forecast": [25.0] * n_timesteps},
+            index=idx1,
+        )
+
+        opt.perform_optimization(
+            data_opt=data_opt_warm,
+            p_pv=p_pv,
+            p_load=p_load,
+            unit_load_cost=unit_load_cost,
+            unit_prod_price=unit_prod_price,
+        )
+
+        # Capture outdoor_temp parameter value after second call
+        outdoor_temp_param_second = opt.param_thermal[0]["outdoor_temp"].value.copy()
+
+        # Verify the outdoor_temp parameter was updated
+        self.assertAlmostEqual(outdoor_temp_param_first[0], 10.0, places=1)
+        self.assertAlmostEqual(outdoor_temp_param_second[0], 25.0, places=1)
+        self.assertNotAlmostEqual(
+            outdoor_temp_param_first[0],
+            outdoor_temp_param_second[0],
+            places=1,
+            msg="Outdoor temp parameter should update between calls",
+        )
+
+    async def test_thermal_battery_params_update_on_cache_hit(self):
+        """Verify thermal_battery derived parameters update correctly on cache hit.
+
+        Tests that heating_demand, thermal_losses, and heatpump_cops are recomputed
+        when outdoor_temp or indoor_target_temperature changes.
+        """
+        from emhass.optimization import Optimization
+
+        retrieve_hass_conf = {
+            "optimization_time_step": pd.Timedelta(minutes=30),
+            "time_zone": "UTC",
+            "sensor_power_photovoltaics": "pv",
+            "sensor_power_load_no_var_loads": "load",
+        }
+
+        plant_conf = {
+            "pv_module_model": None,
+            "pv_inverter_model": None,
+            "surface_tilt": 30,
+            "surface_azimuth": 180,
+            "modules_per_string": 10,
+            "strings_per_inverter": 1,
+            "inverter_is_hybrid": False,
+            "compute_curtailment": False,
+            "set_use_battery": False,
+            "battery_dynamic_max": 1.0,
+            "battery_dynamic_min": -1.0,
+            "battery_discharge_power_max": 1000,
+            "battery_charge_power_max": 1000,
+            "battery_nominal_energy_capacity": 5000,
+            "battery_minimum_state_of_charge": 0.1,
+            "battery_maximum_state_of_charge": 0.9,
+            "battery_discharge_efficiency": 0.95,
+            "battery_charge_efficiency": 0.95,
+        }
+
+        n_timesteps = 10
+
+        optim_conf = {
+            "number_of_deferrable_loads": 1,
+            "nominal_power_of_deferrable_loads": [3000],
+            "operating_hours_of_each_deferrable_load": [4],
+            "start_timesteps_of_each_deferrable_load": [0],
+            "end_timesteps_of_each_deferrable_load": [n_timesteps],
+            "treat_deferrable_load_as_semi_cont": [False],
+            "set_deferrable_load_single_constant": [False],
+            "set_deferrable_startup_penalty": [0],
+            "set_use_battery": False,
+            "set_total_pv_sell": False,
+            "delta_forecast_daily": 1,
+            "def_load_config": [
+                {
+                    "thermal_battery": {
+                        "start_temperature": 22.0,
+                        "indoor_target_temperature": 22.0,
+                        "volume": 8,
+                        "u_value": 0.231,
+                        "envelope_area": 314.0,
+                        "ventilation_rate": 0.41,
+                        "heated_volume": 356.0,
+                        "carnot_efficiency": 0.39,
+                        "supply_temperature": 30.0,
+                        "min_temperatures": [21.0] * n_timesteps,
+                        "max_temperatures": [24.0] * n_timesteps,
+                    }
+                }
+            ],
+        }
+
+        opt = Optimization(
+            retrieve_hass_conf=retrieve_hass_conf,
+            optim_conf=optim_conf,
+            plant_conf=plant_conf,
+            var_load_cost="unit_load_cost",
+            var_prod_price="unit_prod_price",
+            costfun="profit",
+            emhass_conf=emhass_conf,
+            logger=logger,
+        )
+
+        p_pv = np.array([500.0] * n_timesteps)
+        p_load = np.array([1000.0] * n_timesteps)
+        unit_load_cost = np.array([0.15] * n_timesteps)
+        unit_prod_price = np.array([0.05] * n_timesteps)
+
+        start1 = pd.Timestamp.now(tz="UTC")
+        idx1 = pd.date_range(start=start1, periods=n_timesteps, freq="30min", tz="UTC")
+
+        # First call with cold outdoor temp (0°C)
+        data_opt_cold = pd.DataFrame(
+            {"outdoor_temperature_forecast": [0.0] * n_timesteps},
+            index=idx1,
+        )
+
+        opt.perform_optimization(
+            data_opt=data_opt_cold,
+            p_pv=p_pv,
+            p_load=p_load,
+            unit_load_cost=unit_load_cost,
+            unit_prod_price=unit_prod_price,
+        )
+
+        # Capture derived parameter values after first call
+        cops_first = opt.param_thermal[0]["heatpump_cops"].value.copy()
+        heating_demand_first = opt.param_thermal[0]["heating_demand"].value.copy()
+
+        # Second call with warm outdoor temp (15°C)
+        data_opt_warm = pd.DataFrame(
+            {"outdoor_temperature_forecast": [15.0] * n_timesteps},
+            index=idx1,
+        )
+
+        opt.perform_optimization(
+            data_opt=data_opt_warm,
+            p_pv=p_pv,
+            p_load=p_load,
+            unit_load_cost=unit_load_cost,
+            unit_prod_price=unit_prod_price,
+        )
+
+        # Capture derived parameter values after second call
+        cops_second = opt.param_thermal[0]["heatpump_cops"].value.copy()
+        heating_demand_second = opt.param_thermal[0]["heating_demand"].value.copy()
+
+        # Verify COPs changed (warmer outdoor = higher COP)
+        self.assertGreater(
+            cops_second[0],
+            cops_first[0],
+            "Heatpump COP should be higher with warmer outdoor temp",
+        )
+
+        # Verify heating demand changed (warmer outdoor = lower heating demand)
+        self.assertLess(
+            heating_demand_second[0],
+            heating_demand_first[0],
+            "Heating demand should be lower with warmer outdoor temp",
+        )
+
+    async def test_thermal_min_max_temps_update_on_cache_hit(self):
+        """Verify min/max temperature constraints update on cache hit.
+
+        Tests that changing min_temperatures/max_temperatures in config
+        actually affects the optimization constraints.
+        """
+        from emhass.optimization import Optimization
+
+        retrieve_hass_conf = {
+            "optimization_time_step": pd.Timedelta(minutes=30),
+            "time_zone": "UTC",
+            "sensor_power_photovoltaics": "pv",
+            "sensor_power_load_no_var_loads": "load",
+        }
+
+        plant_conf = {
+            "pv_module_model": None,
+            "pv_inverter_model": None,
+            "surface_tilt": 30,
+            "surface_azimuth": 180,
+            "modules_per_string": 10,
+            "strings_per_inverter": 1,
+            "inverter_is_hybrid": False,
+            "compute_curtailment": False,
+            "set_use_battery": False,
+            "battery_dynamic_max": 1.0,
+            "battery_dynamic_min": -1.0,
+            "battery_discharge_power_max": 1000,
+            "battery_charge_power_max": 1000,
+            "battery_nominal_energy_capacity": 5000,
+            "battery_minimum_state_of_charge": 0.1,
+            "battery_maximum_state_of_charge": 0.9,
+            "battery_discharge_efficiency": 0.95,
+            "battery_charge_efficiency": 0.95,
+        }
+
+        n_timesteps = 10
+        initial_min_temp = 18.0
+        updated_min_temp = 22.0
+
+        optim_conf = {
+            "number_of_deferrable_loads": 1,
+            "nominal_power_of_deferrable_loads": [2000],
+            "operating_hours_of_each_deferrable_load": [4],
+            "start_timesteps_of_each_deferrable_load": [0],
+            "end_timesteps_of_each_deferrable_load": [n_timesteps],
+            "treat_deferrable_load_as_semi_cont": [False],
+            "set_deferrable_load_single_constant": [False],
+            "set_deferrable_startup_penalty": [0],
+            "set_use_battery": False,
+            "set_total_pv_sell": False,
+            "delta_forecast_daily": 1,
+            "def_load_config": [
+                {
+                    "thermal_config": {
+                        "start_temperature": 20.0,
+                        "cooling_constant": 0.1,
+                        "heating_rate": 2.0,
+                        "min_temperatures": [initial_min_temp] * n_timesteps,
+                        "max_temperatures": [26.0] * n_timesteps,
+                        "sense": "heat",
+                        "thermal_inertia": 0.0,
+                    }
+                }
+            ],
+        }
+
+        opt = Optimization(
+            retrieve_hass_conf=retrieve_hass_conf,
+            optim_conf=optim_conf,
+            plant_conf=plant_conf,
+            var_load_cost="unit_load_cost",
+            var_prod_price="unit_prod_price",
+            costfun="profit",
+            emhass_conf=emhass_conf,
+            logger=logger,
+        )
+
+        p_pv = np.array([500.0] * n_timesteps)
+        p_load = np.array([1000.0] * n_timesteps)
+        unit_load_cost = np.array([0.15] * n_timesteps)
+        unit_prod_price = np.array([0.05] * n_timesteps)
+
+        start1 = pd.Timestamp.now(tz="UTC")
+        idx1 = pd.date_range(start=start1, periods=n_timesteps, freq="30min", tz="UTC")
+        data_opt = pd.DataFrame(
+            {"outdoor_temperature_forecast": [10.0] * n_timesteps},
+            index=idx1,
+        )
+
+        # First call with initial min_temp
+        opt.perform_optimization(
+            data_opt=data_opt,
+            p_pv=p_pv,
+            p_load=p_load,
+            unit_load_cost=unit_load_cost,
+            unit_prod_price=unit_prod_price,
+        )
+
+        min_temps_first = opt.param_thermal[0]["min_temps"].value.copy()
+
+        # Update min_temperatures in config and call update_thermal_params
+        opt.optim_conf["def_load_config"][0]["thermal_config"]["min_temperatures"] = [
+            updated_min_temp
+        ] * n_timesteps
+        opt.update_thermal_params(opt.optim_conf, data_opt, p_load)
+
+        min_temps_second = opt.param_thermal[0]["min_temps"].value.copy()
+
+        # Verify min_temps parameter was updated
+        self.assertAlmostEqual(min_temps_first[1], initial_min_temp, places=1)
+        self.assertAlmostEqual(min_temps_second[1], updated_min_temp, places=1)
 
 
 if __name__ == "__main__":
