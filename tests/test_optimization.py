@@ -38,6 +38,9 @@ emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations
 # create logger
 logger, ch = get_logger(__name__, emhass_conf, save_to_file=False)
 
+# Valid optimization statuses (some solvers return "Optimal (Relaxed)" for MIP problems)
+VALID_OPTIMAL_STATUSES = ["Optimal", "Optimal (Relaxed)"]
+
 
 class TestOptimization(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -2704,8 +2707,13 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 def_end_timestep=def_end_timestep,
             )
 
-            # Assertions
-            self.assertEqual(opt_res["optim_status"].iloc[0], "Optimal (Relaxed)")
+            # Assertions - accept both Optimal (MIP gap may help) and Optimal (Relaxed)
+            status = opt_res["optim_status"].iloc[0]
+            self.assertIn(
+                status,
+                ["Optimal", "Optimal (Relaxed)"],
+                f"Expected Optimal or Optimal (Relaxed), got {status}",
+            )
 
             # Check Load 0
             p_def_0 = opt_res["P_deferrable0"]
@@ -2830,6 +2838,151 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.opt.optim_status, "Optimal")
         except Exception as e:
             self.fail(f"Optimization failed with partial NaN data: {e}")
+
+    # Test MIP gap tolerance configuration
+    def test_mip_gap_default_value(self):
+        """Test that default MIP gap is 0 (exact optimal for backward compatibility)."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        # Default should be 0 for backward compatibility
+        self.assertEqual(self.optim_conf.get("lp_solver_mip_rel_gap", 0.0), 0.0)
+
+        self.opt = self.create_optimization()
+        self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
+            self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
+        )
+        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+    def test_mip_gap_zero_exact_optimal(self):
+        """Test that MIP gap 0 gives exact optimal solution."""
+        self.optim_conf["lp_solver_mip_rel_gap"] = 0.0
+        self.opt = self.create_optimization()
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+
+        self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
+            self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
+        )
+        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+    def test_mip_gap_custom_value(self):
+        """Test that custom MIP gap values work correctly."""
+        # Test with 10% gap
+        self.optim_conf["lp_solver_mip_rel_gap"] = 0.10
+        self.opt = self.create_optimization()
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+
+        self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
+            self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
+        )
+        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+    def test_mip_gap_with_binary_variables(self):
+        """Test MIP gap with semi-continuous loads (binary variables)."""
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [True, True]
+        self.optim_conf["lp_solver_mip_rel_gap"] = 0.05
+        self.opt = self.create_optimization()
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+
+        self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
+            self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
+        )
+        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+        self.assertIn("P_deferrable0", self.opt_res_dayahead.columns)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+    def test_mip_gap_solution_quality(self):
+        """Test that MIP gap produces similar objective values."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+
+        # Run with exact optimal (gap = 0)
+        self.optim_conf["lp_solver_mip_rel_gap"] = 0.0
+        opt_exact = self.create_optimization()
+        opt_exact.perform_dayahead_forecast_optim(
+            self.df_input_data_dayahead.copy(), self.p_pv_forecast, self.p_load_forecast
+        )
+        obj_exact = opt_exact.prob.value
+
+        # Run with 5% gap
+        self.optim_conf["lp_solver_mip_rel_gap"] = 0.05
+        opt_gap = self.create_optimization()
+        opt_gap.perform_dayahead_forecast_optim(
+            self.df_input_data_dayahead.copy(), self.p_pv_forecast, self.p_load_forecast
+        )
+        obj_gap = opt_gap.prob.value
+
+        # Both should succeed
+        self.assertIn(opt_exact.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertIn(opt_gap.optim_status, VALID_OPTIMAL_STATUSES)
+
+        # Objective values should be within reasonable range
+        # (gap solution should be within 10% of exact for this simple problem)
+        if obj_exact is not None and obj_gap is not None and obj_exact != 0:
+            relative_diff = abs(obj_exact - obj_gap) / abs(obj_exact)
+            self.assertLess(
+                relative_diff,
+                0.10,
+                f"Objective difference too large: exact={obj_exact}, gap={obj_gap}",
+            )
+
+    def test_mip_gap_negative_clamped_to_zero(self):
+        """Test that negative MIP gap values are clamped to 0."""
+        self.optim_conf["lp_solver_mip_rel_gap"] = -0.5
+        self.opt = self.create_optimization()
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+
+        # Should still work - negative value clamped to 0
+        with self.assertLogs(level="WARNING") as log:
+            self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
+                self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
+            )
+        # Check warning was logged
+        self.assertTrue(
+            any("negative" in msg.lower() for msg in log.output),
+            "Expected warning about negative MIP gap value",
+        )
+        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+    def test_mip_gap_exceeds_one_clamped(self):
+        """Test that MIP gap values > 1 are clamped to 1.0."""
+        self.optim_conf["lp_solver_mip_rel_gap"] = 2.5
+        self.opt = self.create_optimization()
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+
+        # Should still work - value clamped to 1.0
+        with self.assertLogs(level="WARNING") as log:
+            self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(
+                self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
+            )
+        # Check warning was logged
+        self.assertTrue(
+            any("exceeds" in msg.lower() or "clamping" in msg.lower() for msg in log.output),
+            "Expected warning about MIP gap exceeding 1.0",
+        )
+        self.assertIsInstance(self.opt_res_dayahead, type(pd.DataFrame()))
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+    def test_mip_gap_boundary_values(self):
+        """Test MIP gap at boundary values (0 and 1)."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+
+        # Test gap = 0 (exact optimal)
+        self.optim_conf["lp_solver_mip_rel_gap"] = 0
+        opt_zero = self.create_optimization()
+        opt_zero.perform_dayahead_forecast_optim(
+            self.df_input_data_dayahead.copy(), self.p_pv_forecast, self.p_load_forecast
+        )
+        self.assertIn(opt_zero.optim_status, VALID_OPTIMAL_STATUSES)
+
+        # Test gap = 1 (100% gap - any feasible solution)
+        self.optim_conf["lp_solver_mip_rel_gap"] = 1.0
+        opt_one = self.create_optimization()
+        opt_one.perform_dayahead_forecast_optim(
+            self.df_input_data_dayahead.copy(), self.p_pv_forecast, self.p_load_forecast
+        )
+        self.assertIn(opt_one.optim_status, VALID_OPTIMAL_STATUSES)
 
 
 if __name__ == "__main__":

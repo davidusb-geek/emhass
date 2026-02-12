@@ -7,6 +7,7 @@ import logging
 import os
 import pathlib
 import pickle
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
@@ -66,7 +67,7 @@ class PublishContext:
 
     Attributes:
         input_data_dict (dict): Dictionary containing input data with keys 'rh' (RetrieveHass),
-            'opt' (Optimization), and 'fcst' (Forecast) objects.
+            'opt' (Optimization - may be None for publish-data), and 'fcst' (Forecast) objects.
         params (dict): Parameters dictionary for publishing configuration.
         idx (int): Index identifier for the current publishing operation.
         common_kwargs (dict): Common keyword arguments shared across publishing helpers.
@@ -88,8 +89,265 @@ class PublishContext:
         return self.input_data_dict["opt"]
 
     @property
+    def optim_conf(self) -> dict:
+        """Access optim_conf directly from input_data_dict (works even when opt is None)."""
+        return self.input_data_dict["optim_conf"]
+
+    @property
+    def plant_conf(self) -> dict:
+        """Access plant_conf directly from input_data_dict (works even when opt is None)."""
+        return self.input_data_dict["plant_conf"]
+
+    @property
     def fcst(self) -> Forecast:
         return self.input_data_dict["fcst"]
+
+
+@dataclass(frozen=True)
+class OptimizationCacheKey:
+    """
+    Frozen dataclass representing configuration fields that affect optimization structure.
+
+    Changes to any of these fields require rebuilding the optimization problem.
+    Using a frozen dataclass makes the cache key explicit, hashable, and easy to extend.
+    """
+
+    number_of_deferrable_loads: int
+    set_use_battery: bool
+    set_use_pv: bool
+    treat_deferrable_load_as_semi_cont: tuple
+    set_deferrable_load_single_constant: tuple
+    set_deferrable_startup_penalty: tuple
+    set_deferrable_load_as_timeseries: tuple
+    nominal_power_of_deferrable_loads: tuple
+    def_load_config_structure: tuple  # (index, type) tuples for each load
+    battery_capacity: float
+    inverter_is_hybrid: bool
+    compute_curtailment: bool
+    optimization_time_step_s: float | None
+    delta_forecast_daily_s: float | None
+    costfun: str
+
+
+class OptimizationCache:
+    """
+    In-memory cache for Optimization objects to enable warm-starting.
+
+    Warm-starting reuses the previous solution as a starting point for the solver,
+    which can significantly speed up repeated MPC optimizations where consecutive
+    problems are similar.
+
+    The cache is invalidated when configuration changes that affect the optimization
+    structure (number of variables, constraints, etc.).
+
+    Thread-safe: Uses a lock to prevent race conditions when multiple optimizations
+    run concurrently in async code.
+    """
+
+    _instance: "Optimization | None" = None
+    _cache_key: OptimizationCacheKey | None = None
+    _last_used: datetime | None = None
+    _lock: threading.Lock = threading.Lock()
+
+    @classmethod
+    def _compute_cache_key(
+        cls,
+        optim_conf: dict,
+        plant_conf: dict,
+        costfun: str,
+        retrieve_hass_conf: dict,
+    ) -> OptimizationCacheKey:
+        """
+        Compute a cache key from configuration that affects optimization structure.
+
+        Returns a frozen dataclass that can be directly compared for equality.
+        Changes to any field require rebuilding the optimization problem.
+        """
+
+        def to_seconds(val):
+            """Convert Timedelta/timedelta to seconds."""
+            if val is None:
+                return None
+            return val.total_seconds() if hasattr(val, "total_seconds") else float(val)
+
+        def to_tuple(val):
+            """Convert lists/arrays to tuples for hashability."""
+            if val is None:
+                return ()
+            if hasattr(val, "tolist"):
+                val = val.tolist()
+            if isinstance(val, (list, tuple)):
+                # Handle nested lists (e.g., nominal_power with sequences)
+                return tuple(tuple(v) if isinstance(v, (list, tuple)) else v for v in val)
+            return (val,)
+
+        def config_hash(cfg: dict, exclude_keys: set | None = None) -> str:
+            """Create a stable hash of config dict for cache key comparison.
+
+            Args:
+                cfg: The config dict to hash
+                exclude_keys: Keys to exclude from hash (runtime params)
+            """
+            import hashlib
+
+            if exclude_keys is None:
+                exclude_keys = set()
+            # Sort keys for deterministic ordering, exclude runtime parameters
+            sorted_items = sorted(
+                ((k, v) for k, v in cfg.items() if k not in exclude_keys),
+                key=lambda x: str(x[0]),
+            )
+            config_str = str(sorted_items)
+            return hashlib.md5(config_str.encode()).hexdigest()[:8]
+
+        # Runtime parameters that should NOT affect cache key
+        # These change between MPC iterations but don't affect problem structure
+        thermal_runtime_keys = {
+            "start_temperature",
+            "desired_temperatures",
+            "indoor_target_temperature",  # thermal_battery runtime param
+        }
+
+        # Extract def_load_config structure (which loads are thermal/thermal_battery/standard)
+        # Include hash of thermal config contents to detect parameter changes
+        def_load_config = optim_conf.get("def_load_config", []) or []
+        def_structure = []
+        for i, cfg in enumerate(def_load_config):
+            cfg = cfg or {}
+            if "thermal_config" in cfg:
+                # Include hash of thermal_config contents to detect parameter changes
+                # Exclude runtime parameters (start_temperature, desired_temperatures) from hash
+                thermal_hash = config_hash(cfg["thermal_config"], thermal_runtime_keys)
+                load_type = f"thermal_config:{thermal_hash}"
+            elif "thermal_battery" in cfg:
+                # Include hash of thermal_battery contents to detect parameter changes
+                # Exclude runtime parameters (start_temperature, desired_temperatures) from hash
+                thermal_hash = config_hash(cfg["thermal_battery"], thermal_runtime_keys)
+                load_type = f"thermal_battery:{thermal_hash}"
+            else:
+                load_type = "standard"
+            def_structure.append((i, load_type))
+
+        return OptimizationCacheKey(
+            number_of_deferrable_loads=optim_conf.get("number_of_deferrable_loads", 0),
+            set_use_battery=optim_conf.get("set_use_battery", False),
+            set_use_pv=optim_conf.get("set_use_pv", True),
+            treat_deferrable_load_as_semi_cont=to_tuple(
+                optim_conf.get("treat_deferrable_load_as_semi_cont", [])
+            ),
+            set_deferrable_load_single_constant=to_tuple(
+                optim_conf.get("set_deferrable_load_single_constant", [])
+            ),
+            set_deferrable_startup_penalty=to_tuple(
+                optim_conf.get("set_deferrable_startup_penalty", [])
+            ),
+            set_deferrable_load_as_timeseries=to_tuple(
+                optim_conf.get("set_deferrable_load_as_timeseries", [])
+            ),
+            # Note: The following are parameterized and don't require rebuild:
+            # - start_timesteps and end_timesteps (via window masks)
+            # - operating_hours_of_each_deferrable_load (via Big-M energy constraints)
+            nominal_power_of_deferrable_loads=to_tuple(
+                optim_conf.get("nominal_power_of_deferrable_loads", [])
+            ),
+            def_load_config_structure=tuple(def_structure),
+            battery_capacity=plant_conf.get("battery_capacity", 0),
+            inverter_is_hybrid=plant_conf.get("inverter_is_hybrid", False),
+            compute_curtailment=plant_conf.get("compute_curtailment", False),
+            optimization_time_step_s=to_seconds(retrieve_hass_conf.get("optimization_time_step")),
+            delta_forecast_daily_s=to_seconds(optim_conf.get("delta_forecast_daily")),
+            costfun=costfun,
+        )
+
+    @classmethod
+    def get(
+        cls,
+        optim_conf: dict,
+        plant_conf: dict,
+        costfun: str,
+        retrieve_hass_conf: dict,
+        logger: logging.Logger,
+    ) -> "Optimization | None":
+        """
+        Get cached Optimization object if configuration matches.
+
+        Returns None if cache is empty or configuration has changed.
+        Thread-safe via internal locking.
+        """
+        cache_key = cls._compute_cache_key(optim_conf, plant_conf, costfun, retrieve_hass_conf)
+
+        with cls._lock:
+            if cls._instance is not None and cls._cache_key == cache_key:
+                age = datetime.now() - cls._last_used if cls._last_used else timedelta(0)
+                logger.debug(
+                    f"OptimizationCache HIT: Reusing cached optimization object "
+                    f"(age={age.total_seconds():.1f}s) - warm-start enabled"
+                )
+                cls._last_used = datetime.now()
+                return cls._instance
+
+            if cls._instance is not None:
+                # Log which fields changed for debugging
+                if cls._cache_key is not None:
+                    changed_fields = []
+                    for field in cache_key.__dataclass_fields__:
+                        old_val = getattr(cls._cache_key, field)
+                        new_val = getattr(cache_key, field)
+                        if old_val != new_val:
+                            changed_fields.append(f"{field}: {old_val!r} -> {new_val!r}")
+                    if changed_fields:
+                        logger.debug(
+                            f"OptimizationCache MISS: Config changed - {', '.join(changed_fields)}"
+                        )
+                    else:
+                        logger.debug("OptimizationCache MISS: Config changed (unknown diff)")
+                else:
+                    logger.debug("OptimizationCache MISS: Config changed, rebuilding optimization")
+            else:
+                logger.debug("OptimizationCache MISS: Empty cache, building new optimization")
+
+            return None
+
+    @classmethod
+    def put(
+        cls,
+        opt: "Optimization",
+        optim_conf: dict,
+        plant_conf: dict,
+        costfun: str,
+        retrieve_hass_conf: dict,
+        logger: logging.Logger,
+    ) -> None:
+        """Store Optimization object in cache. Thread-safe via internal locking."""
+        cache_key = cls._compute_cache_key(optim_conf, plant_conf, costfun, retrieve_hass_conf)
+        with cls._lock:
+            cls._instance = opt
+            cls._cache_key = cache_key
+            cls._last_used = datetime.now()
+            logger.debug(
+                f"OptimizationCache: Stored optimization object "
+                f"(loads={cache_key.number_of_deferrable_loads}, battery={cache_key.set_use_battery})"
+            )
+
+    @classmethod
+    def clear(cls, logger: logging.Logger | None = None) -> None:
+        """Clear the cache (e.g., for testing or explicit invalidation). Thread-safe."""
+        with cls._lock:
+            cls._instance = None
+            cls._cache_key = None
+            cls._last_used = None
+            if logger:
+                logger.debug("OptimizationCache: CLEARED")
+
+    @classmethod
+    def get_stats(cls) -> dict:
+        """Get cache statistics for debugging. Thread-safe."""
+        with cls._lock:
+            return {
+                "has_instance": cls._instance is not None,
+                "cache_key": cls._cache_key,
+                "last_used": cls._last_used.isoformat() if cls._last_used else None,
+            }
 
 
 async def _retrieve_from_file(
@@ -715,25 +973,79 @@ async def set_input_data_dict(
     if isinstance(params, str):
         params = dict(orjson.loads(params))
     costfun = optim_conf.get("costfun", costfun)
-    fcst = Forecast(
-        retrieve_hass_conf,
-        optim_conf,
-        plant_conf,
-        params,
-        emhass_conf,
-        logger,
-        get_data_from_file=get_data_from_file,
-    )
-    opt = Optimization(
-        retrieve_hass_conf,
-        optim_conf,
-        plant_conf,
-        fcst.var_load_cost,
-        fcst.var_prod_price,
-        costfun,
-        emhass_conf,
-        logger,
-    )
+    # Actions that don't require building an Optimization object
+    # publish-data only reads saved results and posts to Home Assistant
+    actions_without_optimization = ["publish-data", "export-influxdb-to-csv"]
+    if set_type in actions_without_optimization:
+        fcst = None
+        opt = None
+        logger.debug(f"Skipping Optimization creation for action: {set_type}")
+    else:
+        fcst = Forecast(
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            params,
+            emhass_conf,
+            logger,
+            get_data_from_file=get_data_from_file,
+        )
+        # Try to get cached Optimization object for warm-starting
+        opt = OptimizationCache.get(optim_conf, plant_conf, costfun, retrieve_hass_conf, logger)
+        if opt is None:
+            # Cache miss - create new Optimization object
+            opt = Optimization(
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                fcst.var_load_cost,
+                fcst.var_prod_price,
+                costfun,
+                emhass_conf,
+                logger,
+            )
+            # Store in cache for future warm-starts
+            OptimizationCache.put(opt, optim_conf, plant_conf, costfun, retrieve_hass_conf, logger)
+        else:
+            # Cache hit - update references that may have changed
+            # (logger, var names from forecast, and runtime-configurable optim_conf values)
+            opt.logger = logger
+            opt.var_load_cost = fcst.var_load_cost
+            opt.var_prod_price = fcst.var_prod_price
+            # Update thermal runtime parameters (start_temperature, desired_temperatures)
+            # These change between MPC iterations and must be synced to cached object
+            new_def_load_config = optim_conf.get("def_load_config", [])
+            cached_def_load_config = opt.optim_conf.get("def_load_config", [])
+            for k, new_cfg in enumerate(new_def_load_config):
+                if k < len(cached_def_load_config) and new_cfg:
+                    cached_cfg = cached_def_load_config[k] or {}
+                    # Update thermal_config runtime parameters
+                    if "thermal_config" in new_cfg and "thermal_config" in cached_cfg:
+                        for key in ("start_temperature", "desired_temperatures"):
+                            if key in new_cfg["thermal_config"]:
+                                cached_cfg["thermal_config"][key] = new_cfg["thermal_config"][key]
+                    # Update thermal_battery runtime parameters
+                    if "thermal_battery" in new_cfg and "thermal_battery" in cached_cfg:
+                        for key in (
+                            "start_temperature",
+                            "desired_temperatures",
+                            "indoor_target_temperature",
+                        ):
+                            if key in new_cfg["thermal_battery"]:
+                                cached_cfg["thermal_battery"][key] = new_cfg["thermal_battery"][key]
+            # Update CVXPY Parameters for thermal start temperatures
+            # This is critical: updating optim_conf alone doesn't change baked-in constraint values
+            opt.update_thermal_start_temps(optim_conf)
+        # Update runtime-configurable solver options from optim_conf
+        # These don't affect problem structure, so they're safe to update on cached object
+        runtime_solver_opts = [
+            "lp_solver_timeout",
+            "lp_solver_mip_rel_gap",
+            "num_threads",
+        ]
+        for key in runtime_solver_opts:
+            if key in optim_conf:
+                opt.optim_conf[key] = optim_conf[key]
     # Create SetupContext
     ctx = SetupContext(
         retrieve_hass_conf=retrieve_hass_conf,
@@ -784,6 +1096,8 @@ async def set_input_data_dict(
     input_data_dict = {
         "emhass_conf": emhass_conf,
         "retrieve_hass_conf": retrieve_hass_conf,
+        "optim_conf": optim_conf,
+        "plant_conf": plant_conf,
         "rh": rh,
         "opt": opt,
         "fcst": fcst,
@@ -1725,19 +2039,6 @@ async def _publish_standard_forecasts(
 ) -> list[str]:
     """Publish PV, Load, Curtailment, and Hybrid Inverter data."""
     cols = []
-    # PV Forecast
-    custom_pv = ctx.params["passed_data"]["custom_pv_forecast_id"]
-    await ctx.rh.post_data(
-        opt_res_latest["P_PV"],
-        ctx.idx,
-        custom_pv["entity_id"],
-        "power",
-        custom_pv["unit_of_measurement"],
-        custom_pv["friendly_name"],
-        type_var="power",
-        **ctx.common_kwargs,
-    )
-    cols.append("P_PV")
     # Load Forecast
     custom_load = ctx.params["passed_data"]["custom_load_forecast_id"]
     await ctx.rh.post_data(
@@ -1751,8 +2052,22 @@ async def _publish_standard_forecasts(
         **ctx.common_kwargs,
     )
     cols.append("P_Load")
+    # PV Forecast
+    if "P_PV" in opt_res_latest.columns:
+        custom_pv = ctx.params["passed_data"]["custom_pv_forecast_id"]
+        await ctx.rh.post_data(
+            opt_res_latest["P_PV"],
+            ctx.idx,
+            custom_pv["entity_id"],
+            "power",
+            custom_pv["unit_of_measurement"],
+            custom_pv["friendly_name"],
+            type_var="power",
+            **ctx.common_kwargs,
+        )
+        cols.append("P_PV")
     # Curtailment
-    if ctx.fcst.plant_conf["compute_curtailment"]:
+    if ctx.plant_conf["compute_curtailment"]:
         custom_curt = ctx.params["passed_data"]["custom_pv_curtailment_id"]
         await ctx.rh.post_data(
             opt_res_latest["P_PV_curtailment"],
@@ -1766,7 +2081,7 @@ async def _publish_standard_forecasts(
         )
         cols.append("P_PV_curtailment")
     # Hybrid Inverter
-    if ctx.fcst.plant_conf["inverter_is_hybrid"]:
+    if ctx.plant_conf["inverter_is_hybrid"]:
         custom_inv = ctx.params["passed_data"]["custom_hybrid_inverter_id"]
         await ctx.rh.post_data(
             opt_res_latest["P_hybrid_inverter"],
@@ -1786,7 +2101,7 @@ async def _publish_deferrable_loads(ctx: PublishContext, opt_res_latest: pd.Data
     """Publish data for all deferrable loads."""
     cols = []
     custom_def = ctx.params["passed_data"]["custom_deferrable_forecast_id"]
-    for k in range(ctx.opt.optim_conf["number_of_deferrable_loads"]):
+    for k in range(ctx.optim_conf["number_of_deferrable_loads"]):
         col_name = f"P_deferrable{k}"
         if col_name not in opt_res_latest.columns:
             ctx.logger.error(f"{col_name} was not found in results DataFrame.")
@@ -1834,10 +2149,10 @@ async def _publish_thermal_loads(ctx: PublishContext, opt_res_latest: pd.DataFra
         return cols
     custom_temp = ctx.params["passed_data"]["custom_predicted_temperature_id"]
     custom_heat = ctx.params["passed_data"].get("custom_heating_demand_id")
-    def_load_config = ctx.opt.optim_conf.get("def_load_config", [])
+    def_load_config = ctx.optim_conf.get("def_load_config", [])
     if not isinstance(def_load_config, list):
         def_load_config = []
-    for k in range(ctx.opt.optim_conf["number_of_deferrable_loads"]):
+    for k in range(ctx.optim_conf["number_of_deferrable_loads"]):
         if k >= len(def_load_config):
             continue
         load_cfg = def_load_config[k]
@@ -1875,7 +2190,7 @@ async def _publish_thermal_loads(ctx: PublishContext, opt_res_latest: pd.DataFra
 async def _publish_battery_data(ctx: PublishContext, opt_res_latest: pd.DataFrame) -> list[str]:
     """Publish Battery Power and SOC."""
     cols = []
-    if not ctx.opt.optim_conf["set_use_battery"]:
+    if not ctx.optim_conf["set_use_battery"]:
         return cols
     if "P_batt" not in opt_res_latest.columns:
         ctx.logger.error("P_batt was not found in results DataFrame.")
