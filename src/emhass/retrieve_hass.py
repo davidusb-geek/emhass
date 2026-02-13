@@ -1237,7 +1237,14 @@ class RetrieveHass:
                 if os.path.isfile(metadata_path):
                     async with aiofiles.open(metadata_path) as file:
                         content = await file.read()
-                        metadata = orjson.loads(content)
+                        try:
+                            metadata = orjson.loads(content)
+                        except orjson.JSONDecodeError:
+                            self.logger.error(f"Corrupted metadata file found at {metadata_path}. Creating a new one.")
+                            metadata = {}
+                            # Rename the corrupted file to metadata_corrupt.json
+                            corrupt_path = entities_path / "metadata_corrupt.json"
+                            os.rename(metadata_path, corrupt_path)
                 else:
                     metadata = {}
 
