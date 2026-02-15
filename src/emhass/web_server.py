@@ -889,7 +889,9 @@ async def initialize(args: dict | None = None):
     server_ip = await _setup_secrets(args, options_path)
     # Build configuration (now uses potentially updated emhass_conf["config_path"] from options.json)
     config, costfun, logging_level = await _build_configuration(
-        emhass_conf["config_path"], emhass_conf.get("legacy_config_path", legacy_config_path), defaults_path
+        emhass_conf["config_path"],
+        emhass_conf.get("legacy_config_path", legacy_config_path),
+        defaults_path,
     )
     # Validate Data Path
     _validate_data_path(root_path)
