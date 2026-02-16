@@ -268,6 +268,15 @@ class Optimization:
                     self.param_thermal[k]["heating_demand"].value = np.zeros(n)
                     self.param_thermal[k]["heatpump_cops"].value = np.full(n, 3.0)
 
+                    # Thermal inertia support (first-order low-pass filter on heat input)
+                    # Always define q_input_start so downstream logic can rely on its presence.
+                    # tau_hours controls whether inertia dynamics are applied, not whether
+                    # this parameter exists.
+                    q_input_init = float(hc.get("q_input_initial", 0.0) or 0.0)
+                    self.param_thermal[k]["q_input_start"] = cp.Parameter(
+                        name=f"thermal_battery_q_input_start_{k}", value=q_input_init
+                    )
+
         # Legacy compatibility - keep param_thermal_start_temps as alias
         self.param_thermal_start_temps = {
             k: (params["type"], params["start_temp"]) for k, params in self.param_thermal.items()
@@ -312,6 +321,16 @@ class Optimization:
                             f"Updating thermal_battery start_temp for load {k}: {param.value} -> {new_temp}"
                         )
                         param.value = new_temp
+
+                    # Auto-persist Q_input from previous solve.
+                    # q_input_var is only set when tau > 0 and a solve has run;
+                    # q_input_start is always present for thermal_battery loads.
+                    if k in self.param_thermal and "q_input_var" in self.param_thermal[k]:
+                        prev_q = self.param_thermal[k]["q_input_var"].value
+                        if prev_q is not None and len(prev_q) > 1:
+                            # Use index 1: in MPC the horizon shifts by one timestep,
+                            # so prev_q[1] becomes the new initial condition.
+                            self.param_thermal[k]["q_input_start"].value = float(prev_q[1])
 
     def update_thermal_params(
         self, optim_conf: dict, data_opt: pd.DataFrame, p_load: np.ndarray
@@ -449,6 +468,28 @@ class Optimization:
                     params["heating_demand"].value = np.array(heating_demand[:n])
                 else:
                     params["heating_demand"].value = np.zeros(n)
+
+                # Auto-persist Q_input from previous solve.
+                # q_input_var is only set when tau > 0 and a solve has run;
+                # q_input_start is always present for thermal_battery loads.
+                if "q_input_var" in params:
+                    prev_q = params["q_input_var"].value
+                    if prev_q is not None and len(prev_q) > 1:
+                        # Use index 1: in MPC the horizon shifts by one timestep,
+                        # so prev_q[1] becomes the new initial condition.
+                        new_q_start = float(prev_q[1])
+                        self.logger.debug(
+                            "Auto-persisting q_input for load %s: %.4f -> %.4f",
+                            k,
+                            params["q_input_start"].value,
+                            new_q_start,
+                        )
+                        params["q_input_start"].value = new_q_start
+
+                # Manual override via config takes priority
+                if "q_input_initial" in hc:
+                    manual_q = float(hc.get("q_input_initial", 0.0) or 0.0)
+                    params["q_input_start"].value = manual_q
 
     def _get_clean_outdoor_temp(self, data_opt: pd.DataFrame, n: int) -> np.ndarray:
         """Extract and clean outdoor temperature from data_opt."""
@@ -1431,16 +1472,70 @@ class Optimization:
 
         constraints.append(predicted_temp_thermal[0] == start_temperature)
 
-        constraints.append(
-            predicted_temp_thermal[1:]
-            == predicted_temp_thermal[:-1]
-            + conversion
-            * (
-                (cp.multiply(heatpump_cops[:-1], p_deferrable[:-1]) / 1000 * self.time_step)
-                - heating_demand[:-1]
-                - thermal_losses[:-1]
+        # Thermal inertia: first-order low-pass filter on heat input
+        tau_hours = float(hc.get("thermal_inertia_time_constant", 0.0) or 0.0)
+
+        if tau_hours < 0:
+            raise ValueError(
+                f"Load {k}: thermal_inertia_time_constant must be >= 0, got {tau_hours}"
             )
-        )
+        if tau_hours > 6:
+            self.logger.warning(
+                "Load %s: thermal_inertia_time_constant=%.1f h is large. "
+                "Ensure this value reflects your system's dynamics.",
+                k,
+                tau_hours,
+            )
+
+        if tau_hours > 0:
+            alpha = self.time_step / tau_hours
+            if alpha > 1.0:
+                self.logger.warning(
+                    "Load %s: thermal_inertia_time_constant (%.2f h) < time_step (%.2f h), "
+                    "clamping filter coefficient to 1.0.",
+                    k,
+                    tau_hours,
+                    self.time_step,
+                )
+                alpha = 1.0
+
+            # Q_input variable: filtered heat energy per timestep (kWh)
+            q_input = cp.Variable(required_len, nonneg=True, name=f"q_input_{k}")
+
+            # Initialize Q_input[0] from CVXPY Parameter (enables warm-start updates)
+            params = self.param_thermal.get(k, {})
+            q_input_start = params.get("q_input_start", 0.0)
+            constraints.append(q_input[0] == q_input_start)
+
+            # Raw heat input: COP * P_hp / 1000 * dt (kWh thermal per timestep)
+            raw_heat = cp.multiply(heatpump_cops[:-1], p_deferrable[:-1]) / 1000 * self.time_step
+
+            # First-order low-pass filter
+            constraints.append(q_input[1:] == q_input[:-1] + alpha * (raw_heat - q_input[:-1]))
+
+            # Temperature uses filtered Q_input instead of raw heat
+            constraints.append(
+                predicted_temp_thermal[1:]
+                == predicted_temp_thermal[:-1]
+                + conversion * (q_input[:-1] - heating_demand[:-1] - thermal_losses[:-1])
+            )
+
+            # Store reference for auto-persistence on cache hit
+            if k in self.param_thermal:
+                self.param_thermal[k]["q_input_var"] = q_input
+        else:
+            q_input = None
+            # Original Langer & Volling equation (backward compatible)
+            constraints.append(
+                predicted_temp_thermal[1:]
+                == predicted_temp_thermal[:-1]
+                + conversion
+                * (
+                    (cp.multiply(heatpump_cops[:-1], p_deferrable[:-1]) / 1000 * self.time_step)
+                    - heating_demand[:-1]
+                    - thermal_losses[:-1]
+                )
+            )
 
         # Min/Max Temperature Constraints using parameters
         if min_temps_param is not None:
@@ -1469,9 +1564,11 @@ class Optimization:
 
         # Return heating_demand array for result building
         heating_demand_arr = (
-            params["heating_demand"].value if k in self.param_thermal else heating_demand
+            self.param_thermal[k]["heating_demand"].value
+            if k in self.param_thermal
+            else heating_demand
         )
-        return predicted_temp_thermal, heating_demand_arr
+        return predicted_temp_thermal, heating_demand_arr, q_input
 
     def _add_deferrable_load_constraints(
         self,
@@ -1493,6 +1590,7 @@ class Optimization:
 
         predicted_temps = {}
         heating_demands = {}
+        q_inputs = {}
         penalty_terms_total = 0
         n = self.num_timesteps
 
@@ -1573,11 +1671,13 @@ class Optimization:
                 and len(self.optim_conf["def_load_config"]) > k
                 and "thermal_battery" in self.optim_conf["def_load_config"][k]
             ):
-                pred_temp, heat_demand = self._add_thermal_battery_constraints(
+                pred_temp, heat_demand, q_input_var = self._add_thermal_battery_constraints(
                     constraints, k, data_opt, p_load
                 )
                 predicted_temps[k] = pred_temp
                 heating_demands[k] = heat_demand
+                if q_input_var is not None:
+                    q_inputs[k] = q_input_var
 
             # Detect special load types that have their own energy/operation constraints
             is_thermal_load = (
@@ -1753,7 +1853,7 @@ class Optimization:
                 constraints.append(p_deferrable[k] >= 0)
                 constraints.append(p_deferrable[k] <= M)
 
-        return predicted_temps, heating_demands, penalty_terms_total
+        return predicted_temps, heating_demands, penalty_terms_total, q_inputs
 
     def _build_results_dataframe(
         self,
@@ -1766,6 +1866,7 @@ class Optimization:
         predicted_temps,
         heating_demands,
         debug,
+        q_inputs=None,
     ):
         """Build the final results DataFrame (Vectorized extraction)."""
         opt_tp = pd.DataFrame(index=data_opt.index)
@@ -1901,6 +2002,11 @@ class Optimization:
 
         for k, heat_demand in heating_demands.items():
             opt_tp[f"heating_demand_heater{k}"] = heat_demand
+
+        if q_inputs:
+            for k, q_input_var in q_inputs.items():
+                q_values = get_val(q_input_var)
+                opt_tp[f"q_input_heater{k}"] = np.round(q_values, 4)
 
         # Debug Columns
         if debug:
@@ -2152,7 +2258,7 @@ class Optimization:
                 )
 
             # Deferrable Loads
-            self.predicted_temps, self.heating_demands, penalty_terms_total = (
+            self.predicted_temps, self.heating_demands, penalty_terms_total, self.q_inputs = (
                 self._add_deferrable_load_constraints(
                     constraints,
                     data_opt,
@@ -2294,7 +2400,7 @@ class Optimization:
                 )
 
             # Re-call deferrable load constraints (Skipping binary logic due to config change)
-            self.predicted_temps, self.heating_demands, penalty_terms_total = (
+            self.predicted_temps, self.heating_demands, penalty_terms_total, self.q_inputs = (
                 self._add_deferrable_load_constraints(
                     constraints_relaxed,
                     data_opt,
@@ -2373,6 +2479,7 @@ class Optimization:
             self.predicted_temps,
             self.heating_demands,
             debug,
+            q_inputs=self.q_inputs,
         )
 
     def perform_perfect_forecast_optim(
