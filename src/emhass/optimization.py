@@ -291,6 +291,44 @@ class Optimization:
             arr = np.concatenate([arr, np.full(n - len(arr), default)])
         return arr
 
+    def _persist_q_input(self, k: int, params: dict, hc: dict) -> None:
+        """Auto-persist Q_input from previous solve and apply manual override.
+
+        Called on cache hit to carry forward the thermal inertia filter state.
+        Only persists when thermal inertia is currently enabled (tau > 0) AND a
+        previous solve produced q_input values. If tau was changed to 0, any stale
+        q_input_var is cleared to prevent surprising persistence.
+
+        :param k: Deferrable load index
+        :param params: The param_thermal[k] dict for this load
+        :param hc: The thermal_battery config dict from def_load_config
+        """
+        tau_hours = float(hc.get("thermal_inertia_time_constant", 0.0) or 0.0)
+
+        if tau_hours > 0 and "q_input_var" in params:
+            prev_q = params["q_input_var"].value
+            if prev_q is not None and len(prev_q) > 1:
+                # Use index 1: in MPC the horizon shifts by one timestep,
+                # so prev_q[1] becomes the new initial condition.
+                new_q_start = float(prev_q[1])
+                self.logger.debug(
+                    "Auto-persisting q_input for load %s: %.4f -> %.4f",
+                    k,
+                    params["q_input_start"].value,
+                    new_q_start,
+                )
+                params["q_input_start"].value = new_q_start
+        elif tau_hours == 0 and "q_input_var" in params:
+            # Inertia was disabled — clear stale variable reference
+            del params["q_input_var"]
+            params["q_input_start"].value = 0.0
+
+        # Manual override via config takes priority
+        if "q_input_initial" in hc:
+            params["q_input_start"].value = float(
+                hc.get("q_input_initial", 0.0) or 0.0
+            )
+
     def update_thermal_start_temps(self, optim_conf: dict) -> None:
         """
         Update thermal start temperature parameters from optim_conf.
@@ -322,15 +360,8 @@ class Optimization:
                         )
                         param.value = new_temp
 
-                    # Auto-persist Q_input from previous solve.
-                    # q_input_var is only set when tau > 0 and a solve has run;
-                    # q_input_start is always present for thermal_battery loads.
-                    if k in self.param_thermal and "q_input_var" in self.param_thermal[k]:
-                        prev_q = self.param_thermal[k]["q_input_var"].value
-                        if prev_q is not None and len(prev_q) > 1:
-                            # Use index 1: in MPC the horizon shifts by one timestep,
-                            # so prev_q[1] becomes the new initial condition.
-                            self.param_thermal[k]["q_input_start"].value = float(prev_q[1])
+                    if k in self.param_thermal:
+                        self._persist_q_input(k, self.param_thermal[k], hc)
 
     def update_thermal_params(
         self, optim_conf: dict, data_opt: pd.DataFrame, p_load: np.ndarray
@@ -469,27 +500,7 @@ class Optimization:
                 else:
                     params["heating_demand"].value = np.zeros(n)
 
-                # Auto-persist Q_input from previous solve.
-                # q_input_var is only set when tau > 0 and a solve has run;
-                # q_input_start is always present for thermal_battery loads.
-                if "q_input_var" in params:
-                    prev_q = params["q_input_var"].value
-                    if prev_q is not None and len(prev_q) > 1:
-                        # Use index 1: in MPC the horizon shifts by one timestep,
-                        # so prev_q[1] becomes the new initial condition.
-                        new_q_start = float(prev_q[1])
-                        self.logger.debug(
-                            "Auto-persisting q_input for load %s: %.4f -> %.4f",
-                            k,
-                            params["q_input_start"].value,
-                            new_q_start,
-                        )
-                        params["q_input_start"].value = new_q_start
-
-                # Manual override via config takes priority
-                if "q_input_initial" in hc:
-                    manual_q = float(hc.get("q_input_initial", 0.0) or 0.0)
-                    params["q_input_start"].value = manual_q
+                self._persist_q_input(k, params, hc)
 
     def _get_clean_outdoor_temp(self, data_opt: pd.DataFrame, n: int) -> np.ndarray:
         """Extract and clean outdoor temperature from data_opt."""
