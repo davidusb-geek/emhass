@@ -2129,6 +2129,163 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("P_deferrable0", opt_res.columns)
 
+    # --- Thermal Battery Inertia Tests ---
+
+    def test_thermal_battery_inertia_backward_compat(self):
+        """Test that thermal_inertia_time_constant=0 produces identical results to omitting it."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 10.0
+
+        base_config = {
+            "start_temperature": 20.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [22.0] * 48,
+        }
+
+        # Without parameter
+        opt_res_default = self.run_optimization_with_config(
+            [{"thermal_battery": base_config.copy()}]
+        )
+
+        # With explicit tau=0
+        config_tau0 = base_config.copy()
+        config_tau0["thermal_inertia_time_constant"] = 0.0
+        opt_res_tau0 = self.run_optimization_with_config([{"thermal_battery": config_tau0}])
+
+        # Results should be identical
+        np.testing.assert_array_almost_equal(
+            opt_res_default["P_deferrable0"].values,
+            opt_res_tau0["P_deferrable0"].values,
+            decimal=4,
+            err_msg="tau=0 should produce identical results to omitting the parameter",
+        )
+
+        # q_input column should NOT be present when tau=0
+        self.assertNotIn("q_input_heater0", opt_res_default.columns)
+        self.assertNotIn("q_input_heater0", opt_res_tau0.columns)
+
+    def test_thermal_battery_inertia_valid_optimization(self):
+        """Test that tau>0 produces a valid optimization with q_input output."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 10.0
+
+        config = {
+            "start_temperature": 20.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [22.0] * 48,
+            "thermal_inertia_time_constant": 2.0,
+        }
+
+        opt_res = self.run_optimization_with_config([{"thermal_battery": config}])
+
+        self.assertIn("q_input_heater0", opt_res.columns)
+        self.assertTrue(
+            (opt_res["q_input_heater0"] >= -1e-6).all(),
+            "q_input values should be non-negative",
+        )
+        self.assertIn("P_deferrable0", opt_res.columns)
+
+    def test_thermal_battery_inertia_negative_tau_raises(self):
+        """Test that negative thermal_inertia_time_constant raises ValueError."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 10.0
+
+        config = {
+            "start_temperature": 20.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [22.0] * 48,
+            "thermal_inertia_time_constant": -1.0,
+        }
+
+        self.optim_conf["def_load_config"] = [{"thermal_battery": config}]
+        opt = self.create_optimization()
+
+        unit_load_cost = self.df_input_data_dayahead[opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[opt.var_prod_price].values
+
+        with self.assertRaises(ValueError):
+            opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                unit_load_cost,
+                unit_prod_price,
+            )
+
+    def test_thermal_battery_inertia_q_input_initial(self):
+        """Test that q_input_initial config override works."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 10.0
+
+        config = {
+            "start_temperature": 20.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [22.0] * 48,
+            "thermal_inertia_time_constant": 2.0,
+            "q_input_initial": 0.5,
+        }
+
+        opt_res = self.run_optimization_with_config([{"thermal_battery": config}])
+
+        self.assertIn("q_input_heater0", opt_res.columns)
+        self.assertIn("P_deferrable0", opt_res.columns)
+
+    def test_thermal_battery_inertia_slower_response(self):
+        """Test that thermal inertia produces a slower/delayed temperature response."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 5.0
+
+        base_config = {
+            "start_temperature": 18.5,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [24.0] * 48,
+        }
+
+        # Without inertia (tau=0)
+        opt_res_no_inertia = self.run_optimization_with_config(
+            [{"thermal_battery": base_config.copy()}]
+        )
+
+        # With inertia (tau=2.0)
+        config_inertia = base_config.copy()
+        config_inertia["thermal_inertia_time_constant"] = 2.0
+        opt_res_inertia = self.run_optimization_with_config([{"thermal_battery": config_inertia}])
+
+        # Both should succeed
+        self.assertIn("predicted_temp_heater0", opt_res_no_inertia.columns)
+        self.assertIn("predicted_temp_heater0", opt_res_inertia.columns)
+
+        # The inertia model should show a different temperature trajectory
+        # (the filter delays heat transfer, so early timesteps should differ)
+        temp_no_inertia = opt_res_no_inertia["predicted_temp_heater0"].values
+        temp_inertia = opt_res_inertia["predicted_temp_heater0"].values
+
+        # The trajectories should not be identical (inertia changes dynamics)
+        self.assertFalse(
+            np.allclose(temp_no_inertia, temp_inertia, atol=0.01),
+            "Temperature trajectories should differ between tau=0 and tau=2.0",
+        )
+
     def test_inverter_stress_cost_discharge_spread(self):
         """Test that inverter stress cost encourages spreading discharge over time."""
         # Setup plant configuration for hybrid inverter with battery
