@@ -325,9 +325,7 @@ class Optimization:
 
         # Manual override via config takes priority
         if "q_input_initial" in hc:
-            params["q_input_start"].value = float(
-                hc.get("q_input_initial", 0.0) or 0.0
-            )
+            params["q_input_start"].value = float(hc.get("q_input_initial", 0.0) or 0.0)
 
     def update_thermal_start_temps(self, optim_conf: dict) -> None:
         """
