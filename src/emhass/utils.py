@@ -1880,7 +1880,7 @@ async def build_secrets(
                     emhass_conf["config_path"] = default_config_path
                 else:
                     logger.warning(
-                        f"Directory {default_config_path.parent} does not exist, keeping current config_path: {emhass_conf.get('config_path')}"
+                        f"Directory {default_config_path.parent} does not exist, keeping current legacy default"
                     )
 
             # Check to use Home Assistant local API
