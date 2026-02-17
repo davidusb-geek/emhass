@@ -1848,13 +1848,15 @@ async def build_secrets(
                     "No config_path provided via options.json, checking default (/config/config.json) and legacy path (/share/config.json)."
                 )
                 default_config_path = pathlib.Path("/config/config.json")
+                default_config_dir_exists = default_config_path.parent.exists()
                 legacy_config_path = pathlib.Path("/share/config.json")
+
                 if default_config_path.is_file():
                     logger.info("Found config.json in /config, using this path for config_path.")
                     emhass_conf["config_path"] = default_config_path
                 elif legacy_config_path.is_file():
                     # found legacy config path, move the file to the default addon-mode config path and use it for config_path
-                    if default_config_path.parent.exists():
+                    if default_config_dir_exists:
                         try:
                             shutil.move(str(legacy_config_path), str(default_config_path))
                             logger.info(
@@ -1871,16 +1873,15 @@ async def build_secrets(
                             f"Directory {default_config_path.parent} does not exist, keeping legacy config_path: {legacy_config_path}."
                         )
                         emhass_conf["config_path"] = legacy_config_path
+                elif default_config_dir_exists:
+                    logger.info(
+                        "No legacy config.json found in /share, using addon-mode default /config/config.json for config_path."
+                    )
+                    emhass_conf["config_path"] = default_config_path
                 else:
-                    if default_config_path.parent.exists():
-                        logger.info(
-                            "No legacy config.json found in /share, using addon-mode default /config/config.json for config_path."
-                        )
-                        emhass_conf["config_path"] = default_config_path
-                    else:
-                        logger.warning(
-                            f"Directory {default_config_path.parent} does not exist, keeping current config_path: {emhass_conf.get('config_path')}"
-                        )
+                    logger.warning(
+                        f"Directory {default_config_path.parent} does not exist, keeping current config_path: {emhass_conf.get('config_path')}"
+                    )
 
             # Check to use Home Assistant local API
             if not no_response and os.getenv("SUPERVISOR_TOKEN", None) is not None:
