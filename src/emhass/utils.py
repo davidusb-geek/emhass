@@ -1854,22 +1854,33 @@ async def build_secrets(
                     emhass_conf["config_path"] = default_config_path
                 elif legacy_config_path.is_file():
                     # found legacy config path, move the file to the default addon-mode config path and use it for config_path
-                    try:
-                        shutil.move(str(legacy_config_path), str(default_config_path))
-                        logger.info(
-                            f"Moved legacy config from {legacy_config_path} to {default_config_path} and using it for config_path."
-                        )
-                        emhass_conf["config_path"] = default_config_path
-                    except Exception as e:
+                    if default_config_path.parent.exists():
+                        try:
+                            shutil.move(str(legacy_config_path), str(default_config_path))
+                            logger.info(
+                                f"Moved legacy config from {legacy_config_path} to {default_config_path} and using it for config_path."
+                            )
+                            emhass_conf["config_path"] = default_config_path
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to move legacy config from {legacy_config_path} to {default_config_path}: {e}"
+                            )
+                            emhass_conf["config_path"] = legacy_config_path
+                    else:
                         logger.warning(
-                            f"Failed to move legacy config from {legacy_config_path} to {default_config_path}: {e}"
+                            f"Directory {default_config_path.parent} does not exist, keeping legacy config_path: {legacy_config_path}."
                         )
                         emhass_conf["config_path"] = legacy_config_path
                 else:
-                    logger.info(
-                        "No legacy config.json found in /share, using addon-mode default /config/config.json for config_path."
-                    )
-                    emhass_conf["config_path"] = default_config_path
+                    if default_config_path.parent.exists():
+                        logger.info(
+                            "No legacy config.json found in /share, using addon-mode default /config/config.json for config_path."
+                        )
+                        emhass_conf["config_path"] = default_config_path
+                    else:
+                        logger.warning(
+                            f"Directory {default_config_path.parent} does not exist, keeping current config_path: {emhass_conf.get('config_path')}"
+                        )
 
             # Check to use Home Assistant local API
             if not no_response and os.getenv("SUPERVISOR_TOKEN", None) is not None:
