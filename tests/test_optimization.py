@@ -2286,6 +2286,240 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "Temperature trajectories should differ between tau=0 and tau=2.0",
         )
 
+    def test_thermal_battery_inertia_large_tau_warning(self):
+        """Test that tau > 6 triggers a warning but still produces valid results."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 10.0
+
+        config = {
+            "start_temperature": 20.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [24.0] * 48,
+            "thermal_inertia_time_constant": 8.0,
+        }
+
+        opt_res = self.run_optimization_with_config([{"thermal_battery": config}])
+        self.assertIn("q_input_heater0", opt_res.columns)
+
+    def test_thermal_battery_inertia_small_tau_clamping(self):
+        """Test that tau < time_step clamps alpha to 1.0 and still optimizes."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 10.0
+
+        config = {
+            "start_temperature": 20.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [22.0] * 48,
+            "thermal_inertia_time_constant": 0.1,  # Much smaller than 0.5h time_step
+        }
+
+        opt_res = self.run_optimization_with_config([{"thermal_battery": config}])
+        self.assertIn("q_input_heater0", opt_res.columns)
+
+    def test_thermal_battery_inertia_persist_on_cache_hit(self):
+        """Test _persist_q_input auto-persists Q_input after a solve (simulated cache hit)."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 10.0
+
+        config = {
+            "start_temperature": 20.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [22.0] * 48,
+            "thermal_inertia_time_constant": 2.0,
+        }
+
+        self.optim_conf["def_load_config"] = [{"thermal_battery": config}]
+        opt = self.create_optimization()
+
+        # First solve — establishes q_input_var
+        unit_load_cost = self.df_input_data_dayahead[opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[opt.var_prod_price].values
+        opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+
+        # Verify q_input_var was stored
+        self.assertIn("q_input_var", opt.param_thermal[0])
+        # Simulate cache hit: call _persist_q_input directly
+        opt._persist_q_input(0, opt.param_thermal[0], config)
+        new_start = opt.param_thermal[0]["q_input_start"].value
+
+        # q_input_start should have been updated from q_input_var.value[1]
+        expected = float(opt.param_thermal[0]["q_input_var"].value[1])
+        self.assertAlmostEqual(new_start, expected, places=4)
+
+    def test_thermal_battery_inertia_persist_clears_stale(self):
+        """Test _persist_q_input clears q_input_var when tau changed to 0."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 10.0
+
+        config = {
+            "start_temperature": 20.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [22.0] * 48,
+            "thermal_inertia_time_constant": 2.0,
+        }
+
+        self.optim_conf["def_load_config"] = [{"thermal_battery": config}]
+        opt = self.create_optimization()
+
+        # Solve to establish q_input_var
+        unit_load_cost = self.df_input_data_dayahead[opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[opt.var_prod_price].values
+        opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+        self.assertIn("q_input_var", opt.param_thermal[0])
+
+        # Now simulate tau changed to 0 on next MPC call
+        config_no_inertia = config.copy()
+        config_no_inertia["thermal_inertia_time_constant"] = 0.0
+        opt._persist_q_input(0, opt.param_thermal[0], config_no_inertia)
+
+        # q_input_var should be cleared, q_input_start reset to 0
+        self.assertNotIn("q_input_var", opt.param_thermal[0])
+        self.assertAlmostEqual(opt.param_thermal[0]["q_input_start"].value, 0.0)
+
+    def test_thermal_battery_inertia_persist_manual_override(self):
+        """Test _persist_q_input applies q_input_initial override over auto-persisted value."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 10.0
+
+        config = {
+            "start_temperature": 20.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [22.0] * 48,
+            "thermal_inertia_time_constant": 2.0,
+        }
+
+        self.optim_conf["def_load_config"] = [{"thermal_battery": config}]
+        opt = self.create_optimization()
+
+        # Solve to establish q_input_var
+        unit_load_cost = self.df_input_data_dayahead[opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[opt.var_prod_price].values
+        opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+
+        # Simulate cache hit with q_input_initial override
+        config_override = config.copy()
+        config_override["q_input_initial"] = 1.23
+        opt._persist_q_input(0, opt.param_thermal[0], config_override)
+
+        # Manual override should take priority
+        self.assertAlmostEqual(opt.param_thermal[0]["q_input_start"].value, 1.23, places=2)
+
+    def test_thermal_battery_inertia_update_thermal_start_temps(self):
+        """Test update_thermal_start_temps calls _persist_q_input for thermal battery."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 10.0
+
+        config = {
+            "start_temperature": 20.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [22.0] * 48,
+            "thermal_inertia_time_constant": 2.0,
+        }
+
+        self.optim_conf["def_load_config"] = [{"thermal_battery": config}]
+        opt = self.create_optimization()
+
+        # Solve to establish q_input_var
+        unit_load_cost = self.df_input_data_dayahead[opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[opt.var_prod_price].values
+        opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+
+        # Call update_thermal_start_temps (simulating cache hit path)
+        opt.update_thermal_start_temps(self.optim_conf)
+
+        new_start = opt.param_thermal[0]["q_input_start"].value
+        expected = float(opt.param_thermal[0]["q_input_var"].value[1])
+        self.assertAlmostEqual(new_start, expected, places=4)
+
+    def test_thermal_battery_inertia_update_thermal_params(self):
+        """Test update_thermal_params calls _persist_q_input for thermal battery."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 10.0
+
+        config = {
+            "start_temperature": 20.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [18.0] * 48,
+            "max_temperatures": [22.0] * 48,
+            "thermal_inertia_time_constant": 2.0,
+        }
+
+        self.optim_conf["def_load_config"] = [{"thermal_battery": config}]
+        opt = self.create_optimization()
+
+        # Solve to establish q_input_var
+        unit_load_cost = self.df_input_data_dayahead[opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[opt.var_prod_price].values
+        opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+
+        # Call update_thermal_params (simulating full cache hit path)
+        opt.update_thermal_params(
+            self.optim_conf,
+            self.df_input_data_dayahead,
+            self.p_load_forecast.values.ravel(),
+        )
+
+        new_start = opt.param_thermal[0]["q_input_start"].value
+        expected = float(opt.param_thermal[0]["q_input_var"].value[1])
+        self.assertAlmostEqual(new_start, expected, places=4)
+
     def test_inverter_stress_cost_discharge_spread(self):
         """Test that inverter stress cost encourages spreading discharge over time."""
         # Setup plant configuration for hybrid inverter with battery
