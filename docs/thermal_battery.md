@@ -152,6 +152,48 @@ Optional HDD parameters:
     * Only adjust this if you have measured data showing different loss rates
     * Example: `0.045`
 
+### Thermal inertia (optional)
+
+Real heating systems have a delay between the heat pump operating and the heat actually reaching the thermal mass (e.g., water circulating through underfloor pipes, slab warming up). The default model treats heat input as instantaneous, which can cause the optimizer to schedule heating at suboptimal times — especially for short pre-heating windows in MPC mode.
+
+The `thermal_inertia_time_constant` parameter adds a first-order low-pass filter on the heat input, modeling this physical delay. When set, a new state variable `Q_input` tracks the *effective* heat energy reaching the thermal mass, smoothing out the raw heat pump output.
+
+* **thermal_inertia_time_constant**: Time constant (τ) of the thermal inertia filter in hours (default: 0.0).
+    * `0.0` (default): No filter, original instantaneous model — fully backward compatible
+    * `0.5-1.0`: Light filtering, suitable for well-coupled radiator systems
+    * `1.0-3.0`: Moderate filtering, typical for underfloor heating with concrete screed
+    * `3.0-4.0`: Heavy filtering, thick slabs or poorly coupled systems
+    * Values above 6.0 trigger a warning (unusually large)
+    * Negative values raise an error
+    * Example: `2.0` for a typical underfloor heating system
+
+The filter equation at each timestep is:
+
+```
+Q_input[t+1] = Q_input[t] + α × (raw_heat[t] - Q_input[t])
+```
+
+where `α = time_step / τ` (clamped to 1.0 if τ < time_step). The temperature equation then uses `Q_input` instead of the raw heat pump output.
+
+#### Warm-starting Q_input in MPC mode
+
+When using MPC (repeated optimizations), `Q_input` automatically persists between solves via the optimization cache. The value from timestep 1 of the previous solve becomes the initial value for the next solve. This means the optimizer "remembers" the thermal state of the system without any manual intervention.
+
+For manual control, you can override the initial Q_input value:
+
+* **q_input_initial**: Manual override for the initial Q_input value in kWh (default: 0.0).
+    * Only needed if you want to explicitly set the starting thermal energy in the filter
+    * When set, it takes priority over the auto-persisted value from the previous solve
+    * Example: `0.5`
+
+#### Published sensors
+
+When `thermal_inertia_time_constant > 0`, an additional sensor is published:
+
+* **sensor.q_input_heater{k}** — Filtered heat input reaching the thermal mass (kWh per timestep)
+
+This sensor shows the effective heat delivery after accounting for the system's thermal lag. Compare it with `P_deferrable{k}` to see the smoothing effect.
+
 ## Example configurations
 
 ### Example 1: Modern home with underfloor heating, solar and internal gains
@@ -224,7 +266,39 @@ This configuration:
 - 120m² heated floor area
 - Maintains thermal mass between 40-65°C
 
-### Example 3: Multiple deferrable loads
+### Example 3: Underfloor heating with thermal inertia
+
+This example shows how to use the thermal inertia filter for a system where there is a measurable delay between heat pump operation and temperature change in the slab.
+
+```python
+{
+  "def_load_config": [
+    {
+      "thermal_battery": {
+        "supply_temperature": 35.0,
+        "volume": 18.0,
+        "start_temperature": 22.0,
+        "min_temperatures": [20.0] * 48,
+        "max_temperatures": [28.0] * 48,
+        "carnot_efficiency": 0.45,
+        "u_value": 0.35,
+        "envelope_area": 380.0,
+        "ventilation_rate": 0.4,
+        "heated_volume": 240.0,
+        "thermal_inertia_time_constant": 2.0
+      }
+    }
+  ]
+}
+```
+
+This configuration:
+- Uses a 2-hour thermal inertia time constant, modeling the delay in heat transfer through the concrete slab
+- The optimizer will schedule heating earlier to account for the lag, resulting in better pre-heating behavior
+- The `q_input_heater0` sensor shows the filtered heat delivery to the slab
+- In MPC mode, Q_input automatically persists between solves for continuity
+
+### Example 4: Multiple deferrable loads
 
 If you have other deferrable loads (EV charger, dishwasher, etc.) along with your thermal battery:
 
@@ -309,6 +383,18 @@ The optimizer decides when to run the heat pump to:
 - Minimize electricity costs
 - Keep storage temperature within min/max bounds
 - Satisfy heating requirements
+
+### 5. Thermal inertia filter (optional)
+
+When `thermal_inertia_time_constant` is set to a value greater than 0, the raw heat pump output passes through a first-order low-pass filter before affecting the storage temperature. This models the physical delay in heat transfer (e.g., water circulating through pipes, concrete warming up).
+
+The filter introduces a new state variable `Q_input` that tracks the effective heat delivery:
+
+```
+Q_input[t+1] = Q_input[t] + (Δt/τ) × (raw_heat[t] - Q_input[t])
+```
+
+The temperature equation then uses `Q_input` instead of the raw heat, resulting in a smoother, delayed temperature response that better matches real-world behavior. This is particularly beneficial for MPC mode where short prediction horizons can lead to suboptimal scheduling without accounting for the thermal lag.
 
 ## Calibrating your thermal battery parameters
 
@@ -420,6 +506,8 @@ Important notes:
 - `outdoor_temperature_forecast` is required for thermal battery optimization
 - `start_temperature` should ideally come from a real sensor (floor temp for underfloor heating)
 - If using solar gains, ensure your forecast data includes `ghi` (global horizontal irradiance)
+- Add `"thermal_inertia_time_constant": 2.0` to the `thermal_battery` dict to enable the thermal inertia filter
+- In MPC mode, `Q_input` auto-persists between solves; use `"q_input_initial": 0.5` to manually override
 
 ## Published sensors
 
@@ -430,6 +518,7 @@ For each thermal battery (where `k` is the load index, starting from 0):
 1. **sensor.p_deferrable{k}** - Heat pump power schedule (W)
 2. **sensor.heating_demand{k}** - Heating energy demand per timestep (kWh)
 3. **sensor.temp_predicted{k}** - Predicted thermal storage temperature (°C)
+4. **sensor.q_input_heater{k}** - Filtered heat input (kWh per timestep) — only when `thermal_inertia_time_constant > 0`
 
 You can customize these sensor names:
 
@@ -551,6 +640,14 @@ The optimizer is keeping storage temperature within bounds, but:
 - If temperature swings are too large: check your thermal mass `volume` is accurate
 - Consider using variable temperature limits (night setback) by adjusting the list values
 
+### Thermal inertia not having an effect
+
+If you set `thermal_inertia_time_constant` but don't see a difference:
+- Check the value is greater than 0 (τ=0 disables the filter)
+- The effect is most visible in MPC with short prediction horizons
+- Compare `q_input_heater0` with `P_deferrable0` — if they look identical, τ may be too small relative to your time step
+- If τ < time_step (e.g., τ=0.3h with 30min steps), the filter coefficient is clamped to 1.0, effectively bypassing the filter
+
 ### Solar gains not working
 
 Requirements for solar gains:
@@ -581,6 +678,8 @@ Check the logs for: "Using physics-based heating demand with solar gains"
 9. **Solar gains matter**: If you have significant south-facing windows, modeling solar gains can improve optimization accuracy by 10-20%
 
 10. **Validate regularly**: Compare predicted vs actual energy consumption weekly and adjust if needed
+
+11. **Use thermal inertia for underfloor heating**: If you notice the optimizer schedules heating too late for short pre-heating windows, try setting `thermal_inertia_time_constant` to 1.0-3.0 hours. This models the delay between heat pump operation and measurable temperature change in the slab.
 
 ## References
 
