@@ -638,11 +638,13 @@ async def action_call(action_name: str):
         return await make_response(await grab_log(action_str), 400)
 
     # Handle Continual Publish Threading
-    continual_publish_active = False
+    # Track whether this request's rh was handed off to a background thread.
+    # If so, the thread owns the rh lifecycle and we must not close it here.
+    rh_handed_to_thread = False
     if len(continual_publish_thread) == 0 and input_data_dict["retrieve_hass_conf"].get(
         "continual_publish", False
     ):
-        continual_publish_active = True
+        rh_handed_to_thread = True
         continual_loop = threading.Thread(
             name="continual_publish",
             target=lambda: asyncio.run(continual_publish(input_data_dict, entity_path, app.logger)),
@@ -656,8 +658,10 @@ async def action_call(action_name: str):
             action_name, input_data_dict, emhass_conf, params, runtimeparams, app.logger
         )
     finally:
-        # Close HTTP session if not used by continual_publish
-        if not continual_publish_active and "rh" in input_data_dict:
+        # Close HTTP session unless this rh was handed to the continual_publish thread.
+        # Each call to set_input_data_dict creates a fresh rh, so closing here only
+        # affects this request's rh, not any previously started background thread's.
+        if not rh_handed_to_thread and "rh" in input_data_dict:
             await input_data_dict["rh"].close()
 
     # Final Log Check & Response

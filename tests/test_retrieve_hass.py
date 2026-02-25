@@ -1,4 +1,5 @@
 import _pickle as cPickle
+import asyncio
 import bz2
 import copy
 import datetime
@@ -764,6 +765,34 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         # Should be a different session
         self.assertIsNot(session1, session2)
         self.assertFalse(session2.closed)
+
+        # Clean up
+        await self.rh.close()
+
+    async def test_async_context_manager(self):
+        """Test that RetrieveHass works as an async context manager."""
+        async with self.rh as rh:
+            # Should return self
+            self.assertIs(rh, self.rh)
+            # Create a session inside the context
+            session = await rh._get_session()
+            self.assertIsNotNone(session)
+            self.assertFalse(session.closed)
+
+        # After exiting context, session should be closed
+        self.assertIsNone(self.rh._session)
+
+    async def test_concurrent_get_session(self):
+        """Test that concurrent _get_session calls only create one session."""
+        # Launch multiple concurrent _get_session calls
+        sessions = await asyncio.gather(
+            self.rh._get_session(),
+            self.rh._get_session(),
+            self.rh._get_session(),
+        )
+        # All should return the same session instance
+        self.assertIs(sessions[0], sessions[1])
+        self.assertIs(sessions[1], sessions[2])
 
         # Clean up
         await self.rh.close()

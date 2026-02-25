@@ -130,6 +130,7 @@ class RetrieveHass:
             self.logger.debug("InfluxDB integration disabled, using Home Assistant API")
         # Persistent HTTP session for connection reuse (lazy-initialized)
         self._session: aiohttp.ClientSession | None = None
+        self._session_lock = asyncio.Lock()
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """
@@ -137,10 +138,13 @@ class RetrieveHass:
 
         This enables connection reuse and avoids the overhead of creating
         a new TCP connection + TLS handshake for each request.
+        Uses an asyncio.Lock to prevent concurrent callers from creating
+        multiple sessions.
         """
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
+        async with self._session_lock:
+            if self._session is None or self._session.closed:
+                self._session = aiohttp.ClientSession()
+            return self._session
 
     async def close(self) -> None:
         """
@@ -149,9 +153,18 @@ class RetrieveHass:
         Should be called when the RetrieveHass instance is no longer needed
         to properly release resources.
         """
-        if self._session is not None and not self._session.closed:
-            await self._session.close()
-            self._session = None
+        async with self._session_lock:
+            if self._session is not None and not self._session.closed:
+                await self._session.close()
+                self._session = None
+
+    async def __aenter__(self) -> "RetrieveHass":
+        """Enter async context manager."""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Exit async context manager, closing the HTTP session."""
+        await self.close()
 
     async def get_ha_config(self):
         """
