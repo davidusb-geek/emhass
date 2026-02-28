@@ -261,7 +261,7 @@ async def configuration():
     if (emhass_conf["data_path"] / params_file).exists():
         async with aiofiles.open(str(emhass_conf["data_path"] / params_file), "rb") as fid:
             content = await fid.read()
-            emhass_conf["config_path"], params = pickle.loads(content)
+            _, params = pickle.loads(content)  # Don't overwrite emhass_conf["config_path"]
     else:
         params = {}
 
@@ -451,7 +451,7 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
     if params_path.exists():
         async with aiofiles.open(str(params_path), "rb") as fid:
             content = await fid.read()
-            emhass_conf["config_path"], params = pickle.loads(content)
+            _, params = pickle.loads(content)  # Don't overwrite emhass_conf["config_path"]
             # Set local costfun variable
             if params.get("optim_conf") is not None:
                 costfun = params["optim_conf"].get("costfun", "profit")
@@ -793,10 +793,10 @@ async def _build_and_save_params(
     # Update params with local variables
     params["optim_conf"]["costfun"] = costfun
     params["optim_conf"]["logging_level"] = logging_level
-    # Save params to file for later reference
+    # Save params to file for later reference (use emhass_conf["config_path"] which may have been updated by build_secrets)
     if os.path.exists(str(emhass_conf["data_path"])):
         async with aiofiles.open(str(emhass_conf["data_path"] / params_file), "wb") as fid:
-            content = pickle.dumps((config_path, params))
+            content = pickle.dumps((emhass_conf["config_path"], params))
             await fid.write(content)
     else:
         raise Exception("missing: " + str(emhass_conf["data_path"]))
@@ -885,12 +885,14 @@ async def initialize(args: dict | None = None):
         legacy_config_path,
         root_path,
     ) = await _setup_paths()
-    # Build configuration
-    config, costfun, logging_level = await _build_configuration(
-        config_path, legacy_config_path, defaults_path
-    )
-    # Setup Secrets
+    # Setup Secrets (must run BEFORE build_configuration to allow options.json to override config_path)
     server_ip = await _setup_secrets(args, options_path)
+    # Build configuration (now uses potentially updated emhass_conf["config_path"] from options.json)
+    config, costfun, logging_level = await _build_configuration(
+        emhass_conf["config_path"],
+        emhass_conf.get("legacy_config_path", legacy_config_path),
+        defaults_path,
+    )
     # Validate Data Path
     _validate_data_path(root_path)
     # Load Injection Dict
@@ -912,6 +914,7 @@ async def initialize(args: dict | None = None):
         "Home Assistant data fetch will be performed using url: " + params_secrets["hass_url"]
     )
     app.logger.info("The data path is: " + str(emhass_conf["data_path"]))
+    app.logger.info("The config path is: " + str(emhass_conf["config_path"]))
     app.logger.info("The logging is: " + str(logging_level))
     try:
         app.logger.info("Using core emhass version: " + version("emhass"))
