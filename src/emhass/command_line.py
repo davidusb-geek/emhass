@@ -206,6 +206,7 @@ class OptimizationCache:
             "start_temperature",
             "desired_temperatures",
             "indoor_target_temperature",  # thermal_battery runtime param
+            "q_input_initial",  # thermal inertia warm-start override
         }
 
         # Extract def_load_config structure (which loads are thermal/thermal_battery/standard)
