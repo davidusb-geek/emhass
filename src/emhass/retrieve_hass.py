@@ -1240,7 +1240,9 @@ class RetrieveHass:
                         try:
                             metadata = orjson.loads(content)
                         except orjson.JSONDecodeError:
-                            self.logger.error(f"Corrupted metadata file found at {metadata_path}. Creating a new one.")
+                            self.logger.error(
+                                f"Corrupted metadata file found at {metadata_path}. Creating a new one."
+                            )
                             metadata = {}
                             # Rename the corrupted file to metadata_corrupt.json
                             corrupt_path = entities_path / "metadata_corrupt.json"
