@@ -176,9 +176,9 @@ class OptimizationCache:
                 return ()
             if hasattr(val, "tolist"):
                 val = val.tolist()
-            if isinstance(val, (list, tuple)):
+            if isinstance(val, list | tuple):
                 # Handle nested lists (e.g., nominal_power with sequences)
-                return tuple(tuple(v) if isinstance(v, (list, tuple)) else v for v in val)
+                return tuple(tuple(v) if isinstance(v, list | tuple) else v for v in val)
             return (val,)
 
         def config_hash(cfg: dict, exclude_keys: set | None = None) -> str:

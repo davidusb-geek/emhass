@@ -6,6 +6,7 @@ import csv
 import logging
 import os
 import pathlib
+import shutil
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -17,7 +18,6 @@ import pandas as pd
 import plotly.express as px
 import pytz
 import yaml
-import shutil
 
 if TYPE_CHECKING:
     from emhass.machine_learning_forecaster import MLForecaster

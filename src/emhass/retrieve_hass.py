@@ -5,7 +5,7 @@ import os
 import pathlib
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Self
 
 import aiofiles
 import aiohttp
@@ -158,7 +158,7 @@ class RetrieveHass:
                 await self._session.close()
                 self._session = None
 
-    async def __aenter__(self) -> "RetrieveHass":
+    async def __aenter__(self) -> Self:
         """Enter async context manager."""
         return self
 
