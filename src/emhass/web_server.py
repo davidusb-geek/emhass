@@ -6,7 +6,6 @@ import logging
 import os
 import pickle
 import re
-import threading
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -638,18 +637,14 @@ async def action_call(action_name: str):
         return await make_response(await grab_log(action_str), 400)
 
     # Handle Continual Publish Threading
-    # Track whether this request's rh was handed off to a background thread.
-    # If so, the thread owns the rh lifecycle and we must not close it here.
     rh_handed_to_thread = False
     if len(continual_publish_thread) == 0 and input_data_dict["retrieve_hass_conf"].get(
         "continual_publish", False
     ):
         rh_handed_to_thread = True
-        continual_loop = threading.Thread(
-            name="continual_publish",
-            target=lambda: asyncio.run(continual_publish(input_data_dict, entity_path, app.logger)),
+        continual_loop = app.add_background_task(
+            continual_publish, input_data_dict, entity_path, app.logger
         )
-        continual_loop.start()
         continual_publish_thread.append(continual_loop)
 
     # Execute Action
@@ -715,23 +710,24 @@ async def _build_configuration(
     """Helper to build configuration and local variables."""
     config = {}
     # Combine parameters from configuration sources (if exists)
-    config.update(
-        await build_config(
-            emhass_conf,
-            app.logger,
-            str(defaults_path),
-            str(config_path) if config_path.exists() else None,
-            str(legacy_config_path) if legacy_config_path.exists() else None,
-        )
+    built_config = await build_config(
+        emhass_conf,
+        app.logger,
+        str(defaults_path),
+        str(config_path) if config_path.exists() else None,
+        str(legacy_config_path) if legacy_config_path.exists() else None,
     )
-    if type(config) is bool and not config:
+    # Catch the False return BEFORE trying to update the dictionary
+    if type(built_config) is bool and not built_config:
         raise Exception("Failed to find default config")
+    config.update(built_config)
     # Set local variables
     costfun = os.getenv("LOCAL_COSTFUN", config.get("costfun", "profit"))
     logging_level = os.getenv("LOGGING_LEVEL", config.get("logging_level", "INFO"))
     # Temporary set logging level if debug
     if logging_level == "DEBUG":
         app.logger.setLevel(logging.DEBUG)
+
     return config, costfun, logging_level
 
 
@@ -887,6 +883,11 @@ async def _initialize_connections(params: dict) -> None:
 
 async def initialize(args: dict | None = None):
     global emhass_conf, params_secrets, continual_publish_thread, injection_dict, entity_path
+    # Grab the logging level early from ENV so initialization functions can log properly
+    early_log_level = os.getenv("LOGGING_LEVEL", "INFO")
+    normalized_log_level = early_log_level.upper()
+    log_level = getattr(logging, normalized_log_level, logging.INFO)
+    app.logger.setLevel(log_level)
     # Setup paths
     (
         config_path,

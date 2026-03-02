@@ -2447,7 +2447,7 @@ async def publish_json(
             content = await file.read()
             metadata = orjson.loads(content)
     else:
-        logger.error("unable to located metadata.json in:" + entity_path)
+        logger.error(f"unable to locate metadata.json in: {entity_path}")
         return False
     # Round current timecode (now)
     now_precise = datetime.now(input_data_dict["retrieve_hass_conf"]["time_zone"]).replace(
