@@ -889,14 +889,9 @@ async def initialize(args: dict | None = None):
     global emhass_conf, params_secrets, continual_publish_thread, injection_dict, entity_path
     # Grab the logging level early from ENV so initialization functions can log properly
     early_log_level = os.getenv("LOGGING_LEVEL", "INFO")
-    if early_log_level == "DEBUG":
-        app.logger.setLevel(logging.DEBUG)
-    elif early_log_level == "INFO":
-        app.logger.setLevel(logging.INFO)
-    elif early_log_level == "WARNING":
-        app.logger.setLevel(logging.WARNING)
-    elif early_log_level == "ERROR":
-        app.logger.setLevel(logging.ERROR)
+    normalized_log_level = early_log_level.upper()
+    log_level = getattr(logging, normalized_log_level, logging.INFO)
+    app.logger.setLevel(log_level)
     # Setup paths
     (
         config_path,
