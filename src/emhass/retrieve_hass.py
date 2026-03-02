@@ -77,7 +77,10 @@ class RetrieveHass:
         """
         self.hass_url = hass_url
         self.long_lived_token = long_lived_token
-        self.freq = freq
+        if isinstance(freq, int | float | str):
+            self.freq = pd.Timedelta(minutes=int(freq))
+        else:
+            self.freq = freq
         self.time_zone = time_zone
         if (params is None) or (params == "null"):
             self.params = {}
@@ -392,19 +395,19 @@ class RetrieveHass:
         if len(df_raw) == 0:
             if is_first_day:
                 self.logger.error(
-                    f"The retrieved Dataframe is empty, A sensor: {var} may have 0 days of history."
+                    f"The retrieved Dataframe is empty. A sensor: {var} may have 0 days of history."
                 )
             else:
                 self.logger.error(
                     f"Retrieved empty Dataframe for day: {day}, check recorder settings."
                 )
             return False
-        # Check for data sufficiency (frequency consistency)
-        expected_count = (60 / (self.freq.seconds / 60)) * 24
+        freq_minutes = self.freq.total_seconds() / 60.0
+        expected_count = (60.0 / freq_minutes) * 24.0
         if len(df_raw) < expected_count and not is_last_day:
             self.logger.debug(
                 f"sensor: {var} retrieved Dataframe count: {len(df_raw)}, on day: {day}. "
-                f"This is less than freq value passed: {self.freq}"
+                f"This is less than expected count: {expected_count} (freq: {self.freq})"
             )
         # Process and Resample
         df_tp = (
