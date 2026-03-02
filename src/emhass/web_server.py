@@ -715,23 +715,24 @@ async def _build_configuration(
     """Helper to build configuration and local variables."""
     config = {}
     # Combine parameters from configuration sources (if exists)
-    config.update(
-        await build_config(
-            emhass_conf,
-            app.logger,
-            str(defaults_path),
-            str(config_path) if config_path.exists() else None,
-            str(legacy_config_path) if legacy_config_path.exists() else None,
-        )
+    built_config = await build_config(
+        emhass_conf,
+        app.logger,
+        str(defaults_path),
+        str(config_path) if config_path.exists() else None,
+        str(legacy_config_path) if legacy_config_path.exists() else None,
     )
-    if type(config) is bool and not config:
+    # Catch the False return BEFORE trying to update the dictionary
+    if type(built_config) is bool and not built_config:
         raise Exception("Failed to find default config")
+    config.update(built_config)
     # Set local variables
     costfun = os.getenv("LOCAL_COSTFUN", config.get("costfun", "profit"))
     logging_level = os.getenv("LOGGING_LEVEL", config.get("logging_level", "INFO"))
     # Temporary set logging level if debug
     if logging_level == "DEBUG":
         app.logger.setLevel(logging.DEBUG)
+
     return config, costfun, logging_level
 
 
