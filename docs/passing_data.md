@@ -104,7 +104,7 @@ Specifically the [Passing your own forecast data](https://emhass.readthedocs.io/
 
 
 ## WebSocket as a data source
-EMHASS can retrieve historical sensor data directly from your Home Assistant instance using a WebSocket connection. By default, this connection fetches short-term statistics at a high resolution (5-minute intervals) which is ideal for real-time optimization and Model Predictive Control (MPC). To activate this option simply set `use_websocket: true`.
+EMHASS can retrieve historical sensor data directly from your Home Assistant instance using a WebSocket connection. By default, this connection fetches short-term statistics at a high resolution (5-minute intervals), which is ideal for real-time optimization and Model Predictive Control (MPC). To activate this option, simply set `use_websocket: true`.
 
 If you are using the EMHASS-Add-on, this connection is handled automatically via the Home Assistant Supervisor API. If you are running EMHASS via Docker standalone or Python, ensure your Home Assistant URL and a Long-Lived Access Token are correctly provided in your configuration.
 
