@@ -522,6 +522,129 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
             # Restore original logging level
             logger.setLevel(original_level)
 
+    @patch("emhass.web_server.build_config", new_callable=AsyncMock)
+    @patch("os.getenv")
+    async def test_build_configuration(self, mock_getenv, mock_build_config):
+        # Setup paths
+        c_path = pathlib.Path("config.json")
+        l_path = pathlib.Path("legacy.yaml")
+        d_path = pathlib.Path("defaults.json")
+        # Test 1: Success Path
+        mock_build_config.return_value = {"costfun": "profit", "logging_level": "WARNING"}
+        # Mock getenv to return 'DEBUG' for LOGGING_LEVEL to trigger the debug branch
+        mock_getenv.side_effect = (
+            lambda key, default=None: "DEBUG" if key == "LOGGING_LEVEL" else default
+        )
+        config, costfun, log_level = await web_server._build_configuration(c_path, l_path, d_path)
+        self.assertEqual(config["costfun"], "profit")
+        self.assertEqual(log_level, "DEBUG")  # Overridden by env
+        self.assertEqual(web_server.app.logger.level, logging.DEBUG)
+        # Test 2: Failure Path (build_config returns False)
+        mock_build_config.return_value = False
+        with self.assertRaises(Exception) as context:
+            await web_server._build_configuration(c_path, l_path, d_path)
+        self.assertTrue("Failed to find default config" in str(context.exception))
+
+    @patch("emhass.web_server.build_secrets", new_callable=AsyncMock)
+    @patch("os.getenv")
+    async def test_setup_secrets(self, mock_getenv, mock_build_secrets):
+        mock_getenv.return_value = "/mock/secrets.yaml"
+        # Return a mock emhass_conf and mock secrets dict
+        mock_build_secrets.return_value = (
+            web_server.emhass_conf,
+            {"server_ip": "192.168.1.100", "test_key": "123"},
+        )
+        args = {"url": "http://ha", "key": "abc", "no_response": True}
+        options_path = pathlib.Path("/mock/options.json")
+        server_ip = await web_server._setup_secrets(args, options_path)
+        self.assertEqual(server_ip, "192.168.1.100")
+        self.assertEqual(web_server.params_secrets["test_key"], "123")
+        # Ensure the global emhass_conf was updated with the secrets path
+        self.assertEqual(web_server.emhass_conf["secrets_path"], pathlib.Path("/mock/secrets.yaml"))
+
+    @patch("pathlib.Path.exists")
+    @patch("emhass.web_server.aiofiles.open")
+    async def test_load_injection_dict(self, mock_aio_open, mock_exists):
+        # Test 1: File doesn't exist
+        mock_exists.return_value = False
+        result = await web_server._load_injection_dict()
+        self.assertIsNone(result)
+        # Test 2: File exists
+        mock_exists.return_value = True
+        mock_file = AsyncMock()
+        mock_data = {"test_injection": "data"}
+        mock_file.read.return_value = pickle.dumps(mock_data)
+        mock_aio_open.return_value.__aenter__.return_value = mock_file
+        result = await web_server._load_injection_dict()
+        self.assertEqual(result, mock_data)
+
+    @patch("os.path.exists")
+    @patch("emhass.web_server.aiofiles.open")
+    @patch("emhass.web_server.build_params", new_callable=AsyncMock)
+    async def test_build_and_save_params(self, mock_build_params, mock_aio_open, mock_os_exists):
+        config = {"some": "config"}
+        c_path = pathlib.Path("/config.json")
+        # Test 1: Success Path
+        mock_build_params.return_value = {"optim_conf": {}}
+        mock_os_exists.return_value = True
+        mock_file = AsyncMock()
+        mock_aio_open.return_value.__aenter__.return_value = mock_file
+        params = await web_server._build_and_save_params(config, "cost", "INFO", c_path)
+        self.assertEqual(params["optim_conf"]["costfun"], "cost")
+        self.assertEqual(params["optim_conf"]["logging_level"], "INFO")
+        mock_file.write.assert_called_once()
+        # Test 2: build_params fails
+        mock_build_params.return_value = False
+        with self.assertRaises(Exception) as context:
+            await web_server._build_and_save_params(config, "cost", "INFO", c_path)
+        self.assertTrue("error has occurred while building params" in str(context.exception))
+        # Test 3: data_path missing
+        mock_build_params.return_value = {"optim_conf": {}}
+        mock_os_exists.return_value = False
+        with self.assertRaises(Exception) as context:
+            await web_server._build_and_save_params(config, "cost", "INFO", c_path)
+        self.assertTrue("missing" in str(context.exception))
+
+    @patch("emhass.web_server.clear_file_log", new_callable=AsyncMock)
+    @patch("logging.FileHandler")
+    @patch("emhass.web_server.app.logger")
+    async def test_configure_logging(self, mock_logger, mock_file_handler, mock_clear_log):
+        # We test a few logging levels to ensure the if/elif block is fully covered
+        levels_to_test = {
+            "DEBUG": logging.DEBUG,
+            "INFO": logging.INFO,
+            "WARNING": logging.WARNING,
+            "ERROR": logging.ERROR,
+            "UNKNOWN": logging.DEBUG,  # The else block defaults to DEBUG
+        }
+        for level_str, expected_level in levels_to_test.items():
+            await web_server._configure_logging(level_str)
+            # Verify the patched logger received the correct setLevel call
+            mock_logger.setLevel.assert_called_with(expected_level)
+        # Ensure clear_file_log was called during setup
+        self.assertEqual(mock_clear_log.call_count, len(levels_to_test))
+        # Ensure file handler was attached
+        self.assertTrue(mock_file_handler.called)
+        # Ensure propagate was set to False on the mock, sparing our real logger!
+        self.assertFalse(mock_logger.propagate)
+
+    @patch("os.path.exists")
+    @patch("os.listdir")
+    @patch("os.remove")
+    def test_cleanup_entities(self, mock_remove, mock_listdir, mock_exists):
+        # Notice this is a normal `def`, not `async def`, because _cleanup_entities is synchronous
+        # Test 1: Directory doesn't exist
+        mock_exists.return_value = False
+        ent_path = web_server._cleanup_entities()
+        self.assertEqual(ent_path, web_server.emhass_conf["data_path"] / "entities")
+        mock_listdir.assert_not_called()
+        # Test 2: Directory exists, has files
+        mock_exists.return_value = True
+        mock_listdir.return_value = ["sensor1.json", "sensor2.json"]
+        web_server._cleanup_entities()
+        # Should have called remove twice (once for each file)
+        self.assertEqual(mock_remove.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
