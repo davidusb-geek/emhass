@@ -532,8 +532,8 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         # Test 1: Success Path
         mock_build_config.return_value = {"costfun": "profit", "logging_level": "WARNING"}
         # Mock getenv to return 'DEBUG' for LOGGING_LEVEL to trigger the debug branch
-        mock_getenv.side_effect = (
-            lambda key, default=None: "DEBUG" if key == "LOGGING_LEVEL" else default
+        mock_getenv.side_effect = lambda key, default=None: (
+            "DEBUG" if key == "LOGGING_LEVEL" else default
         )
         config, costfun, log_level = await web_server._build_configuration(c_path, l_path, d_path)
         self.assertEqual(config["costfun"], "profit")
