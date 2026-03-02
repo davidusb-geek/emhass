@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+### Improvement
+- Added new Websocket section to documentation
+- Improving coverage: MLForecaster, web server and command line utils
+### Fix
+- Fixed logging initialization issue
+
 ## 0.17.0 - 2026-02-28
 ### Improvement
 - Added caching for the Optimization object to use warm start (@sokorn)
