@@ -6,7 +6,6 @@ import logging
 import os
 import pickle
 import re
-import threading
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -638,18 +637,14 @@ async def action_call(action_name: str):
         return await make_response(await grab_log(action_str), 400)
 
     # Handle Continual Publish Threading
-    # Track whether this request's rh was handed off to a background thread.
-    # If so, the thread owns the rh lifecycle and we must not close it here.
     rh_handed_to_thread = False
     if len(continual_publish_thread) == 0 and input_data_dict["retrieve_hass_conf"].get(
         "continual_publish", False
     ):
         rh_handed_to_thread = True
-        continual_loop = threading.Thread(
-            name="continual_publish",
-            target=lambda: asyncio.run(continual_publish(input_data_dict, entity_path, app.logger)),
+        continual_loop = app.add_background_task(
+            continual_publish, input_data_dict, entity_path, app.logger
         )
-        continual_loop.start()
         continual_publish_thread.append(continual_loop)
 
     # Execute Action
