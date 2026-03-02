@@ -77,7 +77,10 @@ class RetrieveHass:
         """
         self.hass_url = hass_url
         self.long_lived_token = long_lived_token
-        self.freq = freq
+        if isinstance(freq, int | float | str):
+            self.freq = pd.Timedelta(minutes=int(freq))
+        else:
+            self.freq = freq
         self.time_zone = time_zone
         if (params is None) or (params == "null"):
             self.params = {}
@@ -312,9 +315,11 @@ class RetrieveHass:
         """Helper to construct the Home Assistant History URL."""
         if test_url != "empty":
             return test_url
+        # Format the date with a strict 'Z' suffix instead of '+00:00'
+        day_str = day.strftime("%Y-%m-%dT%H:%M:%SZ")
         # Check if using supervisor API or Core API
         if self.hass_url == hass_url:
-            base_url = f"{self.hass_url}/history/period/{day.isoformat()}"
+            base_url = f"{self.hass_url}/history/period/{day_str}"
         else:
             # Ensure trailing slash for Core API
             if self.hass_url[-1] != "/":
@@ -322,12 +327,12 @@ class RetrieveHass:
                     "Missing slash </> at the end of the defined URL, appending a slash but please fix your URL"
                 )
                 self.hass_url = self.hass_url + "/"
-            base_url = f"{self.hass_url}api/history/period/{day.isoformat()}"
+            base_url = f"{self.hass_url}api/history/period/{day_str}"
         url = f"{base_url}?filter_entity_id={var}"
         if minimal_response:
-            url += "?minimal_response"
+            url += "&minimal_response"  # Note: fixed to & if query params exist, but ? is fine if it's the only one. Actually, filter_entity_id uses ?, so we MUST use & here.
         if significant_changes_only:
-            url += "?significant_changes_only"
+            url += "&significant_changes_only"
         return url
 
     async def _fetch_history_data(
@@ -342,30 +347,41 @@ class RetrieveHass:
         """Helper to execute the HTTP request and return the raw JSON list."""
         try:
             async with session.get(url, headers=headers, ssl=self.ssl_verify) as response:
-                response.raise_for_status()
+                # Catch specific HTTP errors before trying to parse the JSON
+                if response.status == 400:
+                    self.logger.error(f"Home Assistant returned 400 Bad Request. URL: {url}")
+                    return False
+                elif response.status == 401:
+                    self.logger.error(
+                        "Unable to access Home Assistant instance, TOKEN/KEY is invalid or missing"
+                    )
+                    return False
+                elif response.status > 299:
+                    self.logger.error(
+                        f"Home assistant request GET error: {response.status} for var {var}. URL: {url}"
+                    )
+                    return False
+                # If status is 200 OK, proceed to read and parse
                 data = await response.read()
                 data_list = orjson.loads(data)
-        except Exception:
-            self.logger.error("Unable to access Home Assistant instance, check URL")
+        except aiohttp.ClientError as e:
+            self.logger.error(f"Network error connecting to Home Assistant: {e}")
             self.logger.error("If using addon, try setting url and token to 'empty'")
             return False
-        if response.status == 401:
-            self.logger.error("Unable to access Home Assistant instance, TOKEN/KEY")
-            return False
-        if response.status > 299:
-            self.logger.error(f"Home assistant request GET error: {response.status} for var {var}")
+        except Exception as e:
+            self.logger.error(f"Unexpected error retrieving data from Home Assistant: {e}")
             return False
         try:
             return data_list[0]
         except IndexError:
             if is_first_day:
                 self.logger.error(
-                    f"The retrieved JSON is empty, A sensor: {var} may have 0 days of history, "
-                    "passed sensor may not be correct, or days to retrieve is set too high."
+                    f"The retrieved JSON is empty. A sensor: {var} may have 0 days of history, "
+                    "the passed sensor may not be correct, or days_to_retrieve is set too high."
                 )
             else:
                 self.logger.error(
-                    f"The retrieved JSON is empty for day: {day}, days_to_retrieve may be larger "
+                    f"The retrieved JSON is empty for day: {day}. days_to_retrieve may be larger "
                     f"than the recorded history of sensor: {var}"
                 )
             return False
@@ -379,19 +395,19 @@ class RetrieveHass:
         if len(df_raw) == 0:
             if is_first_day:
                 self.logger.error(
-                    f"The retrieved Dataframe is empty, A sensor: {var} may have 0 days of history."
+                    f"The retrieved Dataframe is empty. A sensor: {var} may have 0 days of history."
                 )
             else:
                 self.logger.error(
                     f"Retrieved empty Dataframe for day: {day}, check recorder settings."
                 )
             return False
-        # Check for data sufficiency (frequency consistency)
-        expected_count = (60 / (self.freq.seconds / 60)) * 24
+        freq_minutes = self.freq.total_seconds() / 60.0
+        expected_count = (60.0 / freq_minutes) * 24.0
         if len(df_raw) < expected_count and not is_last_day:
             self.logger.debug(
                 f"sensor: {var} retrieved Dataframe count: {len(df_raw)}, on day: {day}. "
-                f"This is less than freq value passed: {self.freq}"
+                f"This is less than expected count: {expected_count} (freq: {self.freq})"
             )
         # Process and Resample
         df_tp = (
