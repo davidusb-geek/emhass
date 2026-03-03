@@ -36,15 +36,17 @@ jobs:
           uv run coverage xml -o coverage.xml
 
       - name: Upload coverage reports to Codecov
-        run: |
-          curl -Os https://uploader.codecov.io/latest/linux/codecov
-          chmod +x codecov
-          ./codecov -t ${CODECOV_TOKEN}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: true
+          verbose: true
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v7
         env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }} #
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           args: >
