@@ -127,6 +127,7 @@ class OptimizationCacheKey:
     optimization_time_step_s: float | None
     delta_forecast_daily_s: float | None
     costfun: str
+    plant_conf_hash: str
 
 
 class OptimizationCache:
@@ -208,7 +209,11 @@ class OptimizationCache:
             "indoor_target_temperature",  # thermal_battery runtime param
             "q_input_initial",  # thermal inertia warm-start override
         }
-
+        # Plant parameters that are updated dynamically (no rebuild needed)
+        plant_runtime_keys = {
+            "soc_init",
+            "battery_target_state_of_charge",
+        }
         # Extract def_load_config structure (which loads are thermal/thermal_battery/standard)
         # Include hash of thermal config contents to detect parameter changes
         def_load_config = optim_conf.get("def_load_config", []) or []
@@ -258,6 +263,7 @@ class OptimizationCache:
             optimization_time_step_s=to_seconds(retrieve_hass_conf.get("optimization_time_step")),
             delta_forecast_daily_s=to_seconds(optim_conf.get("delta_forecast_daily")),
             costfun=costfun,
+            plant_conf_hash=config_hash(plant_conf, plant_runtime_keys),
         )
 
     @classmethod
@@ -1013,6 +1019,10 @@ async def set_input_data_dict(
             opt.logger = logger
             opt.var_load_cost = fcst.var_load_cost
             opt.var_prod_price = fcst.var_prod_price
+            # Update internal config dictionaries to prevent stale lookups
+            # for runtime parameters (like battery_target_state_of_charge)
+            opt.plant_conf = plant_conf
+            opt.optim_conf = optim_conf
             # Update thermal runtime parameters (start_temperature, desired_temperatures)
             # These change between MPC iterations and must be synced to cached object
             new_def_load_config = optim_conf.get("def_load_config", [])
