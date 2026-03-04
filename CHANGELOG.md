@@ -4,7 +4,10 @@
 ### Improvement
 - Added new Websocket section to documentation
 - Improving coverage: MLForecaster, web server and command line utils
+- Improved automatic testing: Add tests for converting nested parameters to config, deferrable load padding, export time range parsing, NaN handling, and resampling/filtering of time series data. Add an MPC cache behavior test to verify cache hits for non-structural plant changes and cache misses for structural plant changes.
 ### Fix
+- Ensure cached MPC optimizers are invalidated when structural plant configuration changes while still updating runtime-dependent parameters on cache hits
+- Prevent stale internal optimization configuration by refreshing cached optimizer plant and optimization configs with latest runtime values
 - Fixed logging initialization issue
 
 ## 0.17.0 - 2026-02-28
