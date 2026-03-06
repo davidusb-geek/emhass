@@ -3422,6 +3422,88 @@ class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(min_temps_first[1], initial_min_temp, places=1)
         self.assertAlmostEqual(min_temps_second[1], updated_min_temp, places=1)
 
+    async def test_mpc_cache_plant_conf_updates(self):
+        """
+        Verify that structural plant_conf changes trigger a cache miss,
+        and non-structural plant_conf changes update correctly on a hit.
+        """
+        costfun = "profit"
+        action = "naive-mpc-optim"  # Switched to MPC to use shorter prediction horizon
+        # Set up the base runtime parameters with lists to bypass PVLib/pickles
+        base_runtimeparams = {
+            "pv_power_forecast": [100] * 10,
+            "load_power_forecast": [200] * 10,
+            "load_cost_forecast": [0.15] * 10,
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+        }
+        # Base run
+        runtimeparams_1 = base_runtimeparams.copy()
+        runtimeparams_1.update(
+            {"battery_target_state_of_charge": 0.5, "battery_minimum_state_of_charge": 0.2}
+        )
+        params_1 = copy.deepcopy(self.params)
+        params_1["passed_data"] = runtimeparams_1
+        # Explicitly bypass forecast downloads/computations
+        params_1["optim_conf"]["weather_forecast_method"] = "list"
+        params_1["optim_conf"]["load_forecast_method"] = "list"
+        params_1["optim_conf"]["load_cost_forecast_method"] = "list"
+        params_1["optim_conf"]["production_price_forecast_method"] = "list"
+
+        input_data_1 = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            orjson.dumps(params_1).decode("utf-8"),
+            orjson.dumps(runtimeparams_1).decode("utf-8"),
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_1 = input_data_1["opt"]
+        # Cache Hit: Change target SOC (Should NOT trigger miss, but SHOULD update plant_conf)
+        runtimeparams_2 = base_runtimeparams.copy()
+        runtimeparams_2.update(
+            {"battery_target_state_of_charge": 0.8, "battery_minimum_state_of_charge": 0.2}
+        )
+        params_2 = copy.deepcopy(params_1)
+        params_2["passed_data"] = runtimeparams_2
+        input_data_2 = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            orjson.dumps(params_2).decode("utf-8"),
+            orjson.dumps(runtimeparams_2).decode("utf-8"),
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_2 = input_data_2["opt"]
+        self.assertIs(opt_1, opt_2, "Target SOC change should result in Cache Hit")
+        self.assertEqual(
+            opt_2.plant_conf["battery_target_state_of_charge"],
+            0.8,
+            "Stale plant_conf on cache hit!",
+        )
+        # Cache Miss: Change Minimum SOC limit (Must rebuild CVXPY constraint)
+        runtimeparams_3 = base_runtimeparams.copy()
+        runtimeparams_3.update(
+            {"battery_target_state_of_charge": 0.8, "battery_minimum_state_of_charge": 0.4}
+        )
+        params_3 = copy.deepcopy(params_1)
+        params_3["passed_data"] = runtimeparams_3
+        input_data_3 = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            orjson.dumps(params_3).decode("utf-8"),
+            orjson.dumps(runtimeparams_3).decode("utf-8"),
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_3 = input_data_3["opt"]
+        self.assertIsNot(
+            opt_2, opt_3, "Min SOC change must trigger Cache Miss to rebuild constraints"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
