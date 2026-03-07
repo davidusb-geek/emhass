@@ -426,6 +426,65 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                     emhass_conf["data_path"] / "weather_forecast_data.pkl",
                 )
 
+    # Test Solcast resampling: 30-min Solcast data → 15-min optimization_time_step
+    async def test_get_weather_forecast_solcast_15min_resampling_mock(self):
+        """Verify Solcast data is correctly resampled when optimization_time_step < 30 min."""
+        # Override freq to 15 minutes (default test uses 30 min)
+        original_freq = self.fcst.freq
+        original_forecast_dates = self.fcst.forecast_dates
+        self.fcst.freq = pd.Timedelta("15min")
+        self.fcst.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta("15min")
+        # Rebuild forecast_dates at 15-min intervals (same time window → 2× more slots)
+        self.fcst.forecast_dates = pd.date_range(
+            start=original_forecast_dates[0],
+            end=original_forecast_dates[-1],
+            freq=self.fcst.freq,
+        )
+        self.fcst.params = {
+            "passed_data": {
+                "weather_forecast_cache": False,
+                "weather_forecast_cache_only": False,
+            }
+        }
+        self.fcst.retrieve_hass_conf["solcast_api_key"] = "123456"
+        self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "123456"
+        if os.path.isfile(emhass_conf["data_path"] / "weather_forecast_data.pkl"):
+            os.rename(
+                emhass_conf["data_path"] / "weather_forecast_data.pkl",
+                emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
+            )
+
+        test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2")
+        async with aiofiles.open(test_data_path, "rb") as f:
+            compressed = await f.read()
+        data = bz2.decompress(compressed)
+        data = cPickle.loads(data)
+        data = orjson.loads(data.content)
+
+        days_solcast = int(len(self.fcst.forecast_dates) * self.fcst.freq.seconds / 3600)
+        get_url = f"https://api.solcast.com.au/rooftop_sites/123456/forecasts?hours={days_solcast}"
+
+        with aioresponses() as mocked:
+            mocked.get(get_url, payload=data)
+            df_weather_scrap = await self.fcst.get_weather_forecast(method="solcast")
+
+            self.assertIsInstance(df_weather_scrap, type(pd.DataFrame()))
+            self.assertIsInstance(df_weather_scrap.index, pd.core.indexes.datetimes.DatetimeIndex)
+            self.assertEqual(df_weather_scrap.index.tz, self.fcst.time_zone)
+            # Key assertion: output length must match the 15-min forecast_dates
+            self.assertEqual(len(df_weather_scrap), len(self.fcst.forecast_dates))
+            # Verify no NaN values after interpolation
+            self.assertFalse(df_weather_scrap["yhat"].isna().any())
+
+        # Restore original freq/forecast_dates
+        self.fcst.freq = original_freq
+        self.fcst.forecast_dates = original_forecast_dates
+        if os.path.isfile(emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"):
+            os.rename(
+                emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
+                emhass_conf["data_path"] / "weather_forecast_data.pkl",
+            )
+
     # Test output weather forecast using Forecast.Solar with mock get request data
     async def test_get_weather_forecast_solarforecast_method_mock(self):
         test_data_path = str(
