@@ -476,6 +476,27 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             # Verify no NaN values after interpolation
             self.assertFalse(df_weather_scrap["yhat"].isna().any())
 
+            # Verify interpolation correctness at a midpoint between two 30-min source timestamps
+            # Pick a midpoint index to avoid edge effects
+            midpoint_idx = len(df_weather_scrap.index) // 2
+            ts_mid = df_weather_scrap.index[midpoint_idx]
+            ts_prev = ts_mid - pd.Timedelta(minutes=15)
+            ts_next = ts_mid + pd.Timedelta(minutes=15)
+
+            # Ensure the neighboring timestamps exist in the index
+            self.assertIn(ts_prev, df_weather_scrap.index)
+            self.assertIn(ts_next, df_weather_scrap.index)
+
+            y_prev = df_weather_scrap.loc[ts_prev, "yhat"]
+            y_mid = df_weather_scrap.loc[ts_mid, "yhat"]
+            y_next = df_weather_scrap.loc[ts_next, "yhat"]
+
+            # Expected linear interpolation at the midpoint
+            expected_mid = (y_prev + y_next) / 2.0
+
+            # Check that the interpolated midpoint matches the expected linear value
+            self.assertAlmostEqual(y_mid, expected_mid, places=6)
+
         # Restore original freq/forecast_dates
         self.fcst.freq = original_freq
         self.fcst.forecast_dates = original_forecast_dates
