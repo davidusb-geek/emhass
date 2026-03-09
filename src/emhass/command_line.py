@@ -121,13 +121,13 @@ class OptimizationCacheKey:
     set_deferrable_load_as_timeseries: tuple
     nominal_power_of_deferrable_loads: tuple
     def_load_config_structure: tuple  # (index, type) tuples for each load
-    battery_capacity: float
     inverter_is_hybrid: bool
     compute_curtailment: bool
     optimization_time_step_s: float | None
     delta_forecast_daily_s: float | None
     costfun: str
     plant_conf_hash: str
+    optim_conf_structural_hash: str  # Hash of optim_conf keys that affect problem structure
 
 
 class OptimizationCache:
@@ -214,6 +214,29 @@ class OptimizationCache:
             "soc_init",
             "battery_target_state_of_charge",
         }
+        # Optim conf parameters that don't affect problem structure
+        # (parameterized via CVXPY Parameters, solver options, or forecast method selection)
+        optim_conf_runtime_keys = {
+            # Parameterized via CVXPY Parameters
+            "operating_hours_of_each_deferrable_load",
+            "start_timesteps_of_each_deferrable_load",
+            "end_timesteps_of_each_deferrable_load",
+            "def_current_state",
+            "minimum_power_of_deferrable_loads",
+            # Solver options (updated on cache hit)
+            "lp_solver_timeout",
+            "lp_solver_mip_rel_gap",
+            "num_threads",
+            "lp_solver",
+            # Forecast method selection (not optimization structure)
+            "weather_forecast_method",
+            "load_cost_forecast_method",
+            "production_price_forecast_method",
+            "load_forecast_method",
+            # Already handled by explicit fields or separate hash
+            "def_load_config",
+            "delta_forecast_daily",
+        }
         # Extract def_load_config structure (which loads are thermal/thermal_battery/standard)
         # Include hash of thermal config contents to detect parameter changes
         def_load_config = optim_conf.get("def_load_config", []) or []
@@ -257,13 +280,13 @@ class OptimizationCache:
                 optim_conf.get("nominal_power_of_deferrable_loads", [])
             ),
             def_load_config_structure=tuple(def_structure),
-            battery_capacity=plant_conf.get("battery_capacity", 0),
             inverter_is_hybrid=plant_conf.get("inverter_is_hybrid", False),
             compute_curtailment=plant_conf.get("compute_curtailment", False),
             optimization_time_step_s=to_seconds(retrieve_hass_conf.get("optimization_time_step")),
             delta_forecast_daily_s=to_seconds(optim_conf.get("delta_forecast_daily")),
             costfun=costfun,
             plant_conf_hash=config_hash(plant_conf, plant_runtime_keys),
+            optim_conf_structural_hash=config_hash(optim_conf, optim_conf_runtime_keys),
         )
 
     @classmethod
@@ -1023,27 +1046,6 @@ async def set_input_data_dict(
             # for runtime parameters (like battery_target_state_of_charge)
             opt.plant_conf = plant_conf
             opt.optim_conf = optim_conf
-            # Update thermal runtime parameters (start_temperature, desired_temperatures)
-            # These change between MPC iterations and must be synced to cached object
-            new_def_load_config = optim_conf.get("def_load_config", [])
-            cached_def_load_config = opt.optim_conf.get("def_load_config", [])
-            for k, new_cfg in enumerate(new_def_load_config):
-                if k < len(cached_def_load_config) and new_cfg:
-                    cached_cfg = cached_def_load_config[k] or {}
-                    # Update thermal_config runtime parameters
-                    if "thermal_config" in new_cfg and "thermal_config" in cached_cfg:
-                        for key in ("start_temperature", "desired_temperatures"):
-                            if key in new_cfg["thermal_config"]:
-                                cached_cfg["thermal_config"][key] = new_cfg["thermal_config"][key]
-                    # Update thermal_battery runtime parameters
-                    if "thermal_battery" in new_cfg and "thermal_battery" in cached_cfg:
-                        for key in (
-                            "start_temperature",
-                            "desired_temperatures",
-                            "indoor_target_temperature",
-                        ):
-                            if key in new_cfg["thermal_battery"]:
-                                cached_cfg["thermal_battery"][key] = new_cfg["thermal_battery"][key]
             # Update CVXPY Parameters for thermal start temperatures
             # This is critical: updating optim_conf alone doesn't change baked-in constraint values
             opt.update_thermal_start_temps(optim_conf)

@@ -201,6 +201,16 @@ class Optimization:
             timesteps_active.value = 0.0
             self.param_timesteps_active.append(timesteps_active)
 
+        # Deferrable load current state parameters (for startup detection)
+        # Allows updating def_current_state without rebuilding constraints.
+        # IMPORTANT: Values MUST be exactly 0.0 or 1.0 (binary indicator).
+        # Fractional values would weaken the MIP startup/on-off constraints.
+        self.param_def_current_state = []
+        for k in range(num_def_loads):
+            p = cp.Parameter(nonneg=True, name=f"def_current_state_{k}")
+            p.value = 0.0
+            self.param_def_current_state.append(p)
+
         # Thermal Parameters for warm-starting
         # Dict keyed by load index k, stores all parameters needed for thermal constraints
         # This allows updating runtime values (forecasts, temperatures) without rebuilding constraints
@@ -1813,19 +1823,14 @@ class Optimization:
                 constraints.append(p_deferrable[k] <= M * p_def_bin2[k])
 
                 # Startup Detection: Start[t] >= Bin[t] - Bin[t-1]
-                # Retrieve State
-                current_state = 0
-                if (
-                    "def_current_state" in self.optim_conf
-                    and len(self.optim_conf["def_current_state"]) > k
-                ):
-                    current_state = 1 if self.optim_conf["def_current_state"][k] else 0
-
-                constraints.append(p_def_start[k][0] >= p_def_bin2[k][0] - current_state)
+                # Uses parameterized current state to allow warm-starting
+                constraints.append(
+                    p_def_start[k][0] >= p_def_bin2[k][0] - self.param_def_current_state[k]
+                )
                 constraints.append(p_def_start[k][1:] >= p_def_bin2[k][1:] - p_def_bin2[k][:-1])
 
                 # Startup Limit: Start[t] + Bin[t-1] <= 1
-                constraints.append(p_def_start[k][0] + current_state <= 1)
+                constraints.append(p_def_start[k][0] + self.param_def_current_state[k] <= 1)
                 constraints.append(p_def_start[k][1:] + p_def_bin2[k][:-1] <= 1)
 
                 if not is_sequence_load:
@@ -2218,6 +2223,32 @@ class Optimization:
             else:
                 self.param_required_timesteps[k].value = 0.0
                 self.param_timesteps_active[k].value = 0.0  # Constraint is relaxed (Big-M)
+
+        # Update def_current_state parameters for deferrable loads
+        if "def_current_state" in self.optim_conf:
+            def_state_conf = self.optim_conf["def_current_state"]
+            n_conf_states = len(def_state_conf)
+            n_params = len(self.param_def_current_state)
+            max_updatable = min(num_deferrable_loads, n_params, n_conf_states)
+
+            if not (n_conf_states == num_deferrable_loads == n_params):
+                self.logger.warning(
+                    "def_current_state length mismatch: "
+                    "num_deferrable_loads=%d, len(def_current_state)=%d, "
+                    "len(param_def_current_state)=%d; updating first %d entries",
+                    num_deferrable_loads,
+                    n_conf_states,
+                    n_params,
+                    max_updatable,
+                )
+
+            for k in range(max_updatable):
+                # Round to binary {0.0, 1.0} to prevent fractional values
+                # from weakening the MIP startup/on-off constraints
+                self.param_def_current_state[k].value = 1.0 if def_state_conf[k] else 0.0
+            # Reset any remaining params to safe default (load is off)
+            for k in range(max_updatable, n_params):
+                self.param_def_current_state[k].value = 0.0
 
         # Build Problem (Lazy Construction)
         if self.prob is None:
