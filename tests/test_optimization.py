@@ -3145,15 +3145,15 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         configurations to verify the load deactivation optimization works correctly.
         Loads 4 (thermal_config) and 6 (thermal_battery) must remain active regardless.
 
-        Uses 0.2 MIP gap (matching user's production config) and 192 timesteps
-        (2 days at 15min) to keep solve times manageable in CI.
+        Uses 0.2 MIP gap (matching user's production config) and 96 timesteps
+        (2 days at 30min) to keep solve times manageable in CI.
         """
         import time
 
         # Reuse existing helper to get base data structure
         df_base = self.prepare_forecast_data()
 
-        n_steps = 192
+        n_steps = 96
 
         # Create new index
         idx = pd.date_range(start=df_base.index[0], periods=n_steps, freq=self.opt.freq)
@@ -3169,11 +3169,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         P_Load = pd.Series(500 * rng.random(n_steps), index=idx)
 
         # Add thermal-specific columns
-        temp_profile = 10 + 5 * np.sin(np.linspace(0, 4 * np.pi, n_steps))
+        temp_profile = 10 + 5 * np.sin(np.linspace(0, 2 * np.pi, n_steps))
         df_extended["temperature_forecast"] = temp_profile
         df_extended["outdoor_temperature_forecast"] = temp_profile
         df_extended["solar_irradiance_forecast"] = 800 * np.clip(
-            np.sin(np.linspace(0, 4 * np.pi, n_steps)), 0, 1
+            np.sin(np.linspace(0, 2 * np.pi, n_steps)), 0, 1
         )
         if self.opt.var_load_cost not in df_extended.columns:
             df_extended[self.opt.var_load_cost] = 0.20
@@ -3645,7 +3645,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             def_start_timestep=def_start_timestep,
             def_end_timestep=def_end_timestep,
         )
-        self.assertIsInstance(opt_res, type(pd.DataFrame()))
+        self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
 
         # Load 0 should be active (has 4 operating timesteps)
@@ -3786,7 +3786,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             def_start_timestep=[0, 0, 0],
             def_end_timestep=[0, 0, 0],
         )
-        self.assertIsInstance(opt_res, type(pd.DataFrame()))
+        self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
 
         # Load 0 (non-thermal, 0 timesteps): should be deactivated
@@ -3842,7 +3842,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             def_start_timestep=[0, 0],
             def_end_timestep=[0, 0],
         )
-        self.assertIsInstance(opt_res, type(pd.DataFrame()))
+        self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
 
         # Both loads should be deactivated
@@ -3877,7 +3877,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             def_start_timestep=[0, 0],
             def_end_timestep=[0, 0],
         )
-        self.assertIsInstance(opt_res, type(pd.DataFrame()))
+        self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
 
         # Load 0 active, Load 1 deactivated
