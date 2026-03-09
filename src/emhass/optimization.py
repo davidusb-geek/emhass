@@ -346,6 +346,41 @@ class Optimization:
         if "q_input_initial" in hc:
             params["q_input_start"].value = float(hc.get("q_input_initial", 0.0) or 0.0)
 
+    def _update_def_current_state_params(self, num_def_loads: int) -> None:
+        """Update def_current_state CVXPY Parameters from optim_conf.
+
+        Validates that each entry is a bool or numeric 0/1, raising ValueError
+        for unexpected values that would silently weaken MIP constraints.
+        Missing entries default to off (0.0).
+        """
+        if "def_current_state" not in self.optim_conf:
+            return
+
+        def_state_conf = self.optim_conf["def_current_state"]
+        n_conf_states = len(def_state_conf)
+
+        if n_conf_states != num_def_loads:
+            self.logger.warning(
+                "def_current_state length mismatch: "
+                "num_deferrable_loads=%d, len(def_current_state)=%d; "
+                "extra entries will be ignored or missing ones assumed off",
+                num_def_loads,
+                n_conf_states,
+            )
+
+        for k in range(num_def_loads):
+            state = def_state_conf[k] if k < n_conf_states else False
+            # Validate binary: accept bool and numeric 0/1, reject everything else
+            if isinstance(state, bool):
+                self.param_def_current_state[k].value = float(state)
+            elif isinstance(state, int | float) and state in (0, 1, 0.0, 1.0):
+                self.param_def_current_state[k].value = float(state)
+            else:
+                raise ValueError(
+                    f"Invalid def_current_state value at index {k}: {state!r}. "
+                    "Expected one of {{True, False, 0, 1, 0.0, 1.0}}."
+                )
+
     def update_thermal_start_temps(self, optim_conf: dict) -> None:
         """
         Update thermal start temperature parameters from optim_conf.
