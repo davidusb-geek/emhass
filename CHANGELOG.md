@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+### Improvement
+- Added new Websocket section to documentation
+- Improving coverage: MLForecaster, web server and command line utils
+- Improved automatic testing: Add tests for converting nested parameters to config, deferrable load padding, export time range parsing, NaN handling, and resampling/filtering of time series data. Add an MPC cache behavior test to verify cache hits for non-structural plant changes and cache misses for structural plant changes.
+### Fix
+- Ensure cached MPC optimizers are invalidated when structural plant configuration changes while still updating runtime-dependent parameters on cache hits
+- Prevent stale internal optimization configuration by refreshing cached optimizer plant and optimization configs with latest runtime values
+- Fixed logging initialization issue
+
+## 0.17.0 - 2026-02-28
+### Improvement
+- Added caching for the Optimization object to use warm start (@sokorn)
+- Add thermal inertia extension for thermal battery model (@sokorn)
+- Added parameter for relative MIP gap (@sokorn)
+- Enhance HA add-on file management to use addon_configs folder (@mime24)
+- Rename 'add-on' to 'app' (@AJediIAm)
+- Update skforecast requirement from <0.20.0,>=0.19.1 to >=0.19.1,<0.21.0 (@dependabot)
+### Fix
+- Reuse HTTP session across post_data calls (@sokorn)
+- Handle corrupted metadata.json file (@rmounce)
+- Pin cvxpy version to <1.8.0 (@rmounce)
+- Fix ruff format in retrieve_hass.py (@mime24)
+
+### ⚠️ POSSIBLE BREAKING CHANGE: HA Add-on File Management
+
+This release updates how EMHASS handles file management within Home Assistant, aligning with the new HA standard of using the dedicated `/addon_configs` folder for user-facing configuration files.
+
+* **What changed:** Configuration and data files have been migrated to the new `addon_configs` directory structure.
+* **Why it might break your setup:** If you are an advanced user who has written custom shell commands, external scripts, or backup automations that point strictly to the old hardcoded `/share/emhass` or `/config` directory paths, **those paths will likely fail** after this update.
+* **Action Required:** Please review any custom automations or scripts that read from or write to EMHASS files directly and update the paths to reflect the new `/addon_configs/` location.
+
 ## 0.16.2 - 2026-01-29
 ### Improvement
 - Added support for a thermal inertia parameter for the basic thermal model

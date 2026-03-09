@@ -235,6 +235,57 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         # Default Fallback
         self.assertEqual(passed_data.get("split_date_delta"), "48h")
 
+    async def test_mlforecaster_fit_backtest(self):
+        """Test the backtesting block using a fast linear model and reduced data to save time."""
+        # Use a fast model and a small dataset slice (e.g., last 200 rows)
+        fast_data = self.data.iloc[-200:]
+        mlf = MLForecaster(
+            fast_data,
+            self.input_data_dict["params"]["passed_data"]["model_type"],
+            self.input_data_dict["params"]["passed_data"]["var_model"],
+            "LinearRegression",  # Fast model to skip heavy computation
+            self.input_data_dict["params"]["passed_data"]["num_lags"],
+            emhass_conf,
+            logger,
+        )
+        # Call fit with perform_backtest=True
+        df_pred, df_pred_backtest = await mlf.fit(split_date_delta="48h", perform_backtest=True)
+        # Assertions to ensure backtest was actually performed and formatted correctly
+        self.assertIsInstance(df_pred, pd.DataFrame)
+        self.assertIsInstance(df_pred_backtest, pd.DataFrame)
+        self.assertIn("pred", df_pred_backtest.columns)
+        self.assertIn("train", df_pred_backtest.columns)
+        self.assertEqual(len(df_pred_backtest), len(fast_data))
+
+    async def test_mlforecaster_tune_short_train_size_recovery(self):
+        """Test the fallback logic when initial_train_size <= window_size during tuning."""
+        # Use 50 rows (25 hours). This is enough data for fit() to succeed.
+        short_data = self.data.iloc[:50]
+        mlf = MLForecaster(
+            short_data,
+            self.input_data_dict["params"]["passed_data"]["model_type"],
+            self.input_data_dict["params"]["passed_data"]["var_model"],
+            "LinearRegression",
+            3,  # num_lags (skforecast needs len(y) > num_lags)
+            emhass_conf,
+            logger,
+        )
+        # Fit with a small test split ("5h" = 10 rows).
+        # This leaves 40 rows for `self.data_train`. `fit` succeeds because 40 > 3.
+        await mlf.fit(split_date_delta="5h", perform_backtest=False)
+        # Tune with a huge validation split relative to the remaining data.
+        # "19h" = 38 rows. It subtracts this from the 40 training rows.
+        # initial_train_size becomes 40 - 38 = 2.
+        # debug=True sets window_size=3.
+        # Because 2 <= 3, the recovery block is triggered!
+        with self.assertLogs(logger, level="WARNING") as cm:
+            df_pred_optim = await mlf.tune(debug=True, split_date_delta="19h", n_trials=2)
+        # Verify it survived and returned the dataframe
+        self.assertIsInstance(df_pred_optim, pd.DataFrame)
+        # Verify the specific fallback warnings were logged correctly
+        self.assertTrue(any("Calculated initial_train_size" in log for log in cm.output))
+        self.assertTrue(any("Adjusting initial_train_size" in log for log in cm.output))
+
 
 if __name__ == "__main__":
     unittest.main()

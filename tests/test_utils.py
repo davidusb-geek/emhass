@@ -1141,8 +1141,7 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         retrieve_hass_conf = params["retrieve_hass_conf"]
         optim_conf = params["optim_conf"]
         plant_conf = params["plant_conf"]
-
-        # 1. Test Scalars (should remain scalars)
+        # Test Scalars (should remain scalars)
         runtimeparams = json.dumps(
             {"maximum_power_from_grid": 5000, "maximum_power_to_grid": 2000.5}
         )
@@ -1158,8 +1157,7 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(plant_conf_out["maximum_power_from_grid"], 5000)
         self.assertEqual(plant_conf_out["maximum_power_to_grid"], 2000.5)
-
-        # 2. Test Lists (should remain lists)
+        # Test Lists (should remain lists)
         runtimeparams = json.dumps(
             {"maximum_power_from_grid": [1000, 2000, 3000], "maximum_power_to_grid": [4000, 5000]}
         )
@@ -1176,8 +1174,7 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(plant_conf_out["maximum_power_from_grid"], list)
         self.assertListEqual(plant_conf_out["maximum_power_from_grid"], [1000, 2000, 3000])
         self.assertListEqual(plant_conf_out["maximum_power_to_grid"], [4000, 5000])
-
-        # 3. Test Stringified Lists (should be parsed into lists)
+        # Test Stringified Lists (should be parsed into lists)
         runtimeparams = json.dumps(
             {"maximum_power_from_grid": "[100, 200, 300]", "maximum_power_to_grid": "[400, 500]"}
         )
@@ -1207,12 +1204,9 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         retrieve_hass_conf = params["retrieve_hass_conf"]
         optim_conf = params["optim_conf"]
         plant_conf = params["plant_conf"]
-
         # Default values from config to verify fallback
         default_from_grid = plant_conf.get("maximum_power_from_grid")
-
         runtimeparams = json.dumps({"maximum_power_from_grid": "this-is-not-a-list"})
-
         # Capture logs to verify warning
         with self.assertLogs(logger, level="WARNING") as cm:
             _, _, _, plant_conf_out = await treat_runtimeparams(
@@ -1225,12 +1219,155 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
                 logger,
                 emhass_conf,
             )
-
         # Verify the warning message was logged
         self.assertTrue(any("Could not parse maximum_power_from_grid" in o for o in cm.output))
-
         # Verify it fell back to default or kept original value (depending on logic, usually implies no change)
         self.assertEqual(plant_conf_out["maximum_power_from_grid"], default_from_grid)
+
+    def test_param_to_config(self):
+        """Test converting built params back to a flat config dictionary and masking secrets."""
+        # Create a mock parameter dictionary with the required categories
+        mock_param = {
+            "retrieve_hass_conf": {
+                "hass_url": "http://secret",  # This should be masked
+                "optimization_time_step": 30,
+                "time_zone": "Europe/Paris",
+            },
+            "optim_conf": {"set_use_battery": True, "costfun": "profit"},
+            "plant_conf": {"battery_capacity": 10.0},
+        }
+        # Execute
+        result_config = utils.param_to_config(mock_param, logger)
+        # Verify structure was flattened correctly
+        self.assertIn("optimization_time_step", result_config)
+        self.assertIn("set_use_battery", result_config)
+        self.assertIn("battery_capacity", result_config)
+        # Verify secrets were excluded
+        self.assertNotIn("hass_url", result_config)
+        # Verify values transferred correctly
+        self.assertEqual(result_config["costfun"], "profit")
+        self.assertTrue(result_config["set_use_battery"])
+
+    def test_check_def_loads(self):
+        """Test padding of deferrable load parameter lists."""
+        parameter = {"operating_hours": [3, 4]}
+        default_val = 5
+        # Case 1: Needs padding (num_def_loads > list length)
+        result1 = utils.check_def_loads(4, parameter, default_val, "operating_hours", logger)
+        self.assertEqual(len(result1), 4)
+        self.assertEqual(result1, [3, 4, 5, 5])
+        # Case 2: No padding needed (num_def_loads == list length)
+        parameter = {"operating_hours": [3, 4]}  # Reset
+        result2 = utils.check_def_loads(2, parameter, default_val, "operating_hours", logger)
+        self.assertEqual(len(result2), 2)
+        self.assertEqual(result2, [3, 4])
+        # Case 3: Parameter doesn't exist or isn't a list (should just return as-is, though the logic might fail if not checked)
+        parameter = {"other_param": "test"}
+        with self.assertRaises(KeyError):
+            # The function blindly returns parameter[parameter_name], so a missing key will KeyError
+            utils.check_def_loads(2, parameter, default_val, "missing_key", logger)
+
+    def test_parse_export_time_range(self):
+        """Test timestamp parsing and validation for data exports."""
+        time_zone = pytz.timezone("Europe/Paris")
+        # Case 1: Valid start and end times
+        start_time = "2024-01-01 00:00:00"
+        end_time = "2024-01-02 00:00:00"
+        start_dt, end_dt = utils.parse_export_time_range(start_time, end_time, time_zone, logger)
+        self.assertIsInstance(start_dt, pd.Timestamp)
+        self.assertIsInstance(end_dt, pd.Timestamp)
+        self.assertEqual(str(start_dt.tz), "Europe/Paris")
+        # Case 2: Missing end time (should default to now)
+        start_dt, end_dt = utils.parse_export_time_range(start_time, None, time_zone, logger)
+        self.assertIsInstance(start_dt, pd.Timestamp)
+        self.assertIsInstance(end_dt, pd.Timestamp)
+        self.assertAlmostEqual(
+            end_dt.timestamp(), pd.Timestamp.now(tz=time_zone).timestamp(), delta=5.0
+        )
+        # Case 3: Invalid start time
+        start_dt, end_dt = utils.parse_export_time_range(
+            "invalid-date", end_time, time_zone, logger
+        )
+        self.assertFalse(start_dt)
+        self.assertFalse(end_dt)
+        # Case 4: Invalid end time
+        start_dt, end_dt = utils.parse_export_time_range(
+            start_time, "invalid-date", time_zone, logger
+        )
+        self.assertFalse(start_dt)
+        self.assertFalse(end_dt)
+
+    def test_handle_nan_values(self):
+        """Test NaN handling strategies for dataframes."""
+        # Create a test dataframe with NaNs
+        df = pd.DataFrame(
+            {
+                "timestamp": pd.date_range("2024-01-01", periods=4, freq="1h"),
+                "value1": [1.0, np.nan, np.nan, 4.0],
+                "value2": [10.0, 20.0, np.nan, 40.0],
+            }
+        )
+        # Case 1: Drop
+        df_drop = utils.handle_nan_values(df.copy(), "drop", "timestamp", logger)
+        self.assertEqual(len(df_drop), 2)
+        # Case 2: Fill Zero
+        df_zero = utils.handle_nan_values(df.copy(), "fill_zero", "timestamp", logger)
+        self.assertEqual(df_zero["value1"].iloc[1], 0.0)
+        # Case 3: Interpolate
+        df_interp = utils.handle_nan_values(df.copy(), "interpolate", "timestamp", logger)
+        self.assertEqual(df_interp["value1"].iloc[1], 2.0)
+        self.assertEqual(df_interp["value1"].iloc[2], 3.0)
+        # Case 4: Forward Fill
+        df_ffill = utils.handle_nan_values(df.copy(), "forward_fill", "timestamp", logger)
+        self.assertEqual(df_ffill["value1"].iloc[1], 1.0)
+        self.assertEqual(df_ffill["value1"].iloc[2], 1.0)
+        # Case 5: Backward Fill
+        df_bfill = utils.handle_nan_values(df.copy(), "backward_fill", "timestamp", logger)
+        self.assertEqual(df_bfill["value1"].iloc[1], 4.0)
+        self.assertEqual(df_bfill["value1"].iloc[2], 4.0)
+        # Case 6: No NaNs present (should return immediately)
+        df_clean = df.dropna()
+        df_result = utils.handle_nan_values(df_clean, "drop", "timestamp", logger)
+        self.assertEqual(len(df_result), 2)
+
+    def test_resample_and_filter_data(self):
+        """Test time range filtering and data resampling."""
+        time_zone = pytz.timezone("Europe/Paris")
+
+        # Create a dummy 5-minute dataset
+        idx = pd.date_range("2024-01-01", periods=100, freq="5min", tz=time_zone)
+        df = pd.DataFrame({"value": range(100)}, index=idx)
+
+        start_dt = idx[10]  # 2024-01-01 00:50:00
+        end_dt = idx[60]  # 2024-01-01 05:00:00
+
+        # Case 1: Valid resample from 5min to 30min
+        df_resampled = utils.resample_and_filter_data(df, start_dt, end_dt, "30min", logger)
+        self.assertIsInstance(df_resampled, pd.DataFrame)
+        # Verify index frequency is correctly applied
+        self.assertEqual(df_resampled.index.freq.freqstr, "30min")
+        # Verify filtering worked
+        self.assertEqual(df_resampled.index[0], start_dt.floor("30min"))
+
+        # Case 2: Invalid index type
+        df_invalid_index = df.reset_index()
+        res = utils.resample_and_filter_data(df_invalid_index, start_dt, end_dt, "30min", logger)
+        self.assertFalse(res)
+
+        # Case 3: Empty after filtering
+        future_start = pd.Timestamp("2025-01-01", tz=time_zone)
+        future_end = pd.Timestamp("2025-01-02", tz=time_zone)
+        res = utils.resample_and_filter_data(df, future_start, future_end, "30min", logger)
+        self.assertFalse(res)
+
+        # Case 4: Naive timezone handling (should auto-localize)
+        df_naive = pd.DataFrame(
+            {"value": range(100)}, index=pd.date_range("2024-01-01", periods=100, freq="5min")
+        )
+        # Using a slice that overlaps with the naive index dates
+        res = utils.resample_and_filter_data(df_naive, start_dt, end_dt, "30min", logger)
+        self.assertIsInstance(res, pd.DataFrame)
+        self.assertEqual(res.index.tz, time_zone)
 
 
 class TestHeatingDemand(unittest.TestCase):

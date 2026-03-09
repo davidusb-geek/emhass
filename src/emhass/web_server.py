@@ -6,7 +6,6 @@ import logging
 import os
 import pickle
 import re
-import threading
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -261,7 +260,7 @@ async def configuration():
     if (emhass_conf["data_path"] / params_file).exists():
         async with aiofiles.open(str(emhass_conf["data_path"] / params_file), "rb") as fid:
             content = await fid.read()
-            emhass_conf["config_path"], params = pickle.loads(content)
+            _, params = pickle.loads(content)  # Don't overwrite emhass_conf["config_path"]
     else:
         params = {}
 
@@ -451,7 +450,7 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
     if params_path.exists():
         async with aiofiles.open(str(params_path), "rb") as fid:
             content = await fid.read()
-            emhass_conf["config_path"], params = pickle.loads(content)
+            _, params = pickle.loads(content)  # Don't overwrite emhass_conf["config_path"]
             # Set local costfun variable
             if params.get("optim_conf") is not None:
                 costfun = params["optim_conf"].get("costfun", "profit")
@@ -638,20 +637,27 @@ async def action_call(action_name: str):
         return await make_response(await grab_log(action_str), 400)
 
     # Handle Continual Publish Threading
+    rh_handed_to_thread = False
     if len(continual_publish_thread) == 0 and input_data_dict["retrieve_hass_conf"].get(
         "continual_publish", False
     ):
-        continual_loop = threading.Thread(
-            name="continual_publish",
-            target=lambda: asyncio.run(continual_publish(input_data_dict, entity_path, app.logger)),
+        rh_handed_to_thread = True
+        continual_loop = app.add_background_task(
+            continual_publish, input_data_dict, entity_path, app.logger
         )
-        continual_loop.start()
         continual_publish_thread.append(continual_loop)
 
     # Execute Action
-    msg, status = await _handle_action_dispatch(
-        action_name, input_data_dict, emhass_conf, params, runtimeparams, app.logger
-    )
+    try:
+        msg, status = await _handle_action_dispatch(
+            action_name, input_data_dict, emhass_conf, params, runtimeparams, app.logger
+        )
+    finally:
+        # Close HTTP session unless this rh was handed to the continual_publish thread.
+        # Each call to set_input_data_dict creates a fresh rh, so closing here only
+        # affects this request's rh, not any previously started background thread's.
+        if not rh_handed_to_thread and "rh" in input_data_dict:
+            await input_data_dict["rh"].close()
 
     # Final Log Check & Response
     if status == 201:
@@ -704,23 +710,24 @@ async def _build_configuration(
     """Helper to build configuration and local variables."""
     config = {}
     # Combine parameters from configuration sources (if exists)
-    config.update(
-        await build_config(
-            emhass_conf,
-            app.logger,
-            str(defaults_path),
-            str(config_path) if config_path.exists() else None,
-            str(legacy_config_path) if legacy_config_path.exists() else None,
-        )
+    built_config = await build_config(
+        emhass_conf,
+        app.logger,
+        str(defaults_path),
+        str(config_path) if config_path.exists() else None,
+        str(legacy_config_path) if legacy_config_path.exists() else None,
     )
-    if type(config) is bool and not config:
+    # Catch the False return BEFORE trying to update the dictionary
+    if type(built_config) is bool and not built_config:
         raise Exception("Failed to find default config")
+    config.update(built_config)
     # Set local variables
     costfun = os.getenv("LOCAL_COSTFUN", config.get("costfun", "profit"))
     logging_level = os.getenv("LOGGING_LEVEL", config.get("logging_level", "INFO"))
     # Temporary set logging level if debug
     if logging_level == "DEBUG":
         app.logger.setLevel(logging.DEBUG)
+
     return config, costfun, logging_level
 
 
@@ -793,10 +800,10 @@ async def _build_and_save_params(
     # Update params with local variables
     params["optim_conf"]["costfun"] = costfun
     params["optim_conf"]["logging_level"] = logging_level
-    # Save params to file for later reference
+    # Save params to file for later reference (use emhass_conf["config_path"] which may have been updated by build_secrets)
     if os.path.exists(str(emhass_conf["data_path"])):
         async with aiofiles.open(str(emhass_conf["data_path"] / params_file), "wb") as fid:
-            content = pickle.dumps((config_path, params))
+            content = pickle.dumps((emhass_conf["config_path"], params))
             await fid.write(content)
     else:
         raise Exception("missing: " + str(emhass_conf["data_path"]))
@@ -876,6 +883,11 @@ async def _initialize_connections(params: dict) -> None:
 
 async def initialize(args: dict | None = None):
     global emhass_conf, params_secrets, continual_publish_thread, injection_dict, entity_path
+    # Grab the logging level early from ENV so initialization functions can log properly
+    early_log_level = os.getenv("LOGGING_LEVEL", "INFO")
+    normalized_log_level = early_log_level.upper()
+    log_level = getattr(logging, normalized_log_level, logging.INFO)
+    app.logger.setLevel(log_level)
     # Setup paths
     (
         config_path,
@@ -885,12 +897,14 @@ async def initialize(args: dict | None = None):
         legacy_config_path,
         root_path,
     ) = await _setup_paths()
-    # Build configuration
-    config, costfun, logging_level = await _build_configuration(
-        config_path, legacy_config_path, defaults_path
-    )
-    # Setup Secrets
+    # Setup Secrets (must run BEFORE build_configuration to allow options.json to override config_path)
     server_ip = await _setup_secrets(args, options_path)
+    # Build configuration (now uses potentially updated emhass_conf["config_path"] from options.json)
+    config, costfun, logging_level = await _build_configuration(
+        emhass_conf["config_path"],
+        emhass_conf.get("legacy_config_path", legacy_config_path),
+        defaults_path,
+    )
     # Validate Data Path
     _validate_data_path(root_path)
     # Load Injection Dict
@@ -912,6 +926,7 @@ async def initialize(args: dict | None = None):
         "Home Assistant data fetch will be performed using url: " + params_secrets["hass_url"]
     )
     app.logger.info("The data path is: " + str(emhass_conf["data_path"]))
+    app.logger.info("The config path is: " + str(emhass_conf["config_path"]))
     app.logger.info("The logging is: " + str(logging_level))
     try:
         app.logger.info("Using core emhass version: " + version("emhass"))

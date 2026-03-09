@@ -1,5 +1,5 @@
 ## EMHASS Docker
-## Docker run addon testing example:
+## Docker run app testing example:
 ## docker build -t emhass .
 ## OR docker build --build-arg TARGETARCH=amd64 -t emhass .
 ## docker run --rm -it -p 5000:5000 --name emhass-container -v ./config.json:/share/config.json -v ./secrets_emhass.yaml:/app/secrets_emhass.yaml emhass

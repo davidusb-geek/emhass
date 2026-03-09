@@ -1,16 +1,16 @@
 # Installation Methods
 
-## Method 1) The EMHASS add-on for Home Assistant OS and supervised users
+## Method 1) The EMHASS app for Home Assistant OS and supervised users
 
-For Home Assistant OS and HA Supervised users, A [EMHASS an add-on repository](https://github.com/davidusb-geek/emhass-add-on) has been developed to allow the EMHASS Docker container to run as a [Home Assistant Addon](https://www.home-assistant.io/addons/). The add-on is more user-friendly as the Home Assistant secrets (URL and API key) are automatically placed inside of the EMHASS container, and web server port *(default 5000)* is already opened.
+For Home Assistant OS and HA Supervised users, A [EMHASS app repository](https://github.com/davidusb-geek/emhass-add-on) has been developed to allow the EMHASS Docker container to run as a [Home Assistant app](https://www.home-assistant.io/addons/). The app is more user-friendly as the Home Assistant secrets (URL and API key) are automatically placed inside of the EMHASS container, and web server port *(default 5000)* is already opened.
 
-You can find the add-on with the installation instructions here: [https://github.com/davidusb-geek/emhass-add-on](https://github.com/davidusb-geek/emhass-add-on)
+You can find the app with the installation instructions here: [https://github.com/davidusb-geek/emhass-app](https://github.com/davidusb-geek/emhass-add-on)
 
 These architectures are supported: `amd64` and `aarch64` (currently `armv7` and `armhf` are not supported).
 
 ```{note} 
 
-_Both EMHASS via Docker and EMHASS-Add-on contain the same Docker image. The EMHASS-Add-on repository however, stores Home Assistant addon specific configuration information and maintains EMHASS image version control._
+_Both EMHASS via Docker and EMHASS-app contain the same Docker image. The EMHASS-app repository however, stores Home Assistant addon specific configuration information and maintains EMHASS image version control._
 ```
 
 ## Method 2) Running EMHASS in Docker
