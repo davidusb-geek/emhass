@@ -355,14 +355,14 @@
     },
     "pv_module_model": {
       "friendly_name": "PV module model",
-      "Description": "The PV module model. You can provide the model name from the CEC database or the nominal power in Watts (e.g., 300). This parameter can be a list of items to enable the simulation of mixed orientation systems.",
+      "Description": "The PV module model. Enter the exact CEC database name, or enter the nominal power in Watts (e.g., 300) to automatically use the closest matching panel. Can be a list for mixed orientation systems.",
       "input": "array.string",
       "input_attributes": "_'s",
       "default_value": "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M"
     },
     "pv_inverter_model": {
       "friendly_name": "PV inverter model",
-      "Description": "The PV inverter model. You can provide the model name from the CEC database or the nominal power in Watts (e.g., 5000). This parameter can be a list of items to enable the simulation of mixed orientation systems.",
+      "Description": "The PV inverter model. Enter the exact CEC database name, or enter the nominal AC power in Watts (e.g., 5000) to automatically use the closest matching inverter. Can be a list for mixed orientation systems.",
       "input": "array.string",
       "input_attributes": "_'s",
       "default_value": "Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_"

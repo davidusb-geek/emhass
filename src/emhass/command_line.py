@@ -127,6 +127,7 @@ class OptimizationCacheKey:
     optimization_time_step_s: float | None
     delta_forecast_daily_s: float | None
     costfun: str
+    plant_conf_hash: str
 
 
 class OptimizationCache:
@@ -176,9 +177,9 @@ class OptimizationCache:
                 return ()
             if hasattr(val, "tolist"):
                 val = val.tolist()
-            if isinstance(val, (list, tuple)):
+            if isinstance(val, list | tuple):
                 # Handle nested lists (e.g., nominal_power with sequences)
-                return tuple(tuple(v) if isinstance(v, (list, tuple)) else v for v in val)
+                return tuple(tuple(v) if isinstance(v, list | tuple) else v for v in val)
             return (val,)
 
         def config_hash(cfg: dict, exclude_keys: set | None = None) -> str:
@@ -206,8 +207,13 @@ class OptimizationCache:
             "start_temperature",
             "desired_temperatures",
             "indoor_target_temperature",  # thermal_battery runtime param
+            "q_input_initial",  # thermal inertia warm-start override
         }
-
+        # Plant parameters that are updated dynamically (no rebuild needed)
+        plant_runtime_keys = {
+            "soc_init",
+            "battery_target_state_of_charge",
+        }
         # Extract def_load_config structure (which loads are thermal/thermal_battery/standard)
         # Include hash of thermal config contents to detect parameter changes
         def_load_config = optim_conf.get("def_load_config", []) or []
@@ -257,6 +263,7 @@ class OptimizationCache:
             optimization_time_step_s=to_seconds(retrieve_hass_conf.get("optimization_time_step")),
             delta_forecast_daily_s=to_seconds(optim_conf.get("delta_forecast_daily")),
             costfun=costfun,
+            plant_conf_hash=config_hash(plant_conf, plant_runtime_keys),
         )
 
     @classmethod
@@ -1012,6 +1019,10 @@ async def set_input_data_dict(
             opt.logger = logger
             opt.var_load_cost = fcst.var_load_cost
             opt.var_prod_price = fcst.var_prod_price
+            # Update internal config dictionaries to prevent stale lookups
+            # for runtime parameters (like battery_target_state_of_charge)
+            opt.plant_conf = plant_conf
+            opt.optim_conf = optim_conf
             # Update thermal runtime parameters (start_temperature, desired_temperatures)
             # These change between MPC iterations and must be synced to cached object
             new_def_load_config = optim_conf.get("def_load_config", [])
@@ -2446,7 +2457,7 @@ async def publish_json(
             content = await file.read()
             metadata = orjson.loads(content)
     else:
-        logger.error("unable to located metadata.json in:" + entity_path)
+        logger.error(f"unable to locate metadata.json in: {entity_path}")
         return False
     # Round current timecode (now)
     now_precise = datetime.now(input_data_dict["retrieve_hass_conf"]["time_zone"]).replace(

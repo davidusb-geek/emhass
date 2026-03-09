@@ -103,6 +103,25 @@ There is a complete dedicated section in the [Forecast](forecasts) section.
 Specifically the [Passing your own forecast data](https://emhass.readthedocs.io/en/latest/forecasts.html#passing-your-own-forecast-data) section.
 
 
+## WebSocket as a data source
+EMHASS can retrieve historical sensor data directly from your Home Assistant instance using a WebSocket connection. By default, this connection fetches short-term statistics at a high resolution (5-minute intervals), which is ideal for real-time optimization and Model Predictive Control (MPC). To activate this option, simply set `use_websocket: true`.
+
+If you are using the EMHASS-Add-on, this connection is handled automatically via the Home Assistant Supervisor API. If you are running EMHASS via Docker standalone or Python, ensure your Home Assistant URL and a Long-Lived Access Token are correctly provided in your configuration.
+
+```{note} 
+
+⚠️ **Important limitation regarding long-term historical data:**
+When retrieving data via WebSocket, the availability of high-resolution (5-minute) data is strictly tied to your Home Assistant recorder's `purge_keep_days` setting (which defaults to 10 days).
+
+If you configure EMHASS to retrieve a history window (`historic_days_to_retrieve`) that is *longer* than your `purge_keep_days`, Home Assistant will silently fall back to providing long-term statistics. Because these long-term statistics are aggregated to **one value per hour**, they lack the necessary granularity to use them for EMHASS, for example for accurate machine learning model fitting.
+
+**Best Practices:**
+- Use the **WebSocket** connection primarily for short-term history windows, MPC, and real-time optimization.
+- For training machine learning models over longer historical horizons (e.g., months of data), use **InfluxDB** as your data source, as it retains high-resolution data without aggressive purging.
+
+```
+
+
 ## InfluxDB as a data source
 A new feature allows using **InfluxDB** as an alternative data source to the Home Assistant recorder database. This is beneficial for users who want to treat longer data retention periods for training machine learning models or to reduce the query load on their main Home Assistant instance.
 

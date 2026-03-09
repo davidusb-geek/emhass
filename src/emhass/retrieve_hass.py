@@ -5,7 +5,7 @@ import os
 import pathlib
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Self
 
 import aiofiles
 import aiohttp
@@ -77,7 +77,10 @@ class RetrieveHass:
         """
         self.hass_url = hass_url
         self.long_lived_token = long_lived_token
-        self.freq = freq
+        if isinstance(freq, int | float | str):
+            self.freq = pd.Timedelta(minutes=int(freq))
+        else:
+            self.freq = freq
         self.time_zone = time_zone
         if (params is None) or (params == "null"):
             self.params = {}
@@ -128,6 +131,43 @@ class RetrieveHass:
             )
         else:
             self.logger.debug("InfluxDB integration disabled, using Home Assistant API")
+        # Persistent HTTP session for connection reuse (lazy-initialized)
+        self._session: aiohttp.ClientSession | None = None
+        self._session_lock = asyncio.Lock()
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """
+        Get or create a persistent aiohttp session for HTTP requests.
+
+        This enables connection reuse and avoids the overhead of creating
+        a new TCP connection + TLS handshake for each request.
+        Uses an asyncio.Lock to prevent concurrent callers from creating
+        multiple sessions.
+        """
+        async with self._session_lock:
+            if self._session is None or self._session.closed:
+                self._session = aiohttp.ClientSession()
+            return self._session
+
+    async def close(self) -> None:
+        """
+        Close the persistent HTTP session.
+
+        Should be called when the RetrieveHass instance is no longer needed
+        to properly release resources.
+        """
+        async with self._session_lock:
+            if self._session is not None and not self._session.closed:
+                await self._session.close()
+                self._session = None
+
+    async def __aenter__(self) -> Self:
+        """Enter async context manager."""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Exit async context manager, closing the HTTP session."""
+        await self.close()
 
     async def get_ha_config(self):
         """
@@ -175,15 +215,15 @@ class RetrieveHass:
                 self.hass_url = self.hass_url + "/"
             url = self.hass_url + "api/config"
 
-        # Attempt the connection
+        # Attempt the connection using persistent session for connection reuse
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, ssl=self.ssl_verify) as response:
-                    # Check for HTTP errors (404, 401, 500) before trying to parse JSON
-                    response.raise_for_status()
-                    data = await response.read()
-                    self.ha_config = orjson.loads(data)
-                    return True
+            session = await self._get_session()
+            async with session.get(url, headers=headers, ssl=self.ssl_verify) as response:
+                # Check for HTTP errors (404, 401, 500) before trying to parse JSON
+                response.raise_for_status()
+                data = await response.read()
+                self.ha_config = orjson.loads(data)
+                return True
 
         except Exception as e:
             # Granular Error Logging
@@ -275,9 +315,11 @@ class RetrieveHass:
         """Helper to construct the Home Assistant History URL."""
         if test_url != "empty":
             return test_url
+        # Format the date with a strict 'Z' suffix instead of '+00:00'
+        day_str = day.strftime("%Y-%m-%dT%H:%M:%SZ")
         # Check if using supervisor API or Core API
         if self.hass_url == hass_url:
-            base_url = f"{self.hass_url}/history/period/{day.isoformat()}"
+            base_url = f"{self.hass_url}/history/period/{day_str}"
         else:
             # Ensure trailing slash for Core API
             if self.hass_url[-1] != "/":
@@ -285,12 +327,12 @@ class RetrieveHass:
                     "Missing slash </> at the end of the defined URL, appending a slash but please fix your URL"
                 )
                 self.hass_url = self.hass_url + "/"
-            base_url = f"{self.hass_url}api/history/period/{day.isoformat()}"
+            base_url = f"{self.hass_url}api/history/period/{day_str}"
         url = f"{base_url}?filter_entity_id={var}"
         if minimal_response:
-            url += "?minimal_response"
+            url += "&minimal_response"  # Note: fixed to & if query params exist, but ? is fine if it's the only one. Actually, filter_entity_id uses ?, so we MUST use & here.
         if significant_changes_only:
-            url += "?significant_changes_only"
+            url += "&significant_changes_only"
         return url
 
     async def _fetch_history_data(
@@ -305,30 +347,41 @@ class RetrieveHass:
         """Helper to execute the HTTP request and return the raw JSON list."""
         try:
             async with session.get(url, headers=headers, ssl=self.ssl_verify) as response:
-                response.raise_for_status()
+                # Catch specific HTTP errors before trying to parse the JSON
+                if response.status == 400:
+                    self.logger.error(f"Home Assistant returned 400 Bad Request. URL: {url}")
+                    return False
+                elif response.status == 401:
+                    self.logger.error(
+                        "Unable to access Home Assistant instance, TOKEN/KEY is invalid or missing"
+                    )
+                    return False
+                elif response.status > 299:
+                    self.logger.error(
+                        f"Home assistant request GET error: {response.status} for var {var}. URL: {url}"
+                    )
+                    return False
+                # If status is 200 OK, proceed to read and parse
                 data = await response.read()
                 data_list = orjson.loads(data)
-        except Exception:
-            self.logger.error("Unable to access Home Assistant instance, check URL")
+        except aiohttp.ClientError as e:
+            self.logger.error(f"Network error connecting to Home Assistant: {e}")
             self.logger.error("If using addon, try setting url and token to 'empty'")
             return False
-        if response.status == 401:
-            self.logger.error("Unable to access Home Assistant instance, TOKEN/KEY")
-            return False
-        if response.status > 299:
-            self.logger.error(f"Home assistant request GET error: {response.status} for var {var}")
+        except Exception as e:
+            self.logger.error(f"Unexpected error retrieving data from Home Assistant: {e}")
             return False
         try:
             return data_list[0]
         except IndexError:
             if is_first_day:
                 self.logger.error(
-                    f"The retrieved JSON is empty, A sensor: {var} may have 0 days of history, "
-                    "passed sensor may not be correct, or days to retrieve is set too high."
+                    f"The retrieved JSON is empty. A sensor: {var} may have 0 days of history, "
+                    "the passed sensor may not be correct, or days_to_retrieve is set too high."
                 )
             else:
                 self.logger.error(
-                    f"The retrieved JSON is empty for day: {day}, days_to_retrieve may be larger "
+                    f"The retrieved JSON is empty for day: {day}. days_to_retrieve may be larger "
                     f"than the recorded history of sensor: {var}"
                 )
             return False
@@ -342,19 +395,19 @@ class RetrieveHass:
         if len(df_raw) == 0:
             if is_first_day:
                 self.logger.error(
-                    f"The retrieved Dataframe is empty, A sensor: {var} may have 0 days of history."
+                    f"The retrieved Dataframe is empty. A sensor: {var} may have 0 days of history."
                 )
             else:
                 self.logger.error(
                     f"Retrieved empty Dataframe for day: {day}, check recorder settings."
                 )
             return False
-        # Check for data sufficiency (frequency consistency)
-        expected_count = (60 / (self.freq.seconds / 60)) * 24
+        freq_minutes = self.freq.total_seconds() / 60.0
+        expected_count = (60.0 / freq_minutes) * 24.0
         if len(df_raw) < expected_count and not is_last_day:
             self.logger.debug(
                 f"sensor: {var} retrieved Dataframe count: {len(df_raw)}, on day: {day}. "
-                f"This is less than freq value passed: {self.freq}"
+                f"This is less than expected count: {expected_count} (freq: {self.freq})"
             )
         # Process and Resample
         df_tp = (
@@ -1190,21 +1243,22 @@ class RetrieveHass:
             response_status_code = 200
         else:
             # Always use REST API for posting data, regardless of use_websocket setting
+            # Use persistent session for connection reuse (avoids TLS handshake per request)
             self.logger.debug(f"Posting data to URL: {url}")
             try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        url,
-                        headers=headers,
-                        data=orjson.dumps(data).decode("utf-8"),
-                        ssl=self.ssl_verify,
-                    ) as response:
-                        # Store response data since we need to access it after the context manager
-                        response_ok = response.ok
-                        response_status_code = response.status
-                        self.logger.debug(
-                            f"HTTP POST response: ok={response_ok}, status={response_status_code}"
-                        )
+                session = await self._get_session()
+                async with session.post(
+                    url,
+                    headers=headers,
+                    data=orjson.dumps(data).decode("utf-8"),
+                    ssl=self.ssl_verify,
+                ) as response:
+                    # Store response data since we need to access it after the context manager
+                    response_ok = response.ok
+                    response_status_code = response.status
+                    self.logger.debug(
+                        f"HTTP POST response: ok={response_ok}, status={response_status_code}"
+                    )
             except Exception as e:
                 self.logger.error(f"Failed to post data to {entity_id}: {e}")
                 response_ok = False
@@ -1237,7 +1291,16 @@ class RetrieveHass:
                 if os.path.isfile(metadata_path):
                     async with aiofiles.open(metadata_path) as file:
                         content = await file.read()
-                        metadata = orjson.loads(content)
+                        try:
+                            metadata = orjson.loads(content)
+                        except orjson.JSONDecodeError:
+                            self.logger.error(
+                                f"Corrupted metadata file found at {metadata_path}. Creating a new one."
+                            )
+                            metadata = {}
+                            # Rename the corrupted file to metadata_corrupt.json
+                            corrupt_path = entities_path / "metadata_corrupt.json"
+                            os.rename(metadata_path, corrupt_path)
                 else:
                     metadata = {}
 

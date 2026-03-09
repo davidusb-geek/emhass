@@ -21,6 +21,7 @@ from emhass.command_line import (
     OptimizationCacheKey,
     SetupContext,
     _prepare_dayahead_optim,
+    _publish_and_update_freq,
     adjust_pv_forecast,
     dayahead_forecast_optim,
     export_influxdb_to_csv,
@@ -33,6 +34,7 @@ from emhass.command_line import (
     perfect_forecast_optim,
     prepare_forecast_and_weather_data,
     publish_data,
+    publish_json,
     regressor_model_fit,
     regressor_model_predict,
     retrieve_home_assistant_data,
@@ -1722,6 +1724,115 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         # Verify desired_temperatures override applied (21.0 -> 22.5)
         self.assertEqual(thermal_config["desired_temperatures"], [22.5] * 48)
 
+    @patch("emhass.command_line.publish_json", new_callable=AsyncMock)
+    @patch("emhass.command_line.aiofiles.open")
+    @patch("os.path.isfile")
+    @patch("os.listdir")
+    @patch("os.path.exists")
+    async def test_publish_and_update_freq(
+        self, mock_exists, mock_listdir, mock_isfile, mock_aio_open, mock_publish_json
+    ):
+        """Test the background loop helper that checks for cached entities and updates frequency."""
+        input_data_dict = {}
+        entity_path = pathlib.Path("/mock/entities")
+        logger = MagicMock()
+        current_freq = pd.Timedelta(minutes=30)
+        # Test 1: Directory does not exist
+        mock_exists.return_value = False
+        res = await _publish_and_update_freq(input_data_dict, entity_path, logger, current_freq)
+        self.assertEqual(res, current_freq)
+        # Test 2: Directory is empty
+        mock_exists.return_value = True
+        mock_listdir.return_value = []
+        res = await _publish_and_update_freq(input_data_dict, entity_path, logger, current_freq)
+        self.assertEqual(res, current_freq)
+        # Test 3: Directory has files, metadata exists, new frequency returned
+        mock_listdir.return_value = ["sensor1.json", "metadata.json"]
+        mock_isfile.return_value = True
+        # Mock reading the metadata.json file
+        mock_file_handle = AsyncMock()
+        mock_file_handle.read.return_value = orjson.dumps({"lowest_time_step": 15})
+        mock_aio_open.return_value.__aenter__.return_value = mock_file_handle
+        res = await _publish_and_update_freq(input_data_dict, entity_path, logger, current_freq)
+        # publish_json should only be called for "sensor1.json", NOT "metadata.json"
+        mock_publish_json.assert_called_once_with(
+            "sensor1.json", input_data_dict, entity_path, logger, "continual_publish"
+        )
+        # Expected new frequency based on the mocked lowest_time_step
+        self.assertEqual(res, pd.Timedelta(minutes=15))
+
+    @patch("emhass.command_line.pd.read_json")
+    @patch("emhass.command_line.aiofiles.open")
+    @patch("os.path.isfile")
+    @patch("emhass.command_line.datetime")
+    async def test_publish_json(self, mock_datetime, mock_isfile, mock_aio_open, mock_read_json):
+        """Test the individual JSON file extraction and posting mechanism."""
+        entity_path = pathlib.Path("/mock/entities")
+        entity_file = "sensor_test.json"
+        entity_id = "sensor_test"
+        mock_rh = AsyncMock()
+        input_data_dict = {
+            "retrieve_hass_conf": {
+                "time_zone": "UTC",
+                "method_ts_round": "nearest",  # We will change this to test all branches
+            },
+            "rh": mock_rh,
+        }
+        # Test 1: Metadata file is missing
+        mock_isfile.return_value = False
+        res = await publish_json(entity_file, input_data_dict, entity_path, logger)
+        self.assertFalse(res)
+        # Test 2: Successful publish with 'nearest' rounding
+        mock_isfile.return_value = True
+        # Setup mock metadata JSON payload
+        mock_metadata = {
+            entity_id: {
+                "name": "Test_Sensor",
+                "optimization_time_step": 30,
+                "unit_of_measurement": "W",
+                "friendly_name": "Testing Sensor",
+                "device_class": "power",
+                "type_var": "custom",
+            }
+        }
+        mock_file_handle = AsyncMock()
+        mock_file_handle.read.return_value = orjson.dumps(mock_metadata)
+        mock_aio_open.return_value.__aenter__.return_value = mock_file_handle
+        # Setup mocked Pandas DataFrame representing the saved sensor data
+        idx = pd.date_range("2024-01-01", periods=3, freq="30min", tz="UTC")
+        mock_df = pd.DataFrame({0: [100.0, 200.0, 300.0]}, index=idx)
+        mock_read_json.return_value = mock_df
+        # Mock datetime.now() to match the middle index (2024-01-01 00:30:00)
+        mock_now = MagicMock()
+        mock_now.replace.return_value = idx[1]
+        mock_datetime.now.return_value = mock_now
+        # Execute nearest
+        res = await publish_json(
+            entity_file, input_data_dict, entity_path, logger, "continual_publish"
+        )
+        # Verify formatting and post_data execution
+        self.assertIsInstance(res, pd.Series)
+        self.assertEqual(res.name, "Test_Sensor")
+        mock_rh.post_data.assert_called_once()
+        # Verify post_data arguments
+        call_args = mock_rh.post_data.call_args[1]
+        self.assertEqual(call_args["idx"], 1)  # Middle index matched
+        self.assertEqual(call_args["entity_id"], entity_id)
+        self.assertEqual(
+            call_args["logger_levels"], "DEBUG"
+        )  # Because reference='continual_publish'
+        # Test 3: Coverage for 'first' rounding
+        input_data_dict["retrieve_hass_conf"]["method_ts_round"] = "first"
+        mock_rh.reset_mock()
+        await publish_json(entity_file, input_data_dict, entity_path, logger)
+        self.assertEqual(mock_rh.post_data.call_args[1]["idx"], 1)
+        self.assertEqual(mock_rh.post_data.call_args[1]["logger_levels"], "INFO")  # Blank reference
+        # Test 4: Coverage for 'last' rounding
+        input_data_dict["retrieve_hass_conf"]["method_ts_round"] = "last"
+        mock_rh.reset_mock()
+        await publish_json(entity_file, input_data_dict, entity_path, logger)
+        self.assertEqual(mock_rh.post_data.call_args[1]["idx"], 1)
+
 
 class TestCommandLineTimezoneLogic(unittest.IsolatedAsyncioTestCase):
     """
@@ -3310,6 +3421,88 @@ class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
         # Verify min_temps parameter was updated
         self.assertAlmostEqual(min_temps_first[1], initial_min_temp, places=1)
         self.assertAlmostEqual(min_temps_second[1], updated_min_temp, places=1)
+
+    async def test_mpc_cache_plant_conf_updates(self):
+        """
+        Verify that structural plant_conf changes trigger a cache miss,
+        and non-structural plant_conf changes update correctly on a hit.
+        """
+        costfun = "profit"
+        action = "naive-mpc-optim"  # Switched to MPC to use shorter prediction horizon
+        # Set up the base runtime parameters with lists to bypass PVLib/pickles
+        base_runtimeparams = {
+            "pv_power_forecast": [100] * 10,
+            "load_power_forecast": [200] * 10,
+            "load_cost_forecast": [0.15] * 10,
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+        }
+        # Base run
+        runtimeparams_1 = base_runtimeparams.copy()
+        runtimeparams_1.update(
+            {"battery_target_state_of_charge": 0.5, "battery_minimum_state_of_charge": 0.2}
+        )
+        params_1 = copy.deepcopy(self.params)
+        params_1["passed_data"] = runtimeparams_1
+        # Explicitly bypass forecast downloads/computations
+        params_1["optim_conf"]["weather_forecast_method"] = "list"
+        params_1["optim_conf"]["load_forecast_method"] = "list"
+        params_1["optim_conf"]["load_cost_forecast_method"] = "list"
+        params_1["optim_conf"]["production_price_forecast_method"] = "list"
+
+        input_data_1 = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            orjson.dumps(params_1).decode("utf-8"),
+            orjson.dumps(runtimeparams_1).decode("utf-8"),
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_1 = input_data_1["opt"]
+        # Cache Hit: Change target SOC (Should NOT trigger miss, but SHOULD update plant_conf)
+        runtimeparams_2 = base_runtimeparams.copy()
+        runtimeparams_2.update(
+            {"battery_target_state_of_charge": 0.8, "battery_minimum_state_of_charge": 0.2}
+        )
+        params_2 = copy.deepcopy(params_1)
+        params_2["passed_data"] = runtimeparams_2
+        input_data_2 = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            orjson.dumps(params_2).decode("utf-8"),
+            orjson.dumps(runtimeparams_2).decode("utf-8"),
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_2 = input_data_2["opt"]
+        self.assertIs(opt_1, opt_2, "Target SOC change should result in Cache Hit")
+        self.assertEqual(
+            opt_2.plant_conf["battery_target_state_of_charge"],
+            0.8,
+            "Stale plant_conf on cache hit!",
+        )
+        # Cache Miss: Change Minimum SOC limit (Must rebuild CVXPY constraint)
+        runtimeparams_3 = base_runtimeparams.copy()
+        runtimeparams_3.update(
+            {"battery_target_state_of_charge": 0.8, "battery_minimum_state_of_charge": 0.4}
+        )
+        params_3 = copy.deepcopy(params_1)
+        params_3["passed_data"] = runtimeparams_3
+        input_data_3 = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            orjson.dumps(params_3).decode("utf-8"),
+            orjson.dumps(runtimeparams_3).decode("utf-8"),
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        opt_3 = input_data_3["opt"]
+        self.assertIsNot(
+            opt_2, opt_3, "Min SOC change must trigger Cache Miss to rebuild constraints"
+        )
 
 
 if __name__ == "__main__":
