@@ -178,13 +178,20 @@ class RetrieveHass:
         # Initialize empty config immediately for safety
         self.ha_config = {}
 
-        # Check if variables are None, empty strings, or explicitly set to "empty"
-        if (
-            not self.hass_url
-            or self.hass_url == "empty"
-            or not self.long_lived_token
-            or self.long_lived_token == "empty"
-        ):
+        # Resolve the token: if empty, fall back to SUPERVISOR_TOKEN env var (injected by HA addon supervisor)
+        token = self.long_lived_token
+        if not token or token == "empty":
+            token = os.getenv("SUPERVISOR_TOKEN", "")
+            if token:
+                self.logger.debug("Using SUPERVISOR_TOKEN from environment for HA config retrieval.")
+
+        # Resolve the URL: if empty, use the default supervisor URL
+        url_to_use = self.hass_url
+        if not url_to_use or url_to_use == "empty":
+            url_to_use = hass_url  # default: http://supervisor/core/api
+
+        # If we still have no token after checking env, skip HA config retrieval
+        if not token:
             self.logger.info(
                 "No Home Assistant URL or Long Lived Token found. Using only local configuration file."
             )
@@ -198,22 +205,22 @@ class RetrieveHass:
 
         # Set up headers
         headers = {
-            "Authorization": header_auth + " " + self.long_lived_token,
+            "Authorization": header_auth + " " + token,
             "content-type": header_accept,
         }
 
         # Construct the URL (incorporating the PR's helpful checks)
         # The Supervisor API sometimes uses a different path structure
-        if self.hass_url == hass_url:
-            url = self.hass_url + "/config"
+        if url_to_use == hass_url:
+            url = url_to_use + "/config"
         else:
             # Helpful check for users who forget the trailing slash
-            if not self.hass_url.endswith("/"):
+            if not url_to_use.endswith("/"):
                 self.logger.warning(
                     "The defined HA URL is missing a trailing slash </>. Appending it, but please fix your configuration."
                 )
-                self.hass_url = self.hass_url + "/"
-            url = self.hass_url + "api/config"
+                url_to_use = url_to_use + "/"
+            url = url_to_use + "api/config"
 
         # Attempt the connection using persistent session for connection reuse
         try:
@@ -430,8 +437,19 @@ class RetrieveHass:
     ) -> None:
         """Internal method to handle REST API data retrieval."""
         self.logger.info("Retrieve hass get data method initiated...")
+        # Resolve the token to use for authentication.
+        # If long_lived_token is empty or not set, fall back to the SUPERVISOR_TOKEN
+        # environment variable injected by Home Assistant when running as an addon.
+        token = self.long_lived_token
+        if not token or token == "empty":
+            token = os.getenv("SUPERVISOR_TOKEN", "")
+            if token:
+                self.logger.debug("Using SUPERVISOR_TOKEN from environment for REST API authentication.")
+            else:
+                self.logger.error("No valid authentication token found. Set a long_lived_token or run as a HA addon.")
+                return False
         headers = {
-            "Authorization": header_auth + " " + self.long_lived_token,
+            "Authorization": header_auth + " " + token,
             "content-type": header_accept,
         }
         var_list = [var for var in var_list if var != ""]
