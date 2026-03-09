@@ -354,6 +354,9 @@ class Optimization:
         Missing entries default to off (0.0).
         """
         if "def_current_state" not in self.optim_conf:
+            # Reset all to 0.0 to avoid stale values from previous solves
+            for k in range(min(num_def_loads, len(self.param_def_current_state))):
+                self.param_def_current_state[k].value = 0.0
             return
 
         def_state_conf = self.optim_conf["def_current_state"]
@@ -373,7 +376,7 @@ class Optimization:
             # Validate binary: accept bool and numeric 0/1, reject everything else
             if isinstance(state, bool):
                 self.param_def_current_state[k].value = float(state)
-            elif isinstance(state, int | float) and state in (0, 1, 0.0, 1.0):
+            elif isinstance(state, (int, float)) and state in (0, 1, 0.0, 1.0):
                 self.param_def_current_state[k].value = float(state)
             else:
                 raise ValueError(
