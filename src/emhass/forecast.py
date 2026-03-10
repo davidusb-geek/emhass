@@ -7,7 +7,6 @@ import pickle
 import pickle as cPickle
 import re
 from datetime import datetime, timedelta
-from itertools import zip_longest
 from urllib.parse import quote
 
 import aiofiles
@@ -410,11 +409,11 @@ class Forecast:
         headers = {
             "User-Agent": "EMHASS",
             "Authorization": "Bearer " + self.retrieve_hass_conf["solcast_api_key"],
-            "content-type": header_accept,
+            "Accept": header_accept,
         }
         days_solcast = int(len(self.forecast_dates) * self.freq.seconds / 3600)
         roof_ids = re.split(r"[,\s]+", self.retrieve_hass_conf["solcast_rooftop_id"].strip())
-        total_data_list = [0] * len(self.forecast_dates)
+        total_data = pd.DataFrame()
 
         async with aiohttp.ClientSession() as session:
             for roof_id in roof_ids:
@@ -432,21 +431,35 @@ class Forecast:
                             "Solcast error: Issue with request, check API key and rooftop ID."
                         )
                         return False
-                    data_list = []
-                    for elm in data["forecasts"]:
-                        data_list.append(elm["pv_estimate"] * 1000)
-                    if len(data_list) < len(self.forecast_dates):
-                        self.logger.error("Not enough data retrieved from Solcast service.")
+                    if len(data["forecasts"]) == 0:
+                        self.logger.error("No data retrieved from Solcast service.")
                         return False
-                    total_data_list = [
-                        total + current
-                        for total, current in zip_longest(total_data_list, data_list, fillvalue=0)
+                    # Build a timestamped DataFrame from Solcast period_end timestamps
+                    solcast_timestamps = [
+                        pd.Timestamp(elm["period_end"]) for elm in data["forecasts"]
                     ]
+                    data_list = [elm["pv_estimate"] * 1000 for elm in data["forecasts"]]
+                    data_tmp = pd.DataFrame(
+                        {"yhat": data_list},
+                        index=pd.DatetimeIndex(solcast_timestamps, name="ts"),
+                    )
+                    if data_tmp.index.tz is None:
+                        data_tmp.index = data_tmp.index.tz_localize("UTC")
+                    data_tmp.index = data_tmp.index.tz_convert(self.forecast_dates.tz)
+                    # Reindex to target forecast dates and interpolate
+                    # (handles Solcast 30-min data -> any optimization_time_step)
+                    combined_index = data_tmp.index.union(self.forecast_dates).sort_values()
+                    data_tmp = data_tmp.reindex(combined_index)
+                    data_tmp.interpolate(method="time", inplace=True)
+                    data_tmp = data_tmp.reindex(self.forecast_dates)
+                    # Zero-fill edges beyond Solcast data range
+                    data_tmp = data_tmp.fillna(0.0)
+                    if len(total_data) == 0:
+                        total_data = data_tmp.copy()
+                    else:
+                        total_data = total_data + data_tmp
 
-        total_data_list = total_data_list[0 : len(self.forecast_dates)]
-        data_dict = {"ts": self.forecast_dates, "yhat": total_data_list}
-        data = pd.DataFrame.from_dict(data_dict)
-        data.set_index("ts", inplace=True)
+        data = total_data
         if self.params["passed_data"].get("weather_forecast_cache", False):
             data = await self.set_cached_forecast_data(w_forecast_cache_path, data)
         return data
