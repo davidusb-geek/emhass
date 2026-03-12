@@ -201,6 +201,16 @@ class Optimization:
             timesteps_active.value = 0.0
             self.param_timesteps_active.append(timesteps_active)
 
+        # Deferrable load current state parameters (for startup detection)
+        # Allows updating def_current_state without rebuilding constraints.
+        # IMPORTANT: Values MUST be exactly 0.0 or 1.0 (binary indicator).
+        # Fractional values would weaken the MIP startup/on-off constraints.
+        self.param_def_current_state = []
+        for k in range(num_def_loads):
+            p = cp.Parameter(nonneg=True, name=f"def_current_state_{k}")
+            p.value = 0.0
+            self.param_def_current_state.append(p)
+
         # Thermal Parameters for warm-starting
         # Dict keyed by load index k, stores all parameters needed for thermal constraints
         # This allows updating runtime values (forecasts, temperatures) without rebuilding constraints
@@ -326,6 +336,41 @@ class Optimization:
         # Manual override via config takes priority
         if "q_input_initial" in hc:
             params["q_input_start"].value = float(hc.get("q_input_initial", 0.0) or 0.0)
+
+    def _update_def_current_state_params(self, num_def_loads: int) -> None:
+        """Update def_current_state CVXPY Parameters from optim_conf.
+
+        Validates that each entry is a bool or numeric 0/1, raising ValueError
+        for unexpected values that would silently weaken MIP constraints.
+        Missing entries default to off (0.0).
+        """
+        if "def_current_state" not in self.optim_conf:
+            return
+
+        def_state_conf = self.optim_conf["def_current_state"]
+        n_conf_states = len(def_state_conf)
+
+        if n_conf_states != num_def_loads:
+            self.logger.warning(
+                "def_current_state length mismatch: "
+                "num_deferrable_loads=%d, len(def_current_state)=%d; "
+                "extra entries will be ignored or missing ones assumed off",
+                num_def_loads,
+                n_conf_states,
+            )
+
+        for k in range(num_def_loads):
+            state = def_state_conf[k] if k < n_conf_states else False
+            # Validate binary: accept bool and numeric 0/1, reject everything else
+            if isinstance(state, bool):
+                self.param_def_current_state[k].value = float(state)
+            elif isinstance(state, int | float) and state in (0, 1, 0.0, 1.0):
+                self.param_def_current_state[k].value = float(state)
+            else:
+                raise ValueError(
+                    f"Invalid def_current_state value at index {k}: {state!r}. "
+                    "Expected one of {{True, False, 0, 1, 0.0, 1.0}}."
+                )
 
     def update_thermal_start_temps(self, optim_conf: dict) -> None:
         """
@@ -1813,19 +1858,14 @@ class Optimization:
                 constraints.append(p_deferrable[k] <= M * p_def_bin2[k])
 
                 # Startup Detection: Start[t] >= Bin[t] - Bin[t-1]
-                # Retrieve State
-                current_state = 0
-                if (
-                    "def_current_state" in self.optim_conf
-                    and len(self.optim_conf["def_current_state"]) > k
-                ):
-                    current_state = 1 if self.optim_conf["def_current_state"][k] else 0
-
-                constraints.append(p_def_start[k][0] >= p_def_bin2[k][0] - current_state)
+                # Uses parameterized current state to allow warm-starting
+                constraints.append(
+                    p_def_start[k][0] >= p_def_bin2[k][0] - self.param_def_current_state[k]
+                )
                 constraints.append(p_def_start[k][1:] >= p_def_bin2[k][1:] - p_def_bin2[k][:-1])
 
                 # Startup Limit: Start[t] + Bin[t-1] <= 1
-                constraints.append(p_def_start[k][0] + current_state <= 1)
+                constraints.append(p_def_start[k][0] + self.param_def_current_state[k] <= 1)
                 constraints.append(p_def_start[k][1:] + p_def_bin2[k][:-1] <= 1)
 
                 if not is_sequence_load:
@@ -2218,6 +2258,9 @@ class Optimization:
             else:
                 self.param_required_timesteps[k].value = 0.0
                 self.param_timesteps_active[k].value = 0.0  # Constraint is relaxed (Big-M)
+
+        # Update def_current_state parameters for deferrable loads
+        self._update_def_current_state_params(num_deferrable_loads)
 
         # Build Problem (Lazy Construction)
         if self.prob is None:
