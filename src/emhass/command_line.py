@@ -1275,9 +1275,10 @@ def prepare_forecast_and_weather_data(
 
     # Add outdoor temperature if provided
     if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
+        forecast_len = len(df_input_data_dayahead)
         df_input_data_dayahead["outdoor_temperature_forecast"] = input_data_dict["params"][
             "passed_data"
-        ]["outdoor_temperature_forecast"]
+        ]["outdoor_temperature_forecast"][:forecast_len]
 
     # Auto-fallback to temp_air from Open-Meteo weather forecast
     elif (
@@ -1318,7 +1319,7 @@ def prepare_forecast_and_weather_data(
         dayahead_index = df_input_data_dayahead.index
         ghi_series = input_data_dict["df_weather"]["ghi"].copy()
 
-        # 1. Handle Timezone Mismatches (Same as above)
+        # Handle Timezone Mismatches (Same as above)
         if dayahead_index.tz is None and ghi_series.index.tz is not None:
             ghi_series.index = ghi_series.index.tz_localize(None)
         elif dayahead_index.tz is not None and ghi_series.index.tz is None:

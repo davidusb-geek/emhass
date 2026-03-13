@@ -183,7 +183,9 @@ class RetrieveHass:
         if not token or token == "empty":
             token = os.getenv("SUPERVISOR_TOKEN", "")
             if token:
-                self.logger.debug("Using SUPERVISOR_TOKEN from environment for HA config retrieval.")
+                self.logger.debug(
+                    "Using SUPERVISOR_TOKEN from environment for HA config retrieval."
+                )
 
         # Resolve the URL: if empty, use the default supervisor URL
         url_to_use = self.hass_url
@@ -445,9 +447,13 @@ class RetrieveHass:
         if not token or token == "empty":
             token = os.getenv("SUPERVISOR_TOKEN", "")
             if token:
-                self.logger.debug("Using SUPERVISOR_TOKEN from environment for REST API authentication.")
+                self.logger.debug(
+                    "Using SUPERVISOR_TOKEN from environment for REST API authentication."
+                )
             else:
-                self.logger.error("No valid authentication token found. Set a long_lived_token or run as a HA addon.")
+                self.logger.error(
+                    "No valid authentication token found. Set a long_lived_token or run as a HA addon."
+                )
                 return False
         headers = {
             "Authorization": header_auth + " " + token,

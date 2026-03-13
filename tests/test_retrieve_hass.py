@@ -647,9 +647,7 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(self.rh.df_final, pd.DataFrame)
             self.assertFalse(self.rh.df_final.empty)
             # First data point should be from day 2, not day 1
-            self.assertGreaterEqual(
-                self.rh.df_final.index[0], pd.Timestamp("2024-01-02", tz="UTC")
-            )
+            self.assertGreaterEqual(self.rh.df_final.index[0], pd.Timestamp("2024-01-02", tz="UTC"))
 
     async def test_get_data_rest_api_all_days_empty_fails(self):
         """Test that if ALL days return empty, it still fails with an error."""
