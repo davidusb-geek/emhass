@@ -1635,6 +1635,102 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             )
             self.assertFalse(res, "Should fail when columns are missing")
 
+    async def test_prepare_forecast_and_weather_data(self):
+        """
+        Test the standalone prepare_forecast_and_weather_data helper method.
+        Covers the padding, slicing, timezone mismatches, and GHI resolution warnings.
+        """
+        # Setup base DataFrames
+        dayahead_idx = pd.date_range("2025-01-01", periods=10, freq="30min", tz="UTC")
+        df_input_data_dayahead = pd.DataFrame({"P_PV": [0.0] * 10}, index=dayahead_idx)
+        # Setup input_data_dict
+        input_data_dict = {
+            "fcst": MagicMock(),
+            "df_input_data_dayahead": df_input_data_dayahead,
+            "params": {"passed_data": {}},
+            "df_weather": None,
+        }
+        # Mock the forecast methods to just return the passed DataFrame
+        input_data_dict["fcst"].get_load_cost_forecast.return_value = df_input_data_dayahead.copy()
+        input_data_dict["fcst"].get_prod_price_forecast.return_value = df_input_data_dayahead.copy()
+        # Test 1: Passed outdoor temp is longer than horizon (Slice Test)
+        input_data_dict["params"]["passed_data"]["outdoor_temperature_forecast"] = [
+            20.0
+        ] * 15  # 15 passed > 10 horizon
+        res_df = prepare_forecast_and_weather_data(input_data_dict, logger)
+        self.assertIsInstance(res_df, pd.DataFrame)
+        self.assertEqual(
+            len(res_df["outdoor_temperature_forecast"]), 10, "Should have sliced to exactly 10"
+        )
+        # Test 2: Passed outdoor temp is shorter than horizon (Pad Test)
+        # 5 passed < 10 horizon, last value is 25.0
+        input_data_dict["params"]["passed_data"]["outdoor_temperature_forecast"] = [
+            18.0,
+            19.0,
+            20.0,
+            21.0,
+            25.0,
+        ]
+        res_df = prepare_forecast_and_weather_data(input_data_dict, logger)
+        self.assertEqual(
+            len(res_df["outdoor_temperature_forecast"]), 10, "Should have padded to exactly 10"
+        )
+        self.assertEqual(
+            res_df["outdoor_temperature_forecast"].iloc[-1],
+            25.0,
+            "Padded values should match the last passed value",
+        )
+        # Test 3: Fallback to df_weather with Timezone conversion and GHI
+        input_data_dict["params"]["passed_data"] = {}  # Remove passed outdoor temp
+        # Weather index is timezone naive, dayahead is UTC
+        weather_idx = pd.date_range("2025-01-01", periods=5, freq="2h")
+        df_weather = pd.DataFrame(
+            {"temp_air": [10.0, 11.0, 12.0, 13.0, 14.0], "ghi": [100, 200, 300, 400, 500]},
+            index=weather_idx,
+        )
+        input_data_dict["df_weather"] = df_weather
+        # We also want to test the resolution warning (warn_on_resolution=True)
+        # dayahead is 30m, weather is 1h -> weather_freq > 2 * dayahead_freq will trigger the warning
+        with self.assertLogs(logger, level="WARNING") as cm:
+            res_df = prepare_forecast_and_weather_data(
+                input_data_dict, logger, warn_on_resolution=True
+            )
+        # Verify timezone conversion worked and NaNs were safely filled
+        self.assertIsInstance(res_df, pd.DataFrame)
+        self.assertIn("temp_air", df_weather.columns)
+        self.assertIn("outdoor_temperature_forecast", res_df.columns)
+        self.assertIn("ghi", res_df.columns)
+        self.assertEqual(
+            res_df["outdoor_temperature_forecast"].isnull().sum(),
+            0,
+            "Forward/Backward fill should have caught all NaNs",
+        )
+        self.assertEqual(res_df["ghi"].isnull().sum(), 0)
+        # Verify the resolution warning was actually triggered
+        warning_logs = str(cm.output)
+        self.assertTrue(
+            "much coarser than dayahead" in warning_logs, "Resolution warning should have triggered"
+        )
+        # Test 4: Timezone mismatch (Dayahead Naive, Weather Aware)
+        # Make dayahead naive
+        input_data_dict["df_input_data_dayahead"].index = input_data_dict[
+            "df_input_data_dayahead"
+        ].index.tz_localize(None)
+        input_data_dict["fcst"].get_load_cost_forecast.return_value = input_data_dict[
+            "df_input_data_dayahead"
+        ].copy()
+        input_data_dict["fcst"].get_prod_price_forecast.return_value = input_data_dict[
+            "df_input_data_dayahead"
+        ].copy()
+        # Make weather aware
+        df_weather.index = df_weather.index.tz_localize("Europe/Paris")
+        input_data_dict["df_weather"] = df_weather
+        # Execution shouldn't crash
+        res_df = prepare_forecast_and_weather_data(input_data_dict, logger)
+        self.assertIsInstance(res_df, pd.DataFrame)
+        # Result index should remain naive
+        self.assertIsNone(res_df.index.tz)
+
     async def test_weather_forecast_methods(self):
         """
         Test logic in _get_dayahead_pv_forecast regarding weather method switching.

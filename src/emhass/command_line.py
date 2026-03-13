@@ -118,6 +118,7 @@ class OptimizationCacheKey:
     treat_deferrable_load_as_semi_cont: tuple
     set_deferrable_load_single_constant: tuple
     set_deferrable_startup_penalty: tuple
+    set_deferrable_max_startups: tuple
     set_deferrable_load_as_timeseries: tuple
     nominal_power_of_deferrable_loads: tuple
     def_load_config_structure: tuple  # (index, type) tuples for each load
@@ -270,6 +271,7 @@ class OptimizationCache:
             set_deferrable_startup_penalty=to_tuple(
                 optim_conf.get("set_deferrable_startup_penalty", [])
             ),
+            set_deferrable_max_startups=to_tuple(optim_conf.get("set_deferrable_max_startups", [])),
             set_deferrable_load_as_timeseries=to_tuple(
                 optim_conf.get("set_deferrable_load_as_timeseries", [])
             ),
@@ -1274,10 +1276,28 @@ def prepare_forecast_and_weather_data(
         return False
 
     # Add outdoor temperature if provided
-    if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
-        df_input_data_dayahead["outdoor_temperature_forecast"] = input_data_dict["params"][
-            "passed_data"
-        ]["outdoor_temperature_forecast"]
+    passed_outdoor_temp = input_data_dict["params"]["passed_data"].get(
+        "outdoor_temperature_forecast"
+    )
+
+    if passed_outdoor_temp is not None:
+        forecast_len = len(df_input_data_dayahead)
+
+        # If the passed forecast is shorter than the horizon, pad it with the last value to prevent Pandas crashes
+        if len(passed_outdoor_temp) < forecast_len:
+            logger.warning(
+                "Passed outdoor_temperature_forecast length (%s) "
+                "is shorter than the prediction horizon (%s). Padding with the last value.",
+                len(passed_outdoor_temp),
+                forecast_len,
+            )
+            last_val = passed_outdoor_temp[-1] if len(passed_outdoor_temp) > 0 else 15.0
+            passed_outdoor_temp = passed_outdoor_temp + [last_val] * (
+                forecast_len - len(passed_outdoor_temp)
+            )
+
+        # If it's longer (e.g. 48h data for 13h horizon), slice it securely
+        df_input_data_dayahead["outdoor_temperature_forecast"] = passed_outdoor_temp[:forecast_len]
 
     # Auto-fallback to temp_air from Open-Meteo weather forecast
     elif (
@@ -1318,7 +1338,7 @@ def prepare_forecast_and_weather_data(
         dayahead_index = df_input_data_dayahead.index
         ghi_series = input_data_dict["df_weather"]["ghi"].copy()
 
-        # 1. Handle Timezone Mismatches (Same as above)
+        # Handle Timezone Mismatches (Same as above)
         if dayahead_index.tz is None and ghi_series.index.tz is not None:
             ghi_series.index = ghi_series.index.tz_localize(None)
         elif dayahead_index.tz is not None and ghi_series.index.tz is None:
