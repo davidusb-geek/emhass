@@ -3,6 +3,7 @@ import asyncio
 import bz2
 import copy
 import datetime
+import os
 import pathlib
 import pickle
 import unittest
@@ -881,6 +882,73 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
 
         # Clean up
         await self.rh.close()
+
+    @patch.dict(os.environ, {"SUPERVISOR_TOKEN": "mock_supervisor_token"})
+    async def test_supervisor_token_fallback_success(self):
+        """Test that SUPERVISOR_TOKEN is used when long_lived_token is empty."""
+        rh_empty_token = RetrieveHass(
+            self.retrieve_hass_conf["hass_url"],
+            "empty",  # Trigger the token == "empty" fallback
+            self.retrieve_hass_conf["optimization_time_step"],
+            self.retrieve_hass_conf["time_zone"],
+            {},
+            emhass_conf,
+            logger,
+            get_data_from_file=False,
+        )
+
+        # Test get_ha_config fallback (The first coverage gap: lines 184-186)
+        with self.assertLogs(logger, level="DEBUG") as cm:
+            with aioresponses() as mocked:
+                mocked.get(
+                    rh_empty_token.hass_url + "api/config", status=200, payload={"time_zone": "UTC"}
+                )
+                await rh_empty_token.get_ha_config()
+        self.assertTrue(any("Using SUPERVISOR_TOKEN" in log for log in cm.output))
+
+        # Test _get_data_rest_api fallback (The second coverage gap: lines 448-450)
+        days_list = pd.date_range(start="2024-01-01", periods=1, freq="D", tz="UTC")
+        var_list = ["sensor.test"]
+        with self.assertLogs(logger, level="DEBUG") as cm:
+            with aioresponses() as mocked:
+                # Mock the exact URL called
+                url = (
+                    rh_empty_token.hass_url
+                    + "api/history/period/"
+                    + days_list[0].isoformat()
+                    + "?filter_entity_id=sensor.test"
+                )
+                mocked.get(url, status=200, payload=[])
+                await rh_empty_token._get_data_rest_api(days_list, var_list)
+        self.assertTrue(any("Using SUPERVISOR_TOKEN" in log for log in cm.output))
+
+    @patch.dict(os.environ, {}, clear=True)
+    async def test_supervisor_token_fallback_failure(self):
+        """Test that an error is logged and returns False when no token is available."""
+        # Ensure SUPERVISOR_TOKEN is completely missing from environment
+        if "SUPERVISOR_TOKEN" in os.environ:
+            del os.environ["SUPERVISOR_TOKEN"]
+
+        rh_no_token = RetrieveHass(
+            self.retrieve_hass_conf["hass_url"],
+            "empty",  # Trigger the token == "empty" fallback
+            self.retrieve_hass_conf["optimization_time_step"],
+            self.retrieve_hass_conf["time_zone"],
+            {},
+            emhass_conf,
+            logger,
+            get_data_from_file=False,
+        )
+
+        days_list = pd.date_range(start="2024-01-01", periods=1, freq="D", tz="UTC")
+        var_list = ["sensor.test"]
+
+        # Test the final coverage gap (lines 454-457): No token anywhere
+        with self.assertLogs(logger, level="ERROR") as cm:
+            result = await rh_no_token._get_data_rest_api(days_list, var_list)
+
+        self.assertFalse(result)
+        self.assertTrue(any("No valid authentication token found" in log for log in cm.output))
 
 
 if __name__ == "__main__":
