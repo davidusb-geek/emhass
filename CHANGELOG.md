@@ -9,6 +9,9 @@
 - Ensure cached MPC optimizers are invalidated when structural plant configuration changes while still updating runtime-dependent parameters on cache hits
 - Prevent stale internal optimization configuration by refreshing cached optimizer plant and optimization configs with latest runtime values
 - Fixed logging initialization issue
+- Fixed an issue where the REST API sends 'Bearer empty' when the token is not configured in the add-on
+- Gracefully skip days with no history data during REST API retrieval
+- Fixed Solcast API Accept header and sub-30min resampling issues
 
 ## 0.17.0 - 2026-02-28
 ### Improvement
