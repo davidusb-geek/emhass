@@ -1868,6 +1868,16 @@ class Optimization:
                 constraints.append(p_def_start[k][0] + self.param_def_current_state[k] <= 1)
                 constraints.append(p_def_start[k][1:] + p_def_bin2[k][:-1] <= 1)
 
+                # Max Startups Limit
+                if "set_deferrable_max_startups" in self.optim_conf and k < len(
+                    self.optim_conf["set_deferrable_max_startups"]
+                ):
+                    max_starts = self.optim_conf["set_deferrable_max_startups"][k]
+                    # 0 or None means disabled/unlimited. Only apply if > 0.
+                    if max_starts and max_starts > 0:
+                        # The sum of all start events across the horizon cannot exceed the limit
+                        constraints.append(cp.sum(p_def_start[k]) <= max_starts)
+
                 if not is_sequence_load:
                     # Single Constant Start
                     if is_single_const:

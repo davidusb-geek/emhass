@@ -435,6 +435,12 @@
       "input": "array.float",
       "default_value": 0.0
     },
+    "set_deferrable_max_startups": {
+      "friendly_name": "Maximum startups for deferrable loads",
+      "Description": "Set the maximum number of times each deferrable load can be turned on during the optimization horizon. Set to 0 to disable this limit.",
+      "input": "array.int",
+      "default_value": 0
+    },
     "start_timesteps_of_each_deferrable_load": {
       "friendly_name": "Deferrable start timestamp",
       "Description": "The timestep as from which each deferrable load is allowed to operate (if you don’t want the deferrable load to use the whole optimization time window). If you specify a value of 0 (or negative), the deferrable load will be optimized as from the beginning of the complete prediction horizon window.",
