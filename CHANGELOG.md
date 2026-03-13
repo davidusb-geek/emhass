@@ -2,6 +2,7 @@
 
 ## Unreleased
 ### Improvement
+- Added `set_deferrable_max_startups` parameter to enforce a hard physical limit on the maximum number of times a deferrable load can be turned on during an optimization horizon, preventing unwanted chattering
 - Added new Websocket section to documentation
 - Improving coverage: MLForecaster, web server and command line utils
 - Improved automatic testing: Add tests for converting nested parameters to config, deferrable load padding, export time range parsing, NaN handling, and resampling/filtering of time series data. Add an MPC cache behavior test to verify cache hits for non-structural plant changes and cache misses for structural plant changes.
