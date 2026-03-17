@@ -596,9 +596,96 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             result = await self.rh._get_data_rest_api(days_list, var_list)
             self.assertFalse(result)
 
-        # Test Empty JSON Response (IndexError)
+        # Test Empty JSON Response — all days empty should still fail
         with aioresponses() as mocked:
             mocked.get(url, payload=[], status=200)
+            result = await self.rh._get_data_rest_api(days_list, var_list)
+            self.assertFalse(result)
+
+    async def test_get_data_rest_api_skips_empty_days(self):
+        """Test that days with no data are skipped gracefully instead of aborting."""
+        # Create a 3-day range where day 1 returns empty, days 2–3 return data
+        days_list = pd.date_range(start="2024-01-01", periods=3, freq="D", tz="UTC")
+        var_list = ["sensor.test_power"]
+
+        # Build URLs for each day
+        base_url = self.retrieve_hass_conf["hass_url"] + "api/history/period/"
+        urls = [
+            base_url + day.strftime("%Y-%m-%dT%H:%M:%SZ") + "?filter_entity_id=sensor.test_power"
+            for day in days_list
+        ]
+
+        # Build mock data: 96 records per day at 15-min intervals
+        def make_day_data(date_str, entity_id="sensor.test_power"):
+            records = []
+            base = pd.Timestamp(date_str, tz="UTC")
+            for i in range(96):
+                ts = base + pd.Timedelta(minutes=15 * i)
+                records.append(
+                    {
+                        "entity_id": entity_id,
+                        "state": str(100.0 + i),
+                        "attributes": {},
+                        "last_changed": ts.isoformat(),
+                        "last_updated": ts.isoformat(),
+                    }
+                )
+            return [records]  # HA wraps per-entity in a list
+
+        with aioresponses() as mocked:
+            # Day 1: empty (sensor didn't exist yet)
+            mocked.get(urls[0], payload=[], status=200)
+            # Day 2: has data
+            mocked.get(urls[1], payload=make_day_data("2024-01-02"), status=200)
+            # Day 3: has data
+            mocked.get(urls[2], payload=make_day_data("2024-01-03"), status=200)
+
+            result = await self.rh._get_data_rest_api(days_list, var_list)
+            # Should succeed with partial data
+            self.assertTrue(result)
+            # Should have data from 2 days, not 3
+            self.assertIsInstance(self.rh.df_final, pd.DataFrame)
+            self.assertFalse(self.rh.df_final.empty)
+            # First data point should be from day 2, not day 1
+            self.assertGreaterEqual(
+                self.rh.df_final.index[0], pd.Timestamp("2024-01-02", tz="UTC")
+            )
+
+    async def test_get_data_rest_api_all_days_empty_fails(self):
+        """Test that if ALL days return empty, it still fails with an error."""
+        days_list = pd.date_range(start="2024-01-01", periods=3, freq="D", tz="UTC")
+        var_list = ["sensor.test_power"]
+
+        base_url = self.retrieve_hass_conf["hass_url"] + "api/history/period/"
+        urls = [
+            base_url + day.strftime("%Y-%m-%dT%H:%M:%SZ") + "?filter_entity_id=sensor.test_power"
+            for day in days_list
+        ]
+
+        with aioresponses() as mocked:
+            for url in urls:
+                mocked.get(url, payload=[], status=200)
+
+            result = await self.rh._get_data_rest_api(days_list, var_list)
+            # All days empty → should fail
+            self.assertFalse(result)
+
+    async def test_get_data_rest_api_error_still_aborts(self):
+        """Test that real errors (HTTP 401, network) still abort immediately."""
+        days_list = pd.date_range(start="2024-01-01", periods=3, freq="D", tz="UTC")
+        var_list = ["sensor.test_power"]
+
+        base_url = self.retrieve_hass_conf["hass_url"] + "api/history/period/"
+        urls = [
+            base_url + day.strftime("%Y-%m-%dT%H:%M:%SZ") + "?filter_entity_id=sensor.test_power"
+            for day in days_list
+        ]
+
+        # Day 1: empty (skip), Day 2: auth error (abort)
+        with aioresponses() as mocked:
+            mocked.get(urls[0], payload=[], status=200)
+            mocked.get(urls[1], status=401)
+
             result = await self.rh._get_data_rest_api(days_list, var_list)
             self.assertFalse(result)
 

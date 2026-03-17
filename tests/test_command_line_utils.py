@@ -2575,6 +2575,67 @@ class TestOptimizationCache(unittest.TestCase):
         # Should be cache MISS - structural param changed
         self.assertIsNone(result)
 
+    def test_cache_key_has_no_battery_capacity_field(self):
+        """Test that OptimizationCacheKey no longer has a battery_capacity field."""
+        self.assertNotIn("battery_capacity", OptimizationCacheKey.__dataclass_fields__)
+
+    def test_cache_miss_on_optim_conf_structural_change(self):
+        """Test that changing structural optim_conf params causes cache MISS."""
+        mock_opt = MagicMock()
+        optim_conf = copy.deepcopy(self.optim_conf)
+        optim_conf["set_nocharge_from_grid"] = False
+
+        OptimizationCache.put(
+            mock_opt,
+            optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Change structural param
+        modified_optim_conf = copy.deepcopy(optim_conf)
+        modified_optim_conf["set_nocharge_from_grid"] = True
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+        self.assertIsNone(result)
+
+    def test_cache_hit_on_optim_conf_runtime_change(self):
+        """Test that changing runtime-only optim_conf params still gives cache HIT."""
+        mock_opt = MagicMock()
+        optim_conf = copy.deepcopy(self.optim_conf)
+        optim_conf["lp_solver_timeout"] = 30
+
+        OptimizationCache.put(
+            mock_opt,
+            optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Change runtime param only
+        modified_optim_conf = copy.deepcopy(optim_conf)
+        modified_optim_conf["lp_solver_timeout"] = 60
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+        self.assertIsNotNone(result)
+        self.assertIs(result, mock_opt)
+
 
 class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
     """Integration tests for CLI warm-start flow using actual naive_mpc_optim calls."""
@@ -2601,6 +2662,40 @@ class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         """Clear cache after each test."""
         OptimizationCache.clear()
+
+    def _make_mpc_inputs(self, runtimeparams, costfun="profit"):
+        """Build params_json and runtimeparams_json for an MPC integration test.
+
+        Sets forecast methods to "list" and attaches runtimeparams as passed_data.
+        Returns (params_json, runtimeparams_json).
+        """
+        params = copy.deepcopy(self.params)
+        params["passed_data"] = runtimeparams
+        for key in (
+            "weather_forecast_method",
+            "load_forecast_method",
+            "load_cost_forecast_method",
+            "production_price_forecast_method",
+        ):
+            params["optim_conf"][key] = "list"
+        if costfun != "profit":
+            params["optim_conf"]["costfun"] = costfun
+        params_json = orjson.dumps(params).decode("utf-8")
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+        return params_json, runtimeparams_json
+
+    async def _run_set_input(self, runtimeparams, costfun="profit", action="naive-mpc-optim"):
+        """Call set_input_data_dict with boilerplate handled. Returns input_data_dict."""
+        params_json, runtimeparams_json = self._make_mpc_inputs(runtimeparams, costfun)
+        return await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
 
     async def test_mpc_cache_hit_on_repeated_calls(self):
         """Test that repeated MPC calls with same config reuse the cached Optimization object.
@@ -3503,6 +3598,108 @@ class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertIsNot(
             opt_2, opt_3, "Min SOC change must trigger Cache Miss to rebuild constraints"
         )
+
+    async def test_cache_miss_on_battery_dynamic_change(self):
+        """Test that changing set_battery_dynamic causes cache MISS."""
+        base_rt = {
+            "pv_power_forecast": [100 * (i + 1) for i in range(10)],
+            "load_power_forecast": [200] * 10,
+            "load_cost_forecast": [0.15] * 10,
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+        }
+
+        opt_1 = (await self._run_set_input(base_rt))["opt"]
+        opt_2 = (await self._run_set_input({**base_rt, "set_battery_dynamic": True}))["opt"]
+
+        self.assertIsNot(opt_1, opt_2, "set_battery_dynamic change must cause cache MISS")
+
+    async def test_cache_miss_on_weight_battery_change(self):
+        """Test that changing weight_battery_discharge causes cache MISS."""
+        base_rt = {
+            "pv_power_forecast": [100 * (i + 1) for i in range(10)],
+            "load_power_forecast": [200] * 10,
+            "load_cost_forecast": [0.15] * 10,
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+        }
+
+        opt_1 = (await self._run_set_input(base_rt))["opt"]
+        opt_2 = (await self._run_set_input({**base_rt, "weight_battery_discharge": 2.0}))["opt"]
+
+        self.assertIsNot(opt_1, opt_2, "weight_battery_discharge change must cause cache MISS")
+
+    async def test_cache_miss_on_grid_policy_change(self):
+        """Test that changing set_nocharge_from_grid causes cache MISS."""
+        base_rt = {
+            "pv_power_forecast": [100 * (i + 1) for i in range(10)],
+            "load_power_forecast": [200] * 10,
+            "load_cost_forecast": [0.15] * 10,
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+        }
+
+        opt_1 = (await self._run_set_input(base_rt))["opt"]
+        opt_2 = (await self._run_set_input({**base_rt, "set_nocharge_from_grid": True}))["opt"]
+
+        self.assertIsNot(opt_1, opt_2, "set_nocharge_from_grid change must cause cache MISS")
+
+    async def test_def_current_state_updates_on_cache_hit(self):
+        """Test that def_current_state is updated via CVXPY Parameters on cache hit."""
+        base_rt = {
+            "pv_power_forecast": [100 * (i + 1) for i in range(10)],
+            "load_power_forecast": [200] * 10,
+            "load_cost_forecast": [0.15] * 10,
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+            "def_current_state": [False, False],
+        }
+
+        # First call
+        input_data_dict = await self._run_set_input(base_rt)
+        opt_1 = input_data_dict["opt"]
+        await naive_mpc_optim(input_data_dict, logger, debug=True)
+
+        # Second call with def_current_state changed (should be cache HIT)
+        input_data_dict2 = await self._run_set_input(
+            {**base_rt, "def_current_state": [True, False]}
+        )
+        opt_2 = input_data_dict2["opt"]
+
+        # Should be cache HIT (same object)
+        self.assertIs(opt_1, opt_2, "def_current_state change should NOT cause cache MISS")
+
+        # Run optimization to trigger parameter update in perform_optimization
+        await naive_mpc_optim(input_data_dict2, logger, debug=True)
+
+        # Verify the CVXPY parameter was updated
+        self.assertEqual(opt_2.param_def_current_state[0].value, 1.0)
+        self.assertEqual(opt_2.param_def_current_state[1].value, 0.0)
+
+    async def test_cache_miss_on_battery_power_limit_change(self):
+        """Test that changing battery_discharge_power_max causes cache MISS (via plant_conf_hash)."""
+        base_rt = {
+            "pv_power_forecast": [100 * (i + 1) for i in range(10)],
+            "load_power_forecast": [200] * 10,
+            "load_cost_forecast": [0.15] * 10,
+            "prod_price_forecast": [0.05] * 10,
+            "prediction_horizon": 10,
+            "soc_init": 0.5,
+            "soc_final": 0.5,
+        }
+
+        opt_1 = (await self._run_set_input(base_rt))["opt"]
+        opt_2 = (await self._run_set_input({**base_rt, "battery_discharge_power_max": 9999}))["opt"]
+
+        self.assertIsNot(opt_1, opt_2, "battery_discharge_power_max change must cause cache MISS")
 
 
 if __name__ == "__main__":

@@ -1877,19 +1877,14 @@ class Optimization:
                 constraints.append(p_deferrable[k] <= M * p_def_bin2[k])
 
                 # Startup Detection: Start[t] >= Bin[t] - Bin[t-1]
-                # Retrieve State
-                current_state = 0
-                if (
-                    "def_current_state" in self.optim_conf
-                    and len(self.optim_conf["def_current_state"]) > k
-                ):
-                    current_state = 1 if self.optim_conf["def_current_state"][k] else 0
-
-                constraints.append(p_def_start[k][0] >= p_def_bin2[k][0] - current_state)
+                # Uses parameterized current state to allow warm-starting
+                constraints.append(
+                    p_def_start[k][0] >= p_def_bin2[k][0] - self.param_def_current_state[k]
+                )
                 constraints.append(p_def_start[k][1:] >= p_def_bin2[k][1:] - p_def_bin2[k][:-1])
 
                 # Startup Limit: Start[t] + Bin[t-1] <= 1
-                constraints.append(p_def_start[k][0] + current_state <= 1)
+                constraints.append(p_def_start[k][0] + self.param_def_current_state[k] <= 1)
                 constraints.append(p_def_start[k][1:] + p_def_bin2[k][:-1] <= 1)
 
                 if not is_sequence_load:
