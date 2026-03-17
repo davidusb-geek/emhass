@@ -178,13 +178,20 @@ class RetrieveHass:
         # Initialize empty config immediately for safety
         self.ha_config = {}
 
-        # Check if variables are None, empty strings, or explicitly set to "empty"
-        if (
-            not self.hass_url
-            or self.hass_url == "empty"
-            or not self.long_lived_token
-            or self.long_lived_token == "empty"
-        ):
+        # Resolve the token: if empty, fall back to SUPERVISOR_TOKEN env var (injected by HA addon supervisor)
+        token = self.long_lived_token
+        if not token or token == "empty":
+            token = os.getenv("SUPERVISOR_TOKEN", "")
+            if token:
+                self.logger.debug("Using SUPERVISOR_TOKEN from environment for HA config retrieval.")
+
+        # Resolve the URL: if empty, use the default supervisor URL
+        url_to_use = self.hass_url
+        if not url_to_use or url_to_use == "empty":
+            url_to_use = hass_url  # default: http://supervisor/core/api
+
+        # If we still have no token after checking env, skip HA config retrieval
+        if not token:
             self.logger.info(
                 "No Home Assistant URL or Long Lived Token found. Using only local configuration file."
             )
@@ -198,22 +205,22 @@ class RetrieveHass:
 
         # Set up headers
         headers = {
-            "Authorization": header_auth + " " + self.long_lived_token,
+            "Authorization": header_auth + " " + token,
             "content-type": header_accept,
         }
 
         # Construct the URL (incorporating the PR's helpful checks)
         # The Supervisor API sometimes uses a different path structure
-        if self.hass_url == hass_url:
-            url = self.hass_url + "/config"
+        if url_to_use == hass_url:
+            url = url_to_use + "/config"
         else:
             # Helpful check for users who forget the trailing slash
-            if not self.hass_url.endswith("/"):
+            if not url_to_use.endswith("/"):
                 self.logger.warning(
                     "The defined HA URL is missing a trailing slash </>. Appending it, but please fix your configuration."
                 )
-                self.hass_url = self.hass_url + "/"
-            url = self.hass_url + "api/config"
+                url_to_use = url_to_use + "/"
+            url = url_to_use + "api/config"
 
         # Attempt the connection using persistent session for connection reuse
         try:
@@ -375,33 +382,34 @@ class RetrieveHass:
             return data_list[0]
         except IndexError:
             if is_first_day:
-                self.logger.error(
-                    f"The retrieved JSON is empty. A sensor: {var} may have 0 days of history, "
-                    "the passed sensor may not be correct, or days_to_retrieve is set too high."
+                self.logger.debug(
+                    f"No history data for sensor: {var} on {day.date()}. "
+                    "The sensor may not have existed yet, or days_to_retrieve "
+                    "may exceed the available history. Skipping this day."
                 )
             else:
-                self.logger.error(
-                    f"The retrieved JSON is empty for day: {day}. days_to_retrieve may be larger "
-                    f"than the recorded history of sensor: {var}"
+                self.logger.debug(
+                    f"No history data for sensor: {var} on day: {day.date()}. Skipping this day."
                 )
-            return False
+            return None
 
     def _process_history_dataframe(
         self, data: list, var: str, day: pd.Timestamp, is_first_day: bool, is_last_day: bool
-    ) -> pd.DataFrame | bool:
+    ) -> pd.DataFrame | None:
         """Helper to convert raw data to a resampled DataFrame."""
         df_raw = pd.DataFrame.from_dict(data)
         # Check for empty DataFrame
         if len(df_raw) == 0:
             if is_first_day:
-                self.logger.error(
-                    f"The retrieved Dataframe is empty. A sensor: {var} may have 0 days of history."
+                self.logger.debug(
+                    f"Empty dataframe for sensor: {var} on {day.date()}. "
+                    "The sensor may not have existed yet. Skipping this day."
                 )
             else:
-                self.logger.error(
-                    f"Retrieved empty Dataframe for day: {day}, check recorder settings."
+                self.logger.debug(
+                    f"Empty dataframe for sensor: {var} on day: {day.date()}. Skipping this day."
                 )
-            return False
+            return None
         freq_minutes = self.freq.total_seconds() / 60.0
         expected_count = (60.0 / freq_minutes) * 24.0
         if len(df_raw) < expected_count and not is_last_day:
@@ -430,16 +438,29 @@ class RetrieveHass:
     ) -> None:
         """Internal method to handle REST API data retrieval."""
         self.logger.info("Retrieve hass get data method initiated...")
+        # Resolve the token to use for authentication.
+        # If long_lived_token is empty or not set, fall back to the SUPERVISOR_TOKEN
+        # environment variable injected by Home Assistant when running as an addon.
+        token = self.long_lived_token
+        if not token or token == "empty":
+            token = os.getenv("SUPERVISOR_TOKEN", "")
+            if token:
+                self.logger.debug("Using SUPERVISOR_TOKEN from environment for REST API authentication.")
+            else:
+                self.logger.error("No valid authentication token found. Set a long_lived_token or run as a HA addon.")
+                return False
         headers = {
-            "Authorization": header_auth + " " + self.long_lived_token,
+            "Authorization": header_auth + " " + token,
             "content-type": header_accept,
         }
         var_list = [var for var in var_list if var != ""]
         self.df_final = pd.DataFrame()
 
+        days_skipped = 0
         async with aiohttp.ClientSession() as session:
             for day_idx, day in enumerate(days_list):
                 df_day = pd.DataFrame()
+                skip_day = False
                 for i, var in enumerate(var_list):
                     # Build URL
                     url = self._build_history_url(
@@ -451,6 +472,9 @@ class RetrieveHass:
                     )
                     if data is False:
                         return False
+                    if data is None:
+                        skip_day = True
+                        break
                     # Process Data
                     df_resampled = self._process_history_dataframe(
                         data,
@@ -459,8 +483,9 @@ class RetrieveHass:
                         is_first_day=(day_idx == 0),
                         is_last_day=(day_idx == len(days_list) - 1),
                     )
-                    if df_resampled is False:
-                        return False
+                    if df_resampled is None:
+                        skip_day = True
+                        break
                     # Merge into daily DataFrame
                     # If it's the first variable, we initialize the day's index based on it
                     if i == 0:
@@ -470,7 +495,20 @@ class RetrieveHass:
                         # resampled index from the first variable is safer and cleaner if
                         # _process_history_dataframe handles resampling correctly.
                     df_day = pd.concat([df_day, df_resampled], axis=1)
+                if skip_day:
+                    days_skipped += 1
+                    continue
                 self.df_final = pd.concat([self.df_final, df_day], axis=0)
+        if days_skipped > 0:
+            self.logger.warning(
+                f"Skipped {days_skipped} of {len(days_list)} days due to missing history data"
+            )
+        if self.df_final.empty:
+            self.logger.error(
+                "No data was retrieved for any day in the requested range. "
+                "Check sensor names and recorder history settings."
+            )
+            return False
 
         # Final Cleanup
         self.df_final = set_df_index_freq(self.df_final)
