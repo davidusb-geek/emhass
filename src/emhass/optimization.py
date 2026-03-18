@@ -211,6 +211,15 @@ class Optimization:
             p.value = 0.0
             self.param_def_current_state.append(p)
 
+        # Load active parameters: allows deactivating non-thermal loads with 0 operating
+        # timesteps without rebuilding the problem. When param_load_active[k] = 0, all
+        # binary variables for load k are forced to 0 by constraints, letting the solver
+        # presolve them away instantly instead of branching on them.
+        self.param_load_active = []
+        for k in range(num_def_loads):
+            p = cp.Parameter(nonneg=True, name=f"load_active_{k}")
+            p.value = 1.0  # Default: all loads active
+            self.param_load_active.append(p)
         # Thermal Parameters for warm-starting
         # Dict keyed by load index k, stores all parameters needed for thermal constraints
         # This allows updating runtime values (forecasts, temperatures) without rebuilding constraints
@@ -345,6 +354,9 @@ class Optimization:
         Missing entries default to off (0.0).
         """
         if "def_current_state" not in self.optim_conf:
+            # Reset all to 0.0 to avoid stale values from previous solves
+            for k in range(min(num_def_loads, len(self.param_def_current_state))):
+                self.param_def_current_state[k].value = 0.0
             return
 
         def_state_conf = self.optim_conf["def_current_state"]
@@ -364,7 +376,7 @@ class Optimization:
             # Validate binary: accept bool and numeric 0/1, reject everything else
             if isinstance(state, bool):
                 self.param_def_current_state[k].value = float(state)
-            elif isinstance(state, int | float) and state in (0, 1, 0.0, 1.0):
+            elif isinstance(state, (int, float)) and state in (0, 1, 0.0, 1.0):
                 self.param_def_current_state[k].value = float(state)
             else:
                 raise ValueError(
@@ -1847,6 +1859,13 @@ class Optimization:
             if use_binary_logic:
                 # Standard Binary/Mixed-Integer Constraints
 
+                # Load deactivation: when param_load_active[k] = 0, force all binary
+                # variables to 0. The solver's presolve eliminates these variables
+                # instantly, avoiding expensive branching on inactive loads.
+                if k < len(self.param_load_active):
+                    constraints.append(p_def_bin2[k] <= self.param_load_active[k])
+                    constraints.append(p_def_start[k] <= self.param_load_active[k])
+
                 # Minimum Power (if active)
                 if has_min_power:
                     constraints.append(
@@ -1871,7 +1890,12 @@ class Optimization:
                 if not is_sequence_load:
                     # Single Constant Start
                     if is_single_const:
-                        constraints.append(cp.sum(p_def_start[k]) == 1)
+                        # Use param_load_active so inactive loads require 0 starts
+                        # (avoids solver branching on where to place a meaningless startup)
+                        if k < len(self.param_load_active):
+                            constraints.append(cp.sum(p_def_start[k]) == self.param_load_active[k])
+                        else:
+                            constraints.append(cp.sum(p_def_start[k]) == 1)
 
                         # Required timesteps constraint using Big-M parameterization
                         # When active=1: sum(bin2) == required_timesteps (tight)
@@ -2259,9 +2283,24 @@ class Optimization:
                 self.param_required_timesteps[k].value = 0.0
                 self.param_timesteps_active[k].value = 0.0  # Constraint is relaxed (Big-M)
 
+        # Update load active parameters: deactivate non-thermal loads with 0 operating timesteps
+        # Thermal loads (thermal_config, thermal_battery) are always active since they're
+        # driven by temperature constraints, not operating timesteps.
+        for k in range(min(num_deferrable_loads, len(self.param_load_active))):
+            is_thermal = k in self.param_thermal
+            has_operating_requirement = (
+                def_total_timestep and k < len(def_total_timestep) and def_total_timestep[k] > 0
+            ) or (def_total_hours and k < len(def_total_hours) and def_total_hours[k] > 0)
+            if is_thermal or has_operating_requirement:
+                self.param_load_active[k].value = 1.0
+            else:
+                self.param_load_active[k].value = 0.0
+                self.logger.debug(
+                    f"Deferrable load {k}: deactivated (no operating timesteps, not thermal)"
+                )
+
         # Update def_current_state parameters for deferrable loads
         self._update_def_current_state_params(num_deferrable_loads)
-
         # Build Problem (Lazy Construction)
         if self.prob is None:
             self.logger.info("Building CVXPY problem structure...")

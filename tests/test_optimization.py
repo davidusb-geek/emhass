@@ -3136,6 +3136,242 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         except Exception as e:
             self.fail(f"Complex optimization failed with error: {e}")
 
+    def test_perform_naive_mpc_optim_complex_case_with_inactive_loads(self):
+        """
+        Test the complex 7-load case with loads 2, 3, 5 set to 0 operating timesteps
+        (matching a real user scenario: dishwasher, wallbox, mock load inactive).
+
+        Compares solve time and results between all-active vs partially-inactive
+        configurations to verify the load deactivation optimization works correctly.
+        Loads 4 (thermal_config) and 6 (thermal_battery) must remain active regardless.
+
+        Uses 0.2 MIP gap (matching user's production config) and 96 timesteps
+        (2 days at 30min) to keep solve times manageable in CI.
+        """
+        import time
+
+        # Reuse existing helper to get base data structure
+        df_base = self.prepare_forecast_data()
+
+        n_steps = 96
+
+        # Create new index
+        idx = pd.date_range(start=df_base.index[0], periods=n_steps, freq=self.opt.freq)
+
+        # Create extended DataFrame by tiling the base data
+        tile_count = (n_steps // len(df_base)) + 1
+        df_extended = pd.concat([df_base] * tile_count).iloc[:n_steps]
+        df_extended.index = idx
+
+        # Fixed seed for reproducibility
+        rng = np.random.default_rng(42)
+        P_PV = pd.Series(1000 * rng.random(n_steps), index=idx)
+        P_Load = pd.Series(500 * rng.random(n_steps), index=idx)
+
+        # Add thermal-specific columns
+        temp_profile = 10 + 5 * np.sin(np.linspace(0, 2 * np.pi, n_steps))
+        df_extended["temperature_forecast"] = temp_profile
+        df_extended["outdoor_temperature_forecast"] = temp_profile
+        df_extended["solar_irradiance_forecast"] = 800 * np.clip(
+            np.sin(np.linspace(0, 2 * np.pi, n_steps)), 0, 1
+        )
+        if self.opt.var_load_cost not in df_extended.columns:
+            df_extended[self.opt.var_load_cost] = 0.20
+
+        # Configure Optimization for 7 loads (matching user's real setup)
+        complex_optim_conf = copy.deepcopy(self.optim_conf)
+        complex_optim_conf["number_of_deferrable_loads"] = 7
+        complex_optim_conf["nominal_power_of_deferrable_loads"] = [
+            3000,
+            2000,
+            1500,
+            7000,
+            2000,
+            500,
+            1000,
+        ]
+        complex_optim_conf["operating_hours_of_each_deferrable_load"] = [0] * 7
+        complex_optim_conf["treat_deferrable_load_as_semi_cont"] = [
+            True,
+            True,
+            True,
+            True,
+            True,
+            True,
+            True,
+        ]
+        complex_optim_conf["set_deferrable_load_single_constant"] = [
+            True,
+            True,
+            True,
+            False,
+            False,
+            False,
+            False,
+        ]
+        complex_optim_conf["set_deferrable_startup_penalty"] = [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+        ]
+        complex_optim_conf["minimum_power_of_deferrable_loads"] = [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ]
+        # Match user's production MIP gap for realistic solve times
+        complex_optim_conf["lp_solver_mip_rel_gap"] = 0.2
+
+        # Setup Thermal Configs (load 4 = hot water, load 6 = heat pump)
+        def_load_config = [{} for _ in range(7)]
+        def_load_config[4] = {
+            "thermal_config": {
+                "heating_rate": 5.0,
+                "cooling_constant": 0.1,
+                "start_temperature": 45,
+                "desired_temperatures": [50] * n_steps,
+                "min_temperatures": [40] * n_steps,
+                "max_temperatures": [60] * n_steps,
+            }
+        }
+        def_load_config[6] = {
+            "thermal_battery": {
+                "capacity": 10.0,
+                "volume": 500.0,
+                "u_value": 0.23,
+                "envelope_area": 314.0,
+                "ventilation_rate": 0.41,
+                "heated_volume": 356.0,
+                "indoor_target_temp": 21,
+                "window_area": 29.0,
+                "shgc": 0.50,
+                "start_temperature": 20,
+                "min_temperatures": [18] * n_steps,
+                "max_temperatures": [24] * n_steps,
+                "supply_temperature": 35.0,
+                "carnot_efficiency": 0.4,
+            }
+        }
+        complex_optim_conf["def_load_config"] = def_load_config
+
+        # --- Solve 1: All loads active (baseline) ---
+        opt_all_active = Optimization(
+            self.retrieve_hass_conf,
+            copy.deepcopy(complex_optim_conf),
+            self.plant_conf,
+            self.opt.var_load_cost,
+            self.opt.var_prod_price,
+            self.opt.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        # All non-thermal loads have operating timesteps > 0
+        def_total_timestep_all = [16, 8, 12, 5, 0, 18, 0]
+        t_start_all = time.perf_counter()
+        opt_res_all = opt_all_active.perform_naive_mpc_optim(
+            df_extended.copy(),
+            P_PV,
+            P_Load,
+            prediction_horizon=n_steps,
+            def_total_timestep=def_total_timestep_all,
+            def_start_timestep=[0] * 7,
+            def_end_timestep=[n_steps] * 7,
+        )
+        t_all_active = time.perf_counter() - t_start_all
+
+        status_all = opt_res_all["optim_status"].iloc[0]
+        self.assertIn(status_all, VALID_OPTIMAL_STATUSES)
+
+        # All loads should be active (non-thermal have timesteps > 0, thermal always active)
+        for k in range(7):
+            self.assertEqual(
+                opt_all_active.param_load_active[k].value,
+                1.0,
+                f"Load {k} should be active in all-active case",
+            )
+
+        # --- Solve 2: Loads 2, 3, 5 inactive (user's real scenario) ---
+        opt_partial = Optimization(
+            self.retrieve_hass_conf,
+            copy.deepcopy(complex_optim_conf),
+            self.plant_conf,
+            self.opt.var_load_cost,
+            self.opt.var_prod_price,
+            self.opt.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        # Loads 2, 3, 5 have 0 operating timesteps (dishwasher, wallbox, mock off)
+        def_total_timestep_partial = [16, 8, 0, 0, 0, 0, 0]
+        t_start_partial = time.perf_counter()
+        opt_res_partial = opt_partial.perform_naive_mpc_optim(
+            df_extended.copy(),
+            P_PV,
+            P_Load,
+            prediction_horizon=n_steps,
+            def_total_timestep=def_total_timestep_partial,
+            def_start_timestep=[0] * 7,
+            def_end_timestep=[n_steps] * 7,
+        )
+        t_partial = time.perf_counter() - t_start_partial
+
+        status_partial = opt_res_partial["optim_status"].iloc[0]
+        self.assertIn(status_partial, VALID_OPTIMAL_STATUSES)
+
+        # Verify deactivation: loads 2, 3, 5 should be inactive
+        for k in [2, 3, 5]:
+            self.assertEqual(
+                opt_partial.param_load_active[k].value,
+                0.0,
+                f"Load {k} should be deactivated (0 operating timesteps, not thermal)",
+            )
+            self.assertTrue(
+                np.allclose(opt_res_partial[f"P_deferrable{k}"], 0.0),
+                f"Deactivated load {k} should have zero power output",
+            )
+
+        # Verify active loads still work correctly
+        for k in [0, 1]:
+            self.assertEqual(opt_partial.param_load_active[k].value, 1.0)
+            active_steps = (opt_res_partial[f"P_deferrable{k}"] > 10.0).sum()
+            expected = def_total_timestep_partial[k]
+            self.assertTrue(
+                expected - 1 <= active_steps <= expected + 1,
+                f"Load {k}: expected ~{expected} active steps, got {active_steps}",
+            )
+
+        # Thermal loads must remain active even with no explicit operating timesteps
+        # Load 4 (thermal_config / hot water heater)
+        self.assertEqual(
+            opt_partial.param_load_active[4].value,
+            1.0,
+            "Thermal load 4 (hot water) must remain active",
+        )
+        # Load 6 (thermal_battery / heat pump)
+        self.assertEqual(
+            opt_partial.param_load_active[6].value,
+            1.0,
+            "Thermal load 6 (heat pump) must remain active",
+        )
+
+        # Partial case should solve faster (fewer active binary variables)
+        # Not a hard assertion (solver timing can vary), just log for inspection
+        logger.info(
+            f"Complex case solve times - all active: {t_all_active:.2f}s, "
+            f"3 inactive: {t_partial:.2f}s, "
+            f"speedup: {t_all_active / max(t_partial, 0.001):.1f}x"
+        )
+
     def test_thermal_optimization_with_nan_temperatures(self):
         """
         Test thermal optimization robustness when outdoor_temperature_forecast contains NaNs.
@@ -3374,6 +3610,283 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.df_input_data_dayahead.copy(), self.p_pv_forecast, self.p_load_forecast
         )
         self.assertIn(opt_one.optim_status, VALID_OPTIMAL_STATUSES)
+
+    def test_load_deactivation_zero_operating_timesteps(self):
+        """Test that non-thermal loads with 0 operating timesteps are deactivated.
+
+        When a load has operating_timesteps=0 and is not thermal, param_load_active
+        should be set to 0, forcing all its binary variables to 0 via presolve.
+        The load's power output must be zero throughout the horizon.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "treat_deferrable_load_as_semi_cont": [True, True],
+                "set_deferrable_load_single_constant": [True, True],
+            }
+        )
+        self.opt = self.create_optimization()
+        prediction_horizon = 10
+        # Load 0: active (4 timesteps), Load 1: inactive (0 timesteps)
+        def_total_timestep = [4, 0]
+        def_start_timestep = [0, 0]
+        def_end_timestep = [0, 0]
+
+        opt_res = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            soc_init=0.5,
+            soc_final=0.5,
+            def_total_hours=None,
+            def_total_timestep=def_total_timestep,
+            def_start_timestep=def_start_timestep,
+            def_end_timestep=def_end_timestep,
+        )
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+        # Load 0 should be active (has 4 operating timesteps)
+        self.assertEqual(self.opt.param_load_active[0].value, 1.0)
+        active_timesteps_0 = (opt_res["P_deferrable0"] > 0).sum()
+        self.assertEqual(active_timesteps_0, 4, "Load 0 should have exactly 4 active timesteps")
+
+        # Load 1 should be deactivated (0 operating timesteps, not thermal)
+        self.assertEqual(self.opt.param_load_active[1].value, 0.0)
+        self.assertTrue(
+            np.allclose(opt_res["P_deferrable1"], 0.0),
+            "Deactivated load 1 should have zero power output",
+        )
+
+    def test_load_deactivation_reactivation_on_cache_hit(self):
+        """Test that a load can be deactivated and reactivated across cached solves.
+
+        First solve: load 1 active. Second solve: load 1 inactive (0 timesteps).
+        Third solve: load 1 active again. All should use the cached problem.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "treat_deferrable_load_as_semi_cont": [True, True],
+                "set_deferrable_load_single_constant": [True, True],
+            }
+        )
+        self.opt = self.create_optimization()
+        prediction_horizon = 10
+
+        # Solve 1: both loads active
+        opt_res_1 = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            soc_init=0.5,
+            soc_final=0.5,
+            def_total_hours=None,
+            def_total_timestep=[4, 3],
+            def_start_timestep=[0, 0],
+            def_end_timestep=[0, 0],
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertEqual(self.opt.param_load_active[0].value, 1.0)
+        self.assertEqual(self.opt.param_load_active[1].value, 1.0)
+        active_1_first = (opt_res_1["P_deferrable1"] > 0).sum()
+        self.assertEqual(active_1_first, 3)
+
+        # Solve 2: load 1 inactive (cache hit, same problem structure)
+        opt_res_2 = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            soc_init=0.5,
+            soc_final=0.5,
+            def_total_hours=None,
+            def_total_timestep=[4, 0],
+            def_start_timestep=[0, 0],
+            def_end_timestep=[0, 0],
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertEqual(self.opt.param_load_active[1].value, 0.0)
+        self.assertTrue(
+            np.allclose(opt_res_2["P_deferrable1"], 0.0),
+            "Deactivated load 1 should have zero power in second solve",
+        )
+
+        # Solve 3: load 1 reactivated (cache hit again)
+        opt_res_3 = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            soc_init=0.5,
+            soc_final=0.5,
+            def_total_hours=None,
+            def_total_timestep=[4, 3],
+            def_start_timestep=[0, 0],
+            def_end_timestep=[0, 0],
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertEqual(self.opt.param_load_active[1].value, 1.0)
+        active_1_third = (opt_res_3["P_deferrable1"] > 0).sum()
+        self.assertEqual(active_1_third, 3, "Reactivated load 1 should have 3 active timesteps")
+
+    def test_load_deactivation_does_not_affect_thermal_loads(self):
+        """Test that thermal loads remain active even with 0 operating timesteps.
+
+        Thermal loads are driven by temperature constraints, not operating timesteps,
+        so they must never be deactivated by param_load_active.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 3,
+                "nominal_power_of_deferrable_loads": [2000, 2000, 5000],
+                "operating_hours_of_each_deferrable_load": [0, 0, 0],
+                "treat_deferrable_load_as_semi_cont": [True, False, False],
+                "set_deferrable_load_single_constant": [True, False, False],
+                "weight_deferrable_loads": [1.0, 1.0, 1.0],
+                "minimum_power_of_deferrable_loads": [0, 0, 0],
+                "set_deferrable_startup_penalty": [0, 0, 0],
+                "def_current_state": [0, 0, 0],
+                "def_start_penalty": [0, 0, 0],
+                "def_load_config": [
+                    {},
+                    {
+                        "thermal_config": {
+                            "heating_rate": 5.0,
+                            "sense": "heat",
+                            "cooling_constant": 0.03,
+                            "max_temperatures": [55] * 10,
+                            "min_temperatures": [40] * 10,
+                            "start_temperature": 45.0,
+                        }
+                    },
+                    {},
+                ],
+            }
+        )
+        self.opt = self.create_optimization()
+        prediction_horizon = 10
+
+        # All loads have 0 operating timesteps
+        opt_res = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            soc_init=0.5,
+            soc_final=0.5,
+            def_total_hours=None,
+            def_total_timestep=[0, 0, 0],
+            def_start_timestep=[0, 0, 0],
+            def_end_timestep=[0, 0, 0],
+        )
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+        # Load 0 (non-thermal, 0 timesteps): should be deactivated
+        self.assertEqual(self.opt.param_load_active[0].value, 0.0)
+        self.assertTrue(
+            np.allclose(opt_res["P_deferrable0"], 0.0),
+            "Non-thermal load 0 with 0 timesteps should be deactivated",
+        )
+
+        # Load 1 (thermal_config): must remain active regardless of operating_timesteps
+        self.assertEqual(
+            self.opt.param_load_active[1].value,
+            1.0,
+            "Thermal load should remain active even with 0 operating timesteps",
+        )
+
+        # Load 2 (non-thermal, 0 timesteps): should be deactivated
+        self.assertEqual(self.opt.param_load_active[2].value, 0.0)
+        self.assertTrue(
+            np.allclose(opt_res["P_deferrable2"], 0.0),
+            "Non-thermal load 2 with 0 timesteps should be deactivated",
+        )
+
+    def test_load_deactivation_multiple_inactive_with_single_constant(self):
+        """Test that multiple inactive single-constant loads don't cause infeasibility.
+
+        Previously, sum(p_def_start[k]) == 1 was always enforced for single-constant
+        loads, even when inactive. This caused the solver to waste time branching on
+        192 equivalent positions for a meaningless startup. Now it uses
+        sum(p_def_start[k]) == param_load_active[k], which becomes == 0 for inactive loads.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "treat_deferrable_load_as_semi_cont": [True, True],
+                "set_deferrable_load_single_constant": [True, True],
+            }
+        )
+        self.opt = self.create_optimization()
+        prediction_horizon = 10
+
+        # Both loads inactive with single-constant enabled
+        opt_res = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            soc_init=0.5,
+            soc_final=0.5,
+            def_total_hours=None,
+            def_total_timestep=[0, 0],
+            def_start_timestep=[0, 0],
+            def_end_timestep=[0, 0],
+        )
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+        # Both loads should be deactivated
+        self.assertEqual(self.opt.param_load_active[0].value, 0.0)
+        self.assertEqual(self.opt.param_load_active[1].value, 0.0)
+        self.assertTrue(np.allclose(opt_res["P_deferrable0"], 0.0))
+        self.assertTrue(np.allclose(opt_res["P_deferrable1"], 0.0))
+
+    def test_load_deactivation_with_def_total_hours(self):
+        """Test that loads with 0 def_total_hours (not using def_total_timestep) are deactivated."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "treat_deferrable_load_as_semi_cont": [True, True],
+                "set_deferrable_load_single_constant": [True, True],
+            }
+        )
+        self.opt = self.create_optimization()
+        prediction_horizon = 10
+
+        # Load 0 active via hours, Load 1 inactive (0 hours)
+        opt_res = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            soc_init=0.5,
+            soc_final=0.5,
+            def_total_hours=[2, 0],
+            def_total_timestep=None,
+            def_start_timestep=[0, 0],
+            def_end_timestep=[0, 0],
+        )
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+        # Load 0 active, Load 1 deactivated
+        self.assertEqual(self.opt.param_load_active[0].value, 1.0)
+        self.assertEqual(self.opt.param_load_active[1].value, 0.0)
+        self.assertTrue(
+            np.allclose(opt_res["P_deferrable1"], 0.0),
+            "Load 1 with 0 hours should be deactivated",
+        )
 
 
 if __name__ == "__main__":
