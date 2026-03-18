@@ -2154,6 +2154,13 @@ async def build_params(
             "set_deferrable_startup_penalty",
             logger,
         )
+        params["optim_conf"]["set_deferrable_max_startups"] = check_def_loads(
+            num_def_loads,
+            params["optim_conf"],
+            0,
+            "set_deferrable_max_startups",
+            logger,
+        )
         params["optim_conf"]["operating_hours_of_each_deferrable_load"] = check_def_loads(
             num_def_loads,
             params["optim_conf"],

@@ -289,7 +289,7 @@ When enhancing EMHASS, users may like to add or modify the EMHASS parameters. To
 
 *Example parameter = `this_parameter_is_amazing`*
 
-Append a line into `associations.csv` :
+1. Append a line into `associations.csv` :
 *So that build_params() knows what config catagorie to allocate the parameter*
 ```text
 ...
@@ -301,7 +301,7 @@ retrieve_hass_conf,,this_parameter_is_amazing
     retrieve_hass_conf,his_parameter_is_amazing,this_parameter_is_amazing
     ```
 
-Append a line into the `config_defaults.json`
+2. Append a line into the `config_defaults.json`
 *To set a default value for the user if none is provided in `config.json`*
 ```json
 "...": "...",
@@ -311,7 +311,8 @@ Append a line into the `config_defaults.json`
   ]
 ```
 
-Lastly, to support the configuration website to generate the parameter in the list view, append the `param_definitions.json` file:
+3. Update the Web UI in `param_definitions.json`
+To support the configuration website to generate the parameter in the list view, append the `param_definitions.json` file:
 ```json
 "this_parameter_is_amazing": {
       "friendly_name": "This parameter is amazing",
@@ -324,7 +325,7 @@ Lastly, to support the configuration website to generate the parameter in the li
 
 ![Screenshot from 2024-09-09 16-45-32](https://github.com/user-attachments/assets/01e7984f-3332-4e25-8076-160f51a2e0c4)
 
-If you are only adding another option for a existing parameter, editing param_definitions.json file should be all you need. (allowing the user to select the option from the configuration page):
+If you are only adding another option for a existing parameter, editing `param_definitions.json` file should be all you need (allowing the user to select the option from the configuration page):
 ```json
 "load_forecast_method": {
   "friendly_name": "Load forecast method",
@@ -338,6 +339,37 @@ If you are only adding another option for a existing parameter, editing param_de
   ],
   "default_value": "naive"
 },
+```
+
+4. Update the Optimization Cache Key (`command_line.py`)
+If your new parameter affects the mathematical structure of the optimization problem (e.g., adding constraints, changing binary variables, or adding penalty weights), it must trigger a cache miss when changed.
+
+Add your parameter to the `OptimizationCacheKey` dataclass and the `_compute_cache_key` method inside `command_line.py`:
+```python
+@dataclass(frozen=True)
+class OptimizationCacheKey:
+    # ... existing parameters ...
+    this_parameter_is_amazing: tuple
+
+# Inside _compute_cache_key:
+return OptimizationCacheKey(
+    # ... existing parameters ...
+    this_parameter_is_amazing=to_tuple(
+        optim_conf.get("this_parameter_is_amazing", [])
+    ),
+)
+```
+
+#### Note on Deferrable Load Lists
+If your parameter is a list that must match the `number_of_deferrable_loads` (like `set_deferrable_max_startups`), you must also ensure it gets padded correctly in `utils.py`. Add a call to `check_def_loads()` inside the `build_params()` method:
+```json
+optim_conf["this_parameter_is_amazing"] = check_def_loads(
+    optim_conf["number_of_deferrable_loads"],
+    optim_conf,
+    0, # Your default pad value
+    "this_parameter_is_amazing",
+    logger,
+)
 ```
 
 ### Step 3 - Pull request
