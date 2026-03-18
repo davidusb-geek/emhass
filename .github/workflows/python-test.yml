@@ -43,30 +43,12 @@ jobs:
           uv pip install tables==3.10.2
           uv pip install pulp==3.0.2
           uv run pulptest
-      - name: Install EMHASS with test dependencies (Linux/macOS)
-        if: matrix.os != 'windows-latest'
+      - name: Install EMHASS with test dependencies
         run: |
-          source .venv/bin/activate
           uv sync --reinstall --extra test
-        shell: bash
-      - name: Install EMHASS with test dependencies (Windows)
-        if: matrix.os == 'windows-latest'
+      - name: Test with pytest
         run: |
-          .venv\Scripts\activate
-          uv sync --reinstall --extra test
-        shell: cmd
-      - name: Test with pytest (Linux/macOS)
-        if: matrix.os != 'windows-latest'
-        run: |
-          source .venv/bin/activate
           uv run pytest
-        shell: bash
-      - name: Test with pytest (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          .venv\Scripts\activate
-          uv run pytest
-        shell: cmd
   scan-pr:
     needs:
       - build
