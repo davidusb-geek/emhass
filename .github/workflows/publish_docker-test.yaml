@@ -26,8 +26,8 @@ jobs:
       matrix:
         platform:
           [
-            { target_arch: amd64, os_version: debian },
-            { target_arch: aarch64, os_version: debian },
+            { target_arch: amd64, buildx: "linux/amd64", os_version: debian },
+            { target_arch: aarch64, buildx: "linux/arm64", os_version: debian },
           ]
     steps:
       # Pull git repo and build each architecture image separately (with QEMU and Buildx)
@@ -50,7 +50,7 @@ jobs:
       # Build and save Docker image locally to check security of container packages
       - name: Build Docker image and cache
         id: cache
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: ${{ matrix.platform.buildx }}
@@ -79,7 +79,7 @@ jobs:
       # Build Docker image for pushing to registry
       - name: Build and push Docker image by digest
         id: build
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/${{ matrix.platform.target_arch }}

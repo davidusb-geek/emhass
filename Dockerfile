@@ -95,10 +95,12 @@ LABEL \
     org.opencontainers.image.source="https://github.com/davidusb-geek/emhass" \
     org.opencontainers.image.description="EMHASS python package and requirements, in Home Assistant Debian container."
 
-# Set up venv
-RUN uv venv && . .venv/bin/activate
+# Set up venv and add it to the PATH so it persists across RUN layers
+RUN uv venv
+ENV PATH="/app/.venv/bin:$PATH"
 
-RUN [[ "${TARGETARCH}" == "aarch64" ]] && uv pip install --verbose ndindex || echo "libatomic1 cant be installed"
+# Swapped bashisms [[ == ]] for POSIX compliant [ = ] for Debian dash shell compatibility
+RUN [ "${TARGETARCH}" = "aarch64" ] && uv pip install --verbose ndindex || echo "libatomic1 cant be installed"
 
 # install packages and build EMHASS
 RUN uv pip install --verbose .

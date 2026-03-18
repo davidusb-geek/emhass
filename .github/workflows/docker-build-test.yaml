@@ -20,8 +20,8 @@ jobs:
       matrix:
         platform:
           [
-            { target_arch: amd64, os_version: debian },
-            { target_arch: aarch64, os_version: debian },
+            { target_arch: amd64, buildx: "linux/amd64", os_version: debian },
+            { target_arch: aarch64, buildx: "linux/arm64", os_version: debian },
           ]
     steps:
       - name: Checkout the repository
@@ -32,7 +32,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
       - name: Build and push by digest
         id: build
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: ${{ matrix.platform.buildx }}
