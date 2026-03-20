@@ -8,7 +8,10 @@ import pandas as pd
 from emhass.optimization import Optimization
 
 
-def build_optimization() -> Optimization:
+TEST_ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def build_optimization(optim_overrides=None, plant_overrides=None) -> Optimization:
     logger = logging.getLogger("soc_recovery_test")
     logger.handlers = []
     logger.addHandler(logging.NullHandler())
@@ -43,6 +46,9 @@ def build_optimization() -> Optimization:
         "lp_solver_timeout": 45,
         "lp_solver_mip_rel_gap": 0,
     }
+    if optim_overrides:
+        optim_conf.update(optim_overrides)
+
     plant_conf = {
         "inverter_is_hybrid": False,
         "compute_curtailment": False,
@@ -59,9 +65,12 @@ def build_optimization() -> Optimization:
         "battery_stress_cost": 0.0,
         "battery_stress_segments": 10,
     }
+    if plant_overrides:
+        plant_conf.update(plant_overrides)
+
     emhass_conf = {
-        "root_path": pathlib.Path("/Users/martinarva/dev/EMHASS_DEV/src/emhass"),
-        "data_path": pathlib.Path("/Users/martinarva/dev/EMHASS_DEV/data"),
+        "root_path": TEST_ROOT / "src" / "emhass",
+        "data_path": TEST_ROOT / "data",
     }
     return Optimization(
         retrieve_hass_conf,
@@ -192,3 +201,41 @@ def test_high_soc_stays_below_max_once_back_inside_band():
     assert opt.optim_status == "Optimal"
     assert (recovery_prefix.diff().fillna(0) <= 1e-4).all(), recovery_prefix.tolist()
     assert opt_res.loc[first_inside:, "SOC_opt"].max() <= 0.8 + 1e-4
+
+
+def test_low_soc_recovery_with_non_ideal_efficiency_remains_monotonic():
+    opt = build_optimization(
+        plant_overrides={
+            "battery_discharge_efficiency": 0.92,
+            "battery_charge_efficiency": 0.88,
+            "battery_charge_power_max": 4000,
+            "battery_discharge_power_max": 4000,
+        }
+    )
+    index = pd.date_range("2026-01-01", periods=16, freq="30min", tz="Europe/Tallinn")
+
+    p_pv = pd.Series([0, 0, 0, 0, 0, 0, 4500, 4500, 4500, 4500, 0, 0, 0, 0, 0, 0], index=index)
+    p_load = pd.Series([0] * 16, index=index)
+    df_input = pd.DataFrame(index=index)
+    df_input["unit_load_cost"] = [0.35] * 16
+    df_input["unit_prod_price"] = [0.0] * 16
+
+    opt_res = opt.perform_naive_mpc_optim(
+        df_input,
+        p_pv,
+        p_load,
+        16,
+        soc_init=0.1,
+        soc_final=0.4,
+        def_total_hours=[],
+        def_total_timestep=[],
+        def_start_timestep=[],
+        def_end_timestep=[],
+    )
+
+    first_inside = opt_res.index[opt_res["SOC_opt"] > 0.30001][0]
+    recovery_prefix = opt_res.loc[:first_inside, "SOC_opt"]
+    assert opt.optim_status == "Optimal"
+    assert (recovery_prefix.diff().fillna(0) >= -1e-4).all(), recovery_prefix.tolist()
+    assert opt_res.loc[first_inside:, "SOC_opt"].min() >= 0.3 - 1e-4
+    assert abs(opt_res["SOC_opt"].iloc[-1] - 0.4) < 1e-3
