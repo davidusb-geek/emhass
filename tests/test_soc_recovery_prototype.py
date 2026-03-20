@@ -158,7 +158,9 @@ def test_low_soc_stays_above_min_once_back_inside_band():
     )
 
     first_inside = opt_res.index[opt_res["SOC_opt"] > 0.30001][0]
+    recovery_prefix = opt_res.loc[:first_inside, "SOC_opt"]
     assert opt.optim_status == "Optimal"
+    assert (recovery_prefix.diff().fillna(0) >= -1e-4).all(), recovery_prefix.tolist()
     assert opt_res.loc[first_inside:, "SOC_opt"].min() >= 0.3 - 1e-4
 
 
@@ -186,5 +188,7 @@ def test_high_soc_stays_below_max_once_back_inside_band():
     )
 
     first_inside = opt_res.index[opt_res["SOC_opt"] < 0.79999][0]
+    recovery_prefix = opt_res.loc[:first_inside, "SOC_opt"]
     assert opt.optim_status == "Optimal"
+    assert (recovery_prefix.diff().fillna(0) <= 1e-4).all(), recovery_prefix.tolist()
     assert opt_res.loc[first_inside:, "SOC_opt"].max() <= 0.8 + 1e-4
