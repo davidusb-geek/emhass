@@ -1252,6 +1252,34 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params_out["passed_data"]["soc_init"], 0.05)
         self.assertEqual(params_out["passed_data"]["soc_final"], 0.6)
 
+    async def test_treat_runtimeparams_preserves_high_out_of_band_soc_init(self):
+        """Naive MPC should preserve a high initial SOC that starts above soc_max."""
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+
+        runtimeparams = {
+            "prediction_horizon": 10,
+            "soc_init": 0.95,
+            "soc_final": 0.6,
+        }
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+
+        params_out, _, _, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "naive-mpc-optim",
+            logger,
+            emhass_conf,
+        )
+        params_out = orjson.loads(params_out)
+
+        self.assertEqual(params_out["passed_data"]["soc_init"], 0.95)
+        self.assertEqual(params_out["passed_data"]["soc_final"], 0.6)
+
     def test_param_to_config(self):
         """Test converting built params back to a flat config dictionary and masking secrets."""
         # Create a mock parameter dictionary with the required categories
