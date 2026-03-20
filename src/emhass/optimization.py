@@ -1171,6 +1171,18 @@ class Optimization:
         constraints.append(soc_low_recovered[-1] == self.param_soc_low_required)
         constraints.append(soc_high_recovered[-1] == self.param_soc_high_required)
         constraints.append(
+            current_stored_energy[1:]
+            >= current_stored_energy[:-1]
+            - recovery_big_m
+            * (soc_low_recovered[:-1] + (1 - self.param_soc_low_required))
+        )
+        constraints.append(
+            current_stored_energy[1:]
+            <= current_stored_energy[:-1]
+            + recovery_big_m
+            * (soc_high_recovered[:-1] + (1 - self.param_soc_high_required))
+        )
+        constraints.append(
             current_stored_energy
             <= min_energy
             - recovery_margin
