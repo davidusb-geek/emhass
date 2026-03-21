@@ -150,7 +150,22 @@ def test_low_soc_stays_above_min_once_back_inside_band():
     p_pv = pd.Series([0, 0, 0, 0, 0, 6000, 6000, 0, 0, 0, 0, 0, 6000, 6000], index=index)
     p_load = pd.Series([0, 0, 0, 0, 0, 0, 0, 5000, 5000, 5000, 0, 0, 0, 0], index=index)
     df_input = pd.DataFrame(index=index)
-    df_input["unit_load_cost"] = [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 5.0, 5.0, 5.0, 0.2, 0.2, 0.2, 0.2]
+    df_input["unit_load_cost"] = [
+        0.2,
+        0.2,
+        0.2,
+        0.2,
+        0.2,
+        0.2,
+        0.2,
+        5.0,
+        5.0,
+        5.0,
+        0.2,
+        0.2,
+        0.2,
+        0.2,
+    ]
     df_input["unit_prod_price"] = [0.0] * 14
 
     opt_res = opt.perform_naive_mpc_optim(

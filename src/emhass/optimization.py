@@ -1103,8 +1103,9 @@ class Optimization:
         soc_high_recovered = self.vars["soc_high_recovered"]
         min_energy = self.plant_conf["battery_minimum_state_of_charge"] * cap
         max_energy = self.plant_conf["battery_maximum_state_of_charge"] * cap
-        recovery_big_m = cap
         recovery_margin = max(cap * 1e-6, 1e-3)
+        recovery_big_m_low = cap - min_energy + recovery_margin
+        recovery_big_m_high = max_energy + recovery_margin
 
         # Grid Interaction Constraints
 
@@ -1162,8 +1163,12 @@ class Optimization:
         # Min/Max SOC bounds with a single recovery transition.
         # Before recovery the trajectory stays on the initial out-of-band side.
         # After recovery the usual hard SOC limits apply and cannot be violated again.
-        constraints.append(current_stored_energy >= min_energy - self.param_soc_low_gap * (1 - soc_low_recovered))
-        constraints.append(current_stored_energy <= max_energy + self.param_soc_high_gap * (1 - soc_high_recovered))
+        constraints.append(
+            current_stored_energy >= min_energy - self.param_soc_low_gap * (1 - soc_low_recovered)
+        )
+        constraints.append(
+            current_stored_energy <= max_energy + self.param_soc_high_gap * (1 - soc_high_recovered)
+        )
         constraints.append(soc_low_recovered[1:] >= soc_low_recovered[:-1])
         constraints.append(soc_high_recovered[1:] >= soc_high_recovered[:-1])
         constraints.append(soc_low_recovered <= self.param_soc_low_required)
@@ -1173,28 +1178,26 @@ class Optimization:
         constraints.append(
             current_stored_energy[1:]
             >= current_stored_energy[:-1]
-            - recovery_big_m
-            * (soc_low_recovered[:-1] + (1 - self.param_soc_low_required))
+            - recovery_big_m_low * (soc_low_recovered[:-1] + (1 - self.param_soc_low_required))
         )
         constraints.append(
             current_stored_energy[1:]
             <= current_stored_energy[:-1]
-            + recovery_big_m
-            * (soc_high_recovered[:-1] + (1 - self.param_soc_high_required))
+            + recovery_big_m_high * (soc_high_recovered[:-1] + (1 - self.param_soc_high_required))
         )
         constraints.append(
             current_stored_energy
             <= min_energy
             - recovery_margin
-            + recovery_big_m * soc_low_recovered
-            + recovery_big_m * (1 - self.param_soc_low_required)
+            + recovery_big_m_low * soc_low_recovered
+            + recovery_big_m_low * (1 - self.param_soc_low_required)
         )
         constraints.append(
             current_stored_energy
             >= max_energy
             + recovery_margin
-            - recovery_big_m * soc_high_recovered
-            - recovery_big_m * (1 - self.param_soc_high_required)
+            - recovery_big_m_high * soc_high_recovered
+            - recovery_big_m_high * (1 - self.param_soc_high_required)
         )
 
         # Final SOC Constraint
