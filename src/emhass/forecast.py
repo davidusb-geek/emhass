@@ -176,13 +176,14 @@ class Forecast:
         else:
             self.logger.error("Wrong method_ts_round passed parameter")
         # check if weather_forecast_cache, if so get 2x the amount of forecast
+        _delta_days = self.optim_conf["delta_forecast_daily"].days
         if self.params["passed_data"].get("weather_forecast_cache", False):
             self.end_forecast = (
-                self.start_forecast + (self.optim_conf["delta_forecast_daily"] * 2)
+                self.start_forecast + pd.DateOffset(days=_delta_days * 2)
             ).replace(microsecond=0)
         else:
             self.end_forecast = (
-                self.start_forecast + self.optim_conf["delta_forecast_daily"]
+                self.start_forecast + pd.DateOffset(days=_delta_days)
             ).replace(microsecond=0)
         self.forecast_dates = (
             pd.date_range(
@@ -546,18 +547,22 @@ class Forecast:
     def _get_weather_list(self) -> pd.DataFrame:
         """Helper to retrieve weather data from a passed list."""
         data_list = self.params["passed_data"]["pv_power_forecast"]
+        forecast_dates = (
+            self.forecast_dates.tz_localize(self.time_zone)
+            if self.forecast_dates.tz is None
+            else self.forecast_dates.tz_convert(self.time_zone)
+        )
         if (
-            len(data_list) < len(self.forecast_dates)
+            len(data_list) < len(forecast_dates)
             and self.params["passed_data"]["prediction_horizon"] is None
         ):
             self.logger.error(error_msg_list_not_long_enough)
             return None
-        else:
-            data_list = data_list[0 : len(self.forecast_dates)]
-            data_dict = {"ts": self.forecast_dates, "yhat": data_list}
-            data = pd.DataFrame.from_dict(data_dict)
-            data.set_index("ts", inplace=True)
-            return data
+        data_list = data_list[: len(forecast_dates)]
+        data_dict = {"ts": forecast_dates, "yhat": data_list}
+        data = pd.DataFrame.from_dict(data_dict)
+        data.set_index("ts", inplace=True)
+        return data
 
     async def get_weather_forecast(
         self,
@@ -1057,9 +1062,9 @@ class Forecast:
             )
         else:
             self.logger.error("Wrong method_ts_round passed parameter")
-        end_forecast_csv = (start_forecast_csv + self.optim_conf["delta_forecast_daily"]).replace(
-            microsecond=0
-        )
+        end_forecast_csv = (
+            start_forecast_csv + pd.DateOffset(days=self.optim_conf["delta_forecast_daily"].days)
+        ).replace(microsecond=0)
         forecast_dates_csv = (
             pd.date_range(
                 start=start_forecast_csv,
@@ -1813,9 +1818,9 @@ class Forecast:
                 self.logger.info("Saved the forecast results to cache, for later reference.")
 
         # Trim cached data to match requested dates
-        end_forecast = (self.start_forecast + self.optim_conf["delta_forecast_daily"]).replace(
-            microsecond=0
-        )
+        end_forecast = (
+            self.start_forecast + pd.DateOffset(days=self.optim_conf["delta_forecast_daily"].days)
+        ).replace(microsecond=0)
         forecast_dates = (
             pd.date_range(
                 start=self.start_forecast,

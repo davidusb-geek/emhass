@@ -726,7 +726,7 @@ def _apply_df_freq_horizon(
     # Handle Prediction Horizon
     if prediction_horizon:
         # Slice the dataframe up to the horizon
-        df = copy.deepcopy(df)[df.index[0] : df.index[prediction_horizon - 1]]
+        df = copy.deepcopy(df)[df.index[0] : df.index[min(prediction_horizon, len(df)) - 1]]
     return df
 
 
@@ -2049,7 +2049,9 @@ def _load_opt_res_latest(
         logger.error("File not found error, run an optimization task first.")
         return None
     opt_res_latest = pd.read_csv(file_path, index_col="timestamp")
-    opt_res_latest.index = pd.to_datetime(opt_res_latest.index)
+    opt_res_latest.index = pd.to_datetime(opt_res_latest.index, utc=True).tz_convert(
+        input_data_dict["retrieve_hass_conf"]["time_zone"]
+    )
     opt_res_latest.index.freq = input_data_dict["retrieve_hass_conf"]["optimization_time_step"]
     return opt_res_latest
 
