@@ -41,8 +41,8 @@ The **secrets** parameters are:
 - `hass_url`: The URL to your Home Assistant instance. For example: https://myhass.duckdns.org/
 - `long_lived_token`: A Long-Lived Access Token from the Lovelace profile page.
 - `time_zone`: The time zone of your system. For example: Europe/Paris.
-- `lat`: The latitude. For example: 45.0.
-- `lon`: The longitude. For example: 6.0
+- `Latitude`: The latitude. For example: 45.0.
+- `Longitude`: The longitude. For example: 6.0
 - `alt`: The altitude in meters. For example: 100.0
 - `solcast_api_key`: The Solcast API key (weather_forecast_method=solcast)
 - `solcast_rooftop_id`: The Solcast rooftop ID (weather_forecast_method=solcast)
