@@ -569,16 +569,18 @@ async def _retrieve_and_fit_pv_model(
         emhass_conf,
         test_df_literal,
     )
-    if not success or df_input_data is None or df_input_data.empty:
-        return False
-    if fcst.var_pv_forecast not in df_input_data.columns:
-        fcst.logger.warning(
-            "Missing %s in retrieved data, unable to train adjust_pv model",
-            fcst.var_pv_forecast,
-        )
+    if not success:
         return False
     # Call data preparation method
     fcst.adjust_pv_forecast_data_prep(df_input_data)
+    n_splits = 5
+    x_adjust_pv = getattr(fcst, "x_adjust_pv", None)
+    if x_adjust_pv is not None and len(x_adjust_pv) <= n_splits:
+        fcst.logger.warning(
+            f"Not enough data to fit the PV model (found {len(x_adjust_pv)} samples, "
+            f"require > {n_splits}). Falling back to unadjusted PV forecast."
+        )
+        return False
     # Call the fit method
     await fcst.adjust_pv_forecast_fit(
         n_splits=5,
@@ -643,7 +645,8 @@ async def adjust_pv_forecast(
             test_df_literal,
         )
         if not success:
-            return False
+            logger.warning("Could not train adjusted PV model, falling back to unadjusted PV forecast.")
+            return p_pv_forecast
     else:
         # Load existing model
         logger.info("Loading existing adjusted PV model from file")
@@ -667,8 +670,8 @@ async def adjust_pv_forecast(
                 test_df_literal,
             )
             if not success:
-                logger.error("Failed to retrieve data for model re-fit after load error")
-                return False
+                logger.error("Failed to retrieve data for model re-fit after load error. Falling back to unadjusted forecast.")
+                return p_pv_forecast
             logger.info("Successfully re-fitted model after load failure")
         except Exception as e:
             logger.error(
