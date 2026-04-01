@@ -681,8 +681,8 @@ async def adjust_pv_forecast(
             logger.error(
                 f"Unexpected error loading adjusted PV model: {type(e).__name__}: {str(e)}"
             )
-            logger.error("Cannot recover from this error")
-            return False
+            logger.error("Cannot recover from this error. Falling back to unadjusted forecast.")
+            return p_pv_forecast
     # Call the predict method
     p_pv_forecast = p_pv_forecast.rename("forecast").to_frame()
     p_pv_forecast = fcst.adjust_pv_forecast_predict(forecasted_pv=p_pv_forecast)
