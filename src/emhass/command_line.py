@@ -527,7 +527,13 @@ async def _retrieve_and_fit_pv_model(
         emhass_conf,
         test_df_literal,
     )
-    if not success:
+    if not success or df_input_data is None or df_input_data.empty:
+        return False
+    if fcst.var_pv_forecast not in df_input_data.columns:
+        fcst.logger.warning(
+            "Missing %s in retrieved data, unable to train adjust_pv model",
+            fcst.var_pv_forecast,
+        )
         return False
     # Call data preparation method
     fcst.adjust_pv_forecast_data_prep(df_input_data)
