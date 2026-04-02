@@ -556,9 +556,18 @@ async def _retrieve_and_fit_pv_model(
         return False
     # Call data preparation method
     fcst.adjust_pv_forecast_data_prep(df_input_data)
+    
+    n_splits = 5
+    if len(fcst.x_adjust_pv) <= n_splits:
+        fcst.logger.warning(
+            f"Not enough data to fit the PV model (found {len(fcst.x_adjust_pv)} samples, "
+            f"require > {n_splits}). Falling back to unadjusted PV forecast."
+        )
+        return False
+
     # Call the fit method
     await fcst.adjust_pv_forecast_fit(
-        n_splits=5,
+        n_splits=n_splits,
         regression_model=optim_conf["adjusted_pv_regression_model"],
     )
     return True
