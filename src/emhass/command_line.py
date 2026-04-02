@@ -18,12 +18,12 @@ import orjson
 import pandas as pd
 
 from emhass import utils
-from emhass.utils import log_runtime_banner, stage_timer
 from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
 from emhass.optimization import Optimization
 from emhass.retrieve_hass import RetrieveHass
+from emhass.utils import log_runtime_banner, stage_timer
 
 default_csv_filename = "opt_res_latest.csv"
 default_pkl_suffix = "_mlf.pkl"
@@ -573,9 +573,19 @@ async def _retrieve_and_fit_pv_model(
         return False
     # Call data preparation method
     fcst.adjust_pv_forecast_data_prep(df_input_data)
+
+    n_splits = 5
+    x_adjust_pv = getattr(fcst, "x_adjust_pv", None)
+    if x_adjust_pv is not None and len(x_adjust_pv) <= n_splits:
+        fcst.logger.warning(
+            f"Not enough data to fit the PV model (found {len(x_adjust_pv)} samples, "
+            f"require > {n_splits}). Falling back to unadjusted PV forecast."
+        )
+        return False
+
     # Call the fit method
     await fcst.adjust_pv_forecast_fit(
-        n_splits=5,
+        n_splits=n_splits,
         regression_model=optim_conf["adjusted_pv_regression_model"],
     )
     return True
@@ -669,8 +679,8 @@ async def adjust_pv_forecast(
             logger.error(
                 f"Unexpected error loading adjusted PV model: {type(e).__name__}: {str(e)}"
             )
-            logger.error("Cannot recover from this error. Falling back to unadjusted forecast.")
-            return p_pv_forecast
+            logger.error("Cannot recover from this error")
+            return False
     # Call the predict method
     p_pv_forecast = p_pv_forecast.rename("forecast").to_frame()
     p_pv_forecast = fcst.adjust_pv_forecast_predict(forecasted_pv=p_pv_forecast)
