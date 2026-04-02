@@ -351,6 +351,22 @@ class Optimization:
                     new_q_start,
                 )
                 params["q_input_start"].value = new_q_start
+            else:
+                # prev_q is None (e.g. after infeasible solve) -- estimate
+                # q_input_start from heating demand to avoid persisting 0.0
+                # which would cause a permanent infeasibility loop.
+                demand = params.get("heating_demand")
+                if demand is not None and hasattr(demand, "value") and demand.value is not None:
+                    fallback = float(max(demand.value[0], 0.0))
+                else:
+                    fallback = 0.0
+                if fallback > 0.0 or params["q_input_start"].value == 0.0:
+                    self.logger.warning(
+                        "Load %s: q_input solve result is None (infeasible?), "
+                        "resetting q_input_start from %.4f to heating demand estimate %.4f",
+                        k, params["q_input_start"].value, fallback,
+                    )
+                    params["q_input_start"].value = fallback
         elif tau_hours == 0 and "q_input_var" in params:
             # Inertia was disabled — clear stale variable reference
             del params["q_input_var"]
@@ -1632,7 +1648,21 @@ class Optimization:
             # Initialize Q_input[0] from CVXPY Parameter (enables warm-start updates)
             params = self.param_thermal.get(k, {})
             q_input_start = params.get("q_input_start", 0.0)
-            constraints.append(q_input[0] == q_input_start)
+            # Extract the scalar value for comparison (cp.Parameter or float)
+            q_start_val = float(q_input_start.value) if hasattr(q_input_start, "value") else float(q_input_start)
+            min_temp_0 = float(min_temperatures_list[0]) if min_temperatures_list else 18.0
+            # When q_input_start is zero and the initial temperature is at or below
+            # the minimum, hard-constraining q_input[0] == 0 would force zero heating
+            # at t=0 causing the temperature at t=1 to drop below min_temperatures,
+            # making the problem infeasible.  Release q_input[0] as a free (nonneg)
+            # variable so the optimizer can choose the initial heat input.
+            if q_start_val == 0.0 and start_temp_float <= min_temp_0:
+                self.logger.info(
+                    "Load %s: Releasing q_input[0] (q_input_start=0, start_temp=%.2f <= min_temp=%.2f)",
+                    k, start_temp_float, min_temp_0,
+                )
+            else:
+                constraints.append(q_input[0] == q_input_start)
 
             # Raw heat input: COP * P_hp / 1000 * dt (kWh thermal per timestep)
             raw_heat = cp.multiply(heatpump_cops[:-1], p_deferrable[:-1]) / 1000 * self.time_step
