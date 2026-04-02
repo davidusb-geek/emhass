@@ -1,11 +1,13 @@
 import asyncio
 import bz2
 import copy
+import fcntl
 import logging
 import os
 import pickle
 import pickle as cPickle
 import re
+import tempfile
 from datetime import datetime, timedelta
 from urllib.parse import quote
 
@@ -387,30 +389,41 @@ class Forecast:
             data = await self.get_cached_forecast_data(w_forecast_cache_path)
         return data
 
-    @staticmethod
-    def _solcast_rate_limit_ok(max_calls: int = 8) -> bool:
+    def _solcast_rate_limit_ok(self, max_calls: int = 8) -> bool:
         """Check and increment a daily Solcast API call counter.
 
-        Uses a file in /tmp keyed by date.  Returns True if under
+        Uses a file in temporary directory keyed by date. Returns True if under
         the daily limit, False otherwise.
         """
-        today = datetime.now().strftime("%Y-%m-%d")
-        counter_path = f"/tmp/solcast_calls_{today}.count"
-        count = 0
-        if os.path.isfile(counter_path):
-            try:
-                with open(counter_path) as f:
-                    count = int(f.read().strip())
-            except (ValueError, OSError):
-                count = 0
-        if count >= max_calls:
-            return False
+        today = pd.Timestamp.now(tz=self.time_zone).strftime("%Y-%m-%d")
+        temp_dir = tempfile.gettempdir()
+        counter_path = os.path.join(temp_dir, f"emhass_solcast_calls_{today}.count")
+        
         try:
-            with open(counter_path, "w") as f:
+            # We use a+ mode to read and write without truncating on open.
+            with open(counter_path, "a+") as f:
+                # Acquire exclusive lock
+                fcntl.flock(f, fcntl.LOCK_EX)
+                f.seek(0)
+                
+                content = f.read().strip()
+                count = int(content) if content else 0
+                
+                if count >= max_calls:
+                    fcntl.flock(f, fcntl.LOCK_UN)
+                    return False
+                
+                # Write incremented count back
+                f.seek(0)
+                f.truncate()
                 f.write(str(count + 1))
-        except OSError:
-            pass
-        return True
+                f.flush()
+                # Explicit close/unlock occurs via context manager exit, but we unlock explicitly
+                fcntl.flock(f, fcntl.LOCK_UN)
+            return True
+        except (OSError, ValueError) as e:
+            self.logger.error(f"Failed to check or increment Solcast rate limit: {e}")
+            return False
 
     async def _get_weather_solcast(self, w_forecast_cache_path: str) -> pd.DataFrame:
         """Helper to retrieve weather data from Solcast or cache."""
@@ -1814,6 +1827,15 @@ class Forecast:
                 data = data.reindex(combined_index)
                 data.interpolate(method="time", inplace=True)
                 data = data.reindex(self.forecast_dates)
+                
+                irradiance_cols = [c for c in ["ghi", "dni", "dhi"] if c in data.columns]
+                other_cols = [c for c in data.columns if c not in irradiance_cols]
+                
+                if other_cols:
+                    data[other_cols] = data[other_cols].ffill().bfill()
+                if irradiance_cols:
+                    data[irradiance_cols] = data[irradiance_cols].fillna(0.0)
+                
                 data = data.fillna(0.0)
             return data
 
