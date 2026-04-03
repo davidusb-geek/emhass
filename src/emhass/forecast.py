@@ -177,6 +177,12 @@ class Forecast:
             self.logger.error("Wrong method_ts_round passed parameter")
         # check if weather_forecast_cache, if so get 2x the amount of forecast
         _delta_days = self.optim_conf["delta_forecast_daily"].days
+        if self.optim_conf["delta_forecast_daily"] != pd.Timedelta(days=_delta_days):
+            self.logger.warning(
+                "delta_forecast_daily has sub-day components which are ignored; "
+                "only the day component (%d) is used for the forecast horizon.",
+                _delta_days,
+            )
         if self.params["passed_data"].get("weather_forecast_cache", False):
             self.end_forecast = (
                 self.start_forecast + pd.DateOffset(days=_delta_days * 2)
@@ -204,6 +210,11 @@ class Forecast:
             self.forecast_dates = self.forecast_dates[
                 0 : self.params["passed_data"]["prediction_horizon"]
             ]
+        self.forecast_dates_tz = (
+            self.forecast_dates.tz_localize(self.time_zone)
+            if self.forecast_dates.tz is None
+            else self.forecast_dates.tz_convert(self.time_zone)
+        )
 
     async def get_cached_open_meteo_forecast_json(
         self, max_age: int | None = 30, forecast_days: int = 3
@@ -547,11 +558,7 @@ class Forecast:
     def _get_weather_list(self) -> pd.DataFrame:
         """Helper to retrieve weather data from a passed list."""
         data_list = self.params["passed_data"]["pv_power_forecast"]
-        forecast_dates = (
-            self.forecast_dates.tz_localize(self.time_zone)
-            if self.forecast_dates.tz is None
-            else self.forecast_dates.tz_convert(self.time_zone)
-        )
+        forecast_dates = self.forecast_dates_tz
         if (
             len(data_list) < len(forecast_dates)
             and self.params["passed_data"]["prediction_horizon"] is None
