@@ -1552,6 +1552,143 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class TestDstForecastDates(unittest.IsolatedAsyncioTestCase):
+    """Standalone tests for the DST forecast-date-range fix.
+
+    These tests do NOT require test_df_final.pkl so they can run in Docker
+    without the full data file mount.
+    """
+
+    @staticmethod
+    async def _build_params():
+        config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+        _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
+        return await utils.build_params(emhass_conf, secrets, config, logger)
+
+    async def asyncSetUp(self):
+        import pytz
+
+        params = await self._build_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        self.paris_tz = pytz.timezone("Europe/Paris")
+        retrieve_hass_conf["time_zone"] = self.paris_tz
+        # Force 15-min frequency and 7-day horizon for the DST test
+        optim_conf["delta_forecast_daily"] = pd.Timedelta(days=7)
+        self.retrieve_hass_conf = retrieve_hass_conf
+        self.optim_conf = optim_conf
+        self.plant_conf = plant_conf
+        self.params_json = params_json
+
+    def test_forecast_dates_length_consistent_with_get_forecast_dates_across_dst(self):
+        """Forecast.forecast_dates length must match utils.get_forecast_dates across DST.
+
+        Root cause: Forecast.__init__ previously used pd.Timedelta(days=N) which
+        counts wall-clock hours, producing a different number of 15-min slots than
+        utils.get_forecast_dates which uses pd.DateOffset(days=N) (calendar days).
+        On a spring-forward DST day a 7-day 15-min horizon spans 167 wall-clock
+        hours (668 slots) instead of 168 hours (672 slots).
+        The fix replaces all Timedelta additions in Forecast.__init__ with DateOffset.
+        """
+        from unittest.mock import patch
+        from datetime import datetime
+
+        # Spring-forward for Paris 2025: 2025-03-30 02:00 -> 03:00
+        # Start at midnight so the full 7-day window crosses the transition
+        dst_start_naive = datetime(2025, 3, 30, 0, 0, 0)
+        dst_start_ts = self.paris_tz.localize(dst_start_naive)
+
+        # Build Forecast (no data file needed; only __init__ computes forecast_dates)
+        fcst_dst = Forecast(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.params_json,
+            emhass_conf,
+            logger,
+            get_data_from_file=True,  # flag only; no file access in __init__
+        )
+
+        # Override start so forecast_dates spans the spring-forward transition
+        fcst_dst.start_forecast = dst_start_ts
+        fcst_dst.end_forecast = (dst_start_ts + pd.DateOffset(days=7)).replace(microsecond=0)
+        fcst_dst.forecast_dates = (
+            pd.date_range(
+                start=fcst_dst.start_forecast,
+                end=fcst_dst.end_forecast - fcst_dst.freq,
+                freq=fcst_dst.freq,
+                tz=self.paris_tz,
+            )
+            .tz_convert("utc")
+            .round(fcst_dst.freq, ambiguous="infer", nonexistent="shift_forward")
+            .tz_convert(self.paris_tz)
+        )
+
+        # utils.get_forecast_dates is the reference (uses DateOffset)
+        # fcst_dst.freq is the optimization_time_step Timedelta
+        freq_minutes = int(fcst_dst.freq.seconds // 60)
+        with patch("emhass.utils._get_now", return_value=dst_start_naive):
+            ref_dates = utils.get_forecast_dates(freq_minutes, 7, self.paris_tz)
+
+        self.assertEqual(
+            len(fcst_dst.forecast_dates),
+            len(ref_dates),
+            f"Forecast.forecast_dates ({len(fcst_dst.forecast_dates)}) must match "
+            f"get_forecast_dates ({len(ref_dates)}) across spring-forward DST",
+        )
+        # Crossing spring-forward loses one hour = 4 slots at 15 min
+        self.assertLess(
+            len(fcst_dst.forecast_dates),
+            672,
+            "Spring-forward DST should produce fewer than 672 slots for a 7-day 15-min window",
+        )
+
+    def test_forecast_dates_normal_day_equals_expected_slots(self):
+        """On a normal day (no DST transition) forecast_dates has exactly N*24*(60/freq) slots."""
+        from unittest.mock import patch
+        from datetime import datetime
+
+        # 2025-03-20 is a Thursday well before the spring-forward (2025-03-30),
+        # so a 7-day window from 2025-03-20 to 2025-03-27 has no DST transition.
+        normal_start_naive = datetime(2025, 3, 20, 0, 0, 0)
+        normal_start_ts = self.paris_tz.localize(normal_start_naive)
+
+        fcst_normal = Forecast(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.params_json,
+            emhass_conf,
+            logger,
+            get_data_from_file=True,
+        )
+
+        fcst_normal.start_forecast = normal_start_ts
+        fcst_normal.end_forecast = (normal_start_ts + pd.DateOffset(days=7)).replace(
+            microsecond=0
+        )
+        fcst_normal.forecast_dates = (
+            pd.date_range(
+                start=fcst_normal.start_forecast,
+                end=fcst_normal.end_forecast - fcst_normal.freq,
+                freq=fcst_normal.freq,
+                tz=self.paris_tz,
+            )
+            .tz_convert("utc")
+            .round(fcst_normal.freq, ambiguous="infer", nonexistent="shift_forward")
+            .tz_convert(self.paris_tz)
+        )
+
+        freq_minutes = int(fcst_normal.freq.seconds // 60)
+        with patch("emhass.utils._get_now", return_value=normal_start_naive):
+            ref_dates = utils.get_forecast_dates(freq_minutes, 7, self.paris_tz)
+
+        self.assertEqual(len(fcst_normal.forecast_dates), len(ref_dates))
+        # On a normal day the length must equal exactly 7 * 24 * (60 / freq_minutes) slots
+        expected_slots = 7 * 24 * (60 // freq_minutes)
+        self.assertEqual(len(fcst_normal.forecast_dates), expected_slots)
+
+
 if __name__ == "__main__":
     unittest.main()
     ch.close()
