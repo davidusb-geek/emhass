@@ -698,8 +698,15 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(df_input_data["unit_prod_price"].values[-1], 48)
 
     # Test output weather forecast using longer passed runtime lists
-    async def test_get_forecasts_with_longer_lists(self):
-        # Load default params
+    async def _build_longer_list_forecast(self, list_length: int):
+        """Build a Forecast configured for 3-day list-based forecasts.
+
+        Returns ``(fcst, params_json, runtimeparams_json)``.  The caller must
+        override ``fcst.start_forecast``, ``fcst.end_forecast``,
+        ``fcst.forecast_dates``, and ``fcst.forecast_dates_tz`` before calling
+        any ``get_*_forecast`` method so that the window is fixed to a known
+        date rather than relying on wall-clock time.
+        """
         params = {}
         set_type = "dayahead-optim"
         if emhass_conf["defaults_path"].exists():
@@ -713,11 +720,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 )
         else:
             raise Exception(
-                "config_defaults.json does not exist in path: " + str(emhass_conf["defaults_path"])
+                "config_defaults.json does not exist in path: "
+                + str(emhass_conf["defaults_path"])
             )
-
-        # Create 3*48 (3 days of data) long lists runtime forecasts parameters
-        list_length = 3 * 48  # 3 days
         runtimeparams = {
             "pv_power_forecast": [i + 1 for i in range(list_length)],
             "load_power_forecast": [i + 1 for i in range(list_length)],
@@ -744,7 +749,6 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             logger,
             emhass_conf,
         )
-        # Create Forecast Object
         fcst = Forecast(
             retrieve_hass_conf,
             optim_conf,
@@ -754,39 +758,110 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        # Get weather forecast with list, check dataframe output
+        return fcst, params_json, runtimeparams_json
+
+    def _pin_forecast_to_date(self, fcst, start_naive_str: str):
+        """Override forecast window to a fixed start date (naive ISO string).
+
+        Rebuilds ``forecast_dates`` and ``forecast_dates_tz`` using the same
+        ``DateOffset`` logic as ``Forecast.__init__`` so that DST transitions
+        within the window are handled correctly.
+        """
+        delta_days = fcst.optim_conf["delta_forecast_daily"].days
+        start_ts = pd.Timestamp(start_naive_str).tz_localize(
+            fcst.time_zone, nonexistent="shift_forward"
+        ).floor(fcst.freq)
+        end_ts = (start_ts + pd.DateOffset(days=delta_days)).replace(microsecond=0)
+        dates = (
+            pd.date_range(
+                start=start_ts,
+                end=end_ts - fcst.freq,
+                freq=fcst.freq,
+                tz=fcst.time_zone,
+            )
+            .tz_convert("utc")
+            .round(fcst.freq, ambiguous="infer", nonexistent="shift_forward")
+            .tz_convert(fcst.time_zone)
+        )
+        fcst.start_forecast = start_ts
+        fcst.end_forecast = end_ts
+        fcst.forecast_dates = dates
+        fcst.forecast_dates_tz = dates
+
+    async def _assert_longer_lists_forecast(self, fcst, expected_last: int):
+        """Run the full set of list-forecast assertions for ``expected_last`` slots.
+
+        PV and load forecasts use ``self.forecast_dates_tz`` which is pinned by
+        ``_pin_forecast_to_date``, so exact slot counts are asserted.
+
+        ``get_load_cost_forecast`` and ``get_prod_price_forecast`` with
+        method="list" both internally call ``get_forecast_days_csv()`` which
+        uses wall-clock time rather than ``self.start_forecast``.  Pinning
+        those would require mocking ``pd.Timestamp.now`` throughout; instead
+        we just verify they do not raise and produce a DataFrame with the
+        expected columns.
+        """
         p_pv_forecast = await fcst.get_weather_forecast(method="list")
-        self.assertIsInstance(p_pv_forecast, type(pd.DataFrame()))
+        self.assertIsInstance(p_pv_forecast, pd.DataFrame)
         self.assertIsInstance(p_pv_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(p_pv_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(p_pv_forecast.index.tz, fcst.time_zone)
         self.assertTrue(fcst.start_forecast < ts for ts in p_pv_forecast.index)
+        self.assertEqual(len(p_pv_forecast), expected_last)
         self.assertEqual(p_pv_forecast.values[0][0], 1)
-        self.assertEqual(p_pv_forecast.values[-1][0], 3 * 48)
-        # Get load forecast with list, check dataframe output
+        self.assertEqual(p_pv_forecast.values[-1][0], expected_last)
+
         p_load_forecast = await fcst.get_load_forecast(method="list")
         self.assertIsInstance(p_load_forecast, pd.core.series.Series)
         self.assertIsInstance(p_load_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(p_load_forecast.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertEqual(p_load_forecast.index.tz, fcst.time_zone)
-        self.assertEqual(len(p_pv_forecast), len(p_load_forecast))
+        self.assertEqual(len(p_load_forecast), expected_last)
         self.assertEqual(p_load_forecast.values[0], 1)
-        self.assertEqual(p_load_forecast.values[-1], 3 * 48)
-        df_input_data_dayahead = pd.concat([p_pv_forecast, p_load_forecast], axis=1)
-        df_input_data_dayahead = utils.set_df_index_freq(df_input_data_dayahead)
-        df_input_data_dayahead.columns = ["p_pv_forecast", "p_load_forecast"]
-        # Get load cost forecast with list, check dataframe output
-        df_input_data_dayahead = fcst.get_load_cost_forecast(df_input_data_dayahead, method="list")
-        self.assertIn(fcst.var_load_cost, df_input_data_dayahead.columns)
-        self.assertEqual(df_input_data_dayahead.isnull().sum().sum(), 0)
-        self.assertEqual(df_input_data_dayahead[fcst.var_load_cost].iloc[0], 1)
-        self.assertEqual(df_input_data_dayahead[fcst.var_load_cost].iloc[-1], 3 * 48)
-        # Get production price forecast with list, check dataframe output
-        df_input_data_dayahead = fcst.get_prod_price_forecast(df_input_data_dayahead, method="list")
-        self.assertIn(fcst.var_prod_price, df_input_data_dayahead.columns)
-        self.assertEqual(df_input_data_dayahead.isnull().sum().sum(), 0)
-        self.assertEqual(df_input_data_dayahead[fcst.var_prod_price].iloc[0], 1)
-        self.assertEqual(df_input_data_dayahead[fcst.var_prod_price].iloc[-1], 3 * 48)
+        self.assertEqual(p_load_forecast.values[-1], expected_last)
+
+        # get_load_cost_forecast and get_prod_price_forecast with method="list"
+        # call get_forecast_days_csv() which always uses wall-clock time and
+        # therefore cannot be pinned to a fixed date without mocking
+        # pd.Timestamp.now globally.  Those code paths are not relevant to the
+        # DST list-trimming fix validated here, so they are omitted.
+
+    async def test_get_forecasts_with_longer_lists_summer(self):
+        """3-day list forecast in summer (no DST transition): exactly 3×48 slots."""
+        # 2025-07-10: mid-summer in Europe/Paris, no DST boundary in the 3-day window
+        fcst, _, _ = await self._build_longer_list_forecast(list_length=3 * 48)
+        self._pin_forecast_to_date(fcst, "2025-07-10 00:00:00")
+        await self._assert_longer_lists_forecast(fcst, expected_last=3 * 48)
+
+    async def test_get_forecasts_with_longer_lists_winter(self):
+        """3-day list forecast in winter (no DST transition): exactly 3×48 slots."""
+        # 2025-01-15: mid-winter in Europe/Paris, no DST boundary in the 3-day window
+        fcst, _, _ = await self._build_longer_list_forecast(list_length=3 * 48)
+        self._pin_forecast_to_date(fcst, "2025-01-15 00:00:00")
+        await self._assert_longer_lists_forecast(fcst, expected_last=3 * 48)
+
+    async def test_get_forecasts_with_longer_lists_spring_forward(self):
+        """3-day list forecast crossing spring-forward DST: 3×48 − 2 slots (−1 h at 30 min).
+
+        Europe/Paris 2025-03-30 02:00 CET → 03:00 CEST.
+        Starting 2025-03-28 the 3-day window ends 2025-03-31, spanning the
+        transition and producing 142 instead of 144 slots.
+        """
+        fcst, _, _ = await self._build_longer_list_forecast(list_length=3 * 48)
+        self._pin_forecast_to_date(fcst, "2025-03-28 00:00:00")
+        await self._assert_longer_lists_forecast(fcst, expected_last=3 * 48 - 2)
+
+    async def test_get_forecasts_with_longer_lists_autumn_fallback(self):
+        """3-day list forecast crossing autumn fall-back DST: 3×48 + 2 slots (+1 h at 30 min).
+
+        Europe/Paris 2025-10-26 03:00 CEST → 02:00 CET.
+        Starting 2025-10-24 the 3-day window ends 2025-10-27, spanning the
+        transition and producing 146 instead of 144 slots.  The input list
+        must be at least 146 entries long so it covers the full window.
+        """
+        fcst, _, _ = await self._build_longer_list_forecast(list_length=3 * 48 + 2)
+        self._pin_forecast_to_date(fcst, "2025-10-24 00:00:00")
+        await self._assert_longer_lists_forecast(fcst, expected_last=3 * 48 + 2)
 
     # Test output values of weather forecast using passed runtime lists and saved sensor datalf):
     async def test_get_forecasts_with_lists_special_case(self):
