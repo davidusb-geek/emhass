@@ -126,6 +126,7 @@ class OptimizationCacheKey:
     compute_curtailment: bool
     optimization_time_step_s: float | None
     delta_forecast_daily_s: float | None
+    num_timesteps: int | None
     costfun: str
     plant_conf_hash: str
     optim_conf_structural_hash: str  # Hash of optim_conf keys that affect problem structure
@@ -158,6 +159,7 @@ class OptimizationCache:
         plant_conf: dict,
         costfun: str,
         retrieve_hass_conf: dict,
+        num_timesteps: int | None = None,
     ) -> OptimizationCacheKey:
         """
         Compute a cache key from configuration that affects optimization structure.
@@ -286,6 +288,7 @@ class OptimizationCache:
             compute_curtailment=plant_conf.get("compute_curtailment", False),
             optimization_time_step_s=to_seconds(retrieve_hass_conf.get("optimization_time_step")),
             delta_forecast_daily_s=to_seconds(optim_conf.get("delta_forecast_daily")),
+            num_timesteps=num_timesteps,
             costfun=costfun,
             plant_conf_hash=config_hash(plant_conf, plant_runtime_keys),
             optim_conf_structural_hash=config_hash(optim_conf, optim_conf_runtime_keys),
@@ -299,6 +302,7 @@ class OptimizationCache:
         costfun: str,
         retrieve_hass_conf: dict,
         logger: logging.Logger,
+        num_timesteps: int | None = None,
     ) -> "Optimization | None":
         """
         Get cached Optimization object if configuration matches.
@@ -306,7 +310,9 @@ class OptimizationCache:
         Returns None if cache is empty or configuration has changed.
         Thread-safe via internal locking.
         """
-        cache_key = cls._compute_cache_key(optim_conf, plant_conf, costfun, retrieve_hass_conf)
+        cache_key = cls._compute_cache_key(
+            optim_conf, plant_conf, costfun, retrieve_hass_conf, num_timesteps
+        )
 
         with cls._lock:
             if cls._instance is not None and cls._cache_key == cache_key:
@@ -349,9 +355,12 @@ class OptimizationCache:
         costfun: str,
         retrieve_hass_conf: dict,
         logger: logging.Logger,
+        num_timesteps: int | None = None,
     ) -> None:
         """Store Optimization object in cache. Thread-safe via internal locking."""
-        cache_key = cls._compute_cache_key(optim_conf, plant_conf, costfun, retrieve_hass_conf)
+        cache_key = cls._compute_cache_key(
+            optim_conf, plant_conf, costfun, retrieve_hass_conf, num_timesteps
+        )
         with cls._lock:
             cls._instance = opt
             cls._cache_key = cache_key
@@ -1023,7 +1032,10 @@ async def set_input_data_dict(
             get_data_from_file=get_data_from_file,
         )
         # Try to get cached Optimization object for warm-starting
-        opt = OptimizationCache.get(optim_conf, plant_conf, costfun, retrieve_hass_conf, logger)
+        _num_ts = len(fcst.forecast_dates)
+        opt = OptimizationCache.get(
+            optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
+        )
         if opt is None:
             # Cache miss - create new Optimization object
             opt = Optimization(
@@ -1035,9 +1047,12 @@ async def set_input_data_dict(
                 costfun,
                 emhass_conf,
                 logger,
+                num_timesteps=_num_ts,
             )
             # Store in cache for future warm-starts
-            OptimizationCache.put(opt, optim_conf, plant_conf, costfun, retrieve_hass_conf, logger)
+            OptimizationCache.put(
+                opt, optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
+            )
         else:
             # Cache hit - update references that may have changed
             # (logger, var names from forecast, and runtime-configurable optim_conf values)
@@ -1472,7 +1487,10 @@ async def naive_mpc_optim(
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
     # The specifics params for the MPC at runtime
-    prediction_horizon = input_data_dict["params"]["passed_data"]["prediction_horizon"]
+    prediction_horizon = min(
+        input_data_dict["params"]["passed_data"]["prediction_horizon"],
+        len(df_input_data_dayahead),
+    )
     soc_init = input_data_dict["params"]["passed_data"]["soc_init"]
     soc_final = input_data_dict["params"]["passed_data"]["soc_final"]
     def_total_hours = input_data_dict["params"]["optim_conf"].get(
