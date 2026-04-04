@@ -41,6 +41,7 @@ class Optimization:
         emhass_conf: dict,
         logger: logging.Logger,
         opt_time_delta: int | None = 24,
+        num_timesteps: int | None = None,
     ) -> None:
         r"""
         Define constructor for Optimization class.
@@ -126,7 +127,11 @@ class Optimization:
 
         # CVXPY Initialization
         # Calculate the fixed number of time steps (N)
-        self.num_timesteps = int(self.time_delta / self.freq)
+        # num_timesteps may be passed explicitly to account for DST-adjusted horizons.
+        if num_timesteps is not None:
+            self.num_timesteps = num_timesteps
+        else:
+            self.num_timesteps = int(self.time_delta / self.freq)
         self.logger.debug(f"CVXPY: Initialization with {self.num_timesteps} time steps.")
 
         # Define Parameters (Data holders)
