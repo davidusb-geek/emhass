@@ -2067,12 +2067,25 @@ def _load_opt_res_latest(
         logger.error("File not found error, run an optimization task first.")
         return None
     opt_res_latest = pd.read_csv(file_path, index_col="timestamp")
-    # Use utc=True to handle mixed timezone offsets during DST transitions
-    # (e.g., CSV may contain both +10:00 AEST and +11:00 AEDT timestamps)
-    opt_res_latest.index = pd.to_datetime(opt_res_latest.index, utc=True).tz_convert(
-        input_data_dict["retrieve_hass_conf"]["time_zone"]
-    )
-    opt_res_latest.index.freq = input_data_dict["retrieve_hass_conf"]["optimization_time_step"]
+    # Handle mixed timezone offsets during DST transitions
+    # (e.g., CSV may contain both +10:00 AEST and +11:00 AEDT timestamps).
+    # Only use utc=True when timezone-aware strings are detected; naive
+    # timestamps are left as-is to preserve existing behaviour.
+    raw_index = opt_res_latest.index
+    has_tz = any("+" in str(v) or "Z" in str(v) for v in raw_index[:5])
+    if has_tz:
+        local_tz = input_data_dict.get("retrieve_hass_conf", {}).get("time_zone")
+        opt_res_latest.index = pd.to_datetime(raw_index, utc=True)
+        if local_tz:
+            opt_res_latest.index = opt_res_latest.index.tz_convert(local_tz)
+    else:
+        opt_res_latest.index = pd.to_datetime(raw_index)
+    try:
+        opt_res_latest.index.freq = input_data_dict["retrieve_hass_conf"]["optimization_time_step"]
+    except ValueError:
+        # Frequency assignment can fail across DST transitions when the
+        # localized index is not perfectly regular; infer instead.
+        opt_res_latest.index.freq = pd.infer_freq(opt_res_latest.index)
     return opt_res_latest
 
 
