@@ -3662,6 +3662,37 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         except Exception as e:
             self.fail(f"Optimization failed with partial NaN data: {e}")
 
+    def test_thermal_battery_soft_constraints(self):
+        """Test thermal_battery with desired_temperatures and overshoot penalty."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+
+        runtimeparams = {
+            "def_load_config": [
+                {
+                    "thermal_battery": {
+                        "start_temperature": 20.0,
+                        "supply_temperature": 35.0,
+                        "volume": 50.0,
+                        "specific_heating_demand": 100.0,
+                        "area": 100.0,
+                        "min_temperatures": [18.0] * 48,
+                        "max_temperatures": [24.0] * 48,
+                        "desired_temperatures": [21.0] * 48,
+                        "overshoot_temperature": 23.0,
+                        "penalty_factor": 10,
+                        "sense": "heat",
+                    }
+                },
+            ]
+        }
+
+        opt_res = self.run_optimization_with_config(runtimeparams["def_load_config"])
+        self.assertIn("P_deferrable0", opt_res.columns)
+        self.assertEqual(opt_res["optim_status"].unique()[0], "Optimal")
+        total_heating = opt_res["P_deferrable0"].sum()
+        self.assertGreater(total_heating, 0, "Heat pump must run")
+
     # Test MIP gap tolerance configuration
     def test_mip_gap_default_value(self):
         """Test that default MIP gap is 0 (exact optimal for backward compatibility)."""

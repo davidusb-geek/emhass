@@ -279,6 +279,7 @@ class Optimization:
                     init_temp = float(hc.get("start_temperature", 20.0) or 20.0)
                     min_temps = hc.get("min_temperatures", [])
                     max_temps = hc.get("max_temperatures", [])
+                    desired_temps = hc.get("desired_temperatures", [])
 
                     self.param_thermal[k] = {
                         "type": "thermal_battery",
@@ -293,6 +294,7 @@ class Optimization:
                             n, name=f"thermal_battery_heating_demand_{k}"
                         ),
                         "heatpump_cops": cp.Parameter(n, name=f"thermal_battery_cops_{k}"),
+                        "desired_temps": cp.Parameter(n, name=f"thermal_battery_desired_temps_{k}"),
                     }
                     # Initialize with default values
                     self.param_thermal[k]["outdoor_temp"].value = np.full(n, 15.0)
@@ -305,6 +307,9 @@ class Optimization:
                     self.param_thermal[k]["thermal_losses"].value = np.zeros(n)
                     self.param_thermal[k]["heating_demand"].value = np.zeros(n)
                     self.param_thermal[k]["heatpump_cops"].value = np.full(n, 3.0)
+                    self.param_thermal[k]["desired_temps"].value = self._pad_temp_array(
+                        desired_temps, n, 22.0
+                    )
 
                     # Thermal inertia support (first-order low-pass filter on heat input)
                     # Always define q_input_start so downstream logic can rely on its presence.
@@ -543,6 +548,13 @@ class Optimization:
                 max_temps = hc.get("max_temperatures", [])
                 params["min_temps"].value = self._pad_temp_array(min_temps, n, 18.0)
                 params["max_temps"].value = self._pad_temp_array(max_temps, n, 26.0)
+
+                # Update desired_temperatures
+                if "desired_temps" in params:
+                    desired_temps_list = hc.get("desired_temperatures", [])
+                    params["desired_temps"].value = self._pad_temp_array(
+                        desired_temps_list, n, 22.0
+                    )
 
                 # Compute derived arrays
                 supply_temperature = hc["supply_temperature"]
@@ -1788,7 +1800,78 @@ class Optimization:
             if k in self.param_thermal
             else heating_demand
         )
-        return predicted_temp_thermal, heating_demand_arr, q_input
+
+        # Soft constraints (overshoot/desired/penalty) - same pattern as thermal_config
+        penalty_expr = 0
+        desired_temps_list = hc.get("desired_temperatures", [])
+        overshoot_temperature = hc.get("overshoot_temperature", None)
+        sense = hc.get("sense", "heat")
+        sense_coeff = 1 if sense == "heat" else -1
+
+        if desired_temps_list and overshoot_temperature is not None:
+            is_overshoot = cp.Variable(
+                required_len, boolean=True, name=f"is_overshoot_tb_{k}"
+            )
+            big_m = 100
+
+            if sense == "heat":
+                constraints.append(
+                    predicted_temp_thermal - overshoot_temperature - (big_m * is_overshoot) <= 0
+                )
+                constraints.append(
+                    predicted_temp_thermal
+                    - overshoot_temperature
+                    + (big_m * (1 - is_overshoot))
+                    >= 0
+                )
+            else:
+                constraints.append(
+                    predicted_temp_thermal - overshoot_temperature - (-big_m * is_overshoot) >= 0
+                )
+                constraints.append(
+                    predicted_temp_thermal
+                    - overshoot_temperature
+                    + (-big_m * (1 - is_overshoot))
+                    <= 0
+                )
+
+            # Prevent heating when in overshoot — use p_def_bin2 if available, else bound power directly
+            if self.optim_conf["treat_deferrable_load_as_semi_cont"][k]:
+                p_def_bin2 = self.vars["p_def_bin2"][k]
+                constraints.append(is_overshoot[1:] + p_def_bin2[:-1] <= 1)
+            else:
+                # For non-semi-cont loads, suppress power directly when in overshoot
+                nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
+                if isinstance(nominal_power, list):
+                    nominal_power = max(nominal_power)
+                constraints.append(
+                    p_deferrable <= nominal_power * (1 - is_overshoot)
+                )
+
+            # Penalty calculation
+            penalty_factor = hc.get("penalty_factor", 10)
+            valid_indices = [
+                i
+                for i, val in enumerate(desired_temps_list)
+                if val is not None and i < required_len and i > 0
+            ]
+            if valid_indices:
+                if k in self.param_thermal and "desired_temps" in self.param_thermal[k]:
+                    desired_temps_param = self.param_thermal[k]["desired_temps"]
+                    deviation = (
+                        predicted_temp_thermal[valid_indices]
+                        - desired_temps_param[valid_indices]
+                    ) * sense_coeff
+                else:
+                    des_temps = np.array([desired_temps_list[i] for i in valid_indices])
+                    deviation = (
+                        predicted_temp_thermal[valid_indices] - des_temps
+                    ) * sense_coeff
+
+                penalty_expr = -cp.pos(-deviation * penalty_factor)
+
+        penalty_term = cp.sum(penalty_expr) if not isinstance(penalty_expr, int) else None
+        return predicted_temp_thermal, heating_demand_arr, q_input, penalty_term
 
     def _add_deferrable_load_constraints(
         self,
@@ -1891,13 +1974,15 @@ class Optimization:
                 and len(self.optim_conf["def_load_config"]) > k
                 and "thermal_battery" in self.optim_conf["def_load_config"][k]
             ):
-                pred_temp, heat_demand, q_input_var = self._add_thermal_battery_constraints(
-                    constraints, k, data_opt, p_load
+                pred_temp, heat_demand, q_input_var, penalty_term = (
+                    self._add_thermal_battery_constraints(constraints, k, data_opt, p_load)
                 )
                 predicted_temps[k] = pred_temp
                 heating_demands[k] = heat_demand
                 if q_input_var is not None:
                     q_inputs[k] = q_input_var
+                if penalty_term is not None:
+                    penalty_terms_total += penalty_term
 
             # Detect special load types that have their own energy/operation constraints
             is_thermal_load = (
