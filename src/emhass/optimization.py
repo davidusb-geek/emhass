@@ -1512,7 +1512,7 @@ class Optimization:
 
             # Check for hot water tank mode (draw_off_demand present)
             draw_off_profile = hc.get("draw_off_demand", None)
-            if draw_off_profile is not None:
+            if draw_off_profile is not None and len(draw_off_profile) > 0:
                 # Hot water tank: use constant standby loss + tiled draw-off profile
                 # No outdoor-temp-dependent losses, no building physics
                 draw_off_arr = np.array(draw_off_profile, dtype=float)
@@ -1627,7 +1627,7 @@ class Optimization:
 
             # Check for hot water tank mode (draw_off_demand present)
             draw_off_profile = hc.get("draw_off_demand", None)
-            if draw_off_profile is not None:
+            if draw_off_profile is not None and len(draw_off_profile) > 0:
                 draw_off_arr = np.array(draw_off_profile, dtype=float)
                 if len(draw_off_arr) < required_len:
                     repeats = int(np.ceil(required_len / len(draw_off_arr)))
