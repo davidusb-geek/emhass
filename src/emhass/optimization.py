@@ -1873,6 +1873,79 @@ class Optimization:
         penalty_term = cp.sum(penalty_expr) if not isinstance(penalty_expr, int) else None
         return predicted_temp_thermal, heating_demand_arr, q_input, penalty_term
 
+    def _add_heatpump_group_constraints(self, constraints):
+        """Add mutual exclusivity constraints for loads in the same heatpump_group.
+
+        Discovers groups from def_load_config, then for each group adds:
+            sum(activity_binary[k][t] for k in group) <= 1,  for all t
+
+        For semi-continuous loads, reuses p_def_bin2[k].
+        For non-semi-continuous loads, creates a new hp_active[k] binary variable
+        with: p_deferrable[k][t] <= nominal_power[k] * hp_active[k][t].
+        """
+        def_load_config = self.optim_conf.get("def_load_config", []) or []
+        n = self.num_timesteps
+
+        # Discover groups: {group_id: [load_indices]}
+        groups = {}
+        for k, cfg in enumerate(def_load_config):
+            if not cfg:
+                continue
+            # Check both thermal_config and thermal_battery for heatpump_group
+            for config_key in ("thermal_config", "thermal_battery"):
+                if config_key in cfg:
+                    group_id = cfg[config_key].get("heatpump_group", None)
+                    if group_id is not None:
+                        groups.setdefault(group_id, []).append(k)
+                    break
+
+        if not groups:
+            return
+
+        # Initialize hp_active storage
+        if "hp_active" not in self.vars:
+            self.vars["hp_active"] = {}
+
+        for group_id, load_indices in groups.items():
+            if len(load_indices) < 2:
+                self.logger.debug(
+                    "Heat pump group '%s': only %d load(s), skipping mutual exclusivity",
+                    group_id,
+                    len(load_indices),
+                )
+                continue
+
+            activity_binaries = []
+            for k in load_indices:
+                is_semi_cont = self.optim_conf["treat_deferrable_load_as_semi_cont"][k]
+                if is_semi_cont:
+                    # Reuse existing p_def_bin2
+                    activity_binaries.append(self.vars["p_def_bin2"][k])
+                else:
+                    # Create new hp_active binary variable
+                    hp_active = cp.Variable(n, boolean=True, name=f"hp_active_{k}")
+                    self.vars["hp_active"][k] = hp_active
+
+                    # Link to power: p_deferrable[k] <= nominal_power * hp_active
+                    nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
+                    if isinstance(nominal_power, list):
+                        nominal_power = max(nominal_power)
+                    constraints.append(
+                        self.vars["p_deferrable"][k] <= nominal_power * hp_active
+                    )
+
+                    activity_binaries.append(hp_active)
+
+            # Mutual exclusivity: at most one load active per timestep
+            constraints.append(cp.sum(activity_binaries, axis=0) <= 1)
+
+            self.logger.info(
+                "Heat pump group '%s': loads %s — mutual exclusivity constraint added (%d timesteps)",
+                group_id,
+                load_indices,
+                n,
+            )
+
     def _add_deferrable_load_constraints(
         self,
         constraints,
@@ -2174,6 +2247,9 @@ class Optimization:
                 # Just bound by nominal power. No binary variables involved.
                 constraints.append(p_deferrable[k] >= 0)
                 constraints.append(p_deferrable[k] <= M)
+
+        # Add heat pump group mutual exclusivity constraints
+        self._add_heatpump_group_constraints(constraints)
 
         return predicted_temps, heating_demands, penalty_terms_total, q_inputs
 
