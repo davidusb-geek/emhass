@@ -2647,6 +2647,34 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         expected = float(opt.param_thermal[0]["q_input_var"].value[1])
         self.assertAlmostEqual(new_start, expected, places=4)
 
+    def test_thermal_battery_water_physics(self):
+        """Test thermal battery with water-specific density and heat capacity."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [15.0] * 48
+
+        runtimeparams = {
+            "def_load_config": [
+                {
+                    "thermal_battery": {
+                        "start_temperature": 50.0,
+                        "supply_temperature": 45.0,
+                        "volume": 0.2,  # 200 liters = 0.2 m^3
+                        "density": 997,  # water kg/m^3
+                        "heat_capacity": 4.184,  # water kJ/(kg*degC)
+                        "thermal_loss": 0.035,  # kW standby loss
+                        "specific_heating_demand": 0.0,
+                        "area": 1.0,
+                        "min_temperatures": [40.0] * 48,
+                        "max_temperatures": [60.0] * 48,
+                    }
+                },
+            ]
+        }
+
+        opt_res = self.run_optimization_with_config(runtimeparams["def_load_config"])
+        self.assertIn("P_deferrable0", opt_res.columns)
+        self.assertEqual(opt_res["optim_status"].unique()[0], "Optimal")
+
     def test_inverter_stress_cost_discharge_spread(self):
         """Test that inverter stress cost encourages spreading discharge over time."""
         # Setup plant configuration for hybrid inverter with battery

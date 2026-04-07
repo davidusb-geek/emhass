@@ -1470,10 +1470,10 @@ class Optimization:
         if not max_temperatures_list:
             raise ValueError(f"Load {k}: thermal_battery requires non-empty 'max_temperatures'")
 
-        p_concr = 2400
-        c_concr = 0.88
-        loss = 0.045
-        conversion = 3600 / (p_concr * c_concr * volume)
+        density = hc.get("density", 2400)  # kg/m^3 (default: concrete)
+        heat_capacity = hc.get("heat_capacity", 0.88)  # kJ/(kg*degC) (default: concrete)
+        base_loss = hc.get("thermal_loss", 0.045)  # kW (default: 0.045)
+        conversion = 3600 / (density * heat_capacity * volume)
 
         # Use parameterized values if available (enables warm-start on cache hit)
         if k in self.param_thermal:
@@ -1501,7 +1501,7 @@ class Optimization:
             losses = utils.calculate_thermal_loss_signed(
                 outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
                 indoor_temperature=start_temp_float,
-                base_loss=loss,
+                base_loss=base_loss,
             )
             params["thermal_losses"].value = np.array(losses[:required_len])
 
@@ -1601,7 +1601,7 @@ class Optimization:
                 utils.calculate_thermal_loss_signed(
                     outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
                     indoor_temperature=start_temp_float,
-                    base_loss=loss,
+                    base_loss=base_loss,
                 )[:required_len]
             )
 
