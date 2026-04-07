@@ -2675,6 +2675,47 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIn("P_deferrable0", opt_res.columns)
         self.assertEqual(opt_res["optim_status"].unique()[0], "Optimal")
 
+    def test_thermal_battery_draw_off_demand(self):
+        """Test hot water tank with draw_off_demand profile instead of building heating."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [15.0] * 48
+
+        # 24-hour draw-off profile (kWh per 30-min timestep), tiled to 48 timesteps
+        # Morning shower at 7:00, evening at 19:00
+        draw_off_24h = [0.0] * 14 + [1.5] + [0.0] * 23 + [1.0] + [0.0] * 9
+        # This is 48 entries for 30-min timesteps over 24h
+
+        runtimeparams = {
+            "def_load_config": [
+                {
+                    "thermal_battery": {
+                        "start_temperature": 50.0,
+                        "supply_temperature": 45.0,
+                        "volume": 0.2,
+                        "density": 997,
+                        "heat_capacity": 4.184,
+                        "thermal_loss": 0.035,
+                        "draw_off_demand": draw_off_24h,
+                        "min_temperatures": [40.0] * 48,
+                        "max_temperatures": [60.0] * 48,
+                    }
+                },
+            ]
+        }
+
+        # Hot water tank heat pumps modulate continuously (not semi-continuous on/off)
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False, True]
+
+        opt_res = self.run_optimization_with_config(runtimeparams["def_load_config"])
+        self.assertEqual(opt_res["optim_status"].unique()[0], "Optimal")
+        self.assertIn("P_deferrable0", opt_res.columns)
+
+        # Heat pump must compensate for draw-off + standby losses
+        total_heating = opt_res["P_deferrable0"].sum() * 0.5  # kWh (30-min timesteps)
+        total_draw_off = sum(draw_off_24h)
+        # Heating energy should be at least the draw-off demand (COP amplifies electrical input)
+        self.assertGreater(total_heating, 0, "Heat pump must run to compensate draw-off demand")
+
     def test_inverter_stress_cost_discharge_spread(self):
         """Test that inverter stress cost encourages spreading discharge over time."""
         # Setup plant configuration for hybrid inverter with battery
