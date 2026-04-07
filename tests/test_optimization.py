@@ -2713,7 +2713,6 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
         # Heat pump must compensate for draw-off + standby losses
         total_heating = opt_res["P_deferrable0"].sum() * 0.5  # kWh (30-min timesteps)
-        total_draw_off = sum(draw_off_24h)
         # Heating energy should be at least the draw-off demand (COP amplifies electrical input)
         self.assertGreater(total_heating, 0, "Heat pump must run to compensate draw-off demand")
 

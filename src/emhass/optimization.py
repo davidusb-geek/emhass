@@ -1572,9 +1572,7 @@ class Optimization:
 
                     gains_info = []
                     if solar_irradiance is not None:
-                        gains_info.append(
-                            f"solar (window_area={window_area:.1f}, shgc={shgc:.2f})"
-                        )
+                        gains_info.append(f"solar (window_area={window_area:.1f}, shgc={shgc:.2f})")
                     if internal_gains_factor > 0:
                         gains_info.append(f"internal (factor={internal_gains_factor:.2f})")
                     gains_str = " with " + " and ".join(gains_info) if gains_info else ""
@@ -1809,9 +1807,7 @@ class Optimization:
         sense_coeff = 1 if sense == "heat" else -1
 
         if desired_temps_list and overshoot_temperature is not None:
-            is_overshoot = cp.Variable(
-                required_len, boolean=True, name=f"is_overshoot_tb_{k}"
-            )
+            is_overshoot = cp.Variable(required_len, boolean=True, name=f"is_overshoot_tb_{k}")
             big_m = 100
 
             if sense == "heat":
@@ -1819,9 +1815,7 @@ class Optimization:
                     predicted_temp_thermal - overshoot_temperature - (big_m * is_overshoot) <= 0
                 )
                 constraints.append(
-                    predicted_temp_thermal
-                    - overshoot_temperature
-                    + (big_m * (1 - is_overshoot))
+                    predicted_temp_thermal - overshoot_temperature + (big_m * (1 - is_overshoot))
                     >= 0
                 )
             else:
@@ -1829,9 +1823,7 @@ class Optimization:
                     predicted_temp_thermal - overshoot_temperature - (-big_m * is_overshoot) >= 0
                 )
                 constraints.append(
-                    predicted_temp_thermal
-                    - overshoot_temperature
-                    + (-big_m * (1 - is_overshoot))
+                    predicted_temp_thermal - overshoot_temperature + (-big_m * (1 - is_overshoot))
                     <= 0
                 )
 
@@ -1844,9 +1836,7 @@ class Optimization:
                 nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
                 if isinstance(nominal_power, list):
                     nominal_power = max(nominal_power)
-                constraints.append(
-                    p_deferrable <= nominal_power * (1 - is_overshoot)
-                )
+                constraints.append(p_deferrable <= nominal_power * (1 - is_overshoot))
 
             # Penalty calculation
             penalty_factor = hc.get("penalty_factor", 10)
@@ -1859,14 +1849,11 @@ class Optimization:
                 if k in self.param_thermal and "desired_temps" in self.param_thermal[k]:
                     desired_temps_param = self.param_thermal[k]["desired_temps"]
                     deviation = (
-                        predicted_temp_thermal[valid_indices]
-                        - desired_temps_param[valid_indices]
+                        predicted_temp_thermal[valid_indices] - desired_temps_param[valid_indices]
                     ) * sense_coeff
                 else:
                     des_temps = np.array([desired_temps_list[i] for i in valid_indices])
-                    deviation = (
-                        predicted_temp_thermal[valid_indices] - des_temps
-                    ) * sense_coeff
+                    deviation = (predicted_temp_thermal[valid_indices] - des_temps) * sense_coeff
 
                 penalty_expr = -cp.pos(-deviation * penalty_factor)
 
@@ -1930,9 +1917,7 @@ class Optimization:
                     nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
                     if isinstance(nominal_power, list):
                         nominal_power = max(nominal_power)
-                    constraints.append(
-                        self.vars["p_deferrable"][k] <= nominal_power * hp_active
-                    )
+                    constraints.append(self.vars["p_deferrable"][k] <= nominal_power * hp_active)
 
                     activity_binaries.append(hp_active)
 
