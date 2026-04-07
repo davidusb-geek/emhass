@@ -293,6 +293,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         """
         self.optim_conf["def_load_config"] = def_load_config
         opt = self.create_optimization()
+        self.opt = opt  # Store so callers can inspect optim_status etc.
 
         # Run optimization
         unit_load_cost = self.df_input_data_dayahead[opt.var_load_cost].values
@@ -4238,6 +4239,68 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                     },
                 ],
                 number_of_deferrable_loads=3,
+            )
+
+    def test_heatpump_group_mutual_exclusivity(self):
+        """Test that loads in the same heatpump_group cannot be active simultaneously."""
+        self.optim_conf["number_of_deferrable_loads"] = 2
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [1000, 2000]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0, 0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [True, True]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False, False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0, 0]
+        self.optim_conf["set_deferrable_max_startups"] = [0, 0]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [500, 1500]
+        self.optim_conf["set_deferrable_load_as_timeseries"] = [False, False]
+
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
+            10.0 + 5.0 * np.sin(i * np.pi / 12) for i in range(48)
+        ]
+
+        runtimeparams = {
+            "def_load_config": [
+                {
+                    "thermal_battery": {
+                        "heatpump_group": "hp1",
+                        "start_temperature": 20.0,
+                        "supply_temperature": 35.0,
+                        "volume": 50.0,
+                        "specific_heating_demand": 100.0,
+                        "area": 100.0,
+                        "min_temperatures": [18.0] * 48,
+                        "max_temperatures": [22.0] * 48,
+                    }
+                },
+                {
+                    "thermal_battery": {
+                        "heatpump_group": "hp1",
+                        "start_temperature": 50.0,
+                        "supply_temperature": 45.0,
+                        "volume": 0.2,
+                        "density": 997,
+                        "heat_capacity": 4.184,
+                        "thermal_loss": 0.035,
+                        "draw_off_demand": [0.0] * 14 + [1.5] + [0.0] * 23 + [1.0] + [0.0] * 9,
+                        "min_temperatures": [40.0] * 48,
+                        "max_temperatures": [60.0] * 48,
+                    }
+                },
+            ]
+        }
+
+        opt_res = self.run_optimization_with_config(runtimeparams["def_load_config"])
+        self.assertEqual(self.opt.optim_status, "Optimal")
+
+        # Verify mutual exclusivity: at no timestep should both loads be active
+        p0 = opt_res["P_deferrable0"].values
+        p1 = opt_res["P_deferrable1"].values
+        for t in range(len(p0)):
+            both_active = (p0[t] > 1.0) and (p1[t] > 1.0)
+            self.assertFalse(
+                both_active,
+                f"Timestep {t}: both loads active (P0={p0[t]:.1f}W, P1={p1[t]:.1f}W) "
+                f"— violates heatpump_group mutual exclusivity",
             )
 
 
