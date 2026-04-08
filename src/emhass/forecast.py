@@ -184,13 +184,13 @@ class Forecast:
                 _delta_days,
             )
         if self.params["passed_data"].get("weather_forecast_cache", False):
-            self.end_forecast = (
-                self.start_forecast + pd.DateOffset(days=_delta_days * 2)
-            ).replace(microsecond=0)
+            self.end_forecast = (self.start_forecast + pd.DateOffset(days=_delta_days * 2)).replace(
+                microsecond=0
+            )
         else:
-            self.end_forecast = (
-                self.start_forecast + pd.DateOffset(days=_delta_days)
-            ).replace(microsecond=0)
+            self.end_forecast = (self.start_forecast + pd.DateOffset(days=_delta_days)).replace(
+                microsecond=0
+            )
         self.forecast_dates = (
             pd.date_range(
                 start=self.start_forecast,
