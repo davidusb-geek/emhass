@@ -20,6 +20,8 @@ from emhass.command_line import (
     OptimizationCache,
     OptimizationCacheKey,
     SetupContext,
+    _apply_df_freq_horizon,
+    _load_opt_res_latest,
     _prepare_dayahead_optim,
     _publish_and_update_freq,
     adjust_pv_forecast,
@@ -2731,6 +2733,160 @@ class TestOptimizationCache(unittest.TestCase):
         )
         self.assertIsNotNone(result)
         self.assertIs(result, mock_opt)
+
+    def test_cache_miss_when_num_timesteps_changes(self):
+        """Test that changing num_timesteps causes a cache miss.
+
+        When the forecast crosses a DST boundary the number of timesteps in the
+        optimisation window can differ from a normal day (e.g. 668 vs 672 for a
+        7-day 15-min forecast crossing spring-forward).  Passing a different
+        num_timesteps must invalidate the cached problem so the optimizer is
+        rebuilt with the correct horizon.
+        """
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+            num_timesteps=672,  # normal (non-DST) horizon
+        )
+
+        # DST spring-forward shrinks the window by one hour (4 slots at 15 min)
+        result = OptimizationCache.get(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+            num_timesteps=668,  # DST-adjusted horizon
+        )
+
+        self.assertIsNone(result)
+
+    def test_cache_hit_same_num_timesteps(self):
+        """Test that the same num_timesteps still produces a cache hit."""
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+            num_timesteps=668,
+        )
+
+        result = OptimizationCache.get(
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+            num_timesteps=668,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertIs(result, mock_opt)
+
+
+class TestDstFixes(unittest.TestCase):
+    """Unit tests for DST-boundary fixes in _apply_df_freq_horizon and _load_opt_res_latest."""
+
+    def setUp(self):
+        self.retrieve_hass_conf = {
+            "optimization_time_step": pd.Timedelta(minutes=15),
+            "time_zone": "Europe/Paris",
+        }
+
+    def _make_df(self, n: int) -> pd.DataFrame:
+        """Build a simple DataFrame with a 15-min UTC index of length n."""
+        idx = pd.date_range("2025-03-30 00:00", periods=n, freq="15min", tz="UTC")
+        return pd.DataFrame({"P_pv": range(n), "P_load": range(n)}, index=idx)
+
+    def test_apply_df_freq_horizon_clamps_to_df_length(self):
+        """_apply_df_freq_horizon must not raise IndexError when prediction_horizon > len(df).
+
+        Root cause: across a spring-forward DST boundary a 7-day 15-min forecast
+        produces 668 rows (not 672).  The MPC caller may still pass horizon=672
+        (the non-DST default).  The fix clamps the slice to min(horizon, len(df)).
+        """
+        df = self._make_df(668)  # DST-shortened horizon
+
+        # Must not raise an IndexError
+        result = _apply_df_freq_horizon(df, self.retrieve_hass_conf, prediction_horizon=672)
+
+        self.assertEqual(len(result), 668)
+        self.assertEqual(result.index[0], df.index[0])
+        self.assertEqual(result.index[-1], df.index[-1])
+
+    def test_apply_df_freq_horizon_normal_day(self):
+        """On a normal day _apply_df_freq_horizon slices exactly to the horizon."""
+        df = self._make_df(672)
+
+        result = _apply_df_freq_horizon(df, self.retrieve_hass_conf, prediction_horizon=672)
+
+        self.assertEqual(len(result), 672)
+
+    def test_apply_df_freq_horizon_none_horizon_returns_full_df(self):
+        """When prediction_horizon is None the full DataFrame is returned."""
+        df = self._make_df(668)
+
+        result = _apply_df_freq_horizon(df, self.retrieve_hass_conf, prediction_horizon=None)
+
+        self.assertEqual(len(result), 668)
+
+    def test_load_opt_res_latest_handles_mixed_tz_csv(self):
+        """_load_opt_res_latest must parse a CSV whose index has mixed UTC offsets.
+
+        Across a spring-forward DST transition timestamps written with +01:00 and
+        +02:00 offsets appear in the same CSV.  The old code raised
+        'ValueError: Mixed timezones detected'.  The fix uses
+        pd.to_datetime(..., utc=True).tz_convert(tz) which handles mixed offsets.
+        """
+        import pytz
+
+        paris_tz = pytz.timezone("Europe/Paris")
+
+        # Simulate the production case: 8 timestamps that are exactly 15 min apart
+        # in UTC, straddling the spring-forward DST boundary (2025-03-30 02:00 Paris
+        # = 01:00 UTC).  After tz_convert(Paris) the first 4 show +01:00 and the
+        # last 4 show +02:00, giving a mixed-offset index when serialised to CSV.
+        idx_utc = pd.date_range("2025-03-30 00:00", periods=8, freq="15min", tz="UTC")
+        idx_paris = idx_utc.tz_convert("Europe/Paris")
+        # Verify the test assumption: both offsets must be present
+        assert "+01:00" in str(idx_paris[0]) and "+02:00" in str(idx_paris[-1])
+
+        df = pd.DataFrame({"P_pv": range(8), "P_load": range(8)}, index=idx_paris)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = pathlib.Path(tmpdir)
+            # _load_opt_res_latest(..., save_data_to_file=False) looks for default_csv_filename
+            csv_path = tmp_path / "opt_res_latest.csv"
+            df.index.name = "timestamp"
+            df.to_csv(csv_path)
+
+            # Build a minimal input_data_dict
+            input_data_dict = {
+                "emhass_conf": {"data_path": tmp_path},
+                "retrieve_hass_conf": {
+                    "time_zone": paris_tz,
+                    "optimization_time_step": pd.Timedelta(minutes=15),
+                },
+            }
+
+            result = _load_opt_res_latest(input_data_dict, logger, save_data_to_file=False)
+
+        # If _load_opt_res_latest returned None it means the mixed-TZ ValueError was
+        # raised (or file not found).  The fix makes it return a valid DataFrame.
+        self.assertIsNotNone(result, "_load_opt_res_latest returned None; mixed-TZ parse failed")
+        self.assertEqual(len(result), 8)
+        # After tz_convert all timestamps must be in Europe/Paris.
+        # pytz returns different DstTzInfo objects for CET/CEST, so compare by zone name.
+        zones = {getattr(ts.tzinfo, "zone", str(ts.tzinfo)) for ts in result.index}
+        self.assertEqual(zones, {"Europe/Paris"}, f"Unexpected timezone(s) in result: {zones}")
 
 
 class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
