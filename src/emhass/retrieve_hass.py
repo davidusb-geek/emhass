@@ -146,7 +146,8 @@ class RetrieveHass:
         """
         async with self._session_lock:
             if self._session is None or self._session.closed:
-                self._session = aiohttp.ClientSession()
+                connector = aiohttp.TCPConnector(force_close=True)
+                self._session = aiohttp.ClientSession(connector=connector)
             return self._session
 
     async def close(self) -> None:
@@ -1297,6 +1298,9 @@ class RetrieveHass:
                     data=orjson.dumps(data).decode("utf-8"),
                     ssl=self.ssl_verify,
                 ) as response:
+                    # Read response body to explicitly release connection immediately
+                    await response.read()
+
                     # Store response data since we need to access it after the context manager
                     response_ok = response.ok
                     response_status_code = response.status
