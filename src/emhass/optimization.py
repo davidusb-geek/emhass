@@ -2389,16 +2389,17 @@ class Optimization:
 
         # Update def_current_state parameters for deferrable loads
         self._update_def_current_state_params(num_deferrable_loads)
+        # Initialize stress config variables (needed by retry path even when
+        # self.prob is cached from a previous call, see #770)
+        inv_stress_conf = None
+        batt_stress_conf = None
+
         # Build Problem (Lazy Construction)
         if self.prob is None:
             self.logger.info("Building CVXPY problem structure...")
 
             # Start with bound constraints
             constraints = self.constraints[:]
-
-            # Setup Stress Costs
-            inv_stress_conf = None
-            batt_stress_conf = None
 
             if self.optim_conf["set_use_battery"]:
                 p_batt_max = max(
