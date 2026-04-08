@@ -720,8 +720,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 )
         else:
             raise Exception(
-                "config_defaults.json does not exist in path: "
-                + str(emhass_conf["defaults_path"])
+                "config_defaults.json does not exist in path: " + str(emhass_conf["defaults_path"])
             )
         runtimeparams = {
             "pv_power_forecast": [i + 1 for i in range(list_length)],
@@ -768,9 +767,11 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         within the window are handled correctly.
         """
         delta_days = fcst.optim_conf["delta_forecast_daily"].days
-        start_ts = pd.Timestamp(start_naive_str).tz_localize(
-            fcst.time_zone, nonexistent="shift_forward"
-        ).floor(fcst.freq)
+        start_ts = (
+            pd.Timestamp(start_naive_str)
+            .tz_localize(fcst.time_zone, nonexistent="shift_forward")
+            .floor(fcst.freq)
+        )
         end_ts = (start_ts + pd.DateOffset(days=delta_days)).replace(microsecond=0)
         dates = (
             pd.date_range(
@@ -1739,9 +1740,7 @@ class TestDstForecastDates(unittest.IsolatedAsyncioTestCase):
         )
 
         fcst_normal.start_forecast = normal_start_ts
-        fcst_normal.end_forecast = (normal_start_ts + pd.DateOffset(days=7)).replace(
-            microsecond=0
-        )
+        fcst_normal.end_forecast = (normal_start_ts + pd.DateOffset(days=7)).replace(microsecond=0)
         fcst_normal.forecast_dates = (
             pd.date_range(
                 start=fcst_normal.start_forecast,
