@@ -1485,6 +1485,11 @@ class Optimization:
         density = hc.get("density", 2400)  # kg/m^3 (default: concrete)
         heat_capacity = hc.get("heat_capacity", 0.88)  # kJ/(kg*degC) (default: concrete)
         base_loss = hc.get("thermal_loss", 0.045)  # kW (default: 0.045)
+        if density <= 0 or heat_capacity <= 0 or volume <= 0:
+            raise ValueError(
+                f"Load {k}: thermal_battery requires positive density ({density}), "
+                f"heat_capacity ({heat_capacity}), and volume ({volume})"
+            )
         conversion = 3600 / (density * heat_capacity * volume)
 
         # Use parameterized values if available (enables warm-start on cache hit)
@@ -1511,6 +1516,10 @@ class Optimization:
             params["heatpump_cops"].value = np.array(cops[:required_len])
 
             # Check for hot water tank mode (draw_off_demand present)
+            # draw_off_demand units: kWh per timestep (same as heating_demand from
+            # calculate_heating_demand / calculate_heating_demand_physics). This is
+            # consistent with the thermal dynamics equation where all energy terms are
+            # in kWh: conversion * (COP * P_kW * dt_hours - demand_kWh - loss_kWh)
             draw_off_profile = hc.get("draw_off_demand", None)
             if draw_off_profile is not None and len(draw_off_profile) > 0:
                 # Hot water tank: use constant standby loss + tiled draw-off profile
@@ -1626,6 +1635,7 @@ class Optimization:
             )
 
             # Check for hot water tank mode (draw_off_demand present)
+            # draw_off_demand units: kWh per timestep (see parameterized path comment)
             draw_off_profile = hc.get("draw_off_demand", None)
             if draw_off_profile is not None and len(draw_off_profile) > 0:
                 draw_off_arr = np.array(draw_off_profile, dtype=float)
@@ -1922,7 +1932,9 @@ class Optimization:
                     activity_binaries.append(hp_active)
 
             # Mutual exclusivity: at most one load active per timestep
-            constraints.append(cp.sum(activity_binaries, axis=0) <= 1)
+            # Use vstack to ensure consistent (len(group), n) shape before summing,
+            # since p_def_bin2 and hp_active may have subtly different shapes.
+            constraints.append(cp.sum(cp.vstack(activity_binaries), axis=0) <= 1)
 
             self.logger.info(
                 "Heat pump group '%s': loads %s — mutual exclusivity constraint added (%d timesteps)",
