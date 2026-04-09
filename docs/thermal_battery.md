@@ -146,9 +146,96 @@ Optional HDD parameters:
     * Central Europe: 2500-3500
     * Southern Europe: 1500-2500
 
+### Physical constants
+
+By default, the thermal battery assumes concrete as the storage medium. You can override the physical constants to model other media such as water (for hot water tanks).
+
+* **density**: Density of the thermal storage medium in kg/m³ (default: 2400).
+    * Concrete: 2400
+    * Water: 997
+    * Example: `997` for a hot water tank
+
+* **heat_capacity**: Specific heat capacity of the thermal storage medium in kJ/(kg·°C) (default: 0.88).
+    * Concrete: 0.88
+    * Water: 4.184
+    * Example: `4.184` for a hot water tank
+
+* **thermal_loss**: Constant standby heat loss rate from storage to environment in kW (default: 0.045).
+    * For underfloor heating in concrete slab: 0.045
+    * For a well-insulated hot water tank: 0.02-0.04
+    * Example: `0.035`
+
+All three values must be positive. Invalid values raise an error.
+
+### Hot water tank mode (draw-off demand)
+
+When `draw_off_demand` is present, the thermal battery switches to hot water tank mode. In this mode, the building heating demand calculation is skipped entirely. Instead, the tank has:
+
+- A **constant standby loss** (`thermal_loss`) — heat escaping the tank to the surrounding room.
+- A **draw-off demand profile** — energy withdrawn by hot water usage (showers, taps, etc.).
+
+This is appropriate because a hot water tank sits in a room at roughly constant temperature — there are no outdoor-temperature-dependent losses, no solar gains, and no internal gains.
+
+* **draw_off_demand**: Daily profile of hot water draw-off energy in kWh per timestep (default: none).
+    * A list of energy values representing one day of hot water consumption
+    * The profile is automatically tiled (repeated) to fill the optimization horizon
+    * Each value represents the energy withdrawn during that timestep
+    * Example for 30-minute timesteps: `[0,0,0,0,0,0, 0,0,0,0,0,0, 0.5,0.3,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0, 0.8,0.5,0.3,0,0,0, 0,0,0,0,0,0]`
+      (morning shower around 06:00, evening shower around 18:00)
+
+When `draw_off_demand` is absent (or empty), the existing behavior applies — building heating demand with outdoor-temperature-dependent losses. This preserves backward compatibility for floor heating use cases.
+
+The temperature dynamics in hot water tank mode:
+
+```
+conversion = 3600 / (density * heat_capacity * volume)
+
+predicted_temp[t+1] = predicted_temp[t]
+    + conversion * (cop[t] * p_deferrable[t] / 1000 * dt - draw_off_demand[t] - thermal_loss)
+```
+
+### Soft constraints (desired temperature / overshoot)
+
+By default, `min_temperatures` and `max_temperatures` are enforced as hard constraints — the optimizer must keep the storage temperature strictly within bounds. You can optionally add soft constraints using desired temperatures and overshoot detection, following the same pattern as `thermal_config`.
+
+When configured, the optimizer penalizes deviations from the desired temperature and suppresses heating when the storage temperature overshoots:
+
+* **desired_temperatures**: Target temperatures in °C per timestep (default: none).
+    * When present, enables soft comfort constraints
+    * The penalty for deviating from these targets is added to the objective
+    * Example: `[50.0] * 48` for constant 50°C target in a hot water tank
+
+* **overshoot_temperature**: Temperature threshold above which heating is suppressed in °C (default: none).
+    * When the predicted temperature exceeds this value, the heat pump is forced off
+    * Prevents wasteful overheating
+    * Example: `55.0`
+
+* **penalty_factor**: Weight of the comfort deviation penalty in the objective (default: 10).
+    * Higher values make the optimizer try harder to hit desired temperatures
+    * Lower values give the optimizer more flexibility to shift heating for cost savings
+    * Example: `10`
+
+* **sense**: Direction of thermal control (default: `"heat"`).
+    * `"heat"`: Penalizes temperatures below desired (standard heating)
+    * `"cool"`: Penalizes temperatures above desired (cooling mode)
+    * Example: `"heat"`
+
+### Heat pump group coupling
+
+If a single heat pump serves multiple thermal loads (e.g., underfloor heating AND a hot water tank), you can declare them as a group. The optimizer then ensures at most one load is active per timestep — matching the real-world constraint where a valve switches the heat pump between circuits.
+
+* **heatpump_group**: Group identifier string (default: none).
+    * All loads sharing the same group ID get mutual exclusivity constraints
+    * Can be any string — loads are grouped by matching values
+    * Works across `thermal_config` and `thermal_battery` load types
+    * Works with both semi-continuous and non-semi-continuous loads
+    * Example: `"hp1"`
+
+For semi-continuous loads (`treat_deferrable_load_as_semi_cont: true`), the existing on/off binary (`p_def_bin2`) is reused. For non-semi-continuous loads (e.g., a hot water tank that always runs at fixed power), a new binary variable `hp_active` is created and linked to the power variable.
+
 ### Advanced parameters
 
-* **thermal_loss_coefficient**: Base thermal loss coefficient from storage to environment in kW (default: 0.045).
+* **thermal_loss**: Base thermal loss coefficient from storage to environment in kW (default: 0.045).
     * Only adjust this if you have measured data showing different loss rates
     * Example: `0.045`
 
@@ -329,6 +416,168 @@ In this case:
 - Load 1: Thermal battery with heat pump
 - Load 2: Another regular deferrable load (e.g., washing machine)
 
+### Example 5: Hot water tank
+
+A 200-liter hot water tank heated by a heat pump, with a daily shower profile.
+
+```python
+{
+  "def_load_config": [
+    {
+      "thermal_battery": {
+        "supply_temperature": 45.0,
+        "volume": 0.2,
+        "density": 997,
+        "heat_capacity": 4.184,
+        "thermal_loss": 0.035,
+        "start_temperature": 50.0,
+        "min_temperatures": [40.0] * 48,
+        "max_temperatures": [60.0] * 48,
+        "carnot_efficiency": 0.40,
+        "draw_off_demand": [0,0,0,0,0,0, 0,0,0,0,0,0,
+                            0.5,0.3,0,0,0,0, 0,0,0,0,0,0,
+                            0,0,0,0,0,0, 0,0,0,0,0,0,
+                            0.8,0.5,0.3,0,0,0, 0,0,0,0,0,0]
+      }
+    }
+  ]
+}
+```
+
+This configuration:
+- Models a 200-liter (0.2 m³) hot water tank with water physics (density=997 kg/m³, heat_capacity=4.184 kJ/(kg·°C))
+- Uses 45°C supply temperature (typical for domestic hot water)
+- Has a constant 0.035 kW standby loss (well-insulated tank)
+- Defines a daily draw-off profile (48 half-hour timesteps): morning shower at 06:00 (0.5 + 0.3 kWh) and evening shower at 18:00 (0.8 + 0.5 + 0.3 kWh)
+- The profile repeats automatically if the optimization horizon exceeds 24 hours
+- Maintains tank temperature between 40-60°C
+
+### Example 6: Hot water tank
+
+A 200-liter hot water tank heated by a heat pump, without any `draw_off_demand`.
+
+```python
+{
+  "def_load_config": [
+    {
+      "thermal_battery": {
+        "supply_temperature": 45.0,
+        "volume": 0.2,
+        "density": 997,
+        "heat_capacity": 4.184,
+        "thermal_loss": 0.035,
+        "start_temperature": 50.0,
+        "min_temperatures": [40.0] * 48,
+        "max_temperatures": [60.0] * 48,
+        "carnot_efficiency": 0.40,
+        "specific_heating_demand": 0.0,
+        "area": 1.0
+      }
+    }
+  ]
+}
+```
+
+This configuration:
+- Models a 200-liter (0.2 m³) hot water tank with water physics (density=997 kg/m³, heat_capacity=4.184 kJ/(kg·°C))
+- Uses 45°C supply temperature (typical for domestic hot water)
+- Has a constant 0.035 kW standby loss (well-insulated tank)
+- This config does not define a demand profile, to ensure backward compatibility the parameter `specific_heating_demand` and `area` must be present.
+- Maintains tank temperature between 40-60°C
+
+### Example 7: Hot water tank with soft constraints
+
+Same hot water tank but with soft constraints to target 50°C while allowing deviations when electricity is expensive.
+
+```python
+{
+  "def_load_config": [
+    {
+      "thermal_battery": {
+        "supply_temperature": 45.0,
+        "volume": 0.2,
+        "density": 997,
+        "heat_capacity": 4.184,
+        "thermal_loss": 0.035,
+        "start_temperature": 50.0,
+        "min_temperatures": [40.0] * 48,
+        "max_temperatures": [60.0] * 48,
+        "desired_temperatures": [50.0] * 48,
+        "overshoot_temperature": 55.0,
+        "penalty_factor": 10,
+        "sense": "heat",
+        "carnot_efficiency": 0.40,
+        "draw_off_demand": [0,0,0,0,0,0, 0,0,0,0,0,0,
+                            0.5,0.3,0,0,0,0, 0,0,0,0,0,0,
+                            0,0,0,0,0,0, 0,0,0,0,0,0,
+                            0.8,0.5,0.3,0,0,0, 0,0,0,0,0,0]
+      }
+    }
+  ]
+}
+```
+
+This configuration:
+- Targets 50°C (desired) but allows the optimizer to let it drop toward 40°C (min) when electricity is expensive
+- Suppresses heating when temperature exceeds 55°C (overshoot)
+- The penalty factor (10) balances comfort vs cost — increase for tighter temperature control
+
+### Example 8: Heat pump group (underfloor heating + hot water tank)
+
+A single heat pump serving both underfloor heating and a hot water tank. The optimizer ensures only one is active at a time.
+
+```python
+{
+  "num_def_loads": 2,
+  "nominal_power_of_deferrable_loads": [1000, 2000],
+  "treat_deferrable_load_as_semi_cont": [true, false],
+  "def_load_config": [
+    {
+      "thermal_battery": {
+        "heatpump_group": "hp1",
+        "indoor_target_temperature": 22,
+        "volume": 8,
+        "u_value": 0.3,
+        "envelope_area": 400.0,
+        "ventilation_rate": 0.5,
+        "heated_volume": 450.0,
+        "carnot_efficiency": 0.32,
+        "supply_temperature": 30.0,
+        "min_temperatures": [20.0] * 48,
+        "max_temperatures": [22.0] * 48,
+        "start_temperature": 20.0
+      }
+    },
+    {
+      "thermal_battery": {
+        "heatpump_group": "hp1",
+        "supply_temperature": 45.0,
+        "volume": 0.2,
+        "density": 997,
+        "heat_capacity": 4.184,
+        "thermal_loss": 0.035,
+        "carnot_efficiency": 0.32,
+        "start_temperature": 50.0,
+        "min_temperatures": [40.0] * 48,
+        "max_temperatures": [60.0] * 48,
+        "carnot_efficiency": 0.40,
+        "draw_off_demand": [0,0,0,0,0,0, 0,0,0,0,0,0,
+                            0.5,0.3,0,0,0,0, 0,0,0,0,0,0,
+                            0,0,0,0,0,0, 0,0,0,0,0,0,
+                            0.8,0.5,0.3,0,0,0, 0,0,0,0,0,0]
+      }
+    }
+  ]
+}
+```
+
+This configuration:
+- Load 0: Underfloor heating (semi-continuous, modulates 0-1000W) using `thermal_battery`
+- Load 1: Hot water tank (non-semi-continuous, fixed 2000W) using `thermal_battery`
+- Both share `"heatpump_group": "hp1"` — the optimizer ensures at most one is active per timestep
+- For the semi-continuous load, the existing on/off binary is reused
+- For the non-semi-continuous hot water tank, a new `hp_active` binary is created automatically
+
 ## How the optimization works
 
 The thermal battery optimization uses a physics-based model with three main components:
@@ -354,35 +603,60 @@ Key insights:
 
 ### 2. Thermal losses
 
-The thermal storage gradually loses heat to the environment. EMHASS uses the methodology from Langer & Volling (2020):
+The thermal storage gradually loses heat to the environment. The loss model depends on the mode:
+
+**Building heating mode** (no `draw_off_demand`): Uses the methodology from Langer & Volling (2020):
 
 ```
-Loss = thermal_loss_coefficient × (1 - 2 × Hot)
+Loss = thermal_loss × (1 - 2 × Hot)
 ```
 
-Where `Hot = 1` if outdoor temp ≥ indoor temp, else `0`.
+Where `Hot = 1` if outdoor temp ≥ indoor temp, else `0`. This means losses are positive when it's cold outside (heat escapes) and negative when warm (passive heat gain).
 
-This means:
-- When it's cold outside: positive losses (heat escapes)
-- When it's warm outside: negative losses (passive heat gain)
+**Hot water tank mode** (with `draw_off_demand`): Uses a constant standby loss:
 
-### 3. Heating demand
+```
+Loss = thermal_loss  (constant, not dependent on outdoor temperature)
+```
 
-The building requires a certain amount of heat to maintain comfort. This is calculated either from:
+This is appropriate because a tank sits indoors at roughly constant ambient temperature.
+
+### 3. Heating demand / draw-off demand
+
+**Building heating mode**: The building requires heat to maintain comfort. Calculated from:
 - Physics-based: transmission losses + ventilation losses - solar gains
 - HDD-based: historical consumption scaled by current weather
+
+**Hot water tank mode**: The draw-off demand profile replaces the building heating demand. It represents energy withdrawn by hot water consumption (showers, taps). The daily profile is tiled to fill the optimization horizon.
 
 ### 4. Thermal balance
 
 At each timestep, the storage temperature changes based on:
-- Heat added by the heat pump (at its COP efficiency)
-- Heat removed by the building heating demand
-- Thermal losses (or gains) from the environment
+
+```
+conversion = 3600 / (density × heat_capacity × volume)
+
+predicted_temp[t+1] = predicted_temp[t]
+    + conversion × (cop[t] × P[t] / 1000 × dt - demand[t] - loss[t])
+```
+
+Where `demand[t]` is either building heating demand or draw-off demand, and `loss[t]` is either outdoor-temperature-dependent or constant, depending on the mode.
 
 The optimizer decides when to run the heat pump to:
-- Minimize electricity costs
-- Keep storage temperature within min/max bounds
-- Satisfy heating requirements
+- Minimize electricity costs (plus comfort penalty if soft constraints are configured)
+- Keep storage temperature within min/max bounds (hard constraints)
+- Approach desired temperatures if configured (soft constraints)
+- Respect mutual exclusivity if in a heat pump group
+
+### 5. Heat pump group coupling (optional)
+
+When multiple loads share the same `heatpump_group`, the optimizer adds a mutual exclusivity constraint:
+
+```
+sum(activity_binary[k][t] for k in group) <= 1,  for all t
+```
+
+This ensures at most one load is active per timestep. Both loads can be off simultaneously. The optimizer decides the optimal time allocation between loads to minimize total cost while satisfying all temperature constraints.
 
 ### 5. Thermal inertia filter (optional)
 
@@ -503,11 +777,13 @@ rest_command:
 ```
 
 Important notes:
-- `outdoor_temperature_forecast` is required for thermal battery optimization
-- `start_temperature` should ideally come from a real sensor (floor temp for underfloor heating)
+- `outdoor_temperature_forecast` is required for thermal battery optimization (building heating mode)
+- `start_temperature` should ideally come from a real sensor (floor temp for underfloor heating, tank sensor for hot water)
 - If using solar gains, ensure your forecast data includes `ghi` (global horizontal irradiance)
 - Add `"thermal_inertia_time_constant": 2.0` to the `thermal_battery` dict to enable the thermal inertia filter
 - In MPC mode, `Q_input` auto-persists between solves; use `"q_input_initial": 0.5` to manually override
+- For hot water tanks, add `"density": 997, "heat_capacity": 4.184` and a `"draw_off_demand"` profile or `"specific_heating_demand": 0.0, "area":1.0`
+- For heat pump groups, add `"heatpump_group": "hp1"` to each coupled load
 
 ## Published sensors
 
@@ -603,11 +879,13 @@ Add the heating demand sensor to Home Assistant's energy dashboard to track heat
 - Temperature constraints too tight (try widening min/max range)
 - Thermal mass volume too small for the heating demand
 - Heat pump power rating too low
+- Heat pump group: loads in the same group compete for time — not enough timesteps to satisfy both
 
 **Solutions:**
 - Increase the gap between min and max temperatures
 - Verify your volume calculation is correct
 - Check that `nominal_power_of_deferrable_loads` is set correctly for your heat pump
+- For heat pump groups: widen temperature bounds on one or both loads, or increase the prediction horizon
 
 ### COP values seem wrong
 
@@ -657,6 +935,29 @@ Requirements for solar gains:
 
 Check the logs for: "Using physics-based heating demand with solar gains"
 
+### Hot water tank temperature drops too fast
+
+If the tank temperature drops faster than expected:
+- Check `thermal_loss` is realistic for your tank insulation (typical: 0.02-0.04 kW)
+- Verify `draw_off_demand` values are in kWh per timestep (not total daily)
+- Check `density` (997 for water) and `heat_capacity` (4.184 for water) are correct
+- Verify `volume` matches your actual tank size in m³ (200 liters = 0.2 m³)
+
+### Heat pump group not enforcing mutual exclusivity
+
+If both loads in a group seem to run simultaneously:
+- Verify both loads have the same `heatpump_group` value (string match is exact)
+- Check the logs for "mutual exclusivity constraint added"
+- If a group has only 1 load, the constraint is skipped (need at least 2 loads)
+
+### Soft constraints not working
+
+If `desired_temperatures` doesn't seem to affect the optimization:
+- Ensure `desired_temperatures` is set (not just `min_temperatures`/`max_temperatures`)
+- Try increasing `penalty_factor` (higher = tighter tracking)
+- Check `sense` is correct: `"heat"` for heating, `"cool"` for cooling
+- If `overshoot_temperature` is too close to `max_temperatures`, the optimizer may have no room to maneuver
+
 ## Tips for best results
 
 1. **Start simple**: Use the HDD method first to get familiar, then switch to physics-based for better accuracy
@@ -673,7 +974,7 @@ Check the logs for: "Using physics-based heating demand with solar gains"
 
 7. **Size your thermal mass correctly**: For underfloor heating, measure the actual screed volume with heating pipes. Don't include areas without heating.
 
-8. **Account for DHW**: If your heat pump also provides domestic hot water, you may need to adjust your parameters or run a separate thermal battery for DHW
+8. **Model DHW explicitly**: If your heat pump provides domestic hot water, model the tank as a separate `thermal_battery` with water physics (`density: 997`, `heat_capacity: 4.184`) and a `draw_off_demand` profile. Use `heatpump_group` to couple it with your space heating load.
 
 9. **Solar gains matter**: If you have significant south-facing windows, modeling solar gains can improve optimization accuracy by 10-20%
 
