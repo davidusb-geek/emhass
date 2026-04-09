@@ -1460,6 +1460,15 @@ class Optimization:
         total_penalty = cp.sum(penalty_expr) if not isinstance(penalty_expr, int) else 0
         return predicted_temp, None, total_penalty
 
+    @staticmethod
+    def _tile_profile(profile, required_len):
+        """Tile a daily profile (e.g. draw-off demand) to fill the optimization horizon."""
+        arr = np.array(profile, dtype=float)
+        if len(arr) < required_len:
+            repeats = int(np.ceil(required_len / len(arr)))
+            arr = np.tile(arr, repeats)
+        return arr[:required_len]
+
     def _add_thermal_battery_constraints(self, constraints, k, data_opt, p_load):
         """
         Handle constraints for thermal battery loads (Vectorized, Legacy Match).
@@ -1522,14 +1531,8 @@ class Optimization:
             # in kWh: conversion * (COP * P_kW * dt_hours - demand_kWh - loss_kWh)
             draw_off_profile = hc.get("draw_off_demand", None)
             if draw_off_profile is not None and len(draw_off_profile) > 0:
-                # Hot water tank: use constant standby loss + tiled draw-off profile
-                # No outdoor-temp-dependent losses, no building physics
-                draw_off_arr = np.array(draw_off_profile, dtype=float)
-                # Tile the daily profile to fill the optimization horizon
-                if len(draw_off_arr) < required_len:
-                    repeats = int(np.ceil(required_len / len(draw_off_arr)))
-                    draw_off_arr = np.tile(draw_off_arr, repeats)
-                draw_off_arr = draw_off_arr[:required_len]
+                # Hot water tank: constant standby loss + tiled draw-off profile
+                draw_off_arr = self._tile_profile(draw_off_profile, required_len)
                 params["heating_demand"].value = draw_off_arr
 
                 # Constant standby loss (not outdoor-temp-dependent)
@@ -1638,11 +1641,7 @@ class Optimization:
             # draw_off_demand units: kWh per timestep (see parameterized path comment)
             draw_off_profile = hc.get("draw_off_demand", None)
             if draw_off_profile is not None and len(draw_off_profile) > 0:
-                draw_off_arr = np.array(draw_off_profile, dtype=float)
-                if len(draw_off_arr) < required_len:
-                    repeats = int(np.ceil(required_len / len(draw_off_arr)))
-                    draw_off_arr = np.tile(draw_off_arr, repeats)
-                draw_off_arr = draw_off_arr[:required_len]
+                draw_off_arr = self._tile_profile(draw_off_profile, required_len)
                 heating_demand = draw_off_arr
                 thermal_losses = np.full(required_len, base_loss)
             else:
@@ -1780,27 +1779,23 @@ class Optimization:
         # Min/Max Temperature Constraints using parameters
         if min_temps_param is not None:
             constraints.append(predicted_temp_thermal[1:] >= min_temps_param[1:])
-        else:
-            valid_indices = [
-                i
-                for i, v in enumerate(min_temperatures_list)
-                if v is not None and i < required_len and i > 0
-            ]
-            if valid_indices:
-                limit_vals = np.array([min_temperatures_list[i] for i in valid_indices])
-                constraints.append(predicted_temp_thermal[valid_indices] >= limit_vals)
+        elif valid_indices := [
+            i
+            for i, v in enumerate(min_temperatures_list)
+            if v is not None and i < required_len and i > 0
+        ]:
+            limit_vals = np.array([min_temperatures_list[i] for i in valid_indices])
+            constraints.append(predicted_temp_thermal[valid_indices] >= limit_vals)
 
         if max_temps_param is not None:
             constraints.append(predicted_temp_thermal[1:] <= max_temps_param[1:])
-        else:
-            valid_indices = [
-                i
-                for i, v in enumerate(max_temperatures_list)
-                if v is not None and i < required_len and i > 0
-            ]
-            if valid_indices:
-                limit_vals = np.array([max_temperatures_list[i] for i in valid_indices])
-                constraints.append(predicted_temp_thermal[valid_indices] <= limit_vals)
+        elif valid_indices := [
+            i
+            for i, v in enumerate(max_temperatures_list)
+            if v is not None and i < required_len and i > 0
+        ]:
+            limit_vals = np.array([max_temperatures_list[i] for i in valid_indices])
+            constraints.append(predicted_temp_thermal[valid_indices] <= limit_vals)
 
         # Return heating_demand array for result building
         heating_demand_arr = (
@@ -1850,12 +1845,11 @@ class Optimization:
 
             # Penalty calculation
             penalty_factor = hc.get("penalty_factor", 10)
-            valid_indices = [
+            if valid_indices := [
                 i
                 for i, val in enumerate(desired_temps_list)
                 if val is not None and i < required_len and i > 0
-            ]
-            if valid_indices:
+            ]:
                 if k in self.param_thermal and "desired_temps" in self.param_thermal[k]:
                     desired_temps_param = self.param_thermal[k]["desired_temps"]
                     deviation = (
@@ -1867,7 +1861,7 @@ class Optimization:
 
                 penalty_expr = -cp.pos(-deviation * penalty_factor)
 
-        penalty_term = cp.sum(penalty_expr) if not isinstance(penalty_expr, int) else None
+        penalty_term = None if isinstance(penalty_expr, int) else cp.sum(penalty_expr)
         return predicted_temp_thermal, heating_demand_arr, q_input, penalty_term
 
     def _add_heatpump_group_constraints(self, constraints):

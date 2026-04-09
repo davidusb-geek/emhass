@@ -454,63 +454,6 @@
       "default_value": 0
     }
   },
-  "Thermal Loads (def_load_config)": {
-    "heatpump_group": {
-      "friendly_name": "Heat pump group ID",
-      "Description": "Assign a group ID (e.g. 'hp1') to thermal loads that share the same heat pump. Loads in the same group cannot be active simultaneously (mutual exclusivity). Place inside a thermal_config or thermal_battery block in def_load_config.",
-      "input": "string",
-      "default_value": ""
-    },
-    "density": {
-      "friendly_name": "Medium density (thermal_battery)",
-      "Description": "Density of the thermal storage medium in kg/m³. Default is 2400 (concrete). Use 997 for water (hot water tanks).",
-      "input": "number",
-      "default_value": 2400
-    },
-    "heat_capacity": {
-      "friendly_name": "Medium heat capacity (thermal_battery)",
-      "Description": "Specific heat capacity of the thermal storage medium in kJ/(kg·°C). Default is 0.88 (concrete). Use 4.184 for water (hot water tanks).",
-      "input": "number",
-      "default_value": 0.88
-    },
-    "thermal_loss": {
-      "friendly_name": "Thermal standby loss (thermal_battery)",
-      "Description": "Constant standby heat loss rate in kW. For hot water tanks, this is the heat lost to the surrounding room. Default is 0.045.",
-      "input": "number",
-      "default_value": 0.045
-    },
-    "draw_off_demand": {
-      "friendly_name": "Hot water draw-off demand profile",
-      "Description": "Daily profile of hot water draw-off energy in kWh per timestep (e.g. showers, taps). The profile repeats daily to fill the optimization horizon. When present, building heating demand calculations are skipped. Only for thermal_battery hot water tanks.",
-      "input": "array.number",
-      "default_value": []
-    },
-    "desired_temperatures (thermal_battery)": {
-      "friendly_name": "Desired temperatures (thermal_battery)",
-      "Description": "Target temperatures for soft comfort constraints. When combined with overshoot_temperature, deviations above the desired temperature are penalized in the objective function instead of enforcing hard bounds.",
-      "input": "array.number",
-      "default_value": []
-    },
-    "overshoot_temperature (thermal_battery)": {
-      "friendly_name": "Overshoot temperature (thermal_battery)",
-      "Description": "Temperature threshold above which heating is suppressed. Used with desired_temperatures to create soft comfort constraints. When the predicted temperature exceeds this value, the heat pump is prevented from running.",
-      "input": "number",
-      "default_value": null
-    },
-    "penalty_factor (thermal_battery)": {
-      "friendly_name": "Comfort violation penalty factor (thermal_battery)",
-      "Description": "Weight of comfort deviation in the objective function for soft constraints. Higher values make the optimizer try harder to stay near desired_temperatures.",
-      "input": "number",
-      "default_value": 10
-    },
-    "sense (thermal_battery)": {
-      "friendly_name": "Control direction (thermal_battery)",
-      "Description": "Direction of thermal control: 'heat' penalizes temperatures above desired, 'cool' penalizes temperatures below desired.",
-      "input": "select",
-      "select_options": ["heat", "cool"],
-      "default_value": "heat"
-    }
-  },
   "Battery": {
     "set_use_battery": {
       "friendly_name": "Enable Battery",
