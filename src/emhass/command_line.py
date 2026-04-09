@@ -213,6 +213,7 @@ class OptimizationCache:
             "desired_temperatures",
             "indoor_target_temperature",  # thermal_battery runtime param
             "q_input_initial",  # thermal inertia warm-start override
+            "draw_off_demand",  # hot water tank daily profile (updates heating_demand param)
         }
         # Plant parameters that are updated dynamically (no rebuild needed)
         plant_runtime_keys = {
