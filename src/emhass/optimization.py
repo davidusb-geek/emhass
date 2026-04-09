@@ -571,54 +571,68 @@ class Optimization:
                 )
                 params["heatpump_cops"].value = np.array(heatpump_cops[:n])
 
-                # Thermal losses
-                loss = 0.045
-                thermal_losses = utils.calculate_thermal_loss_signed(
-                    outdoor_temperature_forecast=outdoor_temp.tolist(),
-                    indoor_temperature=new_start_temp,
-                    base_loss=loss,
-                )
-                params["thermal_losses"].value = np.array(thermal_losses[:n])
+                # Thermal losses and heating demand
+                base_loss = hc.get("thermal_loss", 0.045)
+                draw_off_profile = hc.get("draw_off_demand", None)
 
-                # Heating demand (if physics-based params are available)
-                if all(
-                    key in hc
-                    for key in ["u_value", "envelope_area", "ventilation_rate", "heated_volume"]
-                ):
-                    window_area = hc.get("window_area", None)
-                    shgc = hc.get("shgc", 0.6)
-                    internal_gains_factor = hc.get("internal_gains_factor", 0.0)
-
-                    # Solar irradiance
-                    solar_irradiance = None
-                    if "ghi" in data_opt.columns and window_area is not None:
-                        vals = data_opt["ghi"].values
-                        if len(vals) < n:
-                            vals = np.concatenate((vals, np.zeros(n - len(vals))))
-                        solar_irradiance = vals[:n]
-
-                    # Internal gains
-                    internal_gains_forecast = None
-                    if internal_gains_factor > 0:
-                        internal_gains_forecast = p_load
-
-                    heating_demand = utils.calculate_heating_demand_physics(
-                        u_value=hc["u_value"],
-                        envelope_area=hc["envelope_area"],
-                        ventilation_rate=hc["ventilation_rate"],
-                        heated_volume=hc["heated_volume"],
-                        indoor_target_temperature=indoor_target_temp,
-                        outdoor_temperature_forecast=outdoor_temp.tolist(),
-                        optimization_time_step=int(self.freq.total_seconds() / 60),
-                        solar_irradiance_forecast=solar_irradiance,
-                        window_area=window_area,
-                        shgc=shgc,
-                        internal_gains_forecast=internal_gains_forecast,
-                        internal_gains_factor=internal_gains_factor,
-                    )
-                    params["heating_demand"].value = np.array(heating_demand[:n])
+                if draw_off_profile is not None and len(draw_off_profile) > 0:
+                    # Hot water tank mode: constant standby loss + tiled draw-off
+                    params["thermal_losses"].value = np.full(n, base_loss)
+                    draw_off_arr = self._tile_profile(draw_off_profile, n)
+                    params["heating_demand"].value = draw_off_arr
                 else:
-                    params["heating_demand"].value = np.zeros(n)
+                    # Building heating mode: outdoor-temp-dependent losses
+                    thermal_losses = utils.calculate_thermal_loss_signed(
+                        outdoor_temperature_forecast=outdoor_temp.tolist(),
+                        indoor_temperature=new_start_temp,
+                        base_loss=base_loss,
+                    )
+                    params["thermal_losses"].value = np.array(thermal_losses[:n])
+
+                    # Heating demand
+                    if all(
+                        key in hc
+                        for key in [
+                            "u_value",
+                            "envelope_area",
+                            "ventilation_rate",
+                            "heated_volume",
+                        ]
+                    ):
+                        window_area = hc.get("window_area", None)
+                        shgc = hc.get("shgc", 0.6)
+                        internal_gains_factor = hc.get("internal_gains_factor", 0.0)
+
+                        # Solar irradiance
+                        solar_irradiance = None
+                        if "ghi" in data_opt.columns and window_area is not None:
+                            vals = data_opt["ghi"].values
+                            if len(vals) < n:
+                                vals = np.concatenate((vals, np.zeros(n - len(vals))))
+                            solar_irradiance = vals[:n]
+
+                        # Internal gains
+                        internal_gains_forecast = None
+                        if internal_gains_factor > 0:
+                            internal_gains_forecast = p_load
+
+                        heating_demand = utils.calculate_heating_demand_physics(
+                            u_value=hc["u_value"],
+                            envelope_area=hc["envelope_area"],
+                            ventilation_rate=hc["ventilation_rate"],
+                            heated_volume=hc["heated_volume"],
+                            indoor_target_temperature=indoor_target_temp,
+                            outdoor_temperature_forecast=outdoor_temp.tolist(),
+                            optimization_time_step=int(self.freq.total_seconds() / 60),
+                            solar_irradiance_forecast=solar_irradiance,
+                            window_area=window_area,
+                            shgc=shgc,
+                            internal_gains_forecast=internal_gains_forecast,
+                            internal_gains_factor=internal_gains_factor,
+                        )
+                        params["heating_demand"].value = np.array(heating_demand[:n])
+                    else:
+                        params["heating_demand"].value = np.zeros(n)
 
                 self._persist_q_input(k, params, hc)
 
