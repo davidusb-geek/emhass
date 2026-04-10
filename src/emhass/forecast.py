@@ -1,11 +1,13 @@
 import asyncio
 import bz2
 import copy
+import fcntl
 import logging
 import os
 import pickle
 import pickle as cPickle
 import re
+import tempfile
 from datetime import datetime, timedelta
 from urllib.parse import quote
 
@@ -399,17 +401,54 @@ class Forecast:
             data = await self.get_cached_forecast_data(w_forecast_cache_path)
         return data
 
+    def _solcast_rate_limit_ok(self, max_calls: int = 8) -> bool:
+        """Check and increment a daily Solcast API call counter.
+
+        Uses a file in temporary directory keyed by date. Returns True if under
+        the daily limit, False otherwise.
+        """
+        today = pd.Timestamp.now(tz=self.time_zone).strftime("%Y-%m-%d")
+        temp_dir = tempfile.gettempdir()
+        counter_path = os.path.join(temp_dir, f"emhass_solcast_calls_{today}.count")
+        
+        try:
+            # We use a+ mode to read and write without truncating on open.
+            with open(counter_path, "a+") as f:
+                # Acquire exclusive lock
+                fcntl.flock(f, fcntl.LOCK_EX)
+                f.seek(0)
+                
+                content = f.read().strip()
+                count = int(content) if content else 0
+                
+                if count >= max_calls:
+                    fcntl.flock(f, fcntl.LOCK_UN)
+                    return False
+                
+                # Write incremented count back
+                f.seek(0)
+                f.truncate()
+                f.write(str(count + 1))
+                f.flush()
+                # Explicit close/unlock occurs via context manager exit, but we unlock explicitly
+                fcntl.flock(f, fcntl.LOCK_UN)
+            return True
+        except (OSError, ValueError) as e:
+            self.logger.error(f"Failed to check or increment Solcast rate limit: {e}")
+            return False
+
     async def _get_weather_solcast(self, w_forecast_cache_path: str) -> pd.DataFrame:
         """Helper to retrieve weather data from Solcast or cache."""
         if os.path.isfile(w_forecast_cache_path):
             return await self.get_cached_forecast_data(w_forecast_cache_path)
         if self.params["passed_data"].get("weather_forecast_cache_only", False):
-            self.logger.error("Unable to obtain Solcast cache file.")
-            self.logger.error(
-                "Try running optimization again with 'weather_forecast_cache_only': false"
-            )
-            self.logger.error(
-                "Optionally, obtain new Solcast cache with runtime parameter 'weather_forecast_cache': true."
+            self.logger.warning("Solcast cache file missing or deleted due to being out of date.")
+            self.logger.warning("Bypassing 'weather_forecast_cache_only' flag to fetch and cache a fresh forecast.")
+            # Do NOT return False. We'll let execution continue below to fetch normally.
+        if not self._solcast_rate_limit_ok():
+            self.logger.warning(
+                "Solcast daily API call limit reached (safety cap). "
+                "Skipping live API call to preserve quota."
             )
             return False
         if "solcast_api_key" not in self.retrieve_hass_conf:
@@ -472,7 +511,9 @@ class Forecast:
                         total_data = total_data + data_tmp
 
         data = total_data
-        if self.params["passed_data"].get("weather_forecast_cache", False):
+        if self.params["passed_data"].get(
+            "weather_forecast_cache", False
+        ) or self.params["passed_data"].get("weather_forecast_cache_only", False):
             data = await self.set_cached_forecast_data(w_forecast_cache_path, data)
         return data
 
@@ -1775,32 +1816,39 @@ class Forecast:
         async with aiofiles.open(w_forecast_cache_path, "rb") as file:
             content = await file.read()
             data = pickle.loads(content)
-            if not isinstance(data, pd.DataFrame) or len(data) < len(self.forecast_dates):
-                self.logger.error("There has been a error obtaining cached forecast data.")
+            if not isinstance(data, pd.DataFrame) or data.empty:
+                self.logger.error("Cache file is corrupt or empty.")
                 self.logger.error(
-                    "Try running optimization again with 'weather_forecast_cache': true, or run action `weather-forecast-cache`, to pull new data from forecast API and cache."
-                )
-                self.logger.warning(
-                    "Removing old forecast cache file. Next optimization will pull data from forecast API, unless 'weather_forecast_cache_only': true"
+                    "Try running action `weather-forecast-cache` to pull new data from forecast API."
                 )
                 os.remove(w_forecast_cache_path)
                 return False
-            # Filter cached forecast data to match current forecast_dates start-end range (reduce forecast Dataframe size to appropriate length)
+            # Filter cached forecast data to match current forecast_dates start-end range
             if self.forecast_dates[0] in data.index and self.forecast_dates[-1] in data.index:
                 data = data.loc[self.forecast_dates[0] : self.forecast_dates[-1]]
                 self.logger.info("Retrieved forecast data from the previously saved cache.")
             else:
-                self.logger.error(
-                    "Unable to obtain cached forecast data within the requested timeframe range."
-                )
-                self.logger.error(
-                    "Try running optimization again (not using cache). Optionally, add runtime parameter 'weather_forecast_cache': true to pull new data from forecast API and cache."
-                )
+                # Serve best-effort stale cache: reindex to requested dates,
+                # interpolate gaps, and zero-fill edges.  This is far better
+                # than deleting the cache and burning Solcast API quota.
                 self.logger.warning(
-                    "Removing old forecast cache file. Next optimization will pull data from forecast API, unless 'weather_forecast_cache_only': true"
+                    "Cache does not fully cover the requested timeframe. "
+                    "Serving best-effort stale data (reindexed + zero-filled)."
                 )
-                os.remove(w_forecast_cache_path)
-                return False
+                combined_index = data.index.union(self.forecast_dates).sort_values()
+                data = data.reindex(combined_index)
+                data.interpolate(method="time", inplace=True)
+                data = data.reindex(self.forecast_dates)
+                
+                irradiance_cols = [c for c in ["ghi", "dni", "dhi"] if c in data.columns]
+                other_cols = [c for c in data.columns if c not in irradiance_cols]
+                
+                if other_cols:
+                    data[other_cols] = data[other_cols].ffill().bfill()
+                if irradiance_cols:
+                    data[irradiance_cols] = data[irradiance_cols].fillna(0.0)
+                
+                data = data.fillna(0.0)
             return data
 
     async def set_cached_forecast_data(self, w_forecast_cache_path, data) -> pd.DataFrame:
