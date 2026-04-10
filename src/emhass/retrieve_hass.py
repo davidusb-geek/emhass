@@ -1070,14 +1070,23 @@ class RetrieveHass:
             datum["date"] = ts
             datum[entity_id.split(sensor_prefix)[1]] = vals_list[i]
             forecast_list.append(datum)
+            
+        attributes = {
+            "device_class": device_class,
+            "unit_of_measurement": unit_of_measurement,
+            "friendly_name": friendly_name,
+            list_name: forecast_list,
+        }
+        
+        # Add state_class to ensure HA tracks long-term statistics
+        if device_class in ["power", "temperature", "voltage", "current", "battery", "monetary", "power_factor"]:
+            attributes["state_class"] = "measurement"
+        elif device_class == "energy":
+            attributes["state_class"] = "total"
+            
         data = {
             "state": f"{state:.{decimals}f}",
-            "attributes": {
-                "device_class": device_class,
-                "unit_of_measurement": unit_of_measurement,
-                "friendly_name": friendly_name,
-                list_name: forecast_list,
-            },
+            "attributes": attributes,
         }
         return data
 
@@ -1261,22 +1270,32 @@ class RetrieveHass:
                 },
             }
         elif type_var == "mlregressor":
+            attributes = {
+                "device_class": device_class,
+                "unit_of_measurement": unit_of_measurement,
+                "friendly_name": friendly_name,
+            }
+            if device_class in ["power", "temperature", "voltage", "current", "battery", "monetary", "power_factor"]:
+                attributes["state_class"] = "measurement"
+            elif device_class == "energy":
+                attributes["state_class"] = "total"
             data = {
                 "state": state,
-                "attributes": {
-                    "device_class": device_class,
-                    "unit_of_measurement": unit_of_measurement,
-                    "friendly_name": friendly_name,
-                },
+                "attributes": attributes,
             }
         else:
+            attributes = {
+                "device_class": device_class,
+                "unit_of_measurement": unit_of_measurement,
+                "friendly_name": friendly_name,
+            }
+            if device_class in ["power", "temperature", "voltage", "current", "battery", "monetary", "power_factor"]:
+                attributes["state_class"] = "measurement"
+            elif device_class == "energy":
+                attributes["state_class"] = "total"
             data = {
                 "state": f"{state:.2f}",
-                "attributes": {
-                    "device_class": device_class,
-                    "unit_of_measurement": unit_of_measurement,
-                    "friendly_name": friendly_name,
-                },
+                "attributes": attributes,
             }
         # Actually post the data
         if self.get_data_from_file or dont_post:
