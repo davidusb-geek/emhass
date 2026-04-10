@@ -1247,9 +1247,18 @@ async def treat_runtimeparams(
 
         # Treat optimization (optim_conf) configuration parameters passed at runtime
         if "def_current_state" in runtimeparams.keys():
-            params["optim_conf"]["def_current_state"] = [
-                bool(s) for s in runtimeparams["def_current_state"]
-            ]
+            dcs = runtimeparams["def_current_state"]
+            # If passed as a string (e.g. '[false, false]'), parse it to a list
+            if isinstance(dcs, str):
+                try:
+                    dcs = orjson.loads(dcs)
+                except Exception:
+                    logger.warning(f"Could not parse def_current_state string: {dcs}")
+            # Check it's iterable before casting to bool
+            if isinstance(dcs, list):
+                params["optim_conf"]["def_current_state"] = [bool(s) for s in dcs]
+            else:
+                params["optim_conf"]["def_current_state"] = [bool(dcs)]
 
         # Treat retrieve data from Home Assistant (retrieve_hass_conf) configuration parameters passed at runtime
         # Secrets passed at runtime

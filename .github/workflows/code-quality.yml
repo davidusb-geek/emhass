@@ -22,7 +22,7 @@ jobs:
     env:
       OS: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@master
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -52,11 +52,6 @@ jobs:
       - name: Check formatting
         run: uvx ruff format --check --diff
 
-      # Removed due to too many recommendations.
-      # - name: Type Check with Mypy
-      #   shell: bash
-      #   run: |
-      #     uv run mypy ./src/
   scan-pr:
     uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.0.1"
     with:
