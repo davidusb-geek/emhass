@@ -3889,6 +3889,130 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
 
 
+    def test_deferrable_load_group_shared_power(self):
+        """Test that shared power budget constraint limits combined power of grouped loads."""
+        self.optim_conf.update(
+            {
+                "treat_deferrable_load_as_semi_cont": [True, True],
+                "set_deferrable_load_single_constant": [False, False],
+                "nominal_power_of_deferrable_loads": [2000.0, 2000.0],
+                "operating_hours_of_each_deferrable_load": [4, 4],
+                "deferrable_load_groups": [
+                    {
+                        "names": ["deferrable0", "deferrable1"],
+                        "max_power": 2500,
+                        "mutual_exclusion": False,
+                    }
+                ],
+            }
+        )
+        self.opt = self.create_optimization()
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        opt_res = self.opt.perform_dayahead_forecast_optim(
+            self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        # Verify combined power never exceeds group max_power (with small tolerance)
+        combined = opt_res["P_deferrable0"] + opt_res["P_deferrable1"]
+        self.assertTrue(
+            (combined <= 2500 + 1.0).all(),
+            f"Combined power exceeded group max_power: max={combined.max():.1f}",
+        )
+
+    def test_deferrable_load_group_mutual_exclusion(self):
+        """Test that mutual exclusion prevents simultaneous operation of grouped loads."""
+        self.optim_conf.update(
+            {
+                "treat_deferrable_load_as_semi_cont": [True, True],
+                "set_deferrable_load_single_constant": [False, False],
+                "nominal_power_of_deferrable_loads": [2000.0, 1500.0],
+                "operating_hours_of_each_deferrable_load": [4, 4],
+                "deferrable_load_groups": [
+                    {
+                        "names": ["deferrable0", "deferrable1"],
+                        "max_power": 2500,
+                        "mutual_exclusion": True,
+                    }
+                ],
+            }
+        )
+        self.opt = self.create_optimization()
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        opt_res = self.opt.perform_dayahead_forecast_optim(
+            self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        # Verify at most one load is active at any timestep
+        both_active = (opt_res["P_deferrable0"] > 1.0) & (opt_res["P_deferrable1"] > 1.0)
+        self.assertFalse(
+            both_active.any(),
+            "Mutual exclusion violated: both loads active simultaneously",
+        )
+
+    def test_deferrable_load_group_no_groups(self):
+        """Test that empty deferrable_load_groups works (backward compatibility)."""
+        self.optim_conf["deferrable_load_groups"] = []
+        self.opt = self.create_optimization()
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        opt_res = self.opt.perform_dayahead_forecast_optim(
+            self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+    async def _build_params_with_groups(self, groups, **config_overrides):
+        """Helper to build params with deferrable_load_groups set in config."""
+        config = await build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+        config["deferrable_load_groups"] = groups
+        for key, value in config_overrides.items():
+            config[key] = value
+        _, secrets = await build_secrets(emhass_conf, logger, no_response=True)
+        return await build_params(emhass_conf, secrets, config, logger)
+
+    async def test_deferrable_load_group_validation_invalid_name(self):
+        """Test that invalid deferrable names in groups raise errors."""
+        with self.assertRaises(ValueError):
+            await self._build_params_with_groups([
+                {
+                    "names": ["deferrable0", "deferrable99"],
+                    "max_power": 2500,
+                    "mutual_exclusion": False,
+                }
+            ])
+
+    async def test_deferrable_load_group_validation_mutual_exclusion_not_semi_cont(self):
+        """Test that mutual exclusion with non-semi-continuous loads raises error."""
+        with self.assertRaises(ValueError):
+            await self._build_params_with_groups(
+                [
+                    {
+                        "names": ["deferrable0", "deferrable1"],
+                        "max_power": 2500,
+                        "mutual_exclusion": True,
+                    }
+                ],
+                treat_deferrable_load_as_semi_cont=[False, False],
+            )
+
+    async def test_deferrable_load_group_validation_overlapping_groups(self):
+        """Test that a load in multiple groups raises error."""
+        with self.assertRaises(ValueError):
+            await self._build_params_with_groups(
+                [
+                    {
+                        "names": ["deferrable0", "deferrable1"],
+                        "max_power": 2500,
+                        "mutual_exclusion": False,
+                    },
+                    {
+                        "names": ["deferrable1", "deferrable2"],
+                        "max_power": 2000,
+                        "mutual_exclusion": False,
+                    },
+                ],
+                number_of_deferrable_loads=3,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
     ch.close()
