@@ -2182,6 +2182,68 @@ async def build_params(
             "nominal_power_of_deferrable_loads",
             logger,
         )
+        # Validate deferrable_load_groups
+        groups = params["optim_conf"].get("deferrable_load_groups", [])
+        if groups:
+            seen_indices = set()
+            for gi, group in enumerate(groups):
+                # Validate names
+                names = group.get("names", [])
+                if not names:
+                    raise ValueError(
+                        f"deferrable_load_groups[{gi}]: 'names' must contain at least 1 deferrable load reference"
+                    )
+                indices = []
+                group_indices = set()
+                for name in names:
+                    try:
+                        idx = int(name.replace("deferrable", ""))
+                    except ValueError:
+                        raise ValueError(
+                            f"deferrable_load_groups[{gi}]: could not parse index from name '{name}'"
+                        )
+                    if idx < 0 or idx >= num_def_loads:
+                        raise ValueError(
+                            f"deferrable_load_groups[{gi}]: '{name}' references index {idx}, "
+                            f"but only {num_def_loads} deferrable loads are configured"
+                        )
+                    if idx in group_indices:
+                        raise ValueError(
+                            f"deferrable_load_groups[{gi}]: '{name}' is duplicated within the group"
+                        )
+                    if idx in seen_indices:
+                        raise ValueError(
+                            f"deferrable_load_groups[{gi}]: '{name}' is already in another group. "
+                            f"A deferrable load cannot belong to multiple groups"
+                        )
+                    indices.append(idx)
+                    group_indices.add(idx)
+                seen_indices.update(indices)
+                
+                # Validate max_power (optional when mutual_exclusion is true)
+                max_power = group.get("max_power")
+                mutual_exclusion = group.get("mutual_exclusion", False)
+                if max_power is not None and max_power <= 0:
+                    raise ValueError(
+                        f"deferrable_load_groups[{gi}]: 'max_power' must be a positive number"
+                    )
+                if not isinstance(mutual_exclusion, bool):
+                    raise ValueError(
+                        f"deferrable_load_groups[{gi}]: 'mutual_exclusion' must be a boolean"
+                    )
+                if max_power is None and not mutual_exclusion:
+                    raise ValueError(
+                        f"deferrable_load_groups[{gi}]: 'max_power' is required when 'mutual_exclusion' is false"
+                    )
+                if mutual_exclusion:
+                    semi_cont = params["optim_conf"].get("treat_deferrable_load_as_semi_cont", [])
+                    for idx in indices:
+                        is_semi_cont = semi_cont[idx] if idx < len(semi_cont) else False
+                        if not is_semi_cont:
+                            raise ValueError(
+                                f"deferrable_load_groups[{gi}]: mutual_exclusion requires "
+                                f"'deferrable{idx}' to have treat_deferrable_load_as_semi_cont=true"
+                            )
     else:
         logger.warning("unable to obtain parameter: number_of_deferrable_loads")
     # historic_days_to_retrieve should be no less then 2
