@@ -372,14 +372,15 @@ class Optimization:
                     fallback = max(float(demand.value[0]), 0.0)
                 old_val = float(params["q_input_start"].value or 0.0)
                 if fallback > 0.0 or old_val < 1e-6:
-                    self.logger.warning(
-                        "Load %s: previous solve infeasible, resetting "
-                        "q_input_start from %.4f to heating demand fallback %.4f",
-                        k,
-                        old_val,
-                        fallback,
-                    )
                     params["q_input_start"].value = fallback
+                    if abs(fallback - old_val) > 1e-6:
+                        self.logger.warning(
+                            "Load %s: previous solve infeasible, resetting "
+                            "q_input_start from %.4f to heating demand fallback %.4f",
+                            k,
+                            old_val,
+                            fallback,
+                        )
         elif tau_hours == 0 and "q_input_var" in params:
             # Inertia was disabled — clear stale variable reference
             del params["q_input_var"]
@@ -1669,14 +1670,15 @@ class Optimization:
             elif isinstance(q_input_start, (int, float)):
                 q_start_val = float(q_input_start)
 
-            min_temp_0 = float(min_temperatures_list[0]) if min_temperatures_list else 18.0
+            # min_temperatures_list is guaranteed non-empty by the validator above.
+            min_temp_0 = float(min_temperatures_list[0])
 
             if q_start_val < 1e-6 and start_temp_float <= min_temp_0:
                 # When q_input_start is near zero AND temperature is at/below the
                 # minimum, fixing q_input[0]=0 makes the problem infeasible because
                 # the temperature would drop below min at the next timestep.
                 # Let the solver choose a feasible initial heat input instead.
-                self.logger.info(
+                self.logger.debug(
                     "Load %s: releasing q_input[0] constraint "
                     "(q_start=%.4f, start_temp=%.1f, min_temp=%.1f)",
                     k,
