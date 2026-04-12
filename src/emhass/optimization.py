@@ -381,6 +381,15 @@ class Optimization:
                             old_val,
                             fallback,
                         )
+                # Force problem rebuild so the feasibility guard in
+                # _add_thermal_battery_constraints re-evaluates with the
+                # updated q_input_start.  Without this, the constraint
+                # structure from the initial build is reused on warm-start
+                # and the guard condition is never re-checked.
+                self.prob = None
+                # Skip the q_input_initial override below — the recovery
+                # value must survive to break the infeasibility loop.
+                return
         elif tau_hours == 0 and "q_input_var" in params:
             # Inertia was disabled — clear stale variable reference
             del params["q_input_var"]
