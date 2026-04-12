@@ -1660,6 +1660,130 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # Note: Actual behavior depends on how EMHASS handles infeasible problems
         # This test ensures it doesn't crash
 
+    def test_thermal_battery_infeasibility_q_input_start_zero(self):
+        """Test that optimization remains feasible when q_input_start=0 and start_temp <= min_temp.
+
+        Reproduces the scenario from issue #776: after a prior infeasible MPC run,
+        q_input_start is stuck at 0.  When start_temperature is at or below
+        min_temperatures[0], fixing q_input[0]=0 forces the next timestep below
+        the minimum — making the problem permanently infeasible.
+
+        The fix releases the q_input[0] constraint in this situation so the
+        solver can choose a feasible initial heat input.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [5.0] * 48
+
+        runtimeparams = {
+            "def_load_config": [
+                {
+                    "thermal_battery": {
+                        "start_temperature": 18.0,  # == min_temperatures[0]
+                        "supply_temperature": 35.0,
+                        "volume": 50.0,
+                        "specific_heating_demand": 100.0,
+                        "area": 100.0,
+                        "min_temperatures": [18.0] * 48,
+                        "max_temperatures": [24.0] * 48,
+                        "thermal_inertia_time_constant": 1.5,
+                        "q_input_initial": 0.0,  # Simulates post-infeasible state
+                    }
+                },
+            ]
+        }
+
+        opt_res = self.run_optimization_with_config(runtimeparams["def_load_config"])
+
+        # Must be feasible — before the fix this was permanently infeasible
+        self.assertEqual(opt_res["optim_status"].unique()[0], "Optimal")
+
+        # Heat pump must run to keep temperature above minimum
+        total_heating = opt_res["P_deferrable0"].sum()
+        self.assertGreater(
+            total_heating,
+            0,
+            "Heat pump should run when start_temp is at minimum and outdoor temp is cold",
+        )
+
+    def test_thermal_battery_q_input_start_below_min(self):
+        """Test feasibility when start_temperature is slightly below min_temperatures."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [5.0] * 48
+
+        runtimeparams = {
+            "def_load_config": [
+                {
+                    "thermal_battery": {
+                        "start_temperature": 17.5,  # Below min_temperatures[0]
+                        "supply_temperature": 35.0,
+                        "volume": 50.0,
+                        "specific_heating_demand": 100.0,
+                        "area": 100.0,
+                        "min_temperatures": [18.0] * 48,
+                        "max_temperatures": [24.0] * 48,
+                        "thermal_inertia_time_constant": 1.5,
+                        "q_input_initial": 0.0,
+                    }
+                },
+            ]
+        }
+
+        opt_res = self.run_optimization_with_config(runtimeparams["def_load_config"])
+
+        self.assertEqual(opt_res["optim_status"].unique()[0], "Optimal")
+        total_heating = opt_res["P_deferrable0"].sum()
+        self.assertGreater(total_heating, 0, "Heat pump should run to recover from below-min temp")
+
+    def test_persist_q_input_infeasible_fallback(self):
+        """Test that _persist_q_input resets q_input_start after an infeasible solve.
+
+        When the solver returns None for q_input_var (infeasible), the fallback
+        should use heating_demand[0] so the next MPC iteration doesn't stay
+        stuck at q_input_start=0.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [5.0] * 48
+
+        # Set up a basic thermal battery config
+        config = {
+            "thermal_battery": {
+                "start_temperature": 20.0,
+                "supply_temperature": 35.0,
+                "volume": 50.0,
+                "specific_heating_demand": 100.0,
+                "area": 100.0,
+                "min_temperatures": [18.0] * 48,
+                "max_temperatures": [24.0] * 48,
+                "thermal_inertia_time_constant": 1.5,
+            }
+        }
+        self.optim_conf["def_load_config"] = [config]
+        opt = self.create_optimization()
+
+        # Simulate the state after an infeasible solve:
+        # q_input_var exists but its .value is None (CVXPY sets this on infeasible)
+        import cvxpy as cp
+
+        params = opt.param_thermal[0]
+        params["q_input_start"].value = 0.0
+        dummy_var = cp.Variable(48, name="q_input_test")
+        # Don't solve — .value stays None, simulating an infeasible result
+        params["q_input_var"] = dummy_var
+
+        # Set a non-zero heating demand so the fallback has something to use
+        params["heating_demand"].value = np.full(48, 0.5)
+
+        hc = config["thermal_battery"]
+        opt._persist_q_input(0, params, hc)
+
+        # After _persist_q_input, q_input_start should be reset to demand fallback
+        self.assertAlmostEqual(
+            params["q_input_start"].value,
+            0.5,
+            places=4,
+            msg="q_input_start should be reset to heating_demand[0] after infeasible solve",
+        )
+
     def test_thermal_battery_physics_based(self):
         """Test thermal battery optimization with physics-based heating demand calculation."""
         self.df_input_data_dayahead = self.prepare_forecast_data()
