@@ -934,14 +934,12 @@ async def treat_runtimeparams(
                 soc_init = runtimeparams["soc_init"]
             if soc_init < params["plant_conf"]["battery_minimum_state_of_charge"]:
                 logger.warning(
-                    f"Passed soc_init={soc_init} is lower than soc_min={params['plant_conf']['battery_minimum_state_of_charge']}, setting soc_init=soc_min"
+                    f"Passed soc_init={soc_init} is lower than soc_min={params['plant_conf']['battery_minimum_state_of_charge']}, keeping real initial SOC for optimization recovery"
                 )
-                soc_init = params["plant_conf"]["battery_minimum_state_of_charge"]
             if soc_init > params["plant_conf"]["battery_maximum_state_of_charge"]:
                 logger.warning(
-                    f"Passed soc_init={soc_init} is greater than soc_max={params['plant_conf']['battery_maximum_state_of_charge']}, setting soc_init=soc_max"
+                    f"Passed soc_init={soc_init} is greater than soc_max={params['plant_conf']['battery_maximum_state_of_charge']}, keeping real initial SOC for optimization recovery"
                 )
-                soc_init = params["plant_conf"]["battery_maximum_state_of_charge"]
             params["passed_data"]["soc_init"] = soc_init
             if "soc_final" not in runtimeparams.keys():
                 soc_final = params["plant_conf"]["battery_target_state_of_charge"]
@@ -1249,9 +1247,18 @@ async def treat_runtimeparams(
 
         # Treat optimization (optim_conf) configuration parameters passed at runtime
         if "def_current_state" in runtimeparams.keys():
-            params["optim_conf"]["def_current_state"] = [
-                bool(s) for s in runtimeparams["def_current_state"]
-            ]
+            dcs = runtimeparams["def_current_state"]
+            # If passed as a string (e.g. '[false, false]'), parse it to a list
+            if isinstance(dcs, str):
+                try:
+                    dcs = orjson.loads(dcs)
+                except Exception:
+                    logger.warning(f"Could not parse def_current_state string: {dcs}")
+            # Check it's iterable before casting to bool
+            if isinstance(dcs, list):
+                params["optim_conf"]["def_current_state"] = [bool(s) for s in dcs]
+            else:
+                params["optim_conf"]["def_current_state"] = [bool(dcs)]
 
         # Treat retrieve data from Home Assistant (retrieve_hass_conf) configuration parameters passed at runtime
         # Secrets passed at runtime
@@ -2152,6 +2159,13 @@ async def build_params(
             params["optim_conf"],
             0.0,
             "set_deferrable_startup_penalty",
+            logger,
+        )
+        params["optim_conf"]["set_deferrable_max_startups"] = check_def_loads(
+            num_def_loads,
+            params["optim_conf"],
+            0,
+            "set_deferrable_max_startups",
             logger,
         )
         params["optim_conf"]["operating_hours_of_each_deferrable_load"] = check_def_loads(

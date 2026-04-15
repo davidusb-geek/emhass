@@ -118,6 +118,7 @@ class OptimizationCacheKey:
     treat_deferrable_load_as_semi_cont: tuple
     set_deferrable_load_single_constant: tuple
     set_deferrable_startup_penalty: tuple
+    set_deferrable_max_startups: tuple
     set_deferrable_load_as_timeseries: tuple
     nominal_power_of_deferrable_loads: tuple
     def_load_config_structure: tuple  # (index, type) tuples for each load
@@ -125,6 +126,7 @@ class OptimizationCacheKey:
     compute_curtailment: bool
     optimization_time_step_s: float | None
     delta_forecast_daily_s: float | None
+    num_timesteps: int | None
     costfun: str
     plant_conf_hash: str
     optim_conf_structural_hash: str  # Hash of optim_conf keys that affect problem structure
@@ -157,6 +159,7 @@ class OptimizationCache:
         plant_conf: dict,
         costfun: str,
         retrieve_hass_conf: dict,
+        num_timesteps: int | None = None,
     ) -> OptimizationCacheKey:
         """
         Compute a cache key from configuration that affects optimization structure.
@@ -270,6 +273,7 @@ class OptimizationCache:
             set_deferrable_startup_penalty=to_tuple(
                 optim_conf.get("set_deferrable_startup_penalty", [])
             ),
+            set_deferrable_max_startups=to_tuple(optim_conf.get("set_deferrable_max_startups", [])),
             set_deferrable_load_as_timeseries=to_tuple(
                 optim_conf.get("set_deferrable_load_as_timeseries", [])
             ),
@@ -284,6 +288,7 @@ class OptimizationCache:
             compute_curtailment=plant_conf.get("compute_curtailment", False),
             optimization_time_step_s=to_seconds(retrieve_hass_conf.get("optimization_time_step")),
             delta_forecast_daily_s=to_seconds(optim_conf.get("delta_forecast_daily")),
+            num_timesteps=num_timesteps,
             costfun=costfun,
             plant_conf_hash=config_hash(plant_conf, plant_runtime_keys),
             optim_conf_structural_hash=config_hash(optim_conf, optim_conf_runtime_keys),
@@ -297,6 +302,7 @@ class OptimizationCache:
         costfun: str,
         retrieve_hass_conf: dict,
         logger: logging.Logger,
+        num_timesteps: int | None = None,
     ) -> "Optimization | None":
         """
         Get cached Optimization object if configuration matches.
@@ -304,7 +310,9 @@ class OptimizationCache:
         Returns None if cache is empty or configuration has changed.
         Thread-safe via internal locking.
         """
-        cache_key = cls._compute_cache_key(optim_conf, plant_conf, costfun, retrieve_hass_conf)
+        cache_key = cls._compute_cache_key(
+            optim_conf, plant_conf, costfun, retrieve_hass_conf, num_timesteps
+        )
 
         with cls._lock:
             if cls._instance is not None and cls._cache_key == cache_key:
@@ -347,9 +355,12 @@ class OptimizationCache:
         costfun: str,
         retrieve_hass_conf: dict,
         logger: logging.Logger,
+        num_timesteps: int | None = None,
     ) -> None:
         """Store Optimization object in cache. Thread-safe via internal locking."""
-        cache_key = cls._compute_cache_key(optim_conf, plant_conf, costfun, retrieve_hass_conf)
+        cache_key = cls._compute_cache_key(
+            optim_conf, plant_conf, costfun, retrieve_hass_conf, num_timesteps
+        )
         with cls._lock:
             cls._instance = opt
             cls._cache_key = cache_key
@@ -724,7 +735,7 @@ def _apply_df_freq_horizon(
     # Handle Prediction Horizon
     if prediction_horizon:
         # Slice the dataframe up to the horizon
-        df = copy.deepcopy(df)[df.index[0] : df.index[prediction_horizon - 1]]
+        df = copy.deepcopy(df)[df.index[0] : df.index[min(prediction_horizon, len(df)) - 1]]
     return df
 
 
@@ -1021,7 +1032,10 @@ async def set_input_data_dict(
             get_data_from_file=get_data_from_file,
         )
         # Try to get cached Optimization object for warm-starting
-        opt = OptimizationCache.get(optim_conf, plant_conf, costfun, retrieve_hass_conf, logger)
+        _num_ts = len(fcst.forecast_dates)
+        opt = OptimizationCache.get(
+            optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
+        )
         if opt is None:
             # Cache miss - create new Optimization object
             opt = Optimization(
@@ -1033,9 +1047,12 @@ async def set_input_data_dict(
                 costfun,
                 emhass_conf,
                 logger,
+                num_timesteps=_num_ts,
             )
             # Store in cache for future warm-starts
-            OptimizationCache.put(opt, optim_conf, plant_conf, costfun, retrieve_hass_conf, logger)
+            OptimizationCache.put(
+                opt, optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
+            )
         else:
             # Cache hit - update references that may have changed
             # (logger, var names from forecast, and runtime-configurable optim_conf values)
@@ -1274,10 +1291,28 @@ def prepare_forecast_and_weather_data(
         return False
 
     # Add outdoor temperature if provided
-    if "outdoor_temperature_forecast" in input_data_dict["params"]["passed_data"]:
-        df_input_data_dayahead["outdoor_temperature_forecast"] = input_data_dict["params"][
-            "passed_data"
-        ]["outdoor_temperature_forecast"]
+    passed_outdoor_temp = input_data_dict["params"]["passed_data"].get(
+        "outdoor_temperature_forecast"
+    )
+
+    if passed_outdoor_temp is not None:
+        forecast_len = len(df_input_data_dayahead)
+
+        # If the passed forecast is shorter than the horizon, pad it with the last value to prevent Pandas crashes
+        if len(passed_outdoor_temp) < forecast_len:
+            logger.warning(
+                "Passed outdoor_temperature_forecast length (%s) "
+                "is shorter than the prediction horizon (%s). Padding with the last value.",
+                len(passed_outdoor_temp),
+                forecast_len,
+            )
+            last_val = passed_outdoor_temp[-1] if len(passed_outdoor_temp) > 0 else 15.0
+            passed_outdoor_temp = passed_outdoor_temp + [last_val] * (
+                forecast_len - len(passed_outdoor_temp)
+            )
+
+        # If it's longer (e.g. 48h data for 13h horizon), slice it securely
+        df_input_data_dayahead["outdoor_temperature_forecast"] = passed_outdoor_temp[:forecast_len]
 
     # Auto-fallback to temp_air from Open-Meteo weather forecast
     elif (
@@ -1318,7 +1353,7 @@ def prepare_forecast_and_weather_data(
         dayahead_index = df_input_data_dayahead.index
         ghi_series = input_data_dict["df_weather"]["ghi"].copy()
 
-        # 1. Handle Timezone Mismatches (Same as above)
+        # Handle Timezone Mismatches (Same as above)
         if dayahead_index.tz is None and ghi_series.index.tz is not None:
             ghi_series.index = ghi_series.index.tz_localize(None)
         elif dayahead_index.tz is not None and ghi_series.index.tz is None:
@@ -1452,7 +1487,10 @@ async def naive_mpc_optim(
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
     # The specifics params for the MPC at runtime
-    prediction_horizon = input_data_dict["params"]["passed_data"]["prediction_horizon"]
+    prediction_horizon = min(
+        input_data_dict["params"]["passed_data"]["prediction_horizon"],
+        len(df_input_data_dayahead),
+    )
     soc_init = input_data_dict["params"]["passed_data"]["soc_init"]
     soc_final = input_data_dict["params"]["passed_data"]["soc_final"]
     def_total_hours = input_data_dict["params"]["optim_conf"].get(
@@ -2029,7 +2067,9 @@ def _load_opt_res_latest(
         logger.error("File not found error, run an optimization task first.")
         return None
     opt_res_latest = pd.read_csv(file_path, index_col="timestamp")
-    opt_res_latest.index = pd.to_datetime(opt_res_latest.index)
+    opt_res_latest.index = pd.to_datetime(opt_res_latest.index, utc=True).tz_convert(
+        input_data_dict["retrieve_hass_conf"]["time_zone"]
+    )
     opt_res_latest.index.freq = input_data_dict["retrieve_hass_conf"]["optimization_time_step"]
     return opt_res_latest
 

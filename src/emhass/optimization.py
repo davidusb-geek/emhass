@@ -41,6 +41,7 @@ class Optimization:
         emhass_conf: dict,
         logger: logging.Logger,
         opt_time_delta: int | None = 24,
+        num_timesteps: int | None = None,
     ) -> None:
         r"""
         Define constructor for Optimization class.
@@ -126,7 +127,11 @@ class Optimization:
 
         # CVXPY Initialization
         # Calculate the fixed number of time steps (N)
-        self.num_timesteps = int(self.time_delta / self.freq)
+        # num_timesteps may be passed explicitly to account for DST-adjusted horizons.
+        if num_timesteps is not None:
+            self.num_timesteps = num_timesteps
+        else:
+            self.num_timesteps = int(self.time_delta / self.freq)
         self.logger.debug(f"CVXPY: Initialization with {self.num_timesteps} time steps.")
 
         # Define Parameters (Data holders)
@@ -140,6 +145,9 @@ class Optimization:
         self.param_soc_init = cp.Parameter(nonneg=True, name="soc_init")
         self.param_soc_final = cp.Parameter(nonneg=True, name="soc_final")
 
+        # SOC recovery parameters
+        self._init_soc_recovery_params()
+
         # Initialize deferrable load parameters (window masks and energy constraints)
         self._init_deferrable_load_params()
 
@@ -148,6 +156,17 @@ class Optimization:
 
         # Note: The self.prob object will be constructed in a subsequent step
         self.prob = None
+
+    def _init_soc_recovery_params(self) -> None:
+        """Initialize CVXPY parameters used for out-of-band SOC recovery."""
+        self.param_soc_low_gap = cp.Parameter(nonneg=True, name="soc_low_gap")
+        self.param_soc_high_gap = cp.Parameter(nonneg=True, name="soc_high_gap")
+        self.param_soc_low_required = cp.Parameter(nonneg=True, name="soc_low_required")
+        self.param_soc_high_required = cp.Parameter(nonneg=True, name="soc_high_required")
+        self.param_soc_low_gap.value = 0.0
+        self.param_soc_high_gap.value = 0.0
+        self.param_soc_low_required.value = 0.0
+        self.param_soc_high_required.value = 0.0
 
     def _init_deferrable_load_params(self) -> None:
         """
@@ -211,6 +230,15 @@ class Optimization:
             p.value = 0.0
             self.param_def_current_state.append(p)
 
+        # Load active parameters: allows deactivating non-thermal loads with 0 operating
+        # timesteps without rebuilding the problem. When param_load_active[k] = 0, all
+        # binary variables for load k are forced to 0 by constraints, letting the solver
+        # presolve them away instantly instead of branching on them.
+        self.param_load_active = []
+        for k in range(num_def_loads):
+            p = cp.Parameter(nonneg=True, name=f"load_active_{k}")
+            p.value = 1.0  # Default: all loads active
+            self.param_load_active.append(p)
         # Thermal Parameters for warm-starting
         # Dict keyed by load index k, stores all parameters needed for thermal constraints
         # This allows updating runtime values (forecasts, temperatures) without rebuilding constraints
@@ -345,6 +373,9 @@ class Optimization:
         Missing entries default to off (0.0).
         """
         if "def_current_state" not in self.optim_conf:
+            # Reset all to 0.0 to avoid stale values from previous solves
+            for k in range(min(num_def_loads, len(self.param_def_current_state))):
+                self.param_def_current_state[k].value = 0.0
             return
 
         def_state_conf = self.optim_conf["def_current_state"]
@@ -364,7 +395,7 @@ class Optimization:
             # Validate binary: accept bool and numeric 0/1, reject everything else
             if isinstance(state, bool):
                 self.param_def_current_state[k].value = float(state)
-            elif isinstance(state, int | float) and state in (0, 1, 0.0, 1.0):
+            elif isinstance(state, (int, float)) and state in (0, 1, 0.0, 1.0):
                 self.param_def_current_state[k].value = float(state)
             else:
                 raise ValueError(
@@ -743,12 +774,20 @@ class Optimization:
             constraints.append(
                 vars_dict["p_sto_neg"] >= -np.abs(self.plant_conf["battery_charge_power_max"])
             )
+            vars_dict["soc_low_recovered"] = cp.Variable(n, boolean=True, name="soc_low_recovered")
+            vars_dict["soc_high_recovered"] = cp.Variable(
+                n, boolean=True, name="soc_high_recovered"
+            )
         else:
             # Create dummy zero variables to preserve logic structure without conditional checks everywhere
             vars_dict["p_sto_pos"] = cp.Variable(n, name="p_sto_pos_dummy")
             vars_dict["p_sto_neg"] = cp.Variable(n, name="p_sto_neg_dummy")
             constraints.append(vars_dict["p_sto_pos"] == 0)
             constraints.append(vars_dict["p_sto_neg"] == 0)
+            vars_dict["soc_low_recovered"] = cp.Variable(n, name="soc_low_recovered_dummy")
+            vars_dict["soc_high_recovered"] = cp.Variable(n, name="soc_high_recovered_dummy")
+            constraints.append(vars_dict["soc_low_recovered"] == 0)
+            constraints.append(vars_dict["soc_high_recovered"] == 0)
 
         # Self-consumption variable
         if self.costfun == "self-consumption":
@@ -1065,6 +1104,13 @@ class Optimization:
         eff_chg = self.plant_conf["battery_charge_efficiency"]
         max_dis = self.plant_conf["battery_discharge_power_max"]
         max_chg = self.plant_conf["battery_charge_power_max"]  # This is usually positive in config
+        soc_low_recovered = self.vars["soc_low_recovered"]
+        soc_high_recovered = self.vars["soc_high_recovered"]
+        min_energy = self.plant_conf["battery_minimum_state_of_charge"] * cap
+        max_energy = self.plant_conf["battery_maximum_state_of_charge"] * cap
+        recovery_margin = max(cap * 1e-6, 1e-3)
+        recovery_big_m_low = cap - min_energy + recovery_margin
+        recovery_big_m_high = max_energy + recovery_margin
 
         # Grid Interaction Constraints
 
@@ -1119,12 +1165,44 @@ class Optimization:
         # (Subtracting because positive flow is Discharge/Depletion)
         current_stored_energy = (soc_init * cap) - cumulative_energy
 
-        # Min/Max SOC Bounds for all t
+        # Min/Max SOC bounds with a single recovery transition.
+        # Before recovery the trajectory stays on the initial out-of-band side.
+        # After recovery the usual hard SOC limits apply and cannot be violated again.
         constraints.append(
-            current_stored_energy <= self.plant_conf["battery_maximum_state_of_charge"] * cap
+            current_stored_energy >= min_energy - self.param_soc_low_gap * (1 - soc_low_recovered)
         )
         constraints.append(
-            current_stored_energy >= self.plant_conf["battery_minimum_state_of_charge"] * cap
+            current_stored_energy <= max_energy + self.param_soc_high_gap * (1 - soc_high_recovered)
+        )
+        constraints.append(soc_low_recovered[1:] >= soc_low_recovered[:-1])
+        constraints.append(soc_high_recovered[1:] >= soc_high_recovered[:-1])
+        constraints.append(soc_low_recovered <= self.param_soc_low_required)
+        constraints.append(soc_high_recovered <= self.param_soc_high_required)
+        constraints.append(soc_low_recovered[-1] == self.param_soc_low_required)
+        constraints.append(soc_high_recovered[-1] == self.param_soc_high_required)
+        constraints.append(
+            current_stored_energy[1:]
+            >= current_stored_energy[:-1]
+            - recovery_big_m_low * (soc_low_recovered[:-1] + (1 - self.param_soc_low_required))
+        )
+        constraints.append(
+            current_stored_energy[1:]
+            <= current_stored_energy[:-1]
+            + recovery_big_m_high * (soc_high_recovered[:-1] + (1 - self.param_soc_high_required))
+        )
+        constraints.append(
+            current_stored_energy
+            <= min_energy
+            - recovery_margin
+            + recovery_big_m_low * soc_low_recovered
+            + recovery_big_m_low * (1 - self.param_soc_low_required)
+        )
+        constraints.append(
+            current_stored_energy
+            >= max_energy
+            + recovery_margin
+            - recovery_big_m_high * soc_high_recovered
+            - recovery_big_m_high * (1 - self.param_soc_high_required)
         )
 
         # Final SOC Constraint
@@ -1847,6 +1925,13 @@ class Optimization:
             if use_binary_logic:
                 # Standard Binary/Mixed-Integer Constraints
 
+                # Load deactivation: when param_load_active[k] = 0, force all binary
+                # variables to 0. The solver's presolve eliminates these variables
+                # instantly, avoiding expensive branching on inactive loads.
+                if k < len(self.param_load_active):
+                    constraints.append(p_def_bin2[k] <= self.param_load_active[k])
+                    constraints.append(p_def_start[k] <= self.param_load_active[k])
+
                 # Minimum Power (if active)
                 if has_min_power:
                     constraints.append(
@@ -1868,10 +1953,25 @@ class Optimization:
                 constraints.append(p_def_start[k][0] + self.param_def_current_state[k] <= 1)
                 constraints.append(p_def_start[k][1:] + p_def_bin2[k][:-1] <= 1)
 
+                # Max Startups Limit
+                if "set_deferrable_max_startups" in self.optim_conf and k < len(
+                    self.optim_conf["set_deferrable_max_startups"]
+                ):
+                    max_starts = self.optim_conf["set_deferrable_max_startups"][k]
+                    # 0 or None means disabled/unlimited. Only apply if > 0.
+                    if max_starts and max_starts > 0:
+                        # The sum of all start events across the horizon cannot exceed the limit
+                        constraints.append(cp.sum(p_def_start[k]) <= max_starts)
+
                 if not is_sequence_load:
                     # Single Constant Start
                     if is_single_const:
-                        constraints.append(cp.sum(p_def_start[k]) == 1)
+                        # Use param_load_active so inactive loads require 0 starts
+                        # (avoids solver branching on where to place a meaningless startup)
+                        if k < len(self.param_load_active):
+                            constraints.append(cp.sum(p_def_start[k]) == self.param_load_active[k])
+                        else:
+                            constraints.append(cp.sum(p_def_start[k]) == 1)
 
                         # Required timesteps constraint using Big-M parameterization
                         # When active=1: sum(bin2) == required_timesteps (tight)
@@ -2101,6 +2201,9 @@ class Optimization:
             self.param_load_cost = cp.Parameter(current_n, name="load_cost")
             self.param_prod_price = cp.Parameter(current_n, name="prod_price")
 
+            # Re-initialize SOC recovery parameters with the new horizon
+            self._init_soc_recovery_params()
+
             # Re-initialize deferrable load parameters (window masks and energy constraints)
             self._init_deferrable_load_params()
 
@@ -2171,6 +2274,20 @@ class Optimization:
         if self.optim_conf["set_use_battery"]:
             self.param_soc_init.value = soc_init
             self.param_soc_final.value = soc_final
+            low_gap_wh = max(
+                0.0,
+                (self.plant_conf["battery_minimum_state_of_charge"] - soc_init)
+                * self.plant_conf["battery_nominal_energy_capacity"],
+            )
+            high_gap_wh = max(
+                0.0,
+                (soc_init - self.plant_conf["battery_maximum_state_of_charge"])
+                * self.plant_conf["battery_nominal_energy_capacity"],
+            )
+            self.param_soc_low_gap.value = low_gap_wh
+            self.param_soc_high_gap.value = high_gap_wh
+            self.param_soc_low_required.value = 1.0 if low_gap_wh > 0 else 0.0
+            self.param_soc_high_required.value = 1.0 if high_gap_wh > 0 else 0.0
 
         # Update Window Mask Parameters for Deferrable Loads
         # This allows warm-starting even when time windows change
@@ -2259,8 +2376,28 @@ class Optimization:
                 self.param_required_timesteps[k].value = 0.0
                 self.param_timesteps_active[k].value = 0.0  # Constraint is relaxed (Big-M)
 
+        # Update load active parameters: deactivate non-thermal loads with 0 operating timesteps
+        # Thermal loads (thermal_config, thermal_battery) are always active since they're
+        # driven by temperature constraints, not operating timesteps.
+        for k in range(min(num_deferrable_loads, len(self.param_load_active))):
+            is_thermal = k in self.param_thermal
+            has_operating_requirement = (
+                def_total_timestep and k < len(def_total_timestep) and def_total_timestep[k] > 0
+            ) or (def_total_hours and k < len(def_total_hours) and def_total_hours[k] > 0)
+            if is_thermal or has_operating_requirement:
+                self.param_load_active[k].value = 1.0
+            else:
+                self.param_load_active[k].value = 0.0
+                self.logger.debug(
+                    f"Deferrable load {k}: deactivated (no operating timesteps, not thermal)"
+                )
+
         # Update def_current_state parameters for deferrable loads
         self._update_def_current_state_params(num_deferrable_loads)
+        # Initialize stress config variables (needed by retry path even when
+        # self.prob is cached from a previous call, see #770)
+        inv_stress_conf = None
+        batt_stress_conf = None
 
         # Build Problem (Lazy Construction)
         if self.prob is None:
@@ -2268,10 +2405,6 @@ class Optimization:
 
             # Start with bound constraints
             constraints = self.constraints[:]
-
-            # Setup Stress Costs
-            inv_stress_conf = None
-            batt_stress_conf = None
 
             if self.optim_conf["set_use_battery"]:
                 p_batt_max = max(

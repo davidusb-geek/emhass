@@ -1,14 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.17.1 - 2026-03-18
 ### Improvement
+- Added `set_deferrable_max_startups` parameter to enforce a hard physical limit on the maximum number of times a deferrable load can be turned on during an optimization horizon, preventing unwanted chattering
 - Added new Websocket section to documentation
 - Improving coverage: MLForecaster, web server and command line utils
-- Improved automatic testing: Add tests for converting nested parameters to config, deferrable load padding, export time range parsing, NaN handling, and resampling/filtering of time series data. Add an MPC cache behavior test to verify cache hits for non-structural plant changes and cache misses for structural plant changes.
+- Improved automatic testing: Add tests for converting nested parameters to config, deferrable load padding, export time range parsing, NaN handling, and resampling/filtering of time series data. Add an MPC cache behavior test to verify cache hits for non-structural plant changes and cache misses for structural plant changes
+- Deactivate binary variables for non-thermal loads with 0 operating timesteps to reduce MIP solve time
 ### Fix
 - Ensure cached MPC optimizers are invalidated when structural plant configuration changes while still updating runtime-dependent parameters on cache hits
 - Prevent stale internal optimization configuration by refreshing cached optimizer plant and optimization configs with latest runtime values
 - Fixed logging initialization issue
+- Fixed an issue where the REST API sends 'Bearer empty' when the token is not configured in the add-on
+- Gracefully skip days with no history data during REST API retrieval
+- Fixed Solcast API Accept header and sub-30min resampling issues
+- Fix to REST API authentication fails when token is set to "empty" in addon mode issue
 
 ## 0.17.0 - 2026-02-28
 ### Improvement
