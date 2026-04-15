@@ -43,6 +43,7 @@ dependencies = [
     "websockets",
     "uvicorn==0.30.6",
     "influxdb>=5.3.1",
+    "requests==2.32.5"
 ]
 
 [project.optional-dependencies]

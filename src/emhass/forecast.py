@@ -6,7 +6,7 @@ import os
 import pickle
 import pickle as cPickle
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import aiofiles
@@ -14,6 +14,7 @@ import aiohttp
 import numpy as np
 import orjson
 import pandas as pd
+import requests
 from pvlib.irradiance import disc
 from pvlib.location import Location
 from pvlib.modelchain import ModelChain
@@ -1586,6 +1587,33 @@ class Forecast:
         self.logger.debug("get_load_forecast returning:\n%s", p_load_forecast)
         return p_load_forecast
 
+    def _get_octopus_tariff_data(
+        self,
+        tariff_base: str,
+        tariff_code: str,
+        start_date: pd.Timestamp,
+        end_date: pd.Timestamp,
+    ) -> dict:
+        r"""
+        Get data for a specified tariff (import or export) from the Octopus \
+        Energy API. Used by cost/price forecast function where 'octopus' is \
+        specified as the data source.
+        """
+        BASE_URL = "https://api.octopus.energy/v1/products"
+        url = f"{BASE_URL}/{tariff_base}/electricity-tariffs/{tariff_code}/standard-unit-rates/"
+        params = {
+            "period_from": start_date.to_pydatetime().strftime("%Y-%m-%dT%H:%MZ"),
+            "period_to": end_date.to_pydatetime().strftime("%Y-%m-%dT%H:%MZ")
+        }
+
+        response = requests.get(url, params=params)
+
+        if response.status_code != 200:
+            raise Exception(f"API request failed: {response.status_code} {response.text}")
+
+        data = response.json()
+        return data.get("results", [])
+
     def get_load_cost_forecast(
         self,
         df_final: pd.DataFrame,
@@ -1601,8 +1629,9 @@ class Forecast:
         :param df_final: The DataFrame containing the input data.
         :type df_final: pd.DataFrame
         :param method: The method to be used to generate load cost forecast, \
-            the options are 'hp_hc_periods' for peak and non-peak hours contracts\
-            and 'csv' to load a CSV file, defaults to 'hp_hc_periods'
+            the options are 'hp_hc_periods' for peak and non-peak hours contracts,\
+            'octopus' for the Octopus Energy API data, and 'csv' to load a CSV file,\
+            defaults to 'hp_hc_periods'
         :type method: str, optional
         :param csv_path: The path to the CSV file used when method = 'csv', \
             defaults to "data_load_cost_forecast.csv"
@@ -1628,6 +1657,9 @@ class Forecast:
                 df_final.loc[df_hp.index, self.var_load_cost] = self.optim_conf[
                     "load_peak_hours_cost"
                 ]
+        elif method == "octopus":
+            # TODO Add Octo code here
+            None
         elif method == "csv":
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
             forecast_out = self.get_forecast_out_from_csv_or_list(
@@ -1689,8 +1721,8 @@ class Forecast:
             from hass
         :type df_input_data: pd.DataFrame
         :param method: The method to be used to generate the production price forecast, \
-            the options are 'constant' for a fixed constant value and 'csv'\
-            to load a CSV file, defaults to 'constant'
+            the options are 'constant' for a fixed constant value, 'octopus' for the \
+            Octopus Energy API data, and 'csv' to load a CSV file, defaults to 'constant'
         :type method: str, optional
         :param csv_path: The path to the CSV file used when method = 'csv', \
             defaults to "/data/data_load_cost_forecast.csv"
@@ -1705,6 +1737,16 @@ class Forecast:
         csv_path = self.emhass_conf["data_path"] / csv_path
         if method == "constant":
             df_final[self.var_prod_price] = self.optim_conf["photovoltaic_production_sell_price"]
+        elif method == "octopus":
+            # TODO Add Octo Energy Integration Here
+            base_tariff = self.optim_conf["octopus_energy_base_tariff"]
+            tariff_code = self.optim_conf["octopus_energy_tariff_code"]
+            start_date = df_final.index.min()
+            end_date = df_final.index.max()
+            octopus_prod_rates = self._get_octopus_tariff_data(base_tariff,tariff_code,start_date,end_date)
+            
+            df_final[self.var_prod_price]
+            
         elif method == "csv":
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
             forecast_out = self.get_forecast_out_from_csv_or_list(

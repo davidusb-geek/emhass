@@ -905,6 +905,7 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(df_input_data["unit_prod_price"].values[0], 1)
         self.assertEqual(df_input_data["unit_prod_price"].values[-1], 48)
 
+
     async def test_get_power_from_weather(self):
         self.assertIsInstance(self.p_pv_forecast, pd.core.series.Series)
         self.assertIsInstance(self.p_pv_forecast.index, pd.core.indexes.datetimes.DatetimeIndex)
@@ -1097,6 +1098,19 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
     # Test production price forecast dataframe output using saved csv referece file
     def test_get_prod_price_forecast(self):
         df_input_data = self.fcst.get_prod_price_forecast(self.df_input_data)
+        self.assertIn(self.fcst.var_prod_price, df_input_data.columns)
+        self.assertEqual(df_input_data.isnull().sum().sum(), 0)
+        df_input_data = self.fcst.get_prod_price_forecast(
+            self.df_input_data, method="csv", csv_path="data_prod_price_forecast.csv"
+        )
+        self.assertIn(self.fcst.var_prod_price, df_input_data.columns)
+        self.assertEqual(df_input_data.isnull().sum().sum(), 0)
+    
+    # Test production price forecast dataframe output using octopus integration
+    def test_get_prod_price_octopus(self):
+        self.optim_conf["octopus_energy_base_tariff"] = "AGILE-OUTGOING-19-05-13"
+        self.optim_conf["octopus_energy_tariff_code"] = "E-1R-AGILE-OUTGOING-19-05-13-A"
+        df_input_data = self.fcst.get_prod_price_forecast(self.df_input_data,method="octopus")
         self.assertIn(self.fcst.var_prod_price, df_input_data.columns)
         self.assertEqual(df_input_data.isnull().sum().sum(), 0)
         df_input_data = self.fcst.get_prod_price_forecast(
