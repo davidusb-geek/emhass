@@ -1617,15 +1617,27 @@ class Forecast:
                 "Octopus tariff configuration is missing. Please provide both tariff base and tariff code."
             )
         url = f"{base_url}/{tariff_base}/electricity-tariffs/{tariff_code}/standard-unit-rates/"
+        request_timeout = self.optim_conf.get("octopus_energy_request_timeout", 30)
+
+        start_utc = pd.Timestamp(start_date)
+        end_utc = pd.Timestamp(end_date)
+        if start_utc.tz is None:
+            start_utc = start_utc.tz_localize("UTC")
+        else:
+            start_utc = start_utc.tz_convert("UTC")
+        if end_utc.tz is None:
+            end_utc = end_utc.tz_localize("UTC")
+        else:
+            end_utc = end_utc.tz_convert("UTC")
         params = {
-            "period_from": start_date.to_pydatetime().strftime("%Y-%m-%dT%H:%MZ"),
-            "period_to": end_date.to_pydatetime().strftime("%Y-%m-%dT%H:%MZ"),
+            "period_from": start_utc.to_pydatetime().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "period_to": end_utc.to_pydatetime().strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         results = []
         next_url = url
 
         while next_url:
-            response = requests.get(next_url, params=params, timeout=30)
+            response = requests.get(next_url, params=params, timeout=request_timeout)
             if response.status_code != 200:
                 raise RuntimeError(f"API request failed: {response.status_code} {response.text}")
             data = response.json()
@@ -1655,8 +1667,6 @@ class Forecast:
 
         rates_df["valid_from"] = pd.to_datetime(rates_df["valid_from"], utc=True)
         rates_df = rates_df.sort_values("valid_from")
-        if rates_df["valid_from"].dt.tz is None:
-            rates_df["valid_from"] = rates_df["valid_from"].dt.tz_localize("UTC")
         rates_df["valid_from"] = rates_df["valid_from"].dt.tz_convert(self.time_zone)
 
         # Octopus prices are returned in pence/kWh. Convert to currency unit/kWh.
