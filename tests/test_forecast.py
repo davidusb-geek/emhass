@@ -8,6 +8,7 @@ import pathlib
 import pickle
 import re
 import unittest
+from unittest.mock import Mock, patch
 
 import aiofiles
 import numpy as np
@@ -1107,17 +1108,58 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(df_input_data.isnull().sum().sum(), 0)
     
     # Test production price forecast dataframe output using octopus integration
-    def test_get_prod_price_octopus(self):
-        self.optim_conf["octopus_energy_base_tariff"] = "AGILE-OUTGOING-19-05-13"
-        self.optim_conf["octopus_energy_tariff_code"] = "E-1R-AGILE-OUTGOING-19-05-13-A"
-        df_input_data = self.fcst.get_prod_price_forecast(self.df_input_data,method="octopus")
+    @patch("emhass.forecast.requests.get")
+    def test_get_prod_price_octopus(self, mock_get):
+        mock_get.return_value = Mock(
+            status_code=200,
+            json=Mock(
+                return_value={
+                    "results": [
+                        {
+                            "valid_from": "2025-01-01T00:00:00Z",
+                            "valid_to": "2025-01-01T00:30:00Z",
+                            "value_inc_vat": 7.0,
+                        }
+                    ],
+                    "next": None,
+                }
+            ),
+        )
+        self.fcst.optim_conf["octopus_energy_export_base_tariff"] = "AGILE-OUTGOING-19-05-13"
+        self.fcst.optim_conf["octopus_energy_export_tariff_code"] = "E-1R-AGILE-OUTGOING-19-05-13-A"
+        df_input_data = self.fcst.get_prod_price_forecast(self.df_input_data, method="octopus")
         self.assertIn(self.fcst.var_prod_price, df_input_data.columns)
         self.assertEqual(df_input_data.isnull().sum().sum(), 0)
+        self.assertGreaterEqual(df_input_data[self.fcst.var_prod_price].min(), 0)
         df_input_data = self.fcst.get_prod_price_forecast(
             self.df_input_data, method="csv", csv_path="data_prod_price_forecast.csv"
         )
         self.assertIn(self.fcst.var_prod_price, df_input_data.columns)
         self.assertEqual(df_input_data.isnull().sum().sum(), 0)
+
+    @patch("emhass.forecast.requests.get")
+    def test_get_load_cost_octopus(self, mock_get):
+        mock_get.return_value = Mock(
+            status_code=200,
+            json=Mock(
+                return_value={
+                    "results": [
+                        {
+                            "valid_from": "2025-01-01T00:00:00Z",
+                            "valid_to": "2025-01-01T00:30:00Z",
+                            "value_inc_vat": 10.0,
+                        }
+                    ],
+                    "next": None,
+                }
+            ),
+        )
+        self.fcst.optim_conf["octopus_energy_import_base_tariff"] = "AGILE-24-10-01"
+        self.fcst.optim_conf["octopus_energy_import_tariff_code"] = "E-1R-AGILE-24-10-01-A"
+        df_input_data = self.fcst.get_load_cost_forecast(self.df_input_data, method="octopus")
+        self.assertIn(self.fcst.var_load_cost, df_input_data.columns)
+        self.assertEqual(df_input_data.isnull().sum().sum(), 0)
+        self.assertGreaterEqual(df_input_data[self.fcst.var_load_cost].min(), 0)
 
     # Test DST forward and backward transition handling in forecast methods
     async def test_dst_forward_transition_handling(self):
