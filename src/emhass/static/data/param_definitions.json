@@ -310,8 +310,8 @@
     "octopus_energy_import_base_tariff": {
       "friendly_name": "Octopus import base tariff",
       "Description": "Octopus Energy product code used for electricity import rates (for example: AGILE-24-10-01).",
-      "input": "str",
-      "default_value": "",
+      "input": "string",
+      "default_value": "AGILE-24-10-01",
       "requires": {
         "load_cost_forecast_method": "octopus"
       }
@@ -319,8 +319,8 @@
     "octopus_energy_import_tariff_code": {
       "friendly_name": "Octopus import tariff code",
       "Description": "Octopus Energy full electricity tariff code for import rates (for example: E-1R-AGILE-24-10-01-A).",
-      "input": "str",
-      "default_value": "",
+      "input": "string",
+      "default_value": "E-1R-AGILE-24-10-01-A",
       "requires": {
         "load_cost_forecast_method": "octopus"
       }
@@ -328,8 +328,8 @@
     "octopus_energy_export_base_tariff": {
       "friendly_name": "Octopus export base tariff",
       "Description": "Octopus Energy product code used for electricity export rates (for example: AGILE-OUTGOING-19-05-13).",
-      "input": "str",
-      "default_value": "",
+      "input": "string",
+      "default_value": "AGILE-OUTGOING-19-05-13",
       "requires": {
         "production_price_forecast_method": "octopus"
       }
@@ -337,8 +337,8 @@
     "octopus_energy_export_tariff_code": {
       "friendly_name": "Octopus export tariff code",
       "Description": "Octopus Energy full electricity tariff code for export rates (for example: E-1R-AGILE-OUTGOING-19-05-13-A).",
-      "input": "str",
-      "default_value": "",
+      "input": "string",
+      "default_value": "E-1R-AGILE-OUTGOING-19-05-13-A",
       "requires": {
         "production_price_forecast_method": "octopus"
       }
