@@ -4015,7 +4015,6 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "Load 1 with 0 hours should be deactivated",
         )
 
-
     def test_deferrable_load_group_shared_power(self):
         """Test that shared power budget constraint limits combined power of grouped loads."""
         self.optim_conf.update(
@@ -4081,7 +4080,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.optim_conf["deferrable_load_groups"] = []
         self.opt = self.create_optimization()
         self.df_input_data_dayahead = self.prepare_forecast_data()
-        opt_res = self.opt.perform_dayahead_forecast_optim(
+        _ = self.opt.perform_dayahead_forecast_optim(
             self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
         )
         self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
@@ -4098,13 +4097,15 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
     async def test_deferrable_load_group_validation_invalid_name(self):
         """Test that invalid deferrable names in groups raise errors."""
         with self.assertRaises(ValueError):
-            await self._build_params_with_groups([
-                {
-                    "names": ["deferrable0", "deferrable99"],
-                    "max_power": 2500,
-                    "mutual_exclusion": False,
-                }
-            ])
+            await self._build_params_with_groups(
+                [
+                    {
+                        "names": ["deferrable0", "deferrable99"],
+                        "max_power": 2500,
+                        "mutual_exclusion": False,
+                    }
+                ]
+            )
 
     async def test_deferrable_load_group_validation_mutual_exclusion_not_semi_cont(self):
         """Test that mutual exclusion with non-semi-continuous loads raises error."""
