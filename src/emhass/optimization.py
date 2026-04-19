@@ -2004,6 +2004,39 @@ class Optimization:
 
         return predicted_temps, heating_demands, penalty_terms_total, q_inputs
 
+    def _add_deferrable_group_constraints(self, constraints, relaxed=False):
+        """Add shared power budget and mutual exclusion constraints for deferrable load groups.
+
+        Args:
+            constraints: List of CVXPY constraints to append to.
+            relaxed: If True, only add shared power budget constraints (skip mutual
+                exclusion, which requires binary variables not available in the relaxed LP).
+        """
+        groups = self.optim_conf.get("deferrable_load_groups", [])
+        if not groups:
+            return
+
+        p_deferrable = self.vars["p_deferrable"]
+
+        for gi, group in enumerate(groups):
+            indices = [int(name.replace("deferrable", "")) for name in group["names"]]
+            max_power = group.get("max_power")
+            mutual_exclusion = group.get("mutual_exclusion", False)
+
+            self.logger.debug(f"Adding group {gi} constraints for deferrable loads {indices}")
+
+            # Shared power budget: sum of group members <= max_power at each timestep
+            if max_power is not None:
+                group_power_sum = sum(p_deferrable[i] for i in indices)
+                constraints.append(group_power_sum <= max_power)
+
+            # Mutual exclusion: at most one load active per timestep
+            # Skipped in relaxed mode as binary variables are not available
+            if mutual_exclusion and not relaxed:
+                p_def_bin2 = self.vars["p_def_bin2"]
+                bin_sum = sum(p_def_bin2[i] for i in indices)
+                constraints.append(bin_sum <= 1)
+
     def _build_results_dataframe(
         self,
         data_opt,
@@ -2457,6 +2490,9 @@ class Optimization:
                 )
             )
 
+            # Deferrable Load Group Constraints (shared power budget, mutual exclusion)
+            self._add_deferrable_group_constraints(constraints)
+
             # Build Objective
             objective_expr = self._build_objective_function(
                 batt_stress_conf,
@@ -2598,6 +2634,9 @@ class Optimization:
                     p_load,
                 )
             )
+
+            # Deferrable Load Group Constraints (shared power budget only in relaxed mode)
+            self._add_deferrable_group_constraints(constraints_relaxed, relaxed=True)
 
             # Re-build Objective
             objective_expr = self._build_objective_function(batt_stress_conf, inv_stress_conf)

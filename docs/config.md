@@ -103,7 +103,29 @@ Example:
 - `set_deferrable_load_single_constant`: Define if we should set each deferrable load as a constant fixed value variable with just one startup for each optimization task. For example:
 	- False
 	- False
-- `set_deferrable_startup_penalty`: Set to a list of floats. For each deferrable load with a penalty `P`, each time the deferrable load turns on will incur an additional cost of `P * nominal_power_of_deferrable_loads * cost_of_electricity` at that time. 
+- `set_deferrable_startup_penalty`: Set to a list of floats. For each deferrable load with a penalty `P`, each time the deferrable load turns on will incur an additional cost of `P * nominal_power_of_deferrable_loads * cost_of_electricity` at that time.
+- `deferrable_load_groups`: Define groups of deferrable loads that share a physical actuator (e.g. a heat pump serving both hot water and underfloor heating). Each group can enforce a shared power budget, mutual exclusion, or both. This is a list of group objects, each with the following fields:
+	- `names`: List of deferrable load names in the group (e.g. `["deferrable0", "deferrable1"]`).
+	- `max_power` *(optional when `mutual_exclusion` is `true`)*: Maximum combined power in Watts for all loads in the group at any timestep. Required when `mutual_exclusion` is `false`.
+	- `mutual_exclusion` *(optional, defaults to `false`)*: When `true`, only one load in the group may be active at any timestep. Requires all loads in the group to have `treat_deferrable_load_as_semi_cont` set to `true`.
+
+	A load cannot belong to multiple groups. Examples:
+	```json
+	"deferrable_load_groups": [
+	  {"names": ["deferrable0", "deferrable1"], "max_power": 2500}
+	]
+	```
+	```json
+	"deferrable_load_groups": [
+	  {"names": ["deferrable0", "deferrable1"], "mutual_exclusion": true}
+	]
+	```
+	```json
+	"deferrable_load_groups": [
+	  {"names": ["deferrable0", "deferrable1"], "max_power": 2500, "mutual_exclusion": true}
+	]
+	```
+	Defaults to an empty list (no groups).
 - `weather_forecast_method`: This will define the weather forecast method that will be used. The options are `open-meteo` to use the weather forecast API proposed by [Open-Meteo](https://open-meteo.com/), `solcast` to use the [Solcast](https://solcast.com/) solar forecast service, `solar.forecast` to use the free public [Solar.Forecast](https://forecast.solar/) account and finally the `csv` to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts. The default CSV file path that will be used is `/data/data_weather_forecast.csv`. This method is useful to load and use other external forecasting service data in EMHASS. Defaults to `open-meteo` method.
 - `load_forecast_method`: The load forecast method that will be used. The options are `typical` which uses basic statistics and a year long load power data grouped by the current day-of-the-week of the current month, `naive` also called persistence that assumes that the forecast for a future period will be equal to the observed values in a past period, `mlforecaster` that uses regression models considering auto-regression lags as features and finally the `csv` to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts. The default CSV file path that will be used is `/data/data_weather_forecast.csv`. This method is useful to load and use other external forecasting service data in EMHASS. Defaults to `typical`.
 ```{note} 
