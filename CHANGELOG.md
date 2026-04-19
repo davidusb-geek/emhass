@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.17.2 - 2026-04-19
+### Improvement
+- Added support for deferrable load groups
+- Updated versions of workflow actions
+### Fix
+- Prevent thermal battery infeasibility when `q_input_start` is zero
+- Clean session closure to prevent aiohttp timeouts
+- Resolve `UnboundLocalError` for `inv_stress_conf` on infeasible retry
+- Fix DST-boundary crashes in forecast date range computation
+- Fix documentation for location
+- Support out-of-band initial SOC recovery in naive MPC
+
 ## 0.17.1 - 2026-03-18
 ### Improvement
 - Added `set_deferrable_max_startups` parameter to enforce a hard physical limit on the maximum number of times a deferrable load can be turned on during an optimization horizon, preventing unwanted chattering
