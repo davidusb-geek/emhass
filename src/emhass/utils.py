@@ -2198,10 +2198,10 @@ async def build_params(
                 for name in names:
                     try:
                         idx = int(name.replace("deferrable", ""))
-                    except ValueError:
+                    except ValueError as err:
                         raise ValueError(
                             f"deferrable_load_groups[{gi}]: could not parse index from name '{name}'"
-                        )
+                        ) from err
                     if idx < 0 or idx >= num_def_loads:
                         raise ValueError(
                             f"deferrable_load_groups[{gi}]: '{name}' references index {idx}, "
@@ -2219,7 +2219,7 @@ async def build_params(
                     indices.append(idx)
                     group_indices.add(idx)
                 seen_indices.update(indices)
-                
+
                 # Validate max_power (optional when mutual_exclusion is true)
                 max_power = group.get("max_power")
                 mutual_exclusion = group.get("mutual_exclusion", False)
