@@ -33,7 +33,12 @@ myst_heading_anchors = 3
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ["sphinx.ext.autodoc", "myst_parser", "sphinx_design", "sphinx_llm.txt"]
+extensions = [
+    "sphinx.ext.autodoc",
+    "myst_parser",
+    "sphinx_design",
+    "sphinx_llms_txt",
+]
 
 myst_enable_extensions = [
     "amsmath",
