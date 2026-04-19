@@ -122,6 +122,7 @@ class OptimizationCacheKey:
     set_deferrable_load_as_timeseries: tuple
     nominal_power_of_deferrable_loads: tuple
     def_load_config_structure: tuple  # (index, type) tuples for each load
+    deferrable_load_groups: tuple
     inverter_is_hybrid: bool
     compute_curtailment: bool
     optimization_time_step_s: float | None
@@ -284,6 +285,10 @@ class OptimizationCache:
                 optim_conf.get("nominal_power_of_deferrable_loads", [])
             ),
             def_load_config_structure=tuple(def_structure),
+            deferrable_load_groups=tuple(
+                (tuple(g.get("names", [])), g.get("max_power"), g.get("mutual_exclusion", False))
+                for g in optim_conf.get("deferrable_load_groups", [])
+            ),
             inverter_is_hybrid=plant_conf.get("inverter_is_hybrid", False),
             compute_curtailment=plant_conf.get("compute_curtailment", False),
             optimization_time_step_s=to_seconds(retrieve_hass_conf.get("optimization_time_step")),
