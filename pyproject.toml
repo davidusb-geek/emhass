@@ -46,7 +46,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-docs = ["sphinx", "pydata-sphinx-theme", "sphinx-design", "myst-parser"]
+docs = ["sphinx", "pydata-sphinx-theme", "sphinx-design", "myst-parser", "sphinx-llm"]
 test = [
     "pytest",
     "pytz",
