@@ -1030,6 +1030,10 @@ class Forecast:
                 return row["adjusted_forecast"]
 
         forecast_data["adjusted_forecast"] = forecast_data.apply(apply_weighting, axis=1)
+        # Clamp to non-negative: PV power is physically >= 0, but the daytime branch
+        # above returns the raw regression output (e.g. Lasso is unconstrained and can
+        # extrapolate below zero on cloudy days after sunny training history). See #521.
+        forecast_data["adjusted_forecast"] = forecast_data["adjusted_forecast"].clip(lower=0)
         # If using validation data, calculate validation metrics
         if forecasted_pv is None:
             y_true = self.p_pv_validation.values
