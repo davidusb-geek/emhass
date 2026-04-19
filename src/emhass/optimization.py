@@ -356,6 +356,40 @@ class Optimization:
                     new_q_start,
                 )
                 params["q_input_start"].value = new_q_start
+            elif prev_q is None:
+                # Previous solve was infeasible — q_input has no values.
+                # Fall back to heating demand so the next iteration doesn't
+                # stay stuck at q_input_start=0 (which causes a persistent
+                # infeasibility loop when start_temp <= min_temp).
+                demand = params.get("heating_demand")
+                fallback = 0.0
+                if (
+                    demand is not None
+                    and hasattr(demand, "value")
+                    and demand.value is not None
+                    and len(demand.value) > 0
+                ):
+                    fallback = max(float(demand.value[0]), 0.0)
+                old_val = float(params["q_input_start"].value or 0.0)
+                if fallback > 0.0 or old_val < 1e-6:
+                    params["q_input_start"].value = fallback
+                    if abs(fallback - old_val) > 1e-6:
+                        self.logger.warning(
+                            "Load %s: previous solve infeasible, resetting "
+                            "q_input_start from %.4f to heating demand fallback %.4f",
+                            k,
+                            old_val,
+                            fallback,
+                        )
+                # Force problem rebuild so the feasibility guard in
+                # _add_thermal_battery_constraints re-evaluates with the
+                # updated q_input_start.  Without this, the constraint
+                # structure from the initial build is reused on warm-start
+                # and the guard condition is never re-checked.
+                self.prob = None
+                # Skip the q_input_initial override below — the recovery
+                # value must survive to break the infeasibility loop.
+                return
         elif tau_hours == 0 and "q_input_var" in params:
             # Inertia was disabled — clear stale variable reference
             del params["q_input_var"]
@@ -1637,7 +1671,32 @@ class Optimization:
             # Initialize Q_input[0] from CVXPY Parameter (enables warm-start updates)
             params = self.param_thermal.get(k, {})
             q_input_start = params.get("q_input_start", 0.0)
-            constraints.append(q_input[0] == q_input_start)
+
+            # Extract scalar values for the feasibility guard.
+            q_start_val = 0.0
+            if hasattr(q_input_start, "value") and q_input_start.value is not None:
+                q_start_val = float(q_input_start.value)
+            elif isinstance(q_input_start, (int, float)):
+                q_start_val = float(q_input_start)
+
+            # min_temperatures_list is guaranteed non-empty by the validator above.
+            min_temp_0 = float(min_temperatures_list[0])
+
+            if q_start_val < 1e-6 and start_temp_float <= min_temp_0:
+                # When q_input_start is near zero AND temperature is at/below the
+                # minimum, fixing q_input[0]=0 makes the problem infeasible because
+                # the temperature would drop below min at the next timestep.
+                # Let the solver choose a feasible initial heat input instead.
+                self.logger.debug(
+                    "Load %s: releasing q_input[0] constraint "
+                    "(q_start=%.4f, start_temp=%.1f, min_temp=%.1f)",
+                    k,
+                    q_start_val,
+                    start_temp_float,
+                    min_temp_0,
+                )
+            else:
+                constraints.append(q_input[0] == q_input_start)
 
             # Raw heat input: COP * P_hp / 1000 * dt (kWh thermal per timestep)
             raw_heat = cp.multiply(heatpump_cops[:-1], p_deferrable[:-1]) / 1000 * self.time_step
