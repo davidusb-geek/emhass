@@ -1126,6 +1126,7 @@ class Optimization:
         p_sto_neg = self.vars["p_sto_neg"]
         p_grid_neg = self.vars["p_grid_neg"]
         E = self.vars["E"]  # Binary: 1=Discharge, 0=Charge
+        D = self.vars["D"]  # Binary: 1=Import, 0=Export
         p_pv = self.param_pv_forecast
 
         # Parameters (Scalars)
@@ -1148,13 +1149,13 @@ class Optimization:
 
         # Grid Interaction Constraints
 
-        # No charge from grid: Charging power (neg) + PV must be positive (net surplus)
+        # No charge from grid: Battery cannot charge (E=0) while grid is importing (D=1)
         if self.optim_conf["set_nocharge_from_grid"]:
-            constraints.append(p_sto_neg + p_pv >= 0)
+            constraints.append(D <= E)
 
-        # No discharge to grid: Grid Export (neg) + PV must be positive
+        # No discharge to grid: Battery cannot discharge (E=1) while grid is exporting (D=0)
         if self.optim_conf["set_nodischarge_to_grid"]:
-            constraints.append(p_grid_neg + p_pv >= 0)
+            constraints.append(E <= D)
 
         # Dynamic Power Limits (Ramp Rate)
         if self.optim_conf["set_battery_dynamic"]:
