@@ -680,9 +680,18 @@ button {
 .main-svg {
   font-size: 11pt;
   font-family: Arial, sans-serif;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   border-style: hidden;
 }
+
+.mystyle td,
+.mystyle th {
+  border-width: 0 1px 1px 0;
+}
+
+.mystyle td:first-child,
+.mystyle thead th:first-child { border-left-width: 1px; }
 
 .mystyle td {
   padding: 5px;
@@ -705,6 +714,32 @@ th {
 .mystyle tr:hover td {
   background-color: silver;
   cursor: pointer;
+}
+
+/* Fixed clone rendered by JS for sticky header row */
+.sticky-header-wrapper {
+  position: fixed;
+  top: 0;
+  overflow: hidden;
+  z-index: 100;
+  display: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Sticky first column */
+.mystyle td:first-child,
+.mystyle thead th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
+/* Opaque background for sticky header row (original table + JS clone) */
+.mystyle thead th {
+  background: #e1e1e1;
+  border-top-width: 1px;
+  z-index: 2;
 }
 
 th:last-child {
@@ -1317,6 +1352,11 @@ p {
   .mystyle tr:hover td {
     background-color: #3f3f3f;
   }
+
+  .mystyle thead th { background: #282928; }
+
+  .mystyle td,
+  .mystyle th { border-color: #666; }
 
   .modebar-group {
     background-color: #0000 !important;
