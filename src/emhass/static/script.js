@@ -8,6 +8,7 @@
 //on page reload get saved data
 window.onload = async function () {
   await loadBasicOrAdvanced();
+  initStickyTables();
 
   //add listener for basic and advanced html switch
   document
@@ -224,6 +225,74 @@ async function getTemplate() {
     TempScript.innerHTML = script.innerHTML;
     script.parentElement.appendChild(TempScript);
   }
+  initStickyTables();
+}
+
+function initStickyTables() {
+  // Remove clones and listeners from any previous call
+  document.querySelectorAll(".sticky-header-wrapper").forEach((el) => el.remove());
+  document.querySelectorAll("table.mystyle").forEach((table) => {
+    if (table._stickyScrollListener)
+      window.removeEventListener("scroll", table._stickyScrollListener);
+    if (table._stickyHScrollListener && table._stickyContainer)
+      table._stickyContainer.removeEventListener("scroll", table._stickyHScrollListener);
+  });
+
+  document.querySelectorAll("table.mystyle").forEach((table) => {
+    const thead = table.querySelector("thead");
+    if (!thead) return;
+    const container = table.closest(".table_div");
+    if (!container) return;
+
+    // Fixed wrapper clips the clone to the container's visible horizontal area
+    const wrapper = document.createElement("div");
+    wrapper.className = "sticky-header-wrapper";
+    document.body.appendChild(wrapper);
+
+    // Clone table containing only the header
+    const cloneTable = document.createElement("table");
+    cloneTable.className = table.className;
+    cloneTable.style.tableLayout = "fixed";
+    cloneTable.appendChild(thead.cloneNode(true));
+    wrapper.appendChild(cloneTable);
+
+    // Sync wrapper position and column widths with the live table
+    const syncGeometry = () => {
+      const r = container.getBoundingClientRect();
+      wrapper.style.left = r.left + "px";
+      wrapper.style.width = container.clientWidth + "px";
+      cloneTable.style.width = table.getBoundingClientRect().width + "px";
+      thead.querySelectorAll("th").forEach((th, i) => {
+        const cloneTh = cloneTable.querySelectorAll("th")[i];
+        if (cloneTh) cloneTh.style.width = th.getBoundingClientRect().width + "px";
+      });
+    };
+    requestAnimationFrame(syncGeometry);
+    window.addEventListener("resize", syncGeometry, { passive: true });
+
+    // Horizontal scroll: sync wrapper.scrollLeft — avoids transform stacking context,
+    // so overflow:hidden clips correctly on both sides
+    const syncHScroll = () => {
+      wrapper.scrollLeft = container.scrollLeft;
+    };
+    container.addEventListener("scroll", syncHScroll, { passive: true });
+    table._stickyHScrollListener = syncHScroll;
+    table._stickyContainer = container;
+
+    // Vertical scroll: toggle visibility only — no per-frame transform update
+    let shown = false;
+    const updateVisibility = () => {
+      const shouldShow =
+        thead.getBoundingClientRect().top <= 0 &&
+        table.getBoundingClientRect().bottom > 0;
+      if (shouldShow !== shown) {
+        shown = shouldShow;
+        wrapper.style.display = shouldShow ? "block" : "none";
+      }
+    };
+    window.addEventListener("scroll", updateVisibility, { passive: true });
+    table._stickyScrollListener = updateVisibility;
+  });
 }
 
 //test localStorage support
