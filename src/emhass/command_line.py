@@ -1004,7 +1004,6 @@ async def set_input_data_dict(
     :rtype: dict
 
     """
-    log_runtime_banner(logger)
     stage_times = {}
     logger.info("Setting up needed data")
     # Parse Parameters
@@ -1031,6 +1030,7 @@ async def set_input_data_dict(
         logger,
         emhass_conf,
     )
+    log_runtime_banner(logger, optim_conf=optim_conf)
     if isinstance(params, str):
         params = dict(orjson.loads(params))
     # Initialize Core Objects
