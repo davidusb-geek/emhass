@@ -2649,14 +2649,8 @@ def log_runtime_banner(logger, optim_conf: dict | None = None):
         from importlib.metadata import version as _pkg_version
 
         _ver = _pkg_version("emhass")
-        active = None
-        try:
-            if isinstance(optim_conf, dict) and "lp_solver" in optim_conf:
-                active = str(optim_conf["lp_solver"])
-        except Exception:
-            active = None
-        if active:
-            solver = active
+        if isinstance(optim_conf, dict) and "lp_solver" in optim_conf:
+            solver = str(optim_conf["lp_solver"])
         else:
             solvers = _cvx.installed_solvers()
             solver = solvers[0] if solvers else "none"
