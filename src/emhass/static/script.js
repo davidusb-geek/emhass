@@ -287,7 +287,7 @@ function initStickyTables() {
         table.getBoundingClientRect().bottom > 0;
       if (shouldShow !== shown) {
         shown = shouldShow;
-        wrapper.style.display = shouldShow ? "block" : "none";
+        wrapper.style.visibility = shouldShow ? "visible" : "hidden";
       }
     };
     window.addEventListener("scroll", updateVisibility, { passive: true });
