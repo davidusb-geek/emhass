@@ -1130,12 +1130,14 @@ async def set_input_data_dict(
         # Dayahead uses granular per-stage timing inside _prepare_dayahead_optim;
         # no coarse outer wrap here to avoid double-counting.
         result = await _prepare_dayahead_optim(ctx, stage_times=stage_times)
+    elif set_type == "perfect-optim":
+        # Perfect uses historical HA data; no input_data stage timing —
+        # price_prep / optim_solve / publish are timed inside perfect_forecast_optim.
+        result = await _prepare_perfect_optim(ctx)
     else:
         _t0_input_data = time.perf_counter()
         try:
-            if set_type == "perfect-optim":
-                result = await _prepare_perfect_optim(ctx)
-            elif set_type == "naive-mpc-optim":
+            if set_type == "naive-mpc-optim":
                 result = await _prepare_naive_mpc_optim(ctx)
             elif set_type in ["forecast-model-fit", "forecast-model-predict", "forecast-model-tune"]:
                 result = await _prepare_ml_fit_predict(ctx)
@@ -1250,23 +1252,35 @@ async def perfect_forecast_optim(
     """
     logger.info("Performing perfect forecast optimization")
     # Load cost and prod price forecast
-    df_input_data = input_data_dict["fcst"].get_load_cost_forecast(
-        input_data_dict["df_input_data"],
-        method=input_data_dict["fcst"].optim_conf["load_cost_forecast_method"],
-        list_and_perfect=True,
-    )
+    _t0 = time.perf_counter()
+    try:
+        df_input_data = input_data_dict["fcst"].get_load_cost_forecast(
+            input_data_dict["df_input_data"],
+            method=input_data_dict["fcst"].optim_conf["load_cost_forecast_method"],
+            list_and_perfect=True,
+        )
+        if isinstance(df_input_data, bool) and not df_input_data:
+            return False
+        df_input_data = input_data_dict["fcst"].get_prod_price_forecast(
+            df_input_data,
+            method=input_data_dict["fcst"].optim_conf["production_price_forecast_method"],
+            list_and_perfect=True,
+        )
+    finally:
+        _dt = time.perf_counter() - _t0
+        input_data_dict["stage_times"]["price_prep"] = _dt
+        logger.debug(f"Stage [price_prep] completed in {_dt:.3f}s")
     if isinstance(df_input_data, bool) and not df_input_data:
         return False
-    df_input_data = input_data_dict["fcst"].get_prod_price_forecast(
-        df_input_data,
-        method=input_data_dict["fcst"].optim_conf["production_price_forecast_method"],
-        list_and_perfect=True,
-    )
-    if isinstance(df_input_data, bool) and not df_input_data:
-        return False
-    opt_res = input_data_dict["opt"].perform_perfect_forecast_optim(
-        df_input_data, input_data_dict["days_list"]
-    )
+    _t0 = time.perf_counter()
+    try:
+        opt_res = input_data_dict["opt"].perform_perfect_forecast_optim(
+            df_input_data, input_data_dict["days_list"]
+        )
+    finally:
+        _dt = time.perf_counter() - _t0
+        input_data_dict["stage_times"]["optim_solve"] = _dt
+        logger.debug(f"Stage [optim_solve] completed in {_dt:.3f}s")
     # Save CSV file for analysis
     if save_data_to_file:
         filename = "opt_res_perfect_optim_" + input_data_dict["costfun"] + ".csv"
@@ -1286,8 +1300,24 @@ async def perfect_forecast_optim(
     if input_data_dict["retrieve_hass_conf"].get("continual_publish", False) or params[
         "passed_data"
     ].get("entity_save", False):
-        # Trigger the publish function, save entity data and not post to HA
-        await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
+        _t0 = time.perf_counter()
+        try:
+            # Trigger the publish function, save entity data and not post to HA
+            await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
+        finally:
+            _dt = time.perf_counter() - _t0
+            input_data_dict["stage_times"]["publish"] = _dt
+            logger.debug(f"Stage [publish] completed in {_dt:.3f}s")
+
+    stage_times = input_data_dict.get("stage_times", {})
+    if stage_times:
+        total = sum(stage_times.values())
+        top_name, top_s = max(stage_times.items(), key=lambda x: x[1])
+        pct = int(100 * top_s / total) if total > 0 else 0
+        logger.info(
+            f"Optimization completed in {total:.1f}s "
+            f"(top: {top_name}={top_s:.1f}s, {pct}%)"
+        )
 
     return opt_res
 
