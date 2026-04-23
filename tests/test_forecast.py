@@ -231,6 +231,24 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         # )
         # fig.show()
 
+    # Regression test for #521: daytime branch of apply_weighting returns the raw
+    # regression output, which can be negative (e.g. LassoRegression extrapolating
+    # on a cloudy day after sunny training history). Result must be clamped to >= 0.
+    async def test_pv_forecast_adjust_clamps_negative(self):
+        idx = pd.date_range("2026-04-19 10:00:00", periods=4, freq="15min", tz=self.fcst.time_zone)
+        forecasted_pv = pd.DataFrame({"forecast": [500.0, 600.0, 700.0, 800.0]}, index=idx)
+
+        class _NegativePredictModel:
+            def predict(self, X):
+                return np.full(len(X), -150.0)
+
+        self.fcst.model_adjust_pv = _NegativePredictModel()
+        result = self.fcst.adjust_pv_forecast_predict(forecasted_pv=forecasted_pv)
+        self.assertTrue(
+            (result["adjusted_forecast"] >= 0).all(),
+            f"Adjusted forecast must be >= 0, got: {result['adjusted_forecast'].tolist()}",
+        )
+
     # Test output weather forecast using openmeteo with mock get request data
     async def test_get_weather_forecast_openmeteo_method_mock(self):
         test_data_path = emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2"
