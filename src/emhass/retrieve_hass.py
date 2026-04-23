@@ -1,8 +1,10 @@
 import asyncio
+import ast
 import copy
 import logging
 import os
 import pathlib
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Self
@@ -647,18 +649,51 @@ class RetrieveHass:
         if end_time < requested_end:
             self.logger.debug(f"End time capped at current time (requested: {requested_end})")
 
-        # Collect sensor dataframes
+        # Collect sensor dataframes (raw sensors and expression outputs)
         sensor_dfs = []
+        sensor_cache: dict[str, pd.DataFrame | None] = {}
         global_min_time = None
         global_max_time = None
 
-        for sensor in filter(None, var_list):
-            df_sensor = self._fetch_sensor_data(client, sensor, start_time, end_time)
-            if df_sensor is not None:
-                sensor_dfs.append(df_sensor)
+        for variable in filter(None, var_list):
+            df_variable = None
+
+            if self._is_influx_expression(variable):
+                try:
+                    parsed_expression, entities, token_to_entity = self._extract_influx_expression_entities(variable)
+                    series_mapping: dict[str, pd.Series] = {}
+
+                    for token, entity in token_to_entity.items():
+                        if entity not in sensor_cache:
+                            sensor_cache[entity] = self._fetch_sensor_data(
+                                client, entity, start_time, end_time
+                            )
+                        df_entity = sensor_cache[entity]
+                        if df_entity is None:
+                            raise ValueError(f"No data available for entity '{entity}'")
+                        series_mapping[token] = df_entity[entity]
+
+                    expression_result = self._evaluate_influx_expression(
+                        parsed_expression, series_mapping
+                    )
+                    df_variable = pd.DataFrame({variable: expression_result})
+                    self.logger.debug(
+                        f"Evaluated InfluxDB expression '{variable}' with entities: {entities}"
+                    )
+                except Exception as e:
+                    self.logger.error(f"Failed to evaluate InfluxDB expression '{variable}': {e}")
+            else:
+                if variable not in sensor_cache:
+                    sensor_cache[variable] = self._fetch_sensor_data(
+                        client, variable, start_time, end_time
+                    )
+                df_variable = sensor_cache[variable]
+
+            if df_variable is not None and not df_variable.empty:
+                sensor_dfs.append(df_variable)
                 # Track global time range
-                sensor_min = df_sensor.index.min()
-                sensor_max = df_sensor.index.max()
+                sensor_min = df_variable.index.min()
+                sensor_max = df_variable.index.max()
                 global_min_time = min(global_min_time or sensor_min, sensor_min)
                 global_max_time = max(global_max_time or sensor_max, sensor_max)
 
@@ -694,6 +729,68 @@ class RetrieveHass:
         self.var_list = var_list
         self.logger.info(f"InfluxDB data retrieval completed: {self.df_final.shape}")
         return True
+
+    def _is_influx_expression(self, variable: str) -> bool:
+        """Check if variable uses arithmetic expression syntax: {{ ... }}."""
+        stripped = variable.strip() if isinstance(variable, str) else ""
+        return stripped.startswith("{{") and stripped.endswith("}}")
+
+    def _extract_influx_expression_entities(self, expression: str) -> tuple[str, list[str], dict[str, str]]:
+        """
+        Replace quoted entity IDs in an expression with safe variable tokens.
+
+        Example:
+        "{{'sensor.a' - 'sensor.b' * 1000}}" -> ("_v0 - _v1 * 1000", ["sensor.a", "sensor.b"], {"_v0": "sensor.a", ...})
+        """
+        expression_body = expression.strip()[2:-2].strip()
+        matches = list(re.finditer(r"'([^']+)'|\"([^\"]+)\"", expression_body))
+        if not matches:
+            raise ValueError("Expression does not contain quoted entity IDs.")
+
+        entities: list[str] = []
+        token_to_entity: dict[str, str] = {}
+        entity_to_token: dict[str, str] = {}
+
+        def replace_entity(match: re.Match[str]) -> str:
+            entity = match.group(1) or match.group(2)
+            if entity not in entity_to_token:
+                token = f"_v{len(entity_to_token)}"
+                entity_to_token[entity] = token
+                token_to_entity[token] = entity
+                entities.append(entity)
+            return entity_to_token[entity]
+
+        parsed_expression = re.sub(r"'([^']+)'|\"([^\"]+)\"", replace_entity, expression_body)
+        return parsed_expression, entities, token_to_entity
+
+    def _evaluate_influx_expression(
+        self, parsed_expression: str, series_mapping: dict[str, pd.Series]
+    ) -> pd.Series:
+        """Safely evaluate arithmetic expression using pandas Series and constants."""
+        allowed_nodes = (
+            ast.Expression,
+            ast.BinOp,
+            ast.UnaryOp,
+            ast.Add,
+            ast.Sub,
+            ast.Mult,
+            ast.Div,
+            ast.Pow,
+            ast.Mod,
+            ast.USub,
+            ast.UAdd,
+            ast.Name,
+            ast.Load,
+            ast.Constant,
+        )
+        tree = ast.parse(parsed_expression, mode="eval")
+        for node in ast.walk(tree):
+            if not isinstance(node, allowed_nodes):
+                raise ValueError(f"Unsupported expression element: {type(node).__name__}")
+            if isinstance(node, ast.Name) and node.id not in series_mapping:
+                raise ValueError(f"Unknown entity token in expression: {node.id}")
+
+        return eval(compile(tree, "<influx_expression>", "eval"), {"__builtins__": {}}, series_mapping)
 
     def _init_influx_client(self):
         """Initialize InfluxDB client connection."""
