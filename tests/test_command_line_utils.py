@@ -346,12 +346,18 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             logger,
             get_data_from_file=True,
         )
-        opt_res = await perfect_forecast_optim(input_data_dict, logger, debug=True)
+        with self.assertLogs(logger, level="INFO") as cm:
+            opt_res = await perfect_forecast_optim(input_data_dict, logger, debug=True)
         self.assertIsInstance(opt_res, pd.DataFrame)
         self.assertEqual(opt_res.isnull().sum().sum(), 0)
         self.assertIsInstance(opt_res.index, pd.core.indexes.datetimes.DatetimeIndex)
         self.assertIsInstance(opt_res.index.dtype, pd.core.dtypes.dtypes.DatetimeTZDtype)
         self.assertIn("cost_fun_" + input_data_dict["costfun"], opt_res.columns)
+        self.assertIn(
+            "Optimization completed in",
+            "\n".join(cm.output),
+            "Summary line missing — expected one INFO record from orchestrator",
+        )
 
     # Test naive mpc optimization
     async def test_naive_mpc_optim(self):
