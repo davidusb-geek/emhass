@@ -2633,3 +2633,27 @@ def resample_and_filter_data(
     except Exception as e:
         logger.error(f"Error during resampling: {e}")
         return False
+
+
+def log_runtime_banner(logger):
+    """Log a single INFO line with EMHASS/Python/CVXPY/platform info for bug-report reproducibility."""
+    try:
+        import platform as _plat
+        import cvxpy as _cvx
+        from importlib.metadata import version as _pkg_version
+
+        _ver = _pkg_version("emhass")
+        solvers = _cvx.installed_solvers()
+        solver = solvers[0] if solvers else "none"
+        logger.info(
+            f"EMHASS {_ver} | Python {_plat.python_version()} | "
+            f"CVXPY {_cvx.__version__} ({solver}) | "
+            f"{_plat.system()}-{_plat.machine()}"
+        )
+    except Exception as err:
+        try:
+            from importlib.metadata import version as _pkg_version
+            _ver = _pkg_version("emhass")
+            logger.info(f"EMHASS {_ver} (runtime info unavailable: {err})")
+        except Exception:
+            logger.info("EMHASS (runtime info unavailable)")
