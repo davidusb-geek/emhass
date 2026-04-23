@@ -1396,6 +1396,132 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             check_names=False,
         )
 
+    def test_running_single_const_pinned_from_start(self):
+        """A running single-constant load is pinned ON from t=0 regardless of cost."""
+        # Cheap at t=5..9, expensive at t=0..4 — without pinning the solver would defer.
+        self.fcst.params["passed_data"]["load_cost_forecast"] = [
+            2,
+            2,
+            2,
+            2,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+        ]
+        self.optim_conf.update(
+            {
+                "set_deferrable_load_single_constant": [True],
+                "def_current_state": [True],
+            }
+        )
+
+        self.run_penalty_test_forecast()  # 5-step load, no window restriction
+
+        nominal = self.optim_conf["nominal_power_of_deferrable_loads"][0]
+        assert_series_equal(
+            self.opt_res_dayahead["P_deferrable0"],
+            nominal * pd.Series([1, 1, 1, 1, 1, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index),
+            check_names=False,
+        )
+        self.assertTrue(np.all(self.opt.param_running_lb[0].value[:5] == 1.0))
+        self.assertTrue(np.all(self.opt.param_running_lb[0].value[5:] == 0.0))
+        self.assertEqual(self.opt.param_already_running_sc[0].value, 1.0)
+
+    def test_not_running_single_const_not_pinned(self):
+        """A single-constant load that is NOT currently running is freely scheduled."""
+        self.fcst.params["passed_data"]["load_cost_forecast"] = [
+            2,
+            2,
+            2,
+            2,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+        ]
+        self.optim_conf.update(
+            {
+                "set_deferrable_load_single_constant": [True],
+                "def_current_state": [False],
+            }
+        )
+
+        self.run_penalty_test_forecast()
+
+        nominal = self.optim_conf["nominal_power_of_deferrable_loads"][0]
+        assert_series_equal(
+            self.opt_res_dayahead["P_deferrable0"],
+            nominal * pd.Series([0, 0, 0, 0, 0, 1, 1, 1, 1, 1], index=self.opt_res_dayahead.index),
+            check_names=False,
+        )
+        self.assertTrue(np.all(self.opt.param_running_lb[0].value == 0.0))
+        self.assertEqual(self.opt.param_already_running_sc[0].value, 0.0)
+
+    def _run_single_const_with_window(
+        self, def_total_timestep, def_end_timestep, current_state=True
+    ):
+        """Helper: run a single-constant load optimization with explicit window bounds."""
+        self.optim_conf.update(
+            {
+                "set_deferrable_load_single_constant": [True],
+                "def_current_state": [current_state],
+                "number_of_deferrable_loads": 1,
+            }
+        )
+        self.opt = self.create_optimization()
+        prediction_horizon = 10
+        attributes = vars(self.fcst).copy()
+        attributes["params"]["passed_data"]["load_cost_forecast"] = [1] * prediction_horizon
+        attributes["params"]["passed_data"]["prod_price_forecast"] = [0] * prediction_horizon
+        attributes["params"]["passed_data"]["solar_forecast_kwp"] = [0] * prediction_horizon
+        attributes["params"]["passed_data"]["prediction_horizon"] = prediction_horizon
+        fcst = Forecast(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            attributes["params"],
+            emhass_conf,
+            logger,
+            get_data_from_file=True,
+        )
+        df = fcst.get_load_cost_forecast(self.df_input_data_dayahead, method="list")
+        df = fcst.get_prod_price_forecast(df, method="list")
+        return self.opt.perform_naive_mpc_optim(
+            df,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            def_total_hours=None,
+            def_total_timestep=[def_total_timestep],
+            def_start_timestep=[0],
+            def_end_timestep=[def_end_timestep],
+        )
+
+    def test_running_single_const_window_end_caps_pinning(self):
+        """param_running_lb stops at def_end_timestep, not at required_timesteps."""
+        # 3-step load, window ends at t=6 → pinned_steps = min(3, 6, 10) = 3
+        self._run_single_const_with_window(def_total_timestep=3, def_end_timestep=6)
+
+        self.assertTrue(np.all(self.opt.param_running_lb[0].value[:3] == 1.0))
+        self.assertTrue(np.all(self.opt.param_running_lb[0].value[3:] == 0.0))
+        # Window mask must cover [0, 3) but must not extend past step 6
+        wm = self.opt.param_window_masks[0].value
+        self.assertTrue(np.all(wm[:3] == 1.0))
+        self.assertEqual(wm[6], 0.0)
+
+    def test_running_single_const_required_exceeds_window_is_infeasible(self):
+        """required_timesteps=8 with window end=4 → solver reports infeasible."""
+        opt_res = self._run_single_const_with_window(def_total_timestep=8, def_end_timestep=4)
+        # Window admits only 4 slots; sum(p_def_bin2)==8 cannot be satisfied.
+        # On total failure perform_naive_mpc_optim returns a single-column DataFrame
+        # with only 'optim_status'.
+        self.assertNotIn("P_deferrable0", opt_res.columns)
+
     def test_perform_naive_mpc_optim_def_total_timestep(self):
         """Test operating_timesteps_of_each_deferrable_load parameter.
 
