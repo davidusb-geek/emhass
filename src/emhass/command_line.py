@@ -1242,6 +1242,24 @@ async def weather_forecast_cache(
     return True
 
 
+def _log_optimization_summary(input_data_dict: dict, logger: logging.Logger) -> None:
+    """Emit the one-line optimization summary (total elapsed + top stage).
+
+    Reads per-stage timings recorded by the orchestrators in ``input_data_dict["stage_times"]``.
+    No-op if no stages were recorded.
+    """
+    stage_times = input_data_dict.get("stage_times", {})
+    if not stage_times:
+        return
+    total = sum(stage_times.values())
+    top_name, top_s = max(stage_times.items(), key=lambda x: x[1])
+    pct = int(100 * top_s / total) if total > 0 else 0
+    logger.info(
+        f"Optimization completed in {total:.1f}s "
+        f"(top: {top_name}={top_s:.1f}s, {pct}%)"
+    )
+
+
 async def perfect_forecast_optim(
     input_data_dict: dict,
     logger: logging.Logger,
@@ -1322,15 +1340,7 @@ async def perfect_forecast_optim(
             input_data_dict["stage_times"]["publish"] = _dt
             logger.debug(f"Stage [publish] completed in {_dt:.3f}s")
 
-    stage_times = input_data_dict.get("stage_times", {})
-    if stage_times:
-        total = sum(stage_times.values())
-        top_name, top_s = max(stage_times.items(), key=lambda x: x[1])
-        pct = int(100 * top_s / total) if total > 0 else 0
-        logger.info(
-            f"Optimization completed in {total:.1f}s "
-            f"(top: {top_name}={top_s:.1f}s, {pct}%)"
-        )
+    _log_optimization_summary(input_data_dict, logger)
 
     return opt_res
 
@@ -1553,15 +1563,7 @@ async def dayahead_forecast_optim(
             input_data_dict["stage_times"]["publish"] = _dt
             logger.debug(f"Stage [publish] completed in {_dt:.3f}s")
 
-    stage_times = input_data_dict.get("stage_times", {})
-    if stage_times:
-        total = sum(stage_times.values())
-        top_name, top_s = max(stage_times.items(), key=lambda x: x[1])
-        pct = int(100 * top_s / total) if total > 0 else 0
-        logger.info(
-            f"Optimization completed in {total:.1f}s "
-            f"(top: {top_name}={top_s:.1f}s, {pct}%)"
-        )
+    _log_optimization_summary(input_data_dict, logger)
 
     return opt_res_dayahead
 
@@ -1667,15 +1669,7 @@ async def naive_mpc_optim(
             input_data_dict["stage_times"]["publish"] = _dt
             logger.debug(f"Stage [publish] completed in {_dt:.3f}s")
 
-    stage_times = input_data_dict.get("stage_times", {})
-    if stage_times:
-        total = sum(stage_times.values())
-        top_name, top_s = max(stage_times.items(), key=lambda x: x[1])
-        pct = int(100 * top_s / total) if total > 0 else 0
-        logger.info(
-            f"Optimization completed in {total:.1f}s "
-            f"(top: {top_name}={top_s:.1f}s, {pct}%)"
-        )
+    _log_optimization_summary(input_data_dict, logger)
 
     return opt_res_naive_mpc
 
