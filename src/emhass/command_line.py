@@ -8,6 +8,7 @@ import os
 import pathlib
 import pickle
 import threading
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
@@ -18,6 +19,7 @@ import orjson
 import pandas as pd
 
 from emhass import utils
+from emhass.utils import log_runtime_banner
 from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
@@ -966,6 +968,8 @@ async def set_input_data_dict(
     :rtype: dict
 
     """
+    log_runtime_banner(logger)
+    stage_times = {}
     logger.info("Setting up needed data")
     # Parse Parameters
     if (params is not None) and (params != "null"):
@@ -1104,26 +1108,32 @@ async def set_input_data_dict(
     }
     # Delegate to Helpers based on set_type
     result = None
-    if set_type == "perfect-optim":
-        result = await _prepare_perfect_optim(ctx)
-    elif set_type == "dayahead-optim":
-        result = await _prepare_dayahead_optim(ctx)
-    elif set_type == "naive-mpc-optim":
-        result = await _prepare_naive_mpc_optim(ctx)
-    elif set_type in ["forecast-model-fit", "forecast-model-predict", "forecast-model-tune"]:
-        result = await _prepare_ml_fit_predict(ctx)
-    elif set_type == "regressor-model-fit":
-        result = _prepare_regressor_fit(ctx)
-    elif set_type == "regressor-model-predict":
-        if get_data_from_file:
+    _t0_input_data = time.perf_counter()
+    try:
+        if set_type == "perfect-optim":
+            result = await _prepare_perfect_optim(ctx)
+        elif set_type == "dayahead-optim":
+            result = await _prepare_dayahead_optim(ctx)
+        elif set_type == "naive-mpc-optim":
+            result = await _prepare_naive_mpc_optim(ctx)
+        elif set_type in ["forecast-model-fit", "forecast-model-predict", "forecast-model-tune"]:
+            result = await _prepare_ml_fit_predict(ctx)
+        elif set_type == "regressor-model-fit":
             result = _prepare_regressor_fit(ctx)
-        else:
+        elif set_type == "regressor-model-predict":
+            if get_data_from_file:
+                result = _prepare_regressor_fit(ctx)
+            else:
+                result = {}
+        elif set_type == "publish-data" or set_type == "export-influxdb-to-csv":
             result = {}
-    elif set_type == "publish-data" or set_type == "export-influxdb-to-csv":
-        result = {}
-    else:
-        logger.error(f"The passed action set_type parameter '{set_type}' is not valid")
-        result = {}
+        else:
+            logger.error(f"The passed action set_type parameter '{set_type}' is not valid")
+            result = {}
+    finally:
+        _dt_input_data = time.perf_counter() - _t0_input_data
+        stage_times["input_data"] = _dt_input_data
+        logger.debug(f"Stage [input_data] completed in {_dt_input_data:.3f}s")
     if result is None:
         return False
     data_results.update(result)
@@ -1138,6 +1148,7 @@ async def set_input_data_dict(
         "fcst": fcst,
         "costfun": costfun,
         "params": params,
+        "stage_times": stage_times,
         **data_results,
     }
     return input_data_dict
