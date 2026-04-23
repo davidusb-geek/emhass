@@ -2331,6 +2331,8 @@ class TestHeatingDemand(unittest.TestCase):
         loss_manual_warm = base_loss * (1 - 2 * 1)
         self.assertAlmostEqual(loss_manual_warm, -base_loss, places=6)
 
+
+class TestRuntimeBanner(unittest.TestCase):
     def test_log_runtime_banner_logs_info(self):
         from emhass.utils import log_runtime_banner
 
@@ -2355,6 +2357,21 @@ class TestHeatingDemand(unittest.TestCase):
                 log_runtime_banner(test_logger)  # must not raise
         self.assertEqual(len(cm.output), 1)
         self.assertIn("runtime info unavailable", cm.records[0].getMessage())
+
+    def test_log_runtime_banner_uses_active_solver_from_optim_conf(self):
+        from emhass.utils import log_runtime_banner
+
+        test_logger = logging.getLogger("emhass-test-banner-active")
+        with self.assertLogs("emhass-test-banner-active", level="INFO") as cm:
+            log_runtime_banner(test_logger, optim_conf={"lp_solver": "COIN_CMD"})
+        self.assertEqual(len(cm.output), 1, f"Expected one INFO record, got {len(cm.output)}")
+        msg = cm.records[0].getMessage()
+        self.assertIn("COIN_CMD", msg, f"Expected active solver in banner: {msg!r}")
+        self.assertRegex(
+            msg,
+            r"^EMHASS \S+ \| Python \S+ \| CVXPY \S+ \(COIN_CMD\) \| \S+-\S+$",
+            f"Banner format mismatch: {msg!r}",
+        )
 
 
 if __name__ == "__main__":

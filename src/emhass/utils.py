@@ -2635,16 +2635,31 @@ def resample_and_filter_data(
         return False
 
 
-def log_runtime_banner(logger):
-    """Log a single INFO line with EMHASS/Python/CVXPY/platform info for bug-report reproducibility."""
+def log_runtime_banner(logger, optim_conf: dict | None = None):
+    """Log a single INFO line with EMHASS/Python/CVXPY/platform info for bug-report reproducibility.
+
+    When ``optim_conf`` is provided and contains an ``lp_solver`` key, the
+    configured solver is shown (this is the one actually used by the LP).
+    Otherwise falls back to ``cvxpy.installed_solvers()[0]`` — useful for
+    early-fail paths where config is not yet available.
+    """
     try:
         import platform as _plat
         import cvxpy as _cvx
         from importlib.metadata import version as _pkg_version
 
         _ver = _pkg_version("emhass")
-        solvers = _cvx.installed_solvers()
-        solver = solvers[0] if solvers else "none"
+        active = None
+        try:
+            if isinstance(optim_conf, dict) and "lp_solver" in optim_conf:
+                active = str(optim_conf["lp_solver"])
+        except Exception:
+            active = None
+        if active:
+            solver = active
+        else:
+            solvers = _cvx.installed_solvers()
+            solver = solvers[0] if solvers else "none"
         logger.info(
             f"EMHASS {_ver} | Python {_plat.python_version()} | "
             f"CVXPY {_cvx.__version__} ({solver}) | "
