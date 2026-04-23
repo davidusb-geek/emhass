@@ -854,25 +854,43 @@ async def _get_naive_mpc_pv_forecast(ctx: SetupContext, set_mix_forecast, df_inp
     return p_pv_forecast, df_weather
 
 
-async def _prepare_naive_mpc_optim(ctx: SetupContext):
-    """Helper to prepare data for Naive MPC optimization."""
+async def _prepare_naive_mpc_optim(ctx: SetupContext, stage_times: dict | None = None):
+    """Helper to prepare data for Naive MPC optimization.
+
+    :param stage_times: Optional dict to record per-stage elapsed times (seconds).
+    :type stage_times: dict, optional
+    """
+    if stage_times is None:
+        stage_times = {}
     # Retrieve Historical Data
     success, df_input_data, days_list, set_mix_forecast = await _get_naive_mpc_history(ctx)
     if not success:
         return None
     # Get PV Forecast
-    p_pv_forecast, df_weather = await _get_naive_mpc_pv_forecast(
-        ctx, set_mix_forecast, df_input_data
-    )
+    _t0 = time.perf_counter()
+    try:
+        p_pv_forecast, df_weather = await _get_naive_mpc_pv_forecast(
+            ctx, set_mix_forecast, df_input_data
+        )
+    finally:
+        _dt = time.perf_counter() - _t0
+        stage_times["pv_forecast"] = _dt
+        ctx.logger.debug(f"Stage [pv_forecast] completed in {_dt:.3f}s")
     if p_pv_forecast is None:
         return None
     # Get Load Forecast
-    p_load_forecast = await ctx.fcst.get_load_forecast(
-        days_min_load_forecast=ctx.optim_conf["delta_forecast_daily"].days,
-        method=ctx.optim_conf["load_forecast_method"],
-        set_mix_forecast=set_mix_forecast,
-        df_now=df_input_data,
-    )
+    _t0 = time.perf_counter()
+    try:
+        p_load_forecast = await ctx.fcst.get_load_forecast(
+            days_min_load_forecast=ctx.optim_conf["delta_forecast_daily"].days,
+            method=ctx.optim_conf["load_forecast_method"],
+            set_mix_forecast=set_mix_forecast,
+            df_now=df_input_data,
+        )
+    finally:
+        _dt = time.perf_counter() - _t0
+        stage_times["load_forecast"] = _dt
+        ctx.logger.debug(f"Stage [load_forecast] completed in {_dt:.3f}s")
     if isinstance(p_load_forecast, bool) and not p_load_forecast:
         return None
     # Build and Format Input DataFrame
@@ -1134,29 +1152,24 @@ async def set_input_data_dict(
         # Perfect uses historical HA data; no input_data stage timing —
         # price_prep / optim_solve / publish are timed inside perfect_forecast_optim.
         result = await _prepare_perfect_optim(ctx)
+    elif set_type == "naive-mpc-optim":
+        # Naive MPC uses granular per-stage timing inside _prepare_naive_mpc_optim;
+        # no coarse outer wrap here to avoid double-counting.
+        result = await _prepare_naive_mpc_optim(ctx, stage_times=stage_times)
+    elif set_type in ["forecast-model-fit", "forecast-model-predict", "forecast-model-tune"]:
+        result = await _prepare_ml_fit_predict(ctx)
+    elif set_type == "regressor-model-fit":
+        result = _prepare_regressor_fit(ctx)
+    elif set_type == "regressor-model-predict":
+        if get_data_from_file:
+            result = _prepare_regressor_fit(ctx)
+        else:
+            result = {}
+    elif set_type == "publish-data" or set_type == "export-influxdb-to-csv":
+        result = {}
     else:
-        _t0_input_data = time.perf_counter()
-        try:
-            if set_type == "naive-mpc-optim":
-                result = await _prepare_naive_mpc_optim(ctx)
-            elif set_type in ["forecast-model-fit", "forecast-model-predict", "forecast-model-tune"]:
-                result = await _prepare_ml_fit_predict(ctx)
-            elif set_type == "regressor-model-fit":
-                result = _prepare_regressor_fit(ctx)
-            elif set_type == "regressor-model-predict":
-                if get_data_from_file:
-                    result = _prepare_regressor_fit(ctx)
-                else:
-                    result = {}
-            elif set_type == "publish-data" or set_type == "export-influxdb-to-csv":
-                result = {}
-            else:
-                logger.error(f"The passed action set_type parameter '{set_type}' is not valid")
-                result = {}
-        finally:
-            _dt_input_data = time.perf_counter() - _t0_input_data
-            stage_times["input_data"] = _dt_input_data
-            logger.debug(f"Stage [input_data] completed in {_dt_input_data:.3f}s")
+        logger.error(f"The passed action set_type parameter '{set_type}' is not valid")
+        result = {}
     if result is None:
         return False
     data_results.update(result)
@@ -1576,9 +1589,15 @@ async def naive_mpc_optim(
     """
     logger.info("Performing naive MPC optimization")
     # Prepare forecast data with costs, prices, outdoor temp, and GHI (with resolution warning)
-    df_input_data_dayahead = prepare_forecast_and_weather_data(
-        input_data_dict, logger, warn_on_resolution=True
-    )
+    _t0 = time.perf_counter()
+    try:
+        df_input_data_dayahead = prepare_forecast_and_weather_data(
+            input_data_dict, logger, warn_on_resolution=True
+        )
+    finally:
+        _dt = time.perf_counter() - _t0
+        input_data_dict["stage_times"]["price_prep"] = _dt
+        logger.debug(f"Stage [price_prep] completed in {_dt:.3f}s")
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
     # The specifics params for the MPC at runtime
@@ -1600,18 +1619,24 @@ async def naive_mpc_optim(
     def_end_timestep = input_data_dict["params"]["optim_conf"][
         "end_timesteps_of_each_deferrable_load"
     ]
-    opt_res_naive_mpc = input_data_dict["opt"].perform_naive_mpc_optim(
-        df_input_data_dayahead,
-        input_data_dict["p_pv_forecast"],
-        input_data_dict["p_load_forecast"],
-        prediction_horizon,
-        soc_init,
-        soc_final,
-        def_total_hours,
-        def_total_timestep,
-        def_start_timestep,
-        def_end_timestep,
-    )
+    _t0 = time.perf_counter()
+    try:
+        opt_res_naive_mpc = input_data_dict["opt"].perform_naive_mpc_optim(
+            df_input_data_dayahead,
+            input_data_dict["p_pv_forecast"],
+            input_data_dict["p_load_forecast"],
+            prediction_horizon,
+            soc_init,
+            soc_final,
+            def_total_hours,
+            def_total_timestep,
+            def_start_timestep,
+            def_end_timestep,
+        )
+    finally:
+        _dt = time.perf_counter() - _t0
+        input_data_dict["stage_times"]["optim_solve"] = _dt
+        logger.debug(f"Stage [optim_solve] completed in {_dt:.3f}s")
     # Save CSV file for publish_data
     if save_data_to_file:
         today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1633,8 +1658,24 @@ async def naive_mpc_optim(
     if input_data_dict["retrieve_hass_conf"].get("continual_publish", False) or params[
         "passed_data"
     ].get("entity_save", False):
-        # Trigger the publish function, save entity data and not post to HA
-        await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
+        _t0 = time.perf_counter()
+        try:
+            # Trigger the publish function, save entity data and not post to HA
+            await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
+        finally:
+            _dt = time.perf_counter() - _t0
+            input_data_dict["stage_times"]["publish"] = _dt
+            logger.debug(f"Stage [publish] completed in {_dt:.3f}s")
+
+    stage_times = input_data_dict.get("stage_times", {})
+    if stage_times:
+        total = sum(stage_times.values())
+        top_name, top_s = max(stage_times.items(), key=lambda x: x[1])
+        pct = int(100 * top_s / total) if total > 0 else 0
+        logger.info(
+            f"Optimization completed in {total:.1f}s "
+            f"(top: {top_name}={top_s:.1f}s, {pct}%)"
+        )
 
     return opt_res_naive_mpc
 
