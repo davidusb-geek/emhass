@@ -682,7 +682,7 @@ class RetrieveHass:
                     self.logger.debug(
                         f"Evaluated InfluxDB expression '{variable}' with entities: {entities}"
                     )
-                except Exception:
+                except (ValueError, SyntaxError):
                     self.logger.exception(
                         f"Failed to evaluate InfluxDB expression '{variable}'"
                     )
