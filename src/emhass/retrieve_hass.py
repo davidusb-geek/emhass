@@ -1,6 +1,7 @@
 import asyncio
 import ast
 import copy
+import operator
 import logging
 import os
 import pathlib
@@ -652,6 +653,7 @@ class RetrieveHass:
         # Collect sensor dataframes (raw sensors and expression outputs)
         sensor_dfs = []
         sensor_cache: dict[str, pd.DataFrame | None] = {}
+        failed_variables: list[str] = []
         global_min_time = None
         global_max_time = None
 
@@ -680,14 +682,19 @@ class RetrieveHass:
                     self.logger.debug(
                         f"Evaluated InfluxDB expression '{variable}' with entities: {entities}"
                     )
-                except Exception as e:
-                    self.logger.error(f"Failed to evaluate InfluxDB expression '{variable}': {e}")
+                except Exception:
+                    self.logger.exception(
+                        f"Failed to evaluate InfluxDB expression '{variable}'"
+                    )
+                    failed_variables.append(variable)
             else:
                 if variable not in sensor_cache:
                     sensor_cache[variable] = self._fetch_sensor_data(
                         client, variable, start_time, end_time
                     )
                 df_variable = sensor_cache[variable]
+                if df_variable is None:
+                    failed_variables.append(variable)
 
             if df_variable is not None and not df_variable.empty:
                 sensor_dfs.append(df_variable)
@@ -698,6 +705,12 @@ class RetrieveHass:
                 global_max_time = max(global_max_time or sensor_max, sensor_max)
 
         client.close()
+
+        if failed_variables:
+            self.logger.error(
+                f"InfluxDB retrieval failed for variables: {sorted(set(failed_variables))}"
+            )
+            return False
 
         if not sensor_dfs:
             self.logger.error("No data retrieved from InfluxDB")
@@ -767,30 +780,50 @@ class RetrieveHass:
         self, parsed_expression: str, series_mapping: dict[str, pd.Series]
     ) -> pd.Series:
         """Safely evaluate arithmetic expression using pandas Series and constants."""
-        allowed_nodes = (
-            ast.Expression,
-            ast.BinOp,
-            ast.UnaryOp,
-            ast.Add,
-            ast.Sub,
-            ast.Mult,
-            ast.Div,
-            ast.Pow,
-            ast.Mod,
-            ast.USub,
-            ast.UAdd,
-            ast.Name,
-            ast.Load,
-            ast.Constant,
-        )
         tree = ast.parse(parsed_expression, mode="eval")
-        for node in ast.walk(tree):
-            if not isinstance(node, allowed_nodes):
-                raise ValueError(f"Unsupported expression element: {type(node).__name__}")
-            if isinstance(node, ast.Name) and node.id not in series_mapping:
-                raise ValueError(f"Unknown entity token in expression: {node.id}")
 
-        return eval(compile(tree, "<influx_expression>", "eval"), {"__builtins__": {}}, series_mapping)
+        binary_operators = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+            ast.Pow: operator.pow,
+            ast.Mod: operator.mod,
+        }
+        unary_operators = {
+            ast.UAdd: operator.pos,
+            ast.USub: operator.neg,
+        }
+        numeric_nodes = (ast.Constant, ast.Num) if hasattr(ast, "Num") else (ast.Constant,)
+
+        def eval_node(node):
+            if isinstance(node, ast.Expression):
+                return eval_node(node.body)
+            if isinstance(node, ast.BinOp):
+                op_type = type(node.op)
+                if op_type not in binary_operators:
+                    raise ValueError(f"Unsupported binary operator: {op_type.__name__}")
+                return binary_operators[op_type](eval_node(node.left), eval_node(node.right))
+            if isinstance(node, ast.UnaryOp):
+                op_type = type(node.op)
+                if op_type not in unary_operators:
+                    raise ValueError(f"Unsupported unary operator: {op_type.__name__}")
+                return unary_operators[op_type](eval_node(node.operand))
+            if isinstance(node, ast.Name):
+                if node.id not in series_mapping:
+                    raise ValueError(f"Unknown entity token in expression: {node.id}")
+                return series_mapping[node.id]
+            if isinstance(node, numeric_nodes):
+                value = node.n if hasattr(node, "n") else node.value
+                if not isinstance(value, int | float):
+                    raise ValueError(f"Unsupported constant type: {type(value).__name__}")
+                return value
+            raise ValueError(f"Unsupported expression element: {type(node).__name__}")
+
+        result = eval_node(tree)
+        if not isinstance(result, pd.Series):
+            raise ValueError("Expression must produce a pandas Series result.")
+        return result
 
     def _init_influx_client(self):
         """Initialize InfluxDB client connection."""
