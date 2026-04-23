@@ -722,7 +722,7 @@ th {
   top: 0;
   overflow: hidden;
   z-index: 100;
-  display: none;
+  visibility: hidden;
   margin: 0;
   padding: 0;
 }
