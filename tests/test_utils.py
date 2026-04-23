@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import json
+import logging
 import pathlib
 import unittest
 from copy import deepcopy
@@ -2329,6 +2330,31 @@ class TestHeatingDemand(unittest.TestCase):
         # Manual verification for outdoor_temp = 22°C (>= 20°C indoor)
         loss_manual_warm = base_loss * (1 - 2 * 1)
         self.assertAlmostEqual(loss_manual_warm, -base_loss, places=6)
+
+    def test_log_runtime_banner_logs_info(self):
+        from emhass.utils import log_runtime_banner
+
+        test_logger = logging.getLogger("emhass-test-banner")
+        with self.assertLogs("emhass-test-banner", level="INFO") as cm:
+            log_runtime_banner(test_logger)
+        self.assertEqual(len(cm.output), 1, f"Expected one INFO record, got {len(cm.output)}")
+        msg = cm.records[0].getMessage()
+        self.assertRegex(
+            msg,
+            r"^EMHASS \S+ \| Python \S+ \| CVXPY \S+ \(\S+\) \| \S+-\S+$",
+            f"Banner format mismatch: {msg!r}",
+        )
+
+    def test_log_runtime_banner_survives_introspection_failure(self):
+        import unittest.mock
+        from emhass.utils import log_runtime_banner
+
+        test_logger = logging.getLogger("emhass-test-banner-fail")
+        with unittest.mock.patch("cvxpy.installed_solvers", side_effect=RuntimeError("simulated solver-introspection failure")):
+            with self.assertLogs("emhass-test-banner-fail", level="INFO") as cm:
+                log_runtime_banner(test_logger)  # must not raise
+        self.assertEqual(len(cm.output), 1)
+        self.assertIn("runtime info unavailable", cm.records[0].getMessage())
 
 
 if __name__ == "__main__":
