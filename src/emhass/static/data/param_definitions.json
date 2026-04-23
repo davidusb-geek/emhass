@@ -480,8 +480,8 @@
       "default_value": false
     },
     "battery_dynamic_max": {
-      "friendly_name": "Maximum percentage of battery discharge per timestep",
-      "Description": "The maximum positive (for discharge) battery power dynamic. This is the allowed power variation (in percentage) of battery maximum power per unit of timestep",
+      "friendly_name": "Maximum percentage of battery discharge per hour",
+      "Description": "The maximum positive (for discharge) allowed power variation (in percentage of battery maximum power) per hour. The solver will automatically scale this limit down based on your chosen timestep duration.",
       "input": "float",
       "default_value": 0.9,
       "requires": {
@@ -489,8 +489,8 @@
       }
     },
     "battery_dynamic_min": {
-      "friendly_name": "Maximum percentage of battery charge per timestep",
-      "Description": "The maximum negative (for charge) battery power dynamic. This is the allowed power variation (in percentage) of battery maximum power per timestep.",
+      "friendly_name": "Maximum percentage of battery charge per hour",
+      "Description": "The maximum negative (for charge) allowed power variation (in percentage of battery maximum power) per hour. The solver will automatically scale this limit down based on your chosen timestep duration.",
       "input": "float",
       "default_value": -0.9,
       "requires": {
