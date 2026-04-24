@@ -2388,6 +2388,26 @@ class TestRuntimeBanner(unittest.TestCase):
         msg = cm.records[0].getMessage()
         self.assertIn("Highs", msg, f"Expected default Highs in banner: {msg!r}")
 
+    def test_log_runtime_banner_double_fallback_when_version_lookup_fails(self):
+        # Covers the inner except: outer introspection AND importlib.metadata.version
+        # both fail. Banner must still emit one INFO and not raise.
+        import unittest.mock
+        from emhass.utils import log_runtime_banner
+
+        test_logger = logging.getLogger("emhass-test-banner-double-fail")
+        with unittest.mock.patch(
+            "cvxpy.installed_solvers",
+            side_effect=RuntimeError("primary failure"),
+        ):
+            with unittest.mock.patch(
+                "importlib.metadata.version",
+                side_effect=RuntimeError("version lookup failure"),
+            ):
+                with self.assertLogs("emhass-test-banner-double-fail", level="INFO") as cm:
+                    log_runtime_banner(test_logger)  # must not raise
+        self.assertEqual(len(cm.output), 1)
+        self.assertIn("runtime info unavailable", cm.records[0].getMessage())
+
 
 if __name__ == "__main__":
     unittest.main()
