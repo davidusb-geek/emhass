@@ -2657,10 +2657,11 @@ def stage_timer(stage_times: dict, name: str, logger: logging.Logger | None = No
 def log_runtime_banner(logger, optim_conf: dict | None = None):
     """Log a single INFO line with EMHASS/Python/CVXPY/platform info for bug-report reproducibility.
 
-    When ``optim_conf`` is provided and contains an ``lp_solver`` key, the
-    configured solver is shown (this is the one actually used by the LP).
-    Otherwise falls back to ``cvxpy.installed_solvers()[0]`` — useful for
-    early-fail paths where config is not yet available.
+    When ``optim_conf`` is provided, the configured solver (or the EMHASS
+    default ``Highs`` when the key is absent) is shown — this matches the
+    solver the LP actually uses (see ``optimization.py`` constructor).
+    When ``optim_conf`` is missing entirely (early-fail paths), falls back
+    to ``cvxpy.installed_solvers()[0]``.
     """
     try:
         import platform as _plat
@@ -2668,8 +2669,8 @@ def log_runtime_banner(logger, optim_conf: dict | None = None):
         from importlib.metadata import version as _pkg_version
 
         _ver = _pkg_version("emhass")
-        if isinstance(optim_conf, dict) and "lp_solver" in optim_conf:
-            solver = str(optim_conf["lp_solver"])
+        if isinstance(optim_conf, dict):
+            solver = str(optim_conf.get("lp_solver", "Highs"))
         else:
             solvers = _cvx.installed_solvers()
             solver = solvers[0] if solvers else "none"
