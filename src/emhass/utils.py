@@ -7,6 +7,8 @@ import logging
 import os
 import pathlib
 import shutil
+import time
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -2633,6 +2635,23 @@ def resample_and_filter_data(
     except Exception as e:
         logger.error(f"Error during resampling: {e}")
         return False
+
+
+@contextmanager
+def stage_timer(stage_times: dict, name: str, logger: logging.Logger | None = None):
+    """Record wall-clock elapsed time of a block in ``stage_times[name]``.
+
+    Emits one DEBUG line per stage when ``logger`` is provided. Works across
+    ``await`` because ``time.perf_counter()`` is a plain monotonic read.
+    """
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        dt = time.perf_counter() - t0
+        stage_times[name] = dt
+        if logger is not None:
+            logger.debug(f"Stage [{name}] completed in {dt:.3f}s")
 
 
 def log_runtime_banner(logger, optim_conf: dict | None = None):

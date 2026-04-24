@@ -8,7 +8,6 @@ import os
 import pathlib
 import pickle
 import threading
-import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
@@ -19,7 +18,7 @@ import orjson
 import pandas as pd
 
 from emhass import utils
-from emhass.utils import log_runtime_banner
+from emhass.utils import log_runtime_banner, stage_timer
 from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
@@ -755,26 +754,16 @@ async def _prepare_dayahead_optim(ctx: SetupContext, stage_times: dict | None = 
     if stage_times is None:
         stage_times = {}
     # Get PV Forecast
-    _t0 = time.perf_counter()
-    try:
+    with stage_timer(stage_times, "pv_forecast", ctx.logger):
         p_pv_forecast, df_weather = await _get_dayahead_pv_forecast(ctx)
-    finally:
-        _dt = time.perf_counter() - _t0
-        stage_times["pv_forecast"] = _dt
-        ctx.logger.debug(f"Stage [pv_forecast] completed in {_dt:.3f}s")
     if p_pv_forecast is None:
         return None
     # Get Load Forecast
-    _t0 = time.perf_counter()
-    try:
+    with stage_timer(stage_times, "load_forecast", ctx.logger):
         p_load_forecast = await ctx.fcst.get_load_forecast(
             days_min_load_forecast=ctx.optim_conf["delta_forecast_daily"].days,
             method=ctx.optim_conf["load_forecast_method"],
         )
-    finally:
-        _dt = time.perf_counter() - _t0
-        stage_times["load_forecast"] = _dt
-        ctx.logger.debug(f"Stage [load_forecast] completed in {_dt:.3f}s")
     if isinstance(p_load_forecast, bool) and not p_load_forecast:
         ctx.logger.error("Unable to get load forecast.")
         return None
@@ -867,30 +856,20 @@ async def _prepare_naive_mpc_optim(ctx: SetupContext, stage_times: dict | None =
     if not success:
         return None
     # Get PV Forecast
-    _t0 = time.perf_counter()
-    try:
+    with stage_timer(stage_times, "pv_forecast", ctx.logger):
         p_pv_forecast, df_weather = await _get_naive_mpc_pv_forecast(
             ctx, set_mix_forecast, df_input_data
         )
-    finally:
-        _dt = time.perf_counter() - _t0
-        stage_times["pv_forecast"] = _dt
-        ctx.logger.debug(f"Stage [pv_forecast] completed in {_dt:.3f}s")
     if p_pv_forecast is None:
         return None
     # Get Load Forecast
-    _t0 = time.perf_counter()
-    try:
+    with stage_timer(stage_times, "load_forecast", ctx.logger):
         p_load_forecast = await ctx.fcst.get_load_forecast(
             days_min_load_forecast=ctx.optim_conf["delta_forecast_daily"].days,
             method=ctx.optim_conf["load_forecast_method"],
             set_mix_forecast=set_mix_forecast,
             df_now=df_input_data,
         )
-    finally:
-        _dt = time.perf_counter() - _t0
-        stage_times["load_forecast"] = _dt
-        ctx.logger.debug(f"Stage [load_forecast] completed in {_dt:.3f}s")
     if isinstance(p_load_forecast, bool) and not p_load_forecast:
         return None
     # Build and Format Input DataFrame
@@ -1283,8 +1262,7 @@ async def perfect_forecast_optim(
     """
     logger.info("Performing perfect forecast optimization")
     # Load cost and prod price forecast
-    _t0 = time.perf_counter()
-    try:
+    with stage_timer(input_data_dict["stage_times"], "price_prep", logger):
         df_input_data = input_data_dict["fcst"].get_load_cost_forecast(
             input_data_dict["df_input_data"],
             method=input_data_dict["fcst"].optim_conf["load_cost_forecast_method"],
@@ -1297,21 +1275,12 @@ async def perfect_forecast_optim(
             method=input_data_dict["fcst"].optim_conf["production_price_forecast_method"],
             list_and_perfect=True,
         )
-    finally:
-        _dt = time.perf_counter() - _t0
-        input_data_dict["stage_times"]["price_prep"] = _dt
-        logger.debug(f"Stage [price_prep] completed in {_dt:.3f}s")
     if isinstance(df_input_data, bool) and not df_input_data:
         return False
-    _t0 = time.perf_counter()
-    try:
+    with stage_timer(input_data_dict["stage_times"], "optim_solve", logger):
         opt_res = input_data_dict["opt"].perform_perfect_forecast_optim(
             df_input_data, input_data_dict["days_list"]
         )
-    finally:
-        _dt = time.perf_counter() - _t0
-        input_data_dict["stage_times"]["optim_solve"] = _dt
-        logger.debug(f"Stage [optim_solve] completed in {_dt:.3f}s")
     # Save CSV file for analysis
     if save_data_to_file:
         filename = "opt_res_perfect_optim_" + input_data_dict["costfun"] + ".csv"
@@ -1331,14 +1300,9 @@ async def perfect_forecast_optim(
     if input_data_dict["retrieve_hass_conf"].get("continual_publish", False) or params[
         "passed_data"
     ].get("entity_save", False):
-        _t0 = time.perf_counter()
-        try:
+        with stage_timer(input_data_dict["stage_times"], "publish", logger):
             # Trigger the publish function, save entity data and not post to HA
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
-        finally:
-            _dt = time.perf_counter() - _t0
-            input_data_dict["stage_times"]["publish"] = _dt
-            logger.debug(f"Stage [publish] completed in {_dt:.3f}s")
 
     _log_optimization_summary(input_data_dict, logger)
 
@@ -1511,28 +1475,18 @@ async def dayahead_forecast_optim(
     """
     logger.info("Performing day-ahead forecast optimization")
     # Prepare forecast data with costs, prices, outdoor temp, and GHI
-    _t0 = time.perf_counter()
-    try:
+    with stage_timer(input_data_dict["stage_times"], "price_prep", logger):
         df_input_data_dayahead = prepare_forecast_and_weather_data(
             input_data_dict, logger, warn_on_resolution=False
         )
-    finally:
-        _dt = time.perf_counter() - _t0
-        input_data_dict["stage_times"]["price_prep"] = _dt
-        logger.debug(f"Stage [price_prep] completed in {_dt:.3f}s")
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
-    _t0 = time.perf_counter()
-    try:
+    with stage_timer(input_data_dict["stage_times"], "optim_solve", logger):
         opt_res_dayahead = input_data_dict["opt"].perform_dayahead_forecast_optim(
             df_input_data_dayahead,
             input_data_dict["p_pv_forecast"],
             input_data_dict["p_load_forecast"],
         )
-    finally:
-        _dt = time.perf_counter() - _t0
-        input_data_dict["stage_times"]["optim_solve"] = _dt
-        logger.debug(f"Stage [optim_solve] completed in {_dt:.3f}s")
     # Save CSV file for publish_data
     if save_data_to_file:
         today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1554,14 +1508,9 @@ async def dayahead_forecast_optim(
     if input_data_dict["retrieve_hass_conf"].get("continual_publish", False) or params[
         "passed_data"
     ].get("entity_save", False):
-        _t0 = time.perf_counter()
-        try:
+        with stage_timer(input_data_dict["stage_times"], "publish", logger):
             # Trigger the publish function, save entity data and not post to HA
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
-        finally:
-            _dt = time.perf_counter() - _t0
-            input_data_dict["stage_times"]["publish"] = _dt
-            logger.debug(f"Stage [publish] completed in {_dt:.3f}s")
 
     _log_optimization_summary(input_data_dict, logger)
 
@@ -1591,15 +1540,10 @@ async def naive_mpc_optim(
     """
     logger.info("Performing naive MPC optimization")
     # Prepare forecast data with costs, prices, outdoor temp, and GHI (with resolution warning)
-    _t0 = time.perf_counter()
-    try:
+    with stage_timer(input_data_dict["stage_times"], "price_prep", logger):
         df_input_data_dayahead = prepare_forecast_and_weather_data(
             input_data_dict, logger, warn_on_resolution=True
         )
-    finally:
-        _dt = time.perf_counter() - _t0
-        input_data_dict["stage_times"]["price_prep"] = _dt
-        logger.debug(f"Stage [price_prep] completed in {_dt:.3f}s")
     if isinstance(df_input_data_dayahead, bool) and not df_input_data_dayahead:
         return False
     # The specifics params for the MPC at runtime
@@ -1621,8 +1565,7 @@ async def naive_mpc_optim(
     def_end_timestep = input_data_dict["params"]["optim_conf"][
         "end_timesteps_of_each_deferrable_load"
     ]
-    _t0 = time.perf_counter()
-    try:
+    with stage_timer(input_data_dict["stage_times"], "optim_solve", logger):
         opt_res_naive_mpc = input_data_dict["opt"].perform_naive_mpc_optim(
             df_input_data_dayahead,
             input_data_dict["p_pv_forecast"],
@@ -1635,10 +1578,6 @@ async def naive_mpc_optim(
             def_start_timestep,
             def_end_timestep,
         )
-    finally:
-        _dt = time.perf_counter() - _t0
-        input_data_dict["stage_times"]["optim_solve"] = _dt
-        logger.debug(f"Stage [optim_solve] completed in {_dt:.3f}s")
     # Save CSV file for publish_data
     if save_data_to_file:
         today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1660,14 +1599,9 @@ async def naive_mpc_optim(
     if input_data_dict["retrieve_hass_conf"].get("continual_publish", False) or params[
         "passed_data"
     ].get("entity_save", False):
-        _t0 = time.perf_counter()
-        try:
+        with stage_timer(input_data_dict["stage_times"], "publish", logger):
             # Trigger the publish function, save entity data and not post to HA
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
-        finally:
-            _dt = time.perf_counter() - _t0
-            input_data_dict["stage_times"]["publish"] = _dt
-            logger.debug(f"Stage [publish] completed in {_dt:.3f}s")
 
     _log_optimization_summary(input_data_dict, logger)
 
