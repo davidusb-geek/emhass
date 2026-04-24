@@ -2352,7 +2352,10 @@ class TestRuntimeBanner(unittest.TestCase):
         from emhass.utils import log_runtime_banner
 
         test_logger = logging.getLogger("emhass-test-banner-fail")
-        with unittest.mock.patch("cvxpy.installed_solvers", side_effect=RuntimeError("simulated solver-introspection failure")):
+        with unittest.mock.patch(
+            "cvxpy.installed_solvers",
+            side_effect=RuntimeError("simulated solver-introspection failure"),
+        ):
             with self.assertLogs("emhass-test-banner-fail", level="INFO") as cm:
                 log_runtime_banner(test_logger)  # must not raise
         self.assertEqual(len(cm.output), 1)
