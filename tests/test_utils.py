@@ -2373,6 +2373,18 @@ class TestRuntimeBanner(unittest.TestCase):
             f"Banner format mismatch: {msg!r}",
         )
 
+    def test_log_runtime_banner_defaults_to_highs_when_key_missing(self):
+        # Mirrors optimization.py default: when lp_solver is not set in optim_conf,
+        # the LP uses "Highs". Banner must match reality.
+        from emhass.utils import log_runtime_banner
+
+        test_logger = logging.getLogger("emhass-test-banner-default")
+        with self.assertLogs("emhass-test-banner-default", level="INFO") as cm:
+            log_runtime_banner(test_logger, optim_conf={})
+        self.assertEqual(len(cm.output), 1, f"Expected one INFO record, got {len(cm.output)}")
+        msg = cm.records[0].getMessage()
+        self.assertIn("Highs", msg, f"Expected default Highs in banner: {msg!r}")
+
 
 if __name__ == "__main__":
     unittest.main()
