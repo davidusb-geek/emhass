@@ -1233,10 +1233,7 @@ def _log_optimization_summary(input_data_dict: dict, logger: logging.Logger) -> 
     total = sum(stage_times.values())
     top_name, top_s = max(stage_times.items(), key=lambda x: x[1])
     pct = int(100 * top_s / total) if total > 0 else 0
-    logger.info(
-        f"Optimization completed in {total:.1f}s "
-        f"(top: {top_name}={top_s:.1f}s, {pct}%)"
-    )
+    logger.info(f"Optimization completed in {total:.1f}s (top: {top_name}={top_s:.1f}s, {pct}%)")
 
 
 async def perfect_forecast_optim(

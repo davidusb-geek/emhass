@@ -2682,6 +2682,7 @@ def log_runtime_banner(logger, optim_conf: dict | None = None):
     except Exception as err:
         try:
             from importlib.metadata import version as _pkg_version
+
             _ver = _pkg_version("emhass")
             logger.info(f"EMHASS {_ver} (runtime info unavailable: {err})")
         except Exception:
