@@ -7,6 +7,8 @@ import logging
 import os
 import pathlib
 import shutil
+import time
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -2633,3 +2635,55 @@ def resample_and_filter_data(
     except Exception as e:
         logger.error(f"Error during resampling: {e}")
         return False
+
+
+@contextmanager
+def stage_timer(stage_times: dict, name: str, logger: logging.Logger | None = None):
+    """Record wall-clock elapsed time of a block in ``stage_times[name]``.
+
+    Emits one DEBUG line per stage when ``logger`` is provided. Works across
+    ``await`` because ``time.perf_counter()`` is a plain monotonic read.
+    """
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        dt = time.perf_counter() - t0
+        stage_times[name] = dt
+        if logger is not None:
+            logger.debug(f"Stage [{name}] completed in {dt:.3f}s")
+
+
+def log_runtime_banner(logger, optim_conf: dict | None = None):
+    """Log a single INFO line with EMHASS/Python/CVXPY/platform info for bug-report reproducibility.
+
+    When ``optim_conf`` is provided, the configured solver (or the EMHASS
+    default ``Highs`` when the key is absent) is shown — this matches the
+    solver the LP actually uses (see ``optimization.py`` constructor).
+    When ``optim_conf`` is missing entirely (early-fail paths), falls back
+    to ``cvxpy.installed_solvers()[0]``.
+    """
+    try:
+        import platform as _plat
+        import cvxpy as _cvx
+        from importlib.metadata import version as _pkg_version
+
+        _ver = _pkg_version("emhass")
+        if isinstance(optim_conf, dict):
+            solver = str(optim_conf.get("lp_solver", "Highs"))
+        else:
+            solvers = _cvx.installed_solvers()
+            solver = solvers[0] if solvers else "none"
+        logger.info(
+            f"EMHASS {_ver} | Python {_plat.python_version()} | "
+            f"CVXPY {_cvx.__version__} ({solver}) | "
+            f"{_plat.system()}-{_plat.machine()}"
+        )
+    except Exception as err:
+        try:
+            from importlib.metadata import version as _pkg_version
+
+            _ver = _pkg_version("emhass")
+            logger.info(f"EMHASS {_ver} (runtime info unavailable: {err})")
+        except Exception:
+            logger.info("EMHASS (runtime info unavailable)")
