@@ -6,7 +6,7 @@ import os
 import pickle
 import pickle as cPickle
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import aiofiles
@@ -14,6 +14,7 @@ import aiohttp
 import numpy as np
 import orjson
 import pandas as pd
+import requests
 from pvlib.irradiance import disc
 from pvlib.location import Location
 from pvlib.modelchain import ModelChain
@@ -1602,6 +1603,106 @@ class Forecast:
         self.logger.debug("get_load_forecast returning:\n%s", p_load_forecast)
         return p_load_forecast
 
+    def _get_octopus_tariff_data(
+        self,
+        tariff_base: str,
+        tariff_code: str,
+        start_date: pd.Timestamp,
+        end_date: pd.Timestamp,
+    ) -> list[dict]:
+        r"""
+        Get data for a specified tariff (import or export) from the Octopus \
+        Energy API. Used by cost/price forecast function where 'octopus' is \
+        specified as the data source.
+        """
+        base_url = "https://api.octopus.energy/v1/products"
+        if not tariff_base or not tariff_code:
+            raise ValueError(
+                "Octopus tariff configuration is missing. Please provide both tariff base and tariff code."
+            )
+        url = f"{base_url}/{tariff_base}/electricity-tariffs/{tariff_code}/standard-unit-rates/"
+        request_timeout = self.optim_conf.get("octopus_energy_request_timeout", 30)
+
+        start_utc = pd.Timestamp(start_date)
+        end_utc = pd.Timestamp(end_date)
+        if start_utc.tz is None:
+            start_utc = start_utc.tz_localize("UTC")
+        else:
+            start_utc = start_utc.tz_convert("UTC")
+        if end_utc.tz is None:
+            end_utc = end_utc.tz_localize("UTC")
+        else:
+            end_utc = end_utc.tz_convert("UTC")
+        params = {
+            "period_from": start_utc.to_pydatetime().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "period_to": end_utc.to_pydatetime().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        results = []
+        next_url = url
+
+        while next_url:
+            response = requests.get(next_url, params=params, timeout=request_timeout)
+            if response.status_code != 200:
+                raise RuntimeError(f"API request failed: {response.status_code} {response.text}")
+            data = response.json()
+            results.extend(data.get("results", []))
+            next_url = data.get("next")
+            params = None
+
+        return results
+
+    def _octopus_results_to_series(
+        self, octopus_rates: list[dict], target_index: pd.DatetimeIndex
+    ) -> pd.Series:
+        """Map Octopus API rates to forecast index.
+
+        Octopus returns prices in pence/kWh as `value_inc_vat`; convert to GBP/kWh.
+        """
+        if len(octopus_rates) == 0:
+            raise ValueError("Octopus API returned no tariff data for the requested period.")
+
+        rates_df = pd.DataFrame(octopus_rates)
+        required_columns = {"valid_from", "value_inc_vat"}
+        if not required_columns.issubset(rates_df.columns):
+            raise ValueError(
+                "Unexpected Octopus tariff response payload: missing one of "
+                f"{sorted(required_columns)}."
+            )
+
+        rates_df["valid_from"] = pd.to_datetime(rates_df["valid_from"], utc=True)
+        rates_df = rates_df.sort_values("valid_from")
+        rates_df["valid_from"] = rates_df["valid_from"].dt.tz_convert(self.time_zone)
+
+        # Octopus prices are returned in pence/kWh. Convert to currency unit/kWh.
+        rate_series = pd.Series(
+            rates_df["value_inc_vat"].astype(float).to_numpy() / 100.0,
+            index=pd.DatetimeIndex(rates_df["valid_from"]),
+        )
+        rate_series = rate_series[~rate_series.index.duplicated(keep="last")]
+        forecast_series = rate_series.reindex(target_index, method="ffill")
+        if forecast_series.isna().any():
+            forecast_series = forecast_series.bfill()
+        if forecast_series.isna().any():
+            raise ValueError(
+                "Unable to align Octopus tariff data with forecast horizon. "
+                "Check tariff code and requested period."
+            )
+        return forecast_series
+
+    def _get_octopus_tariff_config(self, tariff_type: str) -> tuple[str, str]:
+        """Get Octopus tariff identifiers from config with legacy fallback."""
+        legacy_base = self.optim_conf.get("octopus_energy_base_tariff")
+        legacy_code = self.optim_conf.get("octopus_energy_tariff_code")
+        if tariff_type == "import":
+            return (
+                self.optim_conf.get("octopus_energy_import_base_tariff", legacy_base),
+                self.optim_conf.get("octopus_energy_import_tariff_code", legacy_code),
+            )
+        return (
+            self.optim_conf.get("octopus_energy_export_base_tariff", legacy_base),
+            self.optim_conf.get("octopus_energy_export_tariff_code", legacy_code),
+        )
+
     def get_load_cost_forecast(
         self,
         df_final: pd.DataFrame,
@@ -1617,8 +1718,9 @@ class Forecast:
         :param df_final: The DataFrame containing the input data.
         :type df_final: pd.DataFrame
         :param method: The method to be used to generate load cost forecast, \
-            the options are 'hp_hc_periods' for peak and non-peak hours contracts\
-            and 'csv' to load a CSV file, defaults to 'hp_hc_periods'
+            the options are 'hp_hc_periods' for peak and non-peak hours contracts,\
+            'octopus' for the Octopus Energy API data, and 'csv' to load a CSV file,\
+            defaults to 'hp_hc_periods'
         :type method: str, optional
         :param csv_path: The path to the CSV file used when method = 'csv', \
             defaults to "data_load_cost_forecast.csv"
@@ -1644,6 +1746,17 @@ class Forecast:
                 df_final.loc[df_hp.index, self.var_load_cost] = self.optim_conf[
                     "load_peak_hours_cost"
                 ]
+        elif method == "octopus":
+            base_tariff, tariff_code = self._get_octopus_tariff_config("import")
+            start_date = df_final.index.min()
+            end_date = df_final.index.max() + self.freq
+            octopus_load_rates = self._get_octopus_tariff_data(
+                base_tariff, tariff_code, start_date, end_date
+            )
+            df_final = df_final.copy()
+            df_final[self.var_load_cost] = self._octopus_results_to_series(
+                octopus_load_rates, df_final.index
+            )
         elif method == "csv":
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
             forecast_out = self.get_forecast_out_from_csv_or_list(
@@ -1705,8 +1818,8 @@ class Forecast:
             from hass
         :type df_input_data: pd.DataFrame
         :param method: The method to be used to generate the production price forecast, \
-            the options are 'constant' for a fixed constant value and 'csv'\
-            to load a CSV file, defaults to 'constant'
+            the options are 'constant' for a fixed constant value, 'octopus' for the \
+            Octopus Energy API data, and 'csv' to load a CSV file, defaults to 'constant'
         :type method: str, optional
         :param csv_path: The path to the CSV file used when method = 'csv', \
             defaults to "/data/data_load_cost_forecast.csv"
@@ -1721,6 +1834,18 @@ class Forecast:
         csv_path = self.emhass_conf["data_path"] / csv_path
         if method == "constant":
             df_final[self.var_prod_price] = self.optim_conf["photovoltaic_production_sell_price"]
+        elif method == "octopus":
+            base_tariff, tariff_code = self._get_octopus_tariff_config("export")
+            start_date = df_final.index.min()
+            end_date = df_final.index.max() + self.freq
+            octopus_prod_rates = self._get_octopus_tariff_data(
+                base_tariff, tariff_code, start_date, end_date
+            )
+            df_final = df_final.copy()
+            df_final[self.var_prod_price] = self._octopus_results_to_series(
+                octopus_prod_rates, df_final.index
+            )
+
         elif method == "csv":
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
             forecast_out = self.get_forecast_out_from_csv_or_list(

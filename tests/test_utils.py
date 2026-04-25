@@ -96,6 +96,11 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
             params["retrieve_hass_conf"]["sensor_replace_zero"],
             ["sensor.power_photovoltaics", "sensor.p_pv_forecast"],
         )
+        self.assertEqual(params["optim_conf"]["octopus_energy_import_base_tariff"], "")
+        self.assertEqual(params["optim_conf"]["octopus_energy_import_tariff_code"], "")
+        self.assertEqual(params["optim_conf"]["octopus_energy_export_base_tariff"], "")
+        self.assertEqual(params["optim_conf"]["octopus_energy_export_tariff_code"], "")
+
         # Test with config.json
         config = await utils.build_config(
             emhass_conf,
