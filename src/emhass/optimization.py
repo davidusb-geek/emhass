@@ -1149,9 +1149,9 @@ class Optimization:
 
         # Grid Interaction Constraints
 
-        # No charge from grid: Battery cannot charge (E=0) while grid is importing (D=1)
+        # No charge from grid: The battery charge power cannot exceed the PV production
         if self.optim_conf["set_nocharge_from_grid"]:
-            constraints.append(D <= E)
+            constraints.append(p_sto_neg + p_pv >= 0)
 
         # No discharge to grid: Battery cannot discharge (E=1) while grid is exporting (D=0)
         if self.optim_conf["set_nodischarge_to_grid"]:
