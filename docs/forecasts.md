@@ -6,7 +6,7 @@ EMHASS will need 4 forecasts to work properly:
 
 - Load power forecast: how much power your house will demand in the next 24 hours. This is given in Watts.
 
-- Load cost forecast: the price of the energy from the grid in the next 24 hours. This is given in EUR/kWh.
+- Load cost forecast: the price of the energy from the grid in the next 24 hours. This is given in currency/kWh.
 
 - PV production selling price forecast: the price at which you will sell your excess PV production in the next 24 hours. This is given in currency/kWh.
 
