@@ -237,6 +237,7 @@ section_getting_started
 section_config
 section_core
 section_thermal
+study_cases/index
 section_reference
 
 ```
