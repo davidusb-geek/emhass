@@ -73,8 +73,9 @@ rest_command:
       {%- set timestep_min = 30 -%}
       {%- set horizon = 48 -%}
       {%- set ev_remaining_kwh = states('sensor.YOUR_EV_REMAINING_KWH') | float -%}
-      {%- set ev_hours = (ev_remaining_kwh / charger_kw) | round(0) | int -%}
-      {%- set departure_minutes = (today_at("07:00") - now()).total_seconds() / 60 -%}
+      {%- set ev_hours = (ev_remaining_kwh / charger_kw) | round(0, 'ceil') | int -%}
+      {%- set deadline = today_at("07:00") if now() < today_at("07:00") else today_at("07:00") + timedelta(days=1) -%}
+      {%- set departure_minutes = (deadline - now()).total_seconds() / 60 -%}
       {%- set end_step = (departure_minutes / timestep_min) | int -%}
       {
         "prediction_horizon": {{ horizon }},

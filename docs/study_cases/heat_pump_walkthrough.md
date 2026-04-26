@@ -31,7 +31,7 @@ All four schedules share the same horizon, the same forecasted PV, the same fore
 
 Add `set_use_pv: true`, `set_use_battery: true` plus the standard battery parameters from [Basic — PV + Battery](basic_pv_battery.md). Then add the thermal_battery config under `def_load_config`. A condensed example for a modern home with underfloor heating:
 
-```json
+```python
 {
   "def_load_config": [
     {},
