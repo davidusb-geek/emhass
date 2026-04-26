@@ -30,7 +30,7 @@ In addition to the parameters from [Basic — PV + Battery](basic_pv_battery.md)
 For the full list of runtime keys, see [Passing data](../passing_data.md).
 
 ```{note}
-**`soc_init` and `soc_final` defaults.** EMHASS already defaults `soc_final` to `soc_init` (and vice versa) when only one is passed at runtime; if neither is passed, both fall back to `battery_target_state_of_charge` from the static config. So for typical rolling MPC, passing only `soc_init` is sufficient — the optimizer will not impose a terminal-SOC bias inside the horizon. Pass `soc_final` explicitly only when you have a hard end-of-horizon target (e.g. ensure 60% before tomorrow morning).
+`soc_init` and `soc_final` defaults: EMHASS already defaults `soc_final` to `soc_init` (and vice versa) when only one is passed at runtime; if neither is passed, both fall back to `battery_target_state_of_charge` from the static config. So for typical rolling MPC, passing only `soc_init` is sufficient: the optimizer will not impose a terminal-SOC bias inside the horizon. Pass `soc_final` explicitly only when you have a hard end-of-horizon target (e.g. ensure 60% before tomorrow morning).
 ```
 
 ## Run
@@ -56,7 +56,7 @@ rest_command:
       }
 ```
 
-(`soc_final` is intentionally omitted — see the note above. Adjust the literal `48` if your `optimization_time_step` is not 30 minutes.)
+(`soc_final` is intentionally omitted; see the note above. Adjust the literal `48` if your `optimization_time_step` is not 30 minutes.)
 
 Trigger it every 30 minutes:
 
@@ -75,22 +75,22 @@ For the matching `shell_command.emhass_publish_data`, see [Automations](../autom
 
 ## Output
 
-After each MPC run, EMHASS publishes the same sensors as `dayahead-optim` (`sensor.p_deferrable0`, `sensor.soc_optim`, etc.), but the schedule covering the prediction horizon replaces the previous one. Your HA automations follow the current state of `sensor.p_deferrable*` to switch real loads on/off — they don't care whether the underlying schedule came from `dayahead-optim` or `naive-mpc-optim`.
+After each MPC run, EMHASS publishes the same sensors as `dayahead-optim` (`sensor.p_deferrable0`, `sensor.soc_optim`, etc.), but the schedule covering the prediction horizon replaces the previous one. Your HA automations follow the current state of `sensor.p_deferrable*` to switch real loads on/off; they don't care whether the underlying schedule came from `dayahead-optim` or `naive-mpc-optim`.
 
 The plan-cycle behavior with a 30-minute re-run cadence and a 24 h horizon: at minute 0 the optimizer plans 24 h forward; at minute 30 it plans 24 h forward from the new "now"; at minute 60 again; and so on. Each plan **partially overlaps** the previous one for the next 23.5 h, but the new plan reflects the latest SOC, latest `def_total_hours`, latest forecast.
 
 ## Interpretation
 
 - MPC's main advantage over day-ahead is **resilience to forecast error**: when actual PV generation diverges from the morning forecast, the next MPC iteration corrects course immediately.
-- MPC's main cost is solver time × frequency. With CVXPY/HiGHS the solve is typically 0.1 – 0.5 s; running every 30 min is well within budget. Running every 1 min is overkill for most homes — see [Good Practices](good_practices.md).
-- For deferrable loads with strict windows (EV must charge by 07:00), pass `start_timesteps_of_each_deferrable_load` / `end_timesteps_of_each_deferrable_load` per load in the runtime payload — see [EV walkthrough](ev.md).
+- MPC's main cost is solver time × frequency. With CVXPY/HiGHS the solve is typically 0.1 – 0.5 s; running every 30 min is well within budget. Running every 1 min is overkill for most homes. See [Good Practices](good_practices.md).
+- For deferrable loads with strict windows (EV must charge by 07:00), pass `start_timesteps_of_each_deferrable_load` / `end_timesteps_of_each_deferrable_load` per load in the runtime payload. See [EV walkthrough](ev.md).
 
 ## See also
 
 - Tutorial: [Basic — PV + Battery](basic_pv_battery.md) (the static day-ahead version)
 - Reference: [Passing data](../passing_data.md) for the full runtime params list
 - Reference: [Automations](../automations.md) for `shell_command` / `rest_command` patterns
-- How-to: [Heat-pump walkthrough](heat_pump_walkthrough.md) — MPC + thermal_battery
-- How-to: [EV walkthrough](ev.md) — MPC + windowed deferrable
-- Explanation: [Good Practices](good_practices.md) — MPC cadence, soc_final pattern, infeasibility triage
-- Explanation: [Advanced math model](../advanced_math_model.md) — the optimization formulation
+- How-to: [Heat-pump walkthrough](heat_pump_walkthrough.md)
+- How-to: [EV walkthrough](ev.md)
+- Explanation: [Good Practices](good_practices.md)
+- Explanation: [Advanced math model](../advanced_math_model.md)
