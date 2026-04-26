@@ -31,7 +31,7 @@ operating_hours_of_each_deferrable_load:
 
 If you are running **standalone Docker** with `config_emhass.yaml`, the same keys apply directly.
 
-The other parameters keep the defaults from `config_defaults.json`.
+The values for `operating_hours_of_each_deferrable_load` are intentional choices for this scenario; the rest of the parameters keep the defaults from `config_defaults.json`.
 
 ## Run the optimization
 
@@ -57,7 +57,7 @@ The optimization result:
 
 ![optim_results_defLoads_dayaheadOptim](../images/optim_results_defLoads_dayaheadOptim.png)
 
-For this system, the total value of the cost function is **−5.38 EUR** (negative = cost, i.e. you pay 5.38 EUR for the day's optimized schedule). The schedule places both loads in low-price hours.
+For this system, the total value of the cost function is **−5.38 EUR**. With `costfun: profit`, this is net cash flow over the period (positive = revenue, negative = expenditure) — here the system has no revenue source, so the optimizer's best schedule still costs 5.38 EUR. The schedule places both loads in low-price hours.
 
 ## Interpretation
 

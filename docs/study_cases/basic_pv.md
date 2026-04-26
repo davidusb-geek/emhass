@@ -47,7 +47,7 @@ Cost function over the 7-day period: **−26.23 EUR**.
 
 ## Day-ahead optimization
 
-The `dayahead-optim` mode is the real production case: forecasted PV (from `clearoutside` web-scraping by default, or Solcast/Open-Meteo if configured), forecasted load (1-day persistence by default), forecasted prices (provided at runtime if dynamic).
+The `dayahead-optim` mode is the real production case: forecasted PV (from `open-meteo` by default, or Solcast/clearoutside/Forecast.Solar if configured), forecasted load (1-day persistence by default), forecasted prices (provided at runtime if dynamic).
 
 Run it:
 
@@ -61,7 +61,7 @@ Result:
 
 ![optim_results_PV_defLoads_dayaheadOptim](../images/optim_results_PV_defLoads_dayaheadOptim.png)
 
-Cost function: **−1.56 EUR** for the next day. Compared with the **−5.38 EUR** of the no-PV case (see [Basic — no PV](basic_no_pv.md)) — the PV installation reduces the daily cost by about 70%.
+Cost function: **−1.56 EUR** for the next day. With `costfun: profit`, this is net cash flow over the period (positive = revenue, negative = expenditure); a less-negative value means lower net cost. Compared with the **−5.38 EUR** of the no-PV case (see [Basic — no PV](basic_no_pv.md)), the PV installation reduces the daily net spend by about 71%.
 
 ## Interpretation
 
