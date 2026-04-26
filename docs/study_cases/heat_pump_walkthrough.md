@@ -2,7 +2,7 @@
 
 > **Type:** How-To Guide — task-oriented, follow when integrating a heat pump as a thermal-battery deferrable in a real home with PV and battery.
 
-This page walks through a complete real-house scenario: PV + electrochemical battery + heat-pump-driven thermal battery + (optionally) a regular EV charger. It is an *orchestration* page — for the parameter reference of the thermal battery model itself, see [Reference: thermal_battery](../thermal_battery.md).
+This page walks through a complete real-house scenario: PV + electrochemical battery + heat-pump-driven thermal battery + (optionally) a regular EV charger. It is an *orchestration* page. For the parameter reference of the thermal battery model itself, see [Reference: thermal_battery](../thermal_battery.md).
 
 ## Scenario
 
@@ -21,11 +21,11 @@ A 130 m² single-family home in central Europe with:
 
 EMHASS treats the heat pump as a **thermal_battery** deferrable load. The optimizer simultaneously:
 
-1. Schedules the heat pump to keep the underfloor slab within a min/max temperature comfort range (per `thermal_battery` config — see [thermal_battery.md](../thermal_battery.md) for all parameters).
+1. Schedules the heat pump to keep the underfloor slab within a min/max temperature comfort range (per `thermal_battery` config; see [thermal_battery.md](../thermal_battery.md) for all parameters).
 2. Schedules the electrochemical battery to charge from PV / cheap grid hours and discharge into expensive hours.
 3. Schedules other deferrable loads (washing machine, EV) inside their own windows.
 
-All four schedules share the same horizon, the same forecasted PV, the same forecasted prices — the optimizer finds a globally cost-minimal joint plan.
+All four schedules share the same horizon, the same forecasted PV, the same forecasted prices. The optimizer finds a globally cost-minimal joint plan.
 
 ## Configuration
 
@@ -100,18 +100,18 @@ rest_command:
 
 Adjust `horizon` if you use a non-default `optimization_time_step`.
 
-For the publish-data follow-up call (which converts the predicted thermal-battery temperature into a `sensor.temp_predicted0`-equivalent that drives your real heat pump's setpoint), see [thermal_battery.md — Published sensors](../thermal_battery.md#published-sensors).
+For the publish-data follow-up call (which converts the predicted thermal-battery temperature into a `sensor.temp_predicted0`-equivalent that drives your real heat pump's setpoint), see [thermal_battery.md: Published sensors](../thermal_battery.md#published-sensors).
 
 ## Interpretation
 
 - The optimizer pre-heats the slab during low-price or PV-surplus hours, then lets it coast through expensive hours by drawing from thermal mass instead of running the heat pump.
 - The electrochemical battery handles short-time-scale shifting (within hours), the thermal battery handles longer-scale shifting (across cheap-night → expensive-evening). They are complementary, not redundant.
-- The `thermal_inertia_time_constant` of 2 h tells the optimizer that heat applied now reaches the slab gradually — without it, MPC tends to schedule pre-heating *too late* for short prediction horizons.
+- The `thermal_inertia_time_constant` of 2 h tells the optimizer that heat applied now reaches the slab gradually. Without it, MPC tends to schedule pre-heating *too late* for short prediction horizons.
 
 ## See also
 
-- Reference: [thermal_battery.md](../thermal_battery.md) — every parameter, calibration steps, troubleshooting
-- Reference: [thermal_model.md](../thermal_model.md) — simpler thermal model without thermal-mass storage
-- How-to: [MPC walkthrough](mpc.md) — generic rolling-horizon pattern
-- How-to: [EV walkthrough](ev.md) — adding an EV deferrable to this scenario
-- Explanation: [Good Practices](good_practices.md) — pre-heating windows, infeasibility triage
+- Reference: [thermal_battery.md](../thermal_battery.md) (every parameter, calibration steps, troubleshooting)
+- Reference: [thermal_model.md](../thermal_model.md) (simpler thermal model without thermal-mass storage)
+- How-to: [MPC walkthrough](mpc.md)
+- How-to: [EV walkthrough](ev.md)
+- Explanation: [Good Practices](good_practices.md)
