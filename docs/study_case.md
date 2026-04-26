@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # Example configurations
 
 This page has moved. The study cases have been split into a dedicated
