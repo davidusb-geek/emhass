@@ -83,7 +83,7 @@ The plan-cycle behavior with a 30-minute re-run cadence and a 24 h horizon: at m
 
 - MPC's main advantage over day-ahead is **resilience to forecast error**: when actual PV generation diverges from the morning forecast, the next MPC iteration corrects course immediately.
 - MPC's main cost is solver time × frequency. With CVXPY/HiGHS the solve is typically 0.1 – 0.5 s; running every 30 min is well within budget. Running every 1 min is overkill for most homes — see [Good Practices](good_practices.md).
-- For deferrable loads with strict windows (EV must charge by 07:00), pass `start_window` / `end_window` per load in the runtime payload — see [EV walkthrough](ev.md).
+- For deferrable loads with strict windows (EV must charge by 07:00), pass `start_timesteps_of_each_deferrable_load` / `end_timesteps_of_each_deferrable_load` per load in the runtime payload — see [EV walkthrough](ev.md).
 
 ## See also
 
