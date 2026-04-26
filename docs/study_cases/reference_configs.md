@@ -81,7 +81,7 @@ set_use_battery: true
 battery_nominal_energy_capacity: 30000     # Wh (= 30 kWh)
 battery_charge_power_max: 10000            # W
 battery_discharge_power_max: 10000         # W
-battery_minimum_state_of_charge: 0.2       # higher floor for safety margin
+battery_minimum_state_of_charge: 0.2       # lower floor — off-grid prefers more usable range
 battery_maximum_state_of_charge: 0.95
 battery_target_state_of_charge: 0.7        # always end day with reserve
 

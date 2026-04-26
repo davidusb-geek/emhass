@@ -131,7 +131,7 @@ Read these before designing around the pattern above.
 
 ## Infeasibility
 
-If `(end_step - start_step) × charger_kw < required_kwh`, the optimization is infeasible. EMHASS returns `optim_status: "infeasible"` and publishes nothing. See [Good Practices — infeasibility triage](good_practices.md).
+If `(end_step - start_step) × charger_kw < required_kwh`, the optimization is infeasible. EMHASS returns `optim_status: "Infeasible"` and publishes nothing. See [Good Practices — infeasibility triage](good_practices.md).
 
 ## See also
 

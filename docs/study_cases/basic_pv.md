@@ -47,7 +47,7 @@ Cost function over the 7-day period: **−26.23 EUR**.
 
 ## Day-ahead optimization
 
-The `dayahead-optim` mode is the real production case: forecasted PV (from `open-meteo` by default, or Solcast/clearoutside/Forecast.Solar if configured), forecasted load (1-day persistence by default), forecasted prices (provided at runtime if dynamic).
+The `dayahead-optim` mode is the real production case: forecasted PV (from `open-meteo` by default; alternatives via `weather_forecast_method` are `solcast`, `solar.forecast`, or the `scrapper` clearoutside method), forecasted load (1-day persistence by default), forecasted prices (provided at runtime if dynamic).
 
 Run it:
 

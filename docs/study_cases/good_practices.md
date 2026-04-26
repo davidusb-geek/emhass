@@ -11,7 +11,7 @@ A common newcomer mistake is to spend hours tuning battery parameters (`battery_
 The dominant factor in real-world cost-minimization is the **gap between forecasted and actual** PV power, load power, and price. A 10% improvement in PV forecast accuracy typically yields more cost savings than retuning battery parameters from default to "perfect".
 
 In practice:
-- The default PV forecast method is `open-meteo` (free, no API key). Community feedback in EMHASS discussions repeatedly favors **Solcast** (free tier: 10 calls/day) when accuracy matters most. **Forecast.Solar** is another free alternative; **clearoutside** web-scraping is a fallback that some users still prefer.
+- The default PV forecast method is `open-meteo` (free, no API key, configured as `weather_forecast_method: open-meteo`). Community feedback in EMHASS discussions repeatedly favors **Solcast** (free tier: 10 calls/day, `weather_forecast_method: solcast`) when accuracy matters most. **Forecast.Solar** is another free option (`weather_forecast_method: solar.forecast`). EMHASS also supports a clearoutside.com scraper (`weather_forecast_method: scrapper`) as a fallback some users still prefer.
 - Load forecast 1-day-persistence is fine for routine households. It breaks on holiday weekends. The [ML Forecaster](../mlforecaster.md) helps if you have ≥ 1 month of history.
 - Dynamic price forecasts must come from the tariff provider (Tibber, aWATTar, Octopus, Stromee, Nordpool, etc.) via runtime payload — there is no useful default for these.
 
@@ -49,11 +49,11 @@ For rolling MPC, the often-cited concern is that a fixed `soc_final` reserves ca
 
 Pass `soc_final` explicitly only when you have a hard end-of-horizon target (e.g. "must be at 60% by tomorrow 06:00 to absorb morning PV"). In that case you may also want to extend the horizon so the constraint sits at the actual deadline, not 24 h after the current re-run.
 
-A common new-user trap is the opposite: starting with very low actual SOC. If `soc_init = 0.05` but `battery_minimum_state_of_charge = 0.30`, the optimizer cannot find any valid trajectory because the *initial* state already violates a constraint. Result: `optim_status: infeasible`. See [discussion #359](https://github.com/davidusb-geek/emhass/discussions/359) for the canonical thread on this.
+A common new-user trap is the opposite: starting with very low actual SOC where `soc_init` is below `battery_minimum_state_of_charge`. The optimization becomes infeasible because the initial state already violates a constraint. See Section 5 below (item 4) for the full triage and [discussion #359](https://github.com/davidusb-geek/emhass/discussions/359) for the canonical thread.
 
-## 5. `optim_status: infeasible` triage order
+## 5. `optim_status: Infeasible` triage order
 
-When EMHASS returns `optim_status: "infeasible"` and publishes nothing, work through this list in order. The first match is almost always the cause.
+When EMHASS returns `optim_status: "Infeasible"` and publishes nothing, work through this list in order. The first match is almost always the cause.
 
 1. **Forecast NaN.** A sensor publishing `unavailable` becomes a NaN in the forecast list and the solver chokes. Check `pv_power_forecast`, `load_power_forecast`, `load_cost_forecast`, `prod_price_forecast` for NaN/None entries. Fix at the HA-template level (use `default(0)` or filter out unavailable states).
 2. **Timestep mismatch.** List lengths don't match `prediction_horizon`. See section 2 above.
@@ -68,7 +68,7 @@ The new stage-timing banner introduced in upstream PR [#806](https://github.com/
 
 | Action | Recommended interval |
 |--------|----------------------|
-| `naive-mpc-optim` | 30 min (default `optimization_time_step`) |
+| `naive-mpc-optim` | every `optimization_time_step` minutes (default 30); set your HA automation trigger to match |
 | `dayahead-optim` | once per day, around 05:30 local time (after spot prices publish) |
 | `publish-data` | every 5 min (or use `continual_publish: true`) |
 | Forecast refresh | every 30–60 min |
@@ -77,18 +77,23 @@ Running `naive-mpc-optim` every 1 minute is overkill for residential systems and
 
 ## 7. Logs and stage timing
 
-The CLI and Add-on log to `data/action_logs.txt`. The Add-on web UI exposes them under the *Logs* tab.
+The CLI and Add-on log to `data/logger_emhass.log`. The Add-on web UI exposes them under the *Logs* tab.
 
-The format starts with timestamp, log level, message — for example:
+At the default log level (INFO), each optimization run emits a runtime banner and a one-line summary:
+
 ```
-2026-04-26 17:00:00,123 INFO Stage 1/4 (input_data) — 0.20 s
-2026-04-26 17:00:00,355 INFO Stage 2/4 (pv_forecast) — 0.23 s
-2026-04-26 17:00:00,612 INFO Stage 3/4 (load_forecast) — 0.26 s
-2026-04-26 17:00:00,888 INFO Stage 4/4 (lp_solve) — 0.27 s
-2026-04-26 17:00:00,889 INFO Total: 0.96 s, optim_status: optimal
+2026-04-26 17:00:00 INFO     EMHASS 0.17.2 | Python 3.11.9 | CVXPY 1.5.3 (Highs) | Linux-x86_64
+2026-04-26 17:00:01 INFO     Optimization completed in 0.96s (top: optim_solve=0.52s, 54%)
 ```
 
-If a particular stage consistently dominates, that's where to look first. PV-forecast stage > 5 s usually means a remote API timeout (Solcast / Forecast.Solar). LP-solve > 30 s typically means the problem size has grown — either reduce horizon or increase `lp_solver_timeout`.
+The banner is emitted by `log_runtime_banner` (added in PR [#806](https://github.com/davidusb-geek/emhass/pull/806)) and is useful when filing bug reports — the EMHASS / Python / CVXPY / solver / platform combination is printed at the start of every run.
+
+The summary identifies which stage dominated total runtime. Common patterns:
+- `top: pv_forecast=...` consistently dominating usually means a remote API timeout (Solcast / Forecast.Solar). Check network access and API keys.
+- `top: optim_solve=...` taking more than 30 s usually means the problem size has grown — either reduce the prediction horizon or increase `lp_solver_timeout`.
+- `top: input_data=...` or `top: load_forecast=...` taking long usually means a slow Home Assistant database query — check sensor history depth.
+
+Per-stage timings are recorded internally (in `input_data_dict["stage_times"]`) for every run but are only logged at DEBUG level. To see them, raise the log level to DEBUG temporarily (in `config_emhass.yaml` set `logging_level: DEBUG`, or use the Add-on advanced options). Each stage is logged as `Stage [<name>] completed in <X.XXX>s`.
 
 ## See also
 
