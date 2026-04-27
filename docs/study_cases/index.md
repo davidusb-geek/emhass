@@ -2,7 +2,7 @@
 
 End-to-end walkthroughs for common EMHASS configurations using real data.
 Each page is tagged by Diátaxis mode so you can pick the entry point that
-fits your need.
+fits your needs.
 
 ## Tutorials — start here if you're new
 

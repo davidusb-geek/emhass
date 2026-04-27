@@ -67,7 +67,7 @@ Cost function: **−1.23 EUR**, compared with **−1.56 EUR** for the same syste
 - The `battery_target_state_of_charge` parameter is used as the default for both `soc_init` and `soc_final` when neither is passed at runtime, so the optimizer plans the battery to start and end at this fraction. For rolling-horizon control, see the [MPC walkthrough](mpc.md).
 
 ```{note}
-**SOC convention.** EMHASS expresses SOC as a fraction of the **nominal** battery capacity (0.0 = empty, 1.0 = full). The configured `battery_minimum_state_of_charge` and `battery_maximum_state_of_charge` are the operational bounds the optimizer is allowed to use — they do **not** rescale the SOC fraction. With the defaults (`0.3` and `0.9`), the optimizer's `SOC_opt` will stay within `[0.3, 0.9]`; the values `0.0` and `1.0` are the theoretical extremes of the fraction, not values the optimizer produces under those bounds. A reported `SOC_opt = 0.45` means 45% of nominal capacity.
+**SOC convention.** `SOC_opt` is a fraction of nominal battery capacity (0.0 = empty, 1.0 = full). The configured operational bounds do not rescale the value. See [Good Practices, section 3](good_practices.md#3-soc-convention-fraction-of-nominal-capacity) for the full discussion and source-code reference.
 ```
 
 ## See also
