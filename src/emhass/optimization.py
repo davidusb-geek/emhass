@@ -2284,12 +2284,28 @@ class Optimization:
                 group_power_sum = sum(p_deferrable[i] for i in indices)
                 constraints.append(group_power_sum <= max_power)
 
-            # Mutual exclusion: at most one load active per timestep
-            # Skipped in relaxed mode as binary variables are not available
+            # Mutual exclusion: at most one load active per timestep.
+            # Reuses p_def_bin2[i] for semi-continuous members; for non-semi-cont
+            # members an anonymous binary plus linking constraint is added on the spot.
+            # Skipped in relaxed mode (no binary variables in the LP relaxation).
             if mutual_exclusion and not relaxed:
-                p_def_bin2 = self.vars["p_def_bin2"]
-                bin_sum = sum(p_def_bin2[i] for i in indices)
-                constraints.append(bin_sum <= 1)
+                semi_cont = self.optim_conf["treat_deferrable_load_as_semi_cont"]
+                activity_bins = []
+                for i in indices:
+                    if semi_cont[i]:
+                        activity_bins.append(self.vars["p_def_bin2"][i])
+                    else:
+                        bin_var = cp.Variable(
+                            self.num_timesteps,
+                            boolean=True,
+                            name=f"group{gi}_active_{i}",
+                        )
+                        nominal = self.optim_conf["nominal_power_of_deferrable_loads"][i]
+                        if isinstance(nominal, list):
+                            nominal = max(nominal)
+                        constraints.append(self.vars["p_deferrable"][i] <= nominal * bin_var)
+                        activity_bins.append(bin_var)
+                constraints.append(cp.sum(cp.vstack(activity_bins), axis=0) <= 1)
 
     def _build_results_dataframe(
         self,
