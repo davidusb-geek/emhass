@@ -222,16 +222,16 @@ When configured, the optimizer penalizes deviations from the desired temperature
 
 ### Heat pump group coupling
 
-If a single heat pump serves multiple thermal loads (e.g., underfloor heating AND a hot water tank), you can declare them as a group. The optimizer then ensures at most one load is active per timestep — matching the real-world constraint where a valve switches the heat pump between circuits.
+If a single heat pump serves multiple thermal loads (e.g., underfloor heating AND a hot water tank), declare them as a mutual-exclusion group via `optim_conf.deferrable_load_groups`. The optimizer then ensures at most one load is active per timestep — matching the real-world constraint where a valve switches the heat pump between circuits.
 
-* **heatpump_group**: Group identifier string (default: none).
-    * All loads sharing the same group ID get mutual exclusivity constraints
-    * Can be any string — loads are grouped by matching values
-    * Works across `thermal_config` and `thermal_battery` load types
-    * Works with both semi-continuous and non-semi-continuous loads
-    * Example: `"hp1"`
+```yaml
+optim_conf:
+  deferrable_load_groups:
+    - names: ["deferrable0", "deferrable1"]
+      mutual_exclusion: true
+```
 
-For semi-continuous loads (`treat_deferrable_load_as_semi_cont: true`), the existing on/off binary (`p_def_bin2`) is reused. For non-semi-continuous loads (e.g., a hot water tank that always runs at fixed power), a new binary variable `hp_active` is created and linked to the power variable.
+Members can be any mix of semi-continuous and non-semi-continuous loads. For semi-continuous members the optimizer reuses the on/off binary (`p_def_bin2`); for non-semi-continuous members an anonymous activity binary is created and linked to the power variable so the same `sum(activity[k]) <= 1` constraint applies.
 
 ### Advanced parameters
 
@@ -534,7 +534,6 @@ A single heat pump serving both underfloor heating and a hot water tank. The opt
   "def_load_config": [
     {
       "thermal_battery": {
-        "heatpump_group": "hp1",
         "indoor_target_temperature": 22,
         "volume": 8,
         "u_value": 0.3,
@@ -550,7 +549,6 @@ A single heat pump serving both underfloor heating and a hot water tank. The opt
     },
     {
       "thermal_battery": {
-        "heatpump_group": "hp1",
         "supply_temperature": 45.0,
         "volume": 0.2,
         "density": 997,
@@ -574,9 +572,17 @@ A single heat pump serving both underfloor heating and a hot water tank. The opt
 This configuration:
 - Load 0: Underfloor heating (semi-continuous, modulates 0-1000W) using `thermal_battery`
 - Load 1: Hot water tank (non-semi-continuous, fixed 2000W) using `thermal_battery`
-- Both share `"heatpump_group": "hp1"` — the optimizer ensures at most one is active per timestep
-- For the semi-continuous load, the existing on/off binary is reused
-- For the non-semi-continuous hot water tank, a new `hp_active` binary is created automatically
+
+Couple them by adding a mutual-exclusion entry to `optim_conf`:
+
+```yaml
+optim_conf:
+  deferrable_load_groups:
+    - names: ["deferrable0", "deferrable1"]
+      mutual_exclusion: true
+```
+
+The optimizer reuses the on/off binary for the semi-continuous load and creates an anonymous activity binary for the hot water tank, then enforces `sum(activity[k]) <= 1` at every timestep.
 
 ## How the optimization works
 
@@ -648,15 +654,15 @@ The optimizer decides when to run the heat pump to:
 - Approach desired temperatures if configured (soft constraints)
 - Respect mutual exclusivity if in a heat pump group
 
-### 5. Heat pump group coupling (optional)
+### 5. Mutual exclusion via deferrable_load_groups (optional)
 
-When multiple loads share the same `heatpump_group`, the optimizer adds a mutual exclusivity constraint:
+When multiple deferrable loads are listed in a `deferrable_load_groups` entry with `mutual_exclusion: true`, the optimizer adds:
 
 ```
 sum(activity_binary[k][t] for k in group) <= 1,  for all t
 ```
 
-This ensures at most one load is active per timestep. Both loads can be off simultaneously. The optimizer decides the optimal time allocation between loads to minimize total cost while satisfying all temperature constraints.
+This ensures at most one load is active per timestep. Both loads can be off simultaneously. The optimizer decides the optimal time allocation between members to minimise total cost while satisfying all temperature constraints. Members may be a mix of semi-continuous and non-semi-continuous loads.
 
 ### 5. Thermal inertia filter (optional)
 
@@ -783,7 +789,7 @@ Important notes:
 - Add `"thermal_inertia_time_constant": 2.0` to the `thermal_battery` dict to enable the thermal inertia filter
 - In MPC mode, `Q_input` auto-persists between solves; use `"q_input_initial": 0.5` to manually override
 - For hot water tanks, add `"density": 997, "heat_capacity": 4.184` and a `"draw_off_demand"` profile or `"specific_heating_demand": 0.0, "area":1.0`
-- For heat pump groups, add `"heatpump_group": "hp1"` to each coupled load
+- For heat pump groups, list both deferrable indices in `optim_conf.deferrable_load_groups` with `mutual_exclusion: true`
 
 ## Published sensors
 
@@ -946,9 +952,9 @@ If the tank temperature drops faster than expected:
 ### Heat pump group not enforcing mutual exclusivity
 
 If both loads in a group seem to run simultaneously:
-- Verify both loads have the same `heatpump_group` value (string match is exact)
-- Check the logs for "mutual exclusivity constraint added"
-- If a group has only 1 load, the constraint is skipped (need at least 2 loads)
+- Verify the loads are listed under the same `deferrable_load_groups` entry with `mutual_exclusion: true`
+- Check the indices in `names` (e.g., `"deferrable0"`, `"deferrable1"`) match your `def_load_config` order
+- A group with only one member silently has no effect; ensure both indices are listed
 
 ### Soft constraints not working
 
@@ -974,7 +980,7 @@ If `desired_temperatures` doesn't seem to affect the optimization:
 
 7. **Size your thermal mass correctly**: For underfloor heating, measure the actual screed volume with heating pipes. Don't include areas without heating.
 
-8. **Model DHW explicitly**: If your heat pump provides domestic hot water, model the tank as a separate `thermal_battery` with water physics (`density: 997`, `heat_capacity: 4.184`) and a `draw_off_demand` profile. Use `heatpump_group` to couple it with your space heating load.
+8. **Model DHW explicitly**: If your heat pump provides domestic hot water, model the tank as a separate `thermal_battery` with water physics (`density: 997`, `heat_capacity: 4.184`) and a `draw_off_demand` profile. Couple it with the space-heating load via `optim_conf.deferrable_load_groups` with `mutual_exclusion: true`.
 
 9. **Solar gains matter**: If you have significant south-facing windows, modeling solar gains can improve optimization accuracy by 10-20%
 
