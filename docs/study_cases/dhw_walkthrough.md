@@ -118,12 +118,7 @@ The `overshoot_temperature` is a hard ceiling: the optimizer will not push the t
 
 ## Real-world example
 
-With a 26 April 2026 Tibber-day where the lowest spot price was −0.42 EUR/kWh between 13:00 and 14:30, the deadline profile produced:
-
-- Old fixed profile (55 °C between 09:00–16:00): heat pump ran at 08:30–09:30 to hit the 09:00 deadline. Cost ≈ 0.20 EUR.
-- New deadline profile (base 45, evening spike 50 at 18:00): heat pump ran at 13:00–14:30, exactly during the negative-price slot. Earned ≈ 1.50 EUR. Tank reached 50 °C by 18:00 deadline as required.
-
-Net spread: ~1.70 EUR for the day. The same tank, the same demand, only the temperature profile changed.
+On a 26 April 2026 Tibber-day with spot prices reaching −0.42 EUR/kWh between 13:00 and 14:30, switching from a fixed daily profile (55 °C between 09:00 and 16:00) to the deadline profile (base 45 °C, evening spike 50 °C at 18:00) shifted DHW heating from a morning slot into the 13:00–14:30 negative-price window. Net spread: about 1.70 EUR for the day. Same tank, same demand, only the temperature profile changed.
 
 ## Caveats
 
