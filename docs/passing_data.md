@@ -155,7 +155,7 @@ Then on the EMHASS configuration you need to set:
   "influxdb_database": "homeassistant",
   "influxdb_host": "xxxxxxxx-influxdb",
   "influxdb_port": 8086,
-  "influxdb_measurement": "state",
+  "influxdb_measurement": "W",
   "influxdb_retention_policy": "autogen",
   "influxdb_use_ssl": false,
   "influxdb_verify_ssl": false,
