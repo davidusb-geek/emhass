@@ -482,7 +482,7 @@ This configuration:
 - Models a 200-liter (0.2 m³) hot water tank with water physics (density=997 kg/m³, heat_capacity=4.184 kJ/(kg·°C))
 - Uses 45°C supply temperature (typical for domestic hot water)
 - Has a constant 0.035 kW standby loss (well-insulated tank)
-- This config does not define a demand profile, to ensure backward compatibility the parameter `specific_heating_demand` and `area` must be present.
+- This config does not define a demand profile. To ensure backward compatibility, the parameters `specific_heating_demand` and `area` must be present.
 - Maintains tank temperature between 40-60°C
 
 ### Example 7: Hot water tank with soft constraints

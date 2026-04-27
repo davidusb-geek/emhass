@@ -818,6 +818,7 @@ class Optimization:
         vars_dict["p_def_bin1"] = p_def_bin1
         vars_dict["p_def_start"] = p_def_start
         vars_dict["p_def_bin2"] = p_def_bin2
+        vars_dict["group_activity"] = {}
 
         # Binary indicators for Grid and Battery direction
         vars_dict["D"] = cp.Variable(n, boolean=True, name="D")
@@ -1483,6 +1484,15 @@ class Optimization:
             arr = np.tile(arr, repeats)
         return arr[:required_len]
 
+    def _resolve_draw_off_demand(self, hc, base_loss, required_len):
+        """Return (demand_arr, loss_arr) if hot-water-tank mode (draw_off_demand present), else None."""
+        draw_off_profile = hc.get("draw_off_demand", None)
+        if draw_off_profile is not None and len(draw_off_profile) > 0:
+            demand_arr = self._tile_profile(draw_off_profile, required_len)
+            loss_arr = np.full(required_len, base_loss)
+            return demand_arr, loss_arr
+        return None
+
     def _add_thermal_battery_constraints(self, constraints, k, data_opt, p_load):
         """
         Handle constraints for thermal battery loads (Vectorized, Legacy Match).
@@ -1543,14 +1553,9 @@ class Optimization:
             # calculate_heating_demand / calculate_heating_demand_physics). This is
             # consistent with the thermal dynamics equation where all energy terms are
             # in kWh: conversion * (COP * P_kW * dt_hours - demand_kWh - loss_kWh)
-            draw_off_profile = hc.get("draw_off_demand", None)
-            if draw_off_profile is not None and len(draw_off_profile) > 0:
-                # Hot water tank: constant standby loss + tiled draw-off profile
-                draw_off_arr = self._tile_profile(draw_off_profile, required_len)
-                params["heating_demand"].value = draw_off_arr
-
-                # Constant standby loss (not outdoor-temp-dependent)
-                params["thermal_losses"].value = np.full(required_len, base_loss)
+            hot_water = self._resolve_draw_off_demand(hc, base_loss, required_len)
+            if hot_water is not None:
+                params["heating_demand"].value, params["thermal_losses"].value = hot_water
             else:
                 losses = utils.calculate_thermal_loss_signed(
                     outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
@@ -1653,11 +1658,9 @@ class Optimization:
 
             # Check for hot water tank mode (draw_off_demand present)
             # draw_off_demand units: kWh per timestep (see parameterized path comment)
-            draw_off_profile = hc.get("draw_off_demand", None)
-            if draw_off_profile is not None and len(draw_off_profile) > 0:
-                draw_off_arr = self._tile_profile(draw_off_profile, required_len)
-                heating_demand = draw_off_arr
-                thermal_losses = np.full(required_len, base_loss)
+            hot_water = self._resolve_draw_off_demand(hc, base_loss, required_len)
+            if hot_water is not None:
+                heating_demand, thermal_losses = hot_water
             else:
                 thermal_losses = np.array(
                     utils.calculate_thermal_loss_signed(
@@ -2224,6 +2227,7 @@ class Optimization:
                             boolean=True,
                             name=f"group{gi}_active_{i}",
                         )
+                        self.vars["group_activity"][(gi, i)] = bin_var
                         nominal = self.optim_conf["nominal_power_of_deferrable_loads"][i]
                         if isinstance(nominal, list):
                             nominal = max(nominal)
