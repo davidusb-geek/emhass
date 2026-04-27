@@ -4247,6 +4247,194 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 number_of_deferrable_loads=3,
             )
 
+    def test_deferrable_load_groups_mutex_semi_cont(self):
+        """Two semi-cont loads in a mutual_exclusion group are never co-active."""
+        self.optim_conf["number_of_deferrable_loads"] = 2
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [1000, 2000]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0, 0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [True, True]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False, False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0, 0]
+        self.optim_conf["set_deferrable_max_startups"] = [0, 0]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [500, 1500]
+        self.optim_conf["set_deferrable_load_as_timeseries"] = [False, False]
+        self.optim_conf["deferrable_load_groups"] = [
+            {"names": ["deferrable0", "deferrable1"], "mutual_exclusion": True}
+        ]
+
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
+            10.0 + 5.0 * np.sin(i * np.pi / 12) for i in range(48)
+        ]
+
+        runtimeparams = {
+            "def_load_config": [
+                {
+                    "thermal_battery": {
+                        "start_temperature": 20.0,
+                        "supply_temperature": 35.0,
+                        "volume": 50.0,
+                        "specific_heating_demand": 100.0,
+                        "area": 100.0,
+                        "min_temperatures": [18.0] * 48,
+                        "max_temperatures": [22.0] * 48,
+                    }
+                },
+                {
+                    "thermal_battery": {
+                        "start_temperature": 50.0,
+                        "supply_temperature": 45.0,
+                        "volume": 0.2,
+                        "density": 997,
+                        "heat_capacity": 4.184,
+                        "thermal_loss": 0.035,
+                        "draw_off_demand": [0.0] * 14 + [1.5] + [0.0] * 23 + [1.0] + [0.0] * 9,
+                        "min_temperatures": [40.0] * 48,
+                        "max_temperatures": [60.0] * 48,
+                    }
+                },
+            ]
+        }
+
+        opt_res = self.run_optimization_with_config(runtimeparams["def_load_config"])
+        self.assertEqual(self.opt.optim_status, "Optimal")
+
+        p0 = opt_res["P_deferrable0"].values
+        p1 = opt_res["P_deferrable1"].values
+        for t in range(len(p0)):
+            both_active = (p0[t] > 1.0) and (p1[t] > 1.0)
+            self.assertFalse(
+                both_active,
+                f"Timestep {t}: both loads active (P0={p0[t]:.1f}W, P1={p1[t]:.1f}W) "
+                f"— violates deferrable_load_groups mutual_exclusion",
+            )
+
+    def test_deferrable_load_groups_mutex_mixed_semi_cont(self):
+        """Mutual exclusion holds when one member is semi-cont and the other is not.
+
+        Exercises the new auto-binary path for the non-semi-cont member.
+        """
+        self.optim_conf["number_of_deferrable_loads"] = 2
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [1000, 2000]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0, 0]
+        # Load 0 semi-continuous (modulating); load 1 non-semi-continuous (on/off)
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [True, False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False, False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0, 0]
+        self.optim_conf["set_deferrable_max_startups"] = [0, 0]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [580, 0]
+        self.optim_conf["set_deferrable_load_as_timeseries"] = [False, False]
+        self.optim_conf["deferrable_load_groups"] = [
+            {"names": ["deferrable0", "deferrable1"], "mutual_exclusion": True}
+        ]
+
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
+            10.0 + 5.0 * np.sin(i * np.pi / 12) for i in range(48)
+        ]
+
+        runtimeparams = {
+            "def_load_config": [
+                {
+                    "thermal_battery": {
+                        "start_temperature": 18.0,
+                        "supply_temperature": 35.0,
+                        "volume": 50.0,
+                        "specific_heating_demand": 100.0,
+                        "area": 100.0,
+                        "min_temperatures": [18.0] * 48,
+                        "max_temperatures": [22.0] * 48,
+                    }
+                },
+                {
+                    "thermal_battery": {
+                        "start_temperature": 50.0,
+                        "supply_temperature": 45.0,
+                        "volume": 0.2,
+                        "density": 997,
+                        "heat_capacity": 4.184,
+                        "thermal_loss": 0.035,
+                        "draw_off_demand": [0.3] * 48,
+                        "min_temperatures": [40.0] * 48,
+                        "max_temperatures": [60.0] * 48,
+                    }
+                },
+            ]
+        }
+
+        opt_res = self.run_optimization_with_config(runtimeparams["def_load_config"])
+        self.assertEqual(self.opt.optim_status, "Optimal")
+
+        p0 = opt_res["P_deferrable0"].values
+        p1 = opt_res["P_deferrable1"].values
+        for t in range(len(p0)):
+            both_active = (p0[t] > 1.0) and (p1[t] > 1.0)
+            self.assertFalse(
+                both_active,
+                f"Timestep {t}: both loads active (P0={p0[t]:.1f}W, P1={p1[t]:.1f}W)",
+            )
+
+    def test_deferrable_load_groups_mutex_thermal_config_and_battery(self):
+        """Mutual exclusion across a thermal_config load and a thermal_battery load."""
+        self.optim_conf["number_of_deferrable_loads"] = 2
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [1000, 2000]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0, 0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [True, False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False, False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0, 0]
+        self.optim_conf["set_deferrable_max_startups"] = [0, 0]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [580, 0]
+        self.optim_conf["set_deferrable_load_as_timeseries"] = [False, False]
+        self.optim_conf["deferrable_load_groups"] = [
+            {"names": ["deferrable0", "deferrable1"], "mutual_exclusion": True}
+        ]
+
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
+            10.0 + 5.0 * np.sin(i * np.pi / 12) for i in range(48)
+        ]
+
+        runtimeparams = {
+            "def_load_config": [
+                {
+                    "thermal_config": {
+                        "cooling_constant": 0.005,
+                        "heating_rate": 3.0,
+                        "overshoot_temperature": 24.0,
+                        "start_temperature": 20.0,
+                        "min_temperatures": [18.0] * 48,
+                        "max_temperatures": [24.0] * 48,
+                        "desired_temperatures": [21.0] * 48,
+                    }
+                },
+                {
+                    "thermal_battery": {
+                        "start_temperature": 50.0,
+                        "supply_temperature": 45.0,
+                        "volume": 0.2,
+                        "density": 997,
+                        "heat_capacity": 4.184,
+                        "thermal_loss": 0.035,
+                        "draw_off_demand": [0.3] * 48,
+                        "min_temperatures": [40.0] * 48,
+                        "max_temperatures": [60.0] * 48,
+                    }
+                },
+            ]
+        }
+
+        opt_res = self.run_optimization_with_config(runtimeparams["def_load_config"])
+        self.assertEqual(self.opt.optim_status, "Optimal")
+
+        p0 = opt_res["P_deferrable0"].values
+        p1 = opt_res["P_deferrable1"].values
+        for t in range(len(p0)):
+            both_active = (p0[t] > 1.0) and (p1[t] > 1.0)
+            self.assertFalse(
+                both_active,
+                f"Timestep {t}: both loads active (P0={p0[t]:.1f}W, P1={p1[t]:.1f}W)",
+            )
+
     def test_heatpump_group_mutual_exclusivity(self):
         """Test that loads in the same heatpump_group cannot be active simultaneously."""
         self.optim_conf["number_of_deferrable_loads"] = 2
