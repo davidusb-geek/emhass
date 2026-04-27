@@ -230,6 +230,20 @@ class Optimization:
             p.value = 0.0
             self.param_def_current_state.append(p)
 
+        # Running lower-bound masks for single-constant loads that are currently running.
+        # param_running_lb[k][t] = 1 forces p_def_bin2[k][t] = 1 (load must stay on).
+        # param_already_running_sc[k] = 1 suppresses the mandatory startup event so the
+        # solver doesn't try to turn the load off and back on to satisfy sum(starts)==1.
+        self.param_running_lb = []
+        self.param_already_running_sc = []
+        for k in range(num_def_loads):
+            lb = cp.Parameter(n, nonneg=True, name=f"running_lb_{k}")
+            lb.value = np.zeros(n)
+            self.param_running_lb.append(lb)
+            ar = cp.Parameter(nonneg=True, name=f"already_running_sc_{k}")
+            ar.value = 0.0
+            self.param_already_running_sc.append(ar)
+
         # Load active parameters: allows deactivating non-thermal loads with 0 operating
         # timesteps without rebuilding the problem. When param_load_active[k] = 0, all
         # binary variables for load k are forced to 0 by constraints, letting the solver
@@ -2026,10 +2040,24 @@ class Optimization:
                 if not is_sequence_load:
                     # Single Constant Start
                     if is_single_const:
-                        # Use param_load_active so inactive loads require 0 starts
-                        # (avoids solver branching on where to place a meaningless startup)
+                        # Force ON for the initial run when the load is already running.
+                        # param_running_lb[k][t] = 1 for t in [0, remaining_steps).
+                        if k < len(self.param_running_lb):
+                            constraints.append(p_def_bin2[k] >= self.param_running_lb[k])
+
+                        # Startup count: normally exactly 1 per active load.
+                        # Subtract param_already_running_sc so a currently-running load
+                        # requires 0 new starts (it never turned off within the horizon).
                         if k < len(self.param_load_active):
-                            constraints.append(cp.sum(p_def_start[k]) == self.param_load_active[k])
+                            already_running = (
+                                self.param_already_running_sc[k]
+                                if k < len(self.param_already_running_sc)
+                                else 0
+                            )
+                            constraints.append(
+                                cp.sum(p_def_start[k])
+                                == self.param_load_active[k] - already_running
+                            )
                         else:
                             constraints.append(cp.sum(p_def_start[k]) == 1)
 
@@ -2423,6 +2451,10 @@ class Optimization:
                 if params["type"] == "thermal_battery":
                     self.heating_demands[k] = params["heating_demand"].value
 
+        # Update def_current_state parameters before the per-load loop so that
+        # param_def_current_state[k].value is current when the pinning block reads it.
+        self._update_def_current_state_params(num_deferrable_loads)
+
         # Update Energy Constraint Parameters for Deferrable Loads
         # These control the Big-M relaxation of energy/timestep constraints
         for k in range(min(num_deferrable_loads, len(self.param_target_energy))):
@@ -2469,6 +2501,68 @@ class Optimization:
                 self.param_required_timesteps[k].value = 0.0
                 self.param_timesteps_active[k].value = 0.0  # Constraint is relaxed (Big-M)
 
+            # Pin currently-running single-constant loads to ON for their remaining timesteps.
+            # If the load is already on and single-constant, force p_def_bin2[k] = 1 for
+            # the first required_timesteps slots and suppress the startup event (already on).
+            # Also widen the window mask so the forced-on period is never blocked.
+            if k < len(self.param_running_lb):
+                current_state = (
+                    self.param_def_current_state[k].value > 0.5
+                    if k < len(self.param_def_current_state)
+                    else False
+                )
+                if (
+                    is_single_const
+                    and current_state
+                    and constraint_active
+                    and required_timesteps > 0
+                ):
+                    # Re-derive the configured window end so we respect def_end_timestep.
+                    if def_total_timestep and def_total_timestep[k] > 0:
+                        _, cfg_end, _ = Optimization.validate_def_timewindow(
+                            def_start_timestep[k],
+                            def_end_timestep[k],
+                            ceil(def_total_timestep[k]),
+                            n,
+                        )
+                    else:
+                        _, cfg_end, _ = Optimization.validate_def_timewindow(
+                            def_start_timestep[k],
+                            def_end_timestep[k],
+                            ceil(def_total_hours[k] / self.time_step)
+                            if def_total_hours[k] > 0
+                            else 0,
+                            n,
+                        )
+                    # cfg_end == 0 means no window restriction → treat as full horizon.
+                    effective_end = cfg_end if cfg_end > 0 else n
+                    pinned_steps = min(required_timesteps, effective_end, n)
+
+                    lb_mask = np.zeros(n)
+                    lb_mask[:pinned_steps] = 1.0
+                    self.param_running_lb[k].value = lb_mask
+                    self.param_already_running_sc[k].value = 1.0
+
+                    # Widen the window mask's start to 0 (load is running now),
+                    # but never extend past the configured end timestep.
+                    if k < len(self.param_window_masks):
+                        wm = self.param_window_masks[k].value.copy()
+                        wm[:pinned_steps] = 1.0
+                        self.param_window_masks[k].value = wm
+
+                    self.logger.debug(
+                        "Deferrable load %d: currently running, pinning %d timesteps ON "
+                        "(requested %d, window end %d, horizon %d)",
+                        k,
+                        pinned_steps,
+                        required_timesteps,
+                        effective_end,
+                        n,
+                    )
+                else:
+                    self.param_running_lb[k].value = np.zeros(n)
+                    self.param_already_running_sc[k].value = 0.0
+
         # Update load active parameters: deactivate non-thermal loads with 0 operating timesteps
         # Thermal loads (thermal_config, thermal_battery) are always active since they're
         # driven by temperature constraints, not operating timesteps.
@@ -2485,8 +2579,6 @@ class Optimization:
                     f"Deferrable load {k}: deactivated (no operating timesteps, not thermal)"
                 )
 
-        # Update def_current_state parameters for deferrable loads
-        self._update_def_current_state_params(num_deferrable_loads)
         # Initialize stress config variables (needed by retry path even when
         # self.prob is cached from a previous call, see #770)
         inv_stress_conf = None
