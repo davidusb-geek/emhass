@@ -18,14 +18,15 @@ A better pattern is a deadline-driven profile: a low base temperature most of th
 
 ## Deadline profile
 
-Express the DHW comfort target as three layers stacked in the runtime payload:
+Build the `desired_temperatures` array as three layers stacked over the horizon:
 
 | Layer | Value | Where |
 |-------|-------|-------|
-| Base (always) | 45 °C | every timestep — comfort floor; tank may float down to here |
+| Base (always) | 45 °C | every timestep, the comfort floor; tank may float down to here |
 | Morning spike | 48 °C | last 30 min before 07:00 (1 timestep at 30-min step) |
 | Evening spike | 50 °C | last 1 h before 18:00 (2 timesteps at 30-min step) |
-| Anti-cap | 59 °C `overshoot_temperature` | upper bound to prevent Legionella-cycle conflict and tank stress |
+
+In addition, set `overshoot_temperature: 59 °C` as a hard upper bound (separate constraint, not part of the per-timestep target array). It prevents Legionella-cycle conflicts and excessive tank stress.
 
 These values are starting points. Adjust to your tank size, usage pattern, and water-comfort preference.
 
@@ -46,7 +47,38 @@ The `thermal_config` for DHW comes from the runtime payload, not the static conf
 
 ## Runtime payload
 
-Build the deadline-profile arrays in your Home Assistant `rest_command` template (or Node-RED Function node). The example below assumes 30-minute timesteps and a 24 h horizon:
+The cleanest way to assemble the `desired_temperatures` array is to compute it outside Home Assistant (Node-RED Function node, AppDaemon, a small Python script) and inject the finished list into the EMHASS payload. The contract EMHASS sees is just a list of length `prediction_horizon` floats.
+
+Reference Python sketch for the deadline profile (30-minute timesteps, 24 h horizon):
+
+```python
+from datetime import datetime, timedelta
+
+def build_dhw_profile(now, horizon=48, timestep_min=30,
+                      base=45.0,
+                      morning_temp=48.0, morning_hour=7, morning_window_slots=1,
+                      evening_temp=50.0, evening_hour=18, evening_window_slots=2):
+    """Return a list of length `horizon` with the deadline-driven target temps.
+
+    Each spike fires in the last `*_window_slots` timesteps that end at or
+    before the deadline hour. After a deadline passes today, the next spike
+    rolls forward to tomorrow.
+    """
+    profile = [base] * horizon
+    for hour, temp, slots in (
+        (morning_hour, morning_temp, morning_window_slots),
+        (evening_hour, evening_temp, evening_window_slots),
+    ):
+        deadline = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if deadline <= now:
+            deadline += timedelta(days=1)
+        deadline_step = int((deadline - now).total_seconds() // (timestep_min * 60))
+        for k in range(max(0, deadline_step - slots), min(horizon, deadline_step)):
+            profile[k] = temp
+    return profile
+```
+
+Once your runtime layer (Node-RED, AppDaemon, etc.) holds the array, the HA `rest_command` payload simply forwards it:
 
 ```yaml
 rest_command:
@@ -57,30 +89,8 @@ rest_command:
     headers:
       content-type: application/json
     payload: >
-      {%- set horizon = 48 -%}
-      {%- set timestep_min = 30 -%}
-      {%- set base = 45.0 -%}
-      {%- set morning_temp = 48.0 -%}
-      {%- set morning_hour = 7 -%}
-      {%- set morning_window_slots = 1 -%}
-      {%- set evening_temp = 50.0 -%}
-      {%- set evening_hour = 18 -%}
-      {%- set evening_window_slots = 2 -%}
-      {%- set ns = namespace(profile=[]) -%}
-      {%- for step in range(horizon) -%}
-        {%- set hour = (now().hour + (step * timestep_min) // 60) % 24 -%}
-        {%- set in_morning = (hour == morning_hour) and (step >= horizon - morning_window_slots) -%}
-        {%- set in_evening = (hour == evening_hour) -%}
-        {%- if in_evening -%}
-          {%- set ns.profile = ns.profile + [evening_temp] -%}
-        {%- elif in_morning -%}
-          {%- set ns.profile = ns.profile + [morning_temp] -%}
-        {%- else -%}
-          {%- set ns.profile = ns.profile + [base] -%}
-        {%- endif -%}
-      {%- endfor -%}
       {
-        "prediction_horizon": {{ horizon }},
+        "prediction_horizon": 48,
         "soc_init": {{ states('sensor.battery_soc') | float / 100 }},
         "def_load_config": [
           {},
@@ -91,14 +101,14 @@ rest_command:
               "start_temperature": {{ states('sensor.dhw_tank_temperature') | float }},
               "sense": "heat",
               "overshoot_temperature": 59.0,
-              "desired_temperatures": {{ ns.profile | tojson }}
+              "desired_temperatures": {{ states('sensor.dhw_desired_temperatures') }}
             }
           }
         ]
       }
 ```
 
-The Jinja loop is illustrative. Production systems usually build the array outside HA (Node-RED Function node, AppDaemon, etc.) where set logic is easier. The contract EMHASS sees is just a list of length `prediction_horizon` floats in `desired_temperatures`.
+The HA template assumes `sensor.dhw_desired_temperatures` is a JSON-encoded list maintained by your runtime layer. Adjust the literal `48` if your `optimization_time_step` is not 30 minutes; recompute the array length to match.
 
 ## How EMHASS uses this
 
