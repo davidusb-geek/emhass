@@ -4207,19 +4207,26 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 ]
             )
 
-    async def test_deferrable_load_group_validation_mutual_exclusion_not_semi_cont(self):
-        """Test that mutual exclusion with non-semi-continuous loads raises error."""
-        with self.assertRaises(ValueError):
-            await self._build_params_with_groups(
-                [
-                    {
-                        "names": ["deferrable0", "deferrable1"],
-                        "max_power": 2500,
-                        "mutual_exclusion": True,
-                    }
-                ],
-                treat_deferrable_load_as_semi_cont=[False, False],
-            )
+    async def test_deferrable_load_group_validation_mutual_exclusion_allows_non_semi_cont(self):
+        """Mutual exclusion is allowed for non-semi-continuous loads.
+
+        The validator no longer requires every member to have
+        treat_deferrable_load_as_semi_cont=true; the optimizer creates an
+        anonymous binary + linking constraint for non-semi-cont members.
+        """
+        params = await self._build_params_with_groups(
+            [
+                {
+                    "names": ["deferrable0", "deferrable1"],
+                    "max_power": 2500,
+                    "mutual_exclusion": True,
+                }
+            ],
+            treat_deferrable_load_as_semi_cont=[False, False],
+        )
+        groups = params["optim_conf"]["deferrable_load_groups"]
+        self.assertEqual(len(groups), 1)
+        self.assertTrue(groups[0]["mutual_exclusion"])
 
     async def test_deferrable_load_group_validation_overlapping_groups(self):
         """Test that a load in multiple groups raises error."""
