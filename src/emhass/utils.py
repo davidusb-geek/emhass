@@ -2237,15 +2237,6 @@ async def build_params(
                     raise ValueError(
                         f"deferrable_load_groups[{gi}]: 'max_power' is required when 'mutual_exclusion' is false"
                     )
-                if mutual_exclusion:
-                    semi_cont = params["optim_conf"].get("treat_deferrable_load_as_semi_cont", [])
-                    for idx in indices:
-                        is_semi_cont = semi_cont[idx] if idx < len(semi_cont) else False
-                        if not is_semi_cont:
-                            raise ValueError(
-                                f"deferrable_load_groups[{gi}]: mutual_exclusion requires "
-                                f"'deferrable{idx}' to have treat_deferrable_load_as_semi_cont=true"
-                            )
     else:
         logger.warning("unable to obtain parameter: number_of_deferrable_loads")
     # historic_days_to_retrieve should be no less then 2
