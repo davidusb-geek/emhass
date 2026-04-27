@@ -18,6 +18,7 @@ fits your needs.
 |------|------|
 | Run rolling-horizon control with naive-mpc-optim | [MPC walkthrough](mpc.md) |
 | End-to-end heat-pump scenario combining PV/Batt/thermal_battery | [Heat-pump walkthrough](heat_pump_walkthrough.md) |
+| Domestic hot water with a deadline-driven temperature profile | [DHW walkthrough](dhw_walkthrough.md) |
 | EV charging as a deferrable load | [EV as deferrable](ev.md) |
 
 ## Reference
@@ -42,6 +43,7 @@ basic_pv
 basic_pv_battery
 mpc
 heat_pump_walkthrough
+dhw_walkthrough
 ev
 good_practices
 reference_configs
