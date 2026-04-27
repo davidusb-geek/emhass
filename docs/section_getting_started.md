@@ -8,6 +8,6 @@ installation_methods
 usage_guide
 automations
 differences
-study_case
+study_cases/index
 
 ```
