@@ -1139,7 +1139,7 @@ async def treat_runtimeparams(
             ("model_type", "long_train_data", None),
             ("var_model", default_var_model, None),
             ("sklearn_model", "KNeighborsRegressor", None),
-            ("regression_model", "AdaBoostRegression", None),
+            ("regression_model", "AdaBoostRegressor", None),
             ("num_lags", 48, None),
             ("split_date_delta", "48h", None),
             ("n_trials", 10, int),
