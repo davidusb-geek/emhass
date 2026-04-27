@@ -60,7 +60,7 @@ docker run --rm -it --restart always  -p 5000:5000 --name emhass-container -v /e
 
 ### Docker, things to note 
 
-- You can create a `config.json` file prior to running emhass. *(obtain a example from: [config_defaults.json](https://github.com/davidusb-geek/emhass/blob/enhass-standalone-addon-merge/src/emhass/data/config_defaults.json)* Alteratively, you can insert your parameters into the configuration page on the EMHASS web server. (for EMHASS to auto create a config.json) With either option, the volume mount `-v /emhass/share:/share` should be applied to make sure your config is stored on the host device. (to be not deleted when the EMHASS container gets removed/image updated)*
+- You can create a `config.json` file prior to running emhass. *(obtain an example from: [config_defaults.json](https://github.com/davidusb-geek/emhass/blob/master/src/emhass/data/config_defaults.json)* Alternatively, you can insert your parameters into the configuration page on the EMHASS web server. (for EMHASS to auto create a config.json) With either option, the volume mount `-v /emhass/share:/share` should be applied to make sure your config is stored on the host device. (to be not deleted when the EMHASS container gets removed/image updated)*
 
 - If you wish to keep a local, semi-persistent copy of the EMHASS-generated data, create a local folder on your device, then mount said folder inside the container.  
   ```bash
