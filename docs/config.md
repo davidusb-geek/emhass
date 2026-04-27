@@ -29,7 +29,7 @@ We will need to define these parameters to retrieve data from Home Assistant. Th
 - `influxdb_host`: The IP address or hostname of your InfluxDB instance. Defaults to `localhost`.
 - `influxdb_port`: The port number for your InfluxDB instance. Defaults to 8086.
 - `influxdb_database`: The name of the InfluxDB database containing your Home Assistant data. Defaults to `homeassistant`.
-- `influxdb_measurement`: The measurement name where your sensor data is stored. Defaults to `W` for the Home Assistant integration.
+- `influxdb_measurement`: The measurement name where your sensor data is stored. Defaults to `W`. When using the Home Assistant InfluxDB integration, set this to `state` (the measurement name used by the HA InfluxDB recorder).
 - `influxdb_retention_policy`: The retention policy to use for InfluxDB queries. Defaults to `autogen`.
 
 A second part of this section is given by some privacy-sensitive parameters that should be included as:
