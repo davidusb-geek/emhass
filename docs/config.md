@@ -107,7 +107,7 @@ Example:
 - `deferrable_load_groups`: Define groups of deferrable loads that share a physical actuator (e.g. a heat pump serving both hot water and underfloor heating). Each group can enforce a shared power budget, mutual exclusion, or both. This is a list of group objects, each with the following fields:
 	- `names`: List of deferrable load names in the group (e.g. `["deferrable0", "deferrable1"]`).
 	- `max_power` *(optional when `mutual_exclusion` is `true`)*: Maximum combined power in Watts for all loads in the group at any timestep. Required when `mutual_exclusion` is `false`.
-	- `mutual_exclusion` *(optional, defaults to `false`)*: When `true`, only one load in the group may be active at any timestep. Requires all loads in the group to have `treat_deferrable_load_as_semi_cont` set to `true`.
+	- `mutual_exclusion` *(optional, defaults to `false`)*: When `true`, only one load in the group may be active at any timestep. Members may be a mix of semi-continuous and non-semi-continuous loads — the optimizer reuses `p_def_bin2` for semi-continuous members and creates an anonymous activity binary linked to `p_deferrable` for non-semi-continuous ones.
 
 	A load cannot belong to multiple groups. Examples:
 	```json
