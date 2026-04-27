@@ -26,7 +26,7 @@ Build the `desired_temperatures` array as three layers stacked over the horizon:
 | Morning spike | 48 °C | last 30 min before 07:00 (1 timestep at 30-min step) |
 | Evening spike | 50 °C | last 1 h before 18:00 (2 timesteps at 30-min step) |
 
-In addition, set `overshoot_temperature: 59 °C` as a hard upper bound (separate constraint, not part of the per-timestep target array). It prevents Legionella-cycle conflicts and excessive tank stress.
+In addition, set `overshoot_temperature` to your tank's configured day-maximum (in this example, 59 °C). It is a hard upper bound: the optimizer will not push the tank past it even if free PV is available. Note that values below the typical 60 °C Legionella-prevention threshold mean EMHASS will not heat the tank into that range automatically; handle Legionella cycles separately (see Caveats).
 
 These values are starting points. Adjust to your tank size, usage pattern, and water-comfort preference.
 
