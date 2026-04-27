@@ -652,7 +652,7 @@ The optimizer decides when to run the heat pump to:
 - Minimize electricity costs (plus comfort penalty if soft constraints are configured)
 - Keep storage temperature within min/max bounds (hard constraints)
 - Approach desired temperatures if configured (soft constraints)
-- Respect mutual exclusivity if in a heat pump group
+- Respect mutual exclusivity if listed in a `deferrable_load_groups` entry with `mutual_exclusion: true`
 
 ### 5. Mutual exclusion via deferrable_load_groups (optional)
 
@@ -662,9 +662,9 @@ When multiple deferrable loads are listed in a `deferrable_load_groups` entry wi
 sum(activity_binary[k][t] for k in group) <= 1,  for all t
 ```
 
-This ensures at most one load is active per timestep. Both loads can be off simultaneously. The optimizer decides the optimal time allocation between members to minimise total cost while satisfying all temperature constraints. Members may be a mix of semi-continuous and non-semi-continuous loads.
+This ensures at most one load is active per timestep. Both loads can be off simultaneously. The optimizer decides the optimal time allocation between members to minimize total cost while satisfying all temperature constraints. Members may be a mix of semi-continuous and non-semi-continuous loads.
 
-### 5. Thermal inertia filter (optional)
+### 6. Thermal inertia filter (optional)
 
 When `thermal_inertia_time_constant` is set to a value greater than 0, the raw heat pump output passes through a first-order low-pass filter before affecting the storage temperature. This models the physical delay in heat transfer (e.g., water circulating through pipes, concrete warming up).
 
