@@ -67,7 +67,7 @@ Cost function: **−1.56 EUR** for the next day. With `costfun: profit`, this is
 
 - `perfect-optim` (`−26.23 EUR` over 7 days, ≈ −3.75 EUR/day) gives the theoretical best — the gap to `dayahead-optim` (`−1.56 EUR`/day) represents forecast uncertainty.
 - The closer your PV-forecast and load-forecast are to reality, the more `dayahead-optim` approaches `perfect-optim`. Forecast quality is the dominant factor — see [Good Practices](good_practices.md) for details.
-- Without a battery, all PV produced beyond instantaneous load is fed to grid (or curtailed if `prod_price ≤ 0`). Adding a battery typically improves cost further — see the next tutorial.
+- Without a battery, all PV produced beyond instantaneous load is fed to the grid (or curtailed if `prod_price ≤ 0`). Adding a battery typically improves cost further — see the next tutorial.
 
 ## See also
 
