@@ -2681,10 +2681,10 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.df_input_data_dayahead = self.prepare_forecast_data()
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [15.0] * 48
 
-        # 24-hour draw-off profile (kWh per 30-min timestep), tiled to 48 timesteps
-        # Morning shower at 7:00, evening at 19:00
-        draw_off_24h = [0.0] * 14 + [1.5] + [0.0] * 23 + [1.0] + [0.0] * 9
-        # This is 48 entries for 30-min timesteps over 24h
+        # 12-hour draw-off profile (kWh per 30-min slot), intentionally shorter than
+        # the 48-timestep horizon so _tile_profile's tiling branch is exercised.
+        # Morning shower at 7:00, evening at 19:00 (relative to the 12-h pattern).
+        draw_off_24h = [0.0] * 14 + [1.5] + [0.0] * 8  # 24 elements — tiled × 2 → 48
 
         runtimeparams = {
             "def_load_config": [
@@ -4315,7 +4315,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         Exercises the new auto-binary path for the non-semi-cont member.
         """
         self.optim_conf["number_of_deferrable_loads"] = 2
-        self.optim_conf["nominal_power_of_deferrable_loads"] = [1000, 2000]
+        # Load 1 nominal is a list — exercises the max(nominal) branch in the mutex path.
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [1000, [1000, 2000]]
         self.optim_conf["operating_hours_of_each_deferrable_load"] = [0, 0]
         # Load 0 semi-continuous (modulating); load 1 non-semi-continuous (on/off)
         self.optim_conf["treat_deferrable_load_as_semi_cont"] = [True, False]
