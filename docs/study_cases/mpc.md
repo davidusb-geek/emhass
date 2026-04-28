@@ -30,7 +30,7 @@ In addition to the parameters from [Basic — PV + Battery](basic_pv_battery.md)
 For the full list of runtime keys, see [Passing data](../passing_data.md).
 
 ```{note}
-`soc_init` and `soc_final` defaults: EMHASS already defaults `soc_final` to `soc_init` (and vice versa) when only one is passed at runtime; if neither is passed, both fall back to `battery_target_state_of_charge` from the static config. So for typical rolling MPC, passing only `soc_init` is sufficient: the optimizer will not impose a terminal-SOC bias inside the horizon. Pass `soc_final` explicitly only when you have a hard end-of-horizon target (e.g. ensure 60% before tomorrow morning).
+`soc_init` and `soc_final` defaults: if only one is passed at runtime, EMHASS sets the other equal to it; if neither is passed, both fall back to `battery_target_state_of_charge` from the static config. Passing both with different values is also valid: EMHASS uses them as-is. For a basic rolling-MPC setup, passing only `soc_init` is enough; for systems that compute a dynamic end-of-horizon target (e.g. "must be at 60% by tomorrow 06:00"), pass both explicitly.
 ```
 
 ## Run
