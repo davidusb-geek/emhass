@@ -30,7 +30,7 @@ In addition to the parameters from [Basic — PV + Battery](basic_pv_battery.md)
 For the full list of runtime keys, see [Passing data](../passing_data.md).
 
 ```{note}
-`soc_init` and `soc_final` are read from `runtimeparams` **independently**. If one is omitted, EMHASS substitutes `battery_target_state_of_charge` (default `0.6`) for that one value — it does **not** mirror the passed value onto the missing one. To avoid an unintended terminal-SOC constraint in rolling MPC, pass both explicitly: typically `soc_init` from your battery sensor and `soc_final` to whatever target your runtime layer computes (equal to `soc_init` for a neutral trailing edge, or a fixed end-of-horizon target). See `src/emhass/utils.py` lines 925-983 for the parsing logic.
+`soc_init` and `soc_final` are read from `runtimeparams` independently. If one is omitted, EMHASS substitutes `battery_target_state_of_charge` (default `0.6`) for that single value; it does **not** mirror the passed value onto the missing one. Always pass both explicitly. Two production-tested rolling-MPC patterns: `soc_final = soc_init` (current SOC for both, neutral trailing edge) or `soc_final = 0` (with a 24 h horizon re-run every 30 min, the deadline is always 24 h away and never reached, so this behaves the same in practice). For a hard end-of-horizon target, pass that value and extend `prediction_horizon` so the deadline sits at the real point in time.
 ```
 
 ## Run
