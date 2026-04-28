@@ -41,15 +41,24 @@ Source: `optimization.py` constraints `min_energy = battery_minimum_state_of_cha
 
 If your downstream automation or display does need a different convention (e.g. percentage of *usable* range), apply the transform yourself in a HA template. Don't assume EMHASS already did it.
 
-## 4. `soc_init` and `soc_final` defaults are forgiving
+## 4. `soc_init` and `soc_final` runtime semantics
 
-For day-ahead optimization, setting `soc_final` to a desired end-of-day SOC (e.g. 0.6) ensures you don't end the day empty. EMHASS uses `battery_target_state_of_charge` (default 0.6) as the fallback when neither `soc_init` nor `soc_final` is passed.
+The two SOC parameters behave differently across optimization actions, so it pays to know exactly what EMHASS does with each.
 
-For rolling MPC, the often-cited concern is that a fixed `soc_final` reserves capacity at the trailing edge of every horizon and biases the optimizer toward conservative mid-day behavior. This is real, but the EMHASS code already handles the common case: when you pass only `soc_init` at runtime, EMHASS auto-sets `soc_final = soc_init`. So **passing only `soc_init`** in your MPC payload is the standard rolling-MPC recipe.
+**`naive-mpc-optim`** reads `soc_init` and `soc_final` from `runtimeparams` independently. If one is missing, EMHASS substitutes `battery_target_state_of_charge` (default `0.6`) for that value alone; it does **not** mirror the passed value onto the missing one. So passing only `soc_init = 0.45` yields `soc_init = 0.45, soc_final = 0.6`, which still imposes a terminal-SOC constraint at every solve. Always pass both explicitly.
 
-Pass `soc_final` explicitly only when you have a hard end-of-horizon target (e.g. "must be at 60% by tomorrow 06:00 to absorb morning PV"). In that case you may also want to extend the horizon so the constraint sits at the actual deadline, not 24 h after the current re-run.
+**`dayahead-optim`** and **`perfect-optim`** do not read `soc_init` or `soc_final` from `runtimeparams` at all. Both fall back to `battery_target_state_of_charge`. Use day-ahead when that single value is the right answer for both ends of the horizon, and switch to MPC when you need runtime control of either.
 
-A common new-user trap is the opposite: starting with very low actual SOC where `soc_init` is below `battery_minimum_state_of_charge`. The optimization becomes infeasible because the initial state already violates a constraint. See Section 5 below (item 4) for the full triage and [discussion #359](https://github.com/davidusb-geek/emhass/discussions/359) for the canonical thread.
+### Practical recipes for rolling MPC
+
+Two patterns work well in production. Both pass *both* values explicitly per MPC call, just with different `soc_final`:
+
+- **`soc_final = soc_init`** (pass current measured SOC for both). The trailing-edge constraint becomes neutral: the battery's end-of-horizon SOC is allowed to land wherever it started, so the optimizer is free to use it inside the horizon. Good for systems with no hard end-of-day target.
+- **`soc_final = 0`** (or `battery_minimum_state_of_charge` if you prefer to stay above the floor). With a 48-step (24 h) rolling horizon and re-runs every 30 min, the deadline at step 48 is always 24 h ahead. Each run replaces the schedule before that deadline ever arrives, so the trailing target is never actually reached. In practice the optimizer behaves the same as the neutral-edge case, just expressed differently. Useful when your runtime layer wants a single static `soc_final` value rather than tracking the live sensor.
+
+If you do have a real end-of-horizon deadline (for example "must be at 60% before tomorrow 06:00 to absorb morning PV"), pass that target as `soc_final` and extend `prediction_horizon` so the deadline sits at the actual point in time, not at the trailing edge of a fixed 24 h window.
+
+A common new-user trap is starting with very low actual SOC where `soc_init` is below `battery_minimum_state_of_charge`. The optimization becomes infeasible because the initial state already violates a constraint. See Section 5 below (item 4) for the full triage and [discussion #359](https://github.com/davidusb-geek/emhass/discussions/359) for the canonical thread.
 
 ## 5. `optim_status: Infeasible` triage order
 
