@@ -1,4 +1,4 @@
-# Study Cases
+# 📁 Study Cases
 
 End-to-end walkthroughs for common EMHASS configurations using real data.
 Each page is tagged by Diátaxis mode so you can pick the entry point that
