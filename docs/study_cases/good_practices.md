@@ -41,15 +41,15 @@ Source: `optimization.py` constraints `min_energy = battery_minimum_state_of_cha
 
 If your downstream automation or display does need a different convention (e.g. percentage of *usable* range), apply the transform yourself in a HA template. Don't assume EMHASS already did it.
 
-## 4. `soc_init` and `soc_final` defaults are forgiving
+## 4. `soc_init` and `soc_final` runtime semantics
 
-For day-ahead optimization, setting `soc_final` to a desired end-of-day SOC (e.g. 0.6) ensures you don't end the day empty. EMHASS uses `battery_target_state_of_charge` (default 0.6) as the fallback when neither `soc_init` nor `soc_final` is passed.
+The two SOC parameters behave differently across optimization actions, so it pays to know exactly what EMHASS does in each path.
 
-For rolling MPC, the often-cited concern is that a fixed `soc_final` reserves capacity at the trailing edge of every horizon and biases the optimizer toward conservative mid-day behavior. The EMHASS code helps here for the simple case: if you pass only `soc_init` at runtime (and omit `soc_final`), EMHASS sets `soc_final = soc_init` for you, so passing just `soc_init` is enough for a basic rolling-MPC setup.
+**`naive-mpc-optim`:** EMHASS reads `soc_init` and `soc_final` from `runtimeparams` independently. If a value is missing from `runtimeparams`, EMHASS falls back to `battery_target_state_of_charge` (default `0.6`) for that value alone — it does **not** mirror one to the other. So passing only `soc_init = 0.45` and omitting `soc_final` yields `soc_init = 0.45, soc_final = 0.6`, which still imposes a terminal-SOC constraint. To avoid trailing-edge bias in rolling MPC, pass both explicitly (typically `soc_init` from your battery sensor, `soc_final` to whatever target your runtime layer computes — equal to `soc_init` for a neutral trailing edge, or a fixed end-of-horizon target like `0.6` for an end-of-day reserve). See `src/emhass/utils.py` lines 925-983 for the parsing logic.
 
-If you pass both `soc_init` and `soc_final` explicitly with different values, EMHASS uses them as-is. That is appropriate when you have a hard end-of-horizon target (e.g. "must be at 60% by tomorrow 06:00 to absorb morning PV"), or when your runtime layer computes a target SOC dynamically. In that case you may also want to extend the horizon so the constraint sits at the actual deadline rather than at the trailing edge of a fixed 24 h window.
+**`dayahead-optim` and `perfect-optim`:** runtime `soc_init` and `soc_final` are **not** read from `runtimeparams`; both fall back to `battery_target_state_of_charge` unconditionally. Use day-ahead when `battery_target_state_of_charge` is the right answer for both ends of the horizon, and switch to MPC when you need runtime control of either value.
 
-A common new-user trap is the opposite: starting with very low actual SOC where `soc_init` is below `battery_minimum_state_of_charge`. The optimization becomes infeasible because the initial state already violates a constraint. See Section 5 below (item 4) for the full triage and [discussion #359](https://github.com/davidusb-geek/emhass/discussions/359) for the canonical thread.
+A common new-user trap is starting with very low actual SOC where `soc_init` is below `battery_minimum_state_of_charge`. The optimization becomes infeasible because the initial state already violates a constraint. See Section 5 below (item 4) for the full triage and [discussion #359](https://github.com/davidusb-geek/emhass/discussions/359) for the canonical thread.
 
 ## 5. `optim_status: Infeasible` triage order
 
