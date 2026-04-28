@@ -15,7 +15,7 @@ This scenario adds a 5 kWp PV installation to the previous tutorial. No battery 
 | Optimization modes | perfect-optim (backtest), dayahead-optim |
 | Cost function | profit |
 
-This matches the default configuration shipped in `config_defaults.json` — no parameter changes required.
+To enable PV in EMHASS, set `set_use_pv: true` (default is `false`) and configure your PV plant via `solar_forecast_kwp` (for the `solar.forecast` method) or one of the other `weather_forecast_method` options. The two deferrable loads use the default `nominal_power_of_deferrable_loads: [3000.0, 750.0]` from `config_defaults.json`.
 
 ## Perfect optimization (7-day historical backtest)
 
