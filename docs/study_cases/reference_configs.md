@@ -17,7 +17,8 @@ The most common modern setup: ~150 m² home, 8–12 kWp PV, 10–15 kWh battery,
 set_use_pv: true
 solar_forecast_kwp: 10
 optimization_time_step: 30
-prediction_horizon: 48           # used by MPC
+# Note: prediction_horizon is a runtime parameter (passed in the MPC payload),
+# not a static config field. With this 30-min step a 24 h horizon is 48 timesteps.
 
 set_use_battery: true
 battery_nominal_energy_capacity: 12000     # Wh (= 12 kWh)

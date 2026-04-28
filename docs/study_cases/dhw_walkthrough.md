@@ -96,7 +96,7 @@ rest_command:
           {},
           {
             "thermal_config": {
-              "heating_rate": 4.0,
+              "heating_rate": 5.0,
               "cooling_constant": 0.02,
               "start_temperature": {{ states('sensor.dhw_tank_temperature') | float }},
               "sense": "heat",
