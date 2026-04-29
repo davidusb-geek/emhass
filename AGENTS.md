@@ -119,7 +119,8 @@ AI coders find code locations and produce candidate changes. Domain experts deci
 
 ## Section 6 — Conventions
 
-(filled in Task 8)
+- **Documentation style:** soft Diátaxis (https://diataxis.fr/) — tutorials, how-tos, reference, explanation. Pragmatic, not strictly four-quadrant. The `docs/study_cases/` directory holds the worked example.
+- **Commit messages:** prefix with type (`fix`, `docs`, `feat`, `chore`) per recent maintainer practice.
 
 ## Section 7 — Where to find more
 
