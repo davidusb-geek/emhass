@@ -75,7 +75,12 @@ These four invariants are easy to break by accident and hard to detect in CI.
 
 ## Section 4 — Maintainer scope corridors
 
-(filled in Task 6)
+These corridors come from public maintainer statements. Cite the source if a contributor questions them.
+
+- **Threat model** (Discussion #808): the project's security envelope is code injection, not auth bypass or data leakage. Endpoints that read in-memory state are inside the corridor; endpoints that touch the filesystem, a database, or shell out are not, and need explicit maintainer sign-off.
+- **EMHASS scope** (Issue #789): EMHASS is a MILP optimiser. Vehicle APIs, OCPP, EVCC, and direct charger modulation belong in the integration layer, not in core.
+- **Glue layer is agnostic.** Node-RED, MQTT, Home Assistant, and generic automations are equivalent integration paths. Do not wire Home-Assistant-specific code paths into core.
+- **Zero-config default must keep working.** The add-on must continue to start and produce a sensible optimisation with default configuration after every change.
 
 ## Section 5 — Limits and gotchas
 
