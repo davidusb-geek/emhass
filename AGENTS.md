@@ -63,7 +63,15 @@ Grep `'stage_timer.*"<label>"'` for the live call site at any time. The labels a
 
 ## Section 3 — Don't-touch rules
 
-(filled in Task 5)
+These four invariants are easy to break by accident and hard to detect in CI.
+
+1. **`action_logs.txt` line format.** The web server's error-detection logic in `src/emhass/web_server.py` parses each line by splitting on the first whitespace and comparing the leading token to `"ERROR"`. Any change to the log line format (extra prefix, structured-logging migration, JSON envelope) silently breaks error reporting in the UI.
+
+2. **`utils.get_logger` handler-proliferation guard.** The function checks whether a logger already has handlers before attaching new ones. Removing or bypassing that guard causes duplicated log lines under repeated module imports, which has historically masked real failures by hiding them in scroll-back.
+
+3. **Two parallel logging subsystems.** The CLI path uses `utils.get_logger`. The web path uses `app.logger` (the Flask logger). Logging changes touch both consistently or land in neither — partial migrations leave the two paths emitting different formats and break log consumers downstream.
+
+4. **`param_definitions.json` is a structured surface.** Additive changes only. Renaming a key, removing one, or changing its type contract breaks the configuration UI and any external tooling that reads the schema. New entries are fine; mutations need a migration plan and a maintainer-led review.
 
 ## Section 4 — Maintainer scope corridors
 
