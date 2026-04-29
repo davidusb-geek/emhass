@@ -82,9 +82,40 @@ These corridors come from public maintainer statements. Cite the source if a con
 - **Glue layer is agnostic.** Node-RED, MQTT, Home Assistant, and generic automations are equivalent integration paths. Do not wire Home-Assistant-specific code paths into core.
 - **Zero-config default must keep working.** The add-on must continue to start and produce a sensible optimisation with default configuration after every change.
 
-## Section 5 — Limits and gotchas
+## Section 5 — Limits and gotchas (read this if you are an AI coder or working with one)
 
-(filled in Task 7)
+AI coders find code locations and produce candidate changes. Domain experts decide whether something is a bug or design. A 2026-04-26 schema audit illustrates the split: of eight candidate findings, four were confirmed bugs and PR-able, four needed maintainer judgment and went issue-first. Skipping the human-in-the-loop step produces roughly fifty percent noise.
+
+**File an issue, not a PR, when:**
+
+- Behaviour changes in any visible way (output values, log format, error messages).
+- A magic constant or sentinel might be intentional ("`=0` means no constraint?", "negative value treated as disabled?").
+- A condition looks wrong but might encode a domain convention you do not know (AC vs DC stack power; charge vs discharge sign conventions).
+- The change touches `optimization.py`, `retrieve_hass.py`, or `forecast.py` beyond about three lines.
+
+**Always verify before claiming done:**
+
+- Sign conventions (`P_grid > 0` means import? export? Check; do not assume).
+- Units in the wild (Home Assistant scales SOC by 100; CSV uses 0..1; they differ).
+- A test reproducer is present for any behaviour-change PR.
+- Container or UI smoke-test (`docker compose up` plus the browser config page) if schema or `web_server.py` changed.
+
+**Do not refactor without an issue:**
+
+- Restructuring `optimization.py` (3000+ lines) without an architecture-RFC issue gets rejected.
+- Renaming public API parameters breaks downstream consumers; needs a migration path.
+- Adding new dependencies is coordinated via issue first.
+
+**Adding a parameter:** follow the four-step workflow documented in `docs/develop.md` (`associations.csv` plus `config_defaults.json` plus `param_definitions.json` plus `OptimizationCacheKey`, optionally `check_def_loads`). Skipping any step breaks something.
+
+**Things AI tools commonly hallucinate or get wrong here:**
+
+- Confusing `param_definitions.json` (GUI hint metadata) with `config_defaults.json` (authoritative defaults).
+- Inventing solver or CVXPY APIs that do not exist in the pinned version.
+- Suggesting Pydantic v2 patterns when the codebase is still on v1 (or vice versa — verify in `pyproject.toml`).
+- Flagging the `if not handlers` guard in `get_logger` as missing without checking whether the module is already imported elsewhere.
+
+**Token and context limits:** the largest source files (`optimization.py`, `command_line.py`, both 3000+ lines) exceed comfortable context for many models. Use `repomix` (`npx repomix`) to flatten the repo for full-context tools that support it; otherwise scope reading to specific functions.
 
 ## Section 6 — Conventions
 
