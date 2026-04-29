@@ -26,14 +26,14 @@ Quick-recall for AI tools:
 | Run tests | `pytest tests/` |
 | Sync dev deps | `uv sync --extra test` |
 | Build docs | `sphinx-build -b html docs docs/_build` (configured in `docs/conf.py`) |
-| Lint | No enforced linter at the time of writing. |
+| Lint | No enforced linter. |
 
 Tech stack (verify versions in `pyproject.toml` before assuming an API):
 
 | Component | Version source |
 |---|---|
 | Python | `pyproject.toml` `requires-python` |
-| Pydantic | v1 at the time of writing |
+| Pydantic | v1 |
 | Optimisation | CVXPY (pin in `pyproject.toml`) |
 | Web | Flask |
 | Tests | pytest |
@@ -69,7 +69,7 @@ These four invariants are easy to break by accident and hard to detect in CI.
 
 2. **Logger handler accumulation in `utils.get_logger`.** The function attaches a handler unconditionally on every call. Calling it twice for the same logger name produces duplicated log lines, which has historically masked real failures by hiding them in scroll-back. Avoid duplicate calls; if a guard becomes appropriate, coordinate the change with the maintainer because both the CLI and the web path call into this function.
 
-3. **Two parallel logging subsystems.** The CLI path uses `utils.get_logger`. The web path uses `app.logger` (the Flask logger). Logging changes touch both consistently or land in neither — partial migrations leave the two paths emitting different formats and break log consumers downstream.
+3. **Two parallel logging subsystems.** The CLI path uses `utils.get_logger`. The web path uses `app.logger` (the Flask logger). Logging changes touch both consistently or land in neither. Partial migrations leave the two paths emitting different formats and break log consumers downstream.
 
 4. **`param_definitions.json` is a structured surface.** Additive changes only. Renaming a key, removing one, or changing its type contract breaks the configuration UI and any external tooling that reads the schema. New entries are fine; mutations need a migration plan and a maintainer-led review.
 
@@ -112,14 +112,14 @@ AI coders find code locations and produce candidate changes. Domain experts deci
 
 - Confusing `param_definitions.json` (GUI hint metadata) with `config_defaults.json` (authoritative defaults).
 - Inventing solver or CVXPY APIs that do not exist in the pinned version.
-- Suggesting Pydantic v2 patterns when the codebase is still on v1 (or vice versa — verify in `pyproject.toml`).
+- Suggesting Pydantic v2 patterns when the codebase is still on v1, or vice versa. Verify in `pyproject.toml`.
 - Forgetting that the public `command_line.py` entry points (`set_input_data_dict`, `perfect_forecast_optim`, `dayahead_forecast_optim`, `naive_mpc_optim`, `publish_data`) are `async def` and writing synchronous wrappers around them.
 
 **Token and context limits:** the largest source files (`optimization.py`, `command_line.py`, both 3000+ lines) exceed comfortable context for many models. Use `repomix` (`npx repomix`) to flatten the repo for full-context tools that support it; otherwise scope reading to specific functions.
 
 ## Section 6 — Conventions
 
-- **Documentation style:** soft Diátaxis (https://diataxis.fr/) — tutorials, how-tos, reference, explanation. Pragmatic, not strictly four-quadrant. The `docs/study_cases/` directory holds the worked example.
+- **Documentation style:** soft Diátaxis (https://diataxis.fr/): tutorials, how-tos, reference, explanation. Pragmatic, not strictly four-quadrant. The `docs/study_cases/` directory holds the worked example.
 - **Commit messages:** prefix with type (`fix`, `docs`, `feat`, `chore`) per recent maintainer practice.
 
 ## Section 7 — Where to find more
