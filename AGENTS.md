@@ -124,4 +124,7 @@ AI coders find code locations and produce candidate changes. Domain experts deci
 
 ## Section 7 — Where to find more
 
-(filled in Task 9)
+- [`docs/develop.md`](docs/develop.md) — canonical EMHASS development guide (fork, venv, DevContainer, Docker, adding a parameter, PR process). Read this first.
+- [`llms.txt`](https://emhass.readthedocs.io/en/latest/llms.txt) — Sphinx-generated routing manifest. The file does not exist in the source tree; it is built per Sphinx run and served from Read the Docs.
+- [`docs/study_cases/`](docs/study_cases/) — Diátaxis-soft worked examples per persona.
+- [Project board](https://github.com/users/davidusb-geek/projects/2) — coordination and scope corridors visible per card.
