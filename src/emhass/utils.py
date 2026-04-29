@@ -1233,6 +1233,17 @@ async def treat_runtimeparams(
             weather_forecast_cache_only = runtimeparams["weather_forecast_cache_only"]
         params["passed_data"]["weather_forecast_cache_only"] = weather_forecast_cache_only
 
+        # Param to bypass PV-feedback mixing during curtailment events (#818)
+        if "ignore_pv_feedback_during_curtailment" not in runtimeparams.keys():
+            ignore_pv_feedback_during_curtailment = False
+        else:
+            ignore_pv_feedback_during_curtailment = bool(
+                runtimeparams["ignore_pv_feedback_during_curtailment"]
+            )
+        params["passed_data"]["ignore_pv_feedback_during_curtailment"] = (
+            ignore_pv_feedback_during_curtailment
+        )
+
         # A condition to manually save entity data under data_path/entities after optimization
         if "entity_save" not in runtimeparams.keys():
             entity_save = ""

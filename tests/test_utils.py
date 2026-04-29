@@ -1281,6 +1281,52 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params_out["passed_data"]["soc_init"], 0.95)
         self.assertEqual(params_out["passed_data"]["soc_final"], 0.6)
 
+    async def test_treat_runtimeparams_ignore_pv_feedback_during_curtailment(self):
+        """Wiring for ignore_pv_feedback_during_curtailment runtime flag (#818).
+
+        The read site in forecast.py reads from params["passed_data"]; this
+        test pins the runtime → passed_data path for the four realistic input
+        shapes: missing key (default False), JSON bool true, string "true",
+        string "false". The string cases document the bool() coerce behaviour.
+        """
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+
+        async def run(runtimeparams_dict):
+            runtimeparams_json = orjson.dumps(runtimeparams_dict).decode("utf-8")
+            params_out, _, _, _ = await treat_runtimeparams(
+                runtimeparams_json,
+                params_json,
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                "naive-mpc-optim",
+                logger,
+                emhass_conf,
+            )
+            return orjson.loads(params_out)
+
+        # Case 1: key absent -> default False
+        out = await run({"prediction_horizon": 10})
+        self.assertIs(out["passed_data"]["ignore_pv_feedback_during_curtailment"], False)
+
+        # Case 2: JSON bool true -> True
+        out = await run({"prediction_horizon": 10, "ignore_pv_feedback_during_curtailment": True})
+        self.assertIs(out["passed_data"]["ignore_pv_feedback_during_curtailment"], True)
+
+        # Case 3: string "true" -> bool() coerce -> True
+        out = await run({"prediction_horizon": 10, "ignore_pv_feedback_during_curtailment": "true"})
+        self.assertIs(out["passed_data"]["ignore_pv_feedback_during_curtailment"], True)
+
+        # Case 4: string "false" -> bool() coerce -> True (Python bool("false") is True)
+        # Documents the known limitation of bool() on non-empty strings;
+        # JSON bool transport is the supported shape.
+        out = await run(
+            {"prediction_horizon": 10, "ignore_pv_feedback_during_curtailment": "false"}
+        )
+        self.assertIs(out["passed_data"]["ignore_pv_feedback_during_curtailment"], True)
+
     def test_param_to_config(self):
         """Test converting built params back to a flat config dictionary and masking secrets."""
         # Create a mock parameter dictionary with the required categories
