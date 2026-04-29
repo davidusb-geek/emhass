@@ -17,7 +17,26 @@ This file documents rules for AI coding agents (Claude Code, Cursor, Aider, Copi
 
 ## Section 1 — Canonical commands
 
-(filled in Task 3)
+Setup, environment variables, and the full developer workflow live in `docs/develop.md` (Method 1 Python venv with `uv`, Method 2 DevContainer, Method 3 Docker). Read that first.
+
+Quick-recall for AI tools:
+
+| Action | Command |
+|---|---|
+| Run tests | `pytest tests/` |
+| Sync dev deps | `uv sync --extra test` |
+| Build docs | `sphinx-build -b html docs docs/_build` (configured in `docs/conf.py`) |
+| Lint | No enforced linter at the time of writing. |
+
+Tech stack (verify versions in `pyproject.toml` before assuming an API):
+
+| Component | Version source |
+|---|---|
+| Python | `pyproject.toml` `requires-python` |
+| Pydantic | v1 at the time of writing |
+| Optimisation | CVXPY (pin in `pyproject.toml`) |
+| Web | Flask |
+| Tests | pytest |
 
 ## Section 2 — Pipeline map
 
