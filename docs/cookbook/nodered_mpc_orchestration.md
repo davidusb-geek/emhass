@@ -126,7 +126,7 @@ Expected: every successful tick appends one JSONL line to your audit file; every
 
 ## Caveats
 
-The following are observed-in-production patterns from running this flow shape for months across multiple EMHASS versions (V4.2 thermal/deferrable, V4.5 audit+API). Specific thresholds shown are illustrative — tune to your inverter, sensors, and tariff.
+The following are observed-in-production patterns from running this flow shape for months. Specific thresholds shown are illustrative — tune to your inverter, sensors, and tariff.
 
 - **Field-name versioning.** Runtime-param names are EMHASS-version-sensitive. If you upgrade EMHASS, re-grep `src/emhass/utils.py` for the names you use; key renames are not always called out in release notes.
 - **Watchdog with separated signals.** Publish two retained MQTT topics from this flow: one heartbeat from the orchestrator itself (every tick), one `cycle-ok` signal flipped when the EMHASS POST returns 200. A downstream consumer can then distinguish "orchestrator down" from "EMHASS down". Threshold pattern: WARN at ~2× MPC cadence with no tick, CRITICAL at ~4×. For a 15-min cadence that is 30 / 60 min. Without this, audit logs can have multi-hour gaps that go unnoticed.
