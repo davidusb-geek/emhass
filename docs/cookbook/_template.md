@@ -15,7 +15,7 @@ Contributor rules (see DOC-cookbook design notes):
   - Config snippets MUST be source-verified against `src/emhass/utils.py` (treat_runtimeparams)
     or `src/emhass/optimization.py`. Include `<!-- source: <file>:<line> -->` HTML comments
     above each Config / Snippet code block.
-  - Transport snippets (HA rest_command / Node-RED / EVCC / AppDaemon / Loxone) must mark
+  - Transport snippets (HA rest_command / Node-RED / EVCC / AppDaemon / vendor-native) must mark
     which stack the recipe was tested against, or mark untested variants as such.
   - Keep total length under ~200 lines including code blocks.
 -->
