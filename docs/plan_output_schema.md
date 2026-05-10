@@ -47,15 +47,15 @@ component the chosen `costfun` decomposes into).
 | Column | Source helper | Unit | Sign convention | Conditional | HA scaling | `type_var` | Notes |
 |--------|---------------|------|-----------------|-------------|------------|------------|-------|
 | `P_Load` | `_publish_standard_forecasts` | W | positive = consumption | always | 1:1 | `power` | DataFrame column read directly |
-| `P_PV` | `_publish_standard_forecasts` | W | (TBD — see PR comment 1) | when `"P_PV"` is in DataFrame | 1:1 | `power` | `custom_pv_forecast_id` |
-| `P_PV_curtailment` | `_publish_standard_forecasts` | W | (TBD — see PR comment 2) | `plant_conf.compute_curtailment = true` | 1:1 | `power` | `custom_pv_curtailment_id` |
-| `P_hybrid_inverter` | `_publish_standard_forecasts` | W | (TBD — see PR comment 3) | `plant_conf.inverter_is_hybrid = true` | 1:1 | `power` | `custom_hybrid_inverter_id` |
+| `P_PV` | `_publish_standard_forecasts` | W | positive = production (PV → DC bus) | when `"P_PV"` is in DataFrame | 1:1 | `power` | `custom_pv_forecast_id`. Assigned from `p_pv` forecast input at `optimization.py:2291`. |
+| `P_PV_curtailment` | `_publish_standard_forecasts` | W | positive = curtailed delta (subtracts from gross PV in DC balance) | `plant_conf.compute_curtailment = true` | 1:1 | `power` | `custom_pv_curtailment_id`. CVXPY `nonneg=True` at `optimization.py:876`; appears as `(p_pv - p_pv_curtailment)` in DC-balance constraint at line 1131; bounded by `<= param_pv_forecast` at line 2761. |
+| `P_hybrid_inverter` | `_publish_standard_forecasts` | W | AC-side power; positive = DC → AC delivery, negative = AC → DC (charging-from-grid via DC bus) | `plant_conf.inverter_is_hybrid = true` | 1:1 | `power` | `custom_hybrid_inverter_id`. Defined at `optimization.py:1140` as `p_hybrid_inverter == (p_dc_ac * eff_dc_ac) - (p_ac_dc * (1.0 / eff_ac_dc))`. |
 | `P_deferrable{k}` | `_publish_deferrable_loads` | W | positive = consumption | `k ∈ [0, number_of_deferrable_loads)`; row skipped (error log) if column missing | 1:1 | `deferrable` | `custom_deferrable_forecast_id[k]` |
-| `predicted_temp_heater{k}` | `_publish_thermal_loads` | °C | n/a (state, not flow) — (TBD which temperature: room / supply / tank — see PR comment 7) | per `k` where `def_load_config[k]` has `thermal_config` or `thermal_battery` | 1:1 | `temperature` | `custom_predicted_temperature_id[k]` |
-| `heating_demand_heater{k}` | `_publish_thermal_loads` | **kWh** | (TBD — thermal vs electrical energy, see PR comment 6) | same as `predicted_temp_heater{k}` | 1:1 | `energy` | unit `"kWh"` confirmed at `utils.py` (`heating_demand_friendly_name`). `custom_heating_demand_id[k]` |
-| `P_batt` | `_publish_battery_data` | W | (TBD — charge vs discharge sign, see PR comment 4) | `optim_conf.set_use_battery = true`; row skipped if column missing | 1:1 | `batt` | `custom_batt_forecast_id` |
+| `predicted_temp_heater{k}` | `_publish_thermal_loads` | °C | n/a (state) | per `k` where `def_load_config[k]` has `thermal_config` or `thermal_battery` | 1:1 | `temperature` | `custom_predicted_temperature_id[k]`. Semantics depend on heater type: **room (air) temperature** for `thermal_config` loads (kept within `min_temps`/`max_temps` band toward `desired_temps`); **thermal-storage/tank temperature** for `thermal_battery` loads. |
+| `heating_demand_heater{k}` | `_publish_thermal_loads` | **kWh** | **thermal energy** delivered to the storage (heat in), not electrical input | only set for `thermal_battery`-type loads (not bare `thermal_config`) | 1:1 | `energy` | `custom_heating_demand_id[k]`. The thermal-battery model carries a separate `heatpump_cops` parameter (`optimization.py:310`); electrical input = thermal / COP, so the two are decoupled. Unit `"kWh"` confirmed at `utils.py` (`heating_demand_friendly_name`). |
+| `P_batt` | `_publish_battery_data` | W | positive = discharge (battery → house), negative = charge (house/grid → battery) | `optim_conf.set_use_battery = true`; row skipped if column missing | 1:1 | `batt` | `custom_batt_forecast_id`. Sum of `p_sto_pos + p_sto_neg` at `optimization.py:2312`. SOC reconstruction at lines 2319-2322 confirms direction: `power_flow = p_sto_pos / eff_dis + p_sto_neg * eff_chg`, then `SOC_opt = soc_init - cumulative_change / cap` (so positive `P_batt` drives SOC down → discharge). |
 | `SOC_opt` | `_publish_battery_data` | **fraction (0..1) in CSV; ×100 in HA** | n/a (state) | `optim_conf.set_use_battery = true` | **×100** | `SOC` | See [SOC_opt scaling callout](#soc_opt-scaling-callout) |
-| `P_grid` | `_publish_grid_and_costs` | W | (TBD — import vs export sign, see PR comment 5) | always | 1:1 | `power` | `custom_grid_forecast_id` |
+| `P_grid` | `_publish_grid_and_costs` | W | positive = import (grid → house), negative = export (house → grid) | always | 1:1 | `power` | `custom_grid_forecast_id`. `P_grid = P_grid_pos + P_grid_neg` at `optimization.py:2299`. `p_grid_pos` is CVXPY `nonneg=True` bounded by `maximum_power_from_grid` (line 803); `p_grid_neg` is `nonpos=True` bounded by `-maximum_power_to_grid` (line 798). |
 | `cost_fun_<name>` | `_publish_grid_and_costs` | € | n/a (cost) | always; multi-column (filter on substring `"cost_fun_"`) | 1:1 | `cost_fun` | Components depend on `costfun` (`profit`, `cost`, `self-consumption`). HA single entity `custom_cost_fun_id` aggregates them. |
 | `optim_status` | `_publish_grid_and_costs` | text | n/a | always (defaulted to `"Optimal"` with WARN log if missing) | n/a | `optim_status` | CVXPY status strings: `Optimal`, `Infeasible`, `Unbounded`, etc. `device_class=""`, `unit_of_measurement=""`. |
 | `unit_load_cost` | `_publish_grid_and_costs` | €/kWh | n/a (price) | always | 1:1 | `unit_load_cost` | per-timestep tariff series for load |
@@ -71,13 +71,19 @@ component the chosen `costfun` decomposes into).
 > exported CSV must therefore multiply by 100 themselves if they expect percent;
 > consumers reading the HA entity get percent already and must not double-scale.
 
-## Sign conventions — open
+## Sign conventions
 
-Five power columns and two thermal columns have ambiguous sign conventions until
-maintainer confirms. The opened PR carries those questions in its description; once
-answered, this doc gets a follow-up patch on the same branch that replaces the `(TBD —
-see PR comment N)` markers with the confirmed convention. Until then, consumers must
-inspect the source or wait for the merged version.
+All sign conventions are derived from `src/emhass/optimization.py` (the CVXPY model
+definition). Per-column citations are inline in the column table above. Summary:
+
+| Quantity | Positive means | Negative means |
+|----------|----------------|----------------|
+| `P_PV` | PV production (panels → DC bus) | (always ≥ 0; PV does not consume) |
+| `P_PV_curtailment` | curtailed delta (subtracted from gross PV) | (always ≥ 0; CVXPY `nonneg=True`) |
+| `P_hybrid_inverter` | DC → AC flow (delivered to house/grid) | AC → DC flow (charging via DC bus) |
+| `P_deferrable{k}` | load consumption | (always ≥ 0; loads do not export) |
+| `P_batt` | battery discharge (battery → house) | battery charge (house/grid → battery) |
+| `P_grid` | import (grid → house) | export (house → grid) |
 
 ## Consumer recipes
 
@@ -120,4 +126,4 @@ DataFrame to the published columns before returning.
 
 | Version | Date | Change |
 |---------|------|--------|
-| 1.0 | 2026-05-10 | Initial published schema. 7 sign conventions still TBD; will be resolved in a follow-up patch on the same PR branch before merge. |
+| 1.0 | 2026-05-10 | Initial published schema. Sign conventions derived from `src/emhass/optimization.py` with inline citations. |
