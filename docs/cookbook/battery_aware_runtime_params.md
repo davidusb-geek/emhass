@@ -8,7 +8,7 @@ Feed live battery state of charge (SOC) back into EMHASS naive-MPC on every call
 
 - Battery is enabled in your static EMHASS config (see Step 1 below)
 - A battery SOC sensor reachable from your orchestrator (Node-RED, AppDaemon, etc.). Common sources: inverter Modbus register, manufacturer cloud API, HA `sensor.battery_state_of_charge`. Any source works as long as you can read a number.
-- An MPC orchestrator that already POSTs to `/action/naive-mpc-optim`. If you don't have one yet, see [MPC orchestration via Node-RED](nodered_mpc_orchestration.md). This recipe adds the battery branch to that orchestrator.
+- An MPC orchestrator that already POSTs to `/action/naive-mpc-optim`. If you don't have one yet, see [MPC orchestration via Node-RED](transport_nodered_mpc_orchestration.md). This recipe adds the battery branch to that orchestrator.
 
 ## Step 1: Check your static battery config
 
@@ -41,7 +41,7 @@ Expected: EMHASS starts cleanly, `GET /api/get-config` returns the battery block
 
 ## Step 2: Read battery SOC from your source
 
-In the `function` node where your orchestrator builds `runtime_params` (Step 3 of the [MPC orchestration recipe](nodered_mpc_orchestration.md)), read the SOC from wherever your stack exposes it. Examples:
+In the `function` node where your orchestrator builds `runtime_params` (Step 3 of the [MPC orchestration recipe](transport_nodered_mpc_orchestration.md)), read the SOC from wherever your stack exposes it. Examples:
 
 ```javascript
 // Pick ONE of these — adapt to your stack:
