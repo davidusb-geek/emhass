@@ -41,6 +41,16 @@ Contributor rules:
   E. Length cap
      - Keep total length under ~250 lines including code blocks. If you need more,
        consider splitting into two recipes (e.g. basic + advanced variant).
+
+  F. File naming
+     - Pattern: <index-category>_<transport-or-pattern>_<topic>.md (e.g.
+       transport_nodered_mpc_orchestration.md, tariff_tibber_dynamic.md).
+     - Category is one of: ev / dhw / heatpump / battery / forecast / tariff / transport.
+       Use transport for stack-orchestration recipes (Node-RED MPC driver, watchdog,
+       MQTT publishing patterns, EVCC/HA adapters).
+     - If a recipe is transport-agnostic, omit the transport segment and use
+       <index-category>_<topic>.md (e.g. battery_aware_runtime_params.md,
+       forecast_pv_resilience.md).
 -->
 
 # Recipe Title
