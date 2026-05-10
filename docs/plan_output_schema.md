@@ -1,7 +1,7 @@
 # Plan / Optimization Output Schema
 
 This page documents the columns of the optimization-result DataFrame returned by
-`publish_data` (see [API Reference](emhass.html#emhass.command_line.publish_data)).
+`publish_data` (see [API Reference](emhass.md)).
 Downstream consumers — Home Assistant cards, Node-RED flows, EVCC adapters, third-party
 automations — can rely on this schema as a versioned contract.
 
