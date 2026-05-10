@@ -238,6 +238,7 @@ section_config
 section_core
 section_thermal
 study_cases/index
+cookbook/index
 section_reference
 
 ```
