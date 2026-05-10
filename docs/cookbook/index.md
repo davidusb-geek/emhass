@@ -45,4 +45,4 @@ No recipes yet. Topics that would fit: dynamic-price (EPEX, Tibber, etc.) inject
 
 - [MPC orchestration via Node-RED](nodered_mpc_orchestration.md) — generic Node-RED → EMHASS pattern, transport-agnostic on inputs.
 
-Additional transport recipes welcome: Home Assistant `rest_command` (HA users — see [Discussion #824](https://github.com/davidusb-geek/emhass/discussions/824) for community patterns), AppDaemon, EVCC API integration (pending #29815), Loxone-direct, etc.
+Additional transport recipes welcome: Home Assistant `rest_command` (HA users — see [Discussion #824](https://github.com/davidusb-geek/emhass/discussions/824) for community patterns), AppDaemon, EVCC API integration (pending #29815), other smart-home-native integrations, etc.
