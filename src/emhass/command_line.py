@@ -29,6 +29,7 @@ default_csv_filename = "opt_res_latest.csv"
 default_pkl_suffix = "_mlf.pkl"
 default_metadata_json = "metadata.json"
 test_df_literal = "test_df_final.pkl"
+EMHASS_SCHEMA_VERSION = "1.0"
 
 
 @dataclass
