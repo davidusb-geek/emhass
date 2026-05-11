@@ -96,13 +96,39 @@ Ambiguous types / signs / units / conventions: trace upstream code first. "Ask m
 
 ## 4. Self-check pre-PR
 
-Run through before opening:
+Run through before opening. Each item has a *why* — skip the item only if the *why* genuinely does not apply.
 
-- [ ] Issue filed if behavior change? (Per decision-tree in §2)
-- [ ] `pytest tests/` passes locally?
-- [ ] `uvx ruff check .` clean?
-- [ ] Sign conventions verified (if PR touches power / SOC / cost variables)?
-- [ ] One concern per PR (scope discipline)?
-- [ ] Issue or Discussion linked in PR body if applicable?
-- [ ] Reproducer in body if behavior-change fix?
-- [ ] Maintainer-scope-corridors checked? ([Discussion #808](https://github.com/davidusb-geek/emhass/discussions/808) Layers, [Discussion #789](https://github.com/davidusb-geek/emhass/discussions/789) MILP scope)
+- [ ] Issue filed if behavior change? *Why: surfaces direction-disagreement before code edits; see §2 cautionary #830.*
+- [ ] `pytest tests/` passes locally? *Why: CI runs the same suite; local-fail = CI-fail = wasted review cycle.*
+- [ ] `uvx ruff check .` clean? *Why: ruff is enforced via `.github/workflows/code-quality.yml`; a red lint blocks merge.*
+- [ ] Sign conventions verified (if PR touches power / SOC / cost variables)? *Why: column names do not encode sign; see §3 sign-conventions landmine.*
+- [ ] One concern per PR (scope discipline)? *Why: bundled PRs invite scope-objection on one part and block the whole PR.*
+- [ ] Issue or Discussion linked in PR body if applicable? *Why: makes review context one-click; saves maintainer time.*
+- [ ] Reproducer in body if behavior-change fix? *Why: lets the maintainer confirm the bug, not just the patch.*
+- [ ] Maintainer-scope-corridors checked? ([Discussion #808](https://github.com/davidusb-geek/emhass/discussions/808) Layers, [Discussion #789](https://github.com/davidusb-geek/emhass/discussions/789) MILP scope) *Why: out-of-corridor PRs land in indefinite review limbo.*
+
+## 5. Red flags: stop and ask
+
+Patterns that mean stop, file an issue, do not PR:
+
+- "AI says this is a bug but I can't explain why in my own words." → Don't trust. File issue with the question. Maintainer or community will explain or correct.
+- "I can't tell what unit this number is in (W vs kW, fraction vs percent, UTC vs local)." → File issue. Document the ambiguity for the next person.
+- "I don't know which subsystem owns this concern (optim vs forecast vs retrieve_hass)." → File issue. Don't pick blindly — cross-subsystem PRs carry heavy review-friction.
+- "Test passes but I don't trust the test." → Add a counter-example. If still ambiguous, file issue with the counter-example.
+- "AI generated 200+ LOC and I haven't read it line-by-line." → Stop. Read every line before commit. Unreviewed AI-generated code is a future-bug source.
+- "AI proposed relaxing a constraint to make the solve feasible." → Stop. See §3 MILP infeasibility — relaxation masks the wrong-constraint cause. File issue with the infeasible model dump.
+- "The fix is in a subsystem I don't normally touch and the diff feels speculative." → File issue describing the symptom and the speculative diff. Let the subsystem owner weigh in before you push.
+
+## 6. Help resources
+
+- [GitHub Discussions](https://github.com/davidusb-geek/emhass/discussions) — questions, ideas, use-case sharing
+- [`docs/develop.md`](develop.md) — general developer guide (Method 1 venv with `uv`, Method 2 DevContainer, Method 3 Docker)
+- [`AGENTS.md`](../AGENTS.md) — agent-side rules (read by AI tools; humans read to understand agent constraints)
+- Maintainer scope corridors: [Discussion #808](https://github.com/davidusb-geek/emhass/discussions/808) (Layers 1-3, zero-config default), [Discussion #789](https://github.com/davidusb-geek/emhass/discussions/789) (EMHASS = MILP core, glue layer separate)
+- Issue templates: `.github/ISSUE_TEMPLATE/`
+
+---
+
+Cross-references: [`docs/develop.md`](develop.md), [`AGENTS.md`](../AGENTS.md), [`CONTRIBUTING.md`](../CONTRIBUTING.md).
+
+AI-tool-coverage gaps: Cursor (§1b) and Aider (§1c) are untested stubs. PRs adding tested-against patterns welcome.
