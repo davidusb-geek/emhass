@@ -4,7 +4,7 @@ Companion to [`docs/develop.md`](develop.md) (humans, general) and [`AGENTS.md`]
 
 This file teaches the **human driving the AI agent**. AGENTS.md teaches the agent. develop.md teaches the human contributing without an agent. Three audiences, three docs, no overlap.
 
-EMHASS landmines AI tools won't flag without explicit prompt: sign conventions, SOC scaling, MILP infeasibility, `q_input_start=0`, dual logger, `OptimizationCacheKey`, source-resolve discipline. Each section below addresses one.
+EMHASS landmines AI tools won't flag without an explicit prompt: sign conventions, SOC scaling, MILP infeasibility, `q_input_start=0`, dual logger, `OptimizationCacheKey`, source-resolve discipline. Each section below addresses one.
 
 ## 1. AI-tool setup
 
@@ -36,7 +36,7 @@ Conventions seen in community:
 - `pytest tests/` passes locally before commit
 - `uvx ruff check .` clean before push
 
-PR adding a tested Cursor-setup recipe for EMHASS welcome.
+PR adding a tested Cursor-setup recipe for EMHASS is welcome.
 
 ### 1c. Aider (untested — contribution welcome)
 
@@ -45,7 +45,7 @@ Conventions seen in community:
 - `/test` and `/lint` if configured in `.aider.conf.yml`
 - Same pytest + ruff baseline
 
-PR adding a tested Aider-setup recipe welcome.
+PR adding a tested Aider-setup recipe is welcome.
 
 ## 2. Decision-tree: issue-first vs PR-direct
 
