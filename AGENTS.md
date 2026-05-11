@@ -7,6 +7,8 @@ description: Vendor-neutral rules for AI coding agents working on EMHASS source.
 
 This file documents rules for AI coding agents (Claude Code, Cursor, Aider, Copilot, Codex) working on EMHASS source. It complements `docs/develop.md` (canonical for humans) and does not duplicate its content. Where `docs/develop.md` already covers a topic, this file links and adds AI-specific constraints on top.
 
+*Humans driving an agent on this codebase: see [`docs/develop_ai_coders.md`](docs/develop_ai_coders.md) for the contributor-side companion to this file.*
+
 ## Repository layout
 
 - `src/emhass/` — core module: `optimization.py`, `forecast.py`, `retrieve_hass.py`, `web_server.py`, `command_line.py`, `utils.py`.
