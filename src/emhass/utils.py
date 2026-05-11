@@ -2365,7 +2365,13 @@ def check_def_loads(
         )
         for _x in range(len(parameter[parameter_name]), num_def_loads):
             parameter[parameter_name].append(default)
-    return parameter[parameter_name]
+    result = parameter[parameter_name]
+    # Replace any None elements with the default (can occur when set-config
+    # receives a partial config, e.g. [null, 0] instead of [0, 0]).
+    if isinstance(result, list):
+        result = [v if v is not None else default for v in result]
+        parameter[parameter_name] = result
+    return result
 
 
 def get_days_list(days_to_retrieve: int) -> pd.DatetimeIndex:

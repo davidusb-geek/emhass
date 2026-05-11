@@ -2524,6 +2524,11 @@ class Optimization:
         def_total_hours = pad_list(def_total_hours, num_deferrable_loads)
         def_start_timestep = pad_list(def_start_timestep, num_deferrable_loads)
         def_end_timestep = pad_list(def_end_timestep, num_deferrable_loads)
+        # Normalize any None elements to 0 (treat as "no time restriction").
+        # params.pkl can be corrupted by partial set-config calls that produce
+        # [None, 0] instead of [0, 0], causing TypeError in validate_def_timewindow.
+        def_start_timestep = [s if s is not None else 0 for s in def_start_timestep]
+        def_end_timestep = [e if e is not None else 0 for e in def_end_timestep]
 
         # Parameter Updates
         self.param_pv_forecast.value = p_pv
