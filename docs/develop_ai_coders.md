@@ -93,3 +93,16 @@ Adding a new optimisation parameter requires 4 edits per `docs/develop.md`: (1) 
 
 ### Source-resolve discipline
 Ambiguous types / signs / units / conventions: trace upstream code first. "Ask maintainer" is last resort. Real precedent: PR [#835](https://github.com/davidusb-geek/emhass/pull/835)'s sign-convention questions self-resolved from `optimization.py` MILP constraints rather than punting to the maintainer. Audit-source-ambiguity does not have to propagate into the PR.
+
+## 4. Self-check pre-PR
+
+Run through before opening:
+
+- [ ] Issue filed if behavior change? (Per decision-tree in §2)
+- [ ] `pytest tests/` passes locally?
+- [ ] `uvx ruff check .` clean?
+- [ ] Sign conventions verified (if PR touches power / SOC / cost variables)?
+- [ ] One concern per PR (scope discipline)?
+- [ ] Issue or Discussion linked in PR body if applicable?
+- [ ] Reproducer in body if behavior-change fix?
+- [ ] Maintainer-scope-corridors checked? ([Discussion #808](https://github.com/davidusb-geek/emhass/discussions/808) Layers, [Discussion #789](https://github.com/davidusb-geek/emhass/discussions/789) MILP scope)
