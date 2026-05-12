@@ -29,6 +29,7 @@ default_csv_filename = "opt_res_latest.csv"
 default_pkl_suffix = "_mlf.pkl"
 default_metadata_json = "metadata.json"
 test_df_literal = "test_df_final.pkl"
+EMHASS_SCHEMA_VERSION = "1.0"
 
 
 @dataclass
@@ -2438,6 +2439,7 @@ async def publish_data(
     if not save_data_to_file and publish_prefix != "" and not dont_post:
         opt_res = await _publish_from_saved_entities(input_data_dict, logger, params)
         if opt_res is not None:
+            opt_res.attrs["emhass_schema_version"] = EMHASS_SCHEMA_VERSION
             return opt_res
     # Load Optimization Results (if not passed)
     if opt_res_latest is None:
@@ -2468,6 +2470,7 @@ async def publish_data(
     cols_published.extend(await _publish_grid_and_costs(ctx, opt_res_latest))
     # Return Summary DataFrame
     opt_res = opt_res_latest[cols_published].loc[[opt_res_latest.index[idx_closest]]]
+    opt_res.attrs["emhass_schema_version"] = EMHASS_SCHEMA_VERSION
     return opt_res
 
 
