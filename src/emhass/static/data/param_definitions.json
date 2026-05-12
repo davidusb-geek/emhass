@@ -120,9 +120,9 @@
     },
     "historic_days_to_retrieve": {
       "friendly_name": "Historic days to retrieve",
-      "Description": "We will retrieve data from now to days_to_retrieve days. Defaults to 9",
+      "Description": "We will retrieve data from now to days_to_retrieve days. Defaults to 2",
       "input": "int",
-      "default_value": 9
+      "default_value": 2
     },
     "load_negative": {
       "friendly_name": "Load negative values",
@@ -154,7 +154,7 @@
       "Description": "The load forecast method that will be used. The options are ‘csv’ to load a CSV file or ‘naive’ for a simple 1-day persistence model.",
       "input": "select",
       "select_options": ["typical", "naive", "mlforecaster", "csv"],
-      "default_value": "naive"
+      "default_value": "typical"
     },
     "set_total_pv_sell": {
       "friendly_name": "PV straight to grid",
@@ -215,13 +215,13 @@
       "friendly_name": "Max hybrid inverter AC output power",
       "Description": "Maximum hybrid inverter output power from combined PV and battery discharge.",
       "input": "int",
-      "default_value": 5000
+      "default_value": 0
     },
     "inverter_ac_input_max": {
       "friendly_name": "Max hybrid inverter AC input power",
       "Description": "Maximum hybrid inverter input power from grid to charge battery.",
       "input": "int",
-      "default_value": 5000
+      "default_value": 0
     },
     "inverter_efficiency_dc_ac": {
       "friendly_name": "Hybrid inverter efficency DC to AC",
