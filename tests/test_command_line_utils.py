@@ -2049,6 +2049,32 @@ class TestCommandLineTimezoneLogic(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class TestSchemaVersion(unittest.IsolatedAsyncioTestCase):
+    """Cover EMHASS_SCHEMA_VERSION constant and the publish_data early-return attach."""
+
+    def test_constant_value(self):
+        from emhass.command_line import EMHASS_SCHEMA_VERSION
+
+        self.assertEqual(EMHASS_SCHEMA_VERSION, "1.0")
+
+    async def test_publish_data_attaches_schema_version_on_saved_entities_path(self):
+        from emhass.command_line import EMHASS_SCHEMA_VERSION
+
+        mock_df = pd.DataFrame({"P_grid": [0.0]})
+        with (
+            patch(
+                "emhass.command_line._get_params",
+                return_value={"passed_data": {"publish_prefix": "test_"}},
+            ),
+            patch(
+                "emhass.command_line._publish_from_saved_entities",
+                new=AsyncMock(return_value=mock_df),
+            ),
+        ):
+            result = await publish_data({}, logger)
+        self.assertEqual(result.attrs["emhass_schema_version"], EMHASS_SCHEMA_VERSION)
+
+
 class TestOptimizationCache(unittest.TestCase):
     """Unit tests for the OptimizationCache warm-starting functionality."""
 
