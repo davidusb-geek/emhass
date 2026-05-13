@@ -380,5 +380,5 @@ Edit order:
 
 ### Step 3 - Pull request
 
-Once developed, commit your code, and push the commit to your fork on Github.
+Once developed, commit your code, and push the commit to your fork on GitHub.
 Once ready, submit a pull request with your fork to the [davidusb-geek/emhass@master](https://github.com/davidusb-geek/emhass) repository.
