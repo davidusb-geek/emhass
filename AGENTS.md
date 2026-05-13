@@ -111,22 +111,32 @@ AI coders find code locations and produce candidate changes. Domain experts deci
 
 **Adding a parameter:** follow the four-step workflow documented in `docs/develop.md` (`associations.csv` plus `config_defaults.json` plus `param_definitions.json` plus `OptimizationCacheKey`, optionally `check_def_loads`). Skipping any step breaks something.
 
+**Changing a default value (existing parameter):** edit `src/emhass/static/data/param_definitions.json` first — it is the source of truth. Then align `src/emhass/data/config_defaults.json` to match. See `docs/develop.md` § Changing default values.
+
 **External forecast feed alignment.** The `runtimeparams` handlers for `pv_power_forecast`, `load_power_forecast`, `load_cost_forecast`, and `prod_price_forecast` are intentionally tolerant of length, frequency, and timezone differences — day-ahead price feeds typically publish 24h, not 48h, and get padded gracefully. Tolerant ≠ silent: if you change resample/align logic, log clearly when alignment happens. Silent shifts have historically produced wrong-but-valid-looking plans (`optim_status: Optimal` with every timestep offset by N).
 
 **Things AI tools commonly hallucinate or get wrong here:**
 
-- Confusing `param_definitions.json` (GUI hint metadata) with `config_defaults.json` (authoritative defaults).
+- Confusing `param_definitions.json` (GUI schema, source of truth for default values) with `config_defaults.json` (runtime loader fallback for headless installs).
 - Inventing solver or CVXPY APIs that do not exist in the pinned version.
 - Forgetting that the public `command_line.py` entry points (`set_input_data_dict`, `perfect_forecast_optim`, `dayahead_forecast_optim`, `naive_mpc_optim`, `publish_data`) are `async def` and writing synchronous wrappers around them.
 
 **Token and context limits:** the largest source files (`optimization.py`, `command_line.py`, both 3000+ lines) exceed comfortable context for many models. Use `repomix` (`npx repomix`) to flatten the repo for full-context tools that support it; otherwise scope reading to specific functions.
 
-## Section 6 — Conventions
+## Section 6 — Behavioral guardrails
+Four rules. Reduce wrong-assumption drift, scope creep, dead-code regression.
+1. **Think first.** Surface assumptions before code. Multiple interpretations → ask, never silently pick. Simpler path exists → say so. Unclear → stop, name the confusion.
+2. **Simplicity.** Min code that solves stated problem. No bonus features. No abstractions for single-use. No error handling for impossible cases. 200 lines where 50 work → rewrite.
+3. **Surgical.** Touch only requested code. No "while I'm here" refactors. Match existing style. Remove only imports/vars YOUR change orphaned, never pre-existing dead code unless asked.
+4. **Goal-driven.** Task → verifiable criteria. "Add validation" → "tests for invalid inputs pass". "Fix bug" → "reproduce-test passes". State plan as numbered steps, each with verify check.
+Source: Andrej Karpathy LLM-coding-pitfalls observations (https://x.com/karpathy/status/2015883857489522876), distilled.
+
+## Section 7 — Conventions
 
 - **Documentation style:** soft Diátaxis (https://diataxis.fr/): tutorials, how-tos, reference, explanation. Pragmatic, not strictly four-quadrant. The `docs/study_cases/` directory holds worked examples.
 - **Commit messages:** prefix with type (`fix`, `docs`, `feat`, `chore`) per recent maintainer practice.
 
-## Section 7 — Where to find more
+## Section 8 — Where to find more
 
 - [`docs/develop.md`](docs/develop.md) — canonical EMHASS development guide (fork, venv, DevContainer, Docker, adding a parameter, PR process). Read this first.
 - [`llms.txt`](https://emhass.readthedocs.io/en/latest/llms.txt) — Sphinx-generated routing manifest. The file does not exist in the source tree; it is built per Sphinx run and served from Read the Docs.
