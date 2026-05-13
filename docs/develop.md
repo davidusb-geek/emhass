@@ -377,7 +377,6 @@ When changing the default value of an *existing* parameter (as opposed to adding
 Edit order:
 1. Update `default_value` in `param_definitions.json` (and any matching description text such as "Defaults to N" mentions).
 2. Update the same key in `config_defaults.json` to match. The two files must agree; drift produces silent default-divergence between GUI and headless modes.
-PR #830 reverted a prior `config_defaults`-first edit and PR #845 captured the realignment direction.
 
 ### Step 3 - Pull request
 
