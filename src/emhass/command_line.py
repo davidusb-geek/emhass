@@ -1558,12 +1558,12 @@ async def naive_mpc_optim(
     def_total_timestep = input_data_dict["params"]["optim_conf"].get(
         "operating_timesteps_of_each_deferrable_load", None
     )
-    def_start_timestep = input_data_dict["params"]["optim_conf"][
+    def_start_timestep = input_data_dict["params"]["optim_conf"].get(
         "start_timesteps_of_each_deferrable_load"
-    ]
-    def_end_timestep = input_data_dict["params"]["optim_conf"][
+    )
+    def_end_timestep = input_data_dict["params"]["optim_conf"].get(
         "end_timesteps_of_each_deferrable_load"
-    ]
+    )
     with stage_timer(input_data_dict["stage_times"], "optim_solve", logger):
         opt_res_naive_mpc = input_data_dict["opt"].perform_naive_mpc_optim(
             df_input_data_dayahead,
