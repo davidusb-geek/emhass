@@ -737,6 +737,7 @@ def _apply_df_freq_horizon(
         step = retrieve_hass_conf["optimization_time_step"]
         if not isinstance(step, pd._libs.tslibs.timedeltas.Timedelta):
             step = pd.to_timedelta(step, "minute")
+        df = df[~df.index.duplicated(keep="last")]
         df = df.asfreq(step)
     else:
         df = utils.set_df_index_freq(df)
