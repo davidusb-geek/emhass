@@ -1328,7 +1328,7 @@ async def perfect_forecast_optim(
             else "Unknown"
         )
         last_run.record(
-            input_data_dict["emhass_conf"],
+            input_data_dict["emhass_conf"]["data_path"],
             action="perfect-optim",
             stage_times=input_data_dict["stage_times"],
             optim_status=_optim_status,
@@ -1337,7 +1337,7 @@ async def perfect_forecast_optim(
             schema_version=EMHASS_SCHEMA_VERSION,
         )
     except Exception as _exc:  # noqa: BLE001
-        logger.warning(f"last_run: failed to record perfect-optim snapshot: {_exc}")
+        logger.warning("last_run: failed to record perfect-optim snapshot", exc_info=_exc)
 
     return opt_res
 
@@ -1555,7 +1555,7 @@ async def dayahead_forecast_optim(
             else "Unknown"
         )
         last_run.record(
-            input_data_dict["emhass_conf"],
+            input_data_dict["emhass_conf"]["data_path"],
             action="dayahead-optim",
             stage_times=input_data_dict["stage_times"],
             optim_status=_optim_status,
@@ -1564,7 +1564,7 @@ async def dayahead_forecast_optim(
             schema_version=EMHASS_SCHEMA_VERSION,
         )
     except Exception as _exc:  # noqa: BLE001
-        logger.warning(f"last_run: failed to record dayahead-optim snapshot: {_exc}")
+        logger.warning("last_run: failed to record dayahead-optim snapshot", exc_info=_exc)
 
     return opt_res_dayahead
 
@@ -1665,7 +1665,7 @@ async def naive_mpc_optim(
             else "Unknown"
         )
         last_run.record(
-            input_data_dict["emhass_conf"],
+            input_data_dict["emhass_conf"]["data_path"],
             action="naive-mpc-optim",
             stage_times=input_data_dict["stage_times"],
             optim_status=_optim_status,
@@ -1674,7 +1674,7 @@ async def naive_mpc_optim(
             schema_version=EMHASS_SCHEMA_VERSION,
         )
     except Exception as _exc:  # noqa: BLE001
-        logger.warning(f"last_run: failed to record naive-mpc-optim snapshot: {_exc}")
+        logger.warning("last_run: failed to record naive-mpc-optim snapshot", exc_info=_exc)
 
     return opt_res_naive_mpc
 
