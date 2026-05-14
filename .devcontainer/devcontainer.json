@@ -57,6 +57,6 @@
 
 	"postStartCommand": ["apt-get", "install", "nodejs", "-y"],
 	"updateContentCommand": ["apt-get", "update" ],
-	"postCreateCommand": [ "uv", "pip", "install", ".[test]" ]
+	"postCreateCommand": "uv pip install .[test] && uv tool install prek && prek install"
 	  
 }
