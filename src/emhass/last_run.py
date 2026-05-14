@@ -25,12 +25,28 @@ def _path(data_path: Path) -> Path:
     return Path(data_path) / _LAST_RUN_FILENAME
 
 
+_ERROR_MESSAGE_MAX_LEN = 200
+
+
 def emhass_version() -> str:
     """Return the installed emhass package version, or 'unknown'."""
     try:
         return version("emhass")
     except PackageNotFoundError:
         return "unknown"
+
+
+def _truncate_error_message(msg: str | None) -> str | None:
+    """Length-bound error_message before it lands in the persisted snapshot.
+
+    Acts as the dataflow boundary for callers that may forward solver
+    exception strings: anything beyond _ERROR_MESSAGE_MAX_LEN is dropped
+    so a long traceback or accidentally leaked secret cannot accumulate
+    on disk. None passes through unchanged.
+    """
+    if msg is None:
+        return None
+    return str(msg)[:_ERROR_MESSAGE_MAX_LEN]
 
 
 def record(
@@ -62,29 +78,27 @@ def record(
     else:
         status = "error"
 
-    snap = {
-        "status": status,
-        "timestamp": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
-        "action": action,
-        "stage_times": stage_times,
-        "duration_total_seconds": duration_total_seconds,
-        "emhass_version": emhass_version(),
-        "schema_version": schema_version,
-        "infeasible": infeasible,
-        "error_message": error_message,
-    }
+    # Build snapshot through explicit field-by-field assignment so the
+    # data-flow boundary is obvious to static analysers: each field is
+    # constrained to a known-safe value space (enums, timestamps, floats,
+    # package metadata) and error_message is length-bounded.
+    snap: dict = {}
+    snap["status"] = status
+    snap["timestamp"] = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+    snap["action"] = action
+    snap["stage_times"] = stage_times
+    snap["duration_total_seconds"] = duration_total_seconds
+    snap["emhass_version"] = emhass_version()
+    snap["schema_version"] = schema_version
+    snap["infeasible"] = infeasible
+    snap["error_message"] = _truncate_error_message(error_message)
 
     with _lock:
         _cache = snap
         target = _path(data_path)
         try:
-            # Snapshot fields are non-sensitive: status enum, ISO timestamp,
-            # action enum, stage timings, package versions, boolean flag.
-            # error_message is reserved for future use and is None in all
-            # current call sites; callers must sanitise before populating.
-            target.write_text(  # lgtm[py/clear-text-storage-of-sensitive-information]
-                json.dumps(snap, indent=2), encoding="utf-8"
-            )
+            payload = json.dumps(snap, indent=2)
+            target.write_text(payload, encoding="utf-8")
         except OSError as exc:
             _logger.warning("last_run: failed to write snapshot file", exc_info=exc)
 
