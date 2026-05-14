@@ -188,7 +188,14 @@ async def index():
     if (emhass_conf["data_path"] / injection_dict_file).exists():
         async with aiofiles.open(str(emhass_conf["data_path"] / injection_dict_file), "rb") as fid:
             content = await fid.read()
-            injection_dict = pickle.loads(content)
+            try:
+                injection_dict = pickle.loads(content)
+            except EOFError:
+                app.logger.warning(
+                    "The data container file is empty or incomplete (possible write race condition). "
+                    "Please launch an optimization task."
+                )
+                injection_dict = {}
     else:
         app.logger.info(
             "The data container dictionary is empty... Please launch an optimization task"
@@ -279,7 +286,14 @@ async def template_action():
     if (emhass_conf["data_path"] / injection_dict_file).exists():
         async with aiofiles.open(str(emhass_conf["data_path"] / injection_dict_file), "rb") as fid:
             content = await fid.read()
-            injection_dict = pickle.loads(content)
+            try:
+                injection_dict = pickle.loads(content)
+            except EOFError:
+                app.logger.warning(
+                    "The data container file is empty or incomplete (possible write race condition). "
+                    "Please launch an optimization task."
+                )
+                injection_dict = {}
     else:
         app.logger.warning("Unable to obtain plot data from {injection_dict_file}")
         app.logger.warning("Try running an launch an optimization task")
