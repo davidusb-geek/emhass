@@ -613,7 +613,7 @@ async def api_v1_last_run():
 
     Schema: docs/api/v1/last-run.schema.json (JSON Schema draft 2020-12).
     """
-    snap = last_run.read(emhass_conf)
+    snap = last_run.read(emhass_conf["data_path"])
     if snap is None:
         response_body = {
             "status": "no-run",
@@ -621,7 +621,7 @@ async def api_v1_last_run():
             "action": None,
             "stage_times": None,
             "duration_total_seconds": None,
-            "emhass_version": last_run._emhass_version(),
+            "emhass_version": last_run.emhass_version(),
             "schema_version": EMHASS_SCHEMA_VERSION,
             "infeasible": None,
             "error_message": None,
