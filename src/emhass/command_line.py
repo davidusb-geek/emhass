@@ -8,6 +8,7 @@ import os
 import pathlib
 import pickle
 import threading
+import time as _time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
@@ -17,19 +18,50 @@ import numpy as np
 import orjson
 import pandas as pd
 
-from emhass import utils
-from emhass.utils import log_runtime_banner, stage_timer
+from emhass import last_run, utils
 from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
 from emhass.optimization import Optimization
 from emhass.retrieve_hass import RetrieveHass
+from emhass.utils import log_runtime_banner, stage_timer
 
 default_csv_filename = "opt_res_latest.csv"
 default_pkl_suffix = "_mlf.pkl"
 default_metadata_json = "metadata.json"
 test_df_literal = "test_df_final.pkl"
 EMHASS_SCHEMA_VERSION = "1.0"
+
+
+def _record_optim_snapshot(
+    input_data_dict: dict,
+    action: str,
+    opt_res,
+    t0_monotonic: float,
+    logger: logging.Logger,
+) -> None:
+    """Persist a last_run snapshot after an optim wrapper completes.
+
+    Best-effort: any failure is logged with a traceback but does not
+    propagate so the wrapper's return path stays intact.
+    """
+    try:
+        optim_status = (
+            opt_res["optim_status"].iloc[0]
+            if isinstance(opt_res, pd.DataFrame) and "optim_status" in opt_res
+            else "Unknown"
+        )
+        last_run.record(
+            input_data_dict["emhass_conf"]["data_path"],
+            action=action,
+            stage_times=input_data_dict["stage_times"],
+            optim_status=optim_status,
+            infeasible=(optim_status == "Infeasible"),
+            duration_total_seconds=_time.monotonic() - t0_monotonic,
+            schema_version=EMHASS_SCHEMA_VERSION,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("last_run: failed to record %s snapshot", action, exc_info=exc)
 
 
 @dataclass
@@ -1260,6 +1292,7 @@ async def perfect_forecast_optim(
     :rtype: pd.DataFrame
 
     """
+    _t0 = _time.monotonic()
     logger.info("Performing perfect forecast optimization")
     # Load cost and prod price forecast
     with stage_timer(input_data_dict["stage_times"], "price_prep", logger):
@@ -1305,6 +1338,7 @@ async def perfect_forecast_optim(
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     _log_optimization_summary(input_data_dict, logger)
+    _record_optim_snapshot(input_data_dict, last_run.ACTION_PERFECT_OPTIM, opt_res, _t0, logger)
 
     return opt_res
 
@@ -1473,6 +1507,7 @@ async def dayahead_forecast_optim(
     :rtype: pd.DataFrame
 
     """
+    _t0 = _time.monotonic()
     logger.info("Performing day-ahead forecast optimization")
     # Prepare forecast data with costs, prices, outdoor temp, and GHI
     with stage_timer(input_data_dict["stage_times"], "price_prep", logger):
@@ -1513,6 +1548,9 @@ async def dayahead_forecast_optim(
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     _log_optimization_summary(input_data_dict, logger)
+    _record_optim_snapshot(
+        input_data_dict, last_run.ACTION_DAYAHEAD_OPTIM, opt_res_dayahead, _t0, logger
+    )
 
     return opt_res_dayahead
 
@@ -1538,6 +1576,7 @@ async def naive_mpc_optim(
     :rtype: pd.DataFrame
 
     """
+    _t0 = _time.monotonic()
     logger.info("Performing naive MPC optimization")
     # Prepare forecast data with costs, prices, outdoor temp, and GHI (with resolution warning)
     with stage_timer(input_data_dict["stage_times"], "price_prep", logger):
@@ -1604,6 +1643,9 @@ async def naive_mpc_optim(
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     _log_optimization_summary(input_data_dict, logger)
+    _record_optim_snapshot(
+        input_data_dict, last_run.ACTION_NAIVE_MPC_OPTIM, opt_res_naive_mpc, _t0, logger
+    )
 
     return opt_res_naive_mpc
 
