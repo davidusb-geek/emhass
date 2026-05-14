@@ -18,6 +18,7 @@ from markupsafe import Markup
 from quart import Quart, make_response, request
 from quart import logging as log
 
+from emhass import last_run
 from emhass.command_line import (
     EMHASS_SCHEMA_VERSION,
     continual_publish,
@@ -34,7 +35,6 @@ from emhass.command_line import (
     set_input_data_dict,
     weather_forecast_cache,
 )
-from emhass import last_run
 from emhass.connection_manager import close_global_connection, get_websocket_client, is_connected
 from emhass.utils import (
     build_config,

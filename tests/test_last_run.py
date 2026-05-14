@@ -1,8 +1,9 @@
 """Unit tests for src/emhass/last_run.py (AC-3)."""
 
 import logging
-import pytest
 from datetime import UTC, datetime
+
+import pytest
 
 from emhass import last_run
 
@@ -75,7 +76,12 @@ def test_is_recent_false_when_no_run(emhass_conf):
 
 def test_is_recent_false_when_too_old(emhass_conf):
     from datetime import timedelta
-    old_ts = (datetime.now(UTC) - timedelta(hours=2)).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+    old_ts = (
+        (datetime.now(UTC) - timedelta(hours=2))
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
     last_run._cache = {
         "status": "ok",
         "timestamp": old_ts,
