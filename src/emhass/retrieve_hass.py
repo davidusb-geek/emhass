@@ -1079,7 +1079,15 @@ class RetrieveHass:
         }
 
         # Add state_class to ensure HA tracks long-term statistics
-        if device_class in ["power", "temperature", "voltage", "current", "battery", "monetary", "power_factor"]:
+        if device_class in [
+            "power",
+            "temperature",
+            "voltage",
+            "current",
+            "battery",
+            "monetary",
+            "power_factor",
+        ]:
             attributes["state_class"] = "measurement"
         elif device_class == "energy":
             attributes["state_class"] = "total"
@@ -1275,7 +1283,15 @@ class RetrieveHass:
                 "unit_of_measurement": unit_of_measurement,
                 "friendly_name": friendly_name,
             }
-            if device_class in ["power", "temperature", "voltage", "current", "battery", "monetary", "power_factor"]:
+            if device_class in [
+                "power",
+                "temperature",
+                "voltage",
+                "current",
+                "battery",
+                "monetary",
+                "power_factor",
+            ]:
                 attributes["state_class"] = "measurement"
             elif device_class == "energy":
                 attributes["state_class"] = "total"
@@ -1289,7 +1305,15 @@ class RetrieveHass:
                 "unit_of_measurement": unit_of_measurement,
                 "friendly_name": friendly_name,
             }
-            if device_class in ["power", "temperature", "voltage", "current", "battery", "monetary", "power_factor"]:
+            if device_class in [
+                "power",
+                "temperature",
+                "voltage",
+                "current",
+                "battery",
+                "monetary",
+                "power_factor",
+            ]:
                 attributes["state_class"] = "measurement"
             elif device_class == "energy":
                 attributes["state_class"] = "total"
