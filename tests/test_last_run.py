@@ -131,6 +131,25 @@ def test_record_unknown_status_maps_to_error(data_path):
     assert snap["status"] == "error"
 
 
+def test_record_truncates_long_error_message(data_path):
+    """Long error_message values must be length-bounded before disk persistence."""
+    long_msg = "X" * 1000
+    last_run.record(
+        data_path,
+        action="naive-mpc-optim",
+        stage_times={},
+        optim_status="Unknown",
+        infeasible=False,
+        duration_total_seconds=1.0,
+        schema_version="1.0",
+        error_message=long_msg,
+    )
+    snap = last_run.read(data_path)
+    assert snap is not None
+    assert snap["error_message"] is not None
+    assert len(snap["error_message"]) == last_run._ERROR_MESSAGE_MAX_LEN
+
+
 def test_record_infeasible_status(data_path):
     last_run.record(
         data_path,
