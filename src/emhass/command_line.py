@@ -8,6 +8,7 @@ import os
 import pathlib
 import pickle
 import threading
+import time as _time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
@@ -17,7 +18,7 @@ import numpy as np
 import orjson
 import pandas as pd
 
-from emhass import utils
+from emhass import last_run, utils
 from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
@@ -1273,6 +1274,7 @@ async def perfect_forecast_optim(
     :rtype: pd.DataFrame
 
     """
+    _t0 = _time.monotonic()
     logger.info("Performing perfect forecast optimization")
     # Load cost and prod price forecast
     with stage_timer(input_data_dict["stage_times"], "price_prep", logger):
@@ -1318,6 +1320,24 @@ async def perfect_forecast_optim(
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     _log_optimization_summary(input_data_dict, logger)
+
+    try:
+        _optim_status = (
+            opt_res["optim_status"].iloc[0]
+            if isinstance(opt_res, pd.DataFrame) and "optim_status" in opt_res
+            else "Unknown"
+        )
+        last_run.record(
+            input_data_dict["emhass_conf"],
+            action="perfect-optim",
+            stage_times=input_data_dict["stage_times"],
+            optim_status=_optim_status,
+            infeasible=(_optim_status == "Infeasible"),
+            duration_total_seconds=_time.monotonic() - _t0,
+            schema_version=EMHASS_SCHEMA_VERSION,
+        )
+    except Exception as _exc:  # noqa: BLE001
+        logger.warning(f"last_run: failed to record perfect-optim snapshot: {_exc}")
 
     return opt_res
 
@@ -1486,6 +1506,7 @@ async def dayahead_forecast_optim(
     :rtype: pd.DataFrame
 
     """
+    _t0 = _time.monotonic()
     logger.info("Performing day-ahead forecast optimization")
     # Prepare forecast data with costs, prices, outdoor temp, and GHI
     with stage_timer(input_data_dict["stage_times"], "price_prep", logger):
@@ -1527,6 +1548,24 @@ async def dayahead_forecast_optim(
 
     _log_optimization_summary(input_data_dict, logger)
 
+    try:
+        _optim_status = (
+            opt_res_dayahead["optim_status"].iloc[0]
+            if isinstance(opt_res_dayahead, pd.DataFrame) and "optim_status" in opt_res_dayahead
+            else "Unknown"
+        )
+        last_run.record(
+            input_data_dict["emhass_conf"],
+            action="dayahead-optim",
+            stage_times=input_data_dict["stage_times"],
+            optim_status=_optim_status,
+            infeasible=(_optim_status == "Infeasible"),
+            duration_total_seconds=_time.monotonic() - _t0,
+            schema_version=EMHASS_SCHEMA_VERSION,
+        )
+    except Exception as _exc:  # noqa: BLE001
+        logger.warning(f"last_run: failed to record dayahead-optim snapshot: {_exc}")
+
     return opt_res_dayahead
 
 
@@ -1551,6 +1590,7 @@ async def naive_mpc_optim(
     :rtype: pd.DataFrame
 
     """
+    _t0 = _time.monotonic()
     logger.info("Performing naive MPC optimization")
     # Prepare forecast data with costs, prices, outdoor temp, and GHI (with resolution warning)
     with stage_timer(input_data_dict["stage_times"], "price_prep", logger):
@@ -1617,6 +1657,24 @@ async def naive_mpc_optim(
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     _log_optimization_summary(input_data_dict, logger)
+
+    try:
+        _optim_status = (
+            opt_res_naive_mpc["optim_status"].iloc[0]
+            if isinstance(opt_res_naive_mpc, pd.DataFrame) and "optim_status" in opt_res_naive_mpc
+            else "Unknown"
+        )
+        last_run.record(
+            input_data_dict["emhass_conf"],
+            action="naive-mpc-optim",
+            stage_times=input_data_dict["stage_times"],
+            optim_status=_optim_status,
+            infeasible=(_optim_status == "Infeasible"),
+            duration_total_seconds=_time.monotonic() - _t0,
+            schema_version=EMHASS_SCHEMA_VERSION,
+        )
+    except Exception as _exc:  # noqa: BLE001
+        logger.warning(f"last_run: failed to record naive-mpc-optim snapshot: {_exc}")
 
     return opt_res_naive_mpc
 
