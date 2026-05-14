@@ -1,5 +1,6 @@
 """Unit tests for src/emhass/last_run.py (AC-3)."""
 
+import logging
 import pytest
 from datetime import UTC, datetime
 
@@ -49,7 +50,9 @@ def test_read_returns_none_when_no_run(emhass_conf):
 
 def test_read_recovers_from_corrupt_file(emhass_conf, caplog):
     last_run._path(emhass_conf).write_text("not-json", encoding="utf-8")
-    assert last_run.read(emhass_conf) is None
+    with caplog.at_level(logging.WARNING, logger="emhass.last_run"):
+        result = last_run.read(emhass_conf)
+    assert result is None
     assert any("corrupt or unreadable" in rec.message for rec in caplog.records)
 
 
