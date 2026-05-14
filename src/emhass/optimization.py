@@ -1165,7 +1165,6 @@ class Optimization:
 
         p_sto_pos = self.vars["p_sto_pos"]
         p_sto_neg = self.vars["p_sto_neg"]
-        p_grid_neg = self.vars["p_grid_neg"]  # noqa: F841
         E = self.vars["E"]  # Binary: 1=Discharge, 0=Charge
         D = self.vars["D"]  # Binary: 1=Import, 0=Export
         p_pv = self.param_pv_forecast
