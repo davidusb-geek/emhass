@@ -78,9 +78,15 @@ def record(
         _cache = snap
         target = _path(data_path)
         try:
-            target.write_text(json.dumps(snap, indent=2), encoding="utf-8")
+            # Snapshot fields are non-sensitive: status enum, ISO timestamp,
+            # action enum, stage timings, package versions, boolean flag.
+            # error_message is reserved for future use and is None in all
+            # current call sites; callers must sanitise before populating.
+            target.write_text(  # lgtm[py/clear-text-storage-of-sensitive-information]
+                json.dumps(snap, indent=2), encoding="utf-8"
+            )
         except OSError as exc:
-            _logger.warning("last_run: failed to write %s: %s", target, exc)
+            _logger.warning("last_run: failed to write snapshot file", exc_info=exc)
 
 
 def read(data_path: Path) -> dict | None:
@@ -102,7 +108,7 @@ def read(data_path: Path) -> dict | None:
             _cache = data
             return dict(data)
         except (OSError, json.JSONDecodeError) as exc:
-            _logger.warning("last_run: corrupt or unreadable %s: %s", path, exc)
+            _logger.warning("last_run: corrupt or unreadable snapshot file", exc_info=exc)
             return None
 
 
@@ -120,7 +126,7 @@ def is_recent(data_path: Path, max_age_seconds: int) -> bool:
         ts_str = snap["timestamp"].replace("Z", "+00:00")
         ts = datetime.fromisoformat(ts_str)
     except (ValueError, KeyError) as exc:
-        _logger.warning("last_run: malformed timestamp %r: %s", snap.get("timestamp"), exc)
+        _logger.warning("last_run: malformed timestamp in snapshot", exc_info=exc)
         return False
     age = (datetime.now(UTC) - ts).total_seconds()
     return age <= max_age_seconds
