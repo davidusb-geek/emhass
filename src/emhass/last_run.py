@@ -20,6 +20,12 @@ _lock = threading.Lock()
 _cache: dict | None = None
 _logger = logging.getLogger(__name__)
 
+# Action names — single source of truth for `action` enum used by the
+# /api/v1/last-run schema sidecar and the optim wrappers in command_line.py.
+ACTION_PERFECT_OPTIM = "perfect-optim"
+ACTION_DAYAHEAD_OPTIM = "dayahead-optim"
+ACTION_NAIVE_MPC_OPTIM = "naive-mpc-optim"
+
 
 def _path(data_path: Path) -> Path:
     return Path(data_path) / _LAST_RUN_FILENAME
@@ -115,15 +121,15 @@ def read(data_path: Path) -> dict | None:
         if _cache is not None:
             return dict(_cache)
         path = _path(data_path)
-        if not path.exists():
-            return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            _cache = data
-            return dict(data)
+        except FileNotFoundError:
+            return None
         except (OSError, json.JSONDecodeError) as exc:
             _logger.warning("last_run: corrupt or unreadable snapshot file", exc_info=exc)
             return None
+        _cache = data
+        return dict(data)
 
 
 def is_recent(data_path: Path, max_age_seconds: int) -> bool:
