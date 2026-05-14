@@ -72,6 +72,7 @@ def record(
             _path(emhass_conf).write_text(json.dumps(snap, indent=2), encoding="utf-8")
         except OSError as exc:
             import logging
+
             logging.getLogger(__name__).warning(
                 "last_run: failed to write %s: %s", _path(emhass_conf), exc
             )
@@ -97,9 +98,8 @@ def read(emhass_conf: dict) -> dict | None:
             return dict(data)
         except (OSError, json.JSONDecodeError) as exc:
             import logging
-            logging.getLogger(__name__).warning(
-                "last_run: corrupt or unreadable %s: %s", path, exc
-            )
+
+            logging.getLogger(__name__).warning("last_run: corrupt or unreadable %s: %s", path, exc)
             return None
 
 
