@@ -647,7 +647,9 @@ async def adjust_pv_forecast(
             test_df_literal,
         )
         if not success:
-            logger.warning("Could not train adjusted PV model, falling back to unadjusted PV forecast.")
+            logger.warning(
+                "Could not train adjusted PV model, falling back to unadjusted PV forecast."
+            )
             return p_pv_forecast
     else:
         # Load existing model
@@ -672,7 +674,9 @@ async def adjust_pv_forecast(
                 test_df_literal,
             )
             if not success:
-                logger.error("Failed to retrieve data for model re-fit after load error. Falling back to unadjusted forecast.")
+                logger.error(
+                    "Failed to retrieve data for model re-fit after load error. Falling back to unadjusted forecast."
+                )
                 return p_pv_forecast
             logger.info("Successfully re-fitted model after load failure")
         except Exception as e:
