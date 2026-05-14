@@ -33,6 +33,37 @@ test_df_literal = "test_df_final.pkl"
 EMHASS_SCHEMA_VERSION = "1.0"
 
 
+def _record_optim_snapshot(
+    input_data_dict: dict,
+    action: str,
+    opt_res,
+    t0_monotonic: float,
+    logger: logging.Logger,
+) -> None:
+    """Persist a last_run snapshot after an optim wrapper completes.
+
+    Best-effort: any failure is logged with a traceback but does not
+    propagate so the wrapper's return path stays intact.
+    """
+    try:
+        optim_status = (
+            opt_res["optim_status"].iloc[0]
+            if isinstance(opt_res, pd.DataFrame) and "optim_status" in opt_res
+            else "Unknown"
+        )
+        last_run.record(
+            input_data_dict["emhass_conf"]["data_path"],
+            action=action,
+            stage_times=input_data_dict["stage_times"],
+            optim_status=optim_status,
+            infeasible=(optim_status == "Infeasible"),
+            duration_total_seconds=_time.monotonic() - t0_monotonic,
+            schema_version=EMHASS_SCHEMA_VERSION,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("last_run: failed to record %s snapshot", action, exc_info=exc)
+
+
 @dataclass
 class SetupContext:
     """
@@ -1307,24 +1338,7 @@ async def perfect_forecast_optim(
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     _log_optimization_summary(input_data_dict, logger)
-
-    try:
-        _optim_status = (
-            opt_res["optim_status"].iloc[0]
-            if isinstance(opt_res, pd.DataFrame) and "optim_status" in opt_res
-            else "Unknown"
-        )
-        last_run.record(
-            input_data_dict["emhass_conf"]["data_path"],
-            action="perfect-optim",
-            stage_times=input_data_dict["stage_times"],
-            optim_status=_optim_status,
-            infeasible=(_optim_status == "Infeasible"),
-            duration_total_seconds=_time.monotonic() - _t0,
-            schema_version=EMHASS_SCHEMA_VERSION,
-        )
-    except Exception as _exc:  # noqa: BLE001
-        logger.warning("last_run: failed to record perfect-optim snapshot", exc_info=_exc)
+    _record_optim_snapshot(input_data_dict, last_run.ACTION_PERFECT_OPTIM, opt_res, _t0, logger)
 
     return opt_res
 
@@ -1534,24 +1548,9 @@ async def dayahead_forecast_optim(
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     _log_optimization_summary(input_data_dict, logger)
-
-    try:
-        _optim_status = (
-            opt_res_dayahead["optim_status"].iloc[0]
-            if isinstance(opt_res_dayahead, pd.DataFrame) and "optim_status" in opt_res_dayahead
-            else "Unknown"
-        )
-        last_run.record(
-            input_data_dict["emhass_conf"]["data_path"],
-            action="dayahead-optim",
-            stage_times=input_data_dict["stage_times"],
-            optim_status=_optim_status,
-            infeasible=(_optim_status == "Infeasible"),
-            duration_total_seconds=_time.monotonic() - _t0,
-            schema_version=EMHASS_SCHEMA_VERSION,
-        )
-    except Exception as _exc:  # noqa: BLE001
-        logger.warning("last_run: failed to record dayahead-optim snapshot", exc_info=_exc)
+    _record_optim_snapshot(
+        input_data_dict, last_run.ACTION_DAYAHEAD_OPTIM, opt_res_dayahead, _t0, logger
+    )
 
     return opt_res_dayahead
 
@@ -1644,24 +1643,9 @@ async def naive_mpc_optim(
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     _log_optimization_summary(input_data_dict, logger)
-
-    try:
-        _optim_status = (
-            opt_res_naive_mpc["optim_status"].iloc[0]
-            if isinstance(opt_res_naive_mpc, pd.DataFrame) and "optim_status" in opt_res_naive_mpc
-            else "Unknown"
-        )
-        last_run.record(
-            input_data_dict["emhass_conf"]["data_path"],
-            action="naive-mpc-optim",
-            stage_times=input_data_dict["stage_times"],
-            optim_status=_optim_status,
-            infeasible=(_optim_status == "Infeasible"),
-            duration_total_seconds=_time.monotonic() - _t0,
-            schema_version=EMHASS_SCHEMA_VERSION,
-        )
-    except Exception as _exc:  # noqa: BLE001
-        logger.warning("last_run: failed to record naive-mpc-optim snapshot", exc_info=_exc)
+    _record_optim_snapshot(
+        input_data_dict, last_run.ACTION_NAIVE_MPC_OPTIM, opt_res_naive_mpc, _t0, logger
+    )
 
     return opt_res_naive_mpc
 
