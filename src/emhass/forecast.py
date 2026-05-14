@@ -4,11 +4,21 @@ import copy
 
 try:
     import fcntl as _fcntl
-    def _flock_acquire(f): _fcntl.flock(f, _fcntl.LOCK_EX)
-    def _flock_release(f): _fcntl.flock(f, _fcntl.LOCK_UN)
+
+    def _flock_acquire(f):
+        _fcntl.flock(f, _fcntl.LOCK_EX)
+
+    def _flock_release(f):
+        _fcntl.flock(f, _fcntl.LOCK_UN)
 except ImportError:  # Windows
-    def _flock_acquire(f): pass  # type: ignore[misc]
-    def _flock_release(f): pass  # type: ignore[misc]
+
+    def _flock_acquire(f):
+        pass  # type: ignore[misc]
+
+    def _flock_release(f):
+        pass  # type: ignore[misc]
+
+
 import logging
 import os
 import pickle
@@ -450,7 +460,9 @@ class Forecast:
             return await self.get_cached_forecast_data(w_forecast_cache_path)
         if self.params["passed_data"].get("weather_forecast_cache_only", False):
             self.logger.warning("Solcast cache file missing or deleted due to being out of date.")
-            self.logger.warning("Bypassing 'weather_forecast_cache_only' flag to fetch and cache a fresh forecast.")
+            self.logger.warning(
+                "Bypassing 'weather_forecast_cache_only' flag to fetch and cache a fresh forecast."
+            )
             # Do NOT return False. We'll let execution continue below to fetch normally.
         if not self._solcast_rate_limit_ok():
             self.logger.warning(
@@ -518,9 +530,9 @@ class Forecast:
                         total_data = total_data + data_tmp
 
         data = total_data
-        if self.params["passed_data"].get(
-            "weather_forecast_cache", False
-        ) or self.params["passed_data"].get("weather_forecast_cache_only", False):
+        if self.params["passed_data"].get("weather_forecast_cache", False) or self.params[
+            "passed_data"
+        ].get("weather_forecast_cache_only", False):
             data = await self.set_cached_forecast_data(w_forecast_cache_path, data)
         return data
 
