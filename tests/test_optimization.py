@@ -3977,6 +3977,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 "set_use_battery": True,
                 "treat_deferrable_load_as_semi_cont": [True, True],
                 "set_deferrable_load_single_constant": [True, True],
+                "load_forecast_method": "naive",  # pin: test asserts against naive load-curve; default may shift, see #856
             }
         )
         self.opt = self.create_optimization()
