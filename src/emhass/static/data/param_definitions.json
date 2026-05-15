@@ -569,6 +569,24 @@
       "input": "int",
       "default_value": 10
     },
+    "battery_soc_deficit_threshold": {
+    "friendly_name": "Battery SOC deficit threshold",
+    "Description": "The SOC threshold below which deficit penalties apply. For example, 0.20 for 20% SOC. Penalties are applied for every hour and every kWh the SOC is below this value.",
+    "input": "float",
+    "default_value": 0.4,
+    "requires": {
+      "set_use_battery": true
+    }
+    },
+    "battery_soc_deficit_cost": {
+      "friendly_name": "Battery SOC deficit cost",
+      "Description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC deficit per hour. This penalizes periods when the battery SOC falls below the deficit threshold.",
+      "input": "float",
+      "default_value": 0.0,
+      "requires": {
+        "set_use_battery": true
+    }
+    },
     "ignore_pv_feedback_during_curtailment": {
       "friendly_name": "Ignore PV feedback during curtailment",
       "Description": "When set to true, prevents PV forecast from being updated with real PV data, avoiding flip-flop behavior during curtailment operations",
