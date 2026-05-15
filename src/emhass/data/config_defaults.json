@@ -116,5 +116,7 @@
   "battery_maximum_state_of_charge": 0.9,
   "battery_target_state_of_charge": 0.6,
   "battery_stress_cost": 0.0,
-  "battery_stress_segments": 10
+  "battery_stress_segments": 10,
+  "battery_soc_deficit_threshold": 0.40,
+  "battery_soc_deficit_cost": 0.0
 }

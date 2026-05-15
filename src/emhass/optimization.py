@@ -853,6 +853,7 @@ class Optimization:
             vars_dict["soc_high_recovered"] = cp.Variable(
                 n, boolean=True, name="soc_high_recovered"
             )
+            vars_dict["soc_deficit_cost"] = cp.Variable(n, nonneg=True, name= "soc_deficit_cost")
         else:
             # Create dummy zero variables to preserve logic structure without conditional checks everywhere
             vars_dict["p_sto_pos"] = cp.Variable(n, name="p_sto_pos_dummy")
@@ -863,6 +864,8 @@ class Optimization:
             vars_dict["soc_high_recovered"] = cp.Variable(n, name="soc_high_recovered_dummy")
             constraints.append(vars_dict["soc_low_recovered"] == 0)
             constraints.append(vars_dict["soc_high_recovered"] == 0)
+            vars_dict["soc_deficit_cost"] = cp.Variable(n, name="soc_deficit_cost_dummy")
+            constraints.append(vars_dict["soc_deficit_cost"] == 0)
 
         # Self-consumption variable
         if self.costfun == "self-consumption":
@@ -952,7 +955,7 @@ class Optimization:
                 # Maximize SC
                 objective_terms.append(scale * cp.sum(cp.multiply(unit_load_cost, SC)))
 
-        # Battery Cycle Cost Penalty
+        # Battery Cycle Cost and SOC Penalty
         if self.optim_conf["set_use_battery"]:
             # p_sto_neg is negative. -weight*p_sto_neg is a positive penalty value.
             # We subtract this positive penalty from the maximization objective.
@@ -996,6 +999,13 @@ class Optimization:
         if batt_stress_conf and batt_stress_conf["active"]:
             self.logger.debug("Adding battery stress cost to objective function")
             objective_terms.append(-cp.sum(batt_stress_conf["vars"]))
+
+        # SOC Deficit Cost (convert to per Wh)
+        if self.optim_conf["set_use_battery"]:
+            soc_deficit_cost = self.vars.get("soc_deficit_cost")
+            if soc_deficit_cost is not None:
+                self.logger.debug(f"Adding SOC deficit cost {soc_deficit_cost}  to objective function: ")
+                objective_terms.append(-scale * cp.sum(soc_deficit_cost))
 
         # Sum all terms to create the final objective expression
         return cp.Maximize(cp.sum(objective_terms))
@@ -1300,6 +1310,16 @@ class Optimization:
                 batt_stress_conf["vars"],
                 seg_params,
             )
+
+        # SOC Deficit Cost
+        soc_deficit_threshold = self.plant_conf.get("battery_soc_deficit_threshold", 0.2)
+        soc_deficit_cost_rate = self.plant_conf.get("battery_soc_deficit_cost", 0)/1000. # /kWh -> /Wh
+        if soc_deficit_threshold > 0 and soc_deficit_cost_rate > 0:
+            threshold_energy = soc_deficit_threshold * cap
+            soc_deficit_cost = self.vars["soc_deficit_cost"]
+            constraints.append(soc_deficit_cost >=
+                               (threshold_energy - current_stored_energy)*soc_deficit_cost_rate)
+            constraints.append(soc_deficit_cost >= 0)
 
     def _add_thermal_load_constraints(self, constraints, k, data_opt, def_init_temp):
         """
@@ -2324,6 +2344,10 @@ class Optimization:
             # Stress Cost
             if "batt_stress_cost" in self.vars:
                 opt_tp["batt_stress_cost"] = get_val(self.vars["batt_stress_cost"])
+
+            # SOC Deficit Results
+            if "soc_deficit_cost" in self.vars:
+                opt_tp["soc_deficit_cost"] = get_val(self.vars["soc_deficit_cost"])
 
         # Hybrid Inverter Results
         if self.plant_conf["inverter_is_hybrid"]:
