@@ -68,6 +68,22 @@ These parameters define the basic thermal battery system:
     * Example: `0.42`
     * See the calibration section below for how to determine this
 
+### Constant-efficiency mode (gas boiler, oil burner, district heating)
+
+The default thermal battery model uses a Carnot-based COP that varies with outdoor temperature - appropriate for heat pumps. Non-electric heat sources (gas boilers, oil burners, district heating) convert input power to heat at a roughly constant efficiency that does not depend on outdoor temperature. For these sources, set the `efficiency` parameter:
+
+* **efficiency**: Optional constant energy-conversion factor (output thermal kW / input kW). When set, EMHASS skips the Carnot COP calculation and uses this flat value for every timestep. `supply_temperature` and `carnot_efficiency` become optional in this mode.
+    * Typical values:
+        * Modern condensing gas boiler: 0.90-0.95
+        * Standard gas boiler: 0.85-0.90
+        * Oil burner: 0.80-0.90
+        * District heating substation: 0.95-0.98
+        * Direct electric heater: 1.0
+    * Example: `0.9` for a condensing gas boiler
+    * When both `efficiency` and heat-pump fields are present, `efficiency` takes precedence.
+
+Configure one `thermal_battery` per source-target pair to model hybrid systems. For example, a gas boiler serving both a heating buffer and a DHW tank is two `def_load_config` entries (one per target), grouped via `deferrable_load_groups` with `mutual_exclusion: true` and `max_power` equal to the boiler's modulating maximum if the two targets share the same physical actuator.
+
 ### Heating demand calculation
 
 EMHASS needs to know how much heat your building requires. There are two methods to calculate this, and EMHASS automatically selects the appropriate method based on which parameters you provide.

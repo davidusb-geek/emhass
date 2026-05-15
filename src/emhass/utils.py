@@ -8,6 +8,7 @@ import os
 import pathlib
 import shutil
 import time
+from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -235,6 +236,71 @@ def calculate_cop_heatpump(
     cop_values = np.clip(cop_values, 1.0, 8.0)
 
     return cop_values
+
+
+def resolve_thermal_battery_cop(
+    hc: dict,
+    outdoor_temperature_forecast: Sequence[float] | np.ndarray | pd.Series | None,
+    length: int | None = None,
+) -> np.ndarray:
+    """
+    Resolve the per-timestep energy-conversion factor for a thermal_battery heat source.
+
+    The thermal_battery model treats the conversion factor uniformly as a COP-like
+    multiplier on input power: `Q_thermal = COP * P_in / 1000 * dt`. Two source types
+    are supported:
+
+    - Heat pump (default): COP is computed via the Carnot formula and varies with
+      the outdoor temperature. Requires `supply_temperature` in `hc`; uses
+      `carnot_efficiency` (default 0.4).
+    - Constant-efficiency source (gas boiler, oil burner, district heating, etc.):
+      `efficiency` in `hc` is used as a flat conversion factor for every timestep.
+      `supply_temperature` is not required and outdoor temperature is ignored. The
+      constant value passes through Carnot bounds intentionally (typical 0.85-0.95
+      for combustion sources).
+
+    :param hc: The thermal_battery sub-config dict from def_load_config.
+    :param outdoor_temperature_forecast: Outdoor temperature forecast in degrees
+        Celsius. Required in heat-pump mode. In constant-efficiency mode it is
+        ignored and may be ``None`` provided ``length`` is given explicitly.
+    :param length: Number of timesteps in the returned array. Mandatory when
+        ``outdoor_temperature_forecast`` is ``None``; otherwise truncates or
+        passes through the forecast length when set, or returns the full forecast
+        length when unset.
+    :return: Numpy array of conversion factors, one per timestep.
+    """
+    if "efficiency" in hc and hc["efficiency"] is not None:
+        efficiency = float(hc["efficiency"])
+        if efficiency <= 0:
+            raise ValueError(
+                f"thermal_battery 'efficiency' must be positive, got {efficiency}"
+            )
+        if length is None:
+            if outdoor_temperature_forecast is None:
+                raise ValueError(
+                    "resolve_thermal_battery_cop in constant-efficiency mode "
+                    "requires 'length' when outdoor_temperature_forecast is None"
+                )
+            length = len(outdoor_temperature_forecast)
+        return np.full(length, efficiency)
+
+    supply_temperature = hc.get("supply_temperature")
+    if supply_temperature is None:
+        raise ValueError(
+            "thermal_battery requires either 'efficiency' (constant-efficiency mode) "
+            "or 'supply_temperature' (heat-pump mode)"
+        )
+    if outdoor_temperature_forecast is None:
+        raise ValueError(
+            "resolve_thermal_battery_cop in heat-pump mode requires "
+            "outdoor_temperature_forecast"
+        )
+    cops = calculate_cop_heatpump(
+        supply_temperature=supply_temperature,
+        carnot_efficiency=hc.get("carnot_efficiency", 0.4),
+        outdoor_temperature_forecast=outdoor_temperature_forecast,
+    )
+    return cops if length is None else cops[:length]
 
 
 def calculate_thermal_loss_signed(
