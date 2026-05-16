@@ -147,7 +147,7 @@ def get_forecast_dates(
 
 
 def calculate_cop_heatpump(
-    supply_temperature: float,
+    supply_temperature: float | np.ndarray | pd.Series,
     carnot_efficiency: float,
     outdoor_temperature_forecast: np.ndarray | pd.Series,
 ) -> np.ndarray:
@@ -165,9 +165,11 @@ def calculate_cop_heatpump(
     (difference between supply and outdoor temperature) increases. The carnot_efficiency factor
     represents the real-world efficiency as a fraction of the ideal Carnot cycle efficiency.
 
-    :param supply_temperature: The heat pump supply temperature in degrees Celsius (constant value). \
-        Typical values: 30-40°C for underfloor heating, 50-70°C for radiator systems.
-    :type supply_temperature: float
+    :param supply_temperature: The heat pump supply temperature in degrees Celsius. \
+        Can be a scalar (constant supply T) or an array/Series matching the length of \
+        ``outdoor_temperature_forecast`` for weather-compensated supply T (heating curve). \
+        Typical scalar values: 30-40°C for underfloor heating, 50-70°C for radiator systems.
+    :type supply_temperature: float or np.ndarray or pd.Series
     :param carnot_efficiency: Real-world efficiency factor as fraction of ideal Carnot cycle. \
         Typical range: 0.35-0.50 (35-50%). Default in thermal battery config: 0.4 (40%). \
         Higher values represent more efficient heat pumps.
@@ -195,8 +197,16 @@ def calculate_cop_heatpump(
     else:
         outdoor_temps = np.asarray(outdoor_temperature_forecast)
 
+    # Supply temp can be scalar (constant) or array (heating curve). Broadcast either way.
+    if isinstance(supply_temperature, pd.Series):
+        supply_temps = supply_temperature.values
+    elif np.ndim(supply_temperature) > 0:
+        supply_temps = np.asarray(supply_temperature, dtype=float)
+    else:
+        supply_temps = float(supply_temperature)
+
     # Convert temperatures from Celsius to Kelvin for Carnot formula
-    supply_temperature_kelvin = supply_temperature + 273.15
+    supply_temperature_kelvin = supply_temps + 273.15
     outdoor_temperature_kelvin = outdoor_temps + 273.15
 
     # Calculate temperature difference (supply - outdoor)
@@ -208,12 +218,16 @@ def calculate_cop_heatpump(
     if np.any(temperature_diff <= 0):
         # Log warning about non-physical temperature scenario
         logger = logging.getLogger(__name__)
-        num_invalid = np.sum(temperature_diff <= 0)
+        num_invalid = int(np.sum(temperature_diff <= 0))
         invalid_indices = np.nonzero(temperature_diff <= 0)[0]
+        if np.ndim(supply_temps) > 0:
+            supply_range = f"supply range [{np.min(supply_temps):.1f}, {np.max(supply_temps):.1f}]°C"
+        else:
+            supply_range = f"supply {float(supply_temps):.1f}°C"
         logger.warning(
             f"COP calculation: {num_invalid} timestep(s) have outdoor temperature >= supply temperature. "
             f"This is non-physical for heating mode. Indices: {invalid_indices.tolist()[:5]}{'...' if len(invalid_indices) > 5 else ''}. "
-            f"Supply temp: {supply_temperature:.1f}°C. Setting COP to 1.0 (direct electric heating) for these periods."
+            f"{supply_range}. Setting COP to 1.0 (direct electric heating) for these periods."
         )
 
     # Vectorized Carnot-based COP calculation
@@ -225,8 +239,13 @@ def calculate_cop_heatpump(
     cop_values = np.ones_like(outdoor_temperature_kelvin)  # Default to 1.0 everywhere
     valid_mask = temperature_diff > 0
     if np.any(valid_mask):
+        # supply_temperature_kelvin may be scalar or array - index when array.
+        if np.ndim(supply_temperature_kelvin) > 0:
+            supply_valid = supply_temperature_kelvin[valid_mask]
+        else:
+            supply_valid = supply_temperature_kelvin
         cop_values[valid_mask] = (
-            carnot_efficiency * supply_temperature_kelvin / temperature_diff[valid_mask]
+            carnot_efficiency * supply_valid / temperature_diff[valid_mask]
         )
 
     # Apply realistic bounds: minimum 1.0, maximum 8.0
@@ -236,6 +255,109 @@ def calculate_cop_heatpump(
     cop_values = np.clip(cop_values, 1.0, 8.0)
 
     return cop_values
+
+
+def apply_heating_curve(
+    heating_curve: dict,
+    outdoor_temperature_forecast: np.ndarray | pd.Series,
+) -> np.ndarray:
+    """Compute per-slot supply temperature from a weather-compensated heating curve.
+
+    A heating curve specifies how the heat source modulates its supply temperature in
+    response to outdoor temperature, the way every modern boiler / heat pump controller
+    does. The linear form supported here:
+
+        T_supply(t) = clip(offset - slope * T_outdoor(t), min_supply, max_supply)
+
+    :param heating_curve: dict with required ``slope`` and ``offset`` (both °C), plus
+        optional ``min_supply`` (default 25°C) and ``max_supply`` (default 70°C).
+    :param outdoor_temperature_forecast: Per-slot outdoor temperature in °C.
+    :return: Per-slot supply temperature array in °C.
+    """
+    slope = float(heating_curve["slope"])
+    offset = float(heating_curve["offset"])
+    min_supply = float(heating_curve.get("min_supply", 25.0))
+    max_supply = float(heating_curve.get("max_supply", 70.0))
+    if min_supply >= max_supply:
+        raise ValueError(
+            f"heating_curve: min_supply ({min_supply}) must be < max_supply ({max_supply})"
+        )
+    if isinstance(outdoor_temperature_forecast, pd.Series):
+        outdoor = outdoor_temperature_forecast.values
+    else:
+        outdoor = np.asarray(outdoor_temperature_forecast, dtype=float)
+    supply = offset - slope * outdoor
+    return np.clip(supply, min_supply, max_supply)
+
+
+def resolve_min_temperatures(
+    config: dict,
+    outdoor_temperature_forecast: np.ndarray | pd.Series | list | None,
+    length: int,
+) -> list[float]:
+    """Compute the effective per-slot lower temperature bound for a storage tank.
+
+    Combines two sources, taking the element-wise max so the more conservative
+    floor always wins:
+
+    1. Static ``min_temperatures`` (or ``min_temperature``) list - an absolute
+       weather-independent floor for safety / comfort. Always respected.
+    2. ``min_temperature_curve`` dict - a weather-compensated floor matching
+       the radiator emission law. Same shape as ``heating_curve``:
+       ``T = clip(offset - slope * T_outdoor, min_supply, max_supply)``.
+
+    When only one is set, that one is used. When neither is set, returns an
+    empty list (caller decides how to react).
+
+    :param config: Tank or thermal_battery dict potentially carrying
+        ``min_temperatures`` and/or ``min_temperature_curve``.
+    :param outdoor_temperature_forecast: Per-slot outdoor temperature. May be
+        ``None`` when only the static floor is configured.
+    :param length: Optimization horizon length.
+    :return: List of per-slot minimum temperatures (length = ``length``).
+    """
+    # Accept either the plural list form or a single scalar/list under the
+    # singular key. Normalize a scalar to a one-element list so the slicing
+    # / padding below works uniformly.
+    static = config.get("min_temperatures")
+    if static is None:
+        static = config.get("min_temperature")
+    if static is None:
+        static = []
+    elif isinstance(static, (int, float)):
+        static = [float(static)]
+    curve = config.get("min_temperature_curve")
+
+    if not static and not curve:
+        return []
+
+    if curve is not None:
+        if outdoor_temperature_forecast is None:
+            raise ValueError(
+                "min_temperature_curve requires outdoor_temperature_forecast"
+            )
+        curve_temps = apply_heating_curve(curve, outdoor_temperature_forecast)[:length]
+    else:
+        curve_temps = None
+
+    if static:
+        static_arr = np.asarray(list(static)[:length], dtype=float)
+        if len(static_arr) < length:
+            pad_value = static_arr[-1] if len(static_arr) else 20.0
+            static_arr = np.concatenate(
+                [static_arr, np.full(length - len(static_arr), pad_value)]
+            )
+    else:
+        static_arr = None
+
+    if curve_temps is not None and static_arr is not None:
+        effective = np.maximum(static_arr, curve_temps)
+    elif curve_temps is not None:
+        effective = curve_temps
+    else:
+        effective = static_arr
+
+    return [float(v) for v in effective]
 
 
 def resolve_thermal_battery_cop(
@@ -284,17 +406,24 @@ def resolve_thermal_battery_cop(
             length = len(outdoor_temperature_forecast)
         return np.full(length, efficiency)
 
-    supply_temperature = hc.get("supply_temperature")
-    if supply_temperature is None:
-        raise ValueError(
-            "thermal_battery requires either 'efficiency' (constant-efficiency mode) "
-            "or 'supply_temperature' (heat-pump mode)"
-        )
     if outdoor_temperature_forecast is None:
         raise ValueError(
             "resolve_thermal_battery_cop in heat-pump mode requires "
             "outdoor_temperature_forecast"
         )
+    # Heating-curve mode: per-slot supply T from outdoor T. Falls back to constant
+    # `supply_temperature` when no curve is configured.
+    heating_curve = hc.get("heating_curve")
+    if heating_curve:
+        supply_temperature = apply_heating_curve(heating_curve, outdoor_temperature_forecast)
+    else:
+        supply_temperature = hc.get("supply_temperature")
+        if supply_temperature is None:
+            raise ValueError(
+                "thermal_battery requires either 'efficiency' (constant-efficiency mode), "
+                "'supply_temperature' (constant heat-pump mode), or 'heating_curve' "
+                "(weather-compensated heat-pump mode)"
+            )
     cops = calculate_cop_heatpump(
         supply_temperature=supply_temperature,
         carnot_efficiency=hc.get("carnot_efficiency", 0.4),
@@ -447,7 +576,29 @@ def compile_heat_topology(topology: dict) -> dict:
             "constant_efficiency": True,  # ambiguous - default electric unless overridden
         }
         if src_type in {"heatpump", "heat_pump"}:
-            source_block["supply_temperature"] = float(src["supply_temperature"])
+            # Heating curve takes precedence; constant supply_temperature is the fallback.
+            if "heating_curve" in src and src["heating_curve"]:
+                hc_block = dict(src["heating_curve"])
+                # Validate required fields up-front so users get clear errors
+                for required in ("slope", "offset"):
+                    if required not in hc_block:
+                        raise ValueError(
+                            f"heat_topology.sources[{src['id']}].heating_curve missing "
+                            f"required field '{required}'"
+                        )
+                source_block["heating_curve"] = {
+                    "slope": float(hc_block["slope"]),
+                    "offset": float(hc_block["offset"]),
+                    "min_supply": float(hc_block.get("min_supply", 25.0)),
+                    "max_supply": float(hc_block.get("max_supply", 70.0)),
+                }
+            elif "supply_temperature" in src:
+                source_block["supply_temperature"] = float(src["supply_temperature"])
+            else:
+                raise ValueError(
+                    f"heat_topology.sources[{src['id']}] (type=heatpump) requires "
+                    "either 'supply_temperature' or 'heating_curve'"
+                )
             source_block["carnot_efficiency"] = float(
                 src.get("carnot_efficiency", 0.4)
             )
@@ -545,6 +696,46 @@ def compile_heat_topology(topology: dict) -> dict:
             "min_temperatures": list(s.get("min_temperature", [])) or list(s.get("min_temperatures", [])),
             "max_temperatures": list(s.get("max_temperature", [])) or list(s.get("max_temperatures", [])),
         }
+        # Weather-compensated minimum temperature: when the radiator needs a higher
+        # supply T to keep up with building heat loss on a cold day, the buffer min
+        # should track. Same linear law as the source's heating_curve.
+        if "min_temperature_curve" in s and s["min_temperature_curve"]:
+            mc = dict(s["min_temperature_curve"])
+            for required in ("slope", "offset"):
+                if required not in mc:
+                    raise ValueError(
+                        f"heat_topology.storage[{sid}].min_temperature_curve "
+                        f"missing required field '{required}'"
+                    )
+            tank["min_temperature_curve"] = {
+                "slope": float(mc["slope"]),
+                "offset": float(mc["offset"]),
+                "min_supply": float(mc.get("min_supply", 25.0)),
+                "max_supply": float(mc.get("max_supply", 70.0)),
+            }
+        # Soft comfort constraints: penalize deviations from a target band rather than
+        # hard min/max. Accept either scalar `desired_temperature` (broadcast to horizon
+        # at solve time) or per-slot `desired_temperatures`. The optimizer's existing
+        # thermal_battery soft-constraint code reads these fields directly.
+        desired = s.get("desired_temperatures")
+        if desired is None and "desired_temperature" in s:
+            desired = s["desired_temperature"]
+        if desired is not None:
+            tank["desired_temperatures"] = (
+                list(desired) if isinstance(desired, (list, tuple)) else float(desired)
+            )
+        if "overshoot_temperature" in s:
+            tank["overshoot_temperature"] = float(s["overshoot_temperature"])
+        if "penalty_factor" in s:
+            tank["penalty_factor"] = float(s["penalty_factor"])
+        if "comfort_sense" in s:
+            sense = str(s["comfort_sense"]).lower()
+            if sense not in ("heat", "cool"):
+                raise ValueError(
+                    f"heat_topology.storage[{sid}].comfort_sense='{sense}' "
+                    "must be 'heat' or 'cool'"
+                )
+            tank["sense"] = sense
         demand = storage_demand.get(sid, {})
         if demand.get("profile") is not None:
             tank["draw_off_demand"] = demand["profile"]
@@ -3076,8 +3267,9 @@ def log_runtime_banner(logger, optim_conf: dict | None = None):
     """
     try:
         import platform as _plat
-        import cvxpy as _cvx
         from importlib.metadata import version as _pkg_version
+
+        import cvxpy as _cvx
 
         _ver = _pkg_version("emhass")
         if isinstance(optim_conf, dict):

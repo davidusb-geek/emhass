@@ -1600,8 +1600,9 @@ class Optimization:
         required_len = self.num_timesteps
 
         # Structural parameters (don't change between MPC iterations).
-        # supply_temperature / efficiency requirement is validated by
-        # resolve_thermal_battery_cop further down (single source of truth).
+        # supply_temperature / efficiency / heating_curve requirement is
+        # validated by resolve_thermal_battery_cop further down (single
+        # source of truth).
         volume = hc["volume"]
         min_temperatures_list = hc["min_temperatures"]
         max_temperatures_list = hc["max_temperatures"]
@@ -2034,17 +2035,30 @@ class Optimization:
         conversion = 3600 / (density * heat_capacity * volume)
 
         start_temperature = float(tank.get("start_temperature", 20.0))
-        min_temperatures_list = tank.get("min_temperatures", [])
         max_temperatures_list = tank.get("max_temperatures", [])
-        if not min_temperatures_list or not max_temperatures_list:
+        if not max_temperatures_list:
             raise ValueError(
-                f"Shared tank {tank_id}: requires non-empty min_temperatures and max_temperatures"
+                f"Shared tank {tank_id}: requires non-empty max_temperatures"
             )
 
         base_loss = tank.get("thermal_loss", 0.045)
 
-        # Outdoor temperature - needed for COP and demand
+        # Outdoor temperature - needed for COP, demand, and the optional
+        # weather-compensated min_temperature_curve.
         outdoor_temp_arr = self._get_clean_outdoor_temp(data_opt, required_len)
+
+        # Weather-compensated minimum temperature: if `min_temperature_curve` is set,
+        # the tank floor follows the heating curve (radiator emission floor). Combined
+        # with any static `min_temperatures` via element-wise max so the more
+        # conservative floor wins.
+        min_temperatures_list = utils.resolve_min_temperatures(
+            tank, outdoor_temp_arr, required_len
+        )
+        if not min_temperatures_list:
+            raise ValueError(
+                f"Shared tank {tank_id}: requires non-empty min_temperatures "
+                "or min_temperature_curve"
+            )
 
         # Heating demand resolution: same options as single-source thermal_battery
         # (draw_off_demand for hot-water tanks; physics or HDD for space heating)
