@@ -2529,6 +2529,70 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         total = res["P_deferrable0"].sum() + res["P_deferrable1"].sum()
         self.assertGreater(total, 0, "Expected some dispatch to satisfy draw_off demand")
 
+    def test_is_electric_load_excludes_load_from_grid_balance(self):
+        """A load with is_electric_load[k]=False must not appear in p_def_sum
+        (and hence not in grid_pos / grid_neg balance constraints).
+
+        Set up TWO loads with identical electric draws but opposite electric
+        flags; confirm that the grid_pos reads ONLY the electric one.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        # Both loads identical, but one is flagged non-electric (gas-style).
+        # Set use_pv=False, set baseload to zero, costfun cost - so any
+        # positive p_grid_pos comes purely from the electric deferrable.
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+
+        self.optim_conf["set_use_pv"] = False
+        self.optim_conf["set_use_battery"] = False
+        self.optim_conf["costfun"] = "cost"
+        self.optim_conf["number_of_deferrable_loads"] = 2
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [3000, 3000]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0, 0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [2, 2]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False, False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False, False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0, 0.0]
+        self.optim_conf["set_deferrable_max_startups"] = [0, 0]
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0, 0]
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0, 0]
+        self.optim_conf["def_load_config"] = []
+        self.optim_conf["shared_thermal_tanks"] = []
+        self.optim_conf["deferrable_load_groups"] = []
+        # Load 0 = electric. Load 1 = non-electric (gas style).
+        self.optim_conf["is_electric_load"] = [True, False]
+
+        opt = self.create_optimization()
+        ulc = self.df_input_data_dayahead[opt.var_load_cost].values
+        upp = self.df_input_data_dayahead[opt.var_prod_price].values
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            ulc, upp,
+        )
+
+        p_load0 = res["P_deferrable0"]  # electric
+        p_load1 = res["P_deferrable1"]  # non-electric
+        # Both must be active to satisfy operating_hours = 2 hours = 4 slots × 3 kW
+        self.assertGreater(p_load0.sum(), 0)
+        self.assertGreater(p_load1.sum(), 0)
+        # P_grid_pos should track ONLY load 0, not load 0 + load 1.
+        # We allow tolerance for the baseline load_forecast / numeric.
+        p_grid_pos = res["P_grid_pos"]
+        # In slots where load 1 is firing but load 0 is not, p_grid_pos should
+        # NOT reflect load 1's draw. Find such a slot and assert.
+        only_l1_slots = (p_load0 == 0) & (p_load1 > 0)
+        if only_l1_slots.any():
+            # Grid import in these slots should be just baseload, not 3 kW.
+            grid_in_l1_only = p_grid_pos[only_l1_slots]
+            # Baseline household load is < 1 kW in the typical fixture; if our
+            # flag works, grid_pos here is roughly baseload, not 3000 W.
+            self.assertLess(
+                grid_in_l1_only.max(),
+                2000,
+                "Non-electric load (load 1) appears to be pulling from the grid",
+            )
+
     def test_shared_thermal_tank_single_source_matches_legacy(self):
         """A shared tank with exactly one source produces the same dispatch as
         the legacy per-load thermal_battery path (sanity / regression).

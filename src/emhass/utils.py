@@ -427,6 +427,7 @@ def compile_heat_topology(topology: dict) -> dict:
     operating_hours = []
     def_load_config = []
     cost_per_load: list = []
+    is_electric_load: list[bool] = []
     flow_to_load_idx: dict[tuple[str, str], int] = {}
 
     for i, f in enumerate(flows):
@@ -438,6 +439,13 @@ def compile_heat_topology(topology: dict) -> dict:
         # Source-side fields - shape expected by resolve_thermal_battery_cop
         source_block: dict = {}
         src_type = src.get("type", "").lower()
+        # Type -> default electric bus membership. Explicit `electric` flag wins.
+        type_is_electric = {
+            "heatpump": True, "heat_pump": True,
+            "electric": True,
+            "gas": False, "oil": False, "district": False,
+            "constant_efficiency": True,  # ambiguous - default electric unless overridden
+        }
         if src_type in {"heatpump", "heat_pump"}:
             source_block["supply_temperature"] = float(src["supply_temperature"])
             source_block["carnot_efficiency"] = float(
@@ -452,6 +460,7 @@ def compile_heat_topology(topology: dict) -> dict:
                 "recognised. Allowed types: heatpump, heat_pump, gas, oil, "
                 "district, electric, constant_efficiency."
             )
+        is_electric_load.append(bool(src.get("electric", type_is_electric.get(src_type, True))))
         def_load_config.append({"thermal_source": source_block})
         # Cost track resolution
         cost_track_id = src.get("cost_track")
@@ -579,6 +588,7 @@ def compile_heat_topology(topology: dict) -> dict:
         "shared_thermal_tanks": shared_tanks,
         "deferrable_load_groups": def_groups,
         "cost_forecast_per_deferrable_load": cost_per_load,
+        "is_electric_load": is_electric_load,
     }
 
 
@@ -1721,6 +1731,7 @@ async def treat_runtimeparams(
                     "operating_hours_of_each_deferrable_load",
                     "start_timesteps_of_each_deferrable_load",
                     "end_timesteps_of_each_deferrable_load",
+                    "is_electric_load",
                 }:
                     optim_conf[key] = val
         params["optim_conf"] = optim_conf

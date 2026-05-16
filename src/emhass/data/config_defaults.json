@@ -42,6 +42,7 @@
   "minimum_power_of_deferrable_loads": [0.0, 0.0],
   "cost_forecast_per_deferrable_load": [null, null],
   "heat_topology": null,
+  "is_electric_load": [true, true],
   "operating_hours_of_each_deferrable_load": [4, 0],
   "weather_forecast_method": "open-meteo",
   "open_meteo_cache_max_age": 30,
