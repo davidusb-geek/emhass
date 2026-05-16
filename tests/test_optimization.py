@@ -16,6 +16,7 @@ from pandas.testing import assert_series_equal
 from emhass.forecast import Forecast
 from emhass.optimization import Optimization
 from emhass.retrieve_hass import RetrieveHass
+from emhass import utils
 from emhass.utils import (
     build_config,
     build_params,
@@ -2384,6 +2385,80 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIn("P_deferrable0", opt_res.columns)
 
     # --- Thermal Battery Inertia Tests ---
+
+    def test_thermal_battery_flat_efficiency_mode(self):
+        """Gas-source / constant-efficiency thermal_battery solves successfully.
+
+        When 'efficiency' is set on the thermal_battery sub-config, the optimizer
+        treats the heat source as a constant-efficiency converter (gas boiler, oil
+        burner, district heating, etc.) rather than a temperature-dependent heat
+        pump. supply_temperature is optional in this mode.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        # Varying outdoor temperature - should NOT influence the conversion factor
+        # in flat-efficiency mode.
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
+            10.0 + 8.0 * np.sin(i * np.pi / 12) for i in range(48)
+        ]
+
+        opt_res = self.run_optimization_with_config(
+            [
+                {
+                    "thermal_battery": {
+                        "start_temperature": 20.0,
+                        "efficiency": 0.9,  # flat gas-boiler efficiency
+                        "volume": 50.0,
+                        "specific_heating_demand": 100.0,
+                        "area": 100.0,
+                        "min_temperatures": [18.0] * 48,
+                        "max_temperatures": [22.0] * 48,
+                    }
+                },
+            ]
+        )
+
+        # Optimization succeeds and deferrable power column is present
+        self.assertIn("P_deferrable0", opt_res.columns)
+        self.assertGreaterEqual(opt_res["P_deferrable0"].sum(), 0)
+
+    def test_thermal_battery_efficiency_overrides_carnot(self):
+        """When 'efficiency' is set, the Carnot calc is bypassed even if
+        supply_temperature and carnot_efficiency are also present."""
+        outdoor = np.array([0.0, 5.0, 10.0, 15.0])
+
+        flat = utils.resolve_thermal_battery_cop(
+            {"efficiency": 0.9, "supply_temperature": 35.0, "carnot_efficiency": 0.4},
+            outdoor,
+            length=4,
+        )
+        # Flat array regardless of supply_temperature/carnot_efficiency presence
+        np.testing.assert_array_almost_equal(flat, np.full(4, 0.9))
+
+    def test_thermal_battery_missing_source_field_raises(self):
+        """A thermal_battery config with neither supply_temperature nor efficiency
+        raises a clear ValueError at constraint-build time."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 10.0
+
+        with self.assertRaises(ValueError) as ctx:
+            self.run_optimization_with_config(
+                [
+                    {
+                        "thermal_battery": {
+                            "start_temperature": 20.0,
+                            # neither supply_temperature nor efficiency
+                            "volume": 50.0,
+                            "specific_heating_demand": 100.0,
+                            "area": 100.0,
+                            "min_temperatures": [18.0] * 48,
+                            "max_temperatures": [22.0] * 48,
+                        }
+                    },
+                ]
+            )
+        msg = str(ctx.exception)
+        self.assertIn("supply_temperature", msg)
+        self.assertIn("efficiency", msg)
 
     def test_thermal_battery_inertia_backward_compat(self):
         """Test that thermal_inertia_time_constant=0 produces identical results to omitting it."""

@@ -571,19 +571,17 @@ class Optimization:
                     )
 
                 # Compute derived arrays
-                supply_temperature = hc["supply_temperature"]
                 indoor_target_temp = hc.get(
                     "indoor_target_temperature",
                     min_temps[0] if min_temps else 20.0,
                 )
 
-                # Heatpump COPs
-                heatpump_cops = utils.calculate_cop_heatpump(
-                    supply_temperature=supply_temperature,
-                    carnot_efficiency=hc.get("carnot_efficiency", 0.4),
-                    outdoor_temperature_forecast=outdoor_temp.tolist(),
+                # Conversion factors per timestep (Carnot COP for heat pumps,
+                # flat value for constant-efficiency sources like gas boilers).
+                heatpump_cops = utils.resolve_thermal_battery_cop(
+                    hc, outdoor_temp, length=n
                 )
-                params["heatpump_cops"].value = np.array(heatpump_cops[:n])
+                params["heatpump_cops"].value = np.array(heatpump_cops)
 
                 # Thermal losses and heating demand
                 base_loss = hc.get("thermal_loss", 0.045)
@@ -1519,8 +1517,9 @@ class Optimization:
         hc = def_load_config["thermal_battery"]
         required_len = self.num_timesteps
 
-        # Structural parameters (don't change between MPC iterations)
-        supply_temperature = hc["supply_temperature"]
+        # Structural parameters (don't change between MPC iterations).
+        # supply_temperature / efficiency requirement is validated by
+        # resolve_thermal_battery_cop further down (single source of truth).
         volume = hc["volume"]
         min_temperatures_list = hc["min_temperatures"]
         max_temperatures_list = hc["max_temperatures"]
@@ -1556,12 +1555,10 @@ class Optimization:
             start_temp_float = float(params["start_temp"].value)
 
             # Compute and set derived parameter values
-            cops = utils.calculate_cop_heatpump(
-                supply_temperature=supply_temperature,
-                carnot_efficiency=hc.get("carnot_efficiency", 0.4),
-                outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
+            cops = utils.resolve_thermal_battery_cop(
+                hc, outdoor_temp_arr, length=required_len
             )
-            params["heatpump_cops"].value = np.array(cops[:required_len])
+            params["heatpump_cops"].value = np.array(cops)
 
             # Check for hot water tank mode (draw_off_demand present)
             # draw_off_demand units: kWh per timestep (same as heating_demand from
@@ -1664,11 +1661,9 @@ class Optimization:
             outdoor_temp_arr = self._get_clean_outdoor_temp(data_opt, required_len)
 
             heatpump_cops = np.array(
-                utils.calculate_cop_heatpump(
-                    supply_temperature=supply_temperature,
-                    carnot_efficiency=hc.get("carnot_efficiency", 0.4),
-                    outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
-                )[:required_len]
+                utils.resolve_thermal_battery_cop(
+                    hc, outdoor_temp_arr, length=required_len
+                )
             )
 
             # Check for hot water tank mode (draw_off_demand present)
