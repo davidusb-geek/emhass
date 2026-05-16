@@ -417,6 +417,12 @@
       "input": "array.array.float",
       "default_value": null
     },
+    "heat_topology": {
+      "friendly_name": "Heat topology (graph model)",
+      "Description": "Declarative directed graph of heat sources, thermal storage, consumers, and flows. When set, EMHASS compiles this into the flat optim_conf primitives (def_load_config, shared_thermal_tanks, deferrable_load_groups, cost_forecast_per_deferrable_load) automatically. Lets you express hybrid heating setups (gas + heat pump feeding the same DHW + buffer) without hand-rolling the deferrable-load indices. See docs/heat_topology.md for the schema.",
+      "input": "object",
+      "default_value": null
+    },
     "operating_hours_of_each_deferrable_load": {
       "friendly_name": "Deferrable load operating hours",
       "Description": "The total number of hours that each deferrable load should operate",

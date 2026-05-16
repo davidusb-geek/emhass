@@ -357,6 +357,231 @@ def calculate_surface_solar_gain(
     return ghi_arr * float(absorption_area) * absorption_factor / 1000.0 * dt_hours
 
 
+def compile_heat_topology(topology: dict) -> dict:
+    """Compile a heat-topology graph descriptor into flat optim_conf fields.
+
+    The graph model lets users declare a small directed graph of
+    `sources`, `storage`, `consumers`, `flows`, and `actuator_groups`. This
+    function translates that high-level descriptor into the primitives the
+    optimizer already understands:
+
+    - Each `flow (source, storage)` becomes one deferrable load with a
+      `thermal_source` block in def_load_config.
+    - Each `storage` becomes one entry in `shared_thermal_tanks` with
+      `load_ids` pointing at the deferrable loads feeding it.
+    - Each `consumer` is folded into its target storage (its profile or
+      building model populates the storage's draw_off_demand / u_value etc.).
+    - Each `actuator_group` becomes one entry in `deferrable_load_groups`.
+    - Each source's `cost_track` reference resolves to an entry in
+      `cost_forecast_per_deferrable_load`.
+
+    Returns a dict of optim_conf fields to merge into the live optim_conf:
+        number_of_deferrable_loads, nominal_power_of_deferrable_loads,
+        minimum_power_of_deferrable_loads, treat_deferrable_load_as_semi_cont,
+        operating_hours_of_each_deferrable_load, def_load_config,
+        shared_thermal_tanks, deferrable_load_groups,
+        cost_forecast_per_deferrable_load.
+
+    Validation: missing source/storage references, duplicated ids, and
+    consumers targeting unknown storage all raise ValueError with the
+    offending field path.
+    """
+    sources = topology.get("sources", []) or []
+    storage = topology.get("storage", []) or []
+    consumers = topology.get("consumers", []) or []
+    flows = topology.get("flows", []) or []
+    groups = topology.get("actuator_groups", []) or []
+    cost_tracks = topology.get("cost_tracks", {}) or {}
+
+    src_by_id = {s["id"]: s for s in sources}
+    src_index_by_id = {s["id"]: i for i, s in enumerate(sources)}
+    sto_by_id = {s["id"]: s for s in storage}
+    if len(src_by_id) != len(sources):
+        raise ValueError("heat_topology.sources contains duplicate ids")
+    if len(sto_by_id) != len(storage):
+        raise ValueError("heat_topology.storage contains duplicate ids")
+
+    # Validate flows reference real source/storage ids
+    for i, f in enumerate(flows):
+        if f.get("from") not in src_by_id:
+            raise ValueError(
+                f"heat_topology.flows[{i}].from='{f.get('from')}' does not match any source.id"
+            )
+        if f.get("to") not in sto_by_id:
+            raise ValueError(
+                f"heat_topology.flows[{i}].to='{f.get('to')}' does not match any storage.id"
+            )
+
+    # Validate consumers target real storage
+    for i, c in enumerate(consumers):
+        if c.get("target") not in sto_by_id:
+            raise ValueError(
+                f"heat_topology.consumers[{i}].target='{c.get('target')}' does not match any storage.id"
+            )
+
+    # Build deferrable loads from flows
+    num_loads = len(flows)
+    nominal_power = []
+    min_power = []
+    treat_semi_cont = []
+    operating_hours = []
+    def_load_config = []
+    cost_per_load: list = []
+    flow_to_load_idx: dict[tuple[str, str], int] = {}
+
+    for i, f in enumerate(flows):
+        src = src_by_id[f["from"]]
+        nominal_power.append(float(src.get("nominal_power", 0)))
+        min_power.append(float(src.get("min_power", 0)))
+        treat_semi_cont.append(bool(src.get("treat_as_semi_cont", True)))
+        operating_hours.append(int(src.get("operating_hours", 4)))
+        # Source-side fields - shape expected by resolve_thermal_battery_cop
+        source_block: dict = {}
+        src_type = src.get("type", "").lower()
+        if src_type in {"heatpump", "heat_pump"}:
+            source_block["supply_temperature"] = float(src["supply_temperature"])
+            source_block["carnot_efficiency"] = float(
+                src.get("carnot_efficiency", 0.4)
+            )
+        elif src_type in {"gas", "oil", "district", "constant_efficiency", "electric"}:
+            source_block["efficiency"] = float(src["efficiency"])
+        else:
+            raise ValueError(
+                f"heat_topology.sources[{src_index_by_id[src['id']]}] "
+                f"(id='{src['id']}'): type='{src.get('type', '')}' is not "
+                "recognised. Allowed types: heatpump, heat_pump, gas, oil, "
+                "district, electric, constant_efficiency."
+            )
+        def_load_config.append({"thermal_source": source_block})
+        # Cost track resolution
+        cost_track_id = src.get("cost_track")
+        if cost_track_id is None:
+            cost_per_load.append(None)
+        else:
+            if cost_track_id not in cost_tracks:
+                raise ValueError(
+                    f"heat_topology.sources[{src['id']}].cost_track='{cost_track_id}' "
+                    "not found in cost_tracks"
+                )
+            cost_per_load.append(list(cost_tracks[cost_track_id]))
+        flow_to_load_idx[(f["from"], f["to"])] = i
+
+    # Aggregate consumer demand onto storage
+    storage_demand: dict[str, dict] = {}
+    for c in consumers:
+        target = c["target"]
+        if target not in storage_demand:
+            storage_demand[target] = {"profile": None, "building": None, "pool": None}
+        ctype = (c.get("type") or "").lower()
+        if ctype == "profile":
+            prof = list(c["profile"])
+            existing = storage_demand[target]["profile"]
+            if existing is None:
+                storage_demand[target]["profile"] = prof
+            else:
+                # Pad both lists to the common max length so a later profile
+                # that is longer than `existing` is not silently truncated by
+                # zip(). Demand after the shorter horizon stays at 0.
+                max_len = max(len(existing), len(prof))
+                existing_padded = existing + [0.0] * (max_len - len(existing))
+                prof_padded = prof + [0.0] * (max_len - len(prof))
+                storage_demand[target]["profile"] = [
+                    a + b for a, b in zip(existing_padded, prof_padded)
+                ]
+        elif ctype == "building_demand":
+            if storage_demand[target]["building"] is not None:
+                raise ValueError(
+                    f"heat_topology.consumers: storage '{target}' already has a "
+                    "building_demand consumer; only one is permitted per storage"
+                )
+            storage_demand[target]["building"] = {
+                k: c[k]
+                for k in (
+                    "u_value", "envelope_area", "ventilation_rate", "heated_volume",
+                    "indoor_target_temperature", "window_area", "shgc",
+                    "internal_gains_factor", "specific_heating_demand", "area",
+                    "base_temperature", "annual_reference_hdd",
+                )
+                if k in c
+            }
+        elif ctype == "pool_comfort":
+            storage_demand[target]["pool"] = {
+                k: c[k]
+                for k in ("solar_absorption_area", "solar_absorption_factor")
+                if k in c
+            }
+        else:
+            raise ValueError(
+                f"heat_topology.consumers[{c.get('id')}].type='{ctype}' must be one of "
+                "profile, building_demand, pool_comfort"
+            )
+
+    # Build shared_thermal_tanks from storage + aggregated demand + flows
+    shared_tanks = []
+    for s in storage:
+        sid = s["id"]
+        load_ids = [
+            flow_to_load_idx[(f["from"], f["to"])]
+            for f in flows
+            if f["to"] == sid
+        ]
+        tank: dict = {
+            "id": sid,
+            "load_ids": load_ids,
+            "volume": float(s["volume"]),
+            "density": float(s.get("density", 1000)),
+            "heat_capacity": float(s.get("heat_capacity", 4.186)),
+            "start_temperature": float(s.get("start_temperature", 20.0)),
+            "thermal_loss": float(s.get("thermal_loss", 0.045)),
+            "min_temperatures": list(s.get("min_temperature", [])) or list(s.get("min_temperatures", [])),
+            "max_temperatures": list(s.get("max_temperature", [])) or list(s.get("max_temperatures", [])),
+        }
+        demand = storage_demand.get(sid, {})
+        if demand.get("profile") is not None:
+            tank["draw_off_demand"] = demand["profile"]
+        if demand.get("building"):
+            tank.update(demand["building"])
+        if demand.get("pool"):
+            tank.update(demand["pool"])
+        shared_tanks.append(tank)
+
+    # Build deferrable_load_groups from actuator_groups
+    def_groups = []
+    for gi, g in enumerate(groups):
+        names = []
+        for flow_pair in g.get("flows", []):
+            key = (flow_pair[0], flow_pair[1])
+            if key not in flow_to_load_idx:
+                raise ValueError(
+                    f"heat_topology.actuator_groups[{gi}].flows references unknown flow {flow_pair}"
+                )
+            names.append(f"deferrable{flow_to_load_idx[key]}")
+        def_group = {
+            "names": names,
+            "mutual_exclusion": bool(g.get("mutual_exclusion", False)),
+        }
+        if "max_combined_power" in g:
+            def_group["max_power"] = float(g["max_combined_power"])
+        def_groups.append(def_group)
+
+    return {
+        "number_of_deferrable_loads": num_loads,
+        "nominal_power_of_deferrable_loads": nominal_power,
+        "minimum_power_of_deferrable_loads": min_power,
+        "treat_deferrable_load_as_semi_cont": treat_semi_cont,
+        "operating_hours_of_each_deferrable_load": operating_hours,
+        "set_deferrable_load_single_constant": [False] * num_loads,
+        "set_deferrable_startup_penalty": [0.0] * num_loads,
+        "set_deferrable_max_startups": [0] * num_loads,
+        "start_timesteps_of_each_deferrable_load": [0] * num_loads,
+        "end_timesteps_of_each_deferrable_load": [0] * num_loads,
+        "def_load_config": def_load_config,
+        "shared_thermal_tanks": shared_tanks,
+        "deferrable_load_groups": def_groups,
+        "cost_forecast_per_deferrable_load": cost_per_load,
+    }
+
+
 def calculate_thermal_loss_signed(
     outdoor_temperature_forecast: np.ndarray | pd.Series,
     indoor_temperature: float,
@@ -1459,6 +1684,53 @@ async def treat_runtimeparams(
     retrieve_hass_conf = params["retrieve_hass_conf"]
     optim_conf = params["optim_conf"]
     plant_conf = params["plant_conf"]
+
+    # If heat_topology is present (static config or runtime override), compile
+    # it down to flat optim_conf primitives. Runtime override wins over static
+    # config because runtimeparams have already been merged above.
+    heat_topology = optim_conf.get("heat_topology")
+    if heat_topology:
+        try:
+            compiled = compile_heat_topology(heat_topology)
+        except ValueError as e:
+            logger.error("heat_topology compile failed: %s", e)
+            raise
+        # Merge compiled fields into optim_conf, allowing user-set fields to win
+        # for things the compiler always populates (e.g. operating_hours).
+        for key, val in compiled.items():
+            if key not in optim_conf or optim_conf[key] in (None, [], {}):
+                optim_conf[key] = val
+            else:
+                # For the structural fields we ALWAYS want compiled values
+                # (otherwise the compiled def_load_config doesn't match
+                # number_of_deferrable_loads, etc.)
+                if key in {
+                    "number_of_deferrable_loads",
+                    "def_load_config",
+                    "shared_thermal_tanks",
+                    "deferrable_load_groups",
+                    "nominal_power_of_deferrable_loads",
+                    "minimum_power_of_deferrable_loads",
+                    "treat_deferrable_load_as_semi_cont",
+                    "cost_forecast_per_deferrable_load",
+                    # All per-load arrays must match number_of_deferrable_loads,
+                    # which the compiler sets - so override any defaults.
+                    "set_deferrable_load_single_constant",
+                    "set_deferrable_startup_penalty",
+                    "set_deferrable_max_startups",
+                    "operating_hours_of_each_deferrable_load",
+                    "start_timesteps_of_each_deferrable_load",
+                    "end_timesteps_of_each_deferrable_load",
+                }:
+                    optim_conf[key] = val
+        params["optim_conf"] = optim_conf
+        logger.info(
+            "heat_topology compiled: %d sources, %d storage, %d flows, %d groups",
+            len(heat_topology.get("sources", [])),
+            len(heat_topology.get("storage", [])),
+            len(heat_topology.get("flows", [])),
+            len(heat_topology.get("actuator_groups", [])),
+        )
 
     # Serialize the final params
     params = orjson.dumps(params, default=str).decode()
