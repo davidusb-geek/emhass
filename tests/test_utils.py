@@ -2378,6 +2378,802 @@ class TestHeatingDemand(unittest.TestCase):
         self.assertAlmostEqual(loss_manual_warm, -base_loss, places=6)
 
 
+class TestResolveThermalBatteryCop(unittest.TestCase):
+    """Tests for the dispatch helper that picks between Carnot COP and flat efficiency."""
+
+    def test_efficiency_mode_returns_flat_array(self):
+        """When 'efficiency' is set, return a flat conversion-factor array."""
+        hc = {"efficiency": 0.9}
+        outdoor = np.array([0.0, 5.0, 10.0, 15.0])
+        cops = utils.resolve_thermal_battery_cop(hc, outdoor, length=4)
+        np.testing.assert_array_almost_equal(cops, np.full(4, 0.9))
+
+    def test_efficiency_mode_ignores_outdoor_temperature(self):
+        """Flat efficiency does not vary with outdoor temperature."""
+        hc = {"efficiency": 0.85}
+        hot = utils.resolve_thermal_battery_cop(hc, np.array([20.0] * 6), length=6)
+        cold = utils.resolve_thermal_battery_cop(hc, np.array([-15.0] * 6), length=6)
+        np.testing.assert_array_almost_equal(hot, cold)
+        self.assertTrue(np.all(hot == 0.85))
+
+    def test_efficiency_mode_does_not_require_supply_temperature(self):
+        """Constant-efficiency mode works without a supply_temperature field."""
+        hc = {"efficiency": 0.9}  # no supply_temperature, no carnot_efficiency
+        cops = utils.resolve_thermal_battery_cop(hc, np.array([5.0, 5.0]), length=2)
+        np.testing.assert_array_almost_equal(cops, np.array([0.9, 0.9]))
+
+    def test_heatpump_mode_falls_back_to_carnot(self):
+        """When 'efficiency' is not set, fall back to the existing Carnot COP."""
+        hc = {"supply_temperature": 35.0, "carnot_efficiency": 0.4}
+        outdoor = np.array([5.0])
+        cops = utils.resolve_thermal_battery_cop(hc, outdoor, length=1)
+        expected = utils.calculate_cop_heatpump(35.0, 0.4, outdoor)
+        np.testing.assert_array_almost_equal(cops, expected)
+
+    def test_heatpump_mode_default_carnot_efficiency(self):
+        """carnot_efficiency defaults to 0.4 when not set."""
+        hc_explicit = {"supply_temperature": 35.0, "carnot_efficiency": 0.4}
+        hc_implicit = {"supply_temperature": 35.0}
+        outdoor = np.array([0.0, 5.0, 10.0])
+        cops_explicit = utils.resolve_thermal_battery_cop(hc_explicit, outdoor, length=3)
+        cops_implicit = utils.resolve_thermal_battery_cop(hc_implicit, outdoor, length=3)
+        np.testing.assert_array_almost_equal(cops_explicit, cops_implicit)
+
+    def test_missing_both_efficiency_and_supply_temperature_raises(self):
+        """At least one of efficiency or supply_temperature must be set."""
+        hc = {"carnot_efficiency": 0.4}
+        outdoor = np.array([5.0])
+        with self.assertRaises(ValueError) as ctx:
+            utils.resolve_thermal_battery_cop(hc, outdoor, length=1)
+        self.assertIn("efficiency", str(ctx.exception))
+        self.assertIn("supply_temperature", str(ctx.exception))
+
+    def test_nonpositive_efficiency_raises(self):
+        """efficiency must be strictly positive."""
+        for bad in (0.0, -0.5):
+            hc = {"efficiency": bad}
+            with self.assertRaises(ValueError) as ctx:
+                utils.resolve_thermal_battery_cop(hc, np.array([5.0]), length=1)
+            self.assertIn("positive", str(ctx.exception))
+
+    def test_length_truncation_in_heatpump_mode(self):
+        """When `length` is given, the returned array is truncated."""
+        hc = {"supply_temperature": 35.0}
+        outdoor = np.array([0.0, 5.0, 10.0, 15.0, 20.0])
+        cops = utils.resolve_thermal_battery_cop(hc, outdoor, length=3)
+        self.assertEqual(len(cops), 3)
+
+    def test_length_none_returns_full_forecast(self):
+        """When `length` is None, return the full forecast length."""
+        hc = {"supply_temperature": 35.0}
+        outdoor = np.array([0.0, 5.0, 10.0])
+        cops = utils.resolve_thermal_battery_cop(hc, outdoor, length=None)
+        self.assertEqual(len(cops), 3)
+
+    def test_efficiency_mode_accepts_outdoor_none_when_length_given(self):
+        """Constant-efficiency mode ignores outdoor; passing None is allowed
+        when `length` is supplied explicitly."""
+        hc = {"efficiency": 0.9}
+        cops = utils.resolve_thermal_battery_cop(hc, None, length=4)
+        np.testing.assert_array_almost_equal(cops, np.full(4, 0.9))
+
+    def test_efficiency_mode_outdoor_none_without_length_raises(self):
+        """Constant-efficiency mode with outdoor=None and length=None is
+        ambiguous and raises with a clear message."""
+        hc = {"efficiency": 0.9}
+        with self.assertRaises(ValueError) as ctx:
+            utils.resolve_thermal_battery_cop(hc, None, length=None)
+        self.assertIn("length", str(ctx.exception))
+
+    def test_heatpump_mode_outdoor_none_raises(self):
+        """Heat-pump mode requires outdoor temperature; None must raise."""
+        hc = {"supply_temperature": 35.0}
+        with self.assertRaises(ValueError) as ctx:
+            utils.resolve_thermal_battery_cop(hc, None, length=3)
+        self.assertIn("outdoor_temperature_forecast", str(ctx.exception))
+
+
+class TestCalculateSurfaceSolarGain(unittest.TestCase):
+    """Tests for the pool/outdoor-thermal-mass solar absorption helper."""
+
+    def test_returns_none_when_absorption_area_unset(self):
+        hc = {}  # no solar_absorption_area
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([500.0, 600.0]), optimization_time_step_minutes=30, length=2
+        )
+        self.assertIsNone(result)
+
+    def test_returns_none_when_absorption_area_zero(self):
+        hc = {"solar_absorption_area": 0.0}
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([500.0]), optimization_time_step_minutes=30, length=1
+        )
+        self.assertIsNone(result)
+
+    def test_returns_none_when_ghi_forecast_none(self):
+        hc = {"solar_absorption_area": 30.0}
+        result = utils.calculate_surface_solar_gain(
+            hc, None, optimization_time_step_minutes=30, length=4
+        )
+        self.assertIsNone(result)
+
+    def test_computes_expected_gain(self):
+        """100 W/m² over 30 min on a 30 m² pool at 0.7 absorption =
+        100 * 30 * 0.7 / 1000 * 0.5 = 1.05 kWh per timestep."""
+        hc = {"solar_absorption_area": 30.0, "solar_absorption_factor": 0.7}
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([100.0, 200.0]), optimization_time_step_minutes=30, length=2
+        )
+        np.testing.assert_array_almost_equal(result, np.array([1.05, 2.10]))
+
+    def test_default_absorption_factor_is_0_7(self):
+        hc = {"solar_absorption_area": 30.0}
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([1000.0]), optimization_time_step_minutes=60, length=1
+        )
+        # 1000 * 30 * 0.7 / 1000 * 1 = 21 kWh
+        np.testing.assert_array_almost_equal(result, np.array([21.0]))
+
+    def test_length_pads_with_zero(self):
+        """When ghi is shorter than length, pad with zeros (no solar at night)."""
+        hc = {"solar_absorption_area": 10.0, "solar_absorption_factor": 0.5}
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([200.0]), optimization_time_step_minutes=60, length=3
+        )
+        # First slot: 200*10*0.5/1000*1 = 1.0 kWh; remaining padded to zero
+        np.testing.assert_array_almost_equal(result, np.array([1.0, 0.0, 0.0]))
+
+    def test_length_truncates_excess(self):
+        hc = {"solar_absorption_area": 10.0, "solar_absorption_factor": 1.0}
+        ghi = np.array([100.0, 200.0, 300.0, 400.0, 500.0])
+        result = utils.calculate_surface_solar_gain(
+            hc, ghi, optimization_time_step_minutes=60, length=2
+        )
+        self.assertEqual(len(result), 2)
+        np.testing.assert_array_almost_equal(result, np.array([1.0, 2.0]))
+
+    def test_negative_absorption_factor_raises(self):
+        hc = {"solar_absorption_area": 10.0, "solar_absorption_factor": -0.1}
+        with self.assertRaises(ValueError) as ctx:
+            utils.calculate_surface_solar_gain(
+                hc, np.array([100.0]), optimization_time_step_minutes=60, length=1
+            )
+        self.assertIn(">= 0", str(ctx.exception))
+
+    def test_zero_absorption_factor_returns_zero_array(self):
+        """A fully-covered pool (factor=0) absorbs nothing."""
+        hc = {"solar_absorption_area": 30.0, "solar_absorption_factor": 0.0}
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([500.0, 600.0]), optimization_time_step_minutes=30, length=2
+        )
+        np.testing.assert_array_almost_equal(result, np.zeros(2))
+
+
+class TestApplyHeatingCurve(unittest.TestCase):
+    """Heating-curve: T_supply = clip(offset - slope*T_outdoor, min, max)."""
+
+    def test_linear_curve_negative_slope_clipped_high(self):
+        """Cold outdoor should raise supply T, clipped at max_supply."""
+        curve = {"slope": 1.5, "offset": 35.0, "min_supply": 25.0, "max_supply": 55.0}
+        outdoor = np.array([-10.0, 0.0, 5.0, 15.0, 25.0])
+        supply = utils.apply_heating_curve(curve, outdoor)
+        # at -10: 35 + 15 = 50 (within bounds)
+        # at  0: 35 (within bounds)
+        # at  5: 27.5
+        # at 15: 12.5 -> clipped to 25
+        # at 25: -2.5 -> clipped to 25
+        np.testing.assert_array_almost_equal(supply, [50.0, 35.0, 27.5, 25.0, 25.0])
+
+    def test_curve_clipped_at_max(self):
+        """Very cold outdoor should clip at max_supply."""
+        curve = {"slope": 2.0, "offset": 40.0, "min_supply": 30.0, "max_supply": 50.0}
+        outdoor = np.array([-20.0, -10.0, 0.0])
+        supply = utils.apply_heating_curve(curve, outdoor)
+        # at -20: 40 + 40 = 80 -> clipped to 50
+        # at -10: 40 + 20 = 60 -> clipped to 50
+        # at   0: 40 (within bounds)
+        np.testing.assert_array_almost_equal(supply, [50.0, 50.0, 40.0])
+
+    def test_default_bounds(self):
+        """min_supply defaults to 25, max_supply to 70."""
+        curve = {"slope": 1.0, "offset": 30.0}
+        outdoor = np.array([-50.0, 50.0])
+        supply = utils.apply_heating_curve(curve, outdoor)
+        # -50: 30+50=80 -> clipped to 70 default
+        #  50: 30-50=-20 -> clipped to 25 default
+        np.testing.assert_array_almost_equal(supply, [70.0, 25.0])
+
+    def test_inverted_bounds_raises(self):
+        """min_supply >= max_supply is a config error."""
+        curve = {"slope": 1.0, "offset": 30.0, "min_supply": 60.0, "max_supply": 40.0}
+        with self.assertRaises(ValueError) as ctx:
+            utils.apply_heating_curve(curve, np.array([5.0]))
+        self.assertIn("min_supply", str(ctx.exception))
+
+    def test_accepts_pandas_series(self):
+        """pd.Series input should produce numpy output."""
+        curve = {"slope": 1.0, "offset": 30.0, "min_supply": 25.0, "max_supply": 50.0}
+        outdoor = pd.Series([0.0, 10.0, 20.0])
+        supply = utils.apply_heating_curve(curve, outdoor)
+        np.testing.assert_array_almost_equal(supply, [30.0, 25.0, 25.0])
+
+
+class TestResolveMinTemperatures(unittest.TestCase):
+    """Weather-compensated min buffer T floor (radiator emission floor)."""
+
+    def test_static_only(self):
+        """A config with only static `min_temperatures` returns it unchanged."""
+        cfg = {"min_temperatures": [25.0] * 48}
+        out = utils.resolve_min_temperatures(cfg, None, length=48)
+        self.assertEqual(out, [25.0] * 48)
+
+    def test_curve_only(self):
+        """A config with only `min_temperature_curve` returns per-slot derived floor."""
+        cfg = {"min_temperature_curve": {
+            "slope": 1.0, "offset": 35.0, "min_supply": 30.0, "max_supply": 55.0,
+        }}
+        outdoor = np.array([-5.0, 0.0, 5.0, 15.0, 25.0])
+        out = utils.resolve_min_temperatures(cfg, outdoor, length=5)
+        # at -5: 35-(-5)=40 -> 40
+        # at  0: 35 -> 35
+        # at  5: 30 -> 30
+        # at 15: 20 -> clipped to 30
+        # at 25: 10 -> clipped to 30
+        self.assertEqual(out, [40.0, 35.0, 30.0, 30.0, 30.0])
+
+    def test_curve_and_static_max_wins_elementwise(self):
+        """When both are set, element-wise max is taken (more conservative floor wins)."""
+        cfg = {
+            "min_temperatures": [20.0, 30.0, 40.0, 50.0, 60.0],
+            "min_temperature_curve": {
+                "slope": 1.0, "offset": 35.0, "min_supply": 30.0, "max_supply": 55.0,
+            },
+        }
+        # curve at outdoor = -5,0,5,15,25 -> [40, 35, 30, 30, 30]
+        # static                          -> [20, 30, 40, 50, 60]
+        # elementwise max                 -> [40, 35, 40, 50, 60]
+        outdoor = np.array([-5.0, 0.0, 5.0, 15.0, 25.0])
+        out = utils.resolve_min_temperatures(cfg, outdoor, length=5)
+        self.assertEqual(out, [40.0, 35.0, 40.0, 50.0, 60.0])
+
+    def test_floor_of_30_via_curve_min_supply(self):
+        """User-friendly pattern: curve with min_supply=30 keeps buffer at 30 even in summer."""
+        cfg = {"min_temperature_curve": {
+            "slope": 1.0, "offset": 35.0, "min_supply": 30.0, "max_supply": 50.0,
+        }}
+        # Summer outdoor: 20, 25, 30 °C - curve says 15, 10, 5 -> all clipped to 30
+        out = utils.resolve_min_temperatures(cfg, np.array([20.0, 25.0, 30.0]), length=3)
+        self.assertEqual(out, [30.0, 30.0, 30.0])
+
+    def test_neither_set_returns_empty(self):
+        """Tank with no min config returns empty list (caller raises)."""
+        cfg = {}
+        out = utils.resolve_min_temperatures(cfg, np.array([5.0]), length=1)
+        self.assertEqual(out, [])
+
+    def test_curve_without_outdoor_raises(self):
+        """min_temperature_curve requires outdoor temperature input."""
+        cfg = {"min_temperature_curve": {"slope": 1.0, "offset": 35.0}}
+        with self.assertRaises(ValueError) as ctx:
+            utils.resolve_min_temperatures(cfg, None, length=1)
+        self.assertIn("outdoor", str(ctx.exception))
+
+    def test_short_static_list_padded(self):
+        """Static list shorter than horizon is padded with its last value."""
+        cfg = {"min_temperatures": [25.0, 28.0]}
+        outdoor = None  # curve absent so outdoor not needed
+        out = utils.resolve_min_temperatures(cfg, outdoor, length=4)
+        self.assertEqual(out, [25.0, 28.0, 28.0, 28.0])
+
+    def test_scalar_min_temperature_normalised(self):
+        """A scalar (int / float) under the singular `min_temperature` key is
+        accepted and treated as a one-element list (padded to horizon)."""
+        # float scalar
+        cfg = {"min_temperature": 20.0}
+        out = utils.resolve_min_temperatures(cfg, None, length=3)
+        self.assertEqual(out, [20.0, 20.0, 20.0])
+
+        # int scalar
+        cfg_int = {"min_temperature": 18}
+        out_int = utils.resolve_min_temperatures(cfg_int, None, length=2)
+        self.assertEqual(out_int, [18.0, 18.0])
+
+
+class TestResolveThermalBatteryCopHeatingCurve(unittest.TestCase):
+    """resolve_thermal_battery_cop with heating_curve."""
+
+    def test_heating_curve_produces_per_slot_cop_variation(self):
+        """COP should differ between cold and mild slots when heating curve drops supply T."""
+        hc = {
+            "heating_curve": {"slope": 1.0, "offset": 30.0, "min_supply": 25.0, "max_supply": 55.0},
+            "carnot_efficiency": 0.45,
+        }
+        # Cold morning, mild noon
+        outdoor = np.array([-5.0, -5.0, 0.0, 5.0, 10.0, 15.0])
+        cops = utils.resolve_thermal_battery_cop(hc, outdoor)
+        # At -5 outdoor: supply = 35, ΔT = 40 -> COP = 0.45 * 308 / 40 ≈ 3.47
+        # At 15 outdoor: supply = 25 (clipped), ΔT = 10 -> COP = 0.45 * 298 / 10 ≈ 13.4 -> capped at 8.0
+        # COP should increase as outdoor rises (closer to supply T)
+        self.assertLess(cops[0], cops[-1])
+        self.assertGreater(cops[-1], 5.0)  # mild day, high COP
+
+    def test_heating_curve_takes_precedence_over_constant(self):
+        """If both heating_curve and supply_temperature are set, heating_curve wins."""
+        hc = {
+            "heating_curve": {"slope": 1.0, "offset": 30.0, "min_supply": 25.0, "max_supply": 55.0},
+            "supply_temperature": 55.0,   # would give much lower COP - should be ignored
+            "carnot_efficiency": 0.4,
+        }
+        outdoor = np.array([10.0])
+        cops = utils.resolve_thermal_battery_cop(hc, outdoor)
+        # heating_curve at 10 outdoor: supply = 25 (clipped), so high COP
+        # If supply_temperature=55 had been used: COP = 0.4 * 328 / 45 ≈ 2.92
+        self.assertGreater(cops[0], 4.0)
+
+    def test_no_heating_curve_falls_back_to_supply_temperature(self):
+        """Backward compatibility: configs without heating_curve still work."""
+        hc = {"supply_temperature": 55.0, "carnot_efficiency": 0.4}
+        outdoor = np.array([5.0, 10.0])
+        cops = utils.resolve_thermal_battery_cop(hc, outdoor)
+        # At 5°C outdoor, 55°C supply: COP = 0.4 * 328.15 / 50 ≈ 2.625
+        self.assertAlmostEqual(cops[0], 2.625, places=2)
+
+    def test_missing_both_raises_with_clear_message(self):
+        """When neither supply_temperature nor heating_curve nor efficiency is set, raise."""
+        hc = {"carnot_efficiency": 0.4}
+        with self.assertRaises(ValueError) as ctx:
+            utils.resolve_thermal_battery_cop(hc, np.array([5.0]))
+        msg = str(ctx.exception)
+        self.assertIn("supply_temperature", msg)
+        self.assertIn("heating_curve", msg)
+
+
+class TestCompileHeatTopology(unittest.TestCase):
+    """Tests for the graph -> primitives compiler."""
+
+    def test_minimal_single_source_single_storage(self):
+        topo = {
+            "sources": [{"id": "boiler", "type": "gas", "efficiency": 0.92,
+                         "nominal_power": 25000, "min_power": 8000,
+                         "cost_track": "gas"}],
+            "storage": [{"id": "buf", "volume": 0.05, "start_temperature": 35,
+                         "min_temperature": [25]*48, "max_temperature": [50]*48,
+                         "thermal_loss": 0.06}],
+            "flows": [{"from": "boiler", "to": "buf"}],
+            "cost_tracks": {"gas": [0.085]*48},
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(out["number_of_deferrable_loads"], 1)
+        self.assertEqual(out["nominal_power_of_deferrable_loads"], [25000.0])
+        self.assertEqual(out["minimum_power_of_deferrable_loads"], [8000.0])
+        self.assertEqual(out["def_load_config"][0]["thermal_source"]["efficiency"], 0.92)
+        self.assertEqual(out["shared_thermal_tanks"][0]["id"], "buf")
+        self.assertEqual(out["shared_thermal_tanks"][0]["load_ids"], [0])
+        self.assertEqual(out["cost_forecast_per_deferrable_load"][0], [0.085]*48)
+
+    def test_two_sources_one_storage(self):
+        """HP + gas both feed the same DHW tank."""
+        topo = {
+            "sources": [
+                {"id": "hp", "type": "heatpump", "supply_temperature": 55,
+                 "carnot_efficiency": 0.40, "nominal_power": 3500,
+                 "min_power": 800, "cost_track": "retail"},
+                {"id": "gas", "type": "gas", "efficiency": 0.92,
+                 "nominal_power": 25000, "min_power": 8000,
+                 "cost_track": "gas_flat"},
+            ],
+            "storage": [{"id": "dhw", "volume": 0.20, "start_temperature": 51,
+                         "min_temperature": [48]*48, "max_temperature": [62]*48,
+                         "thermal_loss": 0.05}],
+            "consumers": [{"id": "drw", "type": "profile", "target": "dhw",
+                           "profile": [0]*14 + [1.0] + [0]*33}],
+            "flows": [
+                {"from": "hp", "to": "dhw"},
+                {"from": "gas", "to": "dhw"},
+            ],
+            "cost_tracks": {"retail": [0.25]*48, "gas_flat": [0.085]*48},
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(out["number_of_deferrable_loads"], 2)
+        # Tank has both loads
+        self.assertEqual(out["shared_thermal_tanks"][0]["load_ids"], [0, 1])
+        # Draw profile passed through
+        self.assertEqual(sum(out["shared_thermal_tanks"][0]["draw_off_demand"]), 1.0)
+        # Per-source cost tracks
+        self.assertEqual(out["cost_forecast_per_deferrable_load"][0][0], 0.25)
+        self.assertEqual(out["cost_forecast_per_deferrable_load"][1][0], 0.085)
+
+    def test_actuator_group_emits_deferrable_group(self):
+        """One physical boiler serving two tanks via mutex."""
+        topo = {
+            "sources": [{"id": "g", "type": "gas", "efficiency": 0.9,
+                         "nominal_power": 25000, "min_power": 8000,
+                         "cost_track": "gas"}],
+            "storage": [
+                {"id": "dhw", "volume": 0.2, "start_temperature": 50,
+                 "min_temperature": [45]*48, "max_temperature": [60]*48,
+                 "thermal_loss": 0.05},
+                {"id": "buf", "volume": 0.1, "start_temperature": 35,
+                 "min_temperature": [25]*48, "max_temperature": [50]*48,
+                 "thermal_loss": 0.06},
+            ],
+            "flows": [
+                {"from": "g", "to": "dhw"},
+                {"from": "g", "to": "buf"},
+            ],
+            "actuator_groups": [{
+                "flows": [["g", "dhw"], ["g", "buf"]],
+                "mutual_exclusion": True,
+                "max_combined_power": 25000,
+            }],
+            "cost_tracks": {"gas": [0.085]*48},
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(len(out["deferrable_load_groups"]), 1)
+        g = out["deferrable_load_groups"][0]
+        self.assertEqual(set(g["names"]), {"deferrable0", "deferrable1"})
+        self.assertTrue(g["mutual_exclusion"])
+        self.assertEqual(g["max_power"], 25000.0)
+
+    def test_two_profile_consumers_on_same_storage_pad_to_max_length(self):
+        """When two profile consumers target the same storage with different
+        profile lengths, the merged profile must preserve the LONGER input
+        instead of silently truncating to the first profile's length."""
+        topo = {
+            "sources": [{"id": "g", "type": "gas", "efficiency": 0.9,
+                         "nominal_power": 25000, "min_power": 8000,
+                         "cost_track": "gas"}],
+            "storage": [{"id": "dhw", "volume": 0.2, "start_temperature": 50,
+                         "min_temperature": [45]*48, "max_temperature": [60]*48,
+                         "thermal_loss": 0.05}],
+            "consumers": [
+                # First profile: 24 slots
+                {"id": "morning", "type": "profile", "target": "dhw",
+                 "profile": [0.1]*24},
+                # Second profile: 48 slots - must NOT be truncated to 24.
+                {"id": "evening", "type": "profile", "target": "dhw",
+                 "profile": [0.05]*48},
+            ],
+            "flows": [{"from": "g", "to": "dhw"}],
+            "cost_tracks": {"gas": [0.085]*48},
+        }
+        out = utils.compile_heat_topology(topo)
+        merged = out["shared_thermal_tanks"][0]["draw_off_demand"]
+        self.assertEqual(len(merged), 48)
+        # First 24 slots: 0.1 + 0.05 = 0.15
+        self.assertAlmostEqual(merged[0], 0.15)
+        self.assertAlmostEqual(merged[23], 0.15)
+        # Slots 24..47: only the second profile contributes
+        self.assertAlmostEqual(merged[24], 0.05)
+        self.assertAlmostEqual(merged[47], 0.05)
+
+    def test_unknown_source_type_error_includes_id_and_index(self):
+        """The error for an unrecognised source type must include both the
+        offending source's id AND its index in topology.sources to aid
+        diagnosis when multiple sources are present."""
+        topo = {
+            "sources": [
+                {"id": "ok",  "type": "gas", "efficiency": 0.9,
+                 "nominal_power": 25000, "min_power": 8000},
+                {"id": "bad", "type": "nuclear", "efficiency": 0.99,
+                 "nominal_power": 1000000, "min_power": 10000},
+            ],
+            "storage": [{"id": "buf", "volume": 0.1, "start_temperature": 30,
+                         "min_temperature": [25]*48, "max_temperature": [50]*48,
+                         "thermal_loss": 0.05}],
+            "flows": [
+                {"from": "ok", "to": "buf"},
+                {"from": "bad", "to": "buf"},
+            ],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(topo)
+        msg = str(ctx.exception)
+        self.assertIn("'bad'", msg)
+        self.assertIn("[1]", msg)
+        self.assertIn("nuclear", msg)
+
+    def test_unknown_source_id_in_flow_raises(self):
+        topo = {
+            "sources": [{"id": "boiler", "type": "gas", "efficiency": 0.9,
+                         "nominal_power": 25000, "min_power": 8000}],
+            "storage": [{"id": "buf", "volume": 0.1, "start_temperature": 30,
+                         "min_temperature": [25]*48, "max_temperature": [50]*48,
+                         "thermal_loss": 0.05}],
+            "flows": [{"from": "WRONG", "to": "buf"}],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(topo)
+        self.assertIn("WRONG", str(ctx.exception))
+
+    def test_unknown_storage_id_in_consumer_raises(self):
+        topo = {
+            "sources": [{"id": "b", "type": "gas", "efficiency": 0.9,
+                         "nominal_power": 25000, "min_power": 8000}],
+            "storage": [{"id": "ok", "volume": 0.1, "start_temperature": 30,
+                         "min_temperature": [25]*48, "max_temperature": [50]*48,
+                         "thermal_loss": 0.05}],
+            "consumers": [{"id": "x", "type": "profile", "target": "GHOST",
+                           "profile": [0]*48}],
+            "flows": [{"from": "b", "to": "ok"}],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(topo)
+        self.assertIn("GHOST", str(ctx.exception))
+
+    def test_electric_flag_auto_default_by_source_type(self):
+        """Source type 'gas' / 'oil' / 'district' defaults electric=False;
+        type 'heatpump' / 'electric' defaults electric=True."""
+        topo = {
+            "sources": [
+                {"id": "hp",  "type": "heatpump", "supply_temperature": 55,
+                 "carnot_efficiency": 0.40, "nominal_power": 3500, "min_power": 800},
+                {"id": "gas", "type": "gas", "efficiency": 0.92,
+                 "nominal_power": 25000, "min_power": 8000},
+                {"id": "oil", "type": "oil", "efficiency": 0.88,
+                 "nominal_power": 30000, "min_power": 10000},
+                {"id": "dh",  "type": "district", "efficiency": 0.95,
+                 "nominal_power": 15000, "min_power": 5000},
+                {"id": "el",  "type": "electric", "efficiency": 1.0,
+                 "nominal_power": 2000, "min_power": 0},
+            ],
+            "storage": [{"id": "tank", "volume": 0.2, "start_temperature": 50,
+                         "min_temperature": [45]*48, "max_temperature": [62]*48,
+                         "thermal_loss": 0.05}],
+            "flows": [{"from": s, "to": "tank"} for s in ("hp", "gas", "oil", "dh", "el")],
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(
+            out["is_electric_load"],
+            [True, False, False, False, True],
+            "Expected HP/electric → True, gas/oil/district → False",
+        )
+
+    def test_electric_flag_explicit_override_wins(self):
+        """An explicit `electric: true|false` on a source overrides the type default."""
+        topo = {
+            "sources": [
+                # Gas but flagged as electric (e.g., gas-fired heat pump with
+                # large parasitic electric draw - hypothetical override case)
+                {"id": "weird", "type": "gas", "efficiency": 0.92,
+                 "nominal_power": 25000, "min_power": 8000, "electric": True},
+            ],
+            "storage": [{"id": "tank", "volume": 0.2, "start_temperature": 50,
+                         "min_temperature": [45]*48, "max_temperature": [62]*48,
+                         "thermal_loss": 0.05}],
+            "flows": [{"from": "weird", "to": "tank"}],
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(out["is_electric_load"], [True])
+
+    def test_storage_soft_comfort_fields_propagate(self):
+        """desired_temperatures + overshoot_temperature + penalty_factor + comfort_sense
+        on a storage block should flow through to the compiled shared_thermal_tank."""
+        topo = {
+            "sources": [{"id": "hp", "type": "heatpump",
+                         "supply_temperature": 35, "carnot_efficiency": 0.4,
+                         "nominal_power": 10000, "min_power": 1000}],
+            "storage": [{
+                "id": "buffer", "volume": 0.2,
+                "start_temperature": 35,
+                "min_temperature": [20]*48, "max_temperature": [55]*48,
+                "thermal_loss": 0.05,
+                "desired_temperatures": [30.0]*48,
+                "overshoot_temperature": 40.0,
+                "penalty_factor": 5.0,
+                "comfort_sense": "heat",
+            }],
+            "flows": [{"from": "hp", "to": "buffer"}],
+        }
+        out = utils.compile_heat_topology(topo)
+        tank = out["shared_thermal_tanks"][0]
+        self.assertEqual(tank["desired_temperatures"], [30.0]*48)
+        self.assertEqual(tank["overshoot_temperature"], 40.0)
+        self.assertEqual(tank["penalty_factor"], 5.0)
+        self.assertEqual(tank["sense"], "heat")
+
+    def test_storage_soft_comfort_scalar_desired_temperature(self):
+        """Scalar `desired_temperature` is accepted and stored as a float."""
+        topo = {
+            "sources": [{"id": "g", "type": "gas", "efficiency": 0.92,
+                         "nominal_power": 25000, "min_power": 4000}],
+            "storage": [{
+                "id": "buffer", "volume": 0.2,
+                "start_temperature": 35,
+                "min_temperature": [20]*48, "max_temperature": [55]*48,
+                "thermal_loss": 0.05,
+                "desired_temperature": 35.0,
+                "overshoot_temperature": 45.0,
+            }],
+            "flows": [{"from": "g", "to": "buffer"}],
+        }
+        out = utils.compile_heat_topology(topo)
+        tank = out["shared_thermal_tanks"][0]
+        self.assertEqual(tank["desired_temperatures"], 35.0)
+        self.assertEqual(tank["overshoot_temperature"], 45.0)
+
+    def test_storage_soft_comfort_omitted_does_not_add_fields(self):
+        """When no soft-comfort fields are set, nothing extra is added to the tank."""
+        topo = {
+            "sources": [{"id": "g", "type": "gas", "efficiency": 0.92,
+                         "nominal_power": 25000, "min_power": 4000}],
+            "storage": [{"id": "buffer", "volume": 0.2,
+                         "start_temperature": 35,
+                         "min_temperature": [20]*48, "max_temperature": [55]*48,
+                         "thermal_loss": 0.05}],
+            "flows": [{"from": "g", "to": "buffer"}],
+        }
+        out = utils.compile_heat_topology(topo)
+        tank = out["shared_thermal_tanks"][0]
+        self.assertNotIn("desired_temperatures", tank)
+        self.assertNotIn("overshoot_temperature", tank)
+        self.assertNotIn("penalty_factor", tank)
+        self.assertNotIn("sense", tank)
+
+    def test_storage_comfort_sense_invalid_raises(self):
+        """An invalid comfort_sense should raise ValueError."""
+        topo = {
+            "sources": [{"id": "g", "type": "gas", "efficiency": 0.92,
+                         "nominal_power": 25000, "min_power": 4000}],
+            "storage": [{"id": "buffer", "volume": 0.2,
+                         "start_temperature": 35,
+                         "min_temperature": [20]*48, "max_temperature": [55]*48,
+                         "thermal_loss": 0.05,
+                         "comfort_sense": "freeze"}],
+            "flows": [{"from": "g", "to": "buffer"}],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(topo)
+        self.assertIn("comfort_sense", str(ctx.exception))
+
+    def test_heating_curve_propagates_through_compiler(self):
+        """`heating_curve` on a heatpump source should flow through to def_load_config."""
+        topo = {
+            "sources": [{
+                "id": "hp", "type": "heatpump",
+                "heating_curve": {
+                    "slope": 1.0, "offset": 30.0,
+                    "min_supply": 28.0, "max_supply": 50.0,
+                },
+                "carnot_efficiency": 0.45,
+                "nominal_power": 10000, "min_power": 1000,
+            }],
+            "storage": [{"id": "buf", "volume": 0.2,
+                         "start_temperature": 35,
+                         "min_temperature": [25]*48, "max_temperature": [55]*48,
+                         "thermal_loss": 0.05}],
+            "flows": [{"from": "hp", "to": "buf"}],
+        }
+        out = utils.compile_heat_topology(topo)
+        ts = out["def_load_config"][0]["thermal_source"]
+        self.assertIn("heating_curve", ts)
+        self.assertEqual(ts["heating_curve"]["slope"], 1.0)
+        self.assertEqual(ts["heating_curve"]["offset"], 30.0)
+        self.assertEqual(ts["heating_curve"]["min_supply"], 28.0)
+        self.assertEqual(ts["heating_curve"]["max_supply"], 50.0)
+        # Constant supply_temperature should NOT be set when heating_curve is given
+        self.assertNotIn("supply_temperature", ts)
+        # Carnot efficiency still propagates
+        self.assertEqual(ts["carnot_efficiency"], 0.45)
+
+    def test_heating_curve_missing_required_field_raises(self):
+        """heating_curve must include slope and offset."""
+        topo = {
+            "sources": [{
+                "id": "hp", "type": "heatpump",
+                "heating_curve": {"slope": 1.0},  # missing offset
+                "nominal_power": 10000, "min_power": 1000,
+            }],
+            "storage": [{"id": "buf", "volume": 0.2, "start_temperature": 35,
+                         "min_temperature": [25]*48, "max_temperature": [55]*48,
+                         "thermal_loss": 0.05}],
+            "flows": [{"from": "hp", "to": "buf"}],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(topo)
+        self.assertIn("heating_curve", str(ctx.exception))
+        self.assertIn("offset", str(ctx.exception))
+
+    def test_heatpump_without_supply_or_curve_raises(self):
+        """A heatpump source must specify supply_temperature or heating_curve."""
+        topo = {
+            "sources": [{
+                "id": "hp", "type": "heatpump",
+                "nominal_power": 10000, "min_power": 1000,
+            }],
+            "storage": [{"id": "buf", "volume": 0.2, "start_temperature": 35,
+                         "min_temperature": [25]*48, "max_temperature": [55]*48,
+                         "thermal_loss": 0.05}],
+            "flows": [{"from": "hp", "to": "buf"}],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(topo)
+        msg = str(ctx.exception)
+        self.assertIn("supply_temperature", msg)
+        self.assertIn("heating_curve", msg)
+
+    def test_min_temperature_curve_propagates(self):
+        """min_temperature_curve on storage should flow through to the compiled tank."""
+        topo = {
+            "sources": [{"id": "hp", "type": "heatpump",
+                         "supply_temperature": 55, "carnot_efficiency": 0.4,
+                         "nominal_power": 10000, "min_power": 1000}],
+            "storage": [{
+                "id": "buf", "volume": 0.2, "start_temperature": 35,
+                "min_temperature": [20]*48, "max_temperature": [60]*48,
+                "thermal_loss": 0.06,
+                "min_temperature_curve": {
+                    "slope": 1.0, "offset": 35,
+                    "min_supply": 30, "max_supply": 55,
+                },
+            }],
+            "flows": [{"from": "hp", "to": "buf"}],
+        }
+        out = utils.compile_heat_topology(topo)
+        tank = out["shared_thermal_tanks"][0]
+        self.assertIn("min_temperature_curve", tank)
+        self.assertEqual(tank["min_temperature_curve"]["slope"], 1.0)
+        self.assertEqual(tank["min_temperature_curve"]["offset"], 35.0)
+        self.assertEqual(tank["min_temperature_curve"]["min_supply"], 30.0)
+        self.assertEqual(tank["min_temperature_curve"]["max_supply"], 55.0)
+        # Static absolute floor is still there for safety
+        self.assertEqual(tank["min_temperatures"], [20]*48)
+
+    def test_min_temperature_curve_missing_slope_raises(self):
+        """min_temperature_curve must include slope + offset."""
+        topo = {
+            "sources": [{"id": "hp", "type": "heatpump",
+                         "supply_temperature": 55,
+                         "nominal_power": 10000, "min_power": 1000}],
+            "storage": [{
+                "id": "buf", "volume": 0.2, "start_temperature": 35,
+                "min_temperature": [20]*48, "max_temperature": [60]*48,
+                "thermal_loss": 0.06,
+                "min_temperature_curve": {"offset": 35},   # missing slope
+            }],
+            "flows": [{"from": "hp", "to": "buf"}],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(topo)
+        msg = str(ctx.exception)
+        self.assertIn("min_temperature_curve", msg)
+        self.assertIn("slope", msg)
+
+    def test_constant_supply_temperature_still_works(self):
+        """Back-compat: heatpump with supply_temperature only (no curve) still compiles."""
+        topo = {
+            "sources": [{
+                "id": "hp", "type": "heatpump",
+                "supply_temperature": 55.0,
+                "carnot_efficiency": 0.4,
+                "nominal_power": 10000, "min_power": 1000,
+            }],
+            "storage": [{"id": "buf", "volume": 0.2, "start_temperature": 35,
+                         "min_temperature": [25]*48, "max_temperature": [55]*48,
+                         "thermal_loss": 0.05}],
+            "flows": [{"from": "hp", "to": "buf"}],
+        }
+        out = utils.compile_heat_topology(topo)
+        ts = out["def_load_config"][0]["thermal_source"]
+        self.assertEqual(ts["supply_temperature"], 55.0)
+        self.assertNotIn("heating_curve", ts)
+
+    def test_cost_track_not_found_raises(self):
+        topo = {
+            "sources": [{"id": "b", "type": "gas", "efficiency": 0.9,
+                         "nominal_power": 25000, "min_power": 8000,
+                         "cost_track": "missing"}],
+            "storage": [{"id": "ok", "volume": 0.1, "start_temperature": 30,
+                         "min_temperature": [25]*48, "max_temperature": [50]*48,
+                         "thermal_loss": 0.05}],
+            "flows": [{"from": "b", "to": "ok"}],
+            "cost_tracks": {"gas": [0.085]*48},
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(topo)
+        self.assertIn("missing", str(ctx.exception))
+
+
 class TestRuntimeBanner(unittest.TestCase):
     def test_log_runtime_banner_logs_info(self):
         from emhass.utils import log_runtime_banner
@@ -2395,6 +3191,7 @@ class TestRuntimeBanner(unittest.TestCase):
 
     def test_log_runtime_banner_survives_introspection_failure(self):
         import unittest.mock
+
         from emhass.utils import log_runtime_banner
 
         test_logger = logging.getLogger("emhass-test-banner-fail")
@@ -2438,6 +3235,7 @@ class TestRuntimeBanner(unittest.TestCase):
         # Covers the inner except: outer introspection AND importlib.metadata.version
         # both fail. Banner must still emit one INFO and not raise.
         import unittest.mock
+
         from emhass.utils import log_runtime_banner
 
         test_logger = logging.getLogger("emhass-test-banner-double-fail")

@@ -18,12 +18,12 @@ import orjson
 import pandas as pd
 
 from emhass import utils
-from emhass.utils import log_runtime_banner, stage_timer
 from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
 from emhass.optimization import Optimization
 from emhass.retrieve_hass import RetrieveHass
+from emhass.utils import log_runtime_banner, stage_timer
 
 default_csv_filename = "opt_res_latest.csv"
 default_pkl_suffix = "_mlf.pkl"
@@ -125,6 +125,8 @@ class OptimizationCacheKey:
     nominal_power_of_deferrable_loads: tuple
     def_load_config_structure: tuple  # (index, type) tuples for each load
     deferrable_load_groups: tuple
+    shared_thermal_tanks: tuple  # shared-tank multi-source topology structure
+    is_electric_load: tuple      # per-load electric-bus membership flag
     inverter_is_hybrid: bool
     compute_curtailment: bool
     optimization_time_step_s: float | None
@@ -230,6 +232,14 @@ class OptimizationCache:
             "end_timesteps_of_each_deferrable_load",
             "def_current_state",
             "minimum_power_of_deferrable_loads",
+            "cost_forecast_per_deferrable_load",
+            # shared_thermal_tanks has its own structural hash field above
+            "shared_thermal_tanks",
+            # heat_topology is compiled down to the structural fields which ARE
+            # part of the cache key (def_load_config_structure,
+            # deferrable_load_groups, shared_thermal_tanks). The raw
+            # heat_topology itself is excluded to avoid double-counting.
+            "heat_topology",
             # Solver options (updated on cache hit)
             "lp_solver_timeout",
             "lp_solver_mip_rel_gap",
@@ -292,6 +302,21 @@ class OptimizationCache:
                 (tuple(g.get("names", [])), g.get("max_power"), g.get("mutual_exclusion", False))
                 for g in optim_conf.get("deferrable_load_groups", [])
             ),
+            # shared_thermal_tanks change problem structure (new tank state
+            # variable + dynamics constraints), so include a structure hash.
+            shared_thermal_tanks=tuple(
+                (
+                    t.get("id", ""),
+                    tuple(int(k) for k in t.get("load_ids", [])),
+                    config_hash(
+                        {k: v for k, v in t.items() if k not in {"start_temperature", "draw_off_demand"}},
+                    ),
+                )
+                for t in optim_conf.get("shared_thermal_tanks", []) or []
+            ),
+            # is_electric_load changes p_def_sum membership, hence the electric
+            # power balance shape, hence structural.
+            is_electric_load=to_tuple(optim_conf.get("is_electric_load", [])),
             inverter_is_hybrid=plant_conf.get("inverter_is_hybrid", False),
             compute_curtailment=plant_conf.get("compute_curtailment", False),
             optimization_time_step_s=to_seconds(retrieve_hass_conf.get("optimization_time_step")),

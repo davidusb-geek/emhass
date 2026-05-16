@@ -411,6 +411,24 @@
       "input": "array.float",
       "default_value": 0.0
     },
+    "cost_forecast_per_deferrable_load": {
+      "friendly_name": "Per-load cost forecast",
+      "Description": "Optional per-deferrable-load cost forecast track (Currency/kWh) that overrides the shared load_cost_forecast for that load. Useful for hybrid heating setups where one load (gas boiler) is priced against a gas tariff while another (heat pump) is priced against electricity. Pass null/None for any load that should keep the shared tariff. Runtime parameter - not cached.",
+      "input": "array.array.float",
+      "default_value": null
+    },
+    "heat_topology": {
+      "friendly_name": "Heat topology (graph model)",
+      "Description": "Declarative directed graph of heat sources, thermal storage, consumers, and flows. When set, EMHASS compiles this into the flat optim_conf primitives (def_load_config, shared_thermal_tanks, deferrable_load_groups, cost_forecast_per_deferrable_load) automatically. Lets you express hybrid heating setups (gas + heat pump feeding the same DHW + buffer) without hand-rolling the deferrable-load indices. See docs/heat_topology.md for the schema.",
+      "input": "object",
+      "default_value": null
+    },
+    "is_electric_load": {
+      "friendly_name": "Per-load electric-bus membership",
+      "Description": "Per-deferrable-load boolean. True (default) means the load draws from the electric balance (heat pumps, electric heaters). False means the load consumes a non-electric commodity (gas, oil, district heating) and contributes only to its thermal target, not to the electric power balance. Auto-populated by the heat_topology compiler based on source type but can be overridden directly.",
+      "input": "array.boolean",
+      "default_value": true
+    },
     "operating_hours_of_each_deferrable_load": {
       "friendly_name": "Deferrable load operating hours",
       "Description": "The total number of hours that each deferrable load should operate",
