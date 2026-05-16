@@ -2722,6 +2722,51 @@ class TestCompileHeatTopology(unittest.TestCase):
             utils.compile_heat_topology(topo)
         self.assertIn("GHOST", str(ctx.exception))
 
+    def test_electric_flag_auto_default_by_source_type(self):
+        """Source type 'gas' / 'oil' / 'district' defaults electric=False;
+        type 'heatpump' / 'electric' defaults electric=True."""
+        topo = {
+            "sources": [
+                {"id": "hp",  "type": "heatpump", "supply_temperature": 55,
+                 "carnot_efficiency": 0.40, "nominal_power": 3500, "min_power": 800},
+                {"id": "gas", "type": "gas", "efficiency": 0.92,
+                 "nominal_power": 25000, "min_power": 8000},
+                {"id": "oil", "type": "oil", "efficiency": 0.88,
+                 "nominal_power": 30000, "min_power": 10000},
+                {"id": "dh",  "type": "district", "efficiency": 0.95,
+                 "nominal_power": 15000, "min_power": 5000},
+                {"id": "el",  "type": "electric", "efficiency": 1.0,
+                 "nominal_power": 2000, "min_power": 0},
+            ],
+            "storage": [{"id": "tank", "volume": 0.2, "start_temperature": 50,
+                         "min_temperature": [45]*48, "max_temperature": [62]*48,
+                         "thermal_loss": 0.05}],
+            "flows": [{"from": s, "to": "tank"} for s in ("hp", "gas", "oil", "dh", "el")],
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(
+            out["is_electric_load"],
+            [True, False, False, False, True],
+            "Expected HP/electric → True, gas/oil/district → False",
+        )
+
+    def test_electric_flag_explicit_override_wins(self):
+        """An explicit `electric: true|false` on a source overrides the type default."""
+        topo = {
+            "sources": [
+                # Gas but flagged as electric (e.g., gas-fired heat pump with
+                # large parasitic electric draw - hypothetical override case)
+                {"id": "weird", "type": "gas", "efficiency": 0.92,
+                 "nominal_power": 25000, "min_power": 8000, "electric": True},
+            ],
+            "storage": [{"id": "tank", "volume": 0.2, "start_temperature": 50,
+                         "min_temperature": [45]*48, "max_temperature": [62]*48,
+                         "thermal_loss": 0.05}],
+            "flows": [{"from": "weird", "to": "tank"}],
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(out["is_electric_load"], [True])
+
     def test_cost_track_not_found_raises(self):
         topo = {
             "sources": [{"id": "b", "type": "gas", "efficiency": 0.9,

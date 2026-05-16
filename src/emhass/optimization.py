@@ -886,10 +886,23 @@ class Optimization:
         # Curtailment variable
         vars_dict["p_pv_curtailment"] = cp.Variable(n, nonneg=True, name="p_pv_curtailment")
 
-        # Sum of deferrable loads
+        # Sum of deferrable loads ON THE ELECTRIC BUS. A load flagged with
+        # is_electric_load[k] = False (gas boiler, oil burner, district
+        # heating) provides heat to its thermal target but does NOT draw
+        # electricity from the grid - its p_deferrable is in input-power-
+        # equivalent units (gas burn rate, in W) and feeds the thermal
+        # balance only. Excluding it from p_def_sum keeps the electric
+        # balance honest (no phantom grid draw when the boiler fires).
+        is_electric = self.optim_conf.get(
+            "is_electric_load", [True] * num_deferrable_loads
+        )
         if num_deferrable_loads > 0:
-            # Create an expression for the sum
-            vars_dict["p_def_sum"] = sum(p_deferrable)
+            electric_loads = [
+                p_deferrable[k]
+                for k in range(num_deferrable_loads)
+                if k >= len(is_electric) or bool(is_electric[k])
+            ]
+            vars_dict["p_def_sum"] = sum(electric_loads) if electric_loads else np.zeros(n)
         else:
             vars_dict["p_def_sum"] = np.zeros(n)
 
@@ -998,23 +1011,40 @@ class Optimization:
                     term = -scale * penalty * nominal_power * total_startup_cost
                     objective_terms.append(term)
 
-        # Per-load cost overrides. For each deferrable load with a configured
-        # `cost_forecast_per_deferrable_load[k]` array, add an adjustment term
-        # `(per_load_cost - load_cost) * p_deferrable[k]` to the objective.
-        # Default per-load cost equals load_cost, so the adjustment is zero
-        # unless the user overrides. Applied for both 'profit' and 'cost'
-        # cost functions; for 'self-consumption' it is intentionally skipped
-        # (cost is not the objective).
+        # Per-load cost overrides. Behavior depends on whether the load is on
+        # the electric balance (`is_electric_load[k]`):
+        #
+        # - Electric load (default): the load's power already enters p_def_sum
+        #   and gets charged at unit_load_cost. Apply an ADJUSTMENT term
+        #   `(per_load_cost - load_cost) * p_deferrable[k]` so the net cost
+        #   becomes `per_load_cost * p_deferrable[k]` instead of the global
+        #   retail tariff.
+        #
+        # - Non-electric load (gas / oil / district): the load was excluded
+        #   from p_def_sum, so the base electric cost charges it nothing.
+        #   Add the DIRECT cost `per_load_cost * p_deferrable[k]` instead of
+        #   an adjustment - otherwise the (cheap_gas - retail) adjustment
+        #   becomes a subsidy that pays the optimizer to fire gas.
         if self.costfun in ("profit", "cost") and self.param_cost_per_load:
             p_deferrable = self.vars.get("p_deferrable", None)
+            is_electric = self.optim_conf.get(
+                "is_electric_load",
+                [True] * len(self.param_cost_per_load),
+            )
             if p_deferrable is not None:
                 for k, param_cost in enumerate(self.param_cost_per_load):
                     if k >= len(p_deferrable):
                         break
-                    adjustment = cp.multiply(
-                        param_cost - unit_load_cost, p_deferrable[k]
-                    )
-                    objective_terms.append(-scale * cp.sum(adjustment))
+                    k_is_electric = k >= len(is_electric) or bool(is_electric[k])
+                    if k_is_electric:
+                        # Electric load - adjust away the global tariff
+                        per_load_term = cp.multiply(
+                            param_cost - unit_load_cost, p_deferrable[k]
+                        )
+                    else:
+                        # Non-electric load - charge directly at its commodity rate
+                        per_load_term = cp.multiply(param_cost, p_deferrable[k])
+                    objective_terms.append(-scale * cp.sum(per_load_term))
 
         # Stress Costs
         # These variables represent a cost to be minimized.

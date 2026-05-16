@@ -126,6 +126,7 @@ class OptimizationCacheKey:
     def_load_config_structure: tuple  # (index, type) tuples for each load
     deferrable_load_groups: tuple
     shared_thermal_tanks: tuple  # shared-tank multi-source topology structure
+    is_electric_load: tuple      # per-load electric-bus membership flag
     inverter_is_hybrid: bool
     compute_curtailment: bool
     optimization_time_step_s: float | None
@@ -313,6 +314,9 @@ class OptimizationCache:
                 )
                 for t in optim_conf.get("shared_thermal_tanks", []) or []
             ),
+            # is_electric_load changes p_def_sum membership, hence the electric
+            # power balance shape, hence structural.
+            is_electric_load=to_tuple(optim_conf.get("is_electric_load", [])),
             inverter_is_hybrid=plant_conf.get("inverter_is_hybrid", False),
             compute_curtailment=plant_conf.get("compute_curtailment", False),
             optimization_time_step_s=to_seconds(retrieve_hass_conf.get("optimization_time_step")),
