@@ -2549,6 +2549,195 @@ class TestCalculateSurfaceSolarGain(unittest.TestCase):
         np.testing.assert_array_almost_equal(result, np.zeros(2))
 
 
+class TestCompileHeatTopology(unittest.TestCase):
+    """Tests for the graph -> primitives compiler."""
+
+    def test_minimal_single_source_single_storage(self):
+        topo = {
+            "sources": [{"id": "boiler", "type": "gas", "efficiency": 0.92,
+                         "nominal_power": 25000, "min_power": 8000,
+                         "cost_track": "gas"}],
+            "storage": [{"id": "buf", "volume": 0.05, "start_temperature": 35,
+                         "min_temperature": [25]*48, "max_temperature": [50]*48,
+                         "thermal_loss": 0.06}],
+            "flows": [{"from": "boiler", "to": "buf"}],
+            "cost_tracks": {"gas": [0.085]*48},
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(out["number_of_deferrable_loads"], 1)
+        self.assertEqual(out["nominal_power_of_deferrable_loads"], [25000.0])
+        self.assertEqual(out["minimum_power_of_deferrable_loads"], [8000.0])
+        self.assertEqual(out["def_load_config"][0]["thermal_source"]["efficiency"], 0.92)
+        self.assertEqual(out["shared_thermal_tanks"][0]["id"], "buf")
+        self.assertEqual(out["shared_thermal_tanks"][0]["load_ids"], [0])
+        self.assertEqual(out["cost_forecast_per_deferrable_load"][0], [0.085]*48)
+
+    def test_two_sources_one_storage(self):
+        """HP + gas both feed the same DHW tank."""
+        topo = {
+            "sources": [
+                {"id": "hp", "type": "heatpump", "supply_temperature": 55,
+                 "carnot_efficiency": 0.40, "nominal_power": 3500,
+                 "min_power": 800, "cost_track": "retail"},
+                {"id": "gas", "type": "gas", "efficiency": 0.92,
+                 "nominal_power": 25000, "min_power": 8000,
+                 "cost_track": "gas_flat"},
+            ],
+            "storage": [{"id": "dhw", "volume": 0.20, "start_temperature": 51,
+                         "min_temperature": [48]*48, "max_temperature": [62]*48,
+                         "thermal_loss": 0.05}],
+            "consumers": [{"id": "drw", "type": "profile", "target": "dhw",
+                           "profile": [0]*14 + [1.0] + [0]*33}],
+            "flows": [
+                {"from": "hp", "to": "dhw"},
+                {"from": "gas", "to": "dhw"},
+            ],
+            "cost_tracks": {"retail": [0.25]*48, "gas_flat": [0.085]*48},
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(out["number_of_deferrable_loads"], 2)
+        # Tank has both loads
+        self.assertEqual(out["shared_thermal_tanks"][0]["load_ids"], [0, 1])
+        # Draw profile passed through
+        self.assertEqual(sum(out["shared_thermal_tanks"][0]["draw_off_demand"]), 1.0)
+        # Per-source cost tracks
+        self.assertEqual(out["cost_forecast_per_deferrable_load"][0][0], 0.25)
+        self.assertEqual(out["cost_forecast_per_deferrable_load"][1][0], 0.085)
+
+    def test_actuator_group_emits_deferrable_group(self):
+        """One physical boiler serving two tanks via mutex."""
+        topo = {
+            "sources": [{"id": "g", "type": "gas", "efficiency": 0.9,
+                         "nominal_power": 25000, "min_power": 8000,
+                         "cost_track": "gas"}],
+            "storage": [
+                {"id": "dhw", "volume": 0.2, "start_temperature": 50,
+                 "min_temperature": [45]*48, "max_temperature": [60]*48,
+                 "thermal_loss": 0.05},
+                {"id": "buf", "volume": 0.1, "start_temperature": 35,
+                 "min_temperature": [25]*48, "max_temperature": [50]*48,
+                 "thermal_loss": 0.06},
+            ],
+            "flows": [
+                {"from": "g", "to": "dhw"},
+                {"from": "g", "to": "buf"},
+            ],
+            "actuator_groups": [{
+                "flows": [["g", "dhw"], ["g", "buf"]],
+                "mutual_exclusion": True,
+                "max_combined_power": 25000,
+            }],
+            "cost_tracks": {"gas": [0.085]*48},
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(len(out["deferrable_load_groups"]), 1)
+        g = out["deferrable_load_groups"][0]
+        self.assertEqual(set(g["names"]), {"deferrable0", "deferrable1"})
+        self.assertTrue(g["mutual_exclusion"])
+        self.assertEqual(g["max_power"], 25000.0)
+
+    def test_two_profile_consumers_on_same_storage_pad_to_max_length(self):
+        """When two profile consumers target the same storage with different
+        profile lengths, the merged profile must preserve the LONGER input
+        instead of silently truncating to the first profile's length."""
+        topo = {
+            "sources": [{"id": "g", "type": "gas", "efficiency": 0.9,
+                         "nominal_power": 25000, "min_power": 8000,
+                         "cost_track": "gas"}],
+            "storage": [{"id": "dhw", "volume": 0.2, "start_temperature": 50,
+                         "min_temperature": [45]*48, "max_temperature": [60]*48,
+                         "thermal_loss": 0.05}],
+            "consumers": [
+                # First profile: 24 slots
+                {"id": "morning", "type": "profile", "target": "dhw",
+                 "profile": [0.1]*24},
+                # Second profile: 48 slots - must NOT be truncated to 24.
+                {"id": "evening", "type": "profile", "target": "dhw",
+                 "profile": [0.05]*48},
+            ],
+            "flows": [{"from": "g", "to": "dhw"}],
+            "cost_tracks": {"gas": [0.085]*48},
+        }
+        out = utils.compile_heat_topology(topo)
+        merged = out["shared_thermal_tanks"][0]["draw_off_demand"]
+        self.assertEqual(len(merged), 48)
+        # First 24 slots: 0.1 + 0.05 = 0.15
+        self.assertAlmostEqual(merged[0], 0.15)
+        self.assertAlmostEqual(merged[23], 0.15)
+        # Slots 24..47: only the second profile contributes
+        self.assertAlmostEqual(merged[24], 0.05)
+        self.assertAlmostEqual(merged[47], 0.05)
+
+    def test_unknown_source_type_error_includes_id_and_index(self):
+        """The error for an unrecognised source type must include both the
+        offending source's id AND its index in topology.sources to aid
+        diagnosis when multiple sources are present."""
+        topo = {
+            "sources": [
+                {"id": "ok",  "type": "gas", "efficiency": 0.9,
+                 "nominal_power": 25000, "min_power": 8000},
+                {"id": "bad", "type": "nuclear", "efficiency": 0.99,
+                 "nominal_power": 1000000, "min_power": 10000},
+            ],
+            "storage": [{"id": "buf", "volume": 0.1, "start_temperature": 30,
+                         "min_temperature": [25]*48, "max_temperature": [50]*48,
+                         "thermal_loss": 0.05}],
+            "flows": [
+                {"from": "ok", "to": "buf"},
+                {"from": "bad", "to": "buf"},
+            ],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(topo)
+        msg = str(ctx.exception)
+        self.assertIn("'bad'", msg)
+        self.assertIn("[1]", msg)
+        self.assertIn("nuclear", msg)
+
+    def test_unknown_source_id_in_flow_raises(self):
+        topo = {
+            "sources": [{"id": "boiler", "type": "gas", "efficiency": 0.9,
+                         "nominal_power": 25000, "min_power": 8000}],
+            "storage": [{"id": "buf", "volume": 0.1, "start_temperature": 30,
+                         "min_temperature": [25]*48, "max_temperature": [50]*48,
+                         "thermal_loss": 0.05}],
+            "flows": [{"from": "WRONG", "to": "buf"}],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(topo)
+        self.assertIn("WRONG", str(ctx.exception))
+
+    def test_unknown_storage_id_in_consumer_raises(self):
+        topo = {
+            "sources": [{"id": "b", "type": "gas", "efficiency": 0.9,
+                         "nominal_power": 25000, "min_power": 8000}],
+            "storage": [{"id": "ok", "volume": 0.1, "start_temperature": 30,
+                         "min_temperature": [25]*48, "max_temperature": [50]*48,
+                         "thermal_loss": 0.05}],
+            "consumers": [{"id": "x", "type": "profile", "target": "GHOST",
+                           "profile": [0]*48}],
+            "flows": [{"from": "b", "to": "ok"}],
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(topo)
+        self.assertIn("GHOST", str(ctx.exception))
+
+    def test_cost_track_not_found_raises(self):
+        topo = {
+            "sources": [{"id": "b", "type": "gas", "efficiency": 0.9,
+                         "nominal_power": 25000, "min_power": 8000,
+                         "cost_track": "missing"}],
+            "storage": [{"id": "ok", "volume": 0.1, "start_temperature": 30,
+                         "min_temperature": [25]*48, "max_temperature": [50]*48,
+                         "thermal_loss": 0.05}],
+            "flows": [{"from": "b", "to": "ok"}],
+            "cost_tracks": {"gas": [0.085]*48},
+        }
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(topo)
+        self.assertIn("missing", str(ctx.exception))
+
+
 class TestRuntimeBanner(unittest.TestCase):
     def test_log_runtime_banner_logs_info(self):
         from emhass.utils import log_runtime_banner
