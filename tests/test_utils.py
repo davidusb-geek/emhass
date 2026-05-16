@@ -2378,6 +2378,177 @@ class TestHeatingDemand(unittest.TestCase):
         self.assertAlmostEqual(loss_manual_warm, -base_loss, places=6)
 
 
+class TestResolveThermalBatteryCop(unittest.TestCase):
+    """Tests for the dispatch helper that picks between Carnot COP and flat efficiency."""
+
+    def test_efficiency_mode_returns_flat_array(self):
+        """When 'efficiency' is set, return a flat conversion-factor array."""
+        hc = {"efficiency": 0.9}
+        outdoor = np.array([0.0, 5.0, 10.0, 15.0])
+        cops = utils.resolve_thermal_battery_cop(hc, outdoor, length=4)
+        np.testing.assert_array_almost_equal(cops, np.full(4, 0.9))
+
+    def test_efficiency_mode_ignores_outdoor_temperature(self):
+        """Flat efficiency does not vary with outdoor temperature."""
+        hc = {"efficiency": 0.85}
+        hot = utils.resolve_thermal_battery_cop(hc, np.array([20.0] * 6), length=6)
+        cold = utils.resolve_thermal_battery_cop(hc, np.array([-15.0] * 6), length=6)
+        np.testing.assert_array_almost_equal(hot, cold)
+        self.assertTrue(np.all(hot == 0.85))
+
+    def test_efficiency_mode_does_not_require_supply_temperature(self):
+        """Constant-efficiency mode works without a supply_temperature field."""
+        hc = {"efficiency": 0.9}  # no supply_temperature, no carnot_efficiency
+        cops = utils.resolve_thermal_battery_cop(hc, np.array([5.0, 5.0]), length=2)
+        np.testing.assert_array_almost_equal(cops, np.array([0.9, 0.9]))
+
+    def test_heatpump_mode_falls_back_to_carnot(self):
+        """When 'efficiency' is not set, fall back to the existing Carnot COP."""
+        hc = {"supply_temperature": 35.0, "carnot_efficiency": 0.4}
+        outdoor = np.array([5.0])
+        cops = utils.resolve_thermal_battery_cop(hc, outdoor, length=1)
+        expected = utils.calculate_cop_heatpump(35.0, 0.4, outdoor)
+        np.testing.assert_array_almost_equal(cops, expected)
+
+    def test_heatpump_mode_default_carnot_efficiency(self):
+        """carnot_efficiency defaults to 0.4 when not set."""
+        hc_explicit = {"supply_temperature": 35.0, "carnot_efficiency": 0.4}
+        hc_implicit = {"supply_temperature": 35.0}
+        outdoor = np.array([0.0, 5.0, 10.0])
+        cops_explicit = utils.resolve_thermal_battery_cop(hc_explicit, outdoor, length=3)
+        cops_implicit = utils.resolve_thermal_battery_cop(hc_implicit, outdoor, length=3)
+        np.testing.assert_array_almost_equal(cops_explicit, cops_implicit)
+
+    def test_missing_both_efficiency_and_supply_temperature_raises(self):
+        """At least one of efficiency or supply_temperature must be set."""
+        hc = {"carnot_efficiency": 0.4}
+        outdoor = np.array([5.0])
+        with self.assertRaises(ValueError) as ctx:
+            utils.resolve_thermal_battery_cop(hc, outdoor, length=1)
+        self.assertIn("efficiency", str(ctx.exception))
+        self.assertIn("supply_temperature", str(ctx.exception))
+
+    def test_nonpositive_efficiency_raises(self):
+        """efficiency must be strictly positive."""
+        for bad in (0.0, -0.5):
+            hc = {"efficiency": bad}
+            with self.assertRaises(ValueError) as ctx:
+                utils.resolve_thermal_battery_cop(hc, np.array([5.0]), length=1)
+            self.assertIn("positive", str(ctx.exception))
+
+    def test_length_truncation_in_heatpump_mode(self):
+        """When `length` is given, the returned array is truncated."""
+        hc = {"supply_temperature": 35.0}
+        outdoor = np.array([0.0, 5.0, 10.0, 15.0, 20.0])
+        cops = utils.resolve_thermal_battery_cop(hc, outdoor, length=3)
+        self.assertEqual(len(cops), 3)
+
+    def test_length_none_returns_full_forecast(self):
+        """When `length` is None, return the full forecast length."""
+        hc = {"supply_temperature": 35.0}
+        outdoor = np.array([0.0, 5.0, 10.0])
+        cops = utils.resolve_thermal_battery_cop(hc, outdoor, length=None)
+        self.assertEqual(len(cops), 3)
+
+    def test_efficiency_mode_accepts_outdoor_none_when_length_given(self):
+        """Constant-efficiency mode ignores outdoor; passing None is allowed
+        when `length` is supplied explicitly."""
+        hc = {"efficiency": 0.9}
+        cops = utils.resolve_thermal_battery_cop(hc, None, length=4)
+        np.testing.assert_array_almost_equal(cops, np.full(4, 0.9))
+
+    def test_efficiency_mode_outdoor_none_without_length_raises(self):
+        """Constant-efficiency mode with outdoor=None and length=None is
+        ambiguous and raises with a clear message."""
+        hc = {"efficiency": 0.9}
+        with self.assertRaises(ValueError) as ctx:
+            utils.resolve_thermal_battery_cop(hc, None, length=None)
+        self.assertIn("length", str(ctx.exception))
+
+    def test_heatpump_mode_outdoor_none_raises(self):
+        """Heat-pump mode requires outdoor temperature; None must raise."""
+        hc = {"supply_temperature": 35.0}
+        with self.assertRaises(ValueError) as ctx:
+            utils.resolve_thermal_battery_cop(hc, None, length=3)
+        self.assertIn("outdoor_temperature_forecast", str(ctx.exception))
+
+
+class TestCalculateSurfaceSolarGain(unittest.TestCase):
+    """Tests for the pool/outdoor-thermal-mass solar absorption helper."""
+
+    def test_returns_none_when_absorption_area_unset(self):
+        hc = {}  # no solar_absorption_area
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([500.0, 600.0]), optimization_time_step_minutes=30, length=2
+        )
+        self.assertIsNone(result)
+
+    def test_returns_none_when_absorption_area_zero(self):
+        hc = {"solar_absorption_area": 0.0}
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([500.0]), optimization_time_step_minutes=30, length=1
+        )
+        self.assertIsNone(result)
+
+    def test_returns_none_when_ghi_forecast_none(self):
+        hc = {"solar_absorption_area": 30.0}
+        result = utils.calculate_surface_solar_gain(
+            hc, None, optimization_time_step_minutes=30, length=4
+        )
+        self.assertIsNone(result)
+
+    def test_computes_expected_gain(self):
+        """100 W/m² over 30 min on a 30 m² pool at 0.7 absorption =
+        100 * 30 * 0.7 / 1000 * 0.5 = 1.05 kWh per timestep."""
+        hc = {"solar_absorption_area": 30.0, "solar_absorption_factor": 0.7}
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([100.0, 200.0]), optimization_time_step_minutes=30, length=2
+        )
+        np.testing.assert_array_almost_equal(result, np.array([1.05, 2.10]))
+
+    def test_default_absorption_factor_is_0_7(self):
+        hc = {"solar_absorption_area": 30.0}
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([1000.0]), optimization_time_step_minutes=60, length=1
+        )
+        # 1000 * 30 * 0.7 / 1000 * 1 = 21 kWh
+        np.testing.assert_array_almost_equal(result, np.array([21.0]))
+
+    def test_length_pads_with_zero(self):
+        """When ghi is shorter than length, pad with zeros (no solar at night)."""
+        hc = {"solar_absorption_area": 10.0, "solar_absorption_factor": 0.5}
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([200.0]), optimization_time_step_minutes=60, length=3
+        )
+        # First slot: 200*10*0.5/1000*1 = 1.0 kWh; remaining padded to zero
+        np.testing.assert_array_almost_equal(result, np.array([1.0, 0.0, 0.0]))
+
+    def test_length_truncates_excess(self):
+        hc = {"solar_absorption_area": 10.0, "solar_absorption_factor": 1.0}
+        ghi = np.array([100.0, 200.0, 300.0, 400.0, 500.0])
+        result = utils.calculate_surface_solar_gain(
+            hc, ghi, optimization_time_step_minutes=60, length=2
+        )
+        self.assertEqual(len(result), 2)
+        np.testing.assert_array_almost_equal(result, np.array([1.0, 2.0]))
+
+    def test_negative_absorption_factor_raises(self):
+        hc = {"solar_absorption_area": 10.0, "solar_absorption_factor": -0.1}
+        with self.assertRaises(ValueError) as ctx:
+            utils.calculate_surface_solar_gain(
+                hc, np.array([100.0]), optimization_time_step_minutes=60, length=1
+            )
+        self.assertIn(">= 0", str(ctx.exception))
+
+    def test_zero_absorption_factor_returns_zero_array(self):
+        """A fully-covered pool (factor=0) absorbs nothing."""
+        hc = {"solar_absorption_area": 30.0, "solar_absorption_factor": 0.0}
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([500.0, 600.0]), optimization_time_step_minutes=30, length=2
+        )
+        np.testing.assert_array_almost_equal(result, np.zeros(2))
+
+
 class TestRuntimeBanner(unittest.TestCase):
     def test_log_runtime_banner_logs_info(self):
         from emhass.utils import log_runtime_banner

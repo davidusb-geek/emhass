@@ -230,6 +230,7 @@ class OptimizationCache:
             "end_timesteps_of_each_deferrable_load",
             "def_current_state",
             "minimum_power_of_deferrable_loads",
+            "cost_forecast_per_deferrable_load",
             # Solver options (updated on cache hit)
             "lp_solver_timeout",
             "lp_solver_mip_rel_gap",

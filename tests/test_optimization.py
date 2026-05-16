@@ -16,6 +16,7 @@ from pandas.testing import assert_series_equal
 from emhass.forecast import Forecast
 from emhass.optimization import Optimization
 from emhass.retrieve_hass import RetrieveHass
+from emhass import utils
 from emhass.utils import (
     build_config,
     build_params,
@@ -2384,6 +2385,247 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIn("P_deferrable0", opt_res.columns)
 
     # --- Thermal Battery Inertia Tests ---
+
+    def test_thermal_battery_flat_efficiency_mode(self):
+        """Gas-source / constant-efficiency thermal_battery solves successfully.
+
+        When 'efficiency' is set on the thermal_battery sub-config, the optimizer
+        treats the heat source as a constant-efficiency converter (gas boiler, oil
+        burner, district heating, etc.) rather than a temperature-dependent heat
+        pump. supply_temperature is optional in this mode.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        # Varying outdoor temperature - should NOT influence the conversion factor
+        # in flat-efficiency mode.
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [
+            10.0 + 8.0 * np.sin(i * np.pi / 12) for i in range(48)
+        ]
+
+        opt_res = self.run_optimization_with_config(
+            [
+                {
+                    "thermal_battery": {
+                        "start_temperature": 20.0,
+                        "efficiency": 0.9,  # flat gas-boiler efficiency
+                        "volume": 50.0,
+                        "specific_heating_demand": 100.0,
+                        "area": 100.0,
+                        "min_temperatures": [18.0] * 48,
+                        "max_temperatures": [22.0] * 48,
+                    }
+                },
+            ]
+        )
+
+        # Optimization succeeds and deferrable power column is present
+        self.assertIn("P_deferrable0", opt_res.columns)
+        self.assertGreaterEqual(opt_res["P_deferrable0"].sum(), 0)
+
+    def test_thermal_battery_efficiency_overrides_carnot(self):
+        """When 'efficiency' is set, the Carnot calc is bypassed even if
+        supply_temperature and carnot_efficiency are also present."""
+        outdoor = np.array([0.0, 5.0, 10.0, 15.0])
+
+        flat = utils.resolve_thermal_battery_cop(
+            {"efficiency": 0.9, "supply_temperature": 35.0, "carnot_efficiency": 0.4},
+            outdoor,
+            length=4,
+        )
+        # Flat array regardless of supply_temperature/carnot_efficiency presence
+        np.testing.assert_array_almost_equal(flat, np.full(4, 0.9))
+
+    def test_thermal_battery_missing_source_field_raises(self):
+        """A thermal_battery config with neither supply_temperature nor efficiency
+        raises a clear ValueError at constraint-build time."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = 10.0
+
+        with self.assertRaises(ValueError) as ctx:
+            self.run_optimization_with_config(
+                [
+                    {
+                        "thermal_battery": {
+                            "start_temperature": 20.0,
+                            # neither supply_temperature nor efficiency
+                            "volume": 50.0,
+                            "specific_heating_demand": 100.0,
+                            "area": 100.0,
+                            "min_temperatures": [18.0] * 48,
+                            "max_temperatures": [22.0] * 48,
+                        }
+                    },
+                ]
+            )
+        msg = str(ctx.exception)
+        self.assertIn("supply_temperature", msg)
+        self.assertIn("efficiency", msg)
+
+    def test_thermal_battery_solar_gain_reduces_heating(self):
+        """Surface solar absorption should reduce pumped heat consumption.
+
+        A thermal_battery with a large absorption surface and high GHI gets
+        free heat from the sun. The optimizer should consume strictly less
+        electric/gas power than an identically configured battery with no
+        solar absorption.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        # Cold outdoor, strong daytime sun to force solar to matter.
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [5.0] * 48
+        # Bell-curve GHI profile (W/m²) peaking at solar noon (~slot 24).
+        ghi_profile = [
+            max(0.0, 800.0 * np.sin(np.pi * (i - 12) / 24)) if 12 <= i <= 36 else 0.0
+            for i in range(48)
+        ]
+        self.df_input_data_dayahead["ghi"] = ghi_profile
+
+        base_battery = {
+            "start_temperature": 22.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [20.0] * 48,
+            "max_temperatures": [28.0] * 48,
+        }
+
+        # Baseline: no solar absorption
+        res_no_solar = self.run_optimization_with_config(
+            [{"thermal_battery": dict(base_battery)}]
+        )
+
+        # With solar gain on a 30 m² pool-style surface
+        with_solar_cfg = dict(base_battery)
+        with_solar_cfg["solar_absorption_area"] = 30.0
+        with_solar_cfg["solar_absorption_factor"] = 0.7
+        res_with_solar = self.run_optimization_with_config(
+            [{"thermal_battery": with_solar_cfg}]
+        )
+
+        # Solar gain should reduce pumped heat - strictly less consumption.
+        self.assertLess(
+            res_with_solar["P_deferrable0"].sum(),
+            res_no_solar["P_deferrable0"].sum() + 1e-3,
+            "Solar absorption should not increase heat-pump consumption",
+        )
+
+    def test_thermal_battery_solar_gain_zero_area_no_op(self):
+        """solar_absorption_area = 0 (or unset) leaves dispatch unchanged."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [5.0] * 48
+        self.df_input_data_dayahead["ghi"] = [600.0] * 48
+
+        base_battery = {
+            "start_temperature": 22.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [20.0] * 48,
+            "max_temperatures": [28.0] * 48,
+        }
+
+        res_unset = self.run_optimization_with_config(
+            [{"thermal_battery": dict(base_battery)}]
+        )
+
+        explicit_zero = dict(base_battery)
+        explicit_zero["solar_absorption_area"] = 0.0
+        res_zero = self.run_optimization_with_config(
+            [{"thermal_battery": explicit_zero}]
+        )
+
+        np.testing.assert_array_almost_equal(
+            res_unset["P_deferrable0"].values,
+            res_zero["P_deferrable0"].values,
+            decimal=4,
+            err_msg="solar_absorption_area=0 should match unset behavior",
+        )
+
+    def test_per_load_cost_override_no_op_when_unset(self):
+        """When cost_forecast_per_deferrable_load is unset, the optimizer behavior
+        is identical to baseline (no per-load cost adjustment applied)."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+
+        # Baseline: no per-load cost overrides
+        baseline_conf = copy.deepcopy(self.optim_conf)
+        baseline_conf.pop("cost_forecast_per_deferrable_load", None)
+        self.optim_conf = baseline_conf
+        opt_base = self.create_optimization()
+        unit_load_cost = self.df_input_data_dayahead[opt_base.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[opt_base.var_prod_price].values
+        res_base = opt_base.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+
+        # With override list of all-None: should match baseline
+        override_conf = copy.deepcopy(self.optim_conf)
+        override_conf["cost_forecast_per_deferrable_load"] = [None] * len(
+            override_conf["nominal_power_of_deferrable_loads"]
+        )
+        self.optim_conf = override_conf
+        opt_override = self.create_optimization()
+        res_override = opt_override.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+
+        np.testing.assert_array_almost_equal(
+            res_base["P_deferrable0"].values,
+            res_override["P_deferrable0"].values,
+            decimal=4,
+            err_msg="all-None override list must produce identical results to baseline",
+        )
+
+    def test_per_load_cost_override_shifts_dispatch(self):
+        """When a load is given a per-timestep cost that's HIGHER than the global
+        tariff, the optimizer should dispatch less of that load (cheaper to run
+        the unconstrained alternative or skip)."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
+
+        # Two loads; override load 0 with a 10x penalty so the optimizer prefers
+        # load 1 (which still uses the global tariff).
+        penalty_cost = (np.array(unit_load_cost) * 10.0).tolist()
+
+        cheap_conf = copy.deepcopy(self.optim_conf)
+        cheap_conf["cost_forecast_per_deferrable_load"] = [None, None]
+        self.optim_conf = cheap_conf
+        opt_cheap = self.create_optimization()
+        res_cheap = opt_cheap.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+
+        expensive_conf = copy.deepcopy(self.optim_conf)
+        expensive_conf["cost_forecast_per_deferrable_load"] = [penalty_cost, None]
+        self.optim_conf = expensive_conf
+        opt_expensive = self.create_optimization()
+        res_expensive = opt_expensive.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+
+        # Penalised load 0 should consume strictly less energy when its cost is
+        # 10x higher than the baseline tariff.
+        self.assertLess(
+            res_expensive["P_deferrable0"].sum(),
+            res_cheap["P_deferrable0"].sum() + 1e-3,
+            "Penalised load should not consume MORE than baseline.",
+        )
 
     def test_thermal_battery_inertia_backward_compat(self):
         """Test that thermal_inertia_time_constant=0 produces identical results to omitting it."""

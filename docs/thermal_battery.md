@@ -68,6 +68,39 @@ These parameters define the basic thermal battery system:
     * Example: `0.42`
     * See the calibration section below for how to determine this
 
+### Surface solar gain (pool, outdoor tank, solar-thermal)
+
+When the thermal mass is directly exposed to sunlight - a pool, an uncovered outdoor buffer tank, or a thermal store fed by a flat-plate solar-thermal panel - the surface absorbs solar radiation and reduces the heating demand seen by the pump or boiler. EMHASS models this absorption as a negative term on the residual heating demand. Set two optional `thermal_battery` fields to enable it:
+
+* **solar_absorption_area**: Effective horizontal absorption surface in m². Defaults to unset (no solar gain term). Set this to the pool surface area, the exposed top of an outdoor tank, or the solar-thermal collector aperture.
+    * Example pool: `32.0` for a 4×8 m pool
+
+* **solar_absorption_factor**: Fraction of global horizontal irradiance (GHI) absorbed by the thermal mass (default: 0.7).
+    * Uncovered pool: 0.7-0.9 (water absorbs IR strongly)
+    * Covered pool / solar cover: 0.2-0.4
+    * Insulated tank cover: 0.0-0.1
+    * Flat-plate selective absorber: 0.85-0.95
+
+EMHASS reuses the GHI forecast already fetched for PV - no second weather API call. The per-timestep gain is `ghi[t] * area * factor / 1000 * dt_hours` (kWh) and is subtracted from the heating demand before the optimizer dispatches the heat source.
+
+Seasonal toggle: to stop heating the pool entirely (winter shutdown), either set the pool deferrable load's `nominal_power_of_deferrable_loads[k]` to 0 in optim_conf, or omit the load from `def_load_config` for the off-season config snapshot. The solar-gain term has no effect when the pool load is inactive.
+
+### Constant-efficiency mode (gas boiler, oil burner, district heating)
+
+The default thermal battery model uses a Carnot-based COP that varies with outdoor temperature - appropriate for heat pumps. Non-electric heat sources (gas boilers, oil burners, district heating) convert input power to heat at a roughly constant efficiency that does not depend on outdoor temperature. For these sources, set the `efficiency` parameter:
+
+* **efficiency**: Optional constant energy-conversion factor (output thermal kW / input kW). When set, EMHASS skips the Carnot COP calculation and uses this flat value for every timestep. `supply_temperature` and `carnot_efficiency` become optional in this mode.
+    * Typical values:
+        * Modern condensing gas boiler: 0.90-0.95
+        * Standard gas boiler: 0.85-0.90
+        * Oil burner: 0.80-0.90
+        * District heating substation: 0.95-0.98
+        * Direct electric heater: 1.0
+    * Example: `0.9` for a condensing gas boiler
+    * When both `efficiency` and heat-pump fields are present, `efficiency` takes precedence.
+
+Configure one `thermal_battery` per source-target pair to model hybrid systems. For example, a gas boiler serving both a heating buffer and a DHW tank is two `def_load_config` entries (one per target), grouped via `deferrable_load_groups` with `mutual_exclusion: true` and `max_power` equal to the boiler's modulating maximum if the two targets share the same physical actuator.
+
 ### Heating demand calculation
 
 EMHASS needs to know how much heat your building requires. There are two methods to calculate this, and EMHASS automatically selects the appropriate method based on which parameters you provide.

@@ -141,6 +141,19 @@ class Optimization:
         self.param_load_cost = cp.Parameter(self.num_timesteps, name="load_cost")
         self.param_prod_price = cp.Parameter(self.num_timesteps, name="prod_price")
 
+        # Per-deferrable-load cost override parameters. When the user supplies a
+        # `cost_forecast_per_deferrable_load[k]` array, that load is priced at its
+        # own per-timestep rate (e.g., gas price for a gas-boiler load) instead of
+        # the shared electricity tariff. The objective adds an adjustment term
+        # `(per_load_cost - load_cost) * p_deferrable[k]` per load. Default values
+        # equal `load_cost` for every timestep, making the adjustment a no-op
+        # unless the user explicitly overrides.
+        num_def_loads = self.optim_conf.get("number_of_deferrable_loads", 0)
+        self.param_cost_per_load = [
+            cp.Parameter(self.num_timesteps, name=f"cost_per_load_{k}")
+            for k in range(num_def_loads)
+        ]
+
         # Scalar Parameters
         self.param_soc_init = cp.Parameter(nonneg=True, name="soc_init")
         self.param_soc_final = cp.Parameter(nonneg=True, name="soc_final")
@@ -571,19 +584,17 @@ class Optimization:
                     )
 
                 # Compute derived arrays
-                supply_temperature = hc["supply_temperature"]
                 indoor_target_temp = hc.get(
                     "indoor_target_temperature",
                     min_temps[0] if min_temps else 20.0,
                 )
 
-                # Heatpump COPs
-                heatpump_cops = utils.calculate_cop_heatpump(
-                    supply_temperature=supply_temperature,
-                    carnot_efficiency=hc.get("carnot_efficiency", 0.4),
-                    outdoor_temperature_forecast=outdoor_temp.tolist(),
+                # Conversion factors per timestep (Carnot COP for heat pumps,
+                # flat value for constant-efficiency sources like gas boilers).
+                heatpump_cops = utils.resolve_thermal_battery_cop(
+                    hc, outdoor_temp, length=n
                 )
-                params["heatpump_cops"].value = np.array(heatpump_cops[:n])
+                params["heatpump_cops"].value = np.array(heatpump_cops)
 
                 # Thermal losses and heating demand
                 base_loss = hc.get("thermal_loss", 0.045)
@@ -986,6 +997,24 @@ class Optimization:
 
                     term = -scale * penalty * nominal_power * total_startup_cost
                     objective_terms.append(term)
+
+        # Per-load cost overrides. For each deferrable load with a configured
+        # `cost_forecast_per_deferrable_load[k]` array, add an adjustment term
+        # `(per_load_cost - load_cost) * p_deferrable[k]` to the objective.
+        # Default per-load cost equals load_cost, so the adjustment is zero
+        # unless the user overrides. Applied for both 'profit' and 'cost'
+        # cost functions; for 'self-consumption' it is intentionally skipped
+        # (cost is not the objective).
+        if self.costfun in ("profit", "cost") and self.param_cost_per_load:
+            p_deferrable = self.vars.get("p_deferrable", None)
+            if p_deferrable is not None:
+                for k, param_cost in enumerate(self.param_cost_per_load):
+                    if k >= len(p_deferrable):
+                        break
+                    adjustment = cp.multiply(
+                        param_cost - unit_load_cost, p_deferrable[k]
+                    )
+                    objective_terms.append(-scale * cp.sum(adjustment))
 
         # Stress Costs
         # These variables represent a cost to be minimized.
@@ -1508,6 +1537,27 @@ class Optimization:
             return demand_arr, loss_arr
         return None
 
+    def _apply_surface_solar_gain(self, hc, data_opt, heating_demand, required_len):
+        """Subtract surface solar gain from `heating_demand` when configured.
+
+        Single source of truth used by both the parameterized and fallback
+        paths of `_add_thermal_battery_constraints`. No-op when
+        `solar_absorption_area` is unset on `hc` or when `heating_demand` is
+        None.
+        """
+        if heating_demand is None:
+            return heating_demand
+        ghi_arr = data_opt["ghi"].values if "ghi" in data_opt.columns else None
+        solar_gain = utils.calculate_surface_solar_gain(
+            hc,
+            ghi_arr,
+            optimization_time_step_minutes=int(self.freq.total_seconds() / 60),
+            length=required_len,
+        )
+        if solar_gain is None:
+            return heating_demand
+        return heating_demand - solar_gain
+
     def _add_thermal_battery_constraints(self, constraints, k, data_opt, p_load):
         """
         Handle constraints for thermal battery loads (Vectorized, Legacy Match).
@@ -1519,8 +1569,9 @@ class Optimization:
         hc = def_load_config["thermal_battery"]
         required_len = self.num_timesteps
 
-        # Structural parameters (don't change between MPC iterations)
-        supply_temperature = hc["supply_temperature"]
+        # Structural parameters (don't change between MPC iterations).
+        # supply_temperature / efficiency requirement is validated by
+        # resolve_thermal_battery_cop further down (single source of truth).
         volume = hc["volume"]
         min_temperatures_list = hc["min_temperatures"]
         max_temperatures_list = hc["max_temperatures"]
@@ -1556,12 +1607,10 @@ class Optimization:
             start_temp_float = float(params["start_temp"].value)
 
             # Compute and set derived parameter values
-            cops = utils.calculate_cop_heatpump(
-                supply_temperature=supply_temperature,
-                carnot_efficiency=hc.get("carnot_efficiency", 0.4),
-                outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
+            cops = utils.resolve_thermal_battery_cop(
+                hc, outdoor_temp_arr, length=required_len
             )
-            params["heatpump_cops"].value = np.array(cops[:required_len])
+            params["heatpump_cops"].value = np.array(cops)
 
             # Check for hot water tank mode (draw_off_demand present)
             # draw_off_demand units: kWh per timestep (same as heating_demand from
@@ -1647,6 +1696,13 @@ class Optimization:
                     )
                     params["heating_demand"].value = np.array(demand[:required_len])
 
+            # Surface solar gain (pool, outdoor tank, solar-thermal). Subtracts
+            # absorbed irradiance from the residual heating demand. No-op when
+            # solar_absorption_area is unset.
+            params["heating_demand"].value = self._apply_surface_solar_gain(
+                hc, data_opt, params["heating_demand"].value, required_len
+            )
+
             # Set min/max temperature parameters
             params["min_temps"].value = self._pad_temp_array(
                 min_temperatures_list, required_len, 18.0
@@ -1664,11 +1720,9 @@ class Optimization:
             outdoor_temp_arr = self._get_clean_outdoor_temp(data_opt, required_len)
 
             heatpump_cops = np.array(
-                utils.calculate_cop_heatpump(
-                    supply_temperature=supply_temperature,
-                    carnot_efficiency=hc.get("carnot_efficiency", 0.4),
-                    outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
-                )[:required_len]
+                utils.resolve_thermal_battery_cop(
+                    hc, outdoor_temp_arr, length=required_len
+                )
             )
 
             # Check for hot water tank mode (draw_off_demand present)
@@ -1710,6 +1764,10 @@ class Optimization:
                         optimization_time_step=int(self.freq.total_seconds() / 60),
                     )
                 heating_demand = np.array(demand[:required_len])
+            # Surface solar gain (fallback path - mirrors parameterized path).
+            heating_demand = self._apply_surface_solar_gain(
+                hc, data_opt, heating_demand, required_len
+            )
             min_temps_param = None
             max_temps_param = None
 
@@ -2460,6 +2518,10 @@ class Optimization:
             self.param_load_forecast = cp.Parameter(current_n, name="load_forecast")
             self.param_load_cost = cp.Parameter(current_n, name="load_cost")
             self.param_prod_price = cp.Parameter(current_n, name="prod_price")
+            self.param_cost_per_load = [
+                cp.Parameter(current_n, name=f"cost_per_load_{k}")
+                for k in range(self.optim_conf.get("number_of_deferrable_loads", 0))
+            ]
 
             # Re-initialize SOC recovery parameters with the new horizon
             self._init_soc_recovery_params()
@@ -2535,6 +2597,35 @@ class Optimization:
         self.param_load_forecast.value = p_load
         self.param_load_cost.value = unit_load_cost
         self.param_prod_price.value = unit_prod_price
+
+        # Per-load cost forecast overrides. Default each load's per-timestep cost
+        # to the shared electricity tariff (no-op adjustment in the objective). If
+        # the user provides `cost_forecast_per_deferrable_load`, slot the override
+        # array into the corresponding parameter.
+        cost_per_load_overrides = self.optim_conf.get(
+            "cost_forecast_per_deferrable_load", None
+        )
+        for k, param in enumerate(self.param_cost_per_load):
+            override = (
+                cost_per_load_overrides[k]
+                if cost_per_load_overrides is not None and k < len(cost_per_load_overrides)
+                else None
+            )
+            if override is None:
+                param.value = np.asarray(unit_load_cost, dtype=float)
+            else:
+                override_arr = np.asarray(override, dtype=float)
+                if len(override_arr) < self.num_timesteps:
+                    # Pad with the global cost so missing tail timesteps don't
+                    # accidentally apply a zero-cost override.
+                    pad_len = self.num_timesteps - len(override_arr)
+                    pad_tail = np.asarray(unit_load_cost, dtype=float)[len(override_arr):]
+                    if len(pad_tail) != pad_len:
+                        pad_tail = np.full(pad_len, float(unit_load_cost[-1]))
+                    override_arr = np.concatenate([override_arr, pad_tail])
+                else:
+                    override_arr = override_arr[: self.num_timesteps]
+                param.value = override_arr
 
         if self.optim_conf["set_use_battery"]:
             self.param_soc_init.value = soc_init
