@@ -13,10 +13,10 @@ import orjson
 import pandas as pd
 from pandas.testing import assert_series_equal
 
+from emhass import utils
 from emhass.forecast import Forecast
 from emhass.optimization import Optimization
 from emhass.retrieve_hass import RetrieveHass
-from emhass import utils
 from emhass.utils import (
     build_config,
     build_params,
@@ -2611,7 +2611,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         source_params = {"supply_temperature": 35.0, "carnot_efficiency": 0.40}
 
         # Run A: legacy single-load thermal_battery
-        legacy_a = dict(tank_params); legacy_a.update(source_params)
+        legacy_a = dict(tank_params)
+        legacy_a.update(source_params)
         res_legacy = self.run_optimization_with_config([{"thermal_battery": legacy_a}])
 
         # Run B: same tank declared as shared_thermal_tanks with one member
