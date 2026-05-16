@@ -141,6 +141,19 @@ class Optimization:
         self.param_load_cost = cp.Parameter(self.num_timesteps, name="load_cost")
         self.param_prod_price = cp.Parameter(self.num_timesteps, name="prod_price")
 
+        # Per-deferrable-load cost override parameters. When the user supplies a
+        # `cost_forecast_per_deferrable_load[k]` array, that load is priced at its
+        # own per-timestep rate (e.g., gas price for a gas-boiler load) instead of
+        # the shared electricity tariff. The objective adds an adjustment term
+        # `(per_load_cost - load_cost) * p_deferrable[k]` per load. Default values
+        # equal `load_cost` for every timestep, making the adjustment a no-op
+        # unless the user explicitly overrides.
+        num_def_loads = self.optim_conf.get("number_of_deferrable_loads", 0)
+        self.param_cost_per_load = [
+            cp.Parameter(self.num_timesteps, name=f"cost_per_load_{k}")
+            for k in range(num_def_loads)
+        ]
+
         # Scalar Parameters
         self.param_soc_init = cp.Parameter(nonneg=True, name="soc_init")
         self.param_soc_final = cp.Parameter(nonneg=True, name="soc_final")
@@ -984,6 +997,24 @@ class Optimization:
 
                     term = -scale * penalty * nominal_power * total_startup_cost
                     objective_terms.append(term)
+
+        # Per-load cost overrides. For each deferrable load with a configured
+        # `cost_forecast_per_deferrable_load[k]` array, add an adjustment term
+        # `(per_load_cost - load_cost) * p_deferrable[k]` to the objective.
+        # Default per-load cost equals load_cost, so the adjustment is zero
+        # unless the user overrides. Applied for both 'profit' and 'cost'
+        # cost functions; for 'self-consumption' it is intentionally skipped
+        # (cost is not the objective).
+        if self.costfun in ("profit", "cost") and self.param_cost_per_load:
+            p_deferrable = self.vars.get("p_deferrable", None)
+            if p_deferrable is not None:
+                for k, param_cost in enumerate(self.param_cost_per_load):
+                    if k >= len(p_deferrable):
+                        break
+                    adjustment = cp.multiply(
+                        param_cost - unit_load_cost, p_deferrable[k]
+                    )
+                    objective_terms.append(-scale * cp.sum(adjustment))
 
         # Stress Costs
         # These variables represent a cost to be minimized.
@@ -2455,6 +2486,10 @@ class Optimization:
             self.param_load_forecast = cp.Parameter(current_n, name="load_forecast")
             self.param_load_cost = cp.Parameter(current_n, name="load_cost")
             self.param_prod_price = cp.Parameter(current_n, name="prod_price")
+            self.param_cost_per_load = [
+                cp.Parameter(current_n, name=f"cost_per_load_{k}")
+                for k in range(self.optim_conf.get("number_of_deferrable_loads", 0))
+            ]
 
             # Re-initialize SOC recovery parameters with the new horizon
             self._init_soc_recovery_params()
@@ -2530,6 +2565,35 @@ class Optimization:
         self.param_load_forecast.value = p_load
         self.param_load_cost.value = unit_load_cost
         self.param_prod_price.value = unit_prod_price
+
+        # Per-load cost forecast overrides. Default each load's per-timestep cost
+        # to the shared electricity tariff (no-op adjustment in the objective). If
+        # the user provides `cost_forecast_per_deferrable_load`, slot the override
+        # array into the corresponding parameter.
+        cost_per_load_overrides = self.optim_conf.get(
+            "cost_forecast_per_deferrable_load", None
+        )
+        for k, param in enumerate(self.param_cost_per_load):
+            override = (
+                cost_per_load_overrides[k]
+                if cost_per_load_overrides is not None and k < len(cost_per_load_overrides)
+                else None
+            )
+            if override is None:
+                param.value = np.asarray(unit_load_cost, dtype=float)
+            else:
+                override_arr = np.asarray(override, dtype=float)
+                if len(override_arr) < self.num_timesteps:
+                    # Pad with the global cost so missing tail timesteps don't
+                    # accidentally apply a zero-cost override.
+                    pad_len = self.num_timesteps - len(override_arr)
+                    pad_tail = np.asarray(unit_load_cost, dtype=float)[len(override_arr):]
+                    if len(pad_tail) != pad_len:
+                        pad_tail = np.full(pad_len, float(unit_load_cost[-1]))
+                    override_arr = np.concatenate([override_arr, pad_tail])
+                else:
+                    override_arr = override_arr[: self.num_timesteps]
+                param.value = override_arr
 
         if self.optim_conf["set_use_battery"]:
             self.param_soc_init.value = soc_init
