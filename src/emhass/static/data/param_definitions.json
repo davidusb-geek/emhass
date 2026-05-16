@@ -411,6 +411,12 @@
       "input": "array.float",
       "default_value": 0.0
     },
+    "cost_forecast_per_deferrable_load": {
+      "friendly_name": "Per-load cost forecast",
+      "Description": "Optional per-deferrable-load cost forecast track (Currency/kWh) that overrides the shared load_cost_forecast for that load. Useful for hybrid heating setups where one load (gas boiler) is priced against a gas tariff while another (heat pump) is priced against electricity. Pass null/None for any load that should keep the shared tariff. Runtime parameter - not cached.",
+      "input": "array.array.float",
+      "default_value": null
+    },
     "operating_hours_of_each_deferrable_load": {
       "friendly_name": "Deferrable load operating hours",
       "Description": "The total number of hours that each deferrable load should operate",
