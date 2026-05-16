@@ -1537,6 +1537,27 @@ class Optimization:
             return demand_arr, loss_arr
         return None
 
+    def _apply_surface_solar_gain(self, hc, data_opt, heating_demand, required_len):
+        """Subtract surface solar gain from `heating_demand` when configured.
+
+        Single source of truth used by both the parameterized and fallback
+        paths of `_add_thermal_battery_constraints`. No-op when
+        `solar_absorption_area` is unset on `hc` or when `heating_demand` is
+        None.
+        """
+        if heating_demand is None:
+            return heating_demand
+        ghi_arr = data_opt["ghi"].values if "ghi" in data_opt.columns else None
+        solar_gain = utils.calculate_surface_solar_gain(
+            hc,
+            ghi_arr,
+            optimization_time_step_minutes=int(self.freq.total_seconds() / 60),
+            length=required_len,
+        )
+        if solar_gain is None:
+            return heating_demand
+        return heating_demand - solar_gain
+
     def _add_thermal_battery_constraints(self, constraints, k, data_opt, p_load):
         """
         Handle constraints for thermal battery loads (Vectorized, Legacy Match).
@@ -1675,6 +1696,13 @@ class Optimization:
                     )
                     params["heating_demand"].value = np.array(demand[:required_len])
 
+            # Surface solar gain (pool, outdoor tank, solar-thermal). Subtracts
+            # absorbed irradiance from the residual heating demand. No-op when
+            # solar_absorption_area is unset.
+            params["heating_demand"].value = self._apply_surface_solar_gain(
+                hc, data_opt, params["heating_demand"].value, required_len
+            )
+
             # Set min/max temperature parameters
             params["min_temps"].value = self._pad_temp_array(
                 min_temperatures_list, required_len, 18.0
@@ -1736,6 +1764,10 @@ class Optimization:
                         optimization_time_step=int(self.freq.total_seconds() / 60),
                     )
                 heating_demand = np.array(demand[:required_len])
+            # Surface solar gain (fallback path - mirrors parameterized path).
+            heating_demand = self._apply_surface_solar_gain(
+                hc, data_opt, heating_demand, required_len
+            )
             min_temps_param = None
             max_temps_param = None
 

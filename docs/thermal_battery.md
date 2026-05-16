@@ -68,6 +68,23 @@ These parameters define the basic thermal battery system:
     * Example: `0.42`
     * See the calibration section below for how to determine this
 
+### Surface solar gain (pool, outdoor tank, solar-thermal)
+
+When the thermal mass is directly exposed to sunlight - a pool, an uncovered outdoor buffer tank, or a thermal store fed by a flat-plate solar-thermal panel - the surface absorbs solar radiation and reduces the heating demand seen by the pump or boiler. EMHASS models this absorption as a negative term on the residual heating demand. Set two optional `thermal_battery` fields to enable it:
+
+* **solar_absorption_area**: Effective horizontal absorption surface in m². Defaults to unset (no solar gain term). Set this to the pool surface area, the exposed top of an outdoor tank, or the solar-thermal collector aperture.
+    * Example pool: `32.0` for a 4×8 m pool
+
+* **solar_absorption_factor**: Fraction of global horizontal irradiance (GHI) absorbed by the thermal mass (default: 0.7).
+    * Uncovered pool: 0.7-0.9 (water absorbs IR strongly)
+    * Covered pool / solar cover: 0.2-0.4
+    * Insulated tank cover: 0.0-0.1
+    * Flat-plate selective absorber: 0.85-0.95
+
+EMHASS reuses the GHI forecast already fetched for PV - no second weather API call. The per-timestep gain is `ghi[t] * area * factor / 1000 * dt_hours` (kWh) and is subtracted from the heating demand before the optimizer dispatches the heat source.
+
+Seasonal toggle: to stop heating the pool entirely (winter shutdown), either set the pool deferrable load's `nominal_power_of_deferrable_loads[k]` to 0 in optim_conf, or omit the load from `def_load_config` for the off-season config snapshot. The solar-gain term has no effect when the pool load is inactive.
+
 ### Constant-efficiency mode (gas boiler, oil burner, district heating)
 
 The default thermal battery model uses a Carnot-based COP that varies with outdoor temperature - appropriate for heat pumps. Non-electric heat sources (gas boilers, oil burners, district heating) convert input power to heat at a roughly constant efficiency that does not depend on outdoor temperature. For these sources, set the `efficiency` parameter:

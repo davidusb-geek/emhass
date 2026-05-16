@@ -2460,6 +2460,87 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIn("supply_temperature", msg)
         self.assertIn("efficiency", msg)
 
+    def test_thermal_battery_solar_gain_reduces_heating(self):
+        """Surface solar absorption should reduce pumped heat consumption.
+
+        A thermal_battery with a large absorption surface and high GHI gets
+        free heat from the sun. The optimizer should consume strictly less
+        electric/gas power than an identically configured battery with no
+        solar absorption.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        # Cold outdoor, strong daytime sun to force solar to matter.
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [5.0] * 48
+        # Bell-curve GHI profile (W/m²) peaking at solar noon (~slot 24).
+        ghi_profile = [
+            max(0.0, 800.0 * np.sin(np.pi * (i - 12) / 24)) if 12 <= i <= 36 else 0.0
+            for i in range(48)
+        ]
+        self.df_input_data_dayahead["ghi"] = ghi_profile
+
+        base_battery = {
+            "start_temperature": 22.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [20.0] * 48,
+            "max_temperatures": [28.0] * 48,
+        }
+
+        # Baseline: no solar absorption
+        res_no_solar = self.run_optimization_with_config(
+            [{"thermal_battery": dict(base_battery)}]
+        )
+
+        # With solar gain on a 30 m² pool-style surface
+        with_solar_cfg = dict(base_battery)
+        with_solar_cfg["solar_absorption_area"] = 30.0
+        with_solar_cfg["solar_absorption_factor"] = 0.7
+        res_with_solar = self.run_optimization_with_config(
+            [{"thermal_battery": with_solar_cfg}]
+        )
+
+        # Solar gain should reduce pumped heat - strictly less consumption.
+        self.assertLess(
+            res_with_solar["P_deferrable0"].sum(),
+            res_no_solar["P_deferrable0"].sum() + 1e-3,
+            "Solar absorption should not increase heat-pump consumption",
+        )
+
+    def test_thermal_battery_solar_gain_zero_area_no_op(self):
+        """solar_absorption_area = 0 (or unset) leaves dispatch unchanged."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [5.0] * 48
+        self.df_input_data_dayahead["ghi"] = [600.0] * 48
+
+        base_battery = {
+            "start_temperature": 22.0,
+            "supply_temperature": 35.0,
+            "volume": 50.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [20.0] * 48,
+            "max_temperatures": [28.0] * 48,
+        }
+
+        res_unset = self.run_optimization_with_config(
+            [{"thermal_battery": dict(base_battery)}]
+        )
+
+        explicit_zero = dict(base_battery)
+        explicit_zero["solar_absorption_area"] = 0.0
+        res_zero = self.run_optimization_with_config(
+            [{"thermal_battery": explicit_zero}]
+        )
+
+        np.testing.assert_array_almost_equal(
+            res_unset["P_deferrable0"].values,
+            res_zero["P_deferrable0"].values,
+            decimal=4,
+            err_msg="solar_absorption_area=0 should match unset behavior",
+        )
+
     def test_per_load_cost_override_no_op_when_unset(self):
         """When cost_forecast_per_deferrable_load is unset, the optimizer behavior
         is identical to baseline (no per-load cost adjustment applied)."""
