@@ -188,7 +188,11 @@ async def index():
     if (emhass_conf["data_path"] / injection_dict_file).exists():
         async with aiofiles.open(str(emhass_conf["data_path"] / injection_dict_file), "rb") as fid:
             content = await fid.read()
-            injection_dict = pickle.loads(content)
+            try:
+                injection_dict = pickle.loads(content)
+            except (EOFError, pickle.UnpicklingError):
+                # File truncated due to write race condition; treat as not yet available
+                injection_dict = {}
     else:
         app.logger.info(
             "The data container dictionary is empty... Please launch an optimization task"
@@ -260,7 +264,10 @@ async def configuration():
     if (emhass_conf["data_path"] / params_file).exists():
         async with aiofiles.open(str(emhass_conf["data_path"] / params_file), "rb") as fid:
             content = await fid.read()
-            _, params = pickle.loads(content)  # Don't overwrite emhass_conf["config_path"]
+            try:
+                _, params = pickle.loads(content)  # Don't overwrite emhass_conf["config_path"]
+            except (EOFError, pickle.UnpicklingError):
+                params = {}
     else:
         params = {}
 
@@ -279,7 +286,11 @@ async def template_action():
     if (emhass_conf["data_path"] / injection_dict_file).exists():
         async with aiofiles.open(str(emhass_conf["data_path"] / injection_dict_file), "rb") as fid:
             content = await fid.read()
-            injection_dict = pickle.loads(content)
+            try:
+                injection_dict = pickle.loads(content)
+            except (EOFError, pickle.UnpicklingError):
+                # File truncated due to write race condition; treat as not yet available
+                injection_dict = {}
     else:
         app.logger.warning("Unable to obtain plot data from {injection_dict_file}")
         app.logger.warning("Try running an launch an optimization task")
@@ -450,7 +461,11 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
     if params_path.exists():
         async with aiofiles.open(str(params_path), "rb") as fid:
             content = await fid.read()
-            _, params = pickle.loads(content)  # Don't overwrite emhass_conf["config_path"]
+            try:
+                _, params = pickle.loads(content)  # Don't overwrite emhass_conf["config_path"]
+            except (EOFError, pickle.UnpicklingError):
+                logger.error("params.pkl is corrupted or truncated (race condition); cannot proceed")
+                return None, None, None
             # Set local costfun variable
             if params.get("optim_conf") is not None:
                 costfun = params["optim_conf"].get("costfun", "profit")
@@ -784,7 +799,11 @@ async def _load_injection_dict() -> dict | None:
     if (emhass_conf["data_path"] / injection_dict_file).exists():
         async with aiofiles.open(str(emhass_conf["data_path"] / injection_dict_file), "rb") as fid:
             content = await fid.read()
-            return pickle.loads(content)
+            try:
+                return pickle.loads(content)
+            except (EOFError, pickle.UnpicklingError):
+                # File truncated due to write race condition; treat as not yet available
+                return None
     else:
         return None
 
