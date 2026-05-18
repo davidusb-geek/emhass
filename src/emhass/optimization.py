@@ -1319,7 +1319,6 @@ class Optimization:
             soc_deficit_cost = self.vars["soc_deficit_cost"]
             constraints.append(soc_deficit_cost >=
                                (threshold_energy - current_stored_energy)*soc_deficit_cost_rate)
-            constraints.append(soc_deficit_cost >= 0)
 
     def _add_thermal_load_constraints(self, constraints, k, data_opt, def_init_temp):
         """
