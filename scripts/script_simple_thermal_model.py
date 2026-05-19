@@ -161,8 +161,8 @@ async def main():
     p_load_forecast.loc[:] = 0
 
     df_input_data.loc[df_input_data.index[25:30], "unit_load_cost"] = 2.0  # A price peak
-    unit_load_cost = df_input_data[opt.var_load_cost].values  # €/kWh
-    unit_prod_price = df_input_data[opt.var_prod_price].values  # €/kWh
+    unit_load_cost = df_input_data[opt.var_load_cost].values  # currency/kWh
+    unit_prod_price = df_input_data[opt.var_prod_price].values  # currency/kWh
 
     opt_res_dayahead = opt.perform_optimization(
         df_input_data,

@@ -3412,8 +3412,8 @@ class Optimization:
             data_tp = df_input_data.copy().loc[day_range]
             p_pv = data_tp[self.var_pv].values
             p_load = data_tp[self.var_load_new].values
-            unit_load_cost = data_tp[self.var_load_cost].values  # €/kWh
-            unit_prod_price = data_tp[self.var_prod_price].values  # €/kWh
+            unit_load_cost = data_tp[self.var_load_cost].values  # currency/kWh
+            unit_prod_price = data_tp[self.var_prod_price].values  # currency/kWh
 
             # Call optimization function
             # The new CVXPY implementation will re-use the problem structure automatically
