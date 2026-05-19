@@ -201,7 +201,7 @@ This example is presented graphically here:
 
 The default method for this forecast is simply a constant value. This can be obtained using `method=constant`.
 
-Then you will need to define the `photovoltaic_production_sell_price` variable to provide the correct price for energy injected to the grid from excedent PV production in €/kWh.
+Then you will need to define the `photovoltaic_production_sell_price` variable to provide the correct price for energy injected to the grid from excedent PV production in currency/kWh.
 
 ## Passing your own forecast data
 

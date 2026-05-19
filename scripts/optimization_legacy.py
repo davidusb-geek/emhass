@@ -1644,8 +1644,8 @@ class Optimization:
             data_tp = df_input_data.copy().loc[day_range]
             p_pv = data_tp[self.var_pv].values
             p_load = data_tp[self.var_load_new].values
-            unit_load_cost = data_tp[self.var_load_cost].values  # €/kWh
-            unit_prod_price = data_tp[self.var_prod_price].values  # €/kWh
+            unit_load_cost = data_tp[self.var_load_cost].values  # currency/kWh
+            unit_prod_price = data_tp[self.var_prod_price].values  # currency/kWh
             # Call optimization function
             opt_tp = self.perform_optimization(
                 data_tp, p_pv, p_load, unit_load_cost, unit_prod_price
@@ -1677,8 +1677,8 @@ class Optimization:
 
         """
         self.logger.info("Perform optimization for the day-ahead")
-        unit_load_cost = df_input_data[self.var_load_cost].values  # €/kWh
-        unit_prod_price = df_input_data[self.var_prod_price].values  # €/kWh
+        unit_load_cost = df_input_data[self.var_load_cost].values  # currency/kWh
+        unit_prod_price = df_input_data[self.var_prod_price].values  # currency/kWh
         # Call optimization function
         self.opt_res = self.perform_optimization(
             df_input_data,
@@ -1749,8 +1749,8 @@ class Optimization:
             df_input_data = copy.deepcopy(df_input_data)[
                 df_input_data.index[0] : df_input_data.index[prediction_horizon - 1]
             ]
-        unit_load_cost = df_input_data[self.var_load_cost].values  # €/kWh
-        unit_prod_price = df_input_data[self.var_prod_price].values  # €/kWh
+        unit_load_cost = df_input_data[self.var_load_cost].values  # currency/kWh
+        unit_prod_price = df_input_data[self.var_prod_price].values  # currency/kWh
         # Call optimization function
         self.opt_res = self.perform_optimization(
             df_input_data,
