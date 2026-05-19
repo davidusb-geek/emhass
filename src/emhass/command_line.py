@@ -158,7 +158,7 @@ class OptimizationCacheKey:
     def_load_config_structure: tuple  # (index, type) tuples for each load
     deferrable_load_groups: tuple
     shared_thermal_tanks: tuple  # shared-tank multi-source topology structure
-    is_electric_load: tuple      # per-load electric-bus membership flag
+    is_electric_load: tuple  # per-load electric-bus membership flag
     inverter_is_hybrid: bool
     compute_curtailment: bool
     optimization_time_step_s: float | None
@@ -341,7 +341,11 @@ class OptimizationCache:
                     t.get("id", ""),
                     tuple(int(k) for k in t.get("load_ids", [])),
                     config_hash(
-                        {k: v for k, v in t.items() if k not in {"start_temperature", "draw_off_demand"}},
+                        {
+                            k: v
+                            for k, v in t.items()
+                            if k not in {"start_temperature", "draw_off_demand"}
+                        },
                     ),
                 )
                 for t in optim_conf.get("shared_thermal_tanks", []) or []
