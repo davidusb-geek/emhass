@@ -44,6 +44,7 @@ jobs:
           verbose: true
 
       - name: SonarQube Scan
+        if: github.event.pull_request.head.repo.fork == false
         uses: SonarSource/sonarqube-scan-action@v7
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

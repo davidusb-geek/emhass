@@ -1602,7 +1602,7 @@
          id="tspan5400-1-34-9-3-4-1-4-9-2-5-2-5"
          x="-229.42601"
          y="722.30103"
-         style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-size:12.66666667px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std, Medium';text-align:start;writing-mode:lr;text-anchor:start;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;">Load cost (€/kWh)</tspan></text>
+         style="font-style:normal;font-variant:normal;font-weight:500;font-stretch:normal;font-size:12.66666667px;line-height:125%;font-family:'Tw Cen MT Std';-inkscape-font-specification:'Tw Cen MT Std, Medium';text-align:start;writing-mode:lr;text-anchor:start;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-feature-settings:normal;">Load cost (currency/kWh)</tspan></text>
     <text
        inkscape:export-ydpi="150"
        inkscape:export-xdpi="150"
