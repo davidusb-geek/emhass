@@ -1005,7 +1005,7 @@ class Optimization:
             soc_deficit_cost = self.vars.get("soc_deficit_cost")
             if soc_deficit_cost is not None:
                 self.logger.debug(f"Adding SOC deficit cost {soc_deficit_cost}  to objective function: ")
-                objective_terms.append(-scale * cp.sum(soc_deficit_cost))
+                objective_terms.append(- cp.sum(soc_deficit_cost))
 
         # Sum all terms to create the final objective expression
         return cp.Maximize(cp.sum(objective_terms))
@@ -1312,13 +1312,13 @@ class Optimization:
             )
 
         # SOC Deficit Cost
-        soc_deficit_threshold = self.plant_conf.get("battery_soc_deficit_threshold", 0.2)
-        soc_deficit_cost_rate = self.plant_conf.get("battery_soc_deficit_cost", 0)/1000. # /kWh -> /Wh
+        soc_deficit_threshold = self.optim_conf.get("battery_soc_deficit_threshold", 0.2)
+        soc_deficit_cost_rate = self.optim_conf.get("battery_soc_deficit_cost", 0.0)/1000.  #kWh to Wh
         if soc_deficit_threshold > 0 and soc_deficit_cost_rate > 0:
             threshold_energy = soc_deficit_threshold * cap
             soc_deficit_cost = self.vars["soc_deficit_cost"]
             constraints.append(soc_deficit_cost >=
-                               (threshold_energy - current_stored_energy)*soc_deficit_cost_rate)
+                               (threshold_energy - current_stored_energy)*soc_deficit_cost_rate*self.time_step)
 
     def _add_thermal_load_constraints(self, constraints, k, data_opt, def_init_temp):
         """
