@@ -372,7 +372,13 @@ optim_conf["this_parameter_is_amazing"] = check_def_loads(
 )
 ```
 
+#### Changing default values
+When changing the default value of an *existing* parameter (as opposed to adding a new one), `src/emhass/static/data/param_definitions.json` is the source of truth. The GUI config form reads `param_definitions.json` and writes user-saved values into `config.json`, which then wins at runtime. `src/emhass/data/config_defaults.json` is the loader fallback for headless installs (Docker without GUI save, `options.json`-only).
+Edit order:
+1. Update `default_value` in `param_definitions.json` (and any matching description text such as "Defaults to N" mentions).
+2. Update the same key in `config_defaults.json` to match. The two files must agree; drift produces silent default-divergence between GUI and headless modes.
+
 ### Step 3 - Pull request
 
-Once developed, commit your code, and push the commit to your fork on Github.
+Once developed, commit your code, and push the commit to your fork on GitHub.
 Once ready, submit a pull request with your fork to the [davidusb-geek/emhass@master](https://github.com/davidusb-geek/emhass) repository.

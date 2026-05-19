@@ -18,7 +18,9 @@ from markupsafe import Markup
 from quart import Quart, make_response, request
 from quart import logging as log
 
+from emhass import last_run
 from emhass.command_line import (
+    EMHASS_SCHEMA_VERSION,
     continual_publish,
     dayahead_forecast_optim,
     export_influxdb_to_csv,
@@ -188,7 +190,14 @@ async def index():
     if (emhass_conf["data_path"] / injection_dict_file).exists():
         async with aiofiles.open(str(emhass_conf["data_path"] / injection_dict_file), "rb") as fid:
             content = await fid.read()
-            injection_dict = pickle.loads(content)
+            try:
+                injection_dict = pickle.loads(content)
+            except EOFError:
+                app.logger.warning(
+                    "The data container file is empty or incomplete (possible write race condition). "
+                    "Please launch an optimization task."
+                )
+                injection_dict = {}
     else:
         app.logger.info(
             "The data container dictionary is empty... Please launch an optimization task"
@@ -279,7 +288,14 @@ async def template_action():
     if (emhass_conf["data_path"] / injection_dict_file).exists():
         async with aiofiles.open(str(emhass_conf["data_path"] / injection_dict_file), "rb") as fid:
             content = await fid.read()
-            injection_dict = pickle.loads(content)
+            try:
+                injection_dict = pickle.loads(content)
+            except EOFError:
+                app.logger.warning(
+                    "The data container file is empty or incomplete (possible write race condition). "
+                    "Please launch an optimization task."
+                )
+                injection_dict = {}
     else:
         app.logger.warning("Unable to obtain plot data from {injection_dict_file}")
         app.logger.warning("Try running an launch an optimization task")
@@ -595,6 +611,42 @@ async def _save_injection_dict(injection_dict, data_path):
     async with aiofiles.open(str(data_path / injection_dict_file), "wb") as fid:
         content = pickle.dumps(injection_dict)
         await fid.write(content)
+
+
+@app.route("/api/v1/last-run", methods=["GET"])
+async def api_v1_last_run():
+    """Return metadata about the most recent optimization run.
+
+    Always-200 envelope with status enum:
+      - "no-run": no optim has completed yet (or state lost on restart with no disk file)
+      - "ok": last solve succeeded
+      - "infeasible": solver returned Infeasible
+      - "error": run errored out
+
+    Other fields are populated for status != "no-run"; null otherwise.
+
+    Schema: docs/api/v1/last-run.schema.json (JSON Schema draft 2020-12).
+    """
+    snap = last_run.read(emhass_conf["data_path"])
+    if snap is None:
+        response_body = {
+            "status": "no-run",
+            "timestamp": None,
+            "action": None,
+            "stage_times": None,
+            "duration_total_seconds": None,
+            "emhass_version": last_run.emhass_version(),
+            "schema_version": EMHASS_SCHEMA_VERSION,
+            "infeasible": None,
+            "error_message": None,
+        }
+    else:
+        response_body = snap
+
+    response = await make_response(orjson.dumps(response_body))
+    response.headers["Content-Type"] = "application/json"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.route("/action/<action_name>", methods=["POST"])
