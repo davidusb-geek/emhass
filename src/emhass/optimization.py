@@ -889,10 +889,23 @@ class Optimization:
         # Curtailment variable
         vars_dict["p_pv_curtailment"] = cp.Variable(n, nonneg=True, name="p_pv_curtailment")
 
-        # Sum of deferrable loads
+        # Sum of deferrable loads ON THE ELECTRIC BUS. A load flagged with
+        # is_electric_load[k] = False (gas boiler, oil burner, district
+        # heating) provides heat to its thermal target but does NOT draw
+        # electricity from the grid - its p_deferrable is in input-power-
+        # equivalent units (gas burn rate, in W) and feeds the thermal
+        # balance only. Excluding it from p_def_sum keeps the electric
+        # balance honest (no phantom grid draw when the boiler fires).
+        is_electric = self.optim_conf.get(
+            "is_electric_load", [True] * num_deferrable_loads
+        )
         if num_deferrable_loads > 0:
-            # Create an expression for the sum
-            vars_dict["p_def_sum"] = sum(p_deferrable)
+            electric_loads = [
+                p_deferrable[k]
+                for k in range(num_deferrable_loads)
+                if k >= len(is_electric) or bool(is_electric[k])
+            ]
+            vars_dict["p_def_sum"] = sum(electric_loads) if electric_loads else np.zeros(n)
         else:
             vars_dict["p_def_sum"] = np.zeros(n)
 
@@ -1001,23 +1014,40 @@ class Optimization:
                     term = -scale * penalty * nominal_power * total_startup_cost
                     objective_terms.append(term)
 
-        # Per-load cost overrides. For each deferrable load with a configured
-        # `cost_forecast_per_deferrable_load[k]` array, add an adjustment term
-        # `(per_load_cost - load_cost) * p_deferrable[k]` to the objective.
-        # Default per-load cost equals load_cost, so the adjustment is zero
-        # unless the user overrides. Applied for both 'profit' and 'cost'
-        # cost functions; for 'self-consumption' it is intentionally skipped
-        # (cost is not the objective).
+        # Per-load cost overrides. Behavior depends on whether the load is on
+        # the electric balance (`is_electric_load[k]`):
+        #
+        # - Electric load (default): the load's power already enters p_def_sum
+        #   and gets charged at unit_load_cost. Apply an ADJUSTMENT term
+        #   `(per_load_cost - load_cost) * p_deferrable[k]` so the net cost
+        #   becomes `per_load_cost * p_deferrable[k]` instead of the global
+        #   retail tariff.
+        #
+        # - Non-electric load (gas / oil / district): the load was excluded
+        #   from p_def_sum, so the base electric cost charges it nothing.
+        #   Add the DIRECT cost `per_load_cost * p_deferrable[k]` instead of
+        #   an adjustment - otherwise the (cheap_gas - retail) adjustment
+        #   becomes a subsidy that pays the optimizer to fire gas.
         if self.costfun in ("profit", "cost") and self.param_cost_per_load:
             p_deferrable = self.vars.get("p_deferrable", None)
+            is_electric = self.optim_conf.get(
+                "is_electric_load",
+                [True] * len(self.param_cost_per_load),
+            )
             if p_deferrable is not None:
                 for k, param_cost in enumerate(self.param_cost_per_load):
                     if k >= len(p_deferrable):
                         break
-                    adjustment = cp.multiply(
-                        param_cost - unit_load_cost, p_deferrable[k]
-                    )
-                    objective_terms.append(-scale * cp.sum(adjustment))
+                    k_is_electric = k >= len(is_electric) or bool(is_electric[k])
+                    if k_is_electric:
+                        # Electric load - adjust away the global tariff
+                        per_load_term = cp.multiply(
+                            param_cost - unit_load_cost, p_deferrable[k]
+                        )
+                    else:
+                        # Non-electric load - charge directly at its commodity rate
+                        per_load_term = cp.multiply(param_cost, p_deferrable[k])
+                    objective_terms.append(-scale * cp.sum(per_load_term))
 
         # Stress Costs
         # These variables represent a cost to be minimized.
@@ -1588,8 +1618,9 @@ class Optimization:
         required_len = self.num_timesteps
 
         # Structural parameters (don't change between MPC iterations).
-        # supply_temperature / efficiency requirement is validated by
-        # resolve_thermal_battery_cop further down (single source of truth).
+        # supply_temperature / efficiency / heating_curve requirement is
+        # validated by resolve_thermal_battery_cop further down (single
+        # source of truth).
         volume = hc["volume"]
         min_temperatures_list = hc["min_temperatures"]
         max_temperatures_list = hc["max_temperatures"]
@@ -1972,6 +2003,183 @@ class Optimization:
         penalty_term = None if isinstance(penalty_expr, int) else cp.sum(penalty_expr)
         return predicted_temp_thermal, heating_demand_arr, q_input, penalty_term
 
+    def _get_shared_thermal_tanks(self) -> list[dict]:
+        """Return the configured shared_thermal_tanks list (or empty)."""
+        return list(self.optim_conf.get("shared_thermal_tanks", []) or [])
+
+    def _load_shared_tank_membership(self) -> dict[int, int]:
+        """Map load index -> shared_thermal_tanks index (-1 if standalone)."""
+        membership: dict[int, int] = {}
+        for tank_idx, tank in enumerate(self._get_shared_thermal_tanks()):
+            for k in tank.get("load_ids", []) or []:
+                membership[int(k)] = tank_idx
+        return membership
+
+    def _get_load_source_config(self, k: int) -> dict:
+        """Extract source-side fields for load k.
+
+        Backward compat: reads from 'thermal_source' first, then falls back to
+        'thermal_battery' (the legacy single-source location for these fields).
+        """
+        cfg = self.optim_conf["def_load_config"][k]
+        return cfg.get("thermal_source") or cfg.get("thermal_battery") or {}
+
+    def _add_shared_thermal_tank_constraints(self, constraints, tank_idx, data_opt, p_load):
+        """Build dynamics for ONE shared thermal tank fed by MULTIPLE sources.
+
+        Each source `k` in `tank['load_ids']` contributes
+            cop_k[t] * p_deferrable[k][t] / 1000 * dt  (kWh thermal)
+        where cop_k is resolved via utils.resolve_thermal_battery_cop (Carnot
+        for heat pumps, flat for constant-efficiency sources like gas).
+
+        Returns: (predicted_temp_var, heating_demand_arr) for downstream
+        plotting / publishing.
+        """
+        tank = self._get_shared_thermal_tanks()[tank_idx]
+        tank_id = tank.get("id", f"tank{tank_idx}")
+        required_len = self.num_timesteps
+        load_ids = [int(k) for k in tank.get("load_ids", [])]
+        if not load_ids:
+            return None, None
+
+        # Tank physics
+        volume = tank["volume"]
+        density = tank.get("density", 1000)
+        heat_capacity = tank.get("heat_capacity", 4.186)
+        if density <= 0 or heat_capacity <= 0 or volume <= 0:
+            raise ValueError(
+                f"Shared tank {tank_id}: positive volume/density/heat_capacity required"
+            )
+        conversion = 3600 / (density * heat_capacity * volume)
+
+        start_temperature = float(tank.get("start_temperature", 20.0))
+        max_temperatures_list = tank.get("max_temperatures", [])
+        if not max_temperatures_list:
+            raise ValueError(
+                f"Shared tank {tank_id}: requires non-empty max_temperatures"
+            )
+
+        base_loss = tank.get("thermal_loss", 0.045)
+
+        # Outdoor temperature - needed for COP, demand, and the optional
+        # weather-compensated min_temperature_curve.
+        outdoor_temp_arr = self._get_clean_outdoor_temp(data_opt, required_len)
+
+        # Weather-compensated minimum temperature: if `min_temperature_curve` is set,
+        # the tank floor follows the heating curve (radiator emission floor). Combined
+        # with any static `min_temperatures` via element-wise max so the more
+        # conservative floor wins.
+        min_temperatures_list = utils.resolve_min_temperatures(
+            tank, outdoor_temp_arr, required_len
+        )
+        if not min_temperatures_list:
+            raise ValueError(
+                f"Shared tank {tank_id}: requires non-empty min_temperatures "
+                "or min_temperature_curve"
+            )
+
+        # Heating demand resolution: same options as single-source thermal_battery
+        # (draw_off_demand for hot-water tanks; physics or HDD for space heating)
+        hot_water = self._resolve_draw_off_demand(tank, base_loss, required_len)
+        if hot_water is not None:
+            heating_demand, thermal_losses = hot_water
+        else:
+            thermal_losses = np.array(
+                utils.calculate_thermal_loss_signed(
+                    outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
+                    indoor_temperature=start_temperature,
+                    base_loss=base_loss,
+                )[:required_len]
+            )
+            if all(
+                key in tank
+                for key in ["u_value", "envelope_area", "ventilation_rate", "heated_volume"]
+            ):
+                indoor_target_temp = tank.get(
+                    "indoor_target_temperature",
+                    min_temperatures_list[0] if min_temperatures_list else 20.0,
+                )
+                demand = utils.calculate_heating_demand_physics(
+                    u_value=tank["u_value"],
+                    envelope_area=tank["envelope_area"],
+                    ventilation_rate=tank["ventilation_rate"],
+                    heated_volume=tank["heated_volume"],
+                    indoor_target_temperature=indoor_target_temp,
+                    outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
+                    optimization_time_step=int(self.freq.total_seconds() / 60),
+                )
+            elif "specific_heating_demand" in tank and "area" in tank:
+                demand = utils.calculate_heating_demand(
+                    specific_heating_demand=tank["specific_heating_demand"],
+                    floor_area=tank["area"],
+                    outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
+                    base_temperature=tank.get("base_temperature", 18.0),
+                    annual_reference_hdd=tank.get("annual_reference_hdd", 3000.0),
+                    optimization_time_step=int(self.freq.total_seconds() / 60),
+                )
+            else:
+                # No heating demand model - idle tank with losses only
+                demand = [0.0] * required_len
+            heating_demand = np.array(demand[:required_len])
+
+        # Apply surface solar gain if configured at the tank level
+        solar_gain = utils.calculate_surface_solar_gain(
+            tank,
+            data_opt["ghi"].values if "ghi" in data_opt.columns else None,
+            optimization_time_step_minutes=int(self.freq.total_seconds() / 60),
+            length=required_len,
+        )
+        if solar_gain is not None:
+            heating_demand = heating_demand - solar_gain
+
+        # Per-source COP arrays (HP uses Carnot, gas / oil / district use flat
+        # efficiency). Resolve each source's conversion factor from its config.
+        cop_arrays: list[np.ndarray] = []
+        for k in load_ids:
+            src_cfg = self._get_load_source_config(k)
+            cops = utils.resolve_thermal_battery_cop(
+                src_cfg, outdoor_temp_arr.tolist(), length=required_len
+            )
+            cop_arrays.append(np.asarray(cops))
+
+        # Build CVXPY tank temperature variable
+        predicted_temp = cp.Variable(required_len, name=f"temp_shared_{tank_id}")
+        constraints.append(predicted_temp[0] == start_temperature)
+
+        # Heat input is the SUM of contributions from all member sources
+        # raw_heat[t] = sum_k(cop_k[t] * p_deferrable[k][t] / 1000 * dt)
+        raw_heat = 0
+        for k, cops in zip(load_ids, cop_arrays):
+            p_k = self.vars["p_deferrable"][k]
+            raw_heat = raw_heat + cp.multiply(cops[:-1], p_k[:-1]) / 1000 * self.time_step
+
+        # First-order thermal dynamics
+        # T[t+1] = T[t] + conversion * (raw_heat[t] - demand[t] - loss[t])
+        constraints.append(
+            predicted_temp[1:]
+            == predicted_temp[:-1]
+            + conversion
+            * (raw_heat - heating_demand[:-1] - thermal_losses[:-1])
+        )
+
+        # Hard min/max temperature constraints (skipping index 0 - already pinned)
+        min_idx = [
+            i for i, v in enumerate(min_temperatures_list)
+            if v is not None and 0 < i < required_len
+        ]
+        if min_idx:
+            min_vals = np.array([min_temperatures_list[i] for i in min_idx])
+            constraints.append(predicted_temp[min_idx] >= min_vals)
+        max_idx = [
+            i for i, v in enumerate(max_temperatures_list)
+            if v is not None and 0 < i < required_len
+        ]
+        if max_idx:
+            max_vals = np.array([max_temperatures_list[i] for i in max_idx])
+            constraints.append(predicted_temp[max_idx] <= max_vals)
+
+        return predicted_temp, heating_demand
+
     def _add_deferrable_load_constraints(
         self,
         constraints,
@@ -1995,6 +2203,11 @@ class Optimization:
         q_inputs = {}
         penalty_terms_total = 0
         n = self.num_timesteps
+
+        # Compute shared-tank membership once. Used by the per-load loop to
+        # skip loads that belong to a shared tank (handled after the loop)
+        # and again by the is_thermal_battery check below.
+        shared_tank_membership = self._load_shared_tank_membership()
 
         for k in range(self.optim_conf["number_of_deferrable_loads"]):
             self.logger.debug(f"Processing deferrable load {k}")
@@ -2067,11 +2280,14 @@ class Optimization:
                 if penalty_term is not None:
                     penalty_terms_total += penalty_term
 
-            # Thermal Battery Load
+            # Thermal Battery Load - skip if this load is a member of a shared
+            # thermal tank. Shared tanks are handled once per-tank after the
+            # load loop.
             elif (
                 "def_load_config" in self.optim_conf.keys()
                 and len(self.optim_conf["def_load_config"]) > k
                 and "thermal_battery" in self.optim_conf["def_load_config"][k]
+                and k not in shared_tank_membership
             ):
                 pred_temp, heat_demand, q_input_var, penalty_term = (
                     self._add_thermal_battery_constraints(constraints, k, data_opt, p_load)
@@ -2093,7 +2309,7 @@ class Optimization:
                 "def_load_config" in self.optim_conf.keys()
                 and len(self.optim_conf["def_load_config"]) > k
                 and "thermal_battery" in self.optim_conf["def_load_config"][k]
-            )
+            ) or (k in shared_tank_membership)
 
             # Standard Deferrable Load - Energy Constraint
             # Now using parameterized Big-M formulation to allow changing operating hours
@@ -2287,6 +2503,24 @@ class Optimization:
                 # Just bound by nominal power. No binary variables involved.
                 constraints.append(p_deferrable[k] >= 0)
                 constraints.append(p_deferrable[k] <= M)
+
+        # Process shared thermal tanks once each, after the per-load loop. Each
+        # shared tank is fed by N >= 1 deferrable loads; their per-load
+        # thermal_battery dynamics were skipped above.
+        for tank_idx, tank in enumerate(self._get_shared_thermal_tanks()):
+            shared_pred_temp, shared_demand = self._add_shared_thermal_tank_constraints(
+                constraints, tank_idx, data_opt, p_load
+            )
+            if shared_pred_temp is not None:
+                # Surface the tank state on the first member load so downstream
+                # publishing has a temperature column to report. Subsequent
+                # members reuse the same predicted_temp.
+                for k in tank.get("load_ids", []):
+                    k = int(k)
+                    if k not in predicted_temps:
+                        predicted_temps[k] = shared_pred_temp
+                    if k not in heating_demands and shared_demand is not None:
+                        heating_demands[k] = shared_demand
 
         return predicted_temps, heating_demands, penalty_terms_total, q_inputs
 
