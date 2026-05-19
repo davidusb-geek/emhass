@@ -583,7 +583,7 @@ async def _retrieve_and_fit_pv_model(
         return False
     # Call the fit method
     await fcst.adjust_pv_forecast_fit(
-        n_splits=5,
+        n_splits=n_splits,
         regression_model=optim_conf["adjusted_pv_regression_model"],
     )
     return True
