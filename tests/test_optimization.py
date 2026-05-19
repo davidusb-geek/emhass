@@ -723,8 +723,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         }
         self.optim_conf["def_load_config"] = runtimeparams["def_load_config"]
         self.opt = self.create_optimization()
-        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values  # €/kWh
-        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values  # €/kWh
+        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values  # currency/kWh
+        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values  # currency/kWh
         self.opt_res_dayahead = self.opt.perform_optimization(
             self.df_input_data_dayahead,
             self.p_pv_forecast.values.ravel(),

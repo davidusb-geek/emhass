@@ -141,14 +141,14 @@ The following parameters and definitions are only needed if `load_cost_forecast_
 		- period_hp_2:
 			- start: '17:24'
 			- end: '20:24'
-	- `load_peak_hours_cost`: The cost of the electrical energy from the grid during peak hours in €/kWh. Defaults to 0.1907.
-	- `load_offpeak_hours_cost`: The cost of the electrical energy from the grid during non-peak hours in €/kWh. Defaults to 0.1419.
+	- `load_peak_hours_cost`: The cost of the electrical energy from the grid during peak hours in currency/kWh. Defaults to 0.1907.
+	- `load_offpeak_hours_cost`: The cost of the electrical energy from the grid during non-peak hours in currency/kWh. Defaults to 0.1419.
 - `production_price_forecast_method`: Define the method that will be used for PV power production price forecast. This is the price that is paid by the utility for energy injected into the grid. The options are `constant` for a constant fixed value or `csv` to load custom price forecasts from a CSV file. The default CSV file path that will be used is `/data/data_prod_price_forecast.csv`.
 ```{note} 
 
-For all the forecast methods (`weather`, `load_power`, `load_cost` and `production_price`) it is also possible to pass the data from external services using list of values or a dictionary with timestamps. For more information check the dedicated [Passing your own forecast data](https://emhass.readthedocs.io/en/latest/forecasts.html#passing-your-own-forecast-data) section.
+For all the forecast methods (`weather`, `load_power`, `load_cost` and `production_price`) it is also possible to pass the data from external services using a list of values or a dictionary with timestamps. For more information check the dedicated [Passing your own forecast data](https://emhass.readthedocs.io/en/latest/forecasts.html#passing-your-own-forecast-data) section.
 ```
-- `photovoltaic_production_sell_price`: The paid price for energy injected to the grid from excedent PV production in €/kWh. Defaults to 0.065. This parameter is only needed if production_price_forecast_method='constant'.
+- `photovoltaic_production_sell_price`: The paid price for energy injected to the grid from excess PV production in currency/kWh. Defaults to 0.065. This parameter is only needed if production_price_forecast_method='constant'.
 - `set_total_pv_sell`: Set this parameter to true to consider that all the PV power produced is injected to the grid. No direct self-consumption. The default is false, for a system with direct self-consumption.
 - `set_use_adjusted_pv`: Set to True to enable machine learning-based PV forecast adjustment. This uses historical data to train a regression model that corrects PV forecasts based on local conditions. Defaults to False. See the [Forecasts](https://emhass.readthedocs.io/en/latest/forecasts.html#adjusting-pv-forecasts-using-machine-learning) section for more details.
 - `adjusted_pv_regression_model`: The regression model to use for PV forecast adjustment. See `REGRESSION_METHODS` in `machine_learning_regressor.py` for the authoritative list. Currently available: 'LinearRegression', 'RidgeRegression', 'LassoRegression' (default), 'ElasticNet', 'KNeighborsRegressor', 'DecisionTreeRegressor', 'SVR', 'RandomForestRegressor', 'ExtraTreesRegressor', 'GradientBoostingRegressor', 'AdaBoostRegressor', 'MLPRegressor'. Only used when `set_use_adjusted_pv` is True.
