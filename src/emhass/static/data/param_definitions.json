@@ -346,7 +346,7 @@
     },
     "photovoltaic_production_sell_price": {
       "friendly_name": "Constant PV power production price",
-      "Description": "The paid price for energy injected to the grid from excess PV production in €/kWh.",
+      "Description": "The paid price for energy injected to the grid from excess PV production in currency/kWh.",
       "input": "float",
       "default_value": 0.1419,
       "unit": "¤/kWh",
