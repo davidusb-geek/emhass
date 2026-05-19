@@ -41,15 +41,15 @@ def generate_markdown():
         if merged_dt > last_release_dt:
             title = pr["title"]
             user = pr["user"]["login"]
-            labels = [l["name"].lower() for l in pr["labels"]]
+            labels = [lab["name"].lower() for lab in pr["labels"]]
 
             entry = f"- {title} (@{user})"
 
             # 1. Check for Documentation first
-            if any(l in labels for l in ["documentation", "docs"]) or "docs" in title.lower():
+            if any(lab in labels for lab in ["documentation", "docs"]) or "docs" in title.lower():
                 docs.append(entry)
             # 2. Check for Fixes
-            elif any(l in labels for l in ["bug", "fix"]) or title.lower().startswith("fix"):
+            elif any(lab in labels for lab in ["bug", "fix"]) or title.lower().startswith("fix"):
                 fixes.append(entry)
             # 3. Default to Improvements
             else:
