@@ -303,6 +303,60 @@ def resolve_thermal_battery_cop(
     return cops if length is None else cops[:length]
 
 
+def calculate_surface_solar_gain(
+    hc: dict,
+    ghi_forecast: np.ndarray | None,
+    optimization_time_step_minutes: float,
+    length: int | None = None,
+) -> np.ndarray | None:
+    """
+    Compute per-timestep solar energy absorbed by an exposed thermal mass surface.
+
+    Intended for thermal_battery configs that model a thermal store exposed
+    directly to sunlight (a pool, an outdoor tank, a solar-thermal collector
+    routed into a buffer). The gain is independent of the heater and acts
+    as a negative term on `heating_demand` (i.e. the optimizer needs less
+    pumped heat to maintain temperature when there is solar gain).
+
+    Reuses the existing GHI forecast that EMHASS already fetches for PV. No
+    second weather API call is required.
+
+    :param hc: The thermal_battery sub-config dict. Reads two keys:
+        - `solar_absorption_area`: effective horizontal absorption surface (m²).
+        - `solar_absorption_factor`: fraction of GHI absorbed by the thermal
+          mass (typical pool with no cover: 0.7-0.9; covered pool: 0.2-0.4).
+          Defaults to 0.7 if absent.
+    :param ghi_forecast: Global horizontal irradiance forecast in W/m² per
+        timestep. Pass None or zero-length array to skip gain.
+    :param optimization_time_step_minutes: Timestep duration in minutes.
+    :param length: Truncate / pad the returned array to this length.
+    :return: Solar gain in kWh per timestep, or None if not applicable.
+    """
+    absorption_area = hc.get("solar_absorption_area")
+    if absorption_area is None or float(absorption_area) <= 0:
+        return None
+    if ghi_forecast is None:
+        return None
+
+    ghi_arr = np.asarray(ghi_forecast, dtype=float)
+    if length is not None:
+        if len(ghi_arr) < length:
+            ghi_arr = np.concatenate(
+                (ghi_arr, np.zeros(length - len(ghi_arr)))
+            )
+        else:
+            ghi_arr = ghi_arr[:length]
+
+    absorption_factor = float(hc.get("solar_absorption_factor", 0.7))
+    if absorption_factor < 0:
+        raise ValueError(
+            f"thermal_battery solar_absorption_factor must be >= 0, got {absorption_factor}"
+        )
+    dt_hours = optimization_time_step_minutes / 60.0
+    # W/m² * m² * factor / 1000 (kW per W) * hours = kWh
+    return ghi_arr * float(absorption_area) * absorption_factor / 1000.0 * dt_hours
+
+
 def calculate_thermal_loss_signed(
     outdoor_temperature_forecast: np.ndarray | pd.Series,
     indoor_temperature: float,

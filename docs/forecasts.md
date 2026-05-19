@@ -179,6 +179,30 @@ See the [machine learning forecaster](mlforecaster.md) section for more details.
 
 The default method for load cost forecast is defined for a peak and non-peak hours contract type. This is obtained using `method=hp_hc_periods`.
 
+### Per-deferrable-load cost overrides (hybrid heating)
+
+By default, every deferrable load is priced at the shared `load_cost_forecast` (the electricity tariff). For hybrid heating setups - where one deferrable load runs on a different commodity than another (e.g. a heat pump on electricity and a gas boiler on gas) - the shared cost track is wrong: it would dispatch both loads as if they cost the same per kWh.
+
+To handle this, EMHASS supports an optional `cost_forecast_per_deferrable_load` parameter in `optim_conf`. It's a list with one entry per deferrable load:
+
+- `null` (or `None`) for a load → keep the shared `load_cost_forecast` (default).
+- A list of floats (length equal to the forecast horizon, units `Currency/kWh`) → price that load at its own per-timestep rate.
+
+Example: heat pump on `deferrable0` keeps the electricity tariff; gas boiler on `deferrable1` is priced against a flat gas rate of `0.085 €/kWh`:
+
+```json
+{
+  "cost_forecast_per_deferrable_load": [
+    null,
+    [0.085, 0.085, 0.085, ...]
+  ]
+}
+```
+
+The objective adds an adjustment term `(per_load_cost - load_cost) * p_deferrable[k]` for each load with an override. When the override is unset the adjustment is identically zero, so existing setups are unaffected.
+
+Note: this parameter only adjusts the cost in the objective; it does NOT remove a non-electric load from the electric power-balance constraint. For a gas boiler load, configure `nominal_power_of_deferrable_loads[k]` in the gas-input units you want the optimizer to dispatch, and exclude that load from the household electric `load_forecast` so the grid balance reflects only true electric demand.
+
 When using this method you can provide a list of peak-hour periods, so you can add as many peak-hour periods as possible.
 
 As an example for a two peak-hour periods contract you will need to define the following list in the configuration file:

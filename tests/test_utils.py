@@ -2473,6 +2473,82 @@ class TestResolveThermalBatteryCop(unittest.TestCase):
         self.assertIn("outdoor_temperature_forecast", str(ctx.exception))
 
 
+class TestCalculateSurfaceSolarGain(unittest.TestCase):
+    """Tests for the pool/outdoor-thermal-mass solar absorption helper."""
+
+    def test_returns_none_when_absorption_area_unset(self):
+        hc = {}  # no solar_absorption_area
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([500.0, 600.0]), optimization_time_step_minutes=30, length=2
+        )
+        self.assertIsNone(result)
+
+    def test_returns_none_when_absorption_area_zero(self):
+        hc = {"solar_absorption_area": 0.0}
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([500.0]), optimization_time_step_minutes=30, length=1
+        )
+        self.assertIsNone(result)
+
+    def test_returns_none_when_ghi_forecast_none(self):
+        hc = {"solar_absorption_area": 30.0}
+        result = utils.calculate_surface_solar_gain(
+            hc, None, optimization_time_step_minutes=30, length=4
+        )
+        self.assertIsNone(result)
+
+    def test_computes_expected_gain(self):
+        """100 W/m² over 30 min on a 30 m² pool at 0.7 absorption =
+        100 * 30 * 0.7 / 1000 * 0.5 = 1.05 kWh per timestep."""
+        hc = {"solar_absorption_area": 30.0, "solar_absorption_factor": 0.7}
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([100.0, 200.0]), optimization_time_step_minutes=30, length=2
+        )
+        np.testing.assert_array_almost_equal(result, np.array([1.05, 2.10]))
+
+    def test_default_absorption_factor_is_0_7(self):
+        hc = {"solar_absorption_area": 30.0}
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([1000.0]), optimization_time_step_minutes=60, length=1
+        )
+        # 1000 * 30 * 0.7 / 1000 * 1 = 21 kWh
+        np.testing.assert_array_almost_equal(result, np.array([21.0]))
+
+    def test_length_pads_with_zero(self):
+        """When ghi is shorter than length, pad with zeros (no solar at night)."""
+        hc = {"solar_absorption_area": 10.0, "solar_absorption_factor": 0.5}
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([200.0]), optimization_time_step_minutes=60, length=3
+        )
+        # First slot: 200*10*0.5/1000*1 = 1.0 kWh; remaining padded to zero
+        np.testing.assert_array_almost_equal(result, np.array([1.0, 0.0, 0.0]))
+
+    def test_length_truncates_excess(self):
+        hc = {"solar_absorption_area": 10.0, "solar_absorption_factor": 1.0}
+        ghi = np.array([100.0, 200.0, 300.0, 400.0, 500.0])
+        result = utils.calculate_surface_solar_gain(
+            hc, ghi, optimization_time_step_minutes=60, length=2
+        )
+        self.assertEqual(len(result), 2)
+        np.testing.assert_array_almost_equal(result, np.array([1.0, 2.0]))
+
+    def test_negative_absorption_factor_raises(self):
+        hc = {"solar_absorption_area": 10.0, "solar_absorption_factor": -0.1}
+        with self.assertRaises(ValueError) as ctx:
+            utils.calculate_surface_solar_gain(
+                hc, np.array([100.0]), optimization_time_step_minutes=60, length=1
+            )
+        self.assertIn(">= 0", str(ctx.exception))
+
+    def test_zero_absorption_factor_returns_zero_array(self):
+        """A fully-covered pool (factor=0) absorbs nothing."""
+        hc = {"solar_absorption_area": 30.0, "solar_absorption_factor": 0.0}
+        result = utils.calculate_surface_solar_gain(
+            hc, np.array([500.0, 600.0]), optimization_time_step_minutes=30, length=2
+        )
+        np.testing.assert_array_almost_equal(result, np.zeros(2))
+
+
 class TestRuntimeBanner(unittest.TestCase):
     def test_log_runtime_banner_logs_info(self):
         from emhass.utils import log_runtime_banner
