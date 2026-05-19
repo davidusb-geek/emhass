@@ -40,6 +40,7 @@
   "number_of_deferrable_loads": 2,
   "nominal_power_of_deferrable_loads": [3000.0, 750.0],
   "minimum_power_of_deferrable_loads": [0.0, 0.0],
+  "cost_forecast_per_deferrable_load": [null, null],
   "operating_hours_of_each_deferrable_load": [4, 0],
   "weather_forecast_method": "open-meteo",
   "open_meteo_cache_max_age": 30,
