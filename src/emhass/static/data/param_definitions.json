@@ -5,110 +5,128 @@
       "Description": "Define the type of cost function.",
       "input": "select",
       "select_options": ["profit", "cost", "self-consumption"],
-      "default_value": "profit"
+      "default_value": "profit",
+      "unit": "none"
     },
     "sensor_power_photovoltaics": {
       "friendly_name": "Sensor power photovoltaic",
       "Description": "This is the name of the photovoltaic power-produced sensor in Watts from Home Assistant. For example: ‘sensor.power_photovoltaics’.",
       "input": "string",
-      "default_value": "sensor.power_photovoltaics"
+      "default_value": "sensor.power_photovoltaics",
+      "unit": "none"
     },
     "sensor_power_photovoltaics_forecast": {
       "friendly_name": "Sensor power photovoltaic forecast",
       "Description": "This is the name of the photovoltaic forecast sensor in Watts from Home Assistant. For example: ‘sensor.p_pv_forecast’.",
       "input": "string",
-      "default_value": "sensor.p_pv_forecast"
+      "default_value": "sensor.p_pv_forecast",
+      "unit": "none"
     },
     "sensor_power_load_no_var_loads": {
       "friendly_name": "Sensor power loads with no variable loads",
       "Description": "The name of the household power consumption sensor in Watts from Home Assistant. The deferrable loads that we will want to include in the optimization problem should be subtracted from this sensor in HASS. For example: ‘sensor.power_load_no_var_loads’",
       "input": "string",
-      "default_value": "sensor.power_load_no_var_loads"
+      "default_value": "sensor.power_load_no_var_loads",
+      "unit": "none"
     },
     "sensor_replace_zero": {
       "friendly_name": "Sensor to replace NAN values with 0s",
       "Description": "The list of retrieved variables that we would want to replace NANs (if they exist) with zeros.",
       "input": "array.string",
-      "default_value": "sensor.power_photovoltaics"
+      "default_value": "sensor.power_photovoltaics",
+      "unit": "none"
     },
     "sensor_linear_interp": {
       "friendly_name": "Sensor to replace NAN values with linear interpolation",
       "Description": "The list of retrieved variables that we would want to interpolate NANs values using linear interpolation",
       "input": "array.string",
-      "default_value": "sensor.power_photovoltaics"
+      "default_value": "sensor.power_photovoltaics",
+      "unit": "none"
     },
     "ssl_no_verify": {
       "friendly_name": "SSL no verify",
       "Description": "Set to true to disable SSL verification when connecting to Home Assistant. Useful if using self-signed certificates (HTTPS with IP address).",
       "input": "boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     },
     "use_websocket": {
       "friendly_name": "Use Home Assistant websocket for data retrieval",
       "Description": "Enable Home Assistant websocket as data source instead of Home Assistant API. This allows for longer historical data retention and better performance for machine learning models.",
       "input": "boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     },
     "use_influxdb": {
       "friendly_name": "Use InfluxDB (1.x) for data retrieval",
       "Description": "Enable InfluxDB as data source instead of Home Assistant API. This allows for longer historical data retention and better performance for machine learning models. Only supports version 1.x.",
       "input": "boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     },
     "influxdb_host": {
       "friendly_name": "InfluxDB host",
       "Description": "The IP address or hostname of your InfluxDB instance. Defaults to localhost.",
       "input": "string",
-      "default_value": "localhost"
+      "default_value": "localhost",
+      "unit": "none"
     },
     "influxdb_port": {
       "friendly_name": "InfluxDB port",
       "Description": "The port number for your InfluxDB instance. Defaults to 8086.",
       "input": "int",
-      "default_value": 8086
+      "default_value": 8086,
+      "unit": "count"
     },
     "influxdb_database": {
       "friendly_name": "InfluxDB database name",
       "Description": "The name of the InfluxDB database containing your Home Assistant data. Defaults to 'homeassistant'.",
       "input": "string",
-      "default_value": "homeassistant"
+      "default_value": "homeassistant",
+      "unit": "none"
     },
     "influxdb_measurement": {
       "friendly_name": "InfluxDB measurement name",
       "Description": "The measurement name where your sensor data is stored. Defaults to 'W' for the Home Assistant integration.",
       "input": "string",
-      "default_value": "W"
+      "default_value": "W",
+      "unit": "none"
     },
     "influxdb_retention_policy": {
       "friendly_name": "InfluxDB retention policy",
       "Description": "The retention policy to use for InfluxDB queries. Defaults to 'autogen'.",
       "input": "string",
-      "default_value": "autogen"
+      "default_value": "autogen",
+      "unit": "none"
     },
     "influxdb_use_ssl": {
       "friendly_name": "Use HTTPS on InfluxDB connection",
       "Description": "Enables HTTPS on InfluxDB connections. Defaults to 'false'.",
       "input": "boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     },
     "influxdb_verify_ssl": {
       "friendly_name": "Verify HTTPS on InfluxDB connection",
       "Description": "Enables SSL verification of the certificate (e.g. Let's Encrypt) on InfluxDB connections. Defaults to 'false'.",
       "input": "boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     },
     "continual_publish": {
       "friendly_name": "Continually publish optimization results",
       "Description": "set to True to save entities to .json after an optimization run. Then automatically republish the saved entities (with updated current state value) every freq minutes. entity data saved to data_path/entities.",
       "input": "boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     },
     "logging_level": {
       "friendly_name": "Logging level",
       "Description": "DEBUG provides detailed diagnostic information, INFO gives general operational messages, WARNING highlights potential issues, and ERROR indicates critical problems that may disrupt functionality.",
       "input": "select",
       "select_options": ["INFO", "DEBUG", "WARNING", "ERROR"],
-      "default_value": "INFO"
+      "default_value": "INFO",
+      "unit": "none"
     }
   },
   "System": {
@@ -116,142 +134,165 @@
       "friendly_name": "Optimization steps per minute (timesteps)",
       "Description": "The time step to resample retrieved data from hass. This parameter is given in minutes. It should not be defined too low or you will run into memory problems when defining the Linear Programming optimization. Defaults to 30",
       "input": "int",
-      "default_value": 30
+      "default_value": 30,
+      "unit": "min"
     },
     "historic_days_to_retrieve": {
       "friendly_name": "Historic days to retrieve",
       "Description": "We will retrieve data from now to days_to_retrieve days. Defaults to 2",
       "input": "int",
-      "default_value": 2
+      "default_value": 2,
+      "unit": "days"
     },
     "load_negative": {
       "friendly_name": "Load negative values",
       "Description": "Set this parameter to True if the retrieved load variable is negative by convention. Defaults to False",
       "input": "boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     },
     "set_zero_min": {
       "friendly_name": "Remove Negatives",
       "Description": "Set this parameter to True to give a special treatment for a minimum value saturation to zero for power consumption data. Values below zero are replaced by nans. Defaults to True.",
       "input": "boolean",
-      "default_value": true
+      "default_value": true,
+      "unit": "none"
     },
     "method_ts_round": {
       "friendly_name": "Timestamp rounding method",
       "Description": "Set the method for timestamp rounding, options are: first, last and nearest.",
       "input": "select",
       "select_options": ["nearest", "first", "last"],
-      "default_value": "nearest"
+      "default_value": "nearest",
+      "unit": "none"
     },
     "delta_forecast_daily": {
       "friendly_name": "Number of forecasted days",
       "Description": "The number of days for forecasted data. Defaults to 1.",
       "input": "int",
-      "default_value": 1
+      "default_value": 1,
+      "unit": "days"
     },
     "load_forecast_method": {
       "friendly_name": "Load forecast method",
       "Description": "The load forecast method that will be used. The options are ‘csv’ to load a CSV file or ‘naive’ for a simple 1-day persistence model.",
       "input": "select",
       "select_options": ["typical", "naive", "mlforecaster", "csv"],
-      "default_value": "typical"
+      "default_value": "typical",
+      "unit": "none"
     },
     "set_total_pv_sell": {
       "friendly_name": "PV straight to grid",
       "Description": "Set this parameter to true to consider that all the PV power produced is injected to the grid. No direct self-consumption. The default is false, for a system with direct self-consumption.",
       "input": "boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     },
     "num_threads": {
       "friendly_name": "Number of threads to use for the LP solver",
       "Description": "Set the number of threads for the LP solver to use, when supported by the solver. Defaults to 0 (autodetect)",
       "input": "int",
-      "default_value": 0
+      "default_value": 0,
+      "unit": "count"
     },
     "lp_solver_timeout": {
       "friendly_name": "Linear programming solver timeout",
       "Description": "Set the maximum time (in seconds) for the LP solver. Defaults to 45.",
       "input": "int",
-      "default_value": 45
+      "default_value": 45,
+      "unit": "s"
     },
     "lp_solver_mip_rel_gap": {
       "friendly_name": "MIP relative gap tolerance",
       "Description": "For mixed-integer problems (with binary variables), the solver stops when the solution is within this percentage of optimal. Valid range: 0 to 1 (0% to 100%). Higher values (e.g., 0.05 = 5%) solve faster with minimal quality loss. Recommended: 0.05 for ~2x speedup. Defaults to 0 (exact optimal).",
       "input": "float",
-      "default_value": 0.00
+      "default_value": 0.00,
+      "unit": "fraction"
     },
     "weather_forecast_method": {
       "friendly_name": "Weather forecast method",
       "Description": "This will define the weather forecast method that will be used. options are 'open-meteo', 'Solcast', 'solar.forecast' (forecast.solar) and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts.",
       "input": "select",
       "select_options": ["open-meteo", "solcast", "solar.forecast", "csv"],
-      "default_value": "open-meteo"
+      "default_value": "open-meteo",
+      "unit": "none"
     },
     "open_meteo_cache_max_age": {
       "friendly_name": "Open-Meteo Cache Max Age",
       "Description": "The maximum age, in minutes, of the cached open-meteo json response, after which a new version will be fetched from Open-Meteo. Defaults to 30.",
       "input": "int",
-      "default_value": 30
+      "default_value": 30,
+      "unit": "min"
     },
     "maximum_power_from_grid": {
       "friendly_name": "Max power from grid",
       "Description": "The maximum power that can be supplied by the utility grid in Watts (consumption). Defaults to 9000.",
       "input": "int",
-      "default_value": 9000
+      "default_value": 9000,
+      "unit": "W"
     },
     "maximum_power_to_grid": {
       "friendly_name": "Max export power to grid",
       "Description": "The maximum power that can be supplied to the utility grid in Watts (injection). Defaults to 9000.",
       "input": "int",
-      "default_value": 9000
+      "default_value": 9000,
+      "unit": "W"
     },
     "inverter_is_hybrid": {
       "friendly_name": "Inverter is a hybrid",
       "Description": "Set to True to consider that the installation inverter is hybrid for PV and batteries (Default False)",
       "input": "boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     },
     "inverter_ac_output_max": {
       "friendly_name": "Max hybrid inverter AC output power",
       "Description": "Maximum hybrid inverter output power from combined PV and battery discharge.",
       "input": "int",
-      "default_value": 0
+      "default_value": 0,
+      "unit": "W"
     },
     "inverter_ac_input_max": {
       "friendly_name": "Max hybrid inverter AC input power",
       "Description": "Maximum hybrid inverter input power from grid to charge battery.",
       "input": "int",
-      "default_value": 0
+      "default_value": 0,
+      "unit": "W"
     },
     "inverter_efficiency_dc_ac": {
       "friendly_name": "Hybrid inverter efficency DC to AC",
       "Description": "Hybrid inverter efficiency from the DC bus to AC output. (percentage/100)",
       "input": "float",
-      "default_value": 1.0
+      "default_value": 1.0,
+      "unit": "fraction"
     },
     "inverter_efficiency_ac_dc": {
       "friendly_name": "Hybrid inverter efficency AC to DC",
       "Description": "Hybrid inverter efficiency when charging from the AC input to DC bus. (percentage/100)",
       "input": "float",
-      "default_value": 1.0
+      "default_value": 1.0,
+      "unit": "fraction"
     },
     "inverter_stress_cost": {
       "friendly_name": "Hybrid Inverter Stress Cost",
       "Description": "A virtual cost (Currency/kWh) applied at the inverter's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows.",
       "input": "float",
-      "default_value": 0.0
+      "default_value": 0.0,
+      "unit": "¤/kWh"
     },
     "inverter_stress_segments": {
       "friendly_name": "Hybrid Inverter Stress Segments",
       "Description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time.",
       "input": "int",
-      "default_value": 10
+      "default_value": 10,
+      "unit": "count"
     },
     "compute_curtailment": {
       "friendly_name": "Set compute curtailment (grid export limit)",
       "Description": "Set to True to compute a special PV curtailment variable (Default False)",
       "input": "boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     }
   },
   "Tariff": {
@@ -260,7 +301,8 @@
       "Description": "Define the method that will be used for load cost forecast. The options are ‘hp_hc_periods’ for peak and non-peak hours contracts, and ‘csv’ to load custom cost from CSV file.",
       "input": "select",
       "select_options": ["hp_hc_periods", "csv"],
-      "default_value": "hp_hc_periods"
+      "default_value": "hp_hc_periods",
+      "unit": "none"
     },
     "load_peak_hour_periods": {
       "friendly_name": "List peak hour periods",
@@ -269,6 +311,7 @@
       "default_value": {
         "period_hp_template": [{ "start": "02:54" }, { "end": "15:24" }]
       },
+      "unit": "none",
       "requires": {
         "load_cost_forecast_method": "hp_hc_periods"
       }
@@ -280,7 +323,8 @@
       "requires": {
         "load_cost_forecast_method": "hp_hc_periods"
       },
-      "default_value": 0.1907
+      "default_value": 0.1907,
+      "unit": "¤/kWh"
     },
     "load_offpeak_hours_cost": {
       "friendly_name": "Off-peak hours electrical energy cost",
@@ -289,20 +333,23 @@
       "requires": {
         "load_cost_forecast_method": "hp_hc_periods"
       },
-      "default_value": 0.1419
+      "default_value": 0.1419,
+      "unit": "¤/kWh"
     },
     "production_price_forecast_method": {
       "friendly_name": "PV power production price forecast method",
       "Description": "Define the method that will be used for PV power production price forecast. This is the price that is paid by the utility for energy injected into the grid. The options are ‘constant’ for a constant fixed value or ‘csv’ to load custom price forecasts from a CSV file.",
       "input": "select",
       "select_options": ["constant", "csv"],
-      "default_value": "constant"
+      "default_value": "constant",
+      "unit": "none"
     },
     "photovoltaic_production_sell_price": {
       "friendly_name": "Constant PV power production price",
       "Description": "The paid price for energy injected to the grid from excess PV production in €/kWh.",
       "input": "float",
       "default_value": 0.1419,
+      "unit": "¤/kWh",
       "requires": {
         "production_price_forecast_method": "constant"
       }
@@ -313,13 +360,15 @@
       "friendly_name": "Enable PV system",
       "Description": "Set to True if we should consider an solar PV system. Defaults to False",
       "input": "boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     },
     "set_use_adjusted_pv": {
       "friendly_name": "Enable adjusted PV system",
       "Description": "Set to True if we should consider an adjusted solar PV system. Defaults to False",
       "input": "boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     },
     "adjusted_pv_regression_model": {
       "friendly_name": "Regression model for adjusted PV",
@@ -339,57 +388,66 @@
         "AdaBoostRegressor",
         "MLPRegressor"
       ],
-      "default_value": "LassoRegression"
+      "default_value": "LassoRegression",
+      "unit": "none"
     },
     "adjusted_pv_solar_elevation_threshold": {
       "friendly_name": "Solar elevation threshold",
       "Description": "This is the solar elevation threshold parameter used to identify the early morning or late evening periods. Defaults to 10.",
       "input": "int",
-      "default_value": 10
+      "default_value": 10,
+      "unit": "°"
     },
     "adjusted_pv_model_max_age": {
       "friendly_name": "Adjusted PV model maximum age",
       "Description": "Maximum age in hours before the adjusted PV regression model is re-fitted. If the saved model is older than this value, a new model will be trained using fresh historical data. Set to 0 to force re-fitting on every call. Defaults to 24 hours (1 day).",
       "input": "int",
-      "default_value": 24
+      "default_value": 24,
+      "unit": "h"
     },
     "pv_module_model": {
       "friendly_name": "PV module model",
       "Description": "The PV module model. Enter the exact CEC database name, or enter the nominal power in Watts (e.g., 300) to automatically use the closest matching panel. Can be a list for mixed orientation systems.",
       "input": "array.string",
       "input_attributes": "_'s",
-      "default_value": "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M"
+      "default_value": "CSUN_Eurasia_Energy_Systems_Industry_and_Trade_CSUN295_60M",
+      "unit": "none"
     },
     "pv_inverter_model": {
       "friendly_name": "PV inverter model",
       "Description": "The PV inverter model. Enter the exact CEC database name, or enter the nominal AC power in Watts (e.g., 5000) to automatically use the closest matching inverter. Can be a list for mixed orientation systems.",
       "input": "array.string",
       "input_attributes": "_'s",
-      "default_value": "Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_"
+      "default_value": "Fronius_International_GmbH__Fronius_Primo_5_0_1_208_240__240V_",
+      "unit": "none"
     },
     "surface_tilt": {
       "friendly_name": "The PV panel tilt",
       "Description": "The tilt angle of your solar panels. Defaults to 30. This parameter can be a list of items to enable the simulation of mixed orientation systems.",
       "input": "array.int",
-      "default_value": 30
+      "default_value": 30,
+      "unit": "°"
     },
     "surface_azimuth": {
       "friendly_name": "The PV azimuth (direction)",
       "Description": "The azimuth of your PV installation. Defaults to 205. This parameter can be a list of items to enable the simulation of mixed orientation systems.",
       "input": "array.int",
-      "default_value": 205
+      "default_value": 205,
+      "unit": "°"
     },
     "modules_per_string": {
       "friendly_name": "Number of modules per string",
       "Description": "The number of modules per string. Defaults to 16. This parameter can be a list of items to enable the simulation of mixed orientation systems.",
       "input": "array.int",
-      "default_value": 16
+      "default_value": 16,
+      "unit": "count"
     },
     "strings_per_inverter": {
       "friendly_name": "Number of strings per inverter",
       "Description": "The number of used strings per inverter. Defaults to 1. This parameter can be a list of items to enable the simulation of mixed orientation systems.",
       "input": "array.int",
-      "default_value": 1
+      "default_value": 1,
+      "unit": "count"
     }
   },
   "Deferrable Loads": {
@@ -397,61 +455,71 @@
       "friendly_name": "Number of deferrable loads",
       "Description": "Define the number of deferrable loads (appliances to shift) to consider. Defaults to 2.",
       "input": "int",
-      "default_value": 2
+      "default_value": 2,
+      "unit": "count"
     },
     "nominal_power_of_deferrable_loads": {
       "friendly_name": "Deferrable load nominal power",
       "Description": "The nominal (calculated max) power for each deferrable load in Watts.",
       "input": "array.float",
-      "default_value": 3000.0
+      "default_value": 3000.0,
+      "unit": "W"
     },
     "minimum_power_of_deferrable_loads": {
       "friendly_name": "Deferrable load minimum power",
       "Description": "The minimum power for each deferrable load in Watts.",
       "input": "array.float",
-      "default_value": 0.0
+      "default_value": 0.0,
+      "unit": "W"
     },
     "operating_hours_of_each_deferrable_load": {
       "friendly_name": "Deferrable load operating hours",
       "Description": "The total number of hours that each deferrable load should operate",
       "input": "array.int",
-      "default_value": 0
+      "default_value": 0,
+      "unit": "h"
     },
     "treat_deferrable_load_as_semi_cont": {
       "friendly_name": "Deferrable load as semi-continuous (on/off) variable",
       "Description": "When configuring a deferrable load, set treat_deferrable_load_as_semi_cont = True if the device should only switch fully on or off (for example, a basic hot water heater), or set treat_deferrable_load_as_semi_cont = False if the device supports variable power control within its range (for example, an EV charger with adjustable charging rate).",
       "input": "array.boolean",
-      "default_value": true
+      "default_value": true,
+      "unit": "none"
     },
     "set_deferrable_load_single_constant": {
       "friendly_name": "Deferrable load run single constant per optimization",
       "Description": "Define if we should set each deferrable load as a constant fixed value variable with just one startup for each optimization task",
       "input": "array.boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     },
     "set_deferrable_startup_penalty": {
       "friendly_name": "Set deferrable startup penalty",
       "Description": "For penalty P, each time the deferrable load turns on will incur an additional cost of nominal_power (kW) * cost_of_electricity * time step at that time",
       "input": "array.float",
-      "default_value": 0.0
+      "default_value": 0.0,
+      "unit": "none"
     },
     "set_deferrable_max_startups": {
       "friendly_name": "Maximum startups for deferrable loads",
       "Description": "Set the maximum number of times each deferrable load can be turned on during the optimization horizon. Set to 0 to disable this limit.",
       "input": "array.int",
-      "default_value": 0
+      "default_value": 0,
+      "unit": "count"
     },
     "start_timesteps_of_each_deferrable_load": {
       "friendly_name": "Deferrable start timestamp",
       "Description": "The timestep as from which each deferrable load is allowed to operate (if you don’t want the deferrable load to use the whole optimization time window). If you specify a value of 0 (or negative), the deferrable load will be optimized as from the beginning of the complete prediction horizon window.",
       "input": "array.int",
-      "default_value": 0
+      "default_value": 0,
+      "unit": "timesteps"
     },
     "end_timesteps_of_each_deferrable_load": {
       "friendly_name": "Deferrable end timestamp",
       "Description": "The timestep before which each deferrable load should operate. The deferrable load is not allowed to operate after the specified time step. If a value of 0 (or negative) is provided, the deferrable load is allowed to operate in the complete optimization window)",
       "input": "array.int",
-      "default_value": 0
+      "default_value": 0,
+      "unit": "timesteps"
     }
   },
   "Battery": {
@@ -459,31 +527,36 @@
       "friendly_name": "Enable Battery",
       "Description": "Set to True if we should consider an energy storage device such as a Li-Ion battery. Defaults to False",
       "input": "boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     },
     "set_nocharge_from_grid": {
       "friendly_name": "Forbid charging battery from grid",
       "Description": "Set this to true if you want to forbid charging the battery from the grid. The battery will only be charged from excess PV",
       "input": "boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     },
     "set_nodischarge_to_grid": {
       "friendly_name": "Forbid battery discharge to the grid",
       "Description": "Set this to true if you want to forbid discharging battery power to the grid.",
       "input": "boolean",
-      "default_value": true
+      "default_value": true,
+      "unit": "none"
     },
     "set_battery_dynamic": {
       "friendly_name": "Set Battery dynamic (dis)charge power limiting",
       "Description": "Set a power dynamic limiting condition to the battery power. This is an additional constraint on the battery dynamic in power per unit of time (timestep), which allows you to set a percentage of the battery’s nominal full power as the maximum power allowed for (dis)charge.",
       "input": "boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     },
     "battery_dynamic_max": {
       "friendly_name": "Maximum percentage of battery discharge per hour",
       "Description": "The maximum positive (for discharge) allowed power variation (in percentage of battery maximum power) per hour. The solver will automatically scale this limit down based on your chosen timestep duration.",
       "input": "float",
       "default_value": 0.9,
+      "unit": "fraction",
       "requires": {
         "set_battery_dynamic": true
       }
@@ -493,6 +566,7 @@
       "Description": "The maximum negative (for charge) allowed power variation (in percentage of battery maximum power) per hour. The solver will automatically scale this limit down based on your chosen timestep duration.",
       "input": "float",
       "default_value": -0.9,
+      "unit": "fraction",
       "requires": {
         "set_battery_dynamic": true
       }
@@ -501,79 +575,92 @@
       "friendly_name": "Add cost weight for battery discharge",
       "Description": "An additional weight (currency/ kWh) applied in the cost function to battery usage for discharging",
       "input": "float",
-      "default_value": 0.0
+      "default_value": 0.0,
+      "unit": "¤/kWh"
     },
     "weight_battery_charge": {
       "friendly_name": "Add cost weight for battery charge",
       "Description": "An additional weight (currency/ kWh) applied in the cost function to battery usage for charging",
       "input": "float",
-      "default_value": 0.0
+      "default_value": 0.0,
+      "unit": "¤/kWh"
     },
     "battery_discharge_power_max": {
       "friendly_name": "Max battery discharge power",
       "Description": "The maximum discharge power in Watts",
       "input": "int",
-      "default_value": 1000
+      "default_value": 1000,
+      "unit": "W"
     },
     "battery_charge_power_max": {
       "friendly_name": "Max battery charge power",
       "Description": "The maximum charge power in Watts",
       "input": "int",
-      "default_value": 1000
+      "default_value": 1000,
+      "unit": "W"
     },
     "battery_discharge_efficiency": {
       "friendly_name": "Battery discharge efficiency",
       "Description": "The discharge efficiency. (percentage/100)",
       "input": "float",
-      "default_value": 0.95
+      "default_value": 0.95,
+      "unit": "fraction"
     },
     "battery_charge_efficiency": {
       "friendly_name": "Battery charge efficiency",
       "Description": "The charge efficiency. (percentage/100)",
       "input": "float",
-      "default_value": 0.95
+      "default_value": 0.95,
+      "unit": "fraction"
     },
     "battery_nominal_energy_capacity": {
       "friendly_name": "Battery total capacity",
       "Description": "The total capacity of the battery stack in Wh",
       "input": "int",
-      "default_value": 5000
+      "default_value": 5000,
+      "unit": "Wh"
     },
     "battery_minimum_state_of_charge": {
       "friendly_name": "Minimum Battery charge percentage",
       "Description": "The minimum allowable battery state of charge. (percentage/100)",
       "input": "float",
-      "default_value": 0.3
+      "default_value": 0.3,
+      "unit": "fraction"
     },
     "battery_maximum_state_of_charge": {
       "friendly_name": "Maximum Battery charge percentage",
       "Description": "The maximum allowable battery state of charge. (percentage/100)",
       "input": "float",
-      "default_value": 0.9
+      "default_value": 0.9,
+      "unit": "fraction"
     },
     "battery_target_state_of_charge": {
       "friendly_name": "Battery desired percentage after optimization",
       "Description": "The desired battery state of charge at the end of each optimization cycle. (percentage/100)",
       "input": "float",
-      "default_value": 0.6
+      "default_value": 0.6,
+      "unit": "fraction"
     },
     "battery_stress_cost": {
       "friendly_name": "Battery Stress Cost",
       "Description": "A virtual cost (Currency/kWh) applied at the battery's nominal power to penalise high loads. Currently implemented as a quadratic curve (Cost ∝ Power²), incentivising 'low and slow' operation to reduce thermal stress and smooth power flows.",
       "input": "float",
-      "default_value": 0.0
+      "default_value": 0.0,
+      "unit": "¤/kWh"
     },
     "battery_stress_segments": {
       "friendly_name": "Battery Stress Segments",
       "Description": "The number of linear segments used to approximate the stress cost curve. Higher values increase accuracy but may slightly increase computation time.",
       "input": "int",
-      "default_value": 10
+      "default_value": 10,
+      "unit": "count"
     },
     "ignore_pv_feedback_during_curtailment": {
       "friendly_name": "Ignore PV feedback during curtailment",
       "Description": "When set to true, prevents PV forecast from being updated with real PV data, avoiding flip-flop behavior during curtailment operations",
       "input": "boolean",
-      "default_value": false
+      "default_value": false,
+      "unit": "none"
     }
   }
 }
