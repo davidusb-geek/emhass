@@ -2278,13 +2278,18 @@ class Optimization:
     ):
         """Build the final results DataFrame (Vectorized extraction)."""
         opt_tp = pd.DataFrame(index=data_opt.index)
+        solver_zero_tol = 1e-9
 
         # Helper to safely get value or zeroes
         def get_val(var):
             if var is None:
                 return np.zeros(self.num_timesteps)
             val = var.value
-            return val if val is not None else np.zeros(self.num_timesteps)
+            if val is None:
+                return np.zeros(self.num_timesteps)
+            arr = np.array(val, copy=True)
+            arr[np.isclose(arr, 0.0, atol=solver_zero_tol, rtol=0.0)] = 0.0
+            return arr
 
         # Main Power Variables
         opt_tp["P_PV"] = p_pv
