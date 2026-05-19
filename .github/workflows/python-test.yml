@@ -37,7 +37,7 @@ jobs:
           
       - name: Install EMHASS with test dependencies
         run: |
-          uv sync --reinstall --extra test
+          uv sync --reinstall --upgrade --extra test
           
       - name: Test with pytest
         run: |
