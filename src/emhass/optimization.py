@@ -1224,7 +1224,6 @@ class Optimization:
 
         p_sto_pos = self.vars["p_sto_pos"]
         p_sto_neg = self.vars["p_sto_neg"]
-        p_grid_neg = self.vars["p_grid_neg"]
         E = self.vars["E"]  # Binary: 1=Discharge, 0=Charge
         D = self.vars["D"]  # Binary: 1=Import, 0=Export
         p_pv = self.param_pv_forecast
@@ -2571,13 +2570,18 @@ class Optimization:
     ):
         """Build the final results DataFrame (Vectorized extraction)."""
         opt_tp = pd.DataFrame(index=data_opt.index)
+        solver_zero_tol = 1e-9
 
         # Helper to safely get value or zeroes
         def get_val(var):
             if var is None:
                 return np.zeros(self.num_timesteps)
             val = var.value
-            return val if val is not None else np.zeros(self.num_timesteps)
+            if val is None:
+                return np.zeros(self.num_timesteps)
+            arr = np.array(val, copy=True)
+            arr[np.isclose(arr, 0.0, atol=solver_zero_tol, rtol=0.0)] = 0.0
+            return arr
 
         # Main Power Variables
         opt_tp["P_PV"] = p_pv
