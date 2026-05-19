@@ -324,7 +324,7 @@ def resolve_min_temperatures(
         static = config.get("min_temperature")
     if static is None:
         static = []
-    elif isinstance(static, (int, float)):
+    elif isinstance(static, int | float):
         static = [float(static)]
     curve = config.get("min_temperature_curve")
 
@@ -718,7 +718,7 @@ def compile_heat_topology(topology: dict) -> dict:
             desired = s["desired_temperature"]
         if desired is not None:
             tank["desired_temperatures"] = (
-                list(desired) if isinstance(desired, (list, tuple)) else float(desired)
+                list(desired) if isinstance(desired, list | tuple) else float(desired)
             )
         if "overshoot_temperature" in s:
             tank["overshoot_temperature"] = float(s["overshoot_temperature"])
