@@ -864,6 +864,7 @@ class Optimization:
             vars_dict["soc_high_recovered"] = cp.Variable(
                 n, boolean=True, name="soc_high_recovered"
             )
+            vars_dict["soc_deficit_cost"] = cp.Variable(n, nonneg=True, name= "soc_deficit_cost")
         else:
             # Create dummy zero variables to preserve logic structure without conditional checks everywhere
             vars_dict["p_sto_pos"] = cp.Variable(n, name="p_sto_pos_dummy")
@@ -874,6 +875,8 @@ class Optimization:
             vars_dict["soc_high_recovered"] = cp.Variable(n, name="soc_high_recovered_dummy")
             constraints.append(vars_dict["soc_low_recovered"] == 0)
             constraints.append(vars_dict["soc_high_recovered"] == 0)
+            vars_dict["soc_deficit_cost"] = cp.Variable(n, name="soc_deficit_cost_dummy")
+            constraints.append(vars_dict["soc_deficit_cost"] == 0)
 
         # Self-consumption variable
         if self.costfun == "self-consumption":
@@ -976,7 +979,7 @@ class Optimization:
                 # Maximize SC
                 objective_terms.append(scale * cp.sum(cp.multiply(unit_load_cost, SC)))
 
-        # Battery Cycle Cost Penalty
+        # Battery Cycle Cost and SOC Penalty
         if self.optim_conf["set_use_battery"]:
             # p_sto_neg is negative. -weight*p_sto_neg is a positive penalty value.
             # We subtract this positive penalty from the maximization objective.
@@ -1055,6 +1058,13 @@ class Optimization:
         if batt_stress_conf and batt_stress_conf["active"]:
             self.logger.debug("Adding battery stress cost to objective function")
             objective_terms.append(-cp.sum(batt_stress_conf["vars"]))
+
+        # SOC Deficit Cost (convert to per Wh)
+        if self.optim_conf["set_use_battery"]:
+            soc_deficit_cost = self.vars.get("soc_deficit_cost")
+            if soc_deficit_cost is not None:
+                self.logger.debug(f"Adding SOC deficit cost {soc_deficit_cost}  to objective function: ")
+                objective_terms.append(- cp.sum(soc_deficit_cost))
 
         # Sum all terms to create the final objective expression
         return cp.Maximize(cp.sum(objective_terms))
@@ -1359,6 +1369,15 @@ class Optimization:
                 seg_params,
             )
 
+        # SOC Deficit Cost
+        soc_deficit_threshold = self.optim_conf.get("battery_soc_deficit_threshold", 0.2)
+        soc_deficit_cost_rate = self.optim_conf.get("battery_soc_deficit_cost", 0.0)/1000.  #kWh to Wh
+        if soc_deficit_threshold > 0 and soc_deficit_cost_rate > 0:
+            threshold_energy = soc_deficit_threshold * cap
+            soc_deficit_cost = self.vars["soc_deficit_cost"]
+            constraints.append(soc_deficit_cost >=
+                               (threshold_energy - current_stored_energy)*soc_deficit_cost_rate*self.time_step)
+
     def _add_thermal_load_constraints(self, constraints, k, data_opt, def_init_temp):
         """
         Handle constraints for thermal deferrable loads (Vectorized).
@@ -1599,8 +1618,9 @@ class Optimization:
         required_len = self.num_timesteps
 
         # Structural parameters (don't change between MPC iterations).
-        # supply_temperature / efficiency requirement is validated by
-        # resolve_thermal_battery_cop further down (single source of truth).
+        # supply_temperature / efficiency / heating_curve requirement is
+        # validated by resolve_thermal_battery_cop further down (single
+        # source of truth).
         volume = hc["volume"]
         min_temperatures_list = hc["min_temperatures"]
         max_temperatures_list = hc["max_temperatures"]
@@ -2033,17 +2053,30 @@ class Optimization:
         conversion = 3600 / (density * heat_capacity * volume)
 
         start_temperature = float(tank.get("start_temperature", 20.0))
-        min_temperatures_list = tank.get("min_temperatures", [])
         max_temperatures_list = tank.get("max_temperatures", [])
-        if not min_temperatures_list or not max_temperatures_list:
+        if not max_temperatures_list:
             raise ValueError(
-                f"Shared tank {tank_id}: requires non-empty min_temperatures and max_temperatures"
+                f"Shared tank {tank_id}: requires non-empty max_temperatures"
             )
 
         base_loss = tank.get("thermal_loss", 0.045)
 
-        # Outdoor temperature - needed for COP and demand
+        # Outdoor temperature - needed for COP, demand, and the optional
+        # weather-compensated min_temperature_curve.
         outdoor_temp_arr = self._get_clean_outdoor_temp(data_opt, required_len)
+
+        # Weather-compensated minimum temperature: if `min_temperature_curve` is set,
+        # the tank floor follows the heating curve (radiator emission floor). Combined
+        # with any static `min_temperatures` via element-wise max so the more
+        # conservative floor wins.
+        min_temperatures_list = utils.resolve_min_temperatures(
+            tank, outdoor_temp_arr, required_len
+        )
+        if not min_temperatures_list:
+            raise ValueError(
+                f"Shared tank {tank_id}: requires non-empty min_temperatures "
+                "or min_temperature_curve"
+            )
 
         # Heating demand resolution: same options as single-source thermal_battery
         # (draw_off_demand for hot-water tanks; physics or HDD for space heating)
@@ -2606,6 +2639,10 @@ class Optimization:
             # Stress Cost
             if "batt_stress_cost" in self.vars:
                 opt_tp["batt_stress_cost"] = get_val(self.vars["batt_stress_cost"])
+
+            # SOC Deficit Results
+            if "soc_deficit_cost" in self.vars:
+                opt_tp["soc_deficit_cost"] = get_val(self.vars["soc_deficit_cost"])
 
         # Hybrid Inverter Results
         if self.plant_conf["inverter_is_hybrid"]:

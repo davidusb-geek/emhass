@@ -13,10 +13,10 @@ import orjson
 import pandas as pd
 from pandas.testing import assert_series_equal
 
+from emhass import utils
 from emhass.forecast import Forecast
 from emhass.optimization import Optimization
 from emhass.retrieve_hass import RetrieveHass
-from emhass import utils
 from emhass.utils import (
     build_config,
     build_params,
@@ -2611,7 +2611,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         source_params = {"supply_temperature": 35.0, "carnot_efficiency": 0.40}
 
         # Run A: legacy single-load thermal_battery
-        legacy_a = dict(tank_params); legacy_a.update(source_params)
+        legacy_a = dict(tank_params)
+        legacy_a.update(source_params)
         res_legacy = self.run_optimization_with_config([{"thermal_battery": legacy_a}])
 
         # Run B: same tank declared as shared_thermal_tanks with one member
@@ -4985,6 +4986,136 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 f"Timestep {t}: both loads active (P0={p0[t]:.1f}W, P1={p1[t]:.1f}W)",
             )
 
+    def test_battery_soc_deficit_cost(self):
+        """Test that battery SOC deficit cost prevents battery
+        discharge below threshold unless price difference is
+        sufficient."""
+        
+        # Setup plant configuration for a non-hybrid system
+        # We use a small battery and force a charge event
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": False,
+                "compute_curtailment": False,
+                "battery_nominal_energy_capacity": 2000,  # 2kWh
+                "battery_discharge_power_max": 1000,  # 1kW
+                "battery_charge_power_max": 1000,  # 1kW
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_target_state_of_charge": 1.0,
+            }
+        )
+
+        # Optimization configuration
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "set_nocharge_from_grid": False,  # Allow grid charging
+                "set_nodischarge_to_grid": False,  # Allow grid selling
+                "operating_hours_of_each_deferrable_load": [0, 0],
+                "load_cost_forecast_method": "csv",
+                "production_price_forecast_method": "csv",
+                "battery_soc_deficit_threshold": 0.5,
+            }
+        )
+
+        # Create input data: 4 periods of 30 minutes
+        # Without deficit cost, the solver should discharge the battery
+        # at full power when price is high and then recharge.
+        # With deficit cost, it should only discharge until the deficit
+        # cost negates the price difference.
+        periods = 4
+        dates = pd.date_range(
+            start=pd.Timestamp.now(tz=self.retrieve_hass_conf["time_zone"]),
+            periods=periods,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df_input = pd.DataFrame(index=dates)
+        df_input["p_pv_forecast"] = 0.0
+        df_input["p_load_forecast"] = 0.0
+        df_input[self.fcst.var_prod_price] = [0.2, 0.2, 0.1, 0.1]
+        df_input[self.fcst.var_load_cost] = [0.1, 0.1, 0.1, 0.1]
+
+        # --- Run 1: No Deficit Cost ---
+        self.optim_conf["battery_soc_deficit_cost"] = 0.0
+        self.opt_no_cost = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        opt_res_no_cost = self.opt_no_cost.perform_optimization(
+            df_input,
+            df_input["p_pv_forecast"].values,
+            df_input["p_load_forecast"].values,
+            df_input[self.opt_no_cost.var_load_cost].values,
+            df_input[self.opt_no_cost.var_prod_price].values,
+            soc_init=0.5,
+            soc_final=0.5,
+        )
+
+        # --- Run 2: With Stress Cost of 0.1 per kWh per h ---
+        self.optim_conf["battery_soc_deficit_cost"] = 0.1
+        self.opt_with_cost = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        opt_res_with_cost = self.opt_with_cost.perform_optimization(
+            df_input,
+            df_input["p_pv_forecast"].values,
+            df_input["p_load_forecast"].values,
+            df_input[self.opt_with_cost.var_load_cost].values,
+            df_input[self.opt_with_cost.var_prod_price].values,
+            soc_init=0.5,
+            soc_final=0.5,
+        )
+
+        # Assertions
+        self.assertEqual(self.opt_no_cost.optim_status, "Optimal")
+        self.assertEqual(self.opt_with_cost.optim_status, "Optimal")
+
+        # Verify result column existence
+        self.assertIn("soc_deficit_cost", opt_res_with_cost.columns)
+        self.assertIn("soc_deficit_cost", opt_res_no_cost.columns)
+
+        # Verify SOC without deficit cost. Should be a full discharge
+        # followed by a full charge, for a total gain of 1kWh*0.1 =
+        # 0.1.
+        self.assertEqual(opt_res_no_cost["SOC_opt"].iloc[0], 0.25)
+        self.assertEqual(opt_res_no_cost["SOC_opt"].iloc[1], 0.00)
+        self.assertEqual(opt_res_no_cost["SOC_opt"].iloc[2], 0.25)
+        self.assertEqual(opt_res_no_cost["SOC_opt"].iloc[3], 0.50)
+        logger.debug("soc cost\n{}".format(opt_res_with_cost["SOC_opt"]))
+
+        # Verify SOC with deficit cost. The optimizer can always avoid
+        # a deficit penalty by first charging one timestep and then
+        # discharging for one, for a gain of 0.05.  A significant
+        # deficit cost will make this the preferred action.
+        self.assertEqual(opt_res_with_cost["soc_deficit_cost"].iloc[0], 0.0)
+        self.assertEqual(opt_res_with_cost["soc_deficit_cost"].iloc[1], 0.0)
+        self.assertEqual(opt_res_with_cost["soc_deficit_cost"].iloc[2], 0.0)
+        self.assertEqual(opt_res_with_cost["soc_deficit_cost"].iloc[3], 0.0)
+        
+        self.assertEqual(opt_res_with_cost["SOC_opt"].iloc[0], 0.75)
+        self.assertEqual(opt_res_with_cost["SOC_opt"].iloc[1], 0.50)
+        # it may take any path here as long as it doesn't discharge below 0.5
+        self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[2], 0.50)
+        self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[3], 0.50)
+            
 
 if __name__ == "__main__":
     unittest.main()
