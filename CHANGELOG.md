@@ -43,7 +43,7 @@ We are laying the groundwork for the future of automated coding and custom integ
 - Add a penalty to the battery SOC being below a threshold. (@lutorm)
 - feat(api): add GET /api/v1/last-run JSON endpoint (@OptimalNothing90)
 - feat(schema): add unit field to param_definitions.json (#826) (@OptimalNothing90)
-- chore: add prek pre-commit hooks mirroring CI ruff checks (@kallegrens)
+- chore: add pre-commit hooks mirroring CI ruff checks (@kallegrens)
 - build(deps): update skforecast requirement from <0.21.0,>=0.19.1 to >=0.19.1,<0.23.0 (@dependabot[bot])
 - Feature: heatpump group hotwater (@sokorn)
 - Generalize Load cost forecast value (@m8ram)

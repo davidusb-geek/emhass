@@ -2609,9 +2609,14 @@ class TestResolveMinTemperatures(unittest.TestCase):
 
     def test_curve_only(self):
         """A config with only `min_temperature_curve` returns per-slot derived floor."""
-        cfg = {"min_temperature_curve": {
-            "slope": 1.0, "offset": 35.0, "min_supply": 30.0, "max_supply": 55.0,
-        }}
+        cfg = {
+            "min_temperature_curve": {
+                "slope": 1.0,
+                "offset": 35.0,
+                "min_supply": 30.0,
+                "max_supply": 55.0,
+            }
+        }
         outdoor = np.array([-5.0, 0.0, 5.0, 15.0, 25.0])
         out = utils.resolve_min_temperatures(cfg, outdoor, length=5)
         # at -5: 35-(-5)=40 -> 40
@@ -2626,7 +2631,10 @@ class TestResolveMinTemperatures(unittest.TestCase):
         cfg = {
             "min_temperatures": [20.0, 30.0, 40.0, 50.0, 60.0],
             "min_temperature_curve": {
-                "slope": 1.0, "offset": 35.0, "min_supply": 30.0, "max_supply": 55.0,
+                "slope": 1.0,
+                "offset": 35.0,
+                "min_supply": 30.0,
+                "max_supply": 55.0,
             },
         }
         # curve at outdoor = -5,0,5,15,25 -> [40, 35, 30, 30, 30]
@@ -2638,9 +2646,14 @@ class TestResolveMinTemperatures(unittest.TestCase):
 
     def test_floor_of_30_via_curve_min_supply(self):
         """User-friendly pattern: curve with min_supply=30 keeps buffer at 30 even in summer."""
-        cfg = {"min_temperature_curve": {
-            "slope": 1.0, "offset": 35.0, "min_supply": 30.0, "max_supply": 50.0,
-        }}
+        cfg = {
+            "min_temperature_curve": {
+                "slope": 1.0,
+                "offset": 35.0,
+                "min_supply": 30.0,
+                "max_supply": 50.0,
+            }
+        }
         # Summer outdoor: 20, 25, 30 °C - curve says 15, 10, 5 -> all clipped to 30
         out = utils.resolve_min_temperatures(cfg, np.array([20.0, 25.0, 30.0]), length=3)
         self.assertEqual(out, [30.0, 30.0, 30.0])
@@ -2701,7 +2714,7 @@ class TestResolveThermalBatteryCopHeatingCurve(unittest.TestCase):
         """If both heating_curve and supply_temperature are set, heating_curve wins."""
         hc = {
             "heating_curve": {"slope": 1.0, "offset": 30.0, "min_supply": 25.0, "max_supply": 55.0},
-            "supply_temperature": 55.0,   # would give much lower COP - should be ignored
+            "supply_temperature": 55.0,  # would give much lower COP - should be ignored
             "carnot_efficiency": 0.4,
         }
         outdoor = np.array([10.0])
@@ -2733,14 +2746,28 @@ class TestCompileHeatTopology(unittest.TestCase):
 
     def test_minimal_single_source_single_storage(self):
         topo = {
-            "sources": [{"id": "boiler", "type": "gas", "efficiency": 0.92,
-                         "nominal_power": 25000, "min_power": 8000,
-                         "cost_track": "gas"}],
-            "storage": [{"id": "buf", "volume": 0.05, "start_temperature": 35,
-                         "min_temperature": [25]*48, "max_temperature": [50]*48,
-                         "thermal_loss": 0.06}],
+            "sources": [
+                {
+                    "id": "boiler",
+                    "type": "gas",
+                    "efficiency": 0.92,
+                    "nominal_power": 25000,
+                    "min_power": 8000,
+                    "cost_track": "gas",
+                }
+            ],
+            "storage": [
+                {
+                    "id": "buf",
+                    "volume": 0.05,
+                    "start_temperature": 35,
+                    "min_temperature": [25] * 48,
+                    "max_temperature": [50] * 48,
+                    "thermal_loss": 0.06,
+                }
+            ],
             "flows": [{"from": "boiler", "to": "buf"}],
-            "cost_tracks": {"gas": [0.085]*48},
+            "cost_tracks": {"gas": [0.085] * 48},
         }
         out = utils.compile_heat_topology(topo)
         self.assertEqual(out["number_of_deferrable_loads"], 1)
@@ -2749,29 +2776,53 @@ class TestCompileHeatTopology(unittest.TestCase):
         self.assertEqual(out["def_load_config"][0]["thermal_source"]["efficiency"], 0.92)
         self.assertEqual(out["shared_thermal_tanks"][0]["id"], "buf")
         self.assertEqual(out["shared_thermal_tanks"][0]["load_ids"], [0])
-        self.assertEqual(out["cost_forecast_per_deferrable_load"][0], [0.085]*48)
+        self.assertEqual(out["cost_forecast_per_deferrable_load"][0], [0.085] * 48)
 
     def test_two_sources_one_storage(self):
         """HP + gas both feed the same DHW tank."""
         topo = {
             "sources": [
-                {"id": "hp", "type": "heatpump", "supply_temperature": 55,
-                 "carnot_efficiency": 0.40, "nominal_power": 3500,
-                 "min_power": 800, "cost_track": "retail"},
-                {"id": "gas", "type": "gas", "efficiency": 0.92,
-                 "nominal_power": 25000, "min_power": 8000,
-                 "cost_track": "gas_flat"},
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.40,
+                    "nominal_power": 3500,
+                    "min_power": 800,
+                    "cost_track": "retail",
+                },
+                {
+                    "id": "gas",
+                    "type": "gas",
+                    "efficiency": 0.92,
+                    "nominal_power": 25000,
+                    "min_power": 8000,
+                    "cost_track": "gas_flat",
+                },
             ],
-            "storage": [{"id": "dhw", "volume": 0.20, "start_temperature": 51,
-                         "min_temperature": [48]*48, "max_temperature": [62]*48,
-                         "thermal_loss": 0.05}],
-            "consumers": [{"id": "drw", "type": "profile", "target": "dhw",
-                           "profile": [0]*14 + [1.0] + [0]*33}],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.20,
+                    "start_temperature": 51,
+                    "min_temperature": [48] * 48,
+                    "max_temperature": [62] * 48,
+                    "thermal_loss": 0.05,
+                }
+            ],
+            "consumers": [
+                {
+                    "id": "drw",
+                    "type": "profile",
+                    "target": "dhw",
+                    "profile": [0] * 14 + [1.0] + [0] * 33,
+                }
+            ],
             "flows": [
                 {"from": "hp", "to": "dhw"},
                 {"from": "gas", "to": "dhw"},
             ],
-            "cost_tracks": {"retail": [0.25]*48, "gas_flat": [0.085]*48},
+            "cost_tracks": {"retail": [0.25] * 48, "gas_flat": [0.085] * 48},
         }
         out = utils.compile_heat_topology(topo)
         self.assertEqual(out["number_of_deferrable_loads"], 2)
@@ -2786,27 +2837,46 @@ class TestCompileHeatTopology(unittest.TestCase):
     def test_actuator_group_emits_deferrable_group(self):
         """One physical boiler serving two tanks via mutex."""
         topo = {
-            "sources": [{"id": "g", "type": "gas", "efficiency": 0.9,
-                         "nominal_power": 25000, "min_power": 8000,
-                         "cost_track": "gas"}],
+            "sources": [
+                {
+                    "id": "g",
+                    "type": "gas",
+                    "efficiency": 0.9,
+                    "nominal_power": 25000,
+                    "min_power": 8000,
+                    "cost_track": "gas",
+                }
+            ],
             "storage": [
-                {"id": "dhw", "volume": 0.2, "start_temperature": 50,
-                 "min_temperature": [45]*48, "max_temperature": [60]*48,
-                 "thermal_loss": 0.05},
-                {"id": "buf", "volume": 0.1, "start_temperature": 35,
-                 "min_temperature": [25]*48, "max_temperature": [50]*48,
-                 "thermal_loss": 0.06},
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 48,
+                    "max_temperature": [60] * 48,
+                    "thermal_loss": 0.05,
+                },
+                {
+                    "id": "buf",
+                    "volume": 0.1,
+                    "start_temperature": 35,
+                    "min_temperature": [25] * 48,
+                    "max_temperature": [50] * 48,
+                    "thermal_loss": 0.06,
+                },
             ],
             "flows": [
                 {"from": "g", "to": "dhw"},
                 {"from": "g", "to": "buf"},
             ],
-            "actuator_groups": [{
-                "flows": [["g", "dhw"], ["g", "buf"]],
-                "mutual_exclusion": True,
-                "max_combined_power": 25000,
-            }],
-            "cost_tracks": {"gas": [0.085]*48},
+            "actuator_groups": [
+                {
+                    "flows": [["g", "dhw"], ["g", "buf"]],
+                    "mutual_exclusion": True,
+                    "max_combined_power": 25000,
+                }
+            ],
+            "cost_tracks": {"gas": [0.085] * 48},
         }
         out = utils.compile_heat_topology(topo)
         self.assertEqual(len(out["deferrable_load_groups"]), 1)
@@ -2820,22 +2890,34 @@ class TestCompileHeatTopology(unittest.TestCase):
         profile lengths, the merged profile must preserve the LONGER input
         instead of silently truncating to the first profile's length."""
         topo = {
-            "sources": [{"id": "g", "type": "gas", "efficiency": 0.9,
-                         "nominal_power": 25000, "min_power": 8000,
-                         "cost_track": "gas"}],
-            "storage": [{"id": "dhw", "volume": 0.2, "start_temperature": 50,
-                         "min_temperature": [45]*48, "max_temperature": [60]*48,
-                         "thermal_loss": 0.05}],
+            "sources": [
+                {
+                    "id": "g",
+                    "type": "gas",
+                    "efficiency": 0.9,
+                    "nominal_power": 25000,
+                    "min_power": 8000,
+                    "cost_track": "gas",
+                }
+            ],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 48,
+                    "max_temperature": [60] * 48,
+                    "thermal_loss": 0.05,
+                }
+            ],
             "consumers": [
                 # First profile: 24 slots
-                {"id": "morning", "type": "profile", "target": "dhw",
-                 "profile": [0.1]*24},
+                {"id": "morning", "type": "profile", "target": "dhw", "profile": [0.1] * 24},
                 # Second profile: 48 slots - must NOT be truncated to 24.
-                {"id": "evening", "type": "profile", "target": "dhw",
-                 "profile": [0.05]*48},
+                {"id": "evening", "type": "profile", "target": "dhw", "profile": [0.05] * 48},
             ],
             "flows": [{"from": "g", "to": "dhw"}],
-            "cost_tracks": {"gas": [0.085]*48},
+            "cost_tracks": {"gas": [0.085] * 48},
         }
         out = utils.compile_heat_topology(topo)
         merged = out["shared_thermal_tanks"][0]["draw_off_demand"]
@@ -2853,14 +2935,31 @@ class TestCompileHeatTopology(unittest.TestCase):
         diagnosis when multiple sources are present."""
         topo = {
             "sources": [
-                {"id": "ok",  "type": "gas", "efficiency": 0.9,
-                 "nominal_power": 25000, "min_power": 8000},
-                {"id": "bad", "type": "nuclear", "efficiency": 0.99,
-                 "nominal_power": 1000000, "min_power": 10000},
+                {
+                    "id": "ok",
+                    "type": "gas",
+                    "efficiency": 0.9,
+                    "nominal_power": 25000,
+                    "min_power": 8000,
+                },
+                {
+                    "id": "bad",
+                    "type": "nuclear",
+                    "efficiency": 0.99,
+                    "nominal_power": 1000000,
+                    "min_power": 10000,
+                },
             ],
-            "storage": [{"id": "buf", "volume": 0.1, "start_temperature": 30,
-                         "min_temperature": [25]*48, "max_temperature": [50]*48,
-                         "thermal_loss": 0.05}],
+            "storage": [
+                {
+                    "id": "buf",
+                    "volume": 0.1,
+                    "start_temperature": 30,
+                    "min_temperature": [25] * 48,
+                    "max_temperature": [50] * 48,
+                    "thermal_loss": 0.05,
+                }
+            ],
             "flows": [
                 {"from": "ok", "to": "buf"},
                 {"from": "bad", "to": "buf"},
@@ -2875,11 +2974,25 @@ class TestCompileHeatTopology(unittest.TestCase):
 
     def test_unknown_source_id_in_flow_raises(self):
         topo = {
-            "sources": [{"id": "boiler", "type": "gas", "efficiency": 0.9,
-                         "nominal_power": 25000, "min_power": 8000}],
-            "storage": [{"id": "buf", "volume": 0.1, "start_temperature": 30,
-                         "min_temperature": [25]*48, "max_temperature": [50]*48,
-                         "thermal_loss": 0.05}],
+            "sources": [
+                {
+                    "id": "boiler",
+                    "type": "gas",
+                    "efficiency": 0.9,
+                    "nominal_power": 25000,
+                    "min_power": 8000,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "buf",
+                    "volume": 0.1,
+                    "start_temperature": 30,
+                    "min_temperature": [25] * 48,
+                    "max_temperature": [50] * 48,
+                    "thermal_loss": 0.05,
+                }
+            ],
             "flows": [{"from": "WRONG", "to": "buf"}],
         }
         with self.assertRaises(ValueError) as ctx:
@@ -2888,13 +3001,26 @@ class TestCompileHeatTopology(unittest.TestCase):
 
     def test_unknown_storage_id_in_consumer_raises(self):
         topo = {
-            "sources": [{"id": "b", "type": "gas", "efficiency": 0.9,
-                         "nominal_power": 25000, "min_power": 8000}],
-            "storage": [{"id": "ok", "volume": 0.1, "start_temperature": 30,
-                         "min_temperature": [25]*48, "max_temperature": [50]*48,
-                         "thermal_loss": 0.05}],
-            "consumers": [{"id": "x", "type": "profile", "target": "GHOST",
-                           "profile": [0]*48}],
+            "sources": [
+                {
+                    "id": "b",
+                    "type": "gas",
+                    "efficiency": 0.9,
+                    "nominal_power": 25000,
+                    "min_power": 8000,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "ok",
+                    "volume": 0.1,
+                    "start_temperature": 30,
+                    "min_temperature": [25] * 48,
+                    "max_temperature": [50] * 48,
+                    "thermal_loss": 0.05,
+                }
+            ],
+            "consumers": [{"id": "x", "type": "profile", "target": "GHOST", "profile": [0] * 48}],
             "flows": [{"from": "b", "to": "ok"}],
         }
         with self.assertRaises(ValueError) as ctx:
@@ -2906,20 +3032,53 @@ class TestCompileHeatTopology(unittest.TestCase):
         type 'heatpump' / 'electric' defaults electric=True."""
         topo = {
             "sources": [
-                {"id": "hp",  "type": "heatpump", "supply_temperature": 55,
-                 "carnot_efficiency": 0.40, "nominal_power": 3500, "min_power": 800},
-                {"id": "gas", "type": "gas", "efficiency": 0.92,
-                 "nominal_power": 25000, "min_power": 8000},
-                {"id": "oil", "type": "oil", "efficiency": 0.88,
-                 "nominal_power": 30000, "min_power": 10000},
-                {"id": "dh",  "type": "district", "efficiency": 0.95,
-                 "nominal_power": 15000, "min_power": 5000},
-                {"id": "el",  "type": "electric", "efficiency": 1.0,
-                 "nominal_power": 2000, "min_power": 0},
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.40,
+                    "nominal_power": 3500,
+                    "min_power": 800,
+                },
+                {
+                    "id": "gas",
+                    "type": "gas",
+                    "efficiency": 0.92,
+                    "nominal_power": 25000,
+                    "min_power": 8000,
+                },
+                {
+                    "id": "oil",
+                    "type": "oil",
+                    "efficiency": 0.88,
+                    "nominal_power": 30000,
+                    "min_power": 10000,
+                },
+                {
+                    "id": "dh",
+                    "type": "district",
+                    "efficiency": 0.95,
+                    "nominal_power": 15000,
+                    "min_power": 5000,
+                },
+                {
+                    "id": "el",
+                    "type": "electric",
+                    "efficiency": 1.0,
+                    "nominal_power": 2000,
+                    "min_power": 0,
+                },
             ],
-            "storage": [{"id": "tank", "volume": 0.2, "start_temperature": 50,
-                         "min_temperature": [45]*48, "max_temperature": [62]*48,
-                         "thermal_loss": 0.05}],
+            "storage": [
+                {
+                    "id": "tank",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 48,
+                    "max_temperature": [62] * 48,
+                    "thermal_loss": 0.05,
+                }
+            ],
             "flows": [{"from": s, "to": "tank"} for s in ("hp", "gas", "oil", "dh", "el")],
         }
         out = utils.compile_heat_topology(topo)
@@ -2935,12 +3094,25 @@ class TestCompileHeatTopology(unittest.TestCase):
             "sources": [
                 # Gas but flagged as electric (e.g., gas-fired heat pump with
                 # large parasitic electric draw - hypothetical override case)
-                {"id": "weird", "type": "gas", "efficiency": 0.92,
-                 "nominal_power": 25000, "min_power": 8000, "electric": True},
+                {
+                    "id": "weird",
+                    "type": "gas",
+                    "efficiency": 0.92,
+                    "nominal_power": 25000,
+                    "min_power": 8000,
+                    "electric": True,
+                },
             ],
-            "storage": [{"id": "tank", "volume": 0.2, "start_temperature": 50,
-                         "min_temperature": [45]*48, "max_temperature": [62]*48,
-                         "thermal_loss": 0.05}],
+            "storage": [
+                {
+                    "id": "tank",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 48,
+                    "max_temperature": [62] * 48,
+                    "thermal_loss": 0.05,
+                }
+            ],
             "flows": [{"from": "weird", "to": "tank"}],
         }
         out = utils.compile_heat_topology(topo)
@@ -2950,24 +3122,35 @@ class TestCompileHeatTopology(unittest.TestCase):
         """desired_temperatures + overshoot_temperature + penalty_factor + comfort_sense
         on a storage block should flow through to the compiled shared_thermal_tank."""
         topo = {
-            "sources": [{"id": "hp", "type": "heatpump",
-                         "supply_temperature": 35, "carnot_efficiency": 0.4,
-                         "nominal_power": 10000, "min_power": 1000}],
-            "storage": [{
-                "id": "buffer", "volume": 0.2,
-                "start_temperature": 35,
-                "min_temperature": [20]*48, "max_temperature": [55]*48,
-                "thermal_loss": 0.05,
-                "desired_temperatures": [30.0]*48,
-                "overshoot_temperature": 40.0,
-                "penalty_factor": 5.0,
-                "comfort_sense": "heat",
-            }],
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 35,
+                    "carnot_efficiency": 0.4,
+                    "nominal_power": 10000,
+                    "min_power": 1000,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "buffer",
+                    "volume": 0.2,
+                    "start_temperature": 35,
+                    "min_temperature": [20] * 48,
+                    "max_temperature": [55] * 48,
+                    "thermal_loss": 0.05,
+                    "desired_temperatures": [30.0] * 48,
+                    "overshoot_temperature": 40.0,
+                    "penalty_factor": 5.0,
+                    "comfort_sense": "heat",
+                }
+            ],
             "flows": [{"from": "hp", "to": "buffer"}],
         }
         out = utils.compile_heat_topology(topo)
         tank = out["shared_thermal_tanks"][0]
-        self.assertEqual(tank["desired_temperatures"], [30.0]*48)
+        self.assertEqual(tank["desired_temperatures"], [30.0] * 48)
         self.assertEqual(tank["overshoot_temperature"], 40.0)
         self.assertEqual(tank["penalty_factor"], 5.0)
         self.assertEqual(tank["sense"], "heat")
@@ -2975,16 +3158,27 @@ class TestCompileHeatTopology(unittest.TestCase):
     def test_storage_soft_comfort_scalar_desired_temperature(self):
         """Scalar `desired_temperature` is accepted and stored as a float."""
         topo = {
-            "sources": [{"id": "g", "type": "gas", "efficiency": 0.92,
-                         "nominal_power": 25000, "min_power": 4000}],
-            "storage": [{
-                "id": "buffer", "volume": 0.2,
-                "start_temperature": 35,
-                "min_temperature": [20]*48, "max_temperature": [55]*48,
-                "thermal_loss": 0.05,
-                "desired_temperature": 35.0,
-                "overshoot_temperature": 45.0,
-            }],
+            "sources": [
+                {
+                    "id": "g",
+                    "type": "gas",
+                    "efficiency": 0.92,
+                    "nominal_power": 25000,
+                    "min_power": 4000,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "buffer",
+                    "volume": 0.2,
+                    "start_temperature": 35,
+                    "min_temperature": [20] * 48,
+                    "max_temperature": [55] * 48,
+                    "thermal_loss": 0.05,
+                    "desired_temperature": 35.0,
+                    "overshoot_temperature": 45.0,
+                }
+            ],
             "flows": [{"from": "g", "to": "buffer"}],
         }
         out = utils.compile_heat_topology(topo)
@@ -2995,12 +3189,25 @@ class TestCompileHeatTopology(unittest.TestCase):
     def test_storage_soft_comfort_omitted_does_not_add_fields(self):
         """When no soft-comfort fields are set, nothing extra is added to the tank."""
         topo = {
-            "sources": [{"id": "g", "type": "gas", "efficiency": 0.92,
-                         "nominal_power": 25000, "min_power": 4000}],
-            "storage": [{"id": "buffer", "volume": 0.2,
-                         "start_temperature": 35,
-                         "min_temperature": [20]*48, "max_temperature": [55]*48,
-                         "thermal_loss": 0.05}],
+            "sources": [
+                {
+                    "id": "g",
+                    "type": "gas",
+                    "efficiency": 0.92,
+                    "nominal_power": 25000,
+                    "min_power": 4000,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "buffer",
+                    "volume": 0.2,
+                    "start_temperature": 35,
+                    "min_temperature": [20] * 48,
+                    "max_temperature": [55] * 48,
+                    "thermal_loss": 0.05,
+                }
+            ],
             "flows": [{"from": "g", "to": "buffer"}],
         }
         out = utils.compile_heat_topology(topo)
@@ -3013,13 +3220,26 @@ class TestCompileHeatTopology(unittest.TestCase):
     def test_storage_comfort_sense_invalid_raises(self):
         """An invalid comfort_sense should raise ValueError."""
         topo = {
-            "sources": [{"id": "g", "type": "gas", "efficiency": 0.92,
-                         "nominal_power": 25000, "min_power": 4000}],
-            "storage": [{"id": "buffer", "volume": 0.2,
-                         "start_temperature": 35,
-                         "min_temperature": [20]*48, "max_temperature": [55]*48,
-                         "thermal_loss": 0.05,
-                         "comfort_sense": "freeze"}],
+            "sources": [
+                {
+                    "id": "g",
+                    "type": "gas",
+                    "efficiency": 0.92,
+                    "nominal_power": 25000,
+                    "min_power": 4000,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "buffer",
+                    "volume": 0.2,
+                    "start_temperature": 35,
+                    "min_temperature": [20] * 48,
+                    "max_temperature": [55] * 48,
+                    "thermal_loss": 0.05,
+                    "comfort_sense": "freeze",
+                }
+            ],
             "flows": [{"from": "g", "to": "buffer"}],
         }
         with self.assertRaises(ValueError) as ctx:
@@ -3029,19 +3249,31 @@ class TestCompileHeatTopology(unittest.TestCase):
     def test_heating_curve_propagates_through_compiler(self):
         """`heating_curve` on a heatpump source should flow through to def_load_config."""
         topo = {
-            "sources": [{
-                "id": "hp", "type": "heatpump",
-                "heating_curve": {
-                    "slope": 1.0, "offset": 30.0,
-                    "min_supply": 28.0, "max_supply": 50.0,
-                },
-                "carnot_efficiency": 0.45,
-                "nominal_power": 10000, "min_power": 1000,
-            }],
-            "storage": [{"id": "buf", "volume": 0.2,
-                         "start_temperature": 35,
-                         "min_temperature": [25]*48, "max_temperature": [55]*48,
-                         "thermal_loss": 0.05}],
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "heating_curve": {
+                        "slope": 1.0,
+                        "offset": 30.0,
+                        "min_supply": 28.0,
+                        "max_supply": 50.0,
+                    },
+                    "carnot_efficiency": 0.45,
+                    "nominal_power": 10000,
+                    "min_power": 1000,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "buf",
+                    "volume": 0.2,
+                    "start_temperature": 35,
+                    "min_temperature": [25] * 48,
+                    "max_temperature": [55] * 48,
+                    "thermal_loss": 0.05,
+                }
+            ],
             "flows": [{"from": "hp", "to": "buf"}],
         }
         out = utils.compile_heat_topology(topo)
@@ -3059,14 +3291,25 @@ class TestCompileHeatTopology(unittest.TestCase):
     def test_heating_curve_missing_required_field_raises(self):
         """heating_curve must include slope and offset."""
         topo = {
-            "sources": [{
-                "id": "hp", "type": "heatpump",
-                "heating_curve": {"slope": 1.0},  # missing offset
-                "nominal_power": 10000, "min_power": 1000,
-            }],
-            "storage": [{"id": "buf", "volume": 0.2, "start_temperature": 35,
-                         "min_temperature": [25]*48, "max_temperature": [55]*48,
-                         "thermal_loss": 0.05}],
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "heating_curve": {"slope": 1.0},  # missing offset
+                    "nominal_power": 10000,
+                    "min_power": 1000,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "buf",
+                    "volume": 0.2,
+                    "start_temperature": 35,
+                    "min_temperature": [25] * 48,
+                    "max_temperature": [55] * 48,
+                    "thermal_loss": 0.05,
+                }
+            ],
             "flows": [{"from": "hp", "to": "buf"}],
         }
         with self.assertRaises(ValueError) as ctx:
@@ -3077,13 +3320,24 @@ class TestCompileHeatTopology(unittest.TestCase):
     def test_heatpump_without_supply_or_curve_raises(self):
         """A heatpump source must specify supply_temperature or heating_curve."""
         topo = {
-            "sources": [{
-                "id": "hp", "type": "heatpump",
-                "nominal_power": 10000, "min_power": 1000,
-            }],
-            "storage": [{"id": "buf", "volume": 0.2, "start_temperature": 35,
-                         "min_temperature": [25]*48, "max_temperature": [55]*48,
-                         "thermal_loss": 0.05}],
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "nominal_power": 10000,
+                    "min_power": 1000,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "buf",
+                    "volume": 0.2,
+                    "start_temperature": 35,
+                    "min_temperature": [25] * 48,
+                    "max_temperature": [55] * 48,
+                    "thermal_loss": 0.05,
+                }
+            ],
             "flows": [{"from": "hp", "to": "buf"}],
         }
         with self.assertRaises(ValueError) as ctx:
@@ -3095,18 +3349,32 @@ class TestCompileHeatTopology(unittest.TestCase):
     def test_min_temperature_curve_propagates(self):
         """min_temperature_curve on storage should flow through to the compiled tank."""
         topo = {
-            "sources": [{"id": "hp", "type": "heatpump",
-                         "supply_temperature": 55, "carnot_efficiency": 0.4,
-                         "nominal_power": 10000, "min_power": 1000}],
-            "storage": [{
-                "id": "buf", "volume": 0.2, "start_temperature": 35,
-                "min_temperature": [20]*48, "max_temperature": [60]*48,
-                "thermal_loss": 0.06,
-                "min_temperature_curve": {
-                    "slope": 1.0, "offset": 35,
-                    "min_supply": 30, "max_supply": 55,
-                },
-            }],
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.4,
+                    "nominal_power": 10000,
+                    "min_power": 1000,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "buf",
+                    "volume": 0.2,
+                    "start_temperature": 35,
+                    "min_temperature": [20] * 48,
+                    "max_temperature": [60] * 48,
+                    "thermal_loss": 0.06,
+                    "min_temperature_curve": {
+                        "slope": 1.0,
+                        "offset": 35,
+                        "min_supply": 30,
+                        "max_supply": 55,
+                    },
+                }
+            ],
             "flows": [{"from": "hp", "to": "buf"}],
         }
         out = utils.compile_heat_topology(topo)
@@ -3117,20 +3385,31 @@ class TestCompileHeatTopology(unittest.TestCase):
         self.assertEqual(tank["min_temperature_curve"]["min_supply"], 30.0)
         self.assertEqual(tank["min_temperature_curve"]["max_supply"], 55.0)
         # Static absolute floor is still there for safety
-        self.assertEqual(tank["min_temperatures"], [20]*48)
+        self.assertEqual(tank["min_temperatures"], [20] * 48)
 
     def test_min_temperature_curve_missing_slope_raises(self):
         """min_temperature_curve must include slope + offset."""
         topo = {
-            "sources": [{"id": "hp", "type": "heatpump",
-                         "supply_temperature": 55,
-                         "nominal_power": 10000, "min_power": 1000}],
-            "storage": [{
-                "id": "buf", "volume": 0.2, "start_temperature": 35,
-                "min_temperature": [20]*48, "max_temperature": [60]*48,
-                "thermal_loss": 0.06,
-                "min_temperature_curve": {"offset": 35},   # missing slope
-            }],
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "nominal_power": 10000,
+                    "min_power": 1000,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "buf",
+                    "volume": 0.2,
+                    "start_temperature": 35,
+                    "min_temperature": [20] * 48,
+                    "max_temperature": [60] * 48,
+                    "thermal_loss": 0.06,
+                    "min_temperature_curve": {"offset": 35},  # missing slope
+                }
+            ],
             "flows": [{"from": "hp", "to": "buf"}],
         }
         with self.assertRaises(ValueError) as ctx:
@@ -3142,15 +3421,26 @@ class TestCompileHeatTopology(unittest.TestCase):
     def test_constant_supply_temperature_still_works(self):
         """Back-compat: heatpump with supply_temperature only (no curve) still compiles."""
         topo = {
-            "sources": [{
-                "id": "hp", "type": "heatpump",
-                "supply_temperature": 55.0,
-                "carnot_efficiency": 0.4,
-                "nominal_power": 10000, "min_power": 1000,
-            }],
-            "storage": [{"id": "buf", "volume": 0.2, "start_temperature": 35,
-                         "min_temperature": [25]*48, "max_temperature": [55]*48,
-                         "thermal_loss": 0.05}],
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55.0,
+                    "carnot_efficiency": 0.4,
+                    "nominal_power": 10000,
+                    "min_power": 1000,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "buf",
+                    "volume": 0.2,
+                    "start_temperature": 35,
+                    "min_temperature": [25] * 48,
+                    "max_temperature": [55] * 48,
+                    "thermal_loss": 0.05,
+                }
+            ],
             "flows": [{"from": "hp", "to": "buf"}],
         }
         out = utils.compile_heat_topology(topo)
@@ -3160,14 +3450,28 @@ class TestCompileHeatTopology(unittest.TestCase):
 
     def test_cost_track_not_found_raises(self):
         topo = {
-            "sources": [{"id": "b", "type": "gas", "efficiency": 0.9,
-                         "nominal_power": 25000, "min_power": 8000,
-                         "cost_track": "missing"}],
-            "storage": [{"id": "ok", "volume": 0.1, "start_temperature": 30,
-                         "min_temperature": [25]*48, "max_temperature": [50]*48,
-                         "thermal_loss": 0.05}],
+            "sources": [
+                {
+                    "id": "b",
+                    "type": "gas",
+                    "efficiency": 0.9,
+                    "nominal_power": 25000,
+                    "min_power": 8000,
+                    "cost_track": "missing",
+                }
+            ],
+            "storage": [
+                {
+                    "id": "ok",
+                    "volume": 0.1,
+                    "start_temperature": 30,
+                    "min_temperature": [25] * 48,
+                    "max_temperature": [50] * 48,
+                    "thermal_loss": 0.05,
+                }
+            ],
             "flows": [{"from": "b", "to": "ok"}],
-            "cost_tracks": {"gas": [0.085]*48},
+            "cost_tracks": {"gas": [0.085] * 48},
         }
         with self.assertRaises(ValueError) as ctx:
             utils.compile_heat_topology(topo)
