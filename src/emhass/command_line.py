@@ -8,6 +8,7 @@ import os
 import pathlib
 import pickle
 import threading
+import time as _time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
@@ -17,7 +18,7 @@ import numpy as np
 import orjson
 import pandas as pd
 
-from emhass import utils
+from emhass import last_run, utils
 from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
@@ -30,6 +31,37 @@ default_pkl_suffix = "_mlf.pkl"
 default_metadata_json = "metadata.json"
 test_df_literal = "test_df_final.pkl"
 EMHASS_SCHEMA_VERSION = "1.0"
+
+
+def _record_optim_snapshot(
+    input_data_dict: dict,
+    action: str,
+    opt_res,
+    t0_monotonic: float,
+    logger: logging.Logger,
+) -> None:
+    """Persist a last_run snapshot after an optim wrapper completes.
+
+    Best-effort: any failure is logged with a traceback but does not
+    propagate so the wrapper's return path stays intact.
+    """
+    try:
+        optim_status = (
+            opt_res["optim_status"].iloc[0]
+            if isinstance(opt_res, pd.DataFrame) and "optim_status" in opt_res
+            else "Unknown"
+        )
+        last_run.record(
+            input_data_dict["emhass_conf"]["data_path"],
+            action=action,
+            stage_times=input_data_dict["stage_times"],
+            optim_status=optim_status,
+            infeasible=(optim_status == "Infeasible"),
+            duration_total_seconds=_time.monotonic() - t0_monotonic,
+            schema_version=EMHASS_SCHEMA_VERSION,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("last_run: failed to record %s snapshot", action, exc_info=exc)
 
 
 @dataclass
@@ -126,7 +158,7 @@ class OptimizationCacheKey:
     def_load_config_structure: tuple  # (index, type) tuples for each load
     deferrable_load_groups: tuple
     shared_thermal_tanks: tuple  # shared-tank multi-source topology structure
-    is_electric_load: tuple      # per-load electric-bus membership flag
+    is_electric_load: tuple  # per-load electric-bus membership flag
     inverter_is_hybrid: bool
     compute_curtailment: bool
     optimization_time_step_s: float | None
@@ -309,7 +341,11 @@ class OptimizationCache:
                     t.get("id", ""),
                     tuple(int(k) for k in t.get("load_ids", [])),
                     config_hash(
-                        {k: v for k, v in t.items() if k not in {"start_temperature", "draw_off_demand"}},
+                        {
+                            k: v
+                            for k, v in t.items()
+                            if k not in {"start_temperature", "draw_off_demand"}
+                        },
                     ),
                 )
                 for t in optim_conf.get("shared_thermal_tanks", []) or []
@@ -598,9 +634,17 @@ async def _retrieve_and_fit_pv_model(
         return False
     # Call data preparation method
     fcst.adjust_pv_forecast_data_prep(df_input_data)
+    n_splits = 5
+    x_adjust_pv = getattr(fcst, "x_adjust_pv", None)
+    if x_adjust_pv is not None and len(x_adjust_pv) <= n_splits:
+        fcst.logger.warning(
+            f"Not enough data to fit the PV model (found {len(x_adjust_pv)} samples, "
+            f"require > {n_splits}). Falling back to unadjusted PV forecast."
+        )
+        return False
     # Call the fit method
     await fcst.adjust_pv_forecast_fit(
-        n_splits=5,
+        n_splits=n_splits,
         regression_model=optim_conf["adjusted_pv_regression_model"],
     )
     return True
@@ -662,7 +706,10 @@ async def adjust_pv_forecast(
             test_df_literal,
         )
         if not success:
-            return False
+            logger.warning(
+                "Could not train adjusted PV model, falling back to unadjusted PV forecast."
+            )
+            return p_pv_forecast
     else:
         # Load existing model
         logger.info("Loading existing adjusted PV model from file")
@@ -686,8 +733,10 @@ async def adjust_pv_forecast(
                 test_df_literal,
             )
             if not success:
-                logger.error("Failed to retrieve data for model re-fit after load error")
-                return False
+                logger.error(
+                    "Failed to retrieve data for model re-fit after load error. Falling back to unadjusted forecast."
+                )
+                return p_pv_forecast
             logger.info("Successfully re-fitted model after load failure")
         except Exception as e:
             logger.error(
@@ -1285,6 +1334,7 @@ async def perfect_forecast_optim(
     :rtype: pd.DataFrame
 
     """
+    _t0 = _time.monotonic()
     logger.info("Performing perfect forecast optimization")
     # Load cost and prod price forecast
     with stage_timer(input_data_dict["stage_times"], "price_prep", logger):
@@ -1330,6 +1380,7 @@ async def perfect_forecast_optim(
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     _log_optimization_summary(input_data_dict, logger)
+    _record_optim_snapshot(input_data_dict, last_run.ACTION_PERFECT_OPTIM, opt_res, _t0, logger)
 
     return opt_res
 
@@ -1498,6 +1549,7 @@ async def dayahead_forecast_optim(
     :rtype: pd.DataFrame
 
     """
+    _t0 = _time.monotonic()
     logger.info("Performing day-ahead forecast optimization")
     # Prepare forecast data with costs, prices, outdoor temp, and GHI
     with stage_timer(input_data_dict["stage_times"], "price_prep", logger):
@@ -1538,6 +1590,9 @@ async def dayahead_forecast_optim(
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     _log_optimization_summary(input_data_dict, logger)
+    _record_optim_snapshot(
+        input_data_dict, last_run.ACTION_DAYAHEAD_OPTIM, opt_res_dayahead, _t0, logger
+    )
 
     return opt_res_dayahead
 
@@ -1563,6 +1618,7 @@ async def naive_mpc_optim(
     :rtype: pd.DataFrame
 
     """
+    _t0 = _time.monotonic()
     logger.info("Performing naive MPC optimization")
     # Prepare forecast data with costs, prices, outdoor temp, and GHI (with resolution warning)
     with stage_timer(input_data_dict["stage_times"], "price_prep", logger):
@@ -1629,6 +1685,9 @@ async def naive_mpc_optim(
             await publish_data(input_data_dict, logger, entity_save=True, dont_post=True)
 
     _log_optimization_summary(input_data_dict, logger)
+    _record_optim_snapshot(
+        input_data_dict, last_run.ACTION_NAIVE_MPC_OPTIM, opt_res_naive_mpc, _t0, logger
+    )
 
     return opt_res_naive_mpc
 
