@@ -461,7 +461,7 @@ class Optimization:
             # Validate binary: accept bool and numeric 0/1, reject everything else
             if isinstance(state, bool):
                 self.param_def_current_state[k].value = float(state)
-            elif isinstance(state, (int, float)) and state in (0, 1, 0.0, 1.0):
+            elif isinstance(state, int | float) and state in (0, 1, 0.0, 1.0):
                 self.param_def_current_state[k].value = float(state)
             else:
                 raise ValueError(
@@ -591,9 +591,7 @@ class Optimization:
 
                 # Conversion factors per timestep (Carnot COP for heat pumps,
                 # flat value for constant-efficiency sources like gas boilers).
-                heatpump_cops = utils.resolve_thermal_battery_cop(
-                    hc, outdoor_temp, length=n
-                )
+                heatpump_cops = utils.resolve_thermal_battery_cop(hc, outdoor_temp, length=n)
                 params["heatpump_cops"].value = np.array(heatpump_cops)
 
                 # Thermal losses and heating demand
@@ -864,7 +862,7 @@ class Optimization:
             vars_dict["soc_high_recovered"] = cp.Variable(
                 n, boolean=True, name="soc_high_recovered"
             )
-            vars_dict["soc_deficit_cost"] = cp.Variable(n, nonneg=True, name= "soc_deficit_cost")
+            vars_dict["soc_deficit_cost"] = cp.Variable(n, nonneg=True, name="soc_deficit_cost")
         else:
             # Create dummy zero variables to preserve logic structure without conditional checks everywhere
             vars_dict["p_sto_pos"] = cp.Variable(n, name="p_sto_pos_dummy")
@@ -896,9 +894,7 @@ class Optimization:
         # equivalent units (gas burn rate, in W) and feeds the thermal
         # balance only. Excluding it from p_def_sum keeps the electric
         # balance honest (no phantom grid draw when the boiler fires).
-        is_electric = self.optim_conf.get(
-            "is_electric_load", [True] * num_deferrable_loads
-        )
+        is_electric = self.optim_conf.get("is_electric_load", [True] * num_deferrable_loads)
         if num_deferrable_loads > 0:
             electric_loads = [
                 p_deferrable[k]
@@ -1041,9 +1037,7 @@ class Optimization:
                     k_is_electric = k >= len(is_electric) or bool(is_electric[k])
                     if k_is_electric:
                         # Electric load - adjust away the global tariff
-                        per_load_term = cp.multiply(
-                            param_cost - unit_load_cost, p_deferrable[k]
-                        )
+                        per_load_term = cp.multiply(param_cost - unit_load_cost, p_deferrable[k])
                     else:
                         # Non-electric load - charge directly at its commodity rate
                         per_load_term = cp.multiply(param_cost, p_deferrable[k])
@@ -1063,8 +1057,10 @@ class Optimization:
         if self.optim_conf["set_use_battery"]:
             soc_deficit_cost = self.vars.get("soc_deficit_cost")
             if soc_deficit_cost is not None:
-                self.logger.debug(f"Adding SOC deficit cost {soc_deficit_cost}  to objective function: ")
-                objective_terms.append(- cp.sum(soc_deficit_cost))
+                self.logger.debug(
+                    f"Adding SOC deficit cost {soc_deficit_cost}  to objective function: "
+                )
+                objective_terms.append(-cp.sum(soc_deficit_cost))
 
         # Sum all terms to create the final objective expression
         return cp.Maximize(cp.sum(objective_terms))
@@ -1371,12 +1367,18 @@ class Optimization:
 
         # SOC Deficit Cost
         soc_deficit_threshold = self.optim_conf.get("battery_soc_deficit_threshold", 0.2)
-        soc_deficit_cost_rate = self.optim_conf.get("battery_soc_deficit_cost", 0.0)/1000.  #kWh to Wh
+        soc_deficit_cost_rate = (
+            self.optim_conf.get("battery_soc_deficit_cost", 0.0) / 1000.0
+        )  # kWh to Wh
         if soc_deficit_threshold > 0 and soc_deficit_cost_rate > 0:
             threshold_energy = soc_deficit_threshold * cap
             soc_deficit_cost = self.vars["soc_deficit_cost"]
-            constraints.append(soc_deficit_cost >=
-                               (threshold_energy - current_stored_energy)*soc_deficit_cost_rate*self.time_step)
+            constraints.append(
+                soc_deficit_cost
+                >= (threshold_energy - current_stored_energy)
+                * soc_deficit_cost_rate
+                * self.time_step
+            )
 
     def _add_thermal_load_constraints(self, constraints, k, data_opt, def_init_temp):
         """
@@ -1656,9 +1658,7 @@ class Optimization:
             start_temp_float = float(params["start_temp"].value)
 
             # Compute and set derived parameter values
-            cops = utils.resolve_thermal_battery_cop(
-                hc, outdoor_temp_arr, length=required_len
-            )
+            cops = utils.resolve_thermal_battery_cop(hc, outdoor_temp_arr, length=required_len)
             params["heatpump_cops"].value = np.array(cops)
 
             # Check for hot water tank mode (draw_off_demand present)
@@ -1769,9 +1769,7 @@ class Optimization:
             outdoor_temp_arr = self._get_clean_outdoor_temp(data_opt, required_len)
 
             heatpump_cops = np.array(
-                utils.resolve_thermal_battery_cop(
-                    hc, outdoor_temp_arr, length=required_len
-                )
+                utils.resolve_thermal_battery_cop(hc, outdoor_temp_arr, length=required_len)
             )
 
             # Check for hot water tank mode (draw_off_demand present)
@@ -1863,7 +1861,7 @@ class Optimization:
             q_start_val = 0.0
             if hasattr(q_input_start, "value") and q_input_start.value is not None:
                 q_start_val = float(q_input_start.value)
-            elif isinstance(q_input_start, (int, float)):
+            elif isinstance(q_input_start, int | float):
                 q_start_val = float(q_input_start)
 
             # min_temperatures_list is guaranteed non-empty by the validator above.
@@ -2055,9 +2053,7 @@ class Optimization:
         start_temperature = float(tank.get("start_temperature", 20.0))
         max_temperatures_list = tank.get("max_temperatures", [])
         if not max_temperatures_list:
-            raise ValueError(
-                f"Shared tank {tank_id}: requires non-empty max_temperatures"
-            )
+            raise ValueError(f"Shared tank {tank_id}: requires non-empty max_temperatures")
 
         base_loss = tank.get("thermal_loss", 0.045)
 
@@ -2069,9 +2065,7 @@ class Optimization:
         # the tank floor follows the heating curve (radiator emission floor). Combined
         # with any static `min_temperatures` via element-wise max so the more
         # conservative floor wins.
-        min_temperatures_list = utils.resolve_min_temperatures(
-            tank, outdoor_temp_arr, required_len
-        )
+        min_temperatures_list = utils.resolve_min_temperatures(tank, outdoor_temp_arr, required_len)
         if not min_temperatures_list:
             raise ValueError(
                 f"Shared tank {tank_id}: requires non-empty min_temperatures "
@@ -2158,21 +2152,18 @@ class Optimization:
         constraints.append(
             predicted_temp[1:]
             == predicted_temp[:-1]
-            + conversion
-            * (raw_heat - heating_demand[:-1] - thermal_losses[:-1])
+            + conversion * (raw_heat - heating_demand[:-1] - thermal_losses[:-1])
         )
 
         # Hard min/max temperature constraints (skipping index 0 - already pinned)
         min_idx = [
-            i for i, v in enumerate(min_temperatures_list)
-            if v is not None and 0 < i < required_len
+            i for i, v in enumerate(min_temperatures_list) if v is not None and 0 < i < required_len
         ]
         if min_idx:
             min_vals = np.array([min_temperatures_list[i] for i in min_idx])
             constraints.append(predicted_temp[min_idx] >= min_vals)
         max_idx = [
-            i for i, v in enumerate(max_temperatures_list)
-            if v is not None and 0 < i < required_len
+            i for i, v in enumerate(max_temperatures_list) if v is not None and 0 < i < required_len
         ]
         if max_idx:
             max_vals = np.array([max_temperatures_list[i] for i in max_idx])
@@ -2863,9 +2854,7 @@ class Optimization:
         # to the shared electricity tariff (no-op adjustment in the objective). If
         # the user provides `cost_forecast_per_deferrable_load`, slot the override
         # array into the corresponding parameter.
-        cost_per_load_overrides = self.optim_conf.get(
-            "cost_forecast_per_deferrable_load", None
-        )
+        cost_per_load_overrides = self.optim_conf.get("cost_forecast_per_deferrable_load", None)
         for k, param in enumerate(self.param_cost_per_load):
             override = (
                 cost_per_load_overrides[k]
@@ -2880,7 +2869,7 @@ class Optimization:
                     # Pad with the global cost so missing tail timesteps don't
                     # accidentally apply a zero-cost override.
                     pad_len = self.num_timesteps - len(override_arr)
-                    pad_tail = np.asarray(unit_load_cost, dtype=float)[len(override_arr):]
+                    pad_tail = np.asarray(unit_load_cost, dtype=float)[len(override_arr) :]
                     if len(pad_tail) != pad_len:
                         pad_tail = np.full(pad_len, float(unit_load_cost[-1]))
                     override_arr = np.concatenate([override_arr, pad_tail])

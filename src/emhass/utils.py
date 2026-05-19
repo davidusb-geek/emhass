@@ -221,7 +221,9 @@ def calculate_cop_heatpump(
         num_invalid = int(np.sum(temperature_diff <= 0))
         invalid_indices = np.nonzero(temperature_diff <= 0)[0]
         if np.ndim(supply_temps) > 0:
-            supply_range = f"supply range [{np.min(supply_temps):.1f}, {np.max(supply_temps):.1f}]°C"
+            supply_range = (
+                f"supply range [{np.min(supply_temps):.1f}, {np.max(supply_temps):.1f}]°C"
+            )
         else:
             supply_range = f"supply {float(supply_temps):.1f}°C"
         logger.warning(
@@ -244,9 +246,7 @@ def calculate_cop_heatpump(
             supply_valid = supply_temperature_kelvin[valid_mask]
         else:
             supply_valid = supply_temperature_kelvin
-        cop_values[valid_mask] = (
-            carnot_efficiency * supply_valid / temperature_diff[valid_mask]
-        )
+        cop_values[valid_mask] = carnot_efficiency * supply_valid / temperature_diff[valid_mask]
 
     # Apply realistic bounds: minimum 1.0, maximum 8.0
     # - Lower bound: 1.0 means direct electric heating (no efficiency gain)
@@ -324,7 +324,7 @@ def resolve_min_temperatures(
         static = config.get("min_temperature")
     if static is None:
         static = []
-    elif isinstance(static, (int, float)):
+    elif isinstance(static, int | float):
         static = [float(static)]
     curve = config.get("min_temperature_curve")
 
@@ -333,9 +333,7 @@ def resolve_min_temperatures(
 
     if curve is not None:
         if outdoor_temperature_forecast is None:
-            raise ValueError(
-                "min_temperature_curve requires outdoor_temperature_forecast"
-            )
+            raise ValueError("min_temperature_curve requires outdoor_temperature_forecast")
         curve_temps = apply_heating_curve(curve, outdoor_temperature_forecast)[:length]
     else:
         curve_temps = None
@@ -344,9 +342,7 @@ def resolve_min_temperatures(
         static_arr = np.asarray(list(static)[:length], dtype=float)
         if len(static_arr) < length:
             pad_value = static_arr[-1] if len(static_arr) else 20.0
-            static_arr = np.concatenate(
-                [static_arr, np.full(length - len(static_arr), pad_value)]
-            )
+            static_arr = np.concatenate([static_arr, np.full(length - len(static_arr), pad_value)])
     else:
         static_arr = None
 
@@ -394,9 +390,7 @@ def resolve_thermal_battery_cop(
     if "efficiency" in hc and hc["efficiency"] is not None:
         efficiency = float(hc["efficiency"])
         if efficiency <= 0:
-            raise ValueError(
-                f"thermal_battery 'efficiency' must be positive, got {efficiency}"
-            )
+            raise ValueError(f"thermal_battery 'efficiency' must be positive, got {efficiency}")
         if length is None:
             if outdoor_temperature_forecast is None:
                 raise ValueError(
@@ -408,8 +402,7 @@ def resolve_thermal_battery_cop(
 
     if outdoor_temperature_forecast is None:
         raise ValueError(
-            "resolve_thermal_battery_cop in heat-pump mode requires "
-            "outdoor_temperature_forecast"
+            "resolve_thermal_battery_cop in heat-pump mode requires outdoor_temperature_forecast"
         )
     # Heating-curve mode: per-slot supply T from outdoor T. Falls back to constant
     # `supply_temperature` when no curve is configured.
@@ -470,9 +463,7 @@ def calculate_surface_solar_gain(
     ghi_arr = np.asarray(ghi_forecast, dtype=float)
     if length is not None:
         if len(ghi_arr) < length:
-            ghi_arr = np.concatenate(
-                (ghi_arr, np.zeros(length - len(ghi_arr)))
-            )
+            ghi_arr = np.concatenate((ghi_arr, np.zeros(length - len(ghi_arr))))
         else:
             ghi_arr = ghi_arr[:length]
 
@@ -570,9 +561,12 @@ def compile_heat_topology(topology: dict) -> dict:
         src_type = src.get("type", "").lower()
         # Type -> default electric bus membership. Explicit `electric` flag wins.
         type_is_electric = {
-            "heatpump": True, "heat_pump": True,
+            "heatpump": True,
+            "heat_pump": True,
             "electric": True,
-            "gas": False, "oil": False, "district": False,
+            "gas": False,
+            "oil": False,
+            "district": False,
             "constant_efficiency": True,  # ambiguous - default electric unless overridden
         }
         if src_type in {"heatpump", "heat_pump"}:
@@ -599,9 +593,7 @@ def compile_heat_topology(topology: dict) -> dict:
                     f"heat_topology.sources[{src['id']}] (type=heatpump) requires "
                     "either 'supply_temperature' or 'heating_curve'"
                 )
-            source_block["carnot_efficiency"] = float(
-                src.get("carnot_efficiency", 0.4)
-            )
+            source_block["carnot_efficiency"] = float(src.get("carnot_efficiency", 0.4))
         elif src_type in {"gas", "oil", "district", "constant_efficiency", "electric"}:
             source_block["efficiency"] = float(src["efficiency"])
         else:
@@ -657,18 +649,24 @@ def compile_heat_topology(topology: dict) -> dict:
             storage_demand[target]["building"] = {
                 k: c[k]
                 for k in (
-                    "u_value", "envelope_area", "ventilation_rate", "heated_volume",
-                    "indoor_target_temperature", "window_area", "shgc",
-                    "internal_gains_factor", "specific_heating_demand", "area",
-                    "base_temperature", "annual_reference_hdd",
+                    "u_value",
+                    "envelope_area",
+                    "ventilation_rate",
+                    "heated_volume",
+                    "indoor_target_temperature",
+                    "window_area",
+                    "shgc",
+                    "internal_gains_factor",
+                    "specific_heating_demand",
+                    "area",
+                    "base_temperature",
+                    "annual_reference_hdd",
                 )
                 if k in c
             }
         elif ctype == "pool_comfort":
             storage_demand[target]["pool"] = {
-                k: c[k]
-                for k in ("solar_absorption_area", "solar_absorption_factor")
-                if k in c
+                k: c[k] for k in ("solar_absorption_area", "solar_absorption_factor") if k in c
             }
         else:
             raise ValueError(
@@ -680,11 +678,7 @@ def compile_heat_topology(topology: dict) -> dict:
     shared_tanks = []
     for s in storage:
         sid = s["id"]
-        load_ids = [
-            flow_to_load_idx[(f["from"], f["to"])]
-            for f in flows
-            if f["to"] == sid
-        ]
+        load_ids = [flow_to_load_idx[(f["from"], f["to"])] for f in flows if f["to"] == sid]
         tank: dict = {
             "id": sid,
             "load_ids": load_ids,
@@ -693,8 +687,10 @@ def compile_heat_topology(topology: dict) -> dict:
             "heat_capacity": float(s.get("heat_capacity", 4.186)),
             "start_temperature": float(s.get("start_temperature", 20.0)),
             "thermal_loss": float(s.get("thermal_loss", 0.045)),
-            "min_temperatures": list(s.get("min_temperature", [])) or list(s.get("min_temperatures", [])),
-            "max_temperatures": list(s.get("max_temperature", [])) or list(s.get("max_temperatures", [])),
+            "min_temperatures": list(s.get("min_temperature", []))
+            or list(s.get("min_temperatures", [])),
+            "max_temperatures": list(s.get("max_temperature", []))
+            or list(s.get("max_temperatures", [])),
         }
         # Weather-compensated minimum temperature: when the radiator needs a higher
         # supply T to keep up with building heat loss on a cold day, the buffer min
@@ -722,7 +718,7 @@ def compile_heat_topology(topology: dict) -> dict:
             desired = s["desired_temperature"]
         if desired is not None:
             tank["desired_temperatures"] = (
-                list(desired) if isinstance(desired, (list, tuple)) else float(desired)
+                list(desired) if isinstance(desired, list | tuple) else float(desired)
             )
         if "overshoot_temperature" in s:
             tank["overshoot_temperature"] = float(s["overshoot_temperature"])
@@ -732,8 +728,7 @@ def compile_heat_topology(topology: dict) -> dict:
             sense = str(s["comfort_sense"]).lower()
             if sense not in ("heat", "cool"):
                 raise ValueError(
-                    f"heat_topology.storage[{sid}].comfort_sense='{sense}' "
-                    "must be 'heat' or 'cool'"
+                    f"heat_topology.storage[{sid}].comfort_sense='{sense}' must be 'heat' or 'cool'"
                 )
             tank["sense"] = sense
         demand = storage_demand.get(sid, {})

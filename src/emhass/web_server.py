@@ -472,7 +472,9 @@ async def _load_params_and_runtime(request, emhass_conf, logger):
             try:
                 _, params = pickle.loads(content)  # Don't overwrite emhass_conf["config_path"]
             except (EOFError, pickle.UnpicklingError):
-                logger.error("params.pkl is corrupted or truncated (race condition); cannot proceed")
+                logger.error(
+                    "params.pkl is corrupted or truncated (race condition); cannot proceed"
+                )
                 return None, None, None
             # Set local costfun variable
             if params.get("optim_conf") is not None:
