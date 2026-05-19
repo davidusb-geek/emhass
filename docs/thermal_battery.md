@@ -68,6 +68,58 @@ These parameters define the basic thermal battery system:
     * Example: `0.42`
     * See the calibration section below for how to determine this
 
+### Surface solar gain (pool, outdoor tank, solar-thermal)
+
+When the thermal mass is directly exposed to sunlight - a pool, an uncovered outdoor buffer tank, or a thermal store fed by a flat-plate solar-thermal panel - the surface absorbs solar radiation and reduces the heating demand seen by the pump or boiler. EMHASS models this absorption as a negative term on the residual heating demand. Set two optional `thermal_battery` fields to enable it:
+
+* **solar_absorption_area**: Effective horizontal absorption surface in m². Defaults to unset (no solar gain term). Set this to the pool surface area, the exposed top of an outdoor tank, or the solar-thermal collector aperture.
+    * Example pool: `32.0` for a 4×8 m pool
+
+* **solar_absorption_factor**: Fraction of global horizontal irradiance (GHI) absorbed by the thermal mass (default: 0.7).
+    * Uncovered pool: 0.7-0.9 (water absorbs IR strongly)
+    * Covered pool / solar cover: 0.2-0.4
+    * Insulated tank cover: 0.0-0.1
+    * Flat-plate selective absorber: 0.85-0.95
+
+EMHASS reuses the GHI forecast already fetched for PV - no second weather API call. The per-timestep gain is `ghi[t] * area * factor / 1000 * dt_hours` (kWh) and is subtracted from the heating demand before the optimizer dispatches the heat source.
+
+Seasonal toggle: to stop heating the pool entirely (winter shutdown), either set the pool deferrable load's `nominal_power_of_deferrable_loads[k]` to 0 in optim_conf, or omit the load from `def_load_config` for the off-season config snapshot. The solar-gain term has no effect when the pool load is inactive.
+
+### Heating curve mode (weather-compensated heat pump)
+
+Real heat pumps modulate their supply temperature in response to outdoor temperature, the way modern boiler/HP controllers do. Lower supply temperature when it's mild outside yields better COP. To enable this behavior in optimization, set `heating_curve` instead of (or alongside) `supply_temperature`:
+
+* **heating_curve**: Dict describing a linear weather-compensation law: `T_supply = clip(offset - slope * T_outdoor, min_supply, max_supply)`. When present, this takes precedence over the constant `supply_temperature` field.
+    * `slope`: Kelvin of supply-T change per Kelvin of outdoor-T change. Typical 0.5-1.5. Steeper curves are for less-insulated buildings or radiator systems.
+    * `offset`: Supply temperature in °C at outdoor temperature 0 °C.
+    * `min_supply`: Minimum supply temperature in °C. Defaults to 25. Heat pump never goes below this.
+    * `max_supply`: Maximum supply temperature in °C. Defaults to 70. Heat pump never goes above this.
+    * Example for radiators in a Belgian terraced house: `{"slope": 1.0, "offset": 35, "min_supply": 28, "max_supply": 55}`
+        - At -10 °C outdoor: supply = 45 °C
+        - At 0 °C outdoor: supply = 35 °C
+        - At 12 °C outdoor: supply = 23 °C, clipped to 28 °C floor
+    * Example for underfloor: `{"slope": 0.6, "offset": 30, "min_supply": 25, "max_supply": 40}`
+
+When `heating_curve` is configured, COP is computed per timestep with the per-timestep supply temperature, so the optimizer sees realistic COP variation across the day. This matters most for mild-weather operation where a fixed-55 °C supply T would underestimate HP COP by 25-40 %.
+
+Domestic-hot-water tanks should not use a heating curve - DHW needs a fixed setpoint regardless of outdoor temperature. Configure them as a separate `thermal_battery` (or a separate source in the graph topology) with `supply_temperature: 55` or similar.
+
+### Constant-efficiency mode (gas boiler, oil burner, district heating)
+
+The default thermal battery model uses a Carnot-based COP that varies with outdoor temperature - appropriate for heat pumps. Non-electric heat sources (gas boilers, oil burners, district heating) convert input power to heat at a roughly constant efficiency that does not depend on outdoor temperature. For these sources, set the `efficiency` parameter:
+
+* **efficiency**: Optional constant energy-conversion factor (output thermal kW / input kW). When set, EMHASS skips the Carnot COP calculation and uses this flat value for every timestep. `supply_temperature` and `carnot_efficiency` become optional in this mode.
+    * Typical values:
+        * Modern condensing gas boiler: 0.90-0.95
+        * Standard gas boiler: 0.85-0.90
+        * Oil burner: 0.80-0.90
+        * District heating substation: 0.95-0.98
+        * Direct electric heater: 1.0
+    * Example: `0.9` for a condensing gas boiler
+    * When both `efficiency` and heat-pump fields are present, `efficiency` takes precedence.
+
+Configure one `thermal_battery` per source-target pair to model hybrid systems. For example, a gas boiler serving both a heating buffer and a DHW tank is two `def_load_config` entries (one per target), grouped via `deferrable_load_groups` with `mutual_exclusion: true` and `max_power` equal to the boiler's modulating maximum if the two targets share the same physical actuator.
+
 ### Heating demand calculation
 
 EMHASS needs to know how much heat your building requires. There are two methods to calculate this, and EMHASS automatically selects the appropriate method based on which parameters you provide.
@@ -193,6 +245,25 @@ conversion = 3600 / (density * heat_capacity * volume)
 predicted_temp[t+1] = predicted_temp[t]
     + conversion * (cop[t] * p_deferrable[t] / 1000 * dt - draw_off_demand[t] - thermal_loss)
 ```
+
+### Weather-compensated minimum temperature (radiator emission floor)
+
+For radiator-based heating systems, the buffer / storage temperature must stay above a level where the radiator can still deliver the building's heat demand. Radiator emission follows `Q ∝ (T_water − T_room)^1.3`, so the floor depends on outdoor temperature: cold day → higher floor needed.
+
+Set `min_temperature_curve` to make the floor track outdoor temperature via the same linear law as `heating_curve`:
+
+* **min_temperature_curve**: Dict describing the weather-compensated minimum: `T_min = clip(offset - slope * T_outdoor, min_supply, max_supply)`. When present, the per-slot effective minimum is `max(static_min_temperatures[t], curve_min[t])` so any static absolute floor still wins if it's higher.
+    * `slope`, `offset`: same form as the source's heating curve.
+    * `min_supply`: Absolute floor in °C, never below this regardless of mild weather. Choose this as the buffer T below which your radiators cannot deliver useful heat (typically 28-30 °C).
+    * `max_supply`: Upper bound on the dynamic floor (not the tank max - that's still `max_temperatures`).
+    * Example: `{"slope": 1.0, "offset": 35, "min_supply": 30, "max_supply": 55}`
+        - At 10 °C outdoor: floor = 30 (clipped)
+        - At -5 °C outdoor: floor = 40
+        - At -15 °C outdoor: floor = 50
+
+The `min_temperature_curve` is independent of `heating_curve` on a source: the source curve sets supply T to the buffer, the storage curve sets the floor the buffer must respect. In a well-tuned system they're related — the source curve typically matches or runs slightly above the storage floor curve so the source always has headroom to recharge the buffer.
+
+For underfloor / slab systems the same idea applies but with a lower band (e.g., `min_supply: 22, max_supply: 32`).
 
 ### Soft constraints (desired temperature / overshoot)
 
@@ -484,6 +555,48 @@ This configuration:
 - Has a constant 0.035 kW standby loss (well-insulated tank)
 - This config does not define a demand profile. To ensure backward compatibility, the parameters `specific_heating_demand` and `area` must be present.
 - Maintains tank temperature between 40-60°C
+
+### Example 6b: Direct heating (no buffer tank)
+
+For installations where the heat source feeds radiators directly without an intermediate buffer (common in older homes and apartments), model the building itself as the storage. The building's thermal mass (walls, screed, furniture, air) plays the role of the buffer; the optimizer tracks an effective indoor temperature.
+
+Without a `draw_off_demand`, the thermal_battery automatically switches to space-heating mode and uses the building physics (`u_value`, `envelope_area`, `ventilation_rate`, `heated_volume`) to compute heat loss.
+
+```python
+{
+  "def_load_config": [
+    {
+      "thermal_battery": {
+        # The building is the thermal mass. Sizing rules of thumb:
+        # concrete equivalent ~ 0.05 m^3 per m^3 of heated volume
+        # for a typical brick / concrete envelope (heavier construction -> more).
+        "volume": 12.0,            # m^3 equivalent
+        "density": 2400, "heat_capacity": 0.88,  # concrete defaults
+        "thermal_loss": 0.05,
+        "start_temperature": 20.0,      # current measured indoor T
+        "min_temperatures": [19.0]*48,  # comfort lower bound
+        "max_temperatures": [22.0]*48,  # comfort upper bound
+        # Building envelope physics drives the demand each slot.
+        "u_value": 0.45,
+        "envelope_area": 180.0,
+        "ventilation_rate": 0.4,
+        "heated_volume": 240.0,
+        "indoor_target_temperature": 21.0,
+        # Source: constant-efficiency for gas, supply_temperature/heating_curve for HP
+        "efficiency": 0.92
+      }
+    }
+  ]
+}
+```
+
+This configuration:
+- Treats the heated zone as one thermal node tracked between 19 and 22 °C
+- Computes building heat loss each slot via the existing physics-based method
+- Lets the optimizer shift gas/HP firing into the cheapest slot of the day while keeping the indoor temperature inside the comfort band
+- Reuses every existing capability: heating curve on the source, weather-compensated minimum temperature, soft comfort relaxation, mutex with DHW or other zones
+
+The same pattern works in the graph topology API: declare one `storage` node representing the building (with the envelope params as a `building_demand` consumer attached) and the source flowing into it. No buffer required.
 
 ### Example 7: Hot water tank with soft constraints
 
