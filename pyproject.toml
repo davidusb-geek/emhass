@@ -72,7 +72,7 @@ emhass = { workspace = true }
 [tool.uv]
 default-groups = "all"
 package = true
-override-dependencies = ["yarl!=1.24.1"]
+override-dependencies = ["yarl<1.24"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/emhass"]
