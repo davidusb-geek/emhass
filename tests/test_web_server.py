@@ -1,6 +1,7 @@
 import logging
 import pathlib
 import pickle
+import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -644,6 +645,124 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         web_server._cleanup_entities()
         # Should have called remove twice (once for each file)
         self.assertEqual(mock_remove.call_count, 2)
+
+
+class TestAPIV1LastRun(unittest.IsolatedAsyncioTestCase):
+    """Integration tests for GET /api/v1/last-run (AC-3)."""
+
+    async def asyncSetUp(self):
+        self.client = web_server.app.test_client()
+        self.original_conf = web_server.emhass_conf.copy()
+        self.tmp_path = pathlib.Path(tempfile.mkdtemp())
+        web_server.emhass_conf = {
+            "data_path": self.tmp_path,
+        }
+        from emhass import last_run
+
+        last_run._cache = None
+
+    async def asyncTearDown(self):
+        web_server.emhass_conf = self.original_conf
+        from emhass import last_run
+
+        last_run._cache = None
+
+    async def test_api_v1_last_run_no_run(self):
+        """GET before any optim returns 200 with status='no-run' and nullable fields."""
+        import json
+
+        from emhass import last_run
+
+        last_run._cache = None
+
+        resp = await self.client.get("/api/v1/last-run")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.headers.get("Cache-Control"), "no-store")
+        body = json.loads(await resp.get_data())
+        self.assertEqual(body["status"], "no-run")
+        self.assertIsNone(body["timestamp"])
+        self.assertIsNone(body["action"])
+        self.assertIsNone(body["stage_times"])
+        self.assertIsNone(body["duration_total_seconds"])
+        self.assertIsNone(body["infeasible"])
+        self.assertIsNone(body["error_message"])
+        self.assertIn("emhass_version", body)
+        self.assertIn("schema_version", body)
+
+    async def test_api_v1_last_run_after_record(self):
+        """After last_run.record() runs, GET returns the snapshot with status='ok'."""
+        import json
+
+        from emhass import last_run
+
+        last_run._cache = None
+        last_run.record(
+            self.tmp_path,
+            action="naive-mpc-optim",
+            stage_times={"pv_forecast": 1.2, "load_forecast": 0.5},
+            optim_status="Optimal",
+            infeasible=False,
+            duration_total_seconds=3.7,
+            schema_version="1.0",
+        )
+
+        resp = await self.client.get("/api/v1/last-run")
+        self.assertEqual(resp.status_code, 200)
+        body = json.loads(await resp.get_data())
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["action"], "naive-mpc-optim")
+        self.assertEqual(body["stage_times"], {"pv_forecast": 1.2, "load_forecast": 0.5})
+        self.assertEqual(body["duration_total_seconds"], 3.7)
+        self.assertFalse(body["infeasible"])
+
+    async def test_api_v1_last_run_infeasible(self):
+        """Infeasible solver result is surfaced as status='infeasible' with infeasible flag."""
+        import json
+
+        from emhass import last_run
+
+        last_run._cache = None
+        last_run.record(
+            self.tmp_path,
+            action="dayahead-optim",
+            stage_times={"optim_solve": 2.1},
+            optim_status="Infeasible",
+            infeasible=True,
+            duration_total_seconds=2.5,
+            schema_version="1.0",
+        )
+
+        resp = await self.client.get("/api/v1/last-run")
+        self.assertEqual(resp.status_code, 200)
+        body = json.loads(await resp.get_data())
+        self.assertEqual(body["status"], "infeasible")
+        self.assertEqual(body["action"], "dayahead-optim")
+        self.assertIs(body["infeasible"], True)
+        self.assertIsNone(body["error_message"])
+
+    async def test_api_v1_last_run_error(self):
+        """Unknown / non-Optimal-non-Infeasible status is surfaced as status='error'."""
+        import json
+
+        from emhass import last_run
+
+        last_run._cache = None
+        last_run.record(
+            self.tmp_path,
+            action="perfect-optim",
+            stage_times={},
+            optim_status="Unknown",
+            infeasible=False,
+            duration_total_seconds=0.5,
+            schema_version="1.0",
+            error_message="Solver failed to converge",
+        )
+
+        resp = await self.client.get("/api/v1/last-run")
+        self.assertEqual(resp.status_code, 200)
+        body = json.loads(await resp.get_data())
+        self.assertEqual(body["status"], "error")
+        self.assertEqual(body["error_message"], "Solver failed to converge")
 
 
 if __name__ == "__main__":

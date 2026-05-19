@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://emhass.github.io/api/v1/last-run.schema.json",
+  "title": "EMHASS /api/v1/last-run response",
+  "description": "Response shape for GET /api/v1/last-run. AM-1's openapi generator (board item AM-1) ingests this sidecar alongside other per-endpoint schemas and emits the unified openapi.json. Authored manually until AM-1 lands.",
+  "type": "object",
+  "required": [
+    "status",
+    "timestamp",
+    "action",
+    "stage_times",
+    "duration_total_seconds",
+    "emhass_version",
+    "schema_version",
+    "infeasible",
+    "error_message"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["no-run", "ok", "infeasible", "error"],
+      "description": "Discriminator: which-state-is-this-response."
+    },
+    "timestamp": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "ISO 8601 UTC instant when the run completed. Null when status='no-run'."
+    },
+    "action": {
+      "type": ["string", "null"],
+      "enum": ["perfect-optim", "dayahead-optim", "naive-mpc-optim", null],
+      "description": "URL-form action name (matches /action/<name>). Null when status='no-run'."
+    },
+    "stage_times": {
+      "type": ["object", "null"],
+      "additionalProperties": {"type": "number"},
+      "description": "Per-stage elapsed seconds, e.g. {pv_forecast: 1.2, load_forecast: 0.5}. Null when status='no-run'."
+    },
+    "duration_total_seconds": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Wall-clock seconds from optim-wrapper entry to record() call. Null when status='no-run'."
+    },
+    "emhass_version": {
+      "type": ["string", "null"],
+      "description": "Installed emhass package version (importlib.metadata). Null when status='no-run'."
+    },
+    "schema_version": {
+      "type": ["string", "null"],
+      "description": "EMHASS_SCHEMA_VERSION from command_line.py (per AC-1). Null when status='no-run'."
+    },
+    "infeasible": {
+      "type": ["boolean", "null"],
+      "description": "True when the solver returned Infeasible. Null when status='no-run'."
+    },
+    "error_message": {
+      "type": ["string", "null"],
+      "description": "Populated when status='error'. Null otherwise."
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "no-run"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "timestamp": {"const": null},
+          "action": {"const": null},
+          "stage_times": {"const": null},
+          "duration_total_seconds": {"const": null},
+          "infeasible": {"const": null},
+          "error_message": {"const": null}
+        }
+      }
+    }
+  ]
+}
