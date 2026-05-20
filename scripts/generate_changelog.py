@@ -5,8 +5,8 @@ import requests
 
 # --- CONFIGURATION ---
 REPO = "davidusb-geek/emhass"
-LAST_RELEASE_DATE = "2026-04-19T00:00:00Z"  # ISO format of your last release date
-NEW_VERSION = "0.17.3"
+LAST_RELEASE_DATE = "2026-04-20T12:00:00Z"  # ISO format of your last release date
+NEW_VERSION = "0.17.4"
 TOKEN = os.getenv("GITHUB_TOKEN")  # Add it using: $env:GITHUB_TOKEN="your_actual_token_here" on PS
 # ---------------------
 
