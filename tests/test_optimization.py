@@ -2474,8 +2474,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
 
         draw_off = [0.0] * 48
-        draw_off[14] = 1.0   # morning draw at slot 14
-        draw_off[40] = 1.2   # evening draw at slot 40
+        draw_off[14] = 1.0  # morning draw at slot 14
+        draw_off[40] = 1.2  # evening draw at slot 40
 
         self.optim_conf["number_of_deferrable_loads"] = 2
         self.optim_conf["nominal_power_of_deferrable_loads"] = [3500, 25000]
@@ -2524,7 +2524,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertIn("P_deferrable1", res.columns)
         # Shared tank temperature variable exposed
         tank_cols = [c for c in res.columns if "temp_shared_dhw" in c or "temp_heater" in c]
-        self.assertTrue(tank_cols, f"Expected a temp column for the shared tank, got {res.columns.tolist()}")
+        self.assertTrue(
+            tank_cols, f"Expected a temp column for the shared tank, got {res.columns.tolist()}"
+        )
         # At least one source fires to meet the morning + evening draws
         total = res["P_deferrable0"].sum() + res["P_deferrable1"].sum()
         self.assertGreater(total, 0, "Expected some dispatch to satisfy draw_off demand")
@@ -2568,7 +2570,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.df_input_data_dayahead,
             self.p_pv_forecast.values.ravel(),
             self.p_load_forecast.values.ravel(),
-            ulc, upp,
+            ulc,
+            upp,
         )
 
         p_load0 = res["P_deferrable0"]  # electric
@@ -2618,9 +2621,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # Run B: same tank declared as shared_thermal_tanks with one member
         self.optim_conf["number_of_deferrable_loads"] = 1
         self.optim_conf["def_load_config"] = [{"thermal_source": source_params}]
-        self.optim_conf["shared_thermal_tanks"] = [
-            {"id": "buf", "load_ids": [0], **tank_params}
-        ]
+        self.optim_conf["shared_thermal_tanks"] = [{"id": "buf", "load_ids": [0], **tank_params}]
         opt = self.create_optimization()
         ulc = self.df_input_data_dayahead[opt.var_load_cost].values
         upp = self.df_input_data_dayahead[opt.var_prod_price].values
@@ -2670,17 +2671,13 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         }
 
         # Baseline: no solar absorption
-        res_no_solar = self.run_optimization_with_config(
-            [{"thermal_battery": dict(base_battery)}]
-        )
+        res_no_solar = self.run_optimization_with_config([{"thermal_battery": dict(base_battery)}])
 
         # With solar gain on a 30 m² pool-style surface
         with_solar_cfg = dict(base_battery)
         with_solar_cfg["solar_absorption_area"] = 30.0
         with_solar_cfg["solar_absorption_factor"] = 0.7
-        res_with_solar = self.run_optimization_with_config(
-            [{"thermal_battery": with_solar_cfg}]
-        )
+        res_with_solar = self.run_optimization_with_config([{"thermal_battery": with_solar_cfg}])
 
         # Solar gain should reduce pumped heat - strictly less consumption.
         self.assertLess(
@@ -2705,15 +2702,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "max_temperatures": [28.0] * 48,
         }
 
-        res_unset = self.run_optimization_with_config(
-            [{"thermal_battery": dict(base_battery)}]
-        )
+        res_unset = self.run_optimization_with_config([{"thermal_battery": dict(base_battery)}])
 
         explicit_zero = dict(base_battery)
         explicit_zero["solar_absorption_area"] = 0.0
-        res_zero = self.run_optimization_with_config(
-            [{"thermal_battery": explicit_zero}]
-        )
+        res_zero = self.run_optimization_with_config([{"thermal_battery": explicit_zero}])
 
         np.testing.assert_array_almost_equal(
             res_unset["P_deferrable0"].values,
@@ -4994,7 +4987,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         """Test that battery SOC deficit cost prevents battery
         discharge below threshold unless price difference is
         sufficient."""
-        
+
         # Setup plant configuration for a non-hybrid system
         # We use a small battery and force a charge event
         self.plant_conf.update(
@@ -5113,13 +5106,13 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(opt_res_with_cost["soc_deficit_cost"].iloc[1], 0.0)
         self.assertEqual(opt_res_with_cost["soc_deficit_cost"].iloc[2], 0.0)
         self.assertEqual(opt_res_with_cost["soc_deficit_cost"].iloc[3], 0.0)
-        
+
         self.assertEqual(opt_res_with_cost["SOC_opt"].iloc[0], 0.75)
         self.assertEqual(opt_res_with_cost["SOC_opt"].iloc[1], 0.50)
         # it may take any path here as long as it doesn't discharge below 0.5
         self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[2], 0.50)
         self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[3], 0.50)
-            
+
 
 if __name__ == "__main__":
     unittest.main()
