@@ -491,7 +491,7 @@ function buildParamElement(
     if (value === null) {
       return `
           ${type_specific_html}
-          <input class="param_input" type="${type}" placeholder=${placeholder} value="">
+          <input class="param_input" type="${type}" placeholder="${placeholder}" value="">
           ${type_specific_html_end}
           `;
     }
