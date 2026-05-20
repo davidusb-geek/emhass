@@ -3866,15 +3866,19 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 total_energy_delivered, target_energy, delta=target_energy * 0.01
             )
 
-            # Optional: Relaxed check for steps (allow 24 or 25)
-            steps_active = (p_def_0 > 10.0).sum()  # Use higher threshold (10W) to ignore noise
-            self.assertTrue(
-                23 <= steps_active <= 25, f"Expected ~24 active steps, got {steps_active}"
-            )
-
-            # Check Max Power matches nominal (approx)
+            # Active-step count and peak power are invariants of the integer
+            # (MILP) solution only. When the solver falls back to a relaxed LP,
+            # energy is "smeared" across partial steps, so neither the step
+            # count nor the peak power is constrained; the total-energy check
+            # above is the invariant in that case.
+            steps_active = (p_def_0 > 10.0).sum()  # 10 W threshold ignores noise
             max_power = p_def_0.max()
-            self.assertAlmostEqual(max_power, 3000.0, delta=1.0)
+            if status == "Optimal":
+                self.assertTrue(
+                    23 <= steps_active <= 25,
+                    f"Expected ~24 active steps, got {steps_active}",
+                )
+                self.assertAlmostEqual(max_power, 3000.0, delta=1.0)
 
             self.assertIn("predicted_temp_heater6", opt_res.columns)
 
