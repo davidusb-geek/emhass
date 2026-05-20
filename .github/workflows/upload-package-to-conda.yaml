@@ -25,9 +25,8 @@ jobs:
       - name: Install Build Tools
         shell: bash -l {0}
         run: |
-          conda install -n base -y conda-build anaconda-client
-          # Install your project dependencies needed for the recipe (host requirements)
-          conda install -y setuptools wheel hatchling pip
+          conda install -n base -y conda-build
+          conda install -y anaconda-client setuptools wheel hatchling pip
 
       # Build the Package
       - name: Build Conda Package
