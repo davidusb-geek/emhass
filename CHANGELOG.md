@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.17.4 - 2026-05-20
+
+A hotfix patched version.
+
+### Fix
+* **Config Page Crash Resolved (#872, fixes #869):** Fixed a critical UI rendering crash on the configuration page introduced in v0.17.3. 
+  * The JavaScript configuration renderer (`buildParamElement`) now safely handles `null` and `[null, null]` defaults without throwing a `TypeError`. 
+  * Newly added parameter types (`array.array.float` for `cost_forecast_per_deferrable_load` and `object` for `heat_topology`) are now correctly recognized and rendered as editable text inputs containing their JSON strings. 
+  * This restores the rendering of deferrable loads, batteries, and the Save/Yaml buttons.
+
+### Improvement
+* **Hybrid Heating & Thermal Storage:** Added the `heat_topology` graph model to support complex hybrid heating setups and multi-source thermal storage configurations.
+
 ## 0.17.3 - 2026-05-20
 
 **Thermal Upgrades, AI Integrations, and Smarter Control** 
