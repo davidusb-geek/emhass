@@ -449,6 +449,11 @@ function buildParamElement(
     case "select":
       //format selects later
       break;
+    case "object":
+    case "array.array.float":
+      type = "text";
+      placeholder = JSON.stringify(parameter_definition_object["default_value"]);
+      break;
   }
 
   //check default values saved in param definitions
@@ -482,8 +487,17 @@ function buildParamElement(
   }
   // else if object, loop though array of values, generate input element per value, and and return
   else {
+    // null default: render a single empty input so the section keeps rendering
+    if (value === null) {
+      return `
+          ${type_specific_html}
+          <input class="param_input" type="${type}" placeholder="${placeholder}" value="">
+          ${type_specific_html_end}
+          `;
+    }
     //for items such as load_peak_hour_periods (object of objects with arrays)
-    if (typeof Object.values(value)[0] === "object") {
+    // exclude null: typeof null === "object" is a JS gotcha — null elements must fall to the array branch
+    if (typeof Object.values(value)[0] === "object" && Object.values(value)[0] !== null) {
       for (let param of Object.values(value)) {
         for (let items of Object.values(param)) {
           inputs += `<input class="param_input" type="${type}" placeholder=${Object.values(items)[0]} value=${
