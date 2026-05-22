@@ -2855,6 +2855,17 @@ class Optimization:
         # the user provides `cost_forecast_per_deferrable_load`, slot the override
         # array into the corresponding parameter.
         cost_per_load_overrides = self.optim_conf.get("cost_forecast_per_deferrable_load", None)
+        if cost_per_load_overrides is not None and not isinstance(
+            cost_per_load_overrides, (list, tuple)
+        ):
+            self.logger.warning(
+                "cost_forecast_per_deferrable_load is set but is %s, not a list (value: %r). "
+                "Treating as 'no override' for all loads. Use JSON null or an array of "
+                "per-load arrays (not the string \"null\").",
+                type(cost_per_load_overrides).__name__,
+                cost_per_load_overrides,
+            )
+            cost_per_load_overrides = None
         for k, param in enumerate(self.param_cost_per_load):
             override = (
                 cost_per_load_overrides[k]
@@ -2862,6 +2873,15 @@ class Optimization:
                 else None
             )
             if override is None:
+                param.value = np.asarray(unit_load_cost, dtype=float)
+            elif not isinstance(override, (list, tuple)):
+                self.logger.warning(
+                    "cost_forecast_per_deferrable_load[%d] is %s (value: %r), expected list. "
+                    "Falling back to shared tariff for this load.",
+                    k,
+                    type(override).__name__,
+                    override,
+                )
                 param.value = np.asarray(unit_load_cost, dtype=float)
             else:
                 override_arr = np.asarray(override, dtype=float)
