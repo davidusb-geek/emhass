@@ -1327,6 +1327,31 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIs(out["passed_data"]["ignore_pv_feedback_during_curtailment"], True)
 
+    async def test_treat_runtimeparams_handles_string_null_heat_topology(self):
+        """String "null" heat_topology must not crash; warning logged; no compiled fields merged."""
+        params = await TestUtils.get_test_params()
+        params["optim_conf"]["heat_topology"] = "null"
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        original_num_loads = optim_conf["number_of_deferrable_loads"]
+
+        runtimeparams_json = orjson.dumps({}).decode("utf-8")
+
+        with self.assertLogs(logger, level="WARNING") as log_cm:
+            _, _, optim_conf_out, _ = await treat_runtimeparams(
+                runtimeparams_json,
+                params_json,
+                retrieve_hass_conf,
+                optim_conf,
+                plant_conf,
+                "dayahead-optim",
+                logger,
+                emhass_conf,
+            )
+
+        self.assertEqual(optim_conf_out["number_of_deferrable_loads"], original_num_loads)
+        self.assertTrue(any("heat_topology" in m for m in log_cm.output))
+
     def test_param_to_config(self):
         """Test converting built params back to a flat config dictionary and masking secrets."""
         # Create a mock parameter dictionary with the required categories
@@ -3476,6 +3501,16 @@ class TestCompileHeatTopology(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             utils.compile_heat_topology(topo)
         self.assertIn("missing", str(ctx.exception))
+
+    def test_compile_heat_topology_rejects_non_dict(self):
+        """Non-dict inputs (string "null", None, "") must return {} without raising."""
+        self.assertEqual(utils.compile_heat_topology("null"), {})
+        self.assertEqual(utils.compile_heat_topology(None), {})
+        self.assertEqual(utils.compile_heat_topology(""), {})
+
+    def test_compile_heat_topology_rejects_empty_dict(self):
+        """Empty dict must return {} without raising."""
+        self.assertEqual(utils.compile_heat_topology({}), {})
 
 
 class TestRuntimeBanner(unittest.TestCase):

@@ -506,6 +506,8 @@ def compile_heat_topology(topology: dict) -> dict:
     consumers targeting unknown storage all raise ValueError with the
     offending field path.
     """
+    if not isinstance(topology, dict) or not topology:
+        return {}
     sources = topology.get("sources", []) or []
     storage = topology.get("storage", []) or []
     consumers = topology.get("consumers", []) or []
@@ -1886,48 +1888,57 @@ async def treat_runtimeparams(
     # config because runtimeparams have already been merged above.
     heat_topology = optim_conf.get("heat_topology")
     if heat_topology:
-        try:
-            compiled = compile_heat_topology(heat_topology)
-        except ValueError as e:
-            logger.error("heat_topology compile failed: %s", e)
-            raise
-        # Merge compiled fields into optim_conf, allowing user-set fields to win
-        # for things the compiler always populates (e.g. operating_hours).
-        for key, val in compiled.items():
-            if key not in optim_conf or optim_conf[key] in (None, [], {}):
-                optim_conf[key] = val
-            else:
-                # For the structural fields we ALWAYS want compiled values
-                # (otherwise the compiled def_load_config doesn't match
-                # number_of_deferrable_loads, etc.)
-                if key in {
-                    "number_of_deferrable_loads",
-                    "def_load_config",
-                    "shared_thermal_tanks",
-                    "deferrable_load_groups",
-                    "nominal_power_of_deferrable_loads",
-                    "minimum_power_of_deferrable_loads",
-                    "treat_deferrable_load_as_semi_cont",
-                    "cost_forecast_per_deferrable_load",
-                    # All per-load arrays must match number_of_deferrable_loads,
-                    # which the compiler sets - so override any defaults.
-                    "set_deferrable_load_single_constant",
-                    "set_deferrable_startup_penalty",
-                    "set_deferrable_max_startups",
-                    "operating_hours_of_each_deferrable_load",
-                    "start_timesteps_of_each_deferrable_load",
-                    "end_timesteps_of_each_deferrable_load",
-                    "is_electric_load",
-                }:
+        if not isinstance(heat_topology, dict):
+            logger.warning(
+                "heat_topology is set but is %s, not a dict (value: %r). "
+                "Treating as 'no topology'. Use JSON null (not the string \"null\") "
+                "or omit the key to disable.",
+                type(heat_topology).__name__,
+                heat_topology,
+            )
+        else:
+            try:
+                compiled = compile_heat_topology(heat_topology)
+            except ValueError as e:
+                logger.error("heat_topology compile failed: %s", e)
+                raise
+            # Merge compiled fields into optim_conf, allowing user-set fields to win
+            # for things the compiler always populates (e.g. operating_hours).
+            for key, val in compiled.items():
+                if key not in optim_conf or optim_conf[key] in (None, [], {}):
                     optim_conf[key] = val
-        params["optim_conf"] = optim_conf
-        logger.info(
-            "heat_topology compiled: %d sources, %d storage, %d flows, %d groups",
-            len(heat_topology.get("sources", [])),
-            len(heat_topology.get("storage", [])),
-            len(heat_topology.get("flows", [])),
-            len(heat_topology.get("actuator_groups", [])),
-        )
+                else:
+                    # For the structural fields we ALWAYS want compiled values
+                    # (otherwise the compiled def_load_config doesn't match
+                    # number_of_deferrable_loads, etc.)
+                    if key in {
+                        "number_of_deferrable_loads",
+                        "def_load_config",
+                        "shared_thermal_tanks",
+                        "deferrable_load_groups",
+                        "nominal_power_of_deferrable_loads",
+                        "minimum_power_of_deferrable_loads",
+                        "treat_deferrable_load_as_semi_cont",
+                        "cost_forecast_per_deferrable_load",
+                        # All per-load arrays must match number_of_deferrable_loads,
+                        # which the compiler sets - so override any defaults.
+                        "set_deferrable_load_single_constant",
+                        "set_deferrable_startup_penalty",
+                        "set_deferrable_max_startups",
+                        "operating_hours_of_each_deferrable_load",
+                        "start_timesteps_of_each_deferrable_load",
+                        "end_timesteps_of_each_deferrable_load",
+                        "is_electric_load",
+                    }:
+                        optim_conf[key] = val
+            params["optim_conf"] = optim_conf
+            logger.info(
+                "heat_topology compiled: %d sources, %d storage, %d flows, %d groups",
+                len(heat_topology.get("sources", [])),
+                len(heat_topology.get("storage", [])),
+                len(heat_topology.get("flows", [])),
+                len(heat_topology.get("actuator_groups", [])),
+            )
 
     # Serialize the final params
     params = orjson.dumps(params, default=str).decode()
