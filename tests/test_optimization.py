@@ -2803,6 +2803,107 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "Penalised load should not consume MORE than baseline.",
         )
 
+    def test_cost_forecast_per_load_string_null_does_not_crash(self):
+        """String "null" for cost_forecast_per_deferrable_load must not crash;
+        warning logged; all loads fall back to shared tariff."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
+
+        conf = copy.deepcopy(self.optim_conf)
+        conf["cost_forecast_per_deferrable_load"] = "null"
+        self.optim_conf = conf
+        opt = self.create_optimization()
+
+        with self.assertLogs(level="WARNING") as log:
+            res = opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                unit_load_cost,
+                unit_prod_price,
+            )
+
+        self.assertIsInstance(res, pd.DataFrame)
+        self.assertTrue(
+            any("cost_forecast_per_deferrable_load" in m for m in log.output),
+            "Expected warning mentioning cost_forecast_per_deferrable_load",
+        )
+        for k, param in enumerate(opt.param_cost_per_load):
+            np.testing.assert_array_almost_equal(
+                param.value,
+                unit_load_cost,
+                err_msg=f"Load {k} should use shared tariff when override is string",
+            )
+
+    def test_cost_forecast_per_load_array_with_string_element_does_not_crash(self):
+        """Per-load override list where one element is a string must not crash;
+        that load falls back to shared tariff."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
+
+        conf = copy.deepcopy(self.optim_conf)
+        conf["cost_forecast_per_deferrable_load"] = [None, "null"]
+        self.optim_conf = conf
+        opt = self.create_optimization()
+
+        with self.assertLogs(level="WARNING") as log:
+            res = opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                unit_load_cost,
+                unit_prod_price,
+            )
+
+        self.assertIsInstance(res, pd.DataFrame)
+        self.assertTrue(
+            any("cost_forecast_per_deferrable_load" in m for m in log.output),
+            "Expected warning about string element in per-load override list",
+        )
+        for k, param in enumerate(opt.param_cost_per_load):
+            np.testing.assert_array_almost_equal(
+                param.value,
+                unit_load_cost,
+                err_msg=f"Load {k} should use shared tariff (string override falls back)",
+            )
+
+    def test_cost_forecast_per_load_valid_overrides_applied(self):
+        """Valid list-of-lists override is applied to per-load cost parameters."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        unit_load_cost = self.df_input_data_dayahead[self.opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[self.opt.var_prod_price].values
+        num_ts = len(unit_load_cost)
+
+        override_0 = [0.1] * num_ts
+        override_1 = [0.2] * num_ts
+
+        conf = copy.deepcopy(self.optim_conf)
+        conf["cost_forecast_per_deferrable_load"] = [override_0, override_1]
+        self.optim_conf = conf
+        opt = self.create_optimization()
+
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+
+        self.assertIsInstance(res, pd.DataFrame)
+        np.testing.assert_array_almost_equal(
+            opt.param_cost_per_load[0].value,
+            np.array(override_0),
+            err_msg="Load 0 cost parameter should match the provided override",
+        )
+        np.testing.assert_array_almost_equal(
+            opt.param_cost_per_load[1].value,
+            np.array(override_1),
+            err_msg="Load 1 cost parameter should match the provided override",
+        )
+
     def test_thermal_battery_inertia_backward_compat(self):
         """Test that thermal_inertia_time_constant=0 produces identical results to omitting it."""
         self.df_input_data_dayahead = self.prepare_forecast_data()
