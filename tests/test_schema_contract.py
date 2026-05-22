@@ -107,9 +107,7 @@ def test_config_defaults_keys_match_param_definitions():
     pd = json.loads(
         Path("src/emhass/static/data/param_definitions.json").read_text(encoding="utf-8")
     )
-    cd = json.loads(
-        Path("src/emhass/data/config_defaults.json").read_text(encoding="utf-8")
-    )
+    cd = json.loads(Path("src/emhass/data/config_defaults.json").read_text(encoding="utf-8"))
 
     pd_flat: dict[str, str] = {}
     for section_entries in pd.values():
