@@ -4,38 +4,42 @@ from pathlib import Path
 
 # Keys in config_defaults.json with no param_definitions.json entry.
 # These are ML-subsystem parameters not represented in the UI schema.
-_KNOWN_UNDECLARED_DEFAULTS = frozenset({
-    "data_path",
-    "deferrable_load_groups",
-    "model_type",
-    "num_lags",
-    "perform_backtest",
-    "sklearn_model",
-    "split_date_delta",
-    "var_model",
-})
+_KNOWN_UNDECLARED_DEFAULTS = frozenset(
+    {
+        "data_path",
+        "deferrable_load_groups",
+        "model_type",
+        "num_lags",
+        "perform_backtest",
+        "sklearn_model",
+        "split_date_delta",
+        "var_model",
+    }
+)
 
 # Keys whose default value type doesn't match their declared input type.
 # Pre-existing mismatches outside the scope of the #876/#879 bug-wave.
-_KNOWN_TYPE_MISMATCHES = frozenset({
-    "load_peak_hour_periods",  # declared array.time, default is dict
-})
+_KNOWN_TYPE_MISMATCHES = frozenset(
+    {
+        "load_peak_hour_periods",  # declared array.time, default is dict
+    }
+)
 
 # Mapping from param_definitions "input" type to acceptable Python types for defaults.
 _INPUT_TYPE_TO_PY_TYPES: dict[str, tuple[type, ...]] = {
-    "int":              (int, type(None)),
-    "float":            (int, float, type(None)),
-    "string":           (str, type(None)),
-    "boolean":          (bool,),
-    "time":             (str, type(None)),
-    "select":           (str, type(None)),
-    "array.int":        (list, type(None)),
-    "array.float":      (list, type(None)),
-    "array.string":     (list, type(None)),
-    "array.boolean":    (list, type(None)),
-    "array.time":       (list, type(None)),
+    "int": (int, type(None)),
+    "float": (int, float, type(None)),
+    "string": (str, type(None)),
+    "boolean": (bool,),
+    "time": (str, type(None)),
+    "select": (str, type(None)),
+    "array.int": (list, type(None)),
+    "array.float": (list, type(None)),
+    "array.string": (list, type(None)),
+    "array.boolean": (list, type(None)),
+    "array.time": (list, type(None)),
     "array.array.float": (list, type(None)),
-    "object":           (dict, type(None)),
+    "object": (dict, type(None)),
 }
 
 
