@@ -1,4 +1,3 @@
-# tests/test_schema_contract.py
 import json
 import re
 from pathlib import Path

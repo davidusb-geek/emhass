@@ -1,4 +1,3 @@
-# tests/test_defaults_smoke.py
 import pathlib
 import unittest
 
