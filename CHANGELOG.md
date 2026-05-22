@@ -1,7 +1,11 @@
 # Changelog
 
-## 0.17.4 - 2026-05-20
+## 0.17.5 - 2026-05-22
+### Fix
+* **optimization:** Guard against string-null `cost_forecast_per_deferrable_load` (#879)
+* **utils:** Guard against string-null `heat_topology` in `compile_heat_topology` and `treat_runtimeparams` (#878)
 
+## 0.17.4 - 2026-05-20
 A hotfix patched version.
 
 ### Fix
@@ -14,7 +18,6 @@ A hotfix patched version.
 * **Hybrid Heating & Thermal Storage:** Added the `heat_topology` graph model to support complex hybrid heating setups and multi-source thermal storage configurations.
 
 ## 0.17.3 - 2026-05-20
-
 **Thermal Upgrades, AI Integrations, and Smarter Control** 
 
 Version `0.17.3` is a massive release packed with advanced thermal modeling, smarter battery management, and a huge leap forward in developer and AI-agent tooling. Thanks to the hard work of our contributors, EMHASS is now more robust, customizable, and easier to integrate than ever.
