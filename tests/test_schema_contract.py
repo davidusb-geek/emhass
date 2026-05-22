@@ -43,15 +43,19 @@ _INPUT_TYPE_TO_PY_TYPES: dict[str, tuple[type, ...]] = {
 }
 
 
-def _extract_function_body(js_src: str, fn_name: str) -> str:
-    """Return the body of `function fn_name(...)` from a JS source string.
+def _extract_switch_body(js_src: str, fn_name: str) -> str:
+    """Return the body of the first switch block inside fn_name.
 
-    Uses brace counting; assumes the function declaration is well-formed.
+    Narrower than full-function extraction: brace-counts only the switch
+    block, so extra braces in the surrounding function don't matter.
     """
-    m = re.search(rf"function\s+{re.escape(fn_name)}\s*\([^)]*\)\s*\{{", js_src)
-    if not m:
+    fn_m = re.search(rf"function\s+{re.escape(fn_name)}\s*\([^)]*\)\s*\{{", js_src)
+    if not fn_m:
         raise AssertionError(f"function {fn_name!r} not found in JS source")
-    start = m.end()
+    sw_m = re.search(r"\bswitch\s*\([^)]+\)\s*\{", js_src[fn_m.end() :])
+    if not sw_m:
+        raise AssertionError(f"no switch statement found in function {fn_name!r}")
+    start = fn_m.end() + sw_m.end()
     depth = 1
     i = start
     while i < len(js_src) and depth > 0:
@@ -82,8 +86,8 @@ def test_param_definitions_input_types_have_renderer_cases():
 
     js_path = Path("src/emhass/static/configuration_script.js")
     js_src = js_path.read_text(encoding="utf-8")
-    fn_body = _extract_function_body(js_src, "buildParamElement")
-    cases = set(re.findall(r'case\s+"([^"]+)"\s*:', fn_body))
+    switch_body = _extract_switch_body(js_src, "buildParamElement")
+    cases = set(re.findall(r'case\s+"([^"]+)"\s*:', switch_body))
 
     missing = declared_inputs - cases
     assert not missing, (
@@ -122,16 +126,20 @@ def test_config_defaults_keys_match_param_definitions():
         f"Add an entry to src/emhass/static/data/param_definitions.json."
     )
 
-    # Check 2: each default value's Python type must match the declared input type
+    # Check 2: every input type declared in param_definitions must be mapped
+    unmapped = set(pd_flat.values()) - set(_INPUT_TYPE_TO_PY_TYPES.keys())
+    assert not unmapped, (
+        f"param_definitions.json uses input types not in _INPUT_TYPE_TO_PY_TYPES: "
+        f"{sorted(unmapped)}. Add them to the mapping in test_schema_contract.py."
+    )
+
+    # Check 3: each default value's Python type must match the declared input type
     mismatches: list[str] = []
     for key, default_value in cd.items():
         if key not in pd_flat or key in _KNOWN_TYPE_MISMATCHES:
             continue
         input_type = pd_flat[key]
-        acceptable = _INPUT_TYPE_TO_PY_TYPES.get(input_type)
-        if acceptable is None:
-            mismatches.append(f"{key}: unknown input type {input_type!r}")
-            continue
+        acceptable = _INPUT_TYPE_TO_PY_TYPES[input_type]
         # Targeted #876 footgun: string "null" for an object-typed param
         if input_type == "object" and default_value == "null":
             mismatches.append(
