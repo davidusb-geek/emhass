@@ -506,6 +506,8 @@ def compile_heat_topology(topology: dict) -> dict:
     consumers targeting unknown storage all raise ValueError with the
     offending field path.
     """
+    if not isinstance(topology, dict) or not topology:
+        return {}
     sources = topology.get("sources", []) or []
     storage = topology.get("storage", []) or []
     consumers = topology.get("consumers", []) or []
@@ -1885,7 +1887,7 @@ async def treat_runtimeparams(
     # it down to flat optim_conf primitives. Runtime override wins over static
     # config because runtimeparams have already been merged above.
     heat_topology = optim_conf.get("heat_topology")
-    if heat_topology:
+    if isinstance(heat_topology, dict) and heat_topology:
         try:
             compiled = compile_heat_topology(heat_topology)
         except ValueError as e:
@@ -1927,6 +1929,14 @@ async def treat_runtimeparams(
             len(heat_topology.get("storage", [])),
             len(heat_topology.get("flows", [])),
             len(heat_topology.get("actuator_groups", [])),
+        )
+    elif heat_topology:
+        logger.warning(
+            "heat_topology is set but is %s, not a dict (value: %r). "
+            "Treating as 'no topology'. Use JSON null (not the string \"null\") "
+            "or omit the key to disable.",
+            type(heat_topology).__name__,
+            heat_topology,
         )
 
     # Serialize the final params
