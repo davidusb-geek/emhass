@@ -2430,6 +2430,27 @@ class TestHeatingDemand(unittest.TestCase):
         self.assertEqual(cops[1], 1.0)
         self.assertGreater(cops[2], 1.0)
 
+    def test_calculate_cop_heatpump_invalid_mode_raises(self):
+        """Invalid mode must fail explicitly instead of silently falling back."""
+        with self.assertRaises(ValueError) as ctx:
+            utils.calculate_cop_heatpump(
+                supply_temperature=35.0,
+                carnot_efficiency=0.4,
+                outdoor_temperature_forecast=np.array([5.0, 10.0]),
+                mode=" typo ",
+            )
+        self.assertIn("COP calculation", str(ctx.exception))
+        self.assertIn("Expected 'heat' or 'cool'", str(ctx.exception))
+
+    def test_normalize_heat_cool_mode(self):
+        self.assertEqual(utils.normalize_heat_cool_mode(" HeAt "), "heat")
+        self.assertEqual(utils.normalize_heat_cool_mode(" COOL "), "cool")
+
+        with self.assertRaises(ValueError) as ctx:
+            utils.normalize_heat_cool_mode(" typo ", field_name="sense", context="thermal_battery")
+        self.assertIn("thermal_battery", str(ctx.exception))
+        self.assertIn("invalid sense", str(ctx.exception))
+
     def test_calculate_thermal_loss_signed(self):
         """Test thermal loss sign-switching utility function based on Langer & Volling (2020)."""
         # Test basic calculation with temperatures crossing the indoor threshold
@@ -2543,6 +2564,18 @@ class TestResolveThermalBatteryCop(unittest.TestCase):
         cops = utils.resolve_thermal_battery_cop(hc, outdoor, length=2)
         expected = utils.calculate_cop_heatpump(18.5, 0.45, outdoor, mode="cool")
         np.testing.assert_array_almost_equal(cops, expected)
+
+    def test_heatpump_mode_invalid_sense_raises(self):
+        hc = {
+            "sense": "invalid",
+            "supply_temperature": 18.5,
+            "carnot_efficiency": 0.45,
+        }
+        outdoor = np.array([24.0, 30.0])
+        with self.assertRaises(ValueError) as ctx:
+            utils.resolve_thermal_battery_cop(hc, outdoor, length=2)
+        self.assertIn("thermal_battery", str(ctx.exception))
+        self.assertIn("invalid sense", str(ctx.exception))
 
     def test_missing_both_efficiency_and_supply_temperature_raises(self):
         """At least one of efficiency or supply_temperature must be set."""

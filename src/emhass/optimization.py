@@ -1437,7 +1437,11 @@ class Optimization:
         cooling_constant = hc["cooling_constant"]
         heating_rate = hc["heating_rate"]
         overshoot_temperature = hc.get("overshoot_temperature", None)
-        sense = hc.get("sense", "heat")
+        sense = utils.normalize_heat_cool_mode(
+            hc.get("sense", "heat"),
+            field_name="sense",
+            context=f"Load {k} thermal_config",
+        )
         nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
 
         # Thermal Inertia Logic
@@ -1643,7 +1647,11 @@ class Optimization:
         conversion = 3600 / (density * heat_capacity * volume)
 
         # Determine heat-flow direction: +1 for heating (pump adds heat), -1 for cooling (pump removes heat)
-        sense = hc.get("sense", "heat")
+        sense = utils.normalize_heat_cool_mode(
+            hc.get("sense", "heat"),
+            field_name="sense",
+            context=f"Load {k} thermal_battery",
+        )
         sense_coeff = 1 if sense == "heat" else -1
 
         # Use parameterized values if available (enables warm-start on cache hit)
@@ -1953,7 +1961,6 @@ class Optimization:
         penalty_expr = 0
         desired_temps_list = hc.get("desired_temperatures", [])
         overshoot_temperature = hc.get("overshoot_temperature", None)
-        sense = hc.get("sense", "heat")
         sense_coeff = 1 if sense == "heat" else -1
 
         if desired_temps_list and overshoot_temperature is not None:
