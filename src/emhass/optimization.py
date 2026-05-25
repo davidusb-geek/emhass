@@ -1047,7 +1047,7 @@ class Optimization:
                 # Add reward term: +max_cost * load_is_scheduled
                 # This means: if solver schedules the load (load_is_scheduled=1),
                 # it gets a reward of 'max_cost'
-                reward_term = max_cost * load_is_scheduled[0]
+                reward_term = max_cost * load_is_scheduled
                 objective_terms.append(reward_term)
 
                 self.logger.debug(
@@ -2287,7 +2287,7 @@ class Optimization:
                 M = 10.0
 
             # Check if this load has a max cost
-            has_max_cost = k < len(max_cost) and max_cost[k] > 0
+            has_max_cost = max_cost[k] > 0
 
             # Load Specific Constraints
 
@@ -2315,7 +2315,7 @@ class Optimization:
                     constraints.append(cp.sum(y) <= 1)
 
                     # Create binary variable that tracks whether load is actually scheduled
-                    load_is_scheduled = cp.Variable(1, boolean=True, name=f"load_is_scheduled_{k}")
+                    load_is_scheduled = cp.Variable(boolean=True, name=f"load_is_scheduled_{k}")
 
                     # Constraint: if any y[k] = 1, then load_is_scheduled must = 1
                     constraints.append(cp.sum(y) == load_is_scheduled)
@@ -2410,8 +2410,7 @@ class Optimization:
             ):
                 if has_max_cost:
                     # Create binary variable that tracks whether load is actually scheduled
-                    load_is_scheduled = cp.Variable(1, boolean=True, name=f"load_is_scheduled_{k}")
-                    self.vars[f"load_is_scheduled_{k}"] = load_is_scheduled
+                    load_is_scheduled = cp.Variable(boolean=True, name=f"load_is_scheduled_{k}")
 
                     # Constraint: if any p_def_bin2[k] = 1, then load_is_scheduled must = 1
                     # This is enforced by: sum(p_def_bin2[k]) <= n * load_is_scheduled AND sum(p_def_bin2[k]) >= load_is_scheduled
@@ -2438,8 +2437,6 @@ class Optimization:
                     # Make energy constraint conditional on load being on
                     # When load_is_on = 0: energy constraint is relaxed (Big-M)
                     # When load_is_on = 1: energy constraint is enforced
-                    load_is_scheduled = self.vars[f"load_is_scheduled_{k}"]
-
                     constraints.append(
                         total_energy_expr
                         >= self.param_target_energy[k] * load_is_scheduled - M_energy * (1 - load_is_scheduled)
@@ -2449,7 +2446,7 @@ class Optimization:
                         <= self.param_target_energy[k] * load_is_scheduled + M_energy * (1 - load_is_scheduled)
                     )
                 else:
-                    # Unconditional energy constraint
+                    # No-max-cost energy constraint
                     constraints.append(
                         total_energy_expr
                         >= self.param_target_energy[k] - M_energy * (1 - self.param_energy_active[k])
