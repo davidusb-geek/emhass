@@ -146,6 +146,20 @@ def get_forecast_dates(
     return [ts.isoformat() for ts in forecast_dates]
 
 
+def normalize_heat_cool_mode(
+    value: str,
+    *,
+    field_name: str = "mode",
+    context: str | None = None,
+) -> str:
+    """Normalize heat/cool mode values and raise on invalid input."""
+    mode_norm = str(value).strip().lower()
+    if mode_norm not in {"heat", "cool"}:
+        prefix = f"{context}: " if context else ""
+        raise ValueError(f"{prefix}invalid {field_name} '{value}'. Expected 'heat' or 'cool'.")
+    return mode_norm
+
+
 def calculate_cop_heatpump(
     supply_temperature: float | np.ndarray | pd.Series,
     carnot_efficiency: float,
@@ -221,12 +235,7 @@ def calculate_cop_heatpump(
     supply_temperature_kelvin = supply_temps + 273.15
     outdoor_temperature_kelvin = outdoor_temps + 273.15
 
-    mode_norm = str(mode).strip().lower()
-    if mode_norm not in {"heat", "cool"}:
-        logging.getLogger(__name__).warning(
-            "COP calculation: unknown mode '%s', falling back to 'heat'", mode
-        )
-        mode_norm = "heat"
+    mode_norm = normalize_heat_cool_mode(mode, field_name="mode", context="COP calculation")
 
     # Calculate temperature lift depending on mode.
     if mode_norm == "heat":
@@ -444,7 +453,11 @@ def resolve_thermal_battery_cop(
         supply_temperature=supply_temperature,
         carnot_efficiency=hc.get("carnot_efficiency", 0.4),
         outdoor_temperature_forecast=outdoor_temperature_forecast,
-        mode=hc.get("sense", "heat"),
+        mode=normalize_heat_cool_mode(
+            hc.get("sense", "heat"),
+            field_name="sense",
+            context="thermal_battery",
+        ),
     )
     return cops if length is None else cops[:length]
 
