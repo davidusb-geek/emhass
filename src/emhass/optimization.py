@@ -1039,6 +1039,21 @@ class Optimization:
                     term = -scale * penalty * nominal_power * total_startup_cost
                     objective_terms.append(term)
 
+        # Deferrable Load Max Cost Rewards
+        # Add reward for scheduling loads equal to the max_cost..
+        # Solver will only schedule if it can do so at lower cost than this reward.
+        if hasattr(self, 'deferrable_with_max_cost'):
+            for k, (max_cost, load_is_scheduled) in self.deferrable_with_max_cost.items():
+                # Add reward term: +max_cost * load_is_scheduled
+                # This means: if solver schedules the load (load_is_scheduled=1),
+                # it gets a reward of 'max_cost'
+                reward_term = max_cost * load_is_scheduled[0]
+                objective_terms.append(reward_term)
+
+                self.logger.debug(
+                    f"Deferrable load {k}: added max cost reward of {max_cost} to objective"
+                )
+
         # Per-load cost overrides. Behavior depends on whether the load is on
         # the electric balance (`is_electric_load[k]`):
         #
@@ -2244,6 +2259,13 @@ class Optimization:
         # and again by the is_thermal_battery check below.
         shared_tank_membership = self._load_shared_tank_membership()
 
+        # Initialize max cost vector
+        max_cost = self.optim_conf.get("deferrable_load_max_cost",
+                                       [0.0] * self.optim_conf["number_of_deferrable_loads"])
+        max_cost = max_cost + \
+            [0.0] * (self.optim_conf["number_of_deferrable_loads"] - len(max_cost))
+        self.deferrable_with_max_cost = {}
+
         for k in range(self.optim_conf["number_of_deferrable_loads"]):
             self.logger.debug(f"Processing deferrable load {k}")
 
@@ -2263,6 +2285,9 @@ class Optimization:
             # Safety fallback if M is 0 (e.g., mock load)
             if M <= 0:
                 M = 10.0
+
+            # Check if this load has a max cost
+            has_max_cost = k < len(max_cost) and max_cost[k] > 0
 
             # Load Specific Constraints
 
@@ -2285,8 +2310,23 @@ class Optimization:
 
                 y = cp.Variable(y_len, boolean=True, name=f"y_seq_{k}")
 
-                # Constraint: Choose exactly one start time
-                constraints.append(cp.sum(y) == 1)
+                if has_max_cost:
+                    # Choose *at most* one start time if max cost exists
+                    constraints.append(cp.sum(y) <= 1)
+
+                    # Create binary variable that tracks whether load is actually scheduled
+                    load_is_scheduled = cp.Variable(1, boolean=True, name=f"load_is_scheduled_{k}")
+
+                    # Constraint: if any y[k] = 1, then load_is_scheduled must = 1
+                    constraints.append(cp.sum(y) == load_is_scheduled)
+
+                    # Store for later use in objective function
+                    self.deferrable_with_max_cost[k] = (max_cost[k], load_is_scheduled)
+
+                    self.logger.debug(f"Deferrable sequence load {k}: max cost constraint added")
+                else:
+                    # Constraint: Choose exactly one start time
+                    constraints.append(cp.sum(y) == 1)
 
                 # Detailed power shape constraint (Convolution-like)
                 # We build the matrix explicitly here
@@ -2360,12 +2400,29 @@ class Optimization:
             # - Sequence loads (defined by power profile)
             # - Thermal loads (controlled by temperature targets)
             # - Thermal battery loads (controlled by heat demand)
+
+            # Now add the energy constraint (with optional relaxation if max cost exists)
             if (
                 k < len(self.param_target_energy)
                 and not is_sequence_load
                 and not is_thermal_load
                 and not is_thermal_battery
             ):
+                if has_max_cost:
+                    # Create binary variable that tracks whether load is actually scheduled
+                    load_is_scheduled = cp.Variable(1, boolean=True, name=f"load_is_scheduled_{k}")
+                    self.vars[f"load_is_scheduled_{k}"] = load_is_scheduled
+
+                    # Constraint: if any p_def_bin2[k] = 1, then load_is_scheduled must = 1
+                    # This is enforced by: sum(p_def_bin2[k]) <= n * load_is_scheduled AND sum(p_def_bin2[k]) >= load_is_scheduled
+                    constraints.append(cp.sum(p_def_bin2[k]) >= load_is_scheduled)
+                    constraints.append(cp.sum(p_def_bin2[k]) <= n * load_is_scheduled)
+
+                    # Store for later use in objective function
+                    self.deferrable_with_max_cost[k] = (max_cost[k], load_is_scheduled)
+
+                    self.logger.debug(f"Deferrable load {k}: max cost constraint added")
+
                 # Big-M value: maximum possible energy consumption
                 # = max_power * num_timesteps * time_step
                 nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
@@ -2376,14 +2433,31 @@ class Optimization:
                 # Energy constraint: sum(p) * dt == target_energy (when active)
                 # Relaxed to: target_energy - M*(1-active) <= sum(p)*dt <= target_energy + M*(1-active)
                 total_energy_expr = cp.sum(p_deferrable[k]) * self.time_step
-                constraints.append(
-                    total_energy_expr
-                    >= self.param_target_energy[k] - M_energy * (1 - self.param_energy_active[k])
-                )
-                constraints.append(
-                    total_energy_expr
-                    <= self.param_target_energy[k] + M_energy * (1 - self.param_energy_active[k])
-                )
+
+                if has_max_cost:
+                    # Make energy constraint conditional on load being on
+                    # When load_is_on = 0: energy constraint is relaxed (Big-M)
+                    # When load_is_on = 1: energy constraint is enforced
+                    load_is_scheduled = self.vars[f"load_is_scheduled_{k}"]
+
+                    constraints.append(
+                        total_energy_expr
+                        >= self.param_target_energy[k] * load_is_scheduled - M_energy * (1 - load_is_scheduled)
+                    )
+                    constraints.append(
+                        total_energy_expr
+                        <= self.param_target_energy[k] * load_is_scheduled + M_energy * (1 - load_is_scheduled)
+                    )
+                else:
+                    # Unconditional energy constraint
+                    constraints.append(
+                        total_energy_expr
+                        >= self.param_target_energy[k] - M_energy * (1 - self.param_energy_active[k])
+                    )
+                    constraints.append(
+                        total_energy_expr
+                        <= self.param_target_energy[k] + M_energy * (1 - self.param_energy_active[k])
+                    )
 
             # Generic Constraints (Window)
 

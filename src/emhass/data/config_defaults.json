@@ -78,6 +78,7 @@
   "treat_deferrable_load_as_semi_cont": [true, true],
   "set_deferrable_load_single_constant": [false, false],
   "set_deferrable_startup_penalty": [0.0, 0.0],
+  "deferrable_load_max_cost": [0.0, 0.0],
   "set_deferrable_max_startups": [0, 0],
   "deferrable_load_groups": [],
   "load_peak_hours_cost": 0.1907,
