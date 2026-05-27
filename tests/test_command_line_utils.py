@@ -2320,6 +2320,45 @@ class TestOptimizationCache(unittest.TestCase):
         # Should still return cached object since operating hours are parameterized
         self.assertEqual(result, mock_opt)
 
+    def test_cache_hit_operating_timesteps_changed(self):
+        """Test that changing operating timesteps does NOT invalidate the cache.
+
+        operating_timesteps_of_each_deferrable_load is parameterised via
+        param_target_energy and param_required_timesteps (see optimization.py
+        ~line 2980-3007). Small tick-to-tick shifts in the operating-time
+        requirement (e.g. hot-water-hours-needed translating to 37 vs 38
+        timesteps) should NOT trigger a problem rebuild. This is a regression
+        test for the fix that added operating_timesteps to
+        optim_conf_runtime_keys.
+        """
+        mock_opt = MagicMock()
+        OptimizationCache.put(
+            mock_opt,
+            self.optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Modify operating timesteps for load 1
+        modified_optim_conf = copy.deepcopy(self.optim_conf)
+        modified_optim_conf["operating_timesteps_of_each_deferrable_load"] = [
+            6,
+            16,
+        ]  # was implicit/None before, now varies
+
+        result = OptimizationCache.get(
+            modified_optim_conf,
+            self.plant_conf,
+            self.costfun,
+            self.retrieve_hass_conf,
+            self.logger,
+        )
+
+        # Should still return cached object since operating timesteps are parameterized
+        self.assertEqual(result, mock_opt)
+
     def test_cache_hit_start_timestep_changed(self):
         """Test that changing start timesteps does NOT invalidate the cache.
 
