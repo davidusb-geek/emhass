@@ -452,7 +452,9 @@ function buildParamElement(
     case "object":
     case "array.array.float":
       type = "text";
-      placeholder = JSON.stringify(parameter_definition_object["default_value"]);
+      placeholder = parameter_definition_object["default_value"] === null
+        ? ""
+        : JSON.stringify(parameter_definition_object["default_value"]);
       break;
   }
 
@@ -494,6 +496,11 @@ function buildParamElement(
           <input class="param_input" type="${type}" placeholder="${placeholder}" value="">
           ${type_specific_html_end}
           `;
+    }
+    // Free-form JSON objects (heat_topology etc.) render as a single JSON text box.
+    // The nested-object path below is designed only for load_peak_hour_periods.
+    if (parameter_definition_object["input"] === "object") {
+      return `<input class="param_input" type="text" placeholder="${placeholder}" value='${JSON.stringify(value)}'>`;
     }
     //for items such as load_peak_hour_periods (object of objects with arrays)
     // exclude null: typeof null === "object" is a JS gotcha — null elements must fall to the array branch
@@ -553,15 +560,16 @@ function minusElements(param) {
   let param_input
   if (param_element == null) {
     console.log(
-      "Unable to find " + parameter_definition_name + " param div container"
+      "Unable to find " + param + " param div container"
     );
     return 1;
   }
   let param_input_list = param_element.getElementsByTagName("input");
   if (param_input_list.length == 0) {
     console.log(
-      "Unable to find " + parameter_definition_name + " param input/s"
+      "Unable to find " + param + " param input/s"
     );
+    return 1;
   }
 
   //verify if input is a boolean (if so remove parent slider/switch element with input)
@@ -766,6 +774,22 @@ async function saveConfiguration(param_definitions) {
           );
 
           //build parameters using values extracted from param_inputs
+
+          // object-type: JSON.parse the text-box value; treat "" and "null" as JSON null
+          if (parameter_definition_object["input"] === "object") {
+            const raw = (param_values[0] ?? "").toString();
+            if (raw === "" || raw === "null") {
+              config[parameter_definition_name] = null;
+            } else {
+              try {
+                config[parameter_definition_name] = JSON.parse(raw);
+              } catch (_) {
+                console.debug("saveConfiguration: non-JSON value for " + parameter_definition_name + ", storing as-is");
+                config[parameter_definition_name] = raw;
+              }
+            }
+            continue;
+          }
 
           // If time with 2 sets (load_peak_hour_periods)
           if (
