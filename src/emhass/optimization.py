@@ -2918,6 +2918,13 @@ class Optimization:
         # Update Window Mask Parameters for Deferrable Loads
         # This allows warm-starting even when time windows change
         n = len(p_pv)
+        # Track which loads have a configured-but-empty window so we can
+        # also deactivate their binary vars and energy constraints below.
+        # An empty window means the user's [start, end] is entirely outside
+        # [0, n] — emitting binaries / energy constraints for these loads
+        # would make the MILP either infeasible (forcing the relaxed-LP
+        # fallback) or unnecessarily large.
+        window_empty_loads: set[int] = set()
         for k in range(min(num_deferrable_loads, len(self.param_window_masks))):
             # Calculate validated window bounds
             if def_total_timestep and def_total_timestep[k] > 0:
@@ -2935,12 +2942,37 @@ class Optimization:
                     n,
                 )
 
-            # Build the window mask: 0 outside window, 1 inside window
+            # Detect user-configured-but-empty window. We distinguish three
+            # cases:
+            #   (a) User explicitly configured [start, end] entirely outside
+            #       [0, n] — e.g. start=600, end=800, n=576. validate clamps
+            #       both to n, so def_end == def_start == n. Treat as empty.
+            #   (b) User left start and end at the defaults (typically both 0)
+            #       — treat as "no window restriction", mask = all-1.
+            #   (c) Valid window inside the horizon — mask = 1 inside, 0 outside.
+            raw_start = def_start_timestep[k] if k < len(def_start_timestep) else 0
+            raw_end = def_end_timestep[k] if k < len(def_end_timestep) else 0
+            user_configured_window = (raw_start > 0 or raw_end > 0) and raw_start <= raw_end
+            effective_window_size = max(0, min(n, raw_end) - max(0, raw_start))
+
+            # Build the window mask
             window_mask = np.zeros(n)
             if def_end > def_start:
+                # case (c): valid window inside horizon
                 window_mask[def_start:def_end] = 1.0
+            elif user_configured_window and effective_window_size <= 0:
+                # case (a): structurally empty window — load can never operate.
+                # Mask stays zero, and remember k so the load-active and energy
+                # constraints get deactivated too.
+                window_empty_loads.add(k)
+                self.logger.info(
+                    "Deferrable load %d: configured window [%d, %d] is entirely "
+                    "outside the optimization horizon [0, %d]; deactivating "
+                    "binary vars and energy constraint for this tick.",
+                    k, raw_start, raw_end, n,
+                )
             else:
-                # If window is invalid or full horizon, allow operation everywhere
+                # case (b): no window configured — allow operation everywhere
                 window_mask[:] = 1.0
 
             self.param_window_masks[k].value = window_mask
@@ -2989,8 +3021,12 @@ class Optimization:
                 target_energy = 0.0
                 constraint_active = False
 
-            # Set energy constraint parameters
-            if constraint_active:
+            # Set energy constraint parameters. Force-relax the constraint if
+            # the load's configured window is entirely outside the horizon
+            # (window_empty_loads, populated above) — the load can never run,
+            # so emitting a target-energy constraint would force infeasibility
+            # and trigger the relaxed-LP fallback.
+            if constraint_active and k not in window_empty_loads:
                 self.param_target_energy[k].value = target_energy
                 self.param_energy_active[k].value = 1.0  # Constraint is active
             else:
@@ -2999,7 +3035,7 @@ class Optimization:
 
             # For single-constant (binary) loads, set the required timesteps
             is_single_const = self.optim_conf["set_deferrable_load_single_constant"][k]
-            if is_single_const and constraint_active:
+            if is_single_const and constraint_active and k not in window_empty_loads:
                 self.param_required_timesteps[k].value = required_timesteps
                 self.param_timesteps_active[k].value = 1.0  # Constraint is active
             else:
@@ -3068,7 +3104,8 @@ class Optimization:
                     self.param_running_lb[k].value = np.zeros(n)
                     self.param_already_running_sc[k].value = 0.0
 
-        # Update load active parameters: deactivate non-thermal loads with 0 operating timesteps
+        # Update load active parameters: deactivate non-thermal loads with 0 operating timesteps,
+        # OR with a configured window that's entirely outside the optimization horizon.
         # Thermal loads (thermal_config, thermal_battery) are always active since they're
         # driven by temperature constraints, not operating timesteps.
         for k in range(min(num_deferrable_loads, len(self.param_load_active))):
@@ -3076,13 +3113,23 @@ class Optimization:
             has_operating_requirement = (
                 def_total_timestep and k < len(def_total_timestep) and def_total_timestep[k] > 0
             ) or (def_total_hours and k < len(def_total_hours) and def_total_hours[k] > 0)
-            if is_thermal or has_operating_requirement:
+            window_outside_horizon = k in window_empty_loads
+            if is_thermal:
+                # Thermal loads are still driven by temperature constraints
+                # even if their configured window is outside the horizon.
+                self.param_load_active[k].value = 1.0
+            elif has_operating_requirement and not window_outside_horizon:
                 self.param_load_active[k].value = 1.0
             else:
                 self.param_load_active[k].value = 0.0
-                self.logger.debug(
-                    f"Deferrable load {k}: deactivated (no operating timesteps, not thermal)"
-                )
+                if window_outside_horizon:
+                    self.logger.debug(
+                        f"Deferrable load {k}: deactivated (configured window outside horizon)"
+                    )
+                else:
+                    self.logger.debug(
+                        f"Deferrable load {k}: deactivated (no operating timesteps, not thermal)"
+                    )
 
         # Initialize stress config variables (needed by retry path even when
         # self.prob is cached from a previous call, see #770)
