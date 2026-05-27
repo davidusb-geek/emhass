@@ -3264,9 +3264,13 @@ class Optimization:
             # Re-apply main constraints
             self._add_main_power_balance_constraints(constraints_relaxed)
             # (Note: We reuse previous stress configs as they don't change with relaxation)
-            if inv_stress_conf:
+            # Guard on feature flags, not on the stress conf objects: stress conf is None
+            # on cached-problem retry paths (self.prob is not None), so guarding on the
+            # object itself would silently skip these constraints on every retry after the
+            # first call, leaving the relaxed problem without battery/inverter constraints.
+            if self.plant_conf.get("inverter_is_hybrid", False):
                 self._add_hybrid_inverter_constraints(constraints_relaxed, inv_stress_conf)
-            if batt_stress_conf:
+            if self.optim_conf.get("set_use_battery", False):
                 self._add_battery_constraints(constraints_relaxed, batt_stress_conf)
 
             if self.plant_conf["compute_curtailment"]:
