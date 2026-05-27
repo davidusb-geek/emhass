@@ -464,21 +464,45 @@ class RetrieveHass:
         self.df_final = pd.DataFrame()
 
         days_skipped = 0
+        # Concurrent fetch: run all (day, var) HTTP requests in parallel, bounded
+        # by a Semaphore so we don't hammer Home Assistant's recorder. The
+        # post-fetch processing (resampling + per-day concat) is then done
+        # sequentially to preserve the original day order and the
+        # "first-var's resampled index is the day's spine" behaviour.
+        max_concurrency = 8
+        semaphore = asyncio.Semaphore(max_concurrency)
+
+        async def _fetch_one(day_idx: int, day, var: str):
+            url = self._build_history_url(
+                day, var, test_url, minimal_response, significant_changes_only
+            )
+            async with semaphore:
+                data = await self._fetch_history_data(
+                    session, url, headers, var, day, is_first_day=(day_idx == 0)
+                )
+            return day_idx, var, data
+
         async with aiohttp.ClientSession() as session:
+            tasks = [
+                _fetch_one(day_idx, day, var)
+                for day_idx, day in enumerate(days_list)
+                for var in var_list
+            ]
+            fetched = await asyncio.gather(*tasks)
+
+            # Map (day_idx, var) -> data; fail-fast on any False sentinel.
+            results: dict[tuple[int, str], Any] = {}
+            for day_idx, var, data in fetched:
+                if data is False:
+                    return False
+                results[(day_idx, var)] = data
+
             for day_idx, day in enumerate(days_list):
                 df_day = pd.DataFrame()
                 skip_day = False
                 for i, var in enumerate(var_list):
-                    # Build URL
-                    url = self._build_history_url(
-                        day, var, test_url, minimal_response, significant_changes_only
-                    )
-                    # Fetch Data
-                    data = await self._fetch_history_data(
-                        session, url, headers, var, day, is_first_day=(day_idx == 0)
-                    )
-                    if data is False:
-                        return False
+                    # Fetched concurrently above; just pick the result out
+                    data = results.get((day_idx, var))
                     if data is None:
                         skip_day = True
                         break
