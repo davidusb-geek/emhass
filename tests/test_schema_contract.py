@@ -1,6 +1,14 @@
 import json
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
+
+import pytest
+
+_NODE = shutil.which("node")
 
 # Keys in config_defaults.json with no param_definitions.json entry.
 # These are ML-subsystem parameters not represented in the UI schema.
@@ -157,4 +165,179 @@ def test_config_defaults_keys_match_param_definitions():
     assert not mismatches, (
         "config_defaults.json has values incompatible with their declared input type:\n  - "
         + "\n  - ".join(mismatches)
+    )
+
+
+# ---------------------------------------------------------------------------
+# #880 / #904 regression tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def js_src() -> str:
+    return Path("src/emhass/static/configuration_script.js").read_text(encoding="utf-8")
+
+
+def _extract_function_src(js_src: str, fn_name: str) -> str:
+    """Extract a complete top-level ``function <fn_name>(...) { ... }`` block."""
+    fn_m = re.search(rf"function\s+{re.escape(fn_name)}\s*\([^)]*\)\s*\{{", js_src)
+    if not fn_m:
+        raise AssertionError(f"function {fn_name!r} not found in JS source")
+    brace_open = js_src.index("{", fn_m.start())
+    depth = 1
+    i = brace_open + 1
+    while i < len(js_src) and depth > 0:
+        if js_src[i] == "{":
+            depth += 1
+        elif js_src[i] == "}":
+            depth -= 1
+        i += 1
+    return js_src[fn_m.start() : i]
+
+
+def _run_node(script: str) -> subprocess.CompletedProcess:
+    """Write *script* to a temp file and run it with Node.js."""
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".js", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(script)
+        tmp = f.name
+    try:
+        return subprocess.run(
+            [_NODE, tmp], capture_output=True, text=True, timeout=15
+        )
+    finally:
+        os.unlink(tmp)
+
+
+def test_minus_elements_no_undefined_variable(js_src):
+    """minusElements must not reference ``parameter_definition_name``.
+
+    On master this FAILS: the variable appears at two console.log paths
+    (lines 556 and 563), causing an uncaught ReferenceError that aborts
+    window.onload and leaves the whole config UI dead (#880).
+    After fix: PASSES — renamed to ``param`` everywhere in the function.
+    """
+    fn_src = _extract_function_src(js_src, "minusElements")
+    assert "parameter_definition_name" not in fn_src, (
+        "minusElements references `parameter_definition_name` (undefined in its scope). "
+        "Rename to `param` (the function argument) at lines 556 and 563."
+    )
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not in PATH")
+def test_minus_elements_does_not_crash_on_zero_inputs(js_src):
+    """Node replay: minusElements must return cleanly when a param has no inputs.
+
+    ThomasCZ's crash path (issue #880): heat_topology={"sources":[]} renders to
+    "</br>" with no <input> elements; minusElements then references the undefined
+    ``parameter_definition_name`` → ReferenceError → window.onload rejects.
+
+    On master: exits 1 (ReferenceError).
+    After fix (rename + early return): exits 0.
+    """
+    fn_src = _extract_function_src(js_src, "minusElements")
+
+    node_script = (
+        "const document = {\n"
+        "  getElementById: (id) => {\n"
+        "    if (id === 'heat_topology') {\n"
+        "      return { getElementsByTagName: () => ({ length: 0 }) };\n"
+        "    }\n"
+        "    return null;\n"
+        "  }\n"
+        "};\n\n"
+        + fn_src
+        + "\n\ntry {\n"
+        "  const r = minusElements('heat_topology');\n"
+        "  process.stdout.write('OK result=' + r + '\\n');\n"
+        "  process.exit(0);\n"
+        "} catch (e) {\n"
+        "  process.stderr.write('FAIL: ' + e.toString() + '\\n');\n"
+        "  process.exit(1);\n"
+        "}\n"
+    )
+
+    proc = _run_node(node_script)
+    assert proc.returncode == 0, (
+        f"minusElements threw on zero-input param (expected clean return):\n{proc.stderr.strip()}"
+    )
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not in PATH")
+def test_build_param_element_object_type_renders_input(js_src):
+    """Node replay: buildParamElement for 'object' type must return HTML with <input>.
+
+    ThomasCZ's config has heat_topology={"sources":[]}.  On master the
+    nested-object render path produces the string "</br>" (no <input>), so
+    minusElements subsequently finds length==0 and crashes (#880).
+
+    On master: exits 1.
+    After fix (render as JSON text box): exits 0.
+    """
+    check_fn = _extract_function_src(js_src, "checkConfigParam")
+    build_fn = _extract_function_src(js_src, "buildParamElement")
+
+    node_script = f"""\
+{check_fn}
+{build_fn}
+
+const paramDef = {{
+  input: "object",
+  default_value: null,
+  friendly_name: "Heat Topology",
+  Description: "test"
+}};
+const config = {{ heat_topology: {{ sources: [] }} }};
+const html = buildParamElement(paramDef, "heat_topology", config);
+
+if (!html.includes('<input')) {{
+  process.stderr.write('FAIL: no <input> in rendered HTML: ' + JSON.stringify(html) + '\\n');
+  process.exit(1);
+}}
+process.exit(0);
+"""
+    proc = _run_node(node_script)
+    assert proc.returncode == 0, (
+        f"buildParamElement produced no <input> for object type with value={{sources:[]}}:\n"
+        f"{proc.stderr.strip()}"
+    )
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not in PATH")
+def test_build_param_element_object_absent_config_no_null_string_value(js_src):
+    """Node replay: object-type param absent from config must not render value="null".
+
+    On master: placeholder=JSON.stringify(null)="null" → rendered as
+    <input value=null>.  Saving that back stores the string "null" in
+    config.json, causing a per-request backend warning (#904).
+
+    On master: exits 1.
+    After fix (placeholder="" for null defaults): exits 0.
+    """
+    check_fn = _extract_function_src(js_src, "checkConfigParam")
+    build_fn = _extract_function_src(js_src, "buildParamElement")
+
+    node_script = f"""\
+{check_fn}
+{build_fn}
+
+const paramDef = {{
+  input: "object",
+  default_value: null,
+  friendly_name: "Heat Topology",
+  Description: "test"
+}};
+const config = {{}};  // heat_topology absent
+const html = buildParamElement(paramDef, "heat_topology", config);
+
+if (html.includes('value=null') || html.includes('value="null"')) {{
+  process.stderr.write('FAIL: rendered string null as value attribute: ' + JSON.stringify(html) + '\\n');
+  process.exit(1);
+}}
+process.exit(0);
+"""
+    proc = _run_node(node_script)
+    assert proc.returncode == 0, (
+        f"buildParamElement renders string 'null' as input value for absent config:\n"
+        f"{proc.stderr.strip()}"
     )
