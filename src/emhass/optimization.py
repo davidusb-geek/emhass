@@ -3,6 +3,7 @@ import copy
 import logging
 import os
 import pickle
+import time
 from math import ceil
 
 import cvxpy as cp
@@ -2766,11 +2767,19 @@ class Optimization:
         def_init_temp: list | None = None,
         min_power_of_deferrable_loads: list | None = None,
         debug: bool | None = False,
+        stage_times: dict[str, float] | None = None,
     ) -> pd.DataFrame:
         r"""
         Perform the actual optimization using Convex Programming (CVXPY).
         Includes automatic fallback to relaxed LP if MILP fails or times out.
+
+        If ``stage_times`` is provided, the wall-clock duration of three
+        internal phases is recorded under the keys ``optim_solve.build``,
+        ``optim_solve.solve`` and ``optim_solve.extract``. These nest under
+        the existing ``optim_solve`` parent timer in ``command_line.py`` and
+        sum to it within a few milliseconds.
         """
+        _build_start_perf = time.perf_counter() if stage_times is not None else 0.0
         # Dynamic Resizing
         # If the input data length differs from the initialized N, we must rebuild the problem.
         current_n = len(data_opt)
@@ -3243,6 +3252,11 @@ class Optimization:
             else:
                 self.logger.debug("MIP gap tolerance disabled (exact optimal)")
 
+        # Stage-timer breadcrumb: end of build phase, start of solve phase.
+        _solve_start_perf = time.perf_counter() if stage_times is not None else 0.0
+        if stage_times is not None:
+            stage_times["optim_solve.build"] = _solve_start_perf - _build_start_perf
+
         # Solve Execution with Fallback
         try:
             self.prob.solve(solver=selected_solver, warm_start=True, **solver_opts)
@@ -3342,6 +3356,11 @@ class Optimization:
             self.optim_conf["treat_deferrable_load_as_semi_cont"] = original_semi_cont
             self.optim_conf["set_deferrable_load_single_constant"] = original_single_const
 
+        # Stage-timer breadcrumb: end of solve phase, start of extract phase.
+        _extract_start_perf = time.perf_counter() if stage_times is not None else 0.0
+        if stage_times is not None:
+            stage_times["optim_solve.solve"] = _extract_start_perf - _solve_start_perf
+
         # Fix for Status Case: Map "optimal" -> "Optimal"
         status_raw = self.prob.status
         self.optim_status = status_raw.title() if status_raw else "Failure"
@@ -3361,6 +3380,8 @@ class Optimization:
             # don't crash when trying to access or drop it.
             opt_tp["optim_status"] = self.optim_status
 
+            if stage_times is not None:
+                stage_times["optim_solve.extract"] = time.perf_counter() - _extract_start_perf
             return opt_tp
         else:
             self.logger.info(
@@ -3369,7 +3390,7 @@ class Optimization:
             )
 
         # Results Extraction
-        return self._build_results_dataframe(
+        results_df = self._build_results_dataframe(
             data_opt,
             unit_load_cost,
             unit_prod_price,
@@ -3381,6 +3402,9 @@ class Optimization:
             debug,
             q_inputs=self.q_inputs,
         )
+        if stage_times is not None:
+            stage_times["optim_solve.extract"] = time.perf_counter() - _extract_start_perf
+        return results_df
 
     def perform_perfect_forecast_optim(
         self, df_input_data: pd.DataFrame, days_list: pd.date_range
@@ -3460,7 +3484,11 @@ class Optimization:
         return self.opt_res
 
     def perform_dayahead_forecast_optim(
-        self, df_input_data: pd.DataFrame, p_pv: pd.Series, p_load: pd.Series
+        self,
+        df_input_data: pd.DataFrame,
+        p_pv: pd.Series,
+        p_load: pd.Series,
+        stage_times: dict[str, float] | None = None,
     ) -> pd.DataFrame:
         r"""
         Perform a day-ahead optimization task using real forecast data. \
@@ -3474,6 +3502,9 @@ class Optimization:
         :param p_load: The forecasted Load power consumption. This power should \
             not include the power from the deferrable load that we want to find.
         :type p_load: pandas.DataFrame
+        :param stage_times: Optional dict to record nested sub-stage timings
+            (``optim_solve.build`` / ``optim_solve.solve`` / ``optim_solve.extract``).
+        :type stage_times: dict, optional
         :return: opt_res: A DataFrame containing the optimization results
         :rtype: pandas.DataFrame
 
@@ -3492,6 +3523,7 @@ class Optimization:
             p_load.values.ravel(),
             unit_load_cost,
             unit_prod_price,
+            stage_times=stage_times,
         )
         return self.opt_res
 
@@ -3507,6 +3539,7 @@ class Optimization:
         def_total_timestep: list | None = None,
         def_start_timestep: list | None = None,
         def_end_timestep: list | None = None,
+        stage_times: dict[str, float] | None = None,
     ) -> pd.DataFrame:
         r"""
         Perform a naive approach to a Model Predictive Control (MPC). \
@@ -3584,6 +3617,7 @@ class Optimization:
             def_total_timestep=def_total_timestep,
             def_start_timestep=def_start_timestep,
             def_end_timestep=def_end_timestep,
+            stage_times=stage_times,
         )
         return self.opt_res
 
