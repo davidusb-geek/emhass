@@ -2993,7 +2993,10 @@ class Optimization:
                     "Deferrable load %d: configured window [%d, %d] is entirely "
                     "outside the optimization horizon [0, %d]; deactivating "
                     "binary vars and energy constraint for this tick.",
-                    k, raw_start, raw_end, n,
+                    k,
+                    raw_start,
+                    raw_end,
+                    n,
                 )
             else:
                 # case (b): no window configured — allow operation everywhere
