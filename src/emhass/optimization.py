@@ -1437,7 +1437,11 @@ class Optimization:
         cooling_constant = hc["cooling_constant"]
         heating_rate = hc["heating_rate"]
         overshoot_temperature = hc.get("overshoot_temperature", None)
-        sense = hc.get("sense", "heat")
+        sense = utils.normalize_heat_cool_mode(
+            hc.get("sense", "heat"),
+            field_name="sense",
+            context=f"Load {k} thermal_config",
+        )
         nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
 
         # Thermal Inertia Logic
@@ -1641,6 +1645,14 @@ class Optimization:
                 f"heat_capacity ({heat_capacity}), and volume ({volume})"
             )
         conversion = 3600 / (density * heat_capacity * volume)
+
+        # Determine heat-flow direction: +1 for heating (pump adds heat), -1 for cooling (pump removes heat)
+        sense = utils.normalize_heat_cool_mode(
+            hc.get("sense", "heat"),
+            field_name="sense",
+            context=f"Load {k} thermal_battery",
+        )
+        sense_coeff = 1 if sense == "heat" else -1
 
         # Use parameterized values if available (enables warm-start on cache hit)
         if k in self.param_thermal:
@@ -1890,10 +1902,12 @@ class Optimization:
             constraints.append(q_input[1:] == q_input[:-1] + alpha * (raw_heat - q_input[:-1]))
 
             # Temperature uses filtered Q_input instead of raw heat
+            # sense_coeff: +1 for heating (pump adds heat), -1 for cooling (pump removes heat)
             constraints.append(
                 predicted_temp_thermal[1:]
                 == predicted_temp_thermal[:-1]
-                + conversion * (q_input[:-1] - heating_demand[:-1] - thermal_losses[:-1])
+                + conversion
+                * (sense_coeff * q_input[:-1] - heating_demand[:-1] - thermal_losses[:-1])
             )
 
             # Store reference for auto-persistence on cache hit
@@ -1902,12 +1916,14 @@ class Optimization:
         else:
             q_input = None
             # Original Langer & Volling equation (backward compatible)
+            # sense_coeff: +1 for heating (pump adds heat), -1 for cooling (pump removes heat)
             constraints.append(
                 predicted_temp_thermal[1:]
                 == predicted_temp_thermal[:-1]
                 + conversion
                 * (
-                    (cp.multiply(heatpump_cops[:-1], p_deferrable[:-1]) / 1000 * self.time_step)
+                    sense_coeff
+                    * (cp.multiply(heatpump_cops[:-1], p_deferrable[:-1]) / 1000 * self.time_step)
                     - heating_demand[:-1]
                     - thermal_losses[:-1]
                 )
@@ -1945,7 +1961,6 @@ class Optimization:
         penalty_expr = 0
         desired_temps_list = hc.get("desired_temperatures", [])
         overshoot_temperature = hc.get("overshoot_temperature", None)
-        sense = hc.get("sense", "heat")
         sense_coeff = 1 if sense == "heat" else -1
 
         if desired_temps_list and overshoot_temperature is not None:
@@ -2861,7 +2876,7 @@ class Optimization:
             self.logger.warning(
                 "cost_forecast_per_deferrable_load is set but is %s, not a list (value: %r). "
                 "Treating as 'no override' for all loads. Use JSON null or an array of "
-                "per-load arrays (not the string \"null\").",
+                'per-load arrays (not the string "null").',
                 type(cost_per_load_overrides).__name__,
                 cost_per_load_overrides,
             )
