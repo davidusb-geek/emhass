@@ -114,3 +114,62 @@ lp_solver_mip_rel_gap: 0.05  # Stop when within 5% of optimal
 For home energy optimization, a 5% gap is typically imperceptible in practice—the difference between "optimal" and "within 5% of optimal" is usually smaller than forecast uncertainty.
 
 **Note:** This parameter only affects problems with binary variables. Pure linear problems (continuous loads only, no battery) are unaffected.
+
+## Tuning for Low-Power Hardware (Raspberry Pi, low-end NUC, etc.)
+
+When EMHASS runs on a Raspberry Pi 4 / 5, an Intel NUC, or similar low-power
+hardware, several defaults can be tuned to keep the MPC cycle responsive
+without changing what gets optimised. All settings below are
+**quality-neutral** unless explicitly noted otherwise.
+
+The advice below assumes the default HiGHS solver (`lp_solver: HiGHS`) and a
+home-sized problem (handful of deferrable loads, 24–48 h horizon). With a
+different solver backend or a much larger problem, the specific numeric
+recommendations (e.g. `num_threads: 2`) may not apply directly — the
+principle of "leave headroom for HA and the OS" still does.
+
+### Quick preset
+
+In `config.yaml` (or via the web UI):
+
+```yaml
+# Low-power deployment preset
+lp_solver_timeout: 60          # plenty of headroom; never time out on real workloads
+num_threads: 2                 # leave one core free for HA / publishing
+```
+
+Then, depending on whether your problem has binary variables (semi-continuous
+loads, single-constant loads, startup penalties):
+
+- **Pure-LP setups (no binaries)** — leave defaults; HiGHS' simplex is already
+  fast on a Pi.
+- **MILP setups** — consider `lp_solver_mip_rel_gap: 0.05` (see the MIP-gap
+  section above for the quality trade-off).
+
+### Why the threads setting matters
+
+HiGHS' default behaviour (`num_threads: 0`) runs the simplex single-threaded
+and uses HiGHS' internal parallel scheduler for the MIP branch-and-bound. On a
+4-core Pi 4 with no other heavy workloads, `num_threads: 2` is typically the
+sweet spot:
+
+- More than half the cores helps the B&B but doesn't help simplex.
+- Fewer than all cores leaves room for Home Assistant, EMHASS' own publish
+  path, and the OS so optimisation doesn't preempt other realtime work.
+
+On boxes with 8+ cores, multi-threading can actually **hurt** small MILPs
+because of coordination overhead — measure on your specific shape before
+turning it up.
+
+### Other settings worth checking
+
+- `prediction_horizon`: on a Pi, 48 h × 30 min steps (96 steps) is roughly the
+  comfort threshold. 24 h × 5 min (288) is also reasonable. 48 h × 5 min (576)
+  is workable but pay close attention to MPC cycle wall-clock — start with
+  `lp_solver_timeout: 120` and decrease once you've measured.
+- `weather_forecast_method: open-meteo` with the built-in 30-min cache is
+  cheap. Solcast adds an HTTP roundtrip per cycle; the cache helps but a slow
+  WAN link from a Pi can still cost a second or two each tick.
+- `historic_days_to_retrieve`: each day fetched is one HA recorder call per
+  sensor. Default 2 days is fine; bumping to 5+ for a long-window forecast
+  model can add real time on a Pi behind cellular/Tailscale.
