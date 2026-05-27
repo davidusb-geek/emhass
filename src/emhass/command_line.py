@@ -1563,6 +1563,7 @@ async def dayahead_forecast_optim(
             df_input_data_dayahead,
             input_data_dict["p_pv_forecast"],
             input_data_dict["p_load_forecast"],
+            stage_times=input_data_dict["stage_times"],
         )
     # Save CSV file for publish_data
     if save_data_to_file:
@@ -1658,6 +1659,7 @@ async def naive_mpc_optim(
             def_total_timestep,
             def_start_timestep,
             def_end_timestep,
+            stage_times=input_data_dict["stage_times"],
         )
     # Save CSV file for publish_data
     if save_data_to_file:
