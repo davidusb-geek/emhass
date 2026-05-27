@@ -24,7 +24,6 @@ import asyncio
 import csv
 import json
 import pathlib
-import unittest
 
 import numpy as np
 import orjson
@@ -142,9 +141,7 @@ def _make_cases() -> list:
             marks: list = []
             if reason and (param, val_id) not in _XFAIL_EXCLUDE:
                 marks.append(pytest.mark.xfail(strict=True, reason=reason))
-            cases.append(
-                pytest.param(param, bad_val, id=f"{param}-{val_id}", marks=marks)
-            )
+            cases.append(pytest.param(param, bad_val, id=f"{param}-{val_id}", marks=marks))
     return cases
 
 
@@ -218,24 +215,24 @@ def test_stringly_typed_resilience(param_name: str, bad_value: object):
 # ─────────────────────── thermal sense fixture ──────────────────────────────
 
 
-class TestThermalSenseNullSmoke(unittest.IsolatedAsyncioTestCase):
-    """sense: null in def_load_config must not crash (#898 unfixed)."""
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "sense: null in thermal_battery config crashes before optimization; fix pending in #898"
+    ),
+)
+def test_sense_null_in_thermal_config_does_not_crash():
+    """Thermal load with sense=null must not raise.
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "sense: null crashes normalize_heat_cool_mode via str(None) = 'none' "
-            "which isn't 'heat'/'cool'; fix pending in #898"
-        ),
-    )
-    async def test_sense_null_in_thermal_config_does_not_crash(self):
-        """Thermal load with sense=null must not raise ValueError."""
+    pytest.mark.xfail is not supported on unittest.TestCase methods, so this
+    test is a module-level function with asyncio.run() for the async setup.
+    """
+
+    async def _run():
         config = await utils.build_config(emhass_conf, logger, emhass_conf["defaults_path"])
         _, secrets = await utils.build_secrets(emhass_conf, logger, no_response=True)
         params = await utils.build_params(emhass_conf, secrets, config, logger)
 
-        # Inject a thermal_battery load with sense explicitly null — the exact
-        # shape that the HA add-on UI persists for an unset optional field.
         params["optim_conf"]["number_of_deferrable_loads"] = 1
         params["optim_conf"]["nominal_power_of_deferrable_loads"] = [1000.0]
         params["optim_conf"]["minimum_power_of_deferrable_loads"] = [0.0]
@@ -259,26 +256,28 @@ class TestThermalSenseNullSmoke(unittest.IsolatedAsyncioTestCase):
                 }
             }
         ]
+        return params
 
-        params_json = orjson.dumps(params).decode("utf-8")
-        rh_conf, opt_conf, pl_conf = utils.get_yaml_parse(params_json, logger)  # type: ignore[misc]
+    params = asyncio.run(_run())
+    params_json = orjson.dumps(params).decode("utf-8")
+    rh_conf, opt_conf, pl_conf = utils.get_yaml_parse(params_json, logger)  # type: ignore[misc]
 
-        n = 48
-        freq = rh_conf["optimization_time_step"]
-        tz = rh_conf["time_zone"]
-        idx = pd.date_range("2024-01-01", periods=n, freq=freq, tz=tz)
-        ulc = np.full(n, 0.2)
-        upp = np.full(n, 0.1)
-        df = pd.DataFrame({_VAR_LOAD_COST: ulc, _VAR_PROD_PRICE: upp}, index=idx)
+    n = 48
+    freq = rh_conf["optimization_time_step"]
+    tz = rh_conf["time_zone"]
+    idx = pd.date_range("2024-01-01", periods=n, freq=freq, tz=tz)
+    ulc = np.full(n, 0.2)
+    upp = np.full(n, 0.1)
+    df = pd.DataFrame({_VAR_LOAD_COST: ulc, _VAR_PROD_PRICE: upp}, index=idx)
 
-        opt = Optimization(
-            rh_conf,
-            opt_conf,
-            pl_conf,
-            _VAR_LOAD_COST,
-            _VAR_PROD_PRICE,
-            "profit",
-            emhass_conf,
-            logger,
-        )
-        opt.perform_optimization(df, np.zeros(n), np.full(n, 1000.0), ulc, upp)
+    opt = Optimization(
+        rh_conf,
+        opt_conf,
+        pl_conf,
+        _VAR_LOAD_COST,
+        _VAR_PROD_PRICE,
+        "profit",
+        emhass_conf,
+        logger,
+    )
+    opt.perform_optimization(df, np.zeros(n), np.full(n, 1000.0), ulc, upp)
