@@ -2577,6 +2577,13 @@ class TestResolveThermalBatteryCop(unittest.TestCase):
         self.assertIn("thermal_battery", str(ctx.exception))
         self.assertIn("invalid sense", str(ctx.exception))
 
+    def test_sense_null_falls_back_to_heat(self):
+        outdoor = np.array([0.0, 5.0])
+        expected = utils.calculate_cop_heatpump(35.0, 0.4, outdoor, mode="heat")
+        hc = {"sense": None, "supply_temperature": 35.0}
+        cops = utils.resolve_thermal_battery_cop(hc, outdoor, length=2)
+        np.testing.assert_array_almost_equal(cops, expected)
+
     def test_missing_both_efficiency_and_supply_temperature_raises(self):
         """At least one of efficiency or supply_temperature must be set."""
         hc = {"carnot_efficiency": 0.4}
