@@ -260,6 +260,7 @@ class OptimizationCache:
         optim_conf_runtime_keys = {
             # Parameterized via CVXPY Parameters
             "operating_hours_of_each_deferrable_load",
+            "operating_timesteps_of_each_deferrable_load",
             "start_timesteps_of_each_deferrable_load",
             "end_timesteps_of_each_deferrable_load",
             "def_current_state",
@@ -1115,10 +1116,19 @@ async def set_input_data_dict(
     if isinstance(params, str):
         params = dict(orjson.loads(params))
     costfun = optim_conf.get("costfun", costfun)
-    # Actions that don't require building an Optimization object
-    # publish-data only reads saved results and posts to Home Assistant
-    actions_without_optimization = ["publish-data", "export-influxdb-to-csv"]
-    if set_type in actions_without_optimization:
+    # Two-tier guard:
+    #   - actions_without_fcst_or_opt: read saved results only; build neither.
+    #   - actions_skip_optim_cache: need a Forecast object but no Optimization.
+    #     Keeping these out of the OptimizationCache path stops them poisoning
+    #     the cache key with config-default values that a subsequent
+    #     naive-mpc-optim call would then miss against.
+    actions_without_fcst_or_opt = ["publish-data", "export-influxdb-to-csv"]
+    actions_skip_optim_cache = [
+        "forecast-model-fit",
+        "forecast-model-predict",
+        "forecast-model-tune",
+    ]
+    if set_type in actions_without_fcst_or_opt:
         fcst = None
         opt = None
         logger.debug(f"Skipping Optimization creation for action: {set_type}")
@@ -1132,51 +1142,55 @@ async def set_input_data_dict(
             logger,
             get_data_from_file=get_data_from_file,
         )
-        # Try to get cached Optimization object for warm-starting
-        _num_ts = len(fcst.forecast_dates)
-        opt = OptimizationCache.get(
-            optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
-        )
-        if opt is None:
-            # Cache miss - create new Optimization object
-            opt = Optimization(
-                retrieve_hass_conf,
-                optim_conf,
-                plant_conf,
-                fcst.var_load_cost,
-                fcst.var_prod_price,
-                costfun,
-                emhass_conf,
-                logger,
-                num_timesteps=_num_ts,
-            )
-            # Store in cache for future warm-starts
-            OptimizationCache.put(
-                opt, optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
-            )
+        if set_type in actions_skip_optim_cache:
+            opt = None
+            logger.debug(f"Skipping OptimizationCache for action: {set_type}")
         else:
-            # Cache hit - update references that may have changed
-            # (logger, var names from forecast, and runtime-configurable optim_conf values)
-            opt.logger = logger
-            opt.var_load_cost = fcst.var_load_cost
-            opt.var_prod_price = fcst.var_prod_price
-            # Update internal config dictionaries to prevent stale lookups
-            # for runtime parameters (like battery_target_state_of_charge)
-            opt.plant_conf = plant_conf
-            opt.optim_conf = optim_conf
-            # Update CVXPY Parameters for thermal start temperatures
-            # This is critical: updating optim_conf alone doesn't change baked-in constraint values
-            opt.update_thermal_start_temps(optim_conf)
-        # Update runtime-configurable solver options from optim_conf
-        # These don't affect problem structure, so they're safe to update on cached object
-        runtime_solver_opts = [
-            "lp_solver_timeout",
-            "lp_solver_mip_rel_gap",
-            "num_threads",
-        ]
-        for key in runtime_solver_opts:
-            if key in optim_conf:
-                opt.optim_conf[key] = optim_conf[key]
+            # Try to get cached Optimization object for warm-starting
+            _num_ts = len(fcst.forecast_dates)
+            opt = OptimizationCache.get(
+                optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
+            )
+            if opt is None:
+                # Cache miss - create new Optimization object
+                opt = Optimization(
+                    retrieve_hass_conf,
+                    optim_conf,
+                    plant_conf,
+                    fcst.var_load_cost,
+                    fcst.var_prod_price,
+                    costfun,
+                    emhass_conf,
+                    logger,
+                    num_timesteps=_num_ts,
+                )
+                # Store in cache for future warm-starts
+                OptimizationCache.put(
+                    opt, optim_conf, plant_conf, costfun, retrieve_hass_conf, logger, _num_ts
+                )
+            else:
+                # Cache hit - update references that may have changed
+                # (logger, var names from forecast, and runtime-configurable optim_conf values)
+                opt.logger = logger
+                opt.var_load_cost = fcst.var_load_cost
+                opt.var_prod_price = fcst.var_prod_price
+                # Update internal config dictionaries to prevent stale lookups
+                # for runtime parameters (like battery_target_state_of_charge)
+                opt.plant_conf = plant_conf
+                opt.optim_conf = optim_conf
+                # Update CVXPY Parameters for thermal start temperatures
+                # This is critical: updating optim_conf alone doesn't change baked-in constraint values
+                opt.update_thermal_start_temps(optim_conf)
+            # Update runtime-configurable solver options from optim_conf
+            # These don't affect problem structure, so they're safe to update on cached object
+            runtime_solver_opts = [
+                "lp_solver_timeout",
+                "lp_solver_mip_rel_gap",
+                "num_threads",
+            ]
+            for key in runtime_solver_opts:
+                if key in optim_conf:
+                    opt.optim_conf[key] = optim_conf[key]
     # Create SetupContext
     ctx = SetupContext(
         retrieve_hass_conf=retrieve_hass_conf,
