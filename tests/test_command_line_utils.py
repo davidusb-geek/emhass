@@ -4007,8 +4007,13 @@ class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(opt_2.param_def_current_state[0].value, 1.0)
         self.assertEqual(opt_2.param_def_current_state[1].value, 0.0)
 
-    async def test_cache_miss_on_battery_power_limit_change(self):
-        """Test that changing battery_discharge_power_max causes cache MISS (via plant_conf_hash)."""
+    async def test_cache_hit_on_battery_power_limit_change(self):
+        """Test that changing battery_discharge_power_max keeps cache HIT.
+
+        Both battery power limits live in plant_runtime_keys and are wired
+        through to cp.Parameters whose .value is updated per solve, so a
+        change shouldn't invalidate the cached Optimization instance.
+        """
         base_rt = {
             "pv_power_forecast": [100 * (i + 1) for i in range(10)],
             "load_power_forecast": [200] * 10,
@@ -4022,7 +4027,9 @@ class TestOptimizationCacheIntegration(unittest.IsolatedAsyncioTestCase):
         opt_1 = (await self._run_set_input(base_rt))["opt"]
         opt_2 = (await self._run_set_input({**base_rt, "battery_discharge_power_max": 9999}))["opt"]
 
-        self.assertIsNot(opt_1, opt_2, "battery_discharge_power_max change must cause cache MISS")
+        self.assertIs(opt_1, opt_2, "battery_discharge_power_max change must keep cache HIT")
+        # And the new value has been propagated to the CVXPY Parameter
+        self.assertAlmostEqual(float(opt_2.param_battery_discharge_power_max.value), 9999.0)
 
 
 if __name__ == "__main__":
