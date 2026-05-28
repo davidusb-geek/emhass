@@ -172,6 +172,7 @@ def test_config_defaults_keys_match_param_definitions():
 # #880 / #904 regression tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def js_src() -> str:
     return Path("src/emhass/static/configuration_script.js").read_text(encoding="utf-8")
@@ -205,15 +206,11 @@ def _extract_function_src(js_src: str, fn_name: str) -> str:
 
 def _run_node(script: str) -> subprocess.CompletedProcess:
     """Write *script* to a temp file and run it with Node.js."""
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".js", delete=False, encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".js", delete=False, encoding="utf-8") as f:
         f.write(script)
         tmp = f.name
     try:
-        return subprocess.run(
-            [_NODE, tmp], capture_output=True, text=True, timeout=15
-        )
+        return subprocess.run([_NODE, tmp], capture_output=True, text=True, timeout=15)
     finally:
         os.unlink(tmp)
 
@@ -254,9 +251,7 @@ def test_minus_elements_does_not_crash_on_zero_inputs(js_src):
         "    }\n"
         "    return null;\n"
         "  }\n"
-        "};\n\n"
-        + fn_src
-        + "\n\ntry {\n"
+        "};\n\n" + fn_src + "\n\ntry {\n"
         "  const r = minusElements('heat_topology');\n"
         "  process.stdout.write('OK result=' + r + '\\n');\n"
         "  process.exit(0);\n"
