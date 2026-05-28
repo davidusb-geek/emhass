@@ -361,6 +361,30 @@ def test_def_current_state_null_elements_do_not_crash_optimizer():
     opt.perform_optimization(df, p_pv, p_load, ulc, upp)
 
 
+# ── Test E: scalar runtimeparams coercion ────────────────────────────────────
+
+
+def test_scalar_runtimeparams_coerce_to_bool():
+    """Scalar (non-list) def_current_state and set_deferrable_load_single_constant
+    values must coerce correctly — covers the else-branches in the handlers."""
+    rp = {
+        "nominal_power_of_deferrable_loads": [3000, 700],
+        "operating_hours_of_each_deferrable_load": [2, 1],
+        "start_timesteps_of_each_deferrable_load": [0, 0],
+        "end_timesteps_of_each_deferrable_load": [0, 0],
+        # Scalar bool (not list) — hits the else-branch in each handler
+        "def_current_state": False,
+        "set_deferrable_load_single_constant": False,
+    }
+    _, _, opt_conf, _ = _treat(rp)
+    assert opt_conf["def_current_state"] == [False], (
+        f"Scalar 'False' must coerce to [False]; got {opt_conf['def_current_state']!r}"
+    )
+    assert opt_conf["set_deferrable_load_single_constant"] == [False], (
+        f"Scalar 'False' must coerce to [False]; got {opt_conf['set_deferrable_load_single_constant']!r}"
+    )
+
+
 # ── Test C: horizon-outside-window regression guard ──────────────────────────
 
 
