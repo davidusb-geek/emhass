@@ -454,7 +454,7 @@ def resolve_thermal_battery_cop(
         carnot_efficiency=hc.get("carnot_efficiency", 0.4),
         outdoor_temperature_forecast=outdoor_temperature_forecast,
         mode=normalize_heat_cool_mode(
-            hc.get("sense", "heat"),
+            hc.get("sense") or "heat",
             field_name="sense",
             context="thermal_battery",
         ),

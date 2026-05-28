@@ -1122,7 +1122,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                         "thermal_config": {
                             "start_temperature": 25,
                             "cooling_constant": 0.1,
-                            "heating_rate": -10,  # Negative for cooling capacity
+                            "heating_rate": 10,  # Positive; sense_coeff=-1 applied for cooling
                             "min_temperatures": [0] * 10,  # No min constraint
                             "max_temperatures": [
                                 None,
@@ -1152,6 +1152,12 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             self.optim_conf["nominal_power_of_deferrable_loads"][0]
             * pd.Series([0, 1, 0, 0, 0, 0, 0, 0, 0, 0], index=self.opt_res_dayahead.index),
             check_names=False,
+        )
+        # sense=cool + positive heating_rate must lower temperature when pump runs
+        temp = self.opt_res_dayahead["predicted_temp_heater0"]
+        assert temp.iloc[2] < temp.iloc[1], (
+            f"sense=cool + positive heating_rate must lower temperature; "
+            f"got temp[1]={temp.iloc[1]}, temp[2]={temp.iloc[2]}"
         )
 
     def test_thermal_management_penalty(self):
