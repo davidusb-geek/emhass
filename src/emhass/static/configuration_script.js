@@ -497,7 +497,6 @@ function buildParamElement(
           ${type_specific_html_end}
           `;
     }
-    // Free-form JSON objects (heat_topology etc.) render as a single JSON text box.
     // The nested-object path below is designed only for load_peak_hour_periods.
     if (parameter_definition_object["input"] === "object") {
       return `<input class="param_input" type="text" placeholder="${placeholder}" value="${JSON.stringify(value).replaceAll('"', '&quot;')}">`;

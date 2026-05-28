@@ -177,9 +177,18 @@ def js_src() -> str:
     return Path("src/emhass/static/configuration_script.js").read_text(encoding="utf-8")
 
 
+@pytest.fixture(scope="module")
+def _build_param_fns(js_src: str) -> tuple[str, str]:
+    """Extracted checkConfigParam + buildParamElement sources, shared across Node replay tests."""
+    return (
+        _extract_function_src(js_src, "checkConfigParam"),
+        _extract_function_src(js_src, "buildParamElement"),
+    )
+
+
 def _extract_function_src(js_src: str, fn_name: str) -> str:
-    """Extract a complete top-level ``function <fn_name>(...) { ... }`` block."""
-    fn_m = re.search(rf"function\s+{re.escape(fn_name)}\s*\([^)]*\)\s*\{{", js_src)
+    """Extract a complete top-level ``[async] function <fn_name>(...) { ... }`` block."""
+    fn_m = re.search(rf"(?:async\s+)?function\s+{re.escape(fn_name)}\s*\([^)]*\)\s*\{{", js_src)
     if not fn_m:
         raise AssertionError(f"function {fn_name!r} not found in JS source")
     brace_open = js_src.index("{", fn_m.start())
@@ -264,7 +273,7 @@ def test_minus_elements_does_not_crash_on_zero_inputs(js_src):
 
 
 @pytest.mark.skipif(_NODE is None, reason="node not in PATH")
-def test_build_param_element_object_type_renders_input(js_src):
+def test_build_param_element_object_type_renders_input(_build_param_fns):
     """Node replay: buildParamElement for 'object' type must return HTML with <input>.
 
     ThomasCZ's config has heat_topology={"sources":[]}.  On master the
@@ -274,8 +283,7 @@ def test_build_param_element_object_type_renders_input(js_src):
     On master: exits 1.
     After fix (render as JSON text box): exits 0.
     """
-    check_fn = _extract_function_src(js_src, "checkConfigParam")
-    build_fn = _extract_function_src(js_src, "buildParamElement")
+    check_fn, build_fn = _build_param_fns
 
     node_script = f"""\
 {check_fn}
@@ -304,7 +312,7 @@ process.exit(0);
 
 
 @pytest.mark.skipif(_NODE is None, reason="node not in PATH")
-def test_build_param_element_object_absent_config_no_null_string_value(js_src):
+def test_build_param_element_object_absent_config_no_null_string_value(_build_param_fns):
     """Node replay: object-type param absent from config must not render value="null".
 
     On master: placeholder=JSON.stringify(null)="null" → rendered as
@@ -314,8 +322,7 @@ def test_build_param_element_object_absent_config_no_null_string_value(js_src):
     On master: exits 1.
     After fix (placeholder="" for null defaults): exits 0.
     """
-    check_fn = _extract_function_src(js_src, "checkConfigParam")
-    build_fn = _extract_function_src(js_src, "buildParamElement")
+    check_fn, build_fn = _build_param_fns
 
     node_script = f"""\
 {check_fn}
@@ -344,7 +351,7 @@ process.exit(0);
 
 
 @pytest.mark.skipif(_NODE is None, reason="node not in PATH")
-def test_build_param_element_object_apostrophe_value_escaping(js_src):
+def test_build_param_element_object_apostrophe_value_escaping(_build_param_fns):
     """Node replay: object-type render must escape double quotes so apostrophes in
     string values don't corrupt the HTML attribute.
 
@@ -355,8 +362,7 @@ def test_build_param_element_object_apostrophe_value_escaping(js_src):
     On current (broken) code: exits 1 — no &quot; escape, single-quote wrap.
     After fix (double-quote wrap + replaceAll): exits 0.
     """
-    check_fn = _extract_function_src(js_src, "checkConfigParam")
-    build_fn = _extract_function_src(js_src, "buildParamElement")
+    check_fn, build_fn = _build_param_fns
 
     node_script = f"""\
 {check_fn}
@@ -418,8 +424,6 @@ def test_save_configuration_object_type_null_representations(js_src):
     After fix: exits 0 for both "" and "null" inputs.
     """
     save_fn_src = _extract_function_src(js_src, "saveConfiguration")
-    # _extract_function_src strips the leading 'async'; restore it for Node
-    save_fn_src = "async " + save_fn_src
 
     # document must be a script-level var so saveConfiguration (outer scope) can see it.
     # We reassign it (without var/let) for each test case inside the IIFE.
