@@ -1686,6 +1686,7 @@ async def treat_runtimeparams(
         # Define Helper Functions
         def _cast_bool(value):
             """Helper to cast string inputs to boolean safely."""
+            # ast.literal_eval('None') returns None without raising — explicit guard needed.
             if value is None:
                 return False
             try:
