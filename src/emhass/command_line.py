@@ -254,6 +254,8 @@ class OptimizationCache:
         plant_runtime_keys = {
             "soc_init",
             "battery_target_state_of_charge",
+            "battery_charge_power_max",
+            "battery_discharge_power_max",
         }
         # Optim conf parameters that don't affect problem structure
         # (parameterized via CVXPY Parameters, solver options, or forecast method selection)
@@ -1181,6 +1183,10 @@ async def set_input_data_dict(
                 # Update CVXPY Parameters for thermal start temperatures
                 # This is critical: updating optim_conf alone doesn't change baked-in constraint values
                 opt.update_thermal_start_temps(optim_conf)
+                # Same idea for battery power limits — they participate in
+                # constraints via cp.Parameter and need the runtime value
+                # propagated even on a cache hit.
+                opt.update_battery_power_limits(plant_conf)
             # Update runtime-configurable solver options from optim_conf
             # These don't affect problem structure, so they're safe to update on cached object
             runtime_solver_opts = [
