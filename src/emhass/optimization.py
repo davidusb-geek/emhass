@@ -159,6 +159,21 @@ class Optimization:
         self.param_soc_init = cp.Parameter(nonneg=True, name="soc_init")
         self.param_soc_final = cp.Parameter(nonneg=True, name="soc_final")
 
+        # Battery power limits — parameterised so SoC-derated values arriving
+        # via runtimeparams update without invalidating the OptimizationCache.
+        self.param_battery_charge_power_max = cp.Parameter(
+            nonneg=True, name="battery_charge_power_max"
+        )
+        self.param_battery_discharge_power_max = cp.Parameter(
+            nonneg=True, name="battery_discharge_power_max"
+        )
+        self.param_battery_charge_power_max.value = float(
+            plant_conf.get("battery_charge_power_max", 0)
+        )
+        self.param_battery_discharge_power_max.value = float(
+            plant_conf.get("battery_discharge_power_max", 0)
+        )
+
         # SOC recovery parameters
         self._init_soc_recovery_params()
 
@@ -469,6 +484,23 @@ class Optimization:
                     f"Invalid def_current_state value at index {k}: {state!r}. "
                     "Expected one of {{True, False, 0, 1, 0.0, 1.0}}."
                 )
+
+    def update_battery_power_limits(self, plant_conf: dict) -> None:
+        """
+        Update battery charge/discharge power-limit Parameters from plant_conf.
+
+        Called on cache hit to sync runtime power-limit values without
+        rebuilding constraints. Mirrors update_thermal_start_temps.
+
+        :param plant_conf: The plant configuration containing
+            battery_charge_power_max / battery_discharge_power_max
+        """
+        new_charge_max = float(plant_conf.get("battery_charge_power_max", 0) or 0)
+        new_discharge_max = float(plant_conf.get("battery_discharge_power_max", 0) or 0)
+        if self.param_battery_charge_power_max.value != new_charge_max:
+            self.param_battery_charge_power_max.value = new_charge_max
+        if self.param_battery_discharge_power_max.value != new_discharge_max:
+            self.param_battery_discharge_power_max.value = new_discharge_max
 
     def update_thermal_start_temps(self, optim_conf: dict) -> None:
         """
@@ -851,14 +883,10 @@ class Optimization:
         # Battery power variables
         if self.optim_conf["set_use_battery"]:
             vars_dict["p_sto_pos"] = cp.Variable(n, nonneg=True, name="p_sto_pos")
-            constraints.append(
-                vars_dict["p_sto_pos"] <= self.plant_conf["battery_discharge_power_max"]
-            )
+            constraints.append(vars_dict["p_sto_pos"] <= self.param_battery_discharge_power_max)
 
             vars_dict["p_sto_neg"] = cp.Variable(n, nonpos=True, name="p_sto_neg")
-            constraints.append(
-                vars_dict["p_sto_neg"] >= -np.abs(self.plant_conf["battery_charge_power_max"])
-            )
+            constraints.append(vars_dict["p_sto_neg"] >= -self.param_battery_charge_power_max)
             vars_dict["soc_low_recovered"] = cp.Variable(n, boolean=True, name="soc_low_recovered")
             vars_dict["soc_high_recovered"] = cp.Variable(
                 n, boolean=True, name="soc_high_recovered"
@@ -1243,8 +1271,8 @@ class Optimization:
         cap = self.plant_conf["battery_nominal_energy_capacity"]
         eff_dis = self.plant_conf["battery_discharge_efficiency"]
         eff_chg = self.plant_conf["battery_charge_efficiency"]
-        max_dis = self.plant_conf["battery_discharge_power_max"]
-        max_chg = self.plant_conf["battery_charge_power_max"]  # This is usually positive in config
+        max_dis = self.param_battery_discharge_power_max
+        max_chg = self.param_battery_charge_power_max  # nonneg cp.Parameter
         soc_low_recovered = self.vars["soc_low_recovered"]
         soc_high_recovered = self.vars["soc_high_recovered"]
         min_energy = self.plant_conf["battery_minimum_state_of_charge"] * cap
@@ -2924,6 +2952,12 @@ class Optimization:
         if self.optim_conf["set_use_battery"]:
             self.param_soc_init.value = soc_init
             self.param_soc_final.value = soc_final
+            self.param_battery_charge_power_max.value = float(
+                self.plant_conf["battery_charge_power_max"]
+            )
+            self.param_battery_discharge_power_max.value = float(
+                self.plant_conf["battery_discharge_power_max"]
+            )
             low_gap_wh = max(
                 0.0,
                 (self.plant_conf["battery_minimum_state_of_charge"] - soc_init)
@@ -3171,6 +3205,9 @@ class Optimization:
             constraints = self.constraints[:]
 
             if self.optim_conf["set_use_battery"]:
+                # Raw plant_conf read: stress cost is gated on battery_stress_cost>0
+                # (off by default) and the value is only used to size PWL segments
+                # at build time, so runtime parameterisation isn't needed here.
                 p_batt_max = max(
                     self.plant_conf.get("battery_discharge_power_max", 0),
                     self.plant_conf.get("battery_charge_power_max", 0),
