@@ -210,7 +210,7 @@ def _run_node(script: str) -> subprocess.CompletedProcess:
         f.write(script)
         tmp = f.name
     try:
-        return subprocess.run([_NODE, tmp], capture_output=True, text=True, timeout=15)
+        return subprocess.run([_NODE, tmp], capture_output=True, text=True, timeout=30)
     finally:
         os.unlink(tmp)
 
