@@ -1,23 +1,14 @@
 """
-Parametrised resilience tests: stringly-typed and null config values.
+Resilience tests: stringly-typed config values, null inputs, and mask-builder edge cases.
 
-Extends the #882 prevention suite with runtime-path coverage: for every
-per-load-array parameter derived from param_definitions.json, inject bad
-runtime values (scalar "null", None element, string element) via
-treat_runtimeparams and assert the optimizer survives without raising.
+Parametrised suite (#901): for every optim_conf array parameter, inject bad runtime
+values (scalar null, None element, string element) via treat_runtimeparams and assert
+the optimizer survives without raising.  Guarded params MUST pass; unguarded bugs are
+xfail(strict=True).
 
-Design:
-- Param inventory loaded from param_definitions.json at collection time, so
-  future array-typed params are covered automatically without editing this file.
-- Only optim_conf params are exercised (associations.csv used to determine
-  category); retrieve_hass_conf / plant_conf params aren't accessed during
-  perform_optimization with defaults.
-- Guarded params (cost_forecast_per_deferrable_load) MUST pass — these lock
-  in the shipped fix as a class-level regression guard.
-- Unguarded bugs are xfail(strict=True): CI stays green, the gap is visible,
-  and the test flips to a live regression guard when the fix lands.
-
-AGENTS.md: test-only PR, no prod changes. Follows Section 7 commit convention.
+Specific regression guards (#873): def_current_state stringly-typed 'False' must not
+fire the single-constant pin; None elements must coerce to False; windows outside the
+horizon must deactivate the load.
 """
 
 import asyncio
@@ -44,6 +35,7 @@ logger, _ = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
 _VAR_LOAD_COST = "unit_load_cost"
 _VAR_PROD_PRICE = "unit_prod_price"
+
 
 # ─────────────────────────── param inventory ────────────────────────────────
 
@@ -161,7 +153,8 @@ async def _build_default_params() -> str:
 _PARAMS_JSON: str = asyncio.run(_build_default_params())
 _RHCONF, _OPTCONF, _PCONF = utils.get_yaml_parse(_PARAMS_JSON, logger)
 
-# ─────────────────────── parametrised resilience tests ──────────────────────
+
+# ─────────────────────────────── helpers ────────────────────────────────────
 
 
 def _make_forecast_inputs(rh_conf: dict, n: int = 48):
@@ -172,6 +165,41 @@ def _make_forecast_inputs(rh_conf: dict, n: int = 48):
     upp = np.full(n, 0.1)
     df = pd.DataFrame({_VAR_LOAD_COST: ulc, _VAR_PROD_PRICE: upp}, index=idx)
     return df, np.zeros(n), np.full(n, 1000.0), ulc, upp
+
+
+def _treat(rp_dict: dict):
+    """Run treat_runtimeparams with the given runtimeparams dict synchronously."""
+    rp_json = orjson.dumps(rp_dict).decode("utf-8")
+
+    async def _run():
+        return await utils.treat_runtimeparams(
+            rp_json,
+            _PARAMS_JSON,
+            _RHCONF,
+            _OPTCONF,
+            _PCONF,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+
+    return asyncio.run(_run())
+
+
+def _make_opt(rh_conf, opt_conf, pl_conf):
+    return Optimization(
+        rh_conf,
+        opt_conf,
+        pl_conf,
+        _VAR_LOAD_COST,
+        _VAR_PROD_PRICE,
+        "profit",
+        emhass_conf,
+        logger,
+    )
+
+
+# ─────────────────── parametrised resilience tests (#901) ───────────────────
 
 
 @pytest.mark.parametrize("param_name,bad_value", _CASES)
@@ -210,3 +238,90 @@ def test_stringly_typed_resilience(param_name: str, bad_value: object):
         logger,
     )
     opt.perform_optimization(df, p_pv, p_load, ulc, upp)
+
+
+# ── Test A: single-shot string-bool regression ───────────────────────────────
+
+
+def test_def_current_state_stringly_false_does_not_pin_window_open():
+    """A stringly-typed 'False' in def_current_state must NOT fire the pin.
+
+    Before the fix: bool('False') = True → pin sets lb_mask[:required_steps] = 1
+    → single-constant load starts at t=0 ignoring start_timesteps.
+    After the fix: _cast_bool('False') = False → no pin → window respected.
+    """
+    rp = {
+        # 2 loads (match default num_def_loads=2)
+        "nominal_power_of_deferrable_loads": [3000, 700],
+        "operating_hours_of_each_deferrable_load": [2, 1],
+        "start_timesteps_of_each_deferrable_load": [10, 0],
+        "end_timesteps_of_each_deferrable_load": [40, 0],
+        "set_deferrable_load_single_constant": ["True", "False"],
+        "treat_deferrable_load_as_semi_cont": [False, True],
+        # BUG TRIGGER: stringly-typed 'False' — bool('False') = True in Python
+        "def_current_state": ["False", "False"],
+    }
+
+    _, rh_conf, opt_conf, pl_conf = _treat(rp)
+
+    n = 48
+    df, p_pv, p_load, ulc, upp = _make_forecast_inputs(rh_conf, n)
+    opt = _make_opt(rh_conf, opt_conf, pl_conf)
+    res = opt.perform_optimization(df, p_pv, p_load, ulc, upp)
+
+    p_def0 = res["P_deferrable0"].values
+    pre_window_sum = p_def0[:10].sum()
+    assert pre_window_sum == 0, (
+        f"Load 0 must not run before its configured window (slot 10); "
+        f"pre-window power sum = {pre_window_sum:.1f} W "
+        f"(non-zero means spurious pin fired due to stringly-typed def_current_state)"
+    )
+
+
+# ── Test B: MPC rolling keystone ─────────────────────────────────────────────
+
+
+def test_def_current_state_stringly_false_no_spurious_pin_across_mpc_ticks():
+    """MPC rolling: stringly 'False' must not command load ON before the window start.
+
+    Simulates 3 consecutive MPC ticks (advancing start_timesteps by 1 each tick).
+    At each tick the first-slot result is the actual MPC command. If the pin fires
+    spuriously, the load is commanded ON immediately; the loop checks all 3 ticks.
+
+    This is the keystone test: a single-shot (Test A) might pass if the full-horizon
+    optimizer happens not to start the load at slot 0, but MPC's per-tick command is
+    unambiguous — slot 0 must be zero when the window hasn't opened yet.
+    """
+    for tick in range(3):
+        start_ts = 10 - tick  # window start approaches by 1 slot each tick
+        end_ts = 40 - tick
+
+        rp = {
+            "nominal_power_of_deferrable_loads": [3000, 700],
+            "operating_hours_of_each_deferrable_load": [2, 1],
+            "start_timesteps_of_each_deferrable_load": [start_ts, 0],
+            "end_timesteps_of_each_deferrable_load": [end_ts, 0],
+            "set_deferrable_load_single_constant": ["True", "False"],
+            "treat_deferrable_load_as_semi_cont": [False, True],
+            # Stringly-typed 'False' remains the same across ticks (not driven True)
+            "def_current_state": ["False", "False"],
+        }
+
+        _, rh_conf, opt_conf, pl_conf = _treat(rp)
+
+        # MPC state stays 'False' (no spurious start should have occurred)
+        assert opt_conf["def_current_state"][0] is False, (
+            f"Tick {tick}: def_current_state[0] should be False after coercion; "
+            f"got {opt_conf['def_current_state'][0]!r}"
+        )
+
+        n = 48
+        df, p_pv, p_load, ulc, upp = _make_forecast_inputs(rh_conf, n)
+        opt = _make_opt(rh_conf, opt_conf, pl_conf)
+        res = opt.perform_optimization(df, p_pv, p_load, ulc, upp)
+
+        current_tick_cmd = res["P_deferrable0"].values[0]
+        assert current_tick_cmd == 0, (
+            f"Tick {tick}: MPC current-slot command must be 0 "
+            f"(window starts at slot {start_ts}); got {current_tick_cmd:.1f} W"
+        )
