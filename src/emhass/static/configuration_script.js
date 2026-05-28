@@ -499,7 +499,7 @@ function buildParamElement(
     }
     // The nested-object path below is designed only for load_peak_hour_periods.
     if (parameter_definition_object["input"] === "object") {
-      return `<input class="param_input" type="text" placeholder="${placeholder}" value="${JSON.stringify(value).replaceAll('"', '&quot;')}">`;
+      return `<input class="param_input" type="text" placeholder="${placeholder}" value="${JSON.stringify(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')}">`;
     }
     //for items such as load_peak_hour_periods (object of objects with arrays)
     // exclude null: typeof null === "object" is a JS gotcha — null elements must fall to the array branch
@@ -783,8 +783,8 @@ async function saveConfiguration(param_definitions) {
               try {
                 config[parameter_definition_name] = JSON.parse(raw);
               } catch (_) {
-                console.debug("saveConfiguration: non-JSON value for " + parameter_definition_name + ", storing as-is");
-                config[parameter_definition_name] = raw;
+                errorAlert(parameter_definition_name + ": invalid JSON — please check the value and try again.");
+                return 0;
               }
             }
             continue;

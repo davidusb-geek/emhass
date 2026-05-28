@@ -475,3 +475,132 @@ def test_save_configuration_object_type_null_representations(js_src):
     assert proc.returncode == 0, (
         f"saveConfiguration did not store null for empty/null object input:\n{proc.stderr.strip()}"
     )
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not in PATH")
+def test_build_param_element_object_html_special_chars_escaped(_build_param_fns):
+    """Node replay: object-type render must escape &, <, > in addition to double quotes.
+
+    JSON values can contain arbitrary strings, e.g. {"label":"<b>bold</b> & more"}.
+    Unescaped & is interpreted as an HTML entity reference; < and > are malformed
+    in attribute context.  All four must be escaped: &→&amp; <→&lt; >→&gt; "→&quot;.
+
+    On current code: exits 1 — only " is escaped, &/</> are not.
+    After fix: exits 0.
+    """
+    check_fn, build_fn = _build_param_fns
+
+    node_script = f"""\
+{check_fn}
+{build_fn}
+
+const paramDef = {{
+  input: "object",
+  default_value: null,
+  friendly_name: "Heat Topology",
+  Description: "test"
+}};
+const config = {{ heat_topology: {{ label: "<b>bold</b> & 'text'" }} }};
+const html = buildParamElement(paramDef, "heat_topology", config);
+
+const checks = [
+  ['&amp;',  html.includes('&amp;'),  'unescaped & in attribute'],
+  ['&lt;',   html.includes('&lt;'),   'unescaped < in attribute'],
+  ['&gt;',   html.includes('&gt;'),   'unescaped > in attribute'],
+];
+for (const [entity, found, msg] of checks) {{
+  if (!found) {{
+    process.stderr.write('FAIL: ' + entity + ' missing — ' + msg + ': ' + JSON.stringify(html) + '\\n');
+    process.exit(1);
+  }}
+}}
+// Round-trip: HTML-decode then JSON.parse must recover original object
+const m = html.match(/value="([^"]*)"/);
+if (!m) {{
+  process.stderr.write('FAIL: no double-quoted value= attribute in: ' + JSON.stringify(html) + '\\n');
+  process.exit(1);
+}}
+const decoded = m[1]
+  .replaceAll('&quot;', '"')
+  .replaceAll('&amp;', '&')
+  .replaceAll('&lt;', '<')
+  .replaceAll('&gt;', '>');
+let parsed;
+try {{ parsed = JSON.parse(decoded); }} catch (e) {{
+  process.stderr.write('FAIL: value attr does not round-trip via JSON.parse: ' + e + '\\n');
+  process.exit(1);
+}}
+if (parsed.label !== "<b>bold</b> & 'text'") {{
+  process.stderr.write('FAIL: round-trip mismatch: ' + JSON.stringify(parsed) + '\\n');
+  process.exit(1);
+}}
+process.exit(0);
+"""
+    proc = _run_node(node_script)
+    assert proc.returncode == 0, (
+        f"buildParamElement did not escape HTML special chars in object value:\n{proc.stderr.strip()}"
+    )
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not in PATH")
+def test_save_configuration_object_type_invalid_json_shows_error(js_src):
+    """Node replay: saveConfiguration must call errorAlert and not fetch when given invalid JSON.
+
+    On current code: catch block stores raw string silently (fetch IS called,
+    config gets garbage).
+    After fix (errorAlert + return 0): fetch is NOT called, errorAlert is called.
+    """
+    save_fn_src = _extract_function_src(js_src, "saveConfiguration")
+
+    node_script = (
+        "var capturedBody = null;\n"
+        "var errorAlertMsg = null;\n"
+        "var document = null;\n"
+        "var fetch = async function(url, opts) {\n"
+        "  capturedBody = opts.body;\n"
+        "  return { status: 200, json: async function() { return {}; } };\n"
+        "};\n"
+        "function showChangeStatus() {}\n"
+        "function errorAlert(msg) { errorAlertMsg = msg; }\n\n" + save_fn_src + "\n\n"
+        "(async () => {\n"
+        "  const paramDefs = {\n"
+        "    General: {\n"
+        "      heat_topology: { input: 'object', default_value: null,\n"
+        "                       friendly_name: 'Heat Topology', Description: 'test' }\n"
+        "    }\n"
+        "  };\n"
+        "  document = {\n"
+        "    getElementsByClassName: function(cls) {\n"
+        "      return cls === 'section-card' ? { length: 1 } : { length: 0 };\n"
+        "    },\n"
+        "    getElementById: function(id) {\n"
+        "      if (id === 'config-box') return null;\n"
+        "      if (id === 'heat_topology') return {\n"
+        "        tagName: 'DIV',\n"
+        "        getElementsByClassName: function(cls) {\n"
+        "          return cls === 'param_input'\n"
+        "            ? [{ type: 'text', value: '{not valid json' }]\n"
+        "            : [];\n"
+        "        }\n"
+        "      };\n"
+        "      return null;\n"
+        "    }\n"
+        "  };\n"
+        "  await saveConfiguration(paramDefs);\n"
+        "  if (capturedBody !== null) {\n"
+        "    process.stderr.write('FAIL: fetch was called despite invalid JSON; config stored: '\n"
+        "      + capturedBody + '\\n');\n"
+        "    process.exit(1);\n"
+        "  }\n"
+        "  if (!errorAlertMsg) {\n"
+        "    process.stderr.write('FAIL: errorAlert was not called for invalid JSON\\n');\n"
+        "    process.exit(1);\n"
+        "  }\n"
+        "  process.exit(0);\n"
+        "})().catch(e => { process.stderr.write('FAIL: ' + e + '\\n'); process.exit(1); });\n"
+    )
+
+    proc = _run_node(node_script)
+    assert proc.returncode == 0, (
+        f"saveConfiguration silently stored invalid JSON instead of showing error:\n{proc.stderr.strip()}"
+    )
