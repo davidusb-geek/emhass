@@ -325,3 +325,42 @@ def test_def_current_state_stringly_false_no_spurious_pin_across_mpc_ticks():
             f"Tick {tick}: MPC current-slot command must be 0 "
             f"(window starts at slot {start_ts}); got {current_tick_cmd:.1f} W"
         )
+
+
+# ── Test C: horizon-outside-window regression guard ──────────────────────────
+
+
+def test_window_entirely_outside_horizon_zeros_mask():
+    """A window configured entirely outside the optimization horizon must deactivate the load.
+
+    Regression guard for the fix merged in commit eea5d25 (upstream/master, May 27 2026):
+    when start_timesteps and end_timesteps both exceed n, window_mask must stay zero
+    (load cannot run this tick), NOT open the whole horizon.
+
+    This test is intentionally GREEN on current master; it locks in the correct behavior
+    that replaced the former `window_mask[:] = 1.0` fallback.
+    """
+    rp = {
+        "nominal_power_of_deferrable_loads": [3000, 700],
+        "operating_hours_of_each_deferrable_load": [2, 1],
+        # Both loads: window far outside the 48-slot horizon
+        "start_timesteps_of_each_deferrable_load": [200, 200],
+        "end_timesteps_of_each_deferrable_load": [220, 220],
+        "set_deferrable_load_single_constant": [False, False],
+        "treat_deferrable_load_as_semi_cont": [False, True],
+        "def_current_state": [False, False],
+    }
+
+    _, rh_conf, opt_conf, pl_conf = _treat(rp)
+
+    n = 48
+    df, p_pv, p_load, ulc, upp = _make_forecast_inputs(rh_conf, n)
+    opt = _make_opt(rh_conf, opt_conf, pl_conf)
+    res = opt.perform_optimization(df, p_pv, p_load, ulc, upp)
+
+    p_def0_total = res["P_deferrable0"].values.sum()
+    assert p_def0_total == 0, (
+        f"Load 0 must not run anywhere when its window [{rp['start_timesteps_of_each_deferrable_load'][0]}, "
+        f"{rp['end_timesteps_of_each_deferrable_load'][0]}] is outside the "
+        f"horizon [0, {n}]; got total power = {p_def0_total:.1f} W"
+    )
