@@ -19,7 +19,6 @@ import pathlib
 import numpy as np
 import orjson
 import pandas as pd
-import pytest
 
 from emhass import utils
 from emhass.optimization import Optimization
@@ -325,6 +324,41 @@ def test_def_current_state_stringly_false_no_spurious_pin_across_mpc_ticks():
             f"Tick {tick}: MPC current-slot command must be 0 "
             f"(window starts at slot {start_ts}); got {current_tick_cmd:.1f} W"
         )
+
+
+# ── Test D: null def_current_state coercion ──────────────────────────────────
+
+
+def test_def_current_state_null_elements_do_not_crash_optimizer():
+    """def_current_state arriving as [None, None] (HA JSON null) must coerce to
+    [False, False], not [None, None].
+
+    _cast_bool(None): str(None).capitalize() = 'None'; ast.literal_eval('None')
+    returns Python None (not an exception) → no fallback → None propagates.
+    Consumer _update_def_current_state_params (optimization.py:461-469) has an
+    explicit isinstance(state, bool|int|float) guard; None hits the else branch
+    and raises ValueError → optimization crash.
+    """
+    rp = {
+        "nominal_power_of_deferrable_loads": [3000, 700],
+        "operating_hours_of_each_deferrable_load": [2, 1],
+        "start_timesteps_of_each_deferrable_load": [10, 0],
+        "end_timesteps_of_each_deferrable_load": [40, 0],
+        "set_deferrable_load_single_constant": ["True", "False"],
+        "treat_deferrable_load_as_semi_cont": [False, True],
+        "def_current_state": [None, None],
+    }
+    _, rh_conf, opt_conf, pl_conf = _treat(rp)
+
+    assert opt_conf["def_current_state"] == [False, False], (
+        f"None must coerce to False; got {opt_conf['def_current_state']!r}"
+    )
+
+    # Full round-trip: optimizer must not raise ValueError on None state.
+    n = 48
+    df, p_pv, p_load, ulc, upp = _make_forecast_inputs(rh_conf, n)
+    opt = _make_opt(rh_conf, opt_conf, pl_conf)
+    opt.perform_optimization(df, p_pv, p_load, ulc, upp)
 
 
 # ── Test C: horizon-outside-window regression guard ──────────────────────────

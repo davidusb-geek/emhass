@@ -1686,6 +1686,8 @@ async def treat_runtimeparams(
         # Define Helper Functions
         def _cast_bool(value):
             """Helper to cast string inputs to boolean safely."""
+            if value is None:
+                return False
             try:
                 return ast.literal_eval(str(value).capitalize())
             except (ValueError, SyntaxError):
