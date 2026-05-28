@@ -1686,6 +1686,9 @@ async def treat_runtimeparams(
         # Define Helper Functions
         def _cast_bool(value):
             """Helper to cast string inputs to boolean safely."""
+            # ast.literal_eval('None') returns None without raising — explicit guard needed.
+            if value is None:
+                return False
             try:
                 return ast.literal_eval(str(value).capitalize())
             except (ValueError, SyntaxError):
@@ -1847,11 +1850,28 @@ async def treat_runtimeparams(
                     dcs = orjson.loads(dcs)
                 except Exception:
                     logger.warning(f"Could not parse def_current_state string: {dcs}")
-            # Check it's iterable before casting to bool
+            # Use _cast_bool (not bool()) so string 'False' → False, not True.
+            # bool('False') = True because non-empty strings are truthy in Python.
             if isinstance(dcs, list):
-                params["optim_conf"]["def_current_state"] = [bool(s) for s in dcs]
+                params["optim_conf"]["def_current_state"] = [_cast_bool(s) for s in dcs]
             else:
-                params["optim_conf"]["def_current_state"] = [bool(dcs)]
+                n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
+                params["optim_conf"]["def_current_state"] = [_cast_bool(dcs)] * n_loads
+
+        # set_deferrable_load_single_constant arrives via the generic associations.csv
+        # path as-is (may be a list of strings from runtimeparams JSON).  Apply the
+        # same _cast_bool coercion so 'False' → False, not True (#873, mirrors #876).
+        if "set_deferrable_load_single_constant" in runtimeparams.keys():
+            sdlsc = runtimeparams["set_deferrable_load_single_constant"]
+            if isinstance(sdlsc, list):
+                params["optim_conf"]["set_deferrable_load_single_constant"] = [
+                    _cast_bool(s) for s in sdlsc
+                ]
+            else:
+                n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
+                params["optim_conf"]["set_deferrable_load_single_constant"] = [
+                    _cast_bool(sdlsc)
+                ] * n_loads
 
         # Treat retrieve data from Home Assistant (retrieve_hass_conf) configuration parameters passed at runtime
         # Secrets passed at runtime

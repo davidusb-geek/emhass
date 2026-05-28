@@ -1396,6 +1396,36 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(optim_conf_out["number_of_deferrable_loads"], 1)
         self.assertEqual(len(optim_conf_out["def_load_config"]), 1)
 
+    async def test_treat_runtimeparams_bool_coercion(self):
+        """_cast_bool None-guard and scalar-padding paths must be covered.
+
+        def_current_state=None hits `if value is None` in _cast_bool and the
+        scalar else-branch (padded to n_loads).  set_deferrable_load_single_constant
+        with a scalar bool hits its scalar else-branch identically.
+        """
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        runtimeparams_json = orjson.dumps(
+            {
+                "def_current_state": None,
+                "set_deferrable_load_single_constant": False,
+            }
+        ).decode("utf-8")
+        _, _, optim_conf_out, _ = await utils.treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+        n = len(optim_conf_out["nominal_power_of_deferrable_loads"])
+        self.assertEqual(optim_conf_out["def_current_state"], [False] * n)
+        self.assertEqual(optim_conf_out["set_deferrable_load_single_constant"], [False] * n)
+
     def test_param_to_config(self):
         """Test converting built params back to a flat config dictionary and masking secrets."""
         # Create a mock parameter dictionary with the required categories
