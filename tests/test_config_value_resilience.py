@@ -19,6 +19,7 @@ import pathlib
 import numpy as np
 import orjson
 import pandas as pd
+import pytest
 
 from emhass import utils
 from emhass.optimization import Optimization
@@ -366,7 +367,7 @@ def test_def_current_state_null_elements_do_not_crash_optimizer():
 
 def test_scalar_runtimeparams_coerce_to_bool():
     """Scalar (non-list) def_current_state and set_deferrable_load_single_constant
-    values must coerce correctly — covers the else-branches in the handlers."""
+    must coerce correctly and pad to num_def_loads — covers the else-branches."""
     rp = {
         "nominal_power_of_deferrable_loads": [3000, 700],
         "operating_hours_of_each_deferrable_load": [2, 1],
@@ -377,11 +378,12 @@ def test_scalar_runtimeparams_coerce_to_bool():
         "set_deferrable_load_single_constant": False,
     }
     _, _, opt_conf, _ = _treat(rp)
-    assert opt_conf["def_current_state"] == [False], (
-        f"Scalar 'False' must coerce to [False]; got {opt_conf['def_current_state']!r}"
+    assert opt_conf["def_current_state"] == [False, False], (
+        f"Scalar False must pad to [False, False] for 2 loads; got {opt_conf['def_current_state']!r}"
     )
-    assert opt_conf["set_deferrable_load_single_constant"] == [False], (
-        f"Scalar 'False' must coerce to [False]; got {opt_conf['set_deferrable_load_single_constant']!r}"
+    assert opt_conf["set_deferrable_load_single_constant"] == [False, False], (
+        f"Scalar False must pad to [False, False] for 2 loads; "
+        f"got {opt_conf['set_deferrable_load_single_constant']!r}"
     )
 
 

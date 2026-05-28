@@ -1855,7 +1855,8 @@ async def treat_runtimeparams(
             if isinstance(dcs, list):
                 params["optim_conf"]["def_current_state"] = [_cast_bool(s) for s in dcs]
             else:
-                params["optim_conf"]["def_current_state"] = [_cast_bool(dcs)]
+                n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
+                params["optim_conf"]["def_current_state"] = [_cast_bool(dcs)] * n_loads
 
         # set_deferrable_load_single_constant arrives via the generic associations.csv
         # path as-is (may be a list of strings from runtimeparams JSON).  Apply the
@@ -1867,7 +1868,10 @@ async def treat_runtimeparams(
                     _cast_bool(s) for s in sdlsc
                 ]
             else:
-                params["optim_conf"]["set_deferrable_load_single_constant"] = [_cast_bool(sdlsc)]
+                n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
+                params["optim_conf"]["set_deferrable_load_single_constant"] = [
+                    _cast_bool(sdlsc)
+                ] * n_loads
 
         # Treat retrieve data from Home Assistant (retrieve_hass_conf) configuration parameters passed at runtime
         # Secrets passed at runtime
