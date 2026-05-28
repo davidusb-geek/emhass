@@ -61,6 +61,7 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # a list of builtin themes.
 #
 html_theme = "pydata_sphinx_theme"
+html_baseurl = os.environ.get("READTHEDOCS_CANONICAL_URL", "")
 
 html_theme_options = {
     "show_toc_level": 2,
