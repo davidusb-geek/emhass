@@ -341,3 +341,138 @@ process.exit(0);
         f"buildParamElement renders string 'null' as input value for absent config:\n"
         f"{proc.stderr.strip()}"
     )
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not in PATH")
+def test_build_param_element_object_apostrophe_value_escaping(js_src):
+    """Node replay: object-type render must escape double quotes so apostrophes in
+    string values don't corrupt the HTML attribute.
+
+    Single-quote attribute wrapping (value='...') breaks when the JSON contains
+    an apostrophe, e.g. {"label":"John's panel"} → value='{"label":"John's panel"}'
+    terminates the attribute at the apostrophe.
+
+    On current (broken) code: exits 1 — no &quot; escape, single-quote wrap.
+    After fix (double-quote wrap + replaceAll): exits 0.
+    """
+    check_fn = _extract_function_src(js_src, "checkConfigParam")
+    build_fn = _extract_function_src(js_src, "buildParamElement")
+
+    node_script = f"""\
+{check_fn}
+{build_fn}
+
+const paramDef = {{
+  input: "object",
+  default_value: null,
+  friendly_name: "Heat Topology",
+  Description: "test"
+}};
+const config = {{ heat_topology: {{ label: "John's panel" }} }};
+const html = buildParamElement(paramDef, "heat_topology", config);
+
+// Must use &quot; escaping so double quotes inside the JSON are safe
+if (!html.includes('&quot;')) {{
+  process.stderr.write('FAIL: no &quot; escaping in rendered HTML: ' + JSON.stringify(html) + '\\n');
+  process.exit(1);
+}}
+// Must NOT use single-quote attribute wrapping (apostrophes break it)
+if (html.includes("value='")) {{
+  process.stderr.write('FAIL: single-quote attribute wrapping detected: ' + JSON.stringify(html) + '\\n');
+  process.exit(1);
+}}
+// Round-trip: decode &quot; → " then JSON.parse must recover the original object
+const m = html.match(/value="([^"]*)"/);
+if (!m) {{
+  process.stderr.write('FAIL: no double-quoted value= attribute in: ' + JSON.stringify(html) + '\\n');
+  process.exit(1);
+}}
+const decoded = m[1].replaceAll('&quot;', '"');
+let parsed;
+try {{ parsed = JSON.parse(decoded); }} catch (e) {{
+  process.stderr.write('FAIL: value attr does not round-trip via JSON.parse: ' + e + '\\n');
+  process.exit(1);
+}}
+if (parsed.label !== "John's panel") {{
+  process.stderr.write('FAIL: round-trip value mismatch: ' + JSON.stringify(parsed) + '\\n');
+  process.exit(1);
+}}
+process.exit(0);
+"""
+    proc = _run_node(node_script)
+    assert proc.returncode == 0, (
+        f"buildParamElement broke on apostrophe in object value:\n{proc.stderr.strip()}"
+    )
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not in PATH")
+def test_save_configuration_object_type_null_representations(js_src):
+    """Node replay: saveConfiguration must store JSON null for '' and 'null' inputs.
+
+    When heat_topology is absent from config, buildParamElement renders an empty
+    text box (value="").  If saveConfiguration stores that as "" or as "null"
+    (the string), the backend receives a non-null value and warns on every request.
+
+    On original master (no object-type branch): exits 1 — param falls through to
+    the generic path and config.heat_topology becomes "".
+    After fix: exits 0 for both "" and "null" inputs.
+    """
+    save_fn_src = _extract_function_src(js_src, "saveConfiguration")
+    # _extract_function_src strips the leading 'async'; restore it for Node
+    save_fn_src = "async " + save_fn_src
+
+    # document must be a script-level var so saveConfiguration (outer scope) can see it.
+    # We reassign it (without var/let) for each test case inside the IIFE.
+    node_script = (
+        "var capturedBody = null;\n"
+        "var document = null;\n"
+        "var fetch = async function(url, opts) {\n"
+        "  capturedBody = opts.body;\n"
+        "  return { status: 200, json: async function() { return {}; } };\n"
+        "};\n"
+        "function showChangeStatus() {}\n"
+        "function errorAlert(msg) { throw new Error('errorAlert: ' + msg); }\n\n"
+        + save_fn_src
+        + "\n\n"
+        "(async () => {\n"
+        "  const paramDefs = {\n"
+        "    General: {\n"
+        "      heat_topology: { input: 'object', default_value: null,\n"
+        "                       friendly_name: 'Heat Topology', Description: 'test' }\n"
+        "    }\n"
+        "  };\n"
+        "  for (const [label, val] of [['empty string', ''], ['string null', 'null']]) {\n"
+        "    capturedBody = null;\n"
+        "    document = {\n"
+        "      getElementsByClassName: function(cls) {\n"
+        "        return cls === 'section-card' ? { length: 1 } : { length: 0 };\n"
+        "      },\n"
+        "      getElementById: function(id) {\n"
+        "        if (id === 'config-box') return null;\n"
+        "        if (id === 'heat_topology') return {\n"
+        "          tagName: 'DIV',\n"
+        "          getElementsByClassName: function(cls) {\n"
+        "            return cls === 'param_input'\n"
+        "              ? [{ type: 'text', value: val }]\n"
+        "              : [];\n"
+        "          }\n"
+        "        };\n"
+        "        return null;\n"
+        "      }\n"
+        "    };\n"
+        "    await saveConfiguration(paramDefs);\n"
+        "    const saved = JSON.parse(capturedBody);\n"
+        "    if (saved.heat_topology !== null) {\n"
+        "      process.stderr.write('FAIL (' + label + '): heat_topology should be null, got: '\n"
+        "        + JSON.stringify(saved.heat_topology) + '\\n');\n"
+        "      process.exit(1);\n"
+        "    }\n"
+        "  }\n"
+        "  process.exit(0);\n"
+        "})().catch(e => { process.stderr.write('FAIL: ' + e + '\\n'); process.exit(1); });\n"
+    )
+
+    proc = _run_node(node_script)
+    assert proc.returncode == 0, (
+        f"saveConfiguration did not store null for empty/null object input:\n{proc.stderr.strip()}"
+    )

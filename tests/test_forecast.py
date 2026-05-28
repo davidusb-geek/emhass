@@ -1684,8 +1684,8 @@ class TestDstForecastDates(unittest.IsolatedAsyncioTestCase):
         hours (668 slots) instead of 168 hours (672 slots).
         The fix replaces all Timedelta additions in Forecast.__init__ with DateOffset.
         """
-        from datetime import datetime
         from unittest.mock import patch
+        from datetime import datetime
 
         # Spring-forward for Paris 2025: 2025-03-30 02:00 -> 03:00
         # Start at midnight so the full 7-day window crosses the transition
@@ -1739,8 +1739,8 @@ class TestDstForecastDates(unittest.IsolatedAsyncioTestCase):
 
     def test_forecast_dates_normal_day_equals_expected_slots(self):
         """On a normal day (no DST transition) forecast_dates has exactly N*24*(60/freq) slots."""
-        from datetime import datetime
         from unittest.mock import patch
+        from datetime import datetime
 
         # 2025-03-20 is a Thursday well before the spring-forward (2025-03-30),
         # so a 7-day window from 2025-03-20 to 2025-03-27 has no DST transition.
