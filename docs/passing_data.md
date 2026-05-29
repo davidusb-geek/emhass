@@ -59,6 +59,9 @@ The possible dictionary keys to pass data are:
 
 It is possible to also pass other data during runtime to automate energy management. For example, it could be useful to dynamically update the total number of hours for each deferrable load (`operating_hours_of_each_deferrable_load`) using for instance a correlation with the outdoor temperature (useful for water heater for example). 
 
+A machine-readable schema of the runtime-only optimization parameters is committed at
+`src/emhass/static/data/runtime_params.json` (consumed by the generated OpenAPI spec and tooling).
+
 Here is the list of the other additional dictionary keys that can be passed at runtime:
 
 - `number_of_deferrable_loads` for the number of deferrable loads to consider.
