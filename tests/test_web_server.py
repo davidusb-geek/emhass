@@ -877,12 +877,19 @@ class TestHealthz(unittest.IsolatedAsyncioTestCase):
 
 
 class TestBootTs(unittest.IsolatedAsyncioTestCase):
-    """Proves before_serving captures an ISO-8601 Z boot_ts even if init fails (AC-4)."""
+    """Proves before_serving captures an ISO-8601 Z boot_ts even if init fails (AC-4).
 
-    async def test_before_serving_sets_iso_z_boot_ts(self):
+    Calls before_serving() directly with a failing initialize() rather than running
+    the real lifespan: this tests Decision #3 (boot_ts is set before the try block, so
+    it survives an init failure) without invoking the real logging setup, which would
+    mutate global "emhass" logger state and leak into other tests.
+    """
+
+    @patch("emhass.web_server.initialize", new_callable=AsyncMock)
+    async def test_before_serving_sets_boot_ts_even_if_initialize_fails(self, mock_init):
+        mock_init.side_effect = RuntimeError("init boom")
         web_server.app.config.pop("boot_ts", None)
-        async with web_server.app.test_app():  # fires before_serving lifespan
-            pass
+        await web_server.before_serving()  # before_serving catches the init error and continues
         boot_ts = web_server.app.config.get("boot_ts")
         self.assertIsNotNone(boot_ts)
         self.assertRegex(boot_ts, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
