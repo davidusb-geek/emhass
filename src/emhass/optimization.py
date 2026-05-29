@@ -3118,6 +3118,7 @@ class Optimization:
                     and current_state
                     and constraint_active
                     and required_timesteps > 0
+                    and k not in window_empty_loads
                 ):
                     # Re-derive the configured window end so we respect def_end_timestep.
                     if def_total_timestep and def_total_timestep[k] > 0:
