@@ -1042,7 +1042,7 @@ class Optimization:
         # Deferrable Load Max Cost Rewards
         # Add reward for scheduling loads equal to the max_cost..
         # Solver will only schedule if it can do so at lower cost than this reward.
-        if hasattr(self, 'deferrable_with_max_cost'):
+        if hasattr(self, "deferrable_with_max_cost"):
             for k, (max_cost, load_is_scheduled) in self.deferrable_with_max_cost.items():
                 # Add reward term: +max_cost * load_is_scheduled
                 # This means: if solver schedules the load (load_is_scheduled=1),

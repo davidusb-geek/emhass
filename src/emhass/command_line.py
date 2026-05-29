@@ -323,9 +323,7 @@ class OptimizationCache:
             set_deferrable_startup_penalty=to_tuple(
                 optim_conf.get("set_deferrable_startup_penalty", [])
             ),
-            deferrable_load_max_cost=to_tuple(
-                optim_conf.get("deferrable_load_max_cost", [])
-            ),
+            deferrable_load_max_cost=to_tuple(optim_conf.get("deferrable_load_max_cost", [])),
             set_deferrable_max_startups=to_tuple(optim_conf.get("set_deferrable_max_startups", [])),
             set_deferrable_load_as_timeseries=to_tuple(
                 optim_conf.get("set_deferrable_load_as_timeseries", [])
