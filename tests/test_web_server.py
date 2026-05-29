@@ -765,5 +765,18 @@ class TestAPIV1LastRun(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["error_message"], "Solver failed to converge")
 
 
+class TestHealthVerdict(unittest.TestCase):
+    """Unit tests for the pure _health_verdict helper (AC-4). Recency-only."""
+
+    def test_no_run_is_degraded_503(self):
+        self.assertEqual(web_server._health_verdict(has_run=False, stale=False), ("degraded", 503))
+
+    def test_stale_run_is_degraded_503(self):
+        self.assertEqual(web_server._health_verdict(has_run=True, stale=True), ("degraded", 503))
+
+    def test_fresh_run_is_ok_200(self):
+        self.assertEqual(web_server._health_verdict(has_run=True, stale=False), ("ok", 200))
+
+
 if __name__ == "__main__":
     unittest.main()

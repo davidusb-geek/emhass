@@ -78,6 +78,21 @@ def mark_safe(value):
 templates.filters["mark_safe"] = mark_safe
 
 
+def _health_verdict(has_run: bool, stale: bool) -> tuple[str, int]:
+    """Map run-existence + staleness to (status, http_code).
+
+    Recency-only: last-run correctness (infeasible/error) does NOT affect the
+    health verdict. ``has_run`` is False when no optimization has ever completed;
+    ``stale`` is True only when a freshness window was requested and the last run
+    falls outside it.
+    """
+    if not has_run:
+        return "degraded", 503
+    if stale:
+        return "degraded", 503
+    return "ok", 200
+
+
 # Register async startup and shutdown handlers
 @app.before_serving
 async def before_serving():
