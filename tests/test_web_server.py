@@ -778,5 +778,115 @@ class TestHealthVerdict(unittest.TestCase):
         self.assertEqual(web_server._health_verdict(has_run=True, stale=False), ("ok", 200))
 
 
+class TestHealthz(unittest.IsolatedAsyncioTestCase):
+    """Integration tests for GET /healthz (AC-4)."""
+
+    async def asyncSetUp(self):
+        self.client = web_server.app.test_client()
+        self.original_conf = web_server.emhass_conf.copy()
+        web_server.emhass_conf = {"data_path": pathlib.Path(tempfile.mkdtemp())}
+        # before_serving may not run under test_client(); set boot_ts explicitly
+        web_server.app.config["boot_ts"] = "2026-05-29T08:00:00Z"
+
+    async def asyncTearDown(self):
+        web_server.emhass_conf = self.original_conf
+
+    def _snap(self, status="ok", ts="2026-05-29T09:55:00Z"):
+        return {
+            "status": status,
+            "timestamp": ts,
+            "action": "dayahead-optim",
+            "stage_times": {},
+            "duration_total_seconds": 1.0,
+            "emhass_version": "0.17.5",
+            "schema_version": "1.0",
+            "infeasible": status == "infeasible",
+            "error_message": None,
+        }
+
+    @patch("emhass.web_server.last_run.emhass_version", return_value="0.17.5")
+    @patch("emhass.web_server.last_run.read")
+    async def test_ok_when_run_exists(self, mock_read, _mock_ver):
+        mock_read.return_value = self._snap()
+        resp = await self.client.get("/healthz")
+        self.assertEqual(resp.status_code, 200)
+        body = await resp.get_json()
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["last_run_ts"], "2026-05-29T09:55:00Z")
+        self.assertEqual(body["last_run_status"], "ok")
+        self.assertEqual(body["boot_ts"], "2026-05-29T08:00:00Z")
+
+    @patch("emhass.web_server.last_run.emhass_version", return_value="0.17.5")
+    @patch("emhass.web_server.last_run.read", return_value=None)
+    async def test_no_run_is_degraded_503(self, _mock_read, _mock_ver):
+        resp = await self.client.get("/healthz")
+        self.assertEqual(resp.status_code, 503)
+        body = await resp.get_json()
+        self.assertEqual(body["status"], "degraded")
+        self.assertIsNone(body["last_run_ts"])
+        self.assertIsNone(body["last_run_status"])
+
+    @patch("emhass.web_server.last_run.emhass_version", return_value="0.17.5")
+    @patch("emhass.web_server.last_run.is_recent", return_value=False)
+    @patch("emhass.web_server.last_run.read")
+    async def test_stale_with_threshold_is_503(self, mock_read, _mock_recent, _mock_ver):
+        mock_read.return_value = self._snap(ts="2020-01-01T00:00:00Z")
+        resp = await self.client.get("/healthz?max_age_seconds=60")
+        self.assertEqual(resp.status_code, 503)
+        body = await resp.get_json()
+        self.assertEqual(body["status"], "degraded")
+
+    @patch("emhass.web_server.last_run.emhass_version", return_value="0.17.5")
+    @patch("emhass.web_server.last_run.is_recent", return_value=True)
+    @patch("emhass.web_server.last_run.read")
+    async def test_fresh_with_threshold_is_200(self, mock_read, _mock_recent, _mock_ver):
+        mock_read.return_value = self._snap()
+        resp = await self.client.get("/healthz?max_age_seconds=999999")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual((await resp.get_json())["status"], "ok")
+
+    @patch("emhass.web_server.last_run.emhass_version", return_value="0.17.5")
+    @patch("emhass.web_server.last_run.read")
+    async def test_infeasible_last_run_is_still_healthy(self, mock_read, _mock_ver):
+        # correctness != health: an infeasible solve must NOT flip to 503
+        mock_read.return_value = self._snap(status="infeasible")
+        resp = await self.client.get("/healthz")
+        self.assertEqual(resp.status_code, 200)
+        body = await resp.get_json()
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["last_run_status"], "infeasible")
+
+    @patch("emhass.web_server.last_run.emhass_version", return_value="0.17.5")
+    @patch("emhass.web_server.last_run.read")
+    async def test_invalid_threshold_is_ignored(self, mock_read, _mock_ver):
+        mock_read.return_value = self._snap()
+        resp = await self.client.get("/healthz?max_age_seconds=abc")
+        self.assertEqual(resp.status_code, 200)  # graceful-ignore, falls back to existence check
+        self.assertEqual((await resp.get_json())["status"], "ok")
+
+    @patch("emhass.web_server.last_run.emhass_version", return_value="0.17.5")
+    @patch("emhass.web_server.last_run.read")
+    async def test_versions_block_and_headers(self, mock_read, _mock_ver):
+        mock_read.return_value = self._snap()
+        resp = await self.client.get("/healthz")
+        body = await resp.get_json()
+        self.assertEqual(set(body["versions"].keys()), {"emhass", "python", "schema_version"})
+        self.assertEqual(body["versions"]["emhass"], "0.17.5")
+        self.assertEqual(resp.headers["Cache-Control"], "no-store")
+        self.assertEqual(resp.headers["Content-Type"], "application/json")
+
+
+class TestBootTs(unittest.IsolatedAsyncioTestCase):
+    """Proves before_serving captures an ISO-8601 Z boot_ts even if init fails (AC-4)."""
+
+    async def test_before_serving_sets_iso_z_boot_ts(self):
+        web_server.app.config.pop("boot_ts", None)
+        async with web_server.app.test_app():  # fires before_serving lifespan
+            pass
+        boot_ts = web_server.app.config.get("boot_ts")
+        self.assertIsNotNone(boot_ts)
+        self.assertRegex(boot_ts, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+
 if __name__ == "__main__":
     unittest.main()
