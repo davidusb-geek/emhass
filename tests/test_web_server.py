@@ -888,5 +888,25 @@ class TestBootTs(unittest.IsolatedAsyncioTestCase):
         self.assertRegex(boot_ts, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
+class TestHealthzSchema(unittest.TestCase):
+    """The /healthz response JSON Schema doc exists and is well-formed (AC-4)."""
+
+    def test_schema_file_is_valid_json_with_required_props(self):
+        import json
+        from pathlib import Path
+
+        schema_path = Path(__file__).resolve().parents[1] / "docs" / "api" / "healthz.schema.json"
+        self.assertTrue(schema_path.exists(), f"missing {schema_path}")
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        self.assertIn("$schema", schema)
+        props = schema["properties"]
+        for key in ("status", "boot_ts", "last_run_ts", "last_run_status", "versions"):
+            self.assertIn(key, props)
+        self.assertEqual(
+            set(props["versions"]["properties"].keys()),
+            {"emhass", "python", "schema_version"},
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
