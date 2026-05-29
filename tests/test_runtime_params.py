@@ -4,6 +4,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 RP = REPO / "src" / "emhass" / "static" / "data" / "runtime_params.json"
+# Config surfaces a runtime-only key must NOT appear in (see test_keys_disjoint_from_config).
+PARAM_DEFINITIONS = REPO / "src" / "emhass" / "static" / "data" / "param_definitions.json"
+CONFIG_DEFAULTS = REPO / "src" / "emhass" / "data" / "config_defaults.json"
 
 VALID_INPUT = {
     "int",
@@ -89,6 +92,20 @@ class TestRuntimeParams(unittest.TestCase):
         }
         missing = EXPECTED_KEYS - keys
         self.assertEqual(missing, set(), f"missing expected keys: {missing}")
+
+    def test_keys_disjoint_from_config(self):
+        # Runtime-only contract: a runtime_params.json key must appear in NEITHER
+        # param_definitions.json (the config/GUI form surface) NOR config_defaults.json.
+        # Overlap means the key is a config parameter overridable at runtime (a Bucket-C
+        # key), not a runtime-only knob, so it must not live here. Guards future drift.
+        runtime_keys = {
+            k for _s, params in json.loads(RP.read_text(encoding="utf-8")).items() for k in params
+        }
+        param_def = json.loads(PARAM_DEFINITIONS.read_text(encoding="utf-8"))
+        config_keys = {k for _s, params in param_def.items() for k in params}
+        config_keys |= set(json.loads(CONFIG_DEFAULTS.read_text(encoding="utf-8")).keys())
+        overlap = runtime_keys & config_keys
+        self.assertEqual(overlap, set(), f"runtime-only keys must not be config params: {overlap}")
 
 
 if __name__ == "__main__":
