@@ -520,10 +520,10 @@
     },
     "deferrable_load_max_cost": {
       "friendly_name": "Deferrable load max cost",
-      "Description": "Maximum acceptable cost for scheduling each deferrable load. If the cost to schedule the load (including startup penalty) exceeds this threshold, the load will not be scheduled. Does not work for sequence loads. Set to 0 to disable and make load scheduling mandatory.",
+      "Description": "Maximum acceptable cost for scheduling each deferrable load. If the cost to schedule the load (including startup penalty) exceeds this threshold, the load will not be scheduled. Set to 0 to disable and make load scheduling mandatory.",
       "input": "array.float",
       "default_value": 0.0,
-      "unit": "¤/kWh"
+      "unit": "¤"
     },
     "set_deferrable_max_startups": {
       "friendly_name": "Maximum startups for deferrable loads",

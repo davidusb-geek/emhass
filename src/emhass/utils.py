@@ -2851,6 +2851,13 @@ async def build_params(
             "nominal_power_of_deferrable_loads",
             logger,
         )
+        params["optim_conf"]["deferrable_load_max_cost"] = check_def_loads(
+            num_def_loads,
+            params["optim_conf"],
+            0,
+            "deferrable_load_max_cost",
+            logger,
+        )
         # Validate deferrable_load_groups
         groups = params["optim_conf"].get("deferrable_load_groups", [])
         if groups:
