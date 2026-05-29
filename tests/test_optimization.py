@@ -5266,7 +5266,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         df_input["p_pv_forecast"] = 0.0
         df_input["p_load_forecast"] = 0.0
         df_input[self.fcst.var_prod_price] = 0.1
-        df_input[self.fcst.var_load_cost] = [1.0,0.5,0.5,1.0]
+        df_input[self.fcst.var_load_cost] = [1.0, 0.5, 0.5, 1.0]
 
         # Scheduling the loads for the required 1 hour will cost
         # 0.5*(1 + 0.25) (startup penalty) = 0.625. If max_cost is below this, they should not
@@ -5297,8 +5297,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
         # Verify load 0 was not scheduled, load 1 was
         self.assertTrue(np.allclose(opt_res["P_deferrable0"], 0.0))
-        self.assertTrue(np.allclose(opt_res["P_deferrable1"], [0,1000,1000,0]))
-
+        self.assertTrue(np.allclose(opt_res["P_deferrable1"], [0, 1000, 1000, 0]))
 
     def test_sequence_load_max_cost(self):
         """Test that a nonzero max cost for a sequence load prevents the load
@@ -5321,8 +5320,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 "set_use_pv": False,
                 "set_nocharge_from_grid": False,  # Allow grid charging
                 "set_nodischarge_to_grid": False,  # Allow grid selling
-                "nominal_power_of_deferrable_loads": [ [1000, 1000], [1000, 1000]],
-                "operating_hours_of_each_deferrable_load": [4,4], # without this it doesn't work
+                "nominal_power_of_deferrable_loads": [[1000, 1000], [1000, 1000]],
+                "operating_hours_of_each_deferrable_load": [4, 4],  # without this it doesn't work
                 "load_cost_forecast_method": "csv",
                 "production_price_forecast_method": "csv",
             }
@@ -5339,13 +5338,13 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         df_input["p_pv_forecast"] = 0.0
         df_input["p_load_forecast"] = 0.0
         df_input[self.fcst.var_prod_price] = 0.1
-        df_input[self.fcst.var_load_cost] = [1.0,0.5,0.5,1.0]
+        df_input[self.fcst.var_load_cost] = [1.0, 0.5, 0.5, 1.0]
 
         # Scheduling the loads with the configured sequence will cost
         # 0.5*1.0 = 0.5. If max_cost is below this, they should not
         # be scheduled.
 
-        self.optim_conf["deferrable_load_max_cost"] = [0.45,0.55]
+        self.optim_conf["deferrable_load_max_cost"] = [0.45, 0.55]
         self.opt = Optimization(
             self.retrieve_hass_conf,
             self.optim_conf,
@@ -5373,7 +5372,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         
         # Verify load 0 was not scheduled, load 1 was
         self.assertTrue(np.allclose(opt_res["P_deferrable0"], 0.0))
-        self.assertTrue(np.allclose(opt_res["P_deferrable1"], [0,1000,1000,0]))
+        self.assertTrue(np.allclose(opt_res["P_deferrable1"], [0, 1000, 1000, 0]))
         
 
 if __name__ == "__main__":

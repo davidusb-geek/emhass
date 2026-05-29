@@ -2260,8 +2260,9 @@ class Optimization:
         shared_tank_membership = self._load_shared_tank_membership()
 
         # Initialize max cost vector
-        max_cost = self.optim_conf.get("deferrable_load_max_cost",
-                                       [0.0] * self.optim_conf["number_of_deferrable_loads"])
+        max_cost = self.optim_conf.get(
+            "deferrable_load_max_cost", [0.0] * self.optim_conf["number_of_deferrable_loads"]
+        )
         self.deferrable_with_max_cost = {}
 
         for k in range(self.optim_conf["number_of_deferrable_loads"]):
@@ -2437,21 +2438,25 @@ class Optimization:
                     # When load_is_scheduled = 1: energy constraint is enforced
                     constraints.append(
                         total_energy_expr
-                        >= self.param_target_energy[k] * load_is_scheduled - M_energy * (1 - load_is_scheduled*self.param_energy_active[k])
+                        >= self.param_target_energy[k] * load_is_scheduled
+                        - M_energy * (1 - load_is_scheduled * self.param_energy_active[k])
                     )
                     constraints.append(
                         total_energy_expr
-                        <= self.param_target_energy[k] * load_is_scheduled + M_energy * (1 - load_is_scheduled*self.param_energy_active[k])
+                        <= self.param_target_energy[k] * load_is_scheduled
+                        + M_energy * (1 - load_is_scheduled * self.param_energy_active[k])
                     )
                 else:
                     # No-max-cost energy constraint
                     constraints.append(
                         total_energy_expr
-                        >= self.param_target_energy[k] - M_energy * (1 - self.param_energy_active[k])
+                        >= self.param_target_energy[k]
+                        - M_energy * (1 - self.param_energy_active[k])
                     )
                     constraints.append(
                         total_energy_expr
-                        <= self.param_target_energy[k] + M_energy * (1 - self.param_energy_active[k])
+                        <= self.param_target_energy[k]
+                        + M_energy * (1 - self.param_energy_active[k])
                     )
 
             # Generic Constraints (Window)
