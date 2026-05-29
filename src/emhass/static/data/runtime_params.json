@@ -1,0 +1,84 @@
+{
+  "MPC": {
+    "prediction_horizon": {
+      "friendly_name": "Prediction horizon",
+      "Description": "Number of timesteps the naive-MPC optimization looks ahead. Defaults to 10. Only used by the naive-mpc-optim action. See passing_data.md / study_cases/mpc.md.",
+      "input": "int",
+      "default_value": 10,
+      "unit": "timesteps"
+    },
+    "soc_init": {
+      "friendly_name": "Initial battery state of charge",
+      "Description": "Battery state of charge at the start of the horizon, as a fraction in [0,1] (NOT percent). Defaults to battery_target_state_of_charge when omitted. If passed outside [battery_minimum_state_of_charge, battery_maximum_state_of_charge] a warning is logged and the real SOC is kept for optimization recovery. Only used by naive-mpc-optim. See passing_data.md.",
+      "input": "float",
+      "default_value": null,
+      "unit": "fraction"
+    },
+    "soc_final": {
+      "friendly_name": "Final battery state of charge",
+      "Description": "Target battery state of charge at the end of the horizon, as a fraction in [0,1] (NOT percent). Defaults to battery_target_state_of_charge when omitted; clamped to [battery_minimum_state_of_charge, battery_maximum_state_of_charge] if out of range. Independent of soc_init. Only used by naive-mpc-optim. See passing_data.md.",
+      "input": "float",
+      "default_value": null,
+      "unit": "fraction"
+    },
+    "operating_timesteps_of_each_deferrable_load": {
+      "friendly_name": "Operating timesteps of each deferrable load",
+      "Description": "Per-deferrable-load total number of operating timesteps over the horizon (the timestep-based alternative to operating_hours_of_each_deferrable_load, preferred for sub-hour steps). One int per deferrable load. Only used by naive-mpc-optim. See passing_data.md.",
+      "input": "array.int",
+      "default_value": null,
+      "unit": "timesteps"
+    }
+  },
+  "Cost function": {
+    "alpha": {
+      "friendly_name": "Alpha (forecast weight)",
+      "Description": "Weight applied to the forecast term when mixing forecast and measured load in the now/current model. Defaults to 0.5. Used together with beta. See forecasts.md.",
+      "input": "float",
+      "default_value": 0.5,
+      "unit": "fraction"
+    },
+    "beta": {
+      "friendly_name": "Beta (measured weight)",
+      "Description": "Weight applied to the measured/persistence term when mixing forecast and measured load in the now/current model. Defaults to 0.5. Complement to alpha. See forecasts.md.",
+      "input": "float",
+      "default_value": 0.5,
+      "unit": "fraction"
+    }
+  },
+  "Forecast cache": {
+    "weather_forecast_cache": {
+      "friendly_name": "Weather forecast cache (write)",
+      "Description": "If true, save the computed weather/PV forecast to a cache file for later reuse (e.g. Solcast) so subsequent calls avoid re-hitting the forecast API. Defaults to false. See forecasts.md.",
+      "input": "boolean",
+      "default_value": false,
+      "unit": "none"
+    },
+    "weather_forecast_cache_only": {
+      "friendly_name": "Weather forecast cache only",
+      "Description": "If true, only use cached weather/PV forecast data and raise an error if the cache is missing (prevents accidental API calls). Defaults to false. See forecasts.md.",
+      "input": "boolean",
+      "default_value": false,
+      "unit": "none"
+    }
+  },
+  "Deferrable runtime": {
+    "def_current_state": {
+      "friendly_name": "Deferrable current state",
+      "Description": "Per-deferrable-load boolean list indicating whether each load is currently running at t0, so the optimizer does not penalize a startup for a load that is already on. One boolean per deferrable load. See passing_data.md.",
+      "input": "array.boolean",
+      "default_value": null,
+      "unit": "none"
+    },
+    "def_load_config": {
+      "friendly_name": "Deferrable load special config",
+      "Description": "Per-deferrable-load special configuration carrying the thermal_config / thermal_battery models. Deep, evolving nested schema; not inlined here. See the linked documentation for the full structure.",
+      "input": "object",
+      "default_value": null,
+      "unit": "none",
+      "externalDocs": {
+        "description": "Thermal load / thermal-battery configuration schema",
+        "url": "docs/thermal_battery.md"
+      }
+    }
+  }
+}
