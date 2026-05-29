@@ -3883,6 +3883,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             False,
         ]
         complex_optim_conf["set_deferrable_startup_penalty"] = [0.0] * 7
+        complex_optim_conf["deferrable_load_max_cost"] = [0.0] * 7
 
         # Setup Thermal Configs
         def_load_config = [{} for _ in range(7)]
@@ -4078,6 +4079,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             0,
             0,
         ]
+        complex_optim_conf["deferrable_load_max_cost"] = [0.0] * 7
+
         # Match user's production MIP gap for realistic solve times
         complex_optim_conf["lp_solver_mip_rel_gap"] = 0.2
 
@@ -4635,6 +4638,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 "weight_deferrable_loads": [1.0, 1.0, 1.0],
                 "minimum_power_of_deferrable_loads": [0, 0, 0],
                 "set_deferrable_startup_penalty": [0, 0, 0],
+                "deferrable_load_max_cost": [0, 0, 0],
                 "def_current_state": [0, 0, 0],
                 "def_start_penalty": [0, 0, 0],
                 "def_load_config": [
