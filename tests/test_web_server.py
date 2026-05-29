@@ -906,13 +906,15 @@ class TestHealthzSchema(unittest.TestCase):
         self.assertTrue(schema_path.exists(), f"missing {schema_path}")
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         self.assertIn("$schema", schema)
+        top_level = {"status", "boot_ts", "last_run_ts", "last_run_status", "versions"}
+        version_keys = {"emhass", "python", "schema_version"}
         props = schema["properties"]
-        for key in ("status", "boot_ts", "last_run_ts", "last_run_status", "versions"):
+        for key in top_level:
             self.assertIn(key, props)
-        self.assertEqual(
-            set(props["versions"]["properties"].keys()),
-            {"emhass", "python", "schema_version"},
-        )
+        self.assertEqual(set(props["versions"]["properties"].keys()), version_keys)
+        # required must list the contract keys, else a property is silently optional
+        self.assertTrue(top_level.issubset(schema["required"]))
+        self.assertTrue(version_keys.issubset(props["versions"]["required"]))
 
 
 if __name__ == "__main__":
