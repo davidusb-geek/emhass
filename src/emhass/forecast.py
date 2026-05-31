@@ -416,6 +416,14 @@ class Forecast:
                 data = await self.set_cached_forecast_data(w_forecast_cache_path, data)
         else:
             data = await self.get_cached_forecast_data(w_forecast_cache_path)
+            if data is None:
+                # Stale Open-Meteo cache was deleted — fetch fresh data from API.
+                self.logger.info(
+                    "Stale Open-Meteo cache removed; fetching fresh forecast from API."
+                )
+                return await self._get_weather_open_meteo(
+                    w_forecast_cache_path, use_legacy_pvlib
+                )
         return data
 
     def _solcast_rate_limit_ok(self, max_calls: int = 8) -> bool:
@@ -1826,14 +1834,16 @@ class Forecast:
         self.logger.debug("get_prod_price_forecast returning:\n%s", df_final)
         return df_final
 
-    async def get_cached_forecast_data(self, w_forecast_cache_path) -> pd.DataFrame:
+    async def get_cached_forecast_data(self, w_forecast_cache_path) -> pd.DataFrame | None:
         r"""
         Get cached weather forecast data from file.
 
         :param w_forecast_cache_path: the path to file.
         :type method: Any
-        :return: The DataFrame containing the forecasted data
-        :rtype: pd.DataFrame
+        :return: The DataFrame containing the forecasted data, or ``None`` when
+            the cache is corrupt/missing or was intentionally deleted (e.g. stale
+            Open-Meteo cache).  Callers must handle the ``None`` case.
+        :rtype: pd.DataFrame | None
 
         """
         async with aiofiles.open(w_forecast_cache_path, "rb") as file:
@@ -1844,34 +1854,50 @@ class Forecast:
                 self.logger.error(
                     "Try running action `weather-forecast-cache` to pull new data from forecast API."
                 )
-                os.remove(w_forecast_cache_path)
-                return False
+                try:
+                    os.remove(w_forecast_cache_path)
+                except FileNotFoundError:
+                    pass
+                return None
             # Filter cached forecast data to match current forecast_dates start-end range
             if self.forecast_dates[0] in data.index and self.forecast_dates[-1] in data.index:
                 data = data.loc[self.forecast_dates[0] : self.forecast_dates[-1]]
                 self.logger.info("Retrieved forecast data from the previously saved cache.")
             else:
-                # Serve best-effort stale cache: reindex to requested dates,
-                # interpolate gaps, and zero-fill edges.  This is far better
-                # than deleting the cache and burning Solcast API quota.
-                self.logger.warning(
-                    "Cache does not fully cover the requested timeframe. "
-                    "Serving best-effort stale data (reindexed + zero-filled)."
-                )
-                combined_index = data.index.union(self.forecast_dates).sort_values()
-                data = data.reindex(combined_index)
-                data.interpolate(method="time", inplace=True)
-                data = data.reindex(self.forecast_dates)
+                if self.weather_forecast_method == "open-meteo":
+                    # Open-Meteo has no rate limits: delete the stale cache so
+                    # the next call fetches fresh data directly from the API.
+                    self.logger.warning(
+                        "Cache does not fully cover the requested timeframe. "
+                        "Removing stale Open-Meteo cache; fresh data will be fetched from the API."
+                    )
+                    try:
+                        os.remove(w_forecast_cache_path)
+                    except FileNotFoundError:
+                        pass
+                    return None
+                else:
+                    # Solcast and other rate-limited APIs: serve best-effort
+                    # stale data to avoid burning daily API quota.
+                    self.logger.warning(
+                        "Cache does not fully cover the requested timeframe. "
+                        "Serving best-effort stale data (reindexed + zero-filled). "
+                        "Cache preserved to protect API rate limits."
+                    )
+                    combined_index = data.index.union(self.forecast_dates).sort_values()
+                    data = data.reindex(combined_index)
+                    data.interpolate(method="time", inplace=True)
+                    data = data.reindex(self.forecast_dates)
 
-                irradiance_cols = [c for c in ["ghi", "dni", "dhi"] if c in data.columns]
-                other_cols = [c for c in data.columns if c not in irradiance_cols]
+                    irradiance_cols = [c for c in ["ghi", "dni", "dhi"] if c in data.columns]
+                    other_cols = [c for c in data.columns if c not in irradiance_cols]
 
-                if other_cols:
-                    data[other_cols] = data[other_cols].ffill().bfill()
-                if irradiance_cols:
-                    data[irradiance_cols] = data[irradiance_cols].fillna(0.0)
+                    if other_cols:
+                        data[other_cols] = data[other_cols].ffill().bfill()
+                    if irradiance_cols:
+                        data[irradiance_cols] = data[irradiance_cols].fillna(0.0)
 
-                data = data.fillna(0.0)
+                    data = data.fillna(0.0)
             return data
 
     async def set_cached_forecast_data(self, w_forecast_cache_path, data) -> pd.DataFrame:
