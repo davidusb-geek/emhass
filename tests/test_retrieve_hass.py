@@ -6,6 +6,7 @@ import datetime
 import os
 import pathlib
 import pickle
+import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -738,8 +739,10 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
 
             # Mock os.path.isfile to return False (triggers new metadata file creation)
             with patch("os.path.isfile", return_value=False):
-                # Mock pathlib.Path.mkdir to avoid file system errors
-                with patch("pathlib.Path.mkdir"):
+                # Mock pathlib.Path.mkdir to avoid file system errors, and
+                # os.replace since aiofiles.open is mocked (no real temp file is
+                # written for the atomic metadata commit to move into place).
+                with patch("pathlib.Path.mkdir"), patch("os.replace") as mock_replace:
                     # FIX: Pass dont_post=True to bypass network failure and force response_ok=True
                     # This ensures the save_entities logic block is actually reached
                     response, data = await self.rh.post_data(
@@ -753,6 +756,12 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
                         save_entities=True,
                         dont_post=True,
                     )
+                    # The metadata is committed atomically: a temp file is
+                    # os.replace'd into metadata.json (never an in-place write).
+                    mock_replace.assert_called_once()
+                    tmp_src, dest = mock_replace.call_args.args
+                    self.assertTrue(str(tmp_src).endswith(".tmp"))
+                    self.assertEqual(pathlib.Path(dest).name, "metadata.json")
         finally:
             # Restore path to prevent polluting other tests
             self.rh.emhass_conf["data_path"] = original_path
@@ -778,6 +787,149 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
 
             self.assertFalse(response.ok)
             self.assertEqual(response.status_code, 500)
+
+    async def test_concurrent_save_entities_metadata_integrity(self):
+        """Concurrent publishes that share entities/metadata.json must not
+        corrupt it. The read-modify-write is serialized by a process-wide lock
+        and committed via an atomic os.replace, so the final file is always
+        valid JSON containing every published entity (regression for the
+        shared-state race between the dh/mpc/hwc pipelines)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.rh.emhass_conf["data_path"] = pathlib.Path(tmpdir)
+            # get_data_from_file=True skips the network POST but still reaches
+            # the save_entities block (response_ok is forced True).
+            self.rh.get_data_from_file = True
+
+            data_df = pd.Series(
+                [100.0, 200.0],
+                index=pd.date_range("2024-01-01", periods=2, freq="30min"),
+            )
+            data_df.name = "test_data"
+
+            entity_ids = [f"sensor.race_test_{i}" for i in range(25)]
+
+            async def publish(entity_id):
+                await self.rh.post_data(
+                    data_df,
+                    0,
+                    entity_id,
+                    "power",
+                    "W",
+                    entity_id,
+                    "power",
+                    save_entities=True,
+                    dont_post=True,
+                )
+
+            # Fire them all concurrently so their await points interleave.
+            await asyncio.gather(*(publish(e) for e in entity_ids))
+
+            entities_path = pathlib.Path(tmpdir) / "entities"
+            metadata_path = entities_path / "metadata.json"
+            self.assertTrue(metadata_path.is_file())
+
+            # Must parse cleanly: no concatenated or truncated documents.
+            with open(metadata_path, "rb") as f:
+                metadata = orjson.loads(f.read())
+
+            # Every concurrently-published entity must survive (no lost writes).
+            for entity_id in entity_ids:
+                self.assertIn(entity_id, metadata)
+
+            # The atomic commit must not leave temp files behind.
+            leftover = list(entities_path.glob("metadata.json.*.tmp"))
+            self.assertEqual(leftover, [])
+
+    async def test_save_entities_recovers_from_corrupt_metadata(self):
+        """A pre-existing, unparseable metadata.json must be quarantined to
+        metadata_corrupt.json and replaced by a fresh, valid index containing
+        the entity being published (recovery branch of the shared-state race
+        handling)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.rh.emhass_conf["data_path"] = pathlib.Path(tmpdir)
+            self.rh.get_data_from_file = True
+
+            entities_path = pathlib.Path(tmpdir) / "entities"
+            entities_path.mkdir(parents=True)
+            metadata_path = entities_path / "metadata.json"
+            # Two concatenated documents: exactly the corruption the fix targets.
+            garbage = b'{"sensor.old": {}}\n{"sensor.old": {}}\n'
+            metadata_path.write_bytes(garbage)
+
+            data_df = pd.Series(
+                [100.0, 200.0],
+                index=pd.date_range("2024-01-01", periods=2, freq="30min"),
+            )
+            data_df.name = "test_data"
+
+            await self.rh.post_data(
+                data_df,
+                0,
+                "sensor.recovered",
+                "power",
+                "W",
+                "Recovered",
+                "power",
+                save_entities=True,
+                dont_post=True,
+            )
+
+            # The corrupt file is quarantined verbatim ...
+            corrupt_path = entities_path / "metadata_corrupt.json"
+            self.assertTrue(corrupt_path.is_file())
+            self.assertEqual(corrupt_path.read_bytes(), garbage)
+
+            # ... and metadata.json is rebuilt as a valid index with the entity.
+            with open(metadata_path, "rb") as f:
+                metadata = orjson.loads(f.read())
+            self.assertIn("sensor.recovered", metadata)
+            self.assertNotIn("sensor.old", metadata)
+
+    async def test_corrupt_quarantine_tolerates_lost_race(self):
+        """If a concurrent process already moved the corrupt metadata file, the
+        FileNotFoundError from the quarantine os.replace is swallowed and the
+        publish still rebuilds a valid index."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.rh.emhass_conf["data_path"] = pathlib.Path(tmpdir)
+            self.rh.get_data_from_file = True
+
+            entities_path = pathlib.Path(tmpdir) / "entities"
+            entities_path.mkdir(parents=True)
+            metadata_path = entities_path / "metadata.json"
+            metadata_path.write_bytes(b"not json{{{")
+
+            data_df = pd.Series(
+                [100.0, 200.0],
+                index=pd.date_range("2024-01-01", periods=2, freq="30min"),
+            )
+            data_df.name = "test_data"
+
+            real_replace = os.replace
+
+            def replace_side_effect(src, dst):
+                # Simulate the corrupt file having vanished out from under us;
+                # let the final atomic commit proceed for real.
+                if pathlib.Path(dst).name == "metadata_corrupt.json":
+                    raise FileNotFoundError(src)
+                return real_replace(src, dst)
+
+            with patch("os.replace", side_effect=replace_side_effect):
+                response, _ = await self.rh.post_data(
+                    data_df,
+                    0,
+                    "sensor.x",
+                    "power",
+                    "W",
+                    "X",
+                    "power",
+                    save_entities=True,
+                    dont_post=True,
+                )
+
+            self.assertTrue(response.ok)
+            with open(metadata_path, "rb") as f:
+                metadata = orjson.loads(f.read())
+            self.assertIn("sensor.x", metadata)
 
     async def test_session_lazy_initialization(self):
         """Test that session is lazily initialized on first use."""
