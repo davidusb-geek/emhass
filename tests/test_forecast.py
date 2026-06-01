@@ -1548,6 +1548,23 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         self.assertFalse(w_forecast_cache_path.exists(), "Stale Open-Meteo cache should be deleted")
 
+    async def test_get_cached_forecast_data_corrupt_cache_deletes_and_returns_none(self):
+        """A corrupt (non-DataFrame) cache pickle must be deleted and return None.
+
+        Also exercises the os.remove-after-close path on Windows (the file handle
+        must be released before unlink, else PermissionError [WinError 32]).
+        """
+        w_forecast_cache_path = emhass_conf["data_path"] / "weather_forecast_data_corrupt_test.pkl"
+        # Write a non-DataFrame payload directly (bypasses set_cached_forecast_data)
+        with open(w_forecast_cache_path, "wb") as f:
+            pickle.dump({"not": "a dataframe"}, f)
+        self.assertTrue(w_forecast_cache_path.exists())
+
+        result = await self.fcst.get_cached_forecast_data(w_forecast_cache_path)
+
+        self.assertIsNone(result)
+        self.assertFalse(w_forecast_cache_path.exists(), "Corrupt cache should be deleted")
+
     async def test_get_cached_forecast_data_stale_solcast_zero_fills(self):
         """Stale Solcast cache must be served as reindexed/zero-filled data.
 
