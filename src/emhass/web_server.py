@@ -351,7 +351,7 @@ async def parameter_get():
     # Covert formatted parameters from params back into config.json format
     return_config = param_to_config(params, app.logger)
     # Send config
-    return await make_response(return_config, 201)
+    return await make_response(return_config, 200)
 
 
 # Get default Config
@@ -373,7 +373,7 @@ async def config_get():
     # Covert formatted parameters from params back into config.json format
     return_config = param_to_config(params, app.logger)
     # Send params
-    return await make_response(return_config, 201)
+    return await make_response(return_config, 200)
 
 
 # Get YAML-to-JSON config
@@ -404,7 +404,7 @@ async def json_convert():
     config = orjson.dumps(config).decode()
 
     # Send params
-    return await make_response(config, 201)
+    return await make_response(config, 200)
 
 
 @app.route("/set-config", methods=["POST"])
@@ -469,7 +469,7 @@ async def parameter_set():
         return await make_response(["Unable to save params file, missing data_path"], 500)
 
     app.logger.info("Saved parameters from webserver")
-    return await make_response({}, 201)
+    return await make_response({}, 200)
 
 
 async def _load_params_and_runtime(request, emhass_conf, logger):
@@ -532,14 +532,14 @@ async def _handle_action_dispatch(
         action_str = " >> Performing weather forecast, try to caching result"
         logger.info(action_str)
         await weather_forecast_cache(emhass_conf, params, runtimeparams, logger)
-        return "EMHASS >> Weather Forecast has run and results possibly cached... \n", 201
+        return "EMHASS >> Weather Forecast has run and results possibly cached... \n", 200
 
     if action_name == "export-influxdb-to-csv":
         action_str = " >> Exporting InfluxDB data to CSV..."
         logger.info(action_str)
         success = await export_influxdb_to_csv(None, logger, emhass_conf, params, runtimeparams)
         if success:
-            return "EMHASS >> Action export-influxdb-to-csv executed successfully... \n", 201
+            return "EMHASS >> Action export-influxdb-to-csv executed successfully... \n", 200
         return await grab_log(action_str), 400
 
     # Actions requiring input_data_dict
@@ -547,7 +547,7 @@ async def _handle_action_dispatch(
         action_str = " >> Publishing data..."
         logger.info(action_str)
         _ = await publish_data(input_data_dict, logger)
-        return "EMHASS >> Action publish-data executed... \n", 201
+        return "EMHASS >> Action publish-data executed... \n", 200
 
     # Mapping for optimization actions to their functions
     optim_actions = {
@@ -562,7 +562,7 @@ async def _handle_action_dispatch(
         opt_res = await optim_actions[action_name](input_data_dict, logger)
         injection_dict = get_injection_dict(opt_res)
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
-        return f"EMHASS >> Action {action_name} executed... \n", 201
+        return f"EMHASS >> Action {action_name} executed... \n", 200
 
     # Delegate Machine Learning actions to helper
     ml_response = await _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger)
@@ -586,7 +586,7 @@ async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
         df_fit_pred, _, mlf = await forecast_model_fit(input_data_dict, logger)
         injection_dict = get_injection_dict_forecast_model_fit(df_fit_pred, mlf)
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
-        return "EMHASS >> Action forecast-model-fit executed... \n", 201
+        return "EMHASS >> Action forecast-model-fit executed... \n", 200
 
     # forecast-model-predict
     if action_name == "forecast-model-predict":
@@ -603,7 +603,7 @@ async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
             "table1": table1,
         }
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
-        return "EMHASS >> Action forecast-model-predict executed... \n", 201
+        return "EMHASS >> Action forecast-model-predict executed... \n", 200
 
     # forecast-model-tune
     if action_name == "forecast-model-tune":
@@ -615,21 +615,21 @@ async def _handle_ml_actions(action_name, input_data_dict, emhass_conf, logger):
 
         injection_dict = get_injection_dict_forecast_model_tune(df_pred_optim, mlf)
         await _save_injection_dict(injection_dict, emhass_conf["data_path"])
-        return "EMHASS >> Action forecast-model-tune executed... \n", 201
+        return "EMHASS >> Action forecast-model-tune executed... \n", 200
 
     # regressor-model-fit
     if action_name == "regressor-model-fit":
         action_str = " >> Performing a machine learning regressor fit..."
         logger.info(action_str)
         await regressor_model_fit(input_data_dict, logger)
-        return "EMHASS >> Action regressor-model-fit executed... \n", 201
+        return "EMHASS >> Action regressor-model-fit executed... \n", 200
 
     # regressor-model-predict
     if action_name == "regressor-model-predict":
         action_str = " >> Performing a machine learning regressor predict..."
         logger.info(action_str)
         await regressor_model_predict(input_data_dict, logger)
-        return "EMHASS >> Action regressor-model-predict executed... \n", 201
+        return "EMHASS >> Action regressor-model-predict executed... \n", 200
 
     return None
 
@@ -781,9 +781,9 @@ async def action_call(action_name: str):
             await input_data_dict["rh"].close()
 
     # Final Log Check & Response
-    if status == 201:
+    if status == 200:
         if not await check_file_log(" >> "):
-            return await make_response(msg, 201)
+            return await make_response(msg, 200)
         return await make_response(await grab_log(" >> "), 400)
 
     return await make_response(msg, status)

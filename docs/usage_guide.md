@@ -16,6 +16,12 @@ With this web server, you can perform RESTful POST commands on multiple ENDPOINT
 
 A `curl` command can then be used to launch an optimization task like this: `curl -i -H 'Content-Type:application/json' -X POST -d '{}' http://localhost:5000/action/dayahead-optim`.
 
+> **⚠️ Breaking change — HTTP status codes.** On success, the JSON API endpoints
+> (`action/*`, `get-config`, `get-config/defaults`, `set-config`, `get-json`) now return
+> **`200 OK`**. Earlier releases incorrectly returned **`201 Created`** for *every* response,
+> including read-only reads. If you have automations or integrations (Node-RED, Home Assistant
+> REST commands, custom scripts) that check for HTTP `201`, update them to accept `200`.
+
 ## Method 2) Legacy method using a Python virtual environment
 
 To run a command simply use the `emhass` CLI command followed by the needed arguments.
