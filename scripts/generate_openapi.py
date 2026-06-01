@@ -132,7 +132,11 @@ def _schema_version() -> str:
     return EMHASS_SCHEMA_VERSION
 
 
-def build_spec() -> dict:
+def build_spec(routes: set | None = None) -> dict:
+    # `routes` lets the caller pass an already-discovered set (avoids importing
+    # emhass.web_server twice per generation); falls back to discovery when called standalone.
+    if routes is None:
+        routes = discovered_routes()
     param_defs = json.loads(_PARAM_DEFS.read_text(encoding="utf-8"))
     components = {
         "Config": build_config_component(param_defs),
@@ -233,7 +237,7 @@ def build_spec() -> dict:
     }
 
     # filter CURATED paths down to what actually exists in url_map (e.g. /healthz pre-AC-4)
-    live = {p for p, _ in discovered_routes()}
+    live = {p for p, _ in routes}
     paths = {p: v for p, v in paths.items() if p in live}
 
     return {
@@ -254,8 +258,9 @@ def build_spec() -> dict:
 
 
 def generate() -> dict:
-    assert_no_undocumented(discovered_routes(), CURATED, SKIP)
-    return build_spec()
+    routes = discovered_routes()
+    assert_no_undocumented(routes, CURATED, SKIP)
+    return build_spec(routes)
 
 
 def main(argv=None) -> int:
