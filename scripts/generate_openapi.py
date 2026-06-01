@@ -53,3 +53,17 @@ def _input_to_schema(input_str: str, param: dict) -> dict:
     if desc:
         schema["description"] = desc
     return schema
+
+
+def build_config_component(param_defs: dict) -> dict:
+    """Flatten param_definitions sections into a single OpenAPI object schema.
+
+    Raises if a param key appears in more than one section (don't silently overwrite).
+    """
+    props: dict = {}
+    for params in param_defs.values():
+        for key, param in params.items():
+            if key in props:
+                raise SystemExit(f"generate_openapi: duplicate param key {key!r} across sections")
+            props[key] = _input_to_schema(param["input"], param)
+    return {"type": "object", "properties": props}
