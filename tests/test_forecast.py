@@ -1514,6 +1514,91 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             res = await self.fcst.get_weather_forecast(method="solcast")
             self.assertFalse(res)
 
+    async def test_get_cached_forecast_data_stale_open_meteo_deletes_cache(self):
+        """Stale Open-Meteo cache must be deleted and return False (no zero-fill).
+
+        Regression test for v0.17.3: get_cached_forecast_data() used to
+        reindex + zero-fill irradiance when the cache did not cover the full
+        requested timeframe.  For Open-Meteo (no rate limits) the correct
+        behaviour is to delete the stale pickle so the next call fetches fresh
+        data from the API.
+        """
+        w_forecast_cache_path = emhass_conf["data_path"] / "weather_forecast_data_stale_test.pkl"
+        # Build a cache that covers yesterday only (stale relative to forecast_dates)
+        yesterday = self.fcst.forecast_dates[0] - pd.Timedelta(days=1)
+        stale_index = pd.date_range(
+            start=yesterday,
+            periods=len(self.fcst.forecast_dates),
+            freq=self.fcst.freq,
+            tz=self.fcst.time_zone,
+        )
+        stale_data = pd.DataFrame({"ghi": 500.0, "dni": 400.0, "dhi": 100.0}, index=stale_index)
+        await self.fcst.set_cached_forecast_data(w_forecast_cache_path, stale_data)
+        self.assertTrue(w_forecast_cache_path.exists())
+
+        # Override method so get_cached_forecast_data sees "open-meteo"
+        original_method = self.fcst.weather_forecast_method
+        self.fcst.weather_forecast_method = "open-meteo"
+        try:
+            result = await self.fcst.get_cached_forecast_data(w_forecast_cache_path)
+        finally:
+            self.fcst.weather_forecast_method = original_method
+
+        # Must return None and delete the stale file
+        self.assertIsNone(result)
+        self.assertFalse(w_forecast_cache_path.exists(), "Stale Open-Meteo cache should be deleted")
+
+    async def test_get_cached_forecast_data_stale_solcast_zero_fills(self):
+        """Stale Solcast cache must be served as reindexed/zero-filled data.
+
+        For rate-limited providers (Solcast) the v0.17.3 stale-cache fallback
+        (reindex + zero-fill) must still be used to preserve daily API quota.
+        """
+        w_forecast_cache_path = emhass_conf["data_path"] / "weather_forecast_data_stale_solcast_test.pkl"
+        yesterday = self.fcst.forecast_dates[0] - pd.Timedelta(days=1)
+        stale_index = pd.date_range(
+            start=yesterday,
+            periods=len(self.fcst.forecast_dates),
+            freq=self.fcst.freq,
+            tz=self.fcst.time_zone,
+        )
+        stale_data = pd.DataFrame({"yhat": 1000.0}, index=stale_index)
+        await self.fcst.set_cached_forecast_data(w_forecast_cache_path, stale_data)
+
+        original_method = self.fcst.weather_forecast_method
+        self.fcst.weather_forecast_method = "solcast"
+        try:
+            result = await self.fcst.get_cached_forecast_data(w_forecast_cache_path)
+        finally:
+            self.fcst.weather_forecast_method = original_method
+            if w_forecast_cache_path.exists():
+                os.remove(w_forecast_cache_path)
+
+        # Must return a DataFrame (stale data served, file NOT deleted)
+        self.assertIsInstance(result, pd.DataFrame)
+        self.assertEqual(len(result), len(self.fcst.forecast_dates))
+        self.assertTrue(
+            (result.index == self.fcst.forecast_dates).all(),
+            "Stale Solcast cache index must match forecast_dates",
+        )
+        self.assertIn("yhat", result.columns, "Stale Solcast cache must include 'yhat' column")
+        # Stale data is served via reindex + time-interpolation (which extrapolates the last
+        # known constant value forward).  The result must be finite and non-NaN; the exact
+        # value equals the stale payload (1000.0) because interpolation extrapolates a
+        # constant series.
+        self.assertFalse(
+            result["yhat"].isna().any(),
+            "Stale Solcast cache should not contain NaNs in yhat",
+        )
+        self.assertTrue(
+            np.isfinite(result["yhat"].values).all(),
+            "Stale Solcast cache yhat values must be finite",
+        )
+        self.assertTrue(
+            (result["yhat"] == 1000.0).all(),
+            "Stale Solcast cache yhat should equal the extrapolated stale value (1000.0)",
+        )
+
     async def test_open_meteo_legacy_pvlib(self):
         """Test the use_legacy_pvlib=True path in open-meteo."""
         # Load mock data
@@ -1684,8 +1769,8 @@ class TestDstForecastDates(unittest.IsolatedAsyncioTestCase):
         hours (668 slots) instead of 168 hours (672 slots).
         The fix replaces all Timedelta additions in Forecast.__init__ with DateOffset.
         """
-        from unittest.mock import patch
         from datetime import datetime
+        from unittest.mock import patch
 
         # Spring-forward for Paris 2025: 2025-03-30 02:00 -> 03:00
         # Start at midnight so the full 7-day window crosses the transition
@@ -1739,8 +1824,8 @@ class TestDstForecastDates(unittest.IsolatedAsyncioTestCase):
 
     def test_forecast_dates_normal_day_equals_expected_slots(self):
         """On a normal day (no DST transition) forecast_dates has exactly N*24*(60/freq) slots."""
-        from unittest.mock import patch
         from datetime import datetime
+        from unittest.mock import patch
 
         # 2025-03-20 is a Thursday well before the spring-forward (2025-03-30),
         # so a 7-day window from 2025-03-20 to 2025-03-27 has no DST transition.
