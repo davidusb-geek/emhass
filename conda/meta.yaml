@@ -1,5 +1,5 @@
 {% set name = "emhass" %}
-{% set version = "0.17.6" %}
+{% set version = load_file_regex(load_file="../src/emhass/__init__.py", regex_pattern="^__version__\s*=\s*['\"]([^'\"]*)['\"]")[0] %}
 
 package:
   name: {{ name|lower }}
