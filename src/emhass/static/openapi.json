@@ -100,6 +100,10 @@
     "/action/{action_name}": {
       "post": {
         "summary": "Run an EMHASS action",
+        "externalDocs": {
+          "description": "Plan output field reference",
+          "url": "https://github.com/davidusb-geek/emhass/blob/master/docs/plan_output_schema.md"
+        },
         "parameters": [
           {
             "name": "action_name",
@@ -129,10 +133,6 @@
                   "type": "object"
                 }
               }
-            },
-            "externalDocs": {
-              "description": "Plan output field reference",
-              "url": "https://github.com/davidusb-geek/emhass/blob/master/docs/plan_output_schema.md"
             }
           },
           "400": {

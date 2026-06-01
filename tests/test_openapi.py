@@ -164,10 +164,13 @@ class TestBuildSpec(unittest.TestCase):
         self.assertIn("LastRun", spec["components"]["schemas"])
         self.assertIn("Healthz", spec["components"]["schemas"])
 
-    def test_action_response_links_plan_output_doc(self):
+    def test_action_operation_links_plan_output_doc(self):
+        # externalDocs must sit on the Operation Object (valid in OpenAPI 3.1),
+        # not on a Response Object (invalid — strict validators reject it).
         spec = gen.build_spec()
-        action_201 = spec["paths"]["/action/{action_name}"]["post"]["responses"]["201"]
-        self.assertIn("plan_output_schema.md", json.dumps(action_201))
+        action = spec["paths"]["/action/{action_name}"]["post"]
+        self.assertIn("plan_output_schema.md", action["externalDocs"]["url"])
+        self.assertNotIn("externalDocs", action["responses"]["201"])
 
     def test_action_request_is_open_object(self):
         spec = gen.build_spec()

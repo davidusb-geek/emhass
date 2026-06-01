@@ -186,6 +186,12 @@ def build_spec(routes: set | None = None) -> dict:
         "/action/{action_name}": {
             "post": {
                 "summary": "Run an EMHASS action",
+                # externalDocs belongs on the Operation Object in OpenAPI 3.1
+                # (not on a Response Object — strict validators reject the latter).
+                "externalDocs": {
+                    "description": "Plan output field reference",
+                    "url": _PLAN_OUTPUT_DOC,
+                },
                 "parameters": [
                     {
                         "name": "action_name",
@@ -199,10 +205,6 @@ def build_spec(routes: set | None = None) -> dict:
                     "201": {
                         "description": "Optimization plan",
                         "content": {"application/json": {"schema": {"type": "object"}}},
-                        "externalDocs": {
-                            "description": "Plan output field reference",
-                            "url": _PLAN_OUTPUT_DOC,
-                        },
                     },
                     "400": {"description": "Action failure"},
                 },
