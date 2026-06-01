@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/davidusb-geek/emhass/docs/api/healthz.schema.json",
+  "title": "EMHASS /healthz response",
+  "description": "Liveness/readiness probe response. HTTP 200 => status 'ok'; HTTP 503 => status 'degraded'. Health is recency-only; last-run correctness is reported in last_run_status but does not affect status.",
+  "type": "object",
+  "required": ["status", "boot_ts", "last_run_ts", "last_run_status", "versions"],
+  "additionalProperties": false,
+  "properties": {
+    "status": {"type": "string", "enum": ["ok", "degraded"]},
+    "boot_ts": {"type": ["string", "null"], "description": "ISO-8601 UTC (Z) server boot timestamp"},
+    "last_run_ts": {"type": ["string", "null"], "description": "ISO-8601 UTC (Z) timestamp of the most recent optimization run, or null if none"},
+    "last_run_status": {
+      "type": ["string", "null"],
+      "enum": ["ok", "infeasible", "error", null],
+      "description": "Raw correctness of the last run (diagnostic only; does not affect status)"
+    },
+    "versions": {
+      "type": "object",
+      "required": ["emhass", "python", "schema_version"],
+      "additionalProperties": false,
+      "properties": {
+        "emhass": {"type": "string"},
+        "python": {"type": "string"},
+        "schema_version": {"type": "string"}
+      }
+    }
+  }
+}

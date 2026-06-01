@@ -5,7 +5,9 @@ import asyncio
 import logging
 import os
 import pickle
+import platform
 import re
+from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -78,10 +80,27 @@ def mark_safe(value):
 templates.filters["mark_safe"] = mark_safe
 
 
+def _health_verdict(has_run: bool, stale: bool) -> tuple[str, int]:
+    """Map run-existence + staleness to (status, http_code).
+
+    Recency-only: last-run correctness (infeasible/error) does NOT affect the
+    health verdict. ``has_run`` is False when no optimization has ever completed;
+    ``stale`` is True only when a freshness window was requested and the last run
+    falls outside it.
+    """
+    if not has_run:
+        return "degraded", 503
+    if stale:
+        return "degraded", 503
+    return "ok", 200
+
+
 # Register async startup and shutdown handlers
 @app.before_serving
 async def before_serving():
     """Initialize EMHASS before starting to serve requests."""
+    # Capture boot timestamp first, so /healthz reports it even if initialize() fails.
+    app.config["boot_ts"] = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
     # Initialize the application
     try:
         await initialize()
@@ -653,6 +672,47 @@ async def api_v1_last_run():
         response_body = snap
 
     response = await make_response(orjson.dumps(response_body))
+    response.headers["Content-Type"] = "application/json"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/healthz", methods=["GET"])
+async def healthz():
+    """Liveness/readiness probe for container watchdogs.
+
+    HTTP 200 status:"ok"       -> a run exists (and is within ?max_age_seconds= if given)
+    HTTP 503 status:"degraded" -> no run yet, or the run is older than the requested window
+
+    Recency-only: an infeasible/errored last solve is still a healthy server; the raw
+    result is reported as last_run_status for diagnostics. Unauthenticated, read-only.
+    Schema: docs/api/healthz.schema.json (JSON Schema draft 2020-12).
+    """
+    raw = request.args.get("max_age_seconds")
+    try:
+        max_age = int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        max_age = None  # graceful-ignore: a 400 would read as "unhealthy" to a watchdog
+    snap = last_run.read(emhass_conf["data_path"])
+    has_run = snap is not None
+    stale = (
+        max_age is not None
+        and has_run
+        and not last_run.is_recent(emhass_conf["data_path"], max_age)
+    )
+    status, code = _health_verdict(has_run, stale)
+    body = {
+        "status": status,
+        "boot_ts": app.config.get("boot_ts"),
+        "last_run_ts": snap.get("timestamp") if snap else None,
+        "last_run_status": snap.get("status") if snap else None,
+        "versions": {
+            "emhass": last_run.emhass_version(),
+            "python": platform.python_version(),
+            "schema_version": EMHASS_SCHEMA_VERSION,
+        },
+    }
+    response = await make_response(orjson.dumps(body), code)
     response.headers["Content-Type"] = "application/json"
     response.headers["Cache-Control"] = "no-store"
     return response
