@@ -198,3 +198,20 @@ def build_spec() -> dict:
         "paths": paths,
         "components": {"schemas": components},
     }
+
+
+def generate() -> dict:
+    assert_no_undocumented(discovered_routes(), CURATED, SKIP)
+    return build_spec()
+
+
+def main(argv=None) -> int:
+    argparse.ArgumentParser(description="Generate EMHASS openapi.json").parse_args(argv)
+    spec = generate()
+    _OUT.write_text(json.dumps(spec, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"wrote {_OUT.relative_to(_REPO)} ({len(spec['paths'])} paths)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

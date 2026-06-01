@@ -128,5 +128,27 @@ class TestBuildSpec(unittest.TestCase):
         self.assertTrue(schema["additionalProperties"])
 
 
+class TestOpenapiArtifact(unittest.TestCase):
+    OUT = REPO_ROOT / "src" / "emhass" / "static" / "openapi.json"
+
+    def test_committed_file_is_valid(self):
+        self.assertTrue(self.OUT.exists(), f"missing {self.OUT} — run scripts/generate_openapi.py")
+        spec = json.loads(self.OUT.read_text(encoding="utf-8"))
+        for key in ("openapi", "info", "paths", "components"):
+            self.assertIn(key, spec)
+        # every internal $ref resolves to a declared component
+        names = set(spec["components"]["schemas"])
+        text = json.dumps(spec)
+        for ref in ("Config", "LastRun", "Healthz"):
+            if f"#/components/schemas/{ref}" in text:
+                self.assertIn(ref, names)
+
+    def test_committed_matches_generated(self):
+        committed = json.loads(self.OUT.read_text(encoding="utf-8"))
+        fresh = gen.generate()
+        self.assertEqual(committed, fresh,
+                         "openapi.json is stale — run `python scripts/generate_openapi.py` and commit")
+
+
 if __name__ == "__main__":
     unittest.main()
