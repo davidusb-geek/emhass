@@ -98,5 +98,35 @@ class TestRouteGuard(unittest.TestCase):
         gen.assert_no_undocumented(gen.discovered_routes(), gen.CURATED, gen.SKIP)
 
 
+class TestBuildSpec(unittest.TestCase):
+    def test_spec_has_core_shape_and_curated_paths(self):
+        spec = gen.build_spec()
+        self.assertEqual(spec["openapi"], "3.1.0")
+        self.assertEqual(spec["info"]["title"], "EMHASS API")
+        self.assertTrue(spec["info"]["version"])  # EMHASS_SCHEMA_VERSION
+        for p in ("/get-config", "/set-config", "/get-json", "/action/{action_name}",
+                  "/api/v1/last-run", "/healthz"):
+            self.assertIn(p, spec["paths"], f"missing {p}")
+        # HTML/UI routes absent
+        for p in ("/", "/index", "/template", "/configuration", "/static/{filename}"):
+            self.assertNotIn(p, spec["paths"])
+        # config + inlined response components present
+        self.assertIn("Config", spec["components"]["schemas"])
+        self.assertIn("LastRun", spec["components"]["schemas"])
+        self.assertIn("Healthz", spec["components"]["schemas"])
+
+    def test_action_response_links_plan_output_doc(self):
+        spec = gen.build_spec()
+        action_201 = spec["paths"]["/action/{action_name}"]["post"]["responses"]["201"]
+        self.assertIn("plan_output_schema.md", json.dumps(action_201))
+
+    def test_action_request_is_open_object(self):
+        spec = gen.build_spec()
+        body = spec["paths"]["/action/{action_name}"]["post"]["requestBody"]
+        schema = body["content"]["application/json"]["schema"]
+        self.assertEqual(schema["type"], "object")
+        self.assertTrue(schema["additionalProperties"])
+
+
 if __name__ == "__main__":
     unittest.main()
