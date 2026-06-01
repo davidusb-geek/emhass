@@ -3883,6 +3883,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             False,
         ]
         complex_optim_conf["set_deferrable_startup_penalty"] = [0.0] * 7
+        complex_optim_conf["deferrable_load_max_cost"] = [0.0] * 7
 
         # Setup Thermal Configs
         def_load_config = [{} for _ in range(7)]
@@ -4078,6 +4079,8 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             0,
             0,
         ]
+        complex_optim_conf["deferrable_load_max_cost"] = [0.0] * 7
+
         # Match user's production MIP gap for realistic solve times
         complex_optim_conf["lp_solver_mip_rel_gap"] = 0.2
 
@@ -4635,6 +4638,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 "weight_deferrable_loads": [1.0, 1.0, 1.0],
                 "minimum_power_of_deferrable_loads": [0, 0, 0],
                 "set_deferrable_startup_penalty": [0, 0, 0],
+                "deferrable_load_max_cost": [0, 0, 0],
                 "def_current_state": [0, 0, 0],
                 "def_start_penalty": [0, 0, 0],
                 "def_load_config": [
@@ -5222,6 +5226,154 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[2], 0.50)
         self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[3], 0.50)
 
+    def test_load_max_cost(self):
+        """Test that a nonzero max cost for a load prevents the load
+        from being scheduled unless it can be done for less than the
+        configured cost."""
+
+        # Setup plant configuration for a non-hybrid system
+        # We use a small battery and force a charge event
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": False,
+                "compute_curtailment": False,
+            }
+        )
+
+        # Optimization configuration
+        self.optim_conf.update(
+            {
+                "set_use_battery": False,
+                "set_use_pv": False,
+                "set_nocharge_from_grid": False,  # Allow grid charging
+                "set_nodischarge_to_grid": False,  # Allow grid selling
+                "operating_hours_of_each_deferrable_load": [1, 1],
+                "set_deferrable_startup_penalty": [0.5, 0.5],
+                "nominal_power_of_deferrable_loads": [1000, 1000],
+                "load_cost_forecast_method": "csv",
+                "production_price_forecast_method": "csv",
+            }
+        )
+
+        # Create input data: 4 periods of 30 minutes, constant energy cost
+        periods = 4
+        dates = pd.date_range(
+            start=pd.Timestamp.now(tz=self.retrieve_hass_conf["time_zone"]),
+            periods=periods,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df_input = pd.DataFrame(index=dates)
+        df_input["p_pv_forecast"] = 0.0
+        df_input["p_load_forecast"] = 0.0
+        df_input[self.fcst.var_prod_price] = 0.1
+        df_input[self.fcst.var_load_cost] = [1.0, 0.5, 0.5, 1.0]
+
+        # Scheduling the loads for the required 1 hour will cost
+        # 0.5*(1 + 0.25) (startup penalty) = 0.625. If max_cost is below this, they should not
+        # be scheduled.
+
+        self.optim_conf["deferrable_load_max_cost"] = [0.60, 0.65]
+        self.opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        opt_res = self.opt.perform_optimization(
+            df_input,
+            df_input["p_pv_forecast"].values,
+            df_input["p_load_forecast"].values,
+            df_input[self.opt.var_load_cost].values,
+            df_input[self.opt.var_prod_price].values,
+        )
+
+        # Assertions
+        self.assertEqual(self.opt.optim_status, "Optimal")
+
+        # Verify load 0 was not scheduled, load 1 was
+        self.assertTrue(np.allclose(opt_res["P_deferrable0"], 0.0))
+        self.assertTrue(np.allclose(opt_res["P_deferrable1"], [0, 1000, 1000, 0]))
+
+    def test_sequence_load_max_cost(self):
+        """Test that a nonzero max cost for a sequence load prevents the load
+        from being scheduled unless it can be done for less than the
+        configured cost."""
+
+        # Setup plant configuration for a non-hybrid system
+        # We use a small battery and force a charge event
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": False,
+                "compute_curtailment": False,
+            }
+        )
+
+        # Optimization configuration
+        self.optim_conf.update(
+            {
+                "set_use_battery": False,
+                "set_use_pv": False,
+                "set_nocharge_from_grid": False,  # Allow grid charging
+                "set_nodischarge_to_grid": False,  # Allow grid selling
+                "nominal_power_of_deferrable_loads": [[1000, 1000], [1000, 1000]],
+                "operating_hours_of_each_deferrable_load": [4, 4],  # without this it doesn't work
+                "load_cost_forecast_method": "csv",
+                "production_price_forecast_method": "csv",
+            }
+        )
+
+        # Create input data: 4 periods of 30 minutes, constant energy cost
+        periods = 4
+        dates = pd.date_range(
+            start=pd.Timestamp.now(tz=self.retrieve_hass_conf["time_zone"]),
+            periods=periods,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df_input = pd.DataFrame(index=dates)
+        df_input["p_pv_forecast"] = 0.0
+        df_input["p_load_forecast"] = 0.0
+        df_input[self.fcst.var_prod_price] = 0.1
+        df_input[self.fcst.var_load_cost] = [1.0, 0.5, 0.5, 1.0]
+
+        # Scheduling the loads with the configured sequence will cost
+        # 0.5*1.0 = 0.5. If max_cost is below this, they should not
+        # be scheduled.
+
+        self.optim_conf["deferrable_load_max_cost"] = [0.45, 0.55]
+        self.opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        opt_res = self.opt.perform_optimization(
+            df_input,
+            df_input["p_pv_forecast"].values,
+            df_input["p_load_forecast"].values,
+            df_input[self.opt.var_load_cost].values,
+            df_input[self.opt.var_prod_price].values,
+        )
+
+        # Assertions
+        self.assertEqual(self.opt.optim_status, "Optimal")
+
+        logger.debug("Pdef0\n{}".format(opt_res["P_deferrable0"]))
+        logger.debug("Pdef1\n{}".format(opt_res["P_deferrable1"]))
+        
+        # Verify load 0 was not scheduled, load 1 was
+        self.assertTrue(np.allclose(opt_res["P_deferrable0"], 0.0))
+        self.assertTrue(np.allclose(opt_res["P_deferrable1"], [0, 1000, 1000, 0]))
+        
 
 if __name__ == "__main__":
     unittest.main()

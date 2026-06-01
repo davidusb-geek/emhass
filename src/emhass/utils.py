@@ -806,6 +806,7 @@ def compile_heat_topology(topology: dict) -> dict:
         "operating_hours_of_each_deferrable_load": operating_hours,
         "set_deferrable_load_single_constant": [False] * num_loads,
         "set_deferrable_startup_penalty": [0.0] * num_loads,
+        "deferrable_load_max_cost": [0.0] * num_loads,
         "set_deferrable_max_startups": [0] * num_loads,
         "start_timesteps_of_each_deferrable_load": [0] * num_loads,
         "end_timesteps_of_each_deferrable_load": [0] * num_loads,
@@ -1972,6 +1973,7 @@ async def treat_runtimeparams(
                     # which the compiler sets - so override any defaults.
                     "set_deferrable_load_single_constant",
                     "set_deferrable_startup_penalty",
+                    "deferrable_load_max_cost",
                     "set_deferrable_max_startups",
                     "operating_hours_of_each_deferrable_load",
                     "start_timesteps_of_each_deferrable_load",
@@ -2830,6 +2832,13 @@ async def build_params(
             "set_deferrable_startup_penalty",
             logger,
         )
+        params["optim_conf"]["deferrable_load_max_cost"] = check_def_loads(
+            num_def_loads,
+            params["optim_conf"],
+            0.0,
+            "deferrable_load_max_cost",
+            logger,
+        )
         params["optim_conf"]["set_deferrable_max_startups"] = check_def_loads(
             num_def_loads,
             params["optim_conf"],
@@ -2849,6 +2858,13 @@ async def build_params(
             params["optim_conf"],
             0,
             "nominal_power_of_deferrable_loads",
+            logger,
+        )
+        params["optim_conf"]["deferrable_load_max_cost"] = check_def_loads(
+            num_def_loads,
+            params["optim_conf"],
+            0,
+            "deferrable_load_max_cost",
             logger,
         )
         # Validate deferrable_load_groups
