@@ -1,12 +1,46 @@
 import os
+import re
+import subprocess
 from datetime import datetime
 
 import requests
 
+
+def _get_last_release_date_from_git() -> str:
+    """
+    Derive the last release date dynamically from the latest git tag.
+
+    Returns the commit date (in ISO 8601 format) of the most recent tag.
+    Falls back to an empty string if git commands fail, so callers can
+    decide how to handle the absence of a release date.
+    """
+    try:
+        last_tag = subprocess.check_output(
+            ["git", "describe", "--tags", "--abbrev=0"], text=True
+        ).strip()
+        last_tag_date = subprocess.check_output(
+            ["git", "show", "-s", "--format=%cI", last_tag], text=True
+        ).strip()
+        return last_tag_date
+    except Exception:
+        return ""
+
+
+def get_version() -> str:
+    """Safely parse the version from __init__.py without importing."""
+    # Goes up one level from 'scripts/', then into 'src/emhass/'
+    init_path = os.path.join(os.path.dirname(__file__), "..", "src", "emhass", "__init__.py")
+    with open(init_path, encoding="utf-8") as f:
+        match = re.search(r'^__version__\s*=\s*[\'"]([^\'"]+)[\'"]', f.read(), re.MULTILINE)
+        if match:
+            return match.group(1)
+        raise RuntimeError(f"Unable to find version string in {init_path}")
+
+
 # --- CONFIGURATION ---
 REPO = "davidusb-geek/emhass"
-LAST_RELEASE_DATE = "2026-04-20T12:00:00Z"  # ISO format of your last release date
-NEW_VERSION = "0.17.4"
+LAST_RELEASE_DATE = os.getenv("LAST_RELEASE_DATE") or _get_last_release_date_from_git()
+NEW_VERSION = get_version()
 TOKEN = os.getenv("GITHUB_TOKEN")  # Add it using: $env:GITHUB_TOKEN="your_actual_token_here" on PS
 # ---------------------
 

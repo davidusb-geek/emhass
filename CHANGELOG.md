@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.17.6 - 2026-06-01
+### Improvement
+- feat: add runtime_params.json (machine-readable runtime param schema) (@OptimalNothing90)
+- feat: add /healthz liveness/readiness endpoint (@OptimalNothing90)
+- optimization: parameterise battery_*_power_max for cache stability (@BrettLynch123)
+- test(resilience): parameterised stringly-typed guard for optim_conf array params (@OptimalNothing90)
+- optimization: deactivate deferrables whose [start, end] is entirely outside the horizon (@BrettLynch123)
+- retrieve_hass: fetch HA history concurrently with asyncio.gather (@BrettLynch123)
+- command_line: stop the OptimizationCache invalidating every MPC tick (@BrettLynch123)
+- optimization: split optim_solve into build / solve / extract sub-stages (@BrettLynch123)
+- Thermal battery for cooling (#11) (@mime24)
+- Add optional max cost threshold for deferred loads. (@lutorm)
+- test: add schema-contract and defaults-smoke prevention tests (closes #869) (@OptimalNothing90)
+### Documentation
+- docs(advanced_solvers): add Low-Power Hardware Tuning section (@BrettLynch123)
+### Fix
+- fix: atomic, lock-serialized writes to shared entities/metadata.json (@rmounce)
+- fix: restore delete-on-stale behaviour for Open-Meteo forecast cache (@tomvanacker85)
+- fix: skip single-constant pin when window is outside horizon (#899, follows #873/#910) (@OptimalNothing90)
+- fix: deferrable single-constant pin firing on stringly-typed def_current_state (#873) (@OptimalNothing90)
+- fix: repair config page rendering for null-default params (#880, #904) (@OptimalNothing90)
+- fix: resolve llms.txt links via html_baseurl (#884) (@OptimalNothing90)
+- fix(thermal): sense=null guard + thermal_config cooling dynamics (@OptimalNothing90)
+- fix: LP retry silently skips battery/inverter constraints on cached-problem paths (@hossamnagy)
+- fix(optimization): guard string-null cost_forecast_per_deferrable_load (@OptimalNothing90)
+- fix(utils): guard string-null heat_topology in compile_heat_topology and treat_runtimeparams (@OptimalNothing90)
+
 ## 0.17.5 - 2026-05-22
 ### Fix
 * **optimization:** Guard against string-null `cost_forecast_per_deferrable_load` (#879)

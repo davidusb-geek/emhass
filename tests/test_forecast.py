@@ -1554,7 +1554,9 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         For rate-limited providers (Solcast) the v0.17.3 stale-cache fallback
         (reindex + zero-fill) must still be used to preserve daily API quota.
         """
-        w_forecast_cache_path = emhass_conf["data_path"] / "weather_forecast_data_stale_solcast_test.pkl"
+        w_forecast_cache_path = (
+            emhass_conf["data_path"] / "weather_forecast_data_stale_solcast_test.pkl"
+        )
         yesterday = self.fcst.forecast_dates[0] - pd.Timedelta(days=1)
         stale_index = pd.date_range(
             start=yesterday,
