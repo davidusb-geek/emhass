@@ -85,6 +85,9 @@ _XFAIL_REASON: dict[str, str] = {
     "set_deferrable_startup_penalty": (
         "no stringly-typed guard; string char used as float in penalty (see #900)"
     ),
+    "deferrable_load_max_cost": (
+        "no stringly-typed guard; string char used as float in penalty (see #900)"
+    ),
     "set_deferrable_max_startups": (
         "no stringly-typed guard; string char used as int for max_starts (see #900)"
     ),
