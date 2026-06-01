@@ -51,5 +51,26 @@ class TestInputToSchema(unittest.TestCase):
         self.assertNotIn("default", s)
 
 
+class TestConfigComponent(unittest.TestCase):
+    def _defs(self):
+        return {
+            "SectionA": {"costfun": {"input": "select", "select_options": ["profit", "cost"],
+                                     "default_value": "profit", "friendly_name": "Cost", "Description": "d", "unit": "none"}},
+            "SectionB": {"battery_power": {"input": "int", "default_value": 5, "friendly_name": "BP", "Description": "d", "unit": "W"}},
+        }
+
+    def test_flattens_all_sections_into_properties(self):
+        comp = gen.build_config_component(self._defs())
+        self.assertEqual(comp["type"], "object")
+        self.assertIn("costfun", comp["properties"])
+        self.assertIn("battery_power", comp["properties"])
+
+    def test_duplicate_key_across_sections_raises(self):
+        defs = self._defs()
+        defs["SectionB"]["costfun"] = {"input": "int", "default_value": 1}
+        with self.assertRaises(SystemExit):
+            gen.build_config_component(defs)
+
+
 if __name__ == "__main__":
     unittest.main()
