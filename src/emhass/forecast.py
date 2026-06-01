@@ -421,9 +421,7 @@ class Forecast:
                 self.logger.info(
                     "Stale Open-Meteo cache removed; fetching fresh forecast from API."
                 )
-                return await self._get_weather_open_meteo(
-                    w_forecast_cache_path, use_legacy_pvlib
-                )
+                return await self._get_weather_open_meteo(w_forecast_cache_path, use_legacy_pvlib)
         return data
 
     def _solcast_rate_limit_ok(self, max_calls: int = 8) -> bool:

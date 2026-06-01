@@ -1,6 +1,6 @@
 [project]
 name = "emhass"
-version = "0.17.6"
+dynamic = ["version"]
 description = "An Energy Management System for Home Assistant"
 readme = "README.md"
 requires-python = ">=3.10, <3.13"
@@ -73,6 +73,9 @@ emhass = { workspace = true }
 default-groups = "all"
 package = true
 override-dependencies = ["yarl<1.24"]
+
+[tool.hatch.version]
+path = "src/emhass/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/emhass"]
