@@ -18,6 +18,13 @@ from emhass.utils import set_df_index_freq
 
 logger = logging.getLogger(__name__)
 
+# Serializes the read-modify-write of the shared entities/metadata.json across
+# every RetrieveHass instance in this process. Concurrent publishes (e.g. the
+# day-ahead, MPC and HWC pipelines) otherwise interleave on their await points
+# and corrupt the single shared index. Module-level so it is shared by all
+# instances; binds to the running loop on first use (Python >= 3.10).
+_metadata_lock = asyncio.Lock()
+
 header_accept = "application/json"
 header_auth = "Bearer"
 hass_url = "http://supervisor/core/api"
@@ -1401,11 +1408,16 @@ class RetrieveHass:
                 async with aiofiles.open(entities_path / (entity_id + ".json"), "w") as file:
                     await file.write(orjson.dumps(parsed, option=orjson.OPT_INDENT_2).decode())
 
-                # Save the required metadata to json file
+                # Save the required metadata to json file. The whole
+                # read-modify-write is serialized with a process-wide lock and
+                # committed via an atomic os.replace, so concurrent publishes
+                # sharing this file can neither interleave nor observe a
+                # truncated/half-written document.
                 metadata_path = entities_path / "metadata.json"
-                if os.path.isfile(metadata_path):
-                    async with aiofiles.open(metadata_path) as file:
-                        content = await file.read()
+                async with _metadata_lock:
+                    if os.path.isfile(metadata_path):
+                        async with aiofiles.open(metadata_path) as file:
+                            content = await file.read()
                         try:
                             metadata = orjson.loads(content)
                         except orjson.JSONDecodeError:
@@ -1413,13 +1425,16 @@ class RetrieveHass:
                                 f"Corrupted metadata file found at {metadata_path}. Creating a new one."
                             )
                             metadata = {}
-                            # Rename the corrupted file to metadata_corrupt.json
+                            # Quarantine the corrupted file; tolerate it already
+                            # having been moved by a concurrent process.
                             corrupt_path = entities_path / "metadata_corrupt.json"
-                            os.rename(metadata_path, corrupt_path)
-                else:
-                    metadata = {}
+                            try:
+                                os.replace(metadata_path, corrupt_path)
+                            except FileNotFoundError:
+                                pass
+                    else:
+                        metadata = {}
 
-                async with aiofiles.open(metadata_path, "w") as file:
                     # Save entity metadata, key = entity_id
                     metadata[entity_id] = {
                         "name": data_df.name,
@@ -1435,7 +1450,16 @@ class RetrieveHass:
                         "lowest_time_step"
                     ] > int(self.freq.seconds / 60):
                         metadata["lowest_time_step"] = int(self.freq.seconds / 60)
-                    await file.write(orjson.dumps(metadata, option=orjson.OPT_INDENT_2).decode())
+
+                    # Atomic commit: write to a per-process temp file then
+                    # os.replace, so a concurrent reader always sees a complete
+                    # document (old or new, never a partial write).
+                    tmp_path = metadata_path.with_name(f"metadata.json.{os.getpid()}.tmp")
+                    async with aiofiles.open(tmp_path, "w") as file:
+                        await file.write(
+                            orjson.dumps(metadata, option=orjson.OPT_INDENT_2).decode()
+                        )
+                    os.replace(tmp_path, metadata_path)
 
                     self.logger.debug("Saved " + entity_id + " to json file")
 
