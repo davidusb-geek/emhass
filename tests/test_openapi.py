@@ -72,5 +72,31 @@ class TestConfigComponent(unittest.TestCase):
             gen.build_config_component(defs)
 
 
+class TestRouteGuard(unittest.TestCase):
+    def test_undocumented_route_raises(self):
+        routes = {("/healthz", "GET"), ("/brand-new", "GET")}
+        curated = {"/healthz": {"GET"}}
+        skip = {"/"}
+        with self.assertRaises(SystemExit):
+            gen.assert_no_undocumented(routes, curated, skip)
+
+    def test_skiplisted_and_curated_ok(self):
+        routes = {("/healthz", "GET"), ("/", "GET")}
+        curated = {"/healthz": {"GET"}}
+        skip = {"/"}
+        gen.assert_no_undocumented(routes, curated, skip)  # no raise
+
+    def test_discovered_routes_returns_pairs(self):
+        routes = gen.discovered_routes()
+        self.assertTrue(all(isinstance(p, tuple) and len(p) == 2 for p in routes))
+        # the curated API routes must be discoverable (proves url_map import works)
+        paths = {p for p, _ in routes}
+        self.assertIn("/api/v1/last-run", paths)
+
+    def test_curated_union_skip_covers_live_routes(self):
+        # the live route set must be fully partitioned by CURATED ∪ SKIP
+        gen.assert_no_undocumented(gen.discovered_routes(), gen.CURATED, gen.SKIP)
+
+
 if __name__ == "__main__":
     unittest.main()

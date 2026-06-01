@@ -6,7 +6,24 @@ Stdlib only. Run: python scripts/generate_openapi.py
 
 import argparse
 import json
+import re
 from pathlib import Path
+
+# HTML/UI + framework routes excluded from the JSON-API contract.
+# `/static/{filename}` is Quart's auto-registered asset endpoint (not an API surface);
+# the others are the browser config/landing/template pages.
+SKIP = {"/", "/index", "/template", "/configuration", "/static/{filename}"}
+
+# path -> set of documented methods (used by both the guard and the path assembly).
+CURATED = {
+    "/get-config": {"GET"},
+    "/get-config/defaults": {"GET"},
+    "/set-config": {"POST"},
+    "/get-json": {"POST"},
+    "/action/{action_name}": {"POST"},
+    "/api/v1/last-run": {"GET"},
+    "/healthz": {"GET"},
+}
 
 _ATOMIC = {
     "string": {"type": "string"},
@@ -67,3 +84,27 @@ def build_config_component(param_defs: dict) -> dict:
                 raise SystemExit(f"generate_openapi: duplicate param key {key!r} across sections")
             props[key] = _input_to_schema(param["input"], param)
     return {"type": "object", "properties": props}
+
+
+def discovered_routes() -> set[tuple[str, str]]:
+    """Return {(path, METHOD)} from the live Quart url_map. Normalises <x> -> {x}."""
+    from emhass.web_server import app
+
+    out: set[tuple[str, str]] = set()
+    for rule in app.url_map.iter_rules():
+        path = re.sub(r"<(?:[^:<>]+:)?([^<>]+)>", r"{\1}", rule.rule)
+        for method in rule.methods or set():
+            if method in ("HEAD", "OPTIONS"):
+                continue
+            out.add((path, method))
+    return out
+
+
+def assert_no_undocumented(routes: set, curated: dict, skip: set) -> None:
+    for path, method in routes:
+        if path in skip:
+            continue
+        if path not in curated or method not in curated[path]:
+            raise SystemExit(
+                f"generate_openapi: undocumented route {method} {path} — add to CURATED or SKIP"
+            )
