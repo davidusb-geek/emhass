@@ -58,7 +58,7 @@ def _input_to_schema(input_str: str, param: dict) -> dict:
     if dv is not None:
         leaf["default"] = dv
     schema = leaf
-    for _ in parts[:-1]:          # one wrap per leading "array"
+    for _ in parts[:-1]:  # one wrap per leading "array"
         schema = {"type": "array", "items": schema}
     if param.get("friendly_name"):
         schema["title"] = param["friendly_name"]
@@ -116,14 +116,12 @@ _LAST_RUN_SCHEMA = _REPO / "docs" / "api" / "v1" / "last-run.schema.json"
 _HEALTHZ_SCHEMA = _REPO / "docs" / "api" / "healthz.schema.json"
 _OUT = _REPO / "src" / "emhass" / "static" / "openapi.json"
 
-_PLAN_OUTPUT_DOC = (
-    "https://github.com/davidusb-geek/emhass/blob/master/docs/plan_output_schema.md"
-)
+_PLAN_OUTPUT_DOC = "https://github.com/davidusb-geek/emhass/blob/master/docs/plan_output_schema.md"
 
 
 def _load_json(path: Path) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))
-    data.pop("$schema", None)   # not meaningful inside an openapi component
+    data.pop("$schema", None)  # not meaningful inside an openapi component
     data.pop("$id", None)
     return data
 
@@ -147,36 +145,91 @@ def build_spec() -> dict:
         return {"content": {"application/json": {"schema": schema}}}
 
     paths = {
-        "/get-config": {"get": {"summary": "Current config", "responses": {
-            "201": {"description": "Config JSON", **json_ct(config_ref)}}}},
-        "/get-config/defaults": {"get": {"summary": "Default config", "responses": {
-            "201": {"description": "Default config JSON", **json_ct(config_ref)}}}},
-        "/set-config": {"post": {"summary": "Save config",
-            "requestBody": json_ct(config_ref),
-            "responses": {"201": {"description": "Saved"},
-                          "400": {"description": "Empty/invalid config"},
-                          "500": {"description": "Save failure"}}}},
-        "/get-json": {"post": {"summary": "Convert legacy YAML config to JSON",
-            "requestBody": {"content": {"text/plain": {"schema": {"type": "string"}}}},
-            "responses": {"201": {"description": "Config JSON", **json_ct(config_ref)},
-                          "400": {"description": "YAML parse failure"},
-                          "500": {"description": "Conversion failure"}}}},
-        "/action/{action_name}": {"post": {"summary": "Run an EMHASS action",
-            "parameters": [{"name": "action_name", "in": "path", "required": True,
-                            "schema": {"type": "string"}}],
-            "requestBody": json_ct({"type": "object", "additionalProperties": True}),
-            "responses": {
-                "201": {"description": "Optimization plan",
+        "/get-config": {
+            "get": {
+                "summary": "Current config",
+                "responses": {"201": {"description": "Config JSON", **json_ct(config_ref)}},
+            }
+        },
+        "/get-config/defaults": {
+            "get": {
+                "summary": "Default config",
+                "responses": {"201": {"description": "Default config JSON", **json_ct(config_ref)}},
+            }
+        },
+        "/set-config": {
+            "post": {
+                "summary": "Save config",
+                "requestBody": json_ct(config_ref),
+                "responses": {
+                    "201": {"description": "Saved"},
+                    "400": {"description": "Empty/invalid config"},
+                    "500": {"description": "Save failure"},
+                },
+            }
+        },
+        "/get-json": {
+            "post": {
+                "summary": "Convert legacy YAML config to JSON",
+                "requestBody": {"content": {"text/plain": {"schema": {"type": "string"}}}},
+                "responses": {
+                    "201": {"description": "Config JSON", **json_ct(config_ref)},
+                    "400": {"description": "YAML parse failure"},
+                    "500": {"description": "Conversion failure"},
+                },
+            }
+        },
+        "/action/{action_name}": {
+            "post": {
+                "summary": "Run an EMHASS action",
+                "parameters": [
+                    {
+                        "name": "action_name",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    }
+                ],
+                "requestBody": json_ct({"type": "object", "additionalProperties": True}),
+                "responses": {
+                    "201": {
+                        "description": "Optimization plan",
                         "content": {"application/json": {"schema": {"type": "object"}}},
-                        "externalDocs": {"description": "Plan output field reference",
-                                         "url": _PLAN_OUTPUT_DOC}},
-                "400": {"description": "Action failure"}}}},
-        "/api/v1/last-run": {"get": {"summary": "Most recent run metadata", "responses": {
-            "200": {"description": "Last-run envelope",
-                    **json_ct({"$ref": "#/components/schemas/LastRun"})}}}},
-        "/healthz": {"get": {"summary": "Liveness/readiness probe", "responses": {
-            "200": {"description": "Ready", **json_ct({"$ref": "#/components/schemas/Healthz"})},
-            "503": {"description": "Not ready", **json_ct({"$ref": "#/components/schemas/Healthz"})}}}},
+                        "externalDocs": {
+                            "description": "Plan output field reference",
+                            "url": _PLAN_OUTPUT_DOC,
+                        },
+                    },
+                    "400": {"description": "Action failure"},
+                },
+            }
+        },
+        "/api/v1/last-run": {
+            "get": {
+                "summary": "Most recent run metadata",
+                "responses": {
+                    "200": {
+                        "description": "Last-run envelope",
+                        **json_ct({"$ref": "#/components/schemas/LastRun"}),
+                    }
+                },
+            }
+        },
+        "/healthz": {
+            "get": {
+                "summary": "Liveness/readiness probe",
+                "responses": {
+                    "200": {
+                        "description": "Ready",
+                        **json_ct({"$ref": "#/components/schemas/Healthz"}),
+                    },
+                    "503": {
+                        "description": "Not ready",
+                        **json_ct({"$ref": "#/components/schemas/Healthz"}),
+                    },
+                },
+            }
+        },
     }
 
     # filter CURATED paths down to what actually exists in url_map (e.g. /healthz pre-AC-4)
