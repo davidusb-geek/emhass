@@ -108,3 +108,93 @@ def assert_no_undocumented(routes: set, curated: dict, skip: set) -> None:
             raise SystemExit(
                 f"generate_openapi: undocumented route {method} {path} — add to CURATED or SKIP"
             )
+
+
+_REPO = Path(__file__).resolve().parents[1]
+_PARAM_DEFS = _REPO / "src" / "emhass" / "static" / "data" / "param_definitions.json"
+_LAST_RUN_SCHEMA = _REPO / "docs" / "api" / "v1" / "last-run.schema.json"
+_HEALTHZ_SCHEMA = _REPO / "docs" / "api" / "healthz.schema.json"
+_OUT = _REPO / "src" / "emhass" / "static" / "openapi.json"
+
+_PLAN_OUTPUT_DOC = (
+    "https://github.com/davidusb-geek/emhass/blob/master/docs/plan_output_schema.md"
+)
+
+
+def _load_json(path: Path) -> dict:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data.pop("$schema", None)   # not meaningful inside an openapi component
+    data.pop("$id", None)
+    return data
+
+
+def _schema_version() -> str:
+    from emhass.command_line import EMHASS_SCHEMA_VERSION
+
+    return EMHASS_SCHEMA_VERSION
+
+
+def build_spec() -> dict:
+    param_defs = json.loads(_PARAM_DEFS.read_text(encoding="utf-8"))
+    components = {
+        "Config": build_config_component(param_defs),
+        "LastRun": _load_json(_LAST_RUN_SCHEMA),
+        "Healthz": _load_json(_HEALTHZ_SCHEMA),
+    }
+    config_ref = {"$ref": "#/components/schemas/Config"}
+
+    def json_ct(schema: dict) -> dict:
+        return {"content": {"application/json": {"schema": schema}}}
+
+    paths = {
+        "/get-config": {"get": {"summary": "Current config", "responses": {
+            "201": {"description": "Config JSON", **json_ct(config_ref)}}}},
+        "/get-config/defaults": {"get": {"summary": "Default config", "responses": {
+            "201": {"description": "Default config JSON", **json_ct(config_ref)}}}},
+        "/set-config": {"post": {"summary": "Save config",
+            "requestBody": json_ct(config_ref),
+            "responses": {"201": {"description": "Saved"},
+                          "400": {"description": "Empty/invalid config"},
+                          "500": {"description": "Save failure"}}}},
+        "/get-json": {"post": {"summary": "Convert legacy YAML config to JSON",
+            "requestBody": {"content": {"text/plain": {"schema": {"type": "string"}}}},
+            "responses": {"201": {"description": "Config JSON", **json_ct(config_ref)},
+                          "400": {"description": "YAML parse failure"},
+                          "500": {"description": "Conversion failure"}}}},
+        "/action/{action_name}": {"post": {"summary": "Run an EMHASS action",
+            "parameters": [{"name": "action_name", "in": "path", "required": True,
+                            "schema": {"type": "string"}}],
+            "requestBody": json_ct({"type": "object", "additionalProperties": True}),
+            "responses": {
+                "201": {"description": "Optimization plan",
+                        "content": {"application/json": {"schema": {"type": "object"}}},
+                        "externalDocs": {"description": "Plan output field reference",
+                                         "url": _PLAN_OUTPUT_DOC}},
+                "400": {"description": "Action failure"}}}},
+        "/api/v1/last-run": {"get": {"summary": "Most recent run metadata", "responses": {
+            "200": {"description": "Last-run envelope",
+                    **json_ct({"$ref": "#/components/schemas/LastRun"})}}}},
+        "/healthz": {"get": {"summary": "Liveness/readiness probe", "responses": {
+            "200": {"description": "Ready", **json_ct({"$ref": "#/components/schemas/Healthz"})},
+            "503": {"description": "Not ready", **json_ct({"$ref": "#/components/schemas/Healthz"})}}}},
+    }
+
+    # filter CURATED paths down to what actually exists in url_map (e.g. /healthz pre-AC-4)
+    live = {p for p, _ in discovered_routes()}
+    paths = {p: v for p, v in paths.items() if p in live}
+
+    return {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "EMHASS API",
+            "version": _schema_version(),
+            "description": (
+                "Machine-readable contract for the EMHASS JSON API. `default` values are "
+                "sourced from param_definitions.json (the maintainer-declared source of "
+                "truth); runtime currently loads config_defaults.json, which is kept aligned "
+                "but not enforced in code."
+            ),
+        },
+        "paths": paths,
+        "components": {"schemas": components},
+    }
