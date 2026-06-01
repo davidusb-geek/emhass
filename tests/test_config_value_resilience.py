@@ -427,3 +427,54 @@ def test_window_entirely_outside_horizon_zeros_mask():
         f"{rp['end_timesteps_of_each_deferrable_load'][0]}] is outside the "
         f"horizon [0, {n}]; got total power = {p_def0_total:.1f} W"
     )
+
+
+# ── Test F (#899): pin must not fire when window is outside horizon ───────────
+
+
+def test_running_single_const_with_window_outside_horizon_stays_feasible():
+    """A currently-running single-constant load whose window is outside the horizon
+    must NOT be pinned ON — pinning forces param_running_lb while the load-active
+    loop deactivates the load, yielding an infeasible MILP (#899).
+
+    Trigger: set_deferrable_load_single_constant[0]=True, def_current_state[0]=True
+    (load was running at the end of the previous MPC horizon), and a window entirely
+    outside [0, n].  The energy and timestep blocks already carry the
+    `k not in window_empty_loads` guard; the pin block did not, so it set
+    param_running_lb[0][:pinned_steps]=1 while param_load_active[0]=0 conflicted.
+
+    After the fix the pin block routes load 0 to its else branch (lb=0, sc=0),
+    the solve stays Optimal, and load 0 is not scheduled.
+    """
+    rp = {
+        "nominal_power_of_deferrable_loads": [3000, 700],
+        "operating_hours_of_each_deferrable_load": [2, 1],
+        # Load 0: window entirely outside the 48-slot horizon
+        "start_timesteps_of_each_deferrable_load": [200, 0],
+        "end_timesteps_of_each_deferrable_load": [220, 0],
+        "set_deferrable_load_single_constant": [True, False],
+        "treat_deferrable_load_as_semi_cont": [False, True],
+        # Load 0 was running at the end of the previous MPC horizon
+        "def_current_state": [True, False],
+    }
+
+    _, rh_conf, opt_conf, pl_conf = _treat(rp)
+
+    n = 48
+    df, p_pv, p_load, ulc, upp = _make_forecast_inputs(rh_conf, n)
+    opt = _make_opt(rh_conf, opt_conf, pl_conf)
+    res = opt.perform_optimization(df, p_pv, p_load, ulc, upp)
+
+    status = res["optim_status"].iloc[0]
+    assert status == "Optimal", (
+        f"Single-const load running with window outside horizon must keep the MILP "
+        f"feasible; got optim_status={status!r}. 'Optimal (Relaxed)' means the MILP "
+        f"went infeasible and fell back to the continuous LP — the #899 bug, where the "
+        f"pin forces param_running_lb while the load is deactivated."
+    )
+
+    p_def0_total = res["P_deferrable0"].values.sum()
+    assert p_def0_total == 0, (
+        f"Load 0 must not be scheduled when its window is outside the horizon; "
+        f"got total power = {p_def0_total:.1f} W"
+    )
