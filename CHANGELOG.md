@@ -5,7 +5,7 @@
 - feat: add runtime_params.json (machine-readable runtime param schema) (@OptimalNothing90)
 - feat: add /healthz liveness/readiness endpoint (@OptimalNothing90)
 - optimization: parameterise battery_*_power_max for cache stability (@BrettLynch123)
-- test(resilience): parametrised stringly-typed guard for optim_conf array params (@OptimalNothing90)
+- test(resilience): parameterised stringly-typed guard for optim_conf array params (@OptimalNothing90)
 - optimization: deactivate deferrables whose [start, end] is entirely outside the horizon (@BrettLynch123)
 - retrieve_hass: fetch HA history concurrently with asyncio.gather (@BrettLynch123)
 - command_line: stop the OptimizationCache invalidating every MPC tick (@BrettLynch123)
