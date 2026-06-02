@@ -99,6 +99,49 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `publish_prefix` use this key to pass a common prefix to all published data. This will add a prefix to the sensor name but also the forecast attribute keys within the sensor.
 
+### Requiring an intermediate battery SOC target (naive-mpc-optim)
+
+By default the battery SOC is only pinned at the start (`soc_init`) and end (`soc_final`) of the horizon, leaving the optimizer free to choose the trajectory in between. Sometimes you want to *guarantee* the battery reaches a given charge level **partway through** the horizon — for example, "make sure the battery is full by the time the cheap window ends, even though it's fine to discharge it afterwards". This is the request in [issue #553](https://github.com/davidusb-geek/emhass/issues/553).
+
+Two optional runtime keys (only used by `naive-mpc-optim`) make this possible:
+
+- `soc_target`: the desired *minimum* SOC as a fraction in `[0, 1]` (NOT percent). It is clamped to `[battery_minimum_state_of_charge, battery_maximum_state_of_charge]`.
+- `soc_target_timestep`: the 0-based horizon timestep by which `soc_target` must be reached. After this step the battery is free to discharge again. Defaults to the last timestep if `soc_target` is given without it.
+
+Both default to *unset* (`None`), in which case nothing changes — the constraint is a no-op and existing behaviour is preserved. The target is a one-sided constraint (`SOC >= soc_target` at that step), so it never forces the battery to discharge.
+
+For example, the following runtime payload tells EMHASS that the battery must reach 100% SOC by horizon step index 14 (the SoC after that step, ~7.5 h into a 30-min-step horizon), while still letting it discharge in the steps after that:
+
+```json
+{
+  "prediction_horizon": 48,
+  "soc_init": 0.30,
+  "soc_target": 1.0,
+  "soc_target_timestep": 14
+}
+```
+
+As an HA `rest_command`:
+
+```yaml
+rest_command:
+  naive_mpc_optim:
+    url: http://localhost:5000/action/naive-mpc-optim
+    method: post
+    content_type: application/json
+    payload: >
+      {
+        "prediction_horizon": 48,
+        "soc_init": {{ states('sensor.battery_soc') | float / 100 }},
+        "soc_target": 1.0,
+        "soc_target_timestep": 14
+      }
+```
+
+```{warning}
+The target must be *reachable* by its timestep. If the requested SOC cannot be achieved in time given `soc_init`, `battery_charge_power_max` and the optimization time step, EMHASS logs a warning and the LP is likely to be **infeasible** (the target is a hard constraint, so it is not silently relaxed). Size `soc_target` / `soc_target_timestep` to what your charge power actually allows (e.g. don't ask for +0.7 SOC in 3 steps if a full charge takes 10). Note too that with the default `set_nodischarge_to_grid: true` a high target can be infeasible if local load is too low to shed the stored energy back down to `soc_final`. `soc_target_timestep` is clamped to `[0, prediction_horizon - 1]`.
+```
+
 ### Passing forecast data
 
 There is a complete dedicated section in the [Forecast](forecasts) section.

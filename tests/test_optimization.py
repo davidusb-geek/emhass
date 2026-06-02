@@ -576,6 +576,201 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             soc_final,
         )
 
+    def test_perform_naive_mpc_optim_intermediate_soc_target(self):
+        """Issue #553: an intermediate ``soc_target`` must be met by
+        ``soc_target_timestep`` while the battery is still free to discharge
+        afterward, and passing no target must leave behaviour unchanged.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        # Flat, equal buy/sell prices -> zero time-arbitrage incentive. With a
+        # lossless battery any charge/discharge round-trip is exactly cost-neutral,
+        # so the unconstrained baseline has no economic reason to move the battery.
+        self.df_input_data_dayahead["unit_load_cost"] = 0.2
+        self.df_input_data_dayahead["unit_prod_price"] = 0.2
+        self.optim_conf.update({"set_use_battery": True})
+        self.optim_conf.update({"number_of_deferrable_loads": 0})
+        self.optim_conf.update({"set_battery_dynamic": False})
+        # A small positive cycle cost makes leaving the battery untouched the
+        # unique baseline optimum (any cycling is then strictly worse), so the
+        # charge seen in the targeted run is unambiguously caused by the floor.
+        self.optim_conf.update({"weight_battery_discharge": 1.0})
+        self.optim_conf.update({"weight_battery_charge": 1.0})
+        # Allow export so the battery can discharge down to soc_final (otherwise
+        # the no-discharge-to-grid default makes shedding 0.8->0.5 infeasible when
+        # local load is low). This keeps the test focused on the intermediate target.
+        self.optim_conf.update({"set_nodischarge_to_grid": False})
+        # Clean, ample battery so a mid-horizon target is reachable and the
+        # SOC trajectory is deterministic (no efficiency losses).
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        prediction_horizon = 10
+        # Deterministic charge-up scenario: start and end low so the
+        # unconstrained baseline has no reason to charge (it stays ~soc_init),
+        # but a mid-horizon target forces a clear charge 0.3->0.9 by step 5 and
+        # back to 0.3 — feasible at 20 kW / 10 kWh / eff 1.0.
+        soc_init = 0.3
+        soc_final = 0.3
+        target_step = 5
+        soc_target = 0.9
+
+        # Baseline (no intermediate target) — establishes the unconstrained SOC.
+        self.opt = self.create_optimization()
+        opt_res_baseline = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            soc_init=soc_init,
+            soc_final=soc_final,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertIn("SOC_opt", opt_res_baseline.columns)
+        soc_baseline_at_step = opt_res_baseline["SOC_opt"].iloc[target_step]
+        # No-op-by-default coverage: with no target and no arbitrage incentive the
+        # baseline leaves the battery on soc_init, well below the target. This is
+        # what proves the floor param (not arbitrage / tie-breaking) drives the
+        # change in the targeted run below.
+        self.assertAlmostEqual(soc_baseline_at_step, soc_init, delta=1e-2)
+        self.assertLess(soc_baseline_at_step, soc_target - 0.2)
+
+        # With intermediate target — SOC at target_step must meet/exceed soc_target.
+        self.opt = self.create_optimization()
+        opt_res_target = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            soc_init=soc_init,
+            soc_final=soc_final,
+            soc_target=soc_target,
+            soc_target_timestep=target_step,
+        )
+        self.assertEqual(self.opt.optim_status, "Optimal")
+        self.assertIn("SOC_opt", opt_res_target.columns)
+        # Lock in the DPP fix: a non-DPP product of two parameters would force
+        # recanonicalisation and flip this to False (this is what catches Fix 1
+        # regressing).
+        self.assertTrue(self.opt.prob.is_dpp())
+        soc_target_at_step = opt_res_target["SOC_opt"].iloc[target_step]
+
+        # 1) The target is enforced at the requested timestep.
+        self.assertGreaterEqual(soc_target_at_step, soc_target - 1e-3)
+        # 2) The constraint actually bit: the targeted run holds clearly more
+        #    charge at the target step than the unconstrained baseline did.
+        self.assertGreaterEqual(soc_target_at_step, soc_baseline_at_step + 0.2)
+        # 3) The battery is still free to discharge afterward: the end-of-horizon
+        #    SOC still lands on soc_final (target does not pin the tail).
+        self.assertLess(
+            np.abs(opt_res_target.loc[opt_res_target.index[-1], "SOC_opt"] - soc_final),
+            1e-2,
+        )
+
+    def test_intermediate_soc_target_clamped_above_max(self):
+        """Issue #553: a soc_target above battery_maximum_state_of_charge is
+        clamped to the ceiling (with a warning) instead of forcing infeasibility.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["unit_load_cost"] = 0.2
+        self.df_input_data_dayahead["unit_prod_price"] = 0.2
+        self.optim_conf.update({"set_use_battery": True})
+        self.optim_conf.update({"number_of_deferrable_loads": 0})
+        self.optim_conf.update({"set_battery_dynamic": False})
+        self.optim_conf.update({"set_nodischarge_to_grid": False})
+        soc_max = 0.8
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": soc_max,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        self.opt = self.create_optimization()
+        with self.assertLogs(level="WARNING") as logs:
+            opt_res = self.opt.perform_naive_mpc_optim(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast,
+                self.p_load_forecast,
+                10,
+                soc_init=0.3,
+                soc_final=0.3,
+                soc_target=1.5,  # absurd: above the 0.8 ceiling
+                soc_target_timestep=5,
+            )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        # Clamped: the target step reaches the ceiling and SOC never exceeds it.
+        self.assertGreaterEqual(opt_res["SOC_opt"].iloc[5], soc_max - 1e-3)
+        self.assertLessEqual(opt_res["SOC_opt"].max(), soc_max + 1e-3)
+        # And the out-of-range request is surfaced to the user.
+        self.assertTrue(
+            any("outside" in line for line in logs.output),
+            msg=f"expected an out-of-range clamp warning, got: {logs.output}",
+        )
+
+    def test_intermediate_soc_target_below_soc_init_is_noop(self):
+        """Issue #553: a soc_target at or below the SoC the battery already holds
+        builds a non-biting floor, so the optimized plan is unchanged vs no target.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["unit_load_cost"] = 0.2
+        self.df_input_data_dayahead["unit_prod_price"] = 0.2
+        self.optim_conf.update({"set_use_battery": True})
+        self.optim_conf.update({"number_of_deferrable_loads": 0})
+        self.optim_conf.update({"set_battery_dynamic": False})
+        self.optim_conf.update({"set_nodischarge_to_grid": False})
+        self.optim_conf.update({"weight_battery_discharge": 1.0})
+        self.optim_conf.update({"weight_battery_charge": 1.0})
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        self.opt = self.create_optimization()
+        opt_res_baseline = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            10,
+            soc_init=0.3,
+            soc_final=0.3,
+        )
+        self.opt = self.create_optimization()
+        opt_res_low_target = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            10,
+            soc_init=0.3,
+            soc_final=0.3,
+            soc_target=0.2,  # below soc_init -> floor never binds
+            soc_target_timestep=5,
+        )
+        # Identical optimized SoC trajectory: the floor imposed nothing.
+        assert_series_equal(
+            opt_res_baseline["SOC_opt"],
+            opt_res_low_target["SOC_opt"],
+            atol=1e-3,
+            check_names=False,
+        )
+
     def test_perform_naive_mpc_optim_weight_scaling(self):
         """
         Regression test: Ensure weights are applied element-wise, not as matrix multiplication.
