@@ -60,7 +60,7 @@ test = [
     # stream_writer argument that aiohttp>=3.13 made required, so the mock-based
     # tests fail under aiohttp 3.13+. Cap aiohttp here (test extra only) until
     # aioresponses ships 3.13 support; production installs stay unpinned.
-    "aiohttp<3.13",
+    "aiohttp<3.15",
 ]
 dev = ["ruff"]
 
