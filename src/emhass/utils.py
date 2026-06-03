@@ -1506,11 +1506,39 @@ async def treat_runtimeparams(
 
         # MPC control case
         if set_type == "naive-mpc-optim":
-            if "prediction_horizon" not in runtimeparams.keys():
+            if (
+                "prediction_horizon" not in runtimeparams.keys()
+                or runtimeparams["prediction_horizon"] is None
+            ):
                 prediction_horizon = 10  # 10 time steps by default
             else:
                 prediction_horizon = runtimeparams["prediction_horizon"]
             params["passed_data"]["prediction_horizon"] = prediction_horizon
+            # Auto-extend the forecast window to cover the requested MPC horizon.
+            # forecast_dates was sized from delta_forecast_daily (default 1 day) above,
+            # before prediction_horizon was known; a longer horizon would otherwise be
+            # silently truncated by the [0:prediction_horizon] slice below, and the
+            # weather/Solcast fetch (which scales its request to the window length)
+            # would only pull 1 day. So grow the window to fit and rebuild it once.
+            steps_per_day = int(24 * 60 / optimization_time_step)
+            required_delta_forecast = max(
+                delta_forecast,
+                -(-int(prediction_horizon) // steps_per_day),  # ceil division
+            )
+            if required_delta_forecast > delta_forecast:
+                logger.info(
+                    "naive-mpc prediction_horizon=%s exceeds the %s-day forecast window; "
+                    "extending delta_forecast_daily to %s day(s) to cover the full horizon "
+                    "and its weather forecast.",
+                    prediction_horizon,
+                    delta_forecast,
+                    required_delta_forecast,
+                )
+                delta_forecast = required_delta_forecast
+                params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(days=delta_forecast)
+                forecast_dates = get_forecast_dates(
+                    optimization_time_step, delta_forecast, time_zone
+                )
             if "soc_init" not in runtimeparams.keys():
                 soc_init = params["plant_conf"]["battery_target_state_of_charge"]
             else:
