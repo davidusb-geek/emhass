@@ -10,7 +10,7 @@
       "get": {
         "summary": "Current config",
         "responses": {
-          "201": {
+          "200": {
             "description": "Config JSON",
             "content": {
               "application/json": {
@@ -27,7 +27,7 @@
       "get": {
         "summary": "Default config",
         "responses": {
-          "201": {
+          "200": {
             "description": "Default config JSON",
             "content": {
               "application/json": {
@@ -53,7 +53,7 @@
           }
         },
         "responses": {
-          "201": {
+          "200": {
             "description": "Saved"
           },
           "400": {
@@ -78,7 +78,7 @@
           }
         },
         "responses": {
-          "201": {
+          "200": {
             "description": "Config JSON",
             "content": {
               "application/json": {
@@ -125,7 +125,7 @@
           }
         },
         "responses": {
-          "201": {
+          "200": {
             "description": "Optimization plan",
             "content": {
               "application/json": {

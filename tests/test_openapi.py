@@ -170,7 +170,7 @@ class TestBuildSpec(unittest.TestCase):
         spec = gen.build_spec()
         action = spec["paths"]["/action/{action_name}"]["post"]
         self.assertIn("plan_output_schema.md", action["externalDocs"]["url"])
-        self.assertNotIn("externalDocs", action["responses"]["201"])
+        self.assertNotIn("externalDocs", action["responses"]["200"])
 
     def test_action_request_is_open_object(self):
         spec = gen.build_spec()
