@@ -2555,6 +2555,20 @@ async def publish_data(
         opt_res_latest = _load_opt_res_latest(input_data_dict, logger, save_data_to_file)
         if opt_res_latest is None:
             return None
+    # A failed/infeasible optimization yields a results frame with only the
+    # optim_status column (see Optimization.perform_optimization); the forecast
+    # and battery columns are absent. Publishing it would crash on the first
+    # lookup (e.g. opt_res_latest["P_Load"]). Surface the failure instead.
+    if "P_Load" not in opt_res_latest.columns:
+        status = "unknown"
+        if "optim_status" in opt_res_latest.columns and not opt_res_latest.empty:
+            status = opt_res_latest["optim_status"].iloc[0]
+        logger.error(
+            "Optimization result is incomplete (status: %s); nothing to publish. "
+            "Run a successful optimization before publishing.",
+            status,
+        )
+        return None
     # Determine Closest Index
     idx_closest = _get_closest_index(input_data_dict["retrieve_hass_conf"], opt_res_latest.index)
     # Create Context
