@@ -152,13 +152,13 @@ def build_spec(routes: set | None = None) -> dict:
         "/get-config": {
             "get": {
                 "summary": "Current config",
-                "responses": {"201": {"description": "Config JSON", **json_ct(config_ref)}},
+                "responses": {"200": {"description": "Config JSON", **json_ct(config_ref)}},
             }
         },
         "/get-config/defaults": {
             "get": {
                 "summary": "Default config",
-                "responses": {"201": {"description": "Default config JSON", **json_ct(config_ref)}},
+                "responses": {"200": {"description": "Default config JSON", **json_ct(config_ref)}},
             }
         },
         "/set-config": {
@@ -166,7 +166,7 @@ def build_spec(routes: set | None = None) -> dict:
                 "summary": "Save config",
                 "requestBody": json_ct(config_ref),
                 "responses": {
-                    "201": {"description": "Saved"},
+                    "200": {"description": "Saved"},
                     "400": {"description": "Empty/invalid config"},
                     "500": {"description": "Save failure"},
                 },
@@ -177,7 +177,7 @@ def build_spec(routes: set | None = None) -> dict:
                 "summary": "Convert legacy YAML config to JSON",
                 "requestBody": {"content": {"text/plain": {"schema": {"type": "string"}}}},
                 "responses": {
-                    "201": {"description": "Config JSON", **json_ct(config_ref)},
+                    "200": {"description": "Config JSON", **json_ct(config_ref)},
                     "400": {"description": "YAML parse failure"},
                     "500": {"description": "Conversion failure"},
                 },
@@ -202,7 +202,7 @@ def build_spec(routes: set | None = None) -> dict:
                 ],
                 "requestBody": json_ct({"type": "object", "additionalProperties": True}),
                 "responses": {
-                    "201": {
+                    "200": {
                         "description": "Optimization plan",
                         "content": {"application/json": {"schema": {"type": "object"}}},
                     },
