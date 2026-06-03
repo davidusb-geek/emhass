@@ -55,7 +55,7 @@ Two values you compute fresh per MPC call:
 
 | Variable | Source | Calculation |
 |----------|--------|-------------|
-| `def_total_hours[2]` | a sensor that reports remaining kWh to deliver | `kWh_remaining / charger_kW`, rounded to whole hours (see *Known limits*) |
+| `def_total_hours[2]` | a sensor that reports remaining kWh to deliver | `kWh_remaining / charger_kW` (fractional hours are fine) |
 | `end_timesteps_of_each_deferrable_load[2]` | departure deadline | `(deadline - now) / optimization_time_step_minutes`, integer |
 
 A Home Assistant `rest_command` template, source-agnostic:
@@ -73,7 +73,7 @@ rest_command:
       {%- set timestep_min = 30 -%}
       {%- set horizon = 48 -%}
       {%- set ev_remaining_kwh = states('sensor.YOUR_EV_REMAINING_KWH') | float -%}
-      {%- set ev_hours = (ev_remaining_kwh / charger_kw) | round(0, 'ceil') | int -%}
+      {%- set ev_hours = (ev_remaining_kwh / charger_kw) | round(2) -%}
       {%- set deadline = today_at("07:00") if now() < today_at("07:00") else today_at("07:00") + timedelta(days=1) -%}
       {%- set departure_minutes = (deadline - now()).total_seconds() / 60 -%}
       {%- set end_step = (departure_minutes / timestep_min) | int -%}
@@ -123,7 +123,7 @@ Replace `switch.YOUR_EV_CHARGER` with the actual control entity for your charger
 
 Read these before designing around the pattern above.
 
-- **Integer hours only.** `operating_hours_of_each_deferrable_load` accepts whole hours, not fractions ([issue #373](https://github.com/davidusb-geek/emhass/issues/373)). With a 30-minute timestep and an 11 kW charger, that means kWh-required is rounded up to the next 11 kWh increment. Reduce the rounding error by using a smaller `optimization_time_step` (e.g. 15 minutes) — but then 48 timesteps becomes 96.
+- **Fractional hours are honoured.** `operating_hours_of_each_deferrable_load` accepts fractional values (e.g. `1.25`); EMHASS targets exactly `nominal_power × hours` of energy ([issue #373](https://github.com/davidusb-geek/emhass/issues/373)), so a smaller `optimization_time_step` is no longer required just for charge-amount precision. A value that isn't a whole number of timesteps is still met exactly on an energy basis; for a single fixed on-block (`set_deferrable_load_single_constant`) prefer a timestep-aligned value or `operating_timesteps_of_each_deferrable_load`.
 - **Power modulation is not supported.** EMHASS schedules the deferrable as either-on-at-nominal-power-or-off per timestep. Modulating chargers (e.g. Tesla 3.6–11 kW continuous) cannot be cleanly expressed as a single deferrable; you would need multiple parallel deferrable slots at different powers, or model only the upper bound.
 - **Mid-session state is not forced.** `def_current_state` flags the load as currently-on for startup-penalty purposes but does not force the optimizer to plan a non-zero power for the first timestep ([issue #605](https://github.com/davidusb-geek/emhass/issues/605)). If you start charging manually mid-window, the optimizer may plan to stop and re-start.
 - **No native vehicle-API integration.** EMHASS does not query the vehicle SOC directly; you provide kWh-remaining via a sensor. The community has seen this gap and discussed approaches in [#789](https://github.com/davidusb-geek/emhass/discussions/789), including a fork by @tomvanacker85 with calendar-driven SOC targets. None of those have been upstreamed.
