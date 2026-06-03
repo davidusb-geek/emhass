@@ -9,6 +9,9 @@ from pathlib import Path
 import pytest
 
 _NODE = shutil.which("node")
+# Node cold-start can be slow on loaded Windows CI runners; 30 s still flaked
+# (test_minus_elements_does_not_crash_on_zero_inputs timed out). Give it headroom.
+_NODE_TIMEOUT_S = 120
 
 # Keys in config_defaults.json with no param_definitions.json entry.
 # These are ML-subsystem parameters not represented in the UI schema.
@@ -210,7 +213,9 @@ def _run_node(script: str) -> subprocess.CompletedProcess:
         f.write(script)
         tmp = f.name
     try:
-        return subprocess.run([_NODE, tmp], capture_output=True, text=True, timeout=30)
+        return subprocess.run(
+            [_NODE, tmp], capture_output=True, text=True, timeout=_NODE_TIMEOUT_S
+        )
     finally:
         os.unlink(tmp)
 
