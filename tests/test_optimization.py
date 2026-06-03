@@ -4787,32 +4787,39 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         """
         nominal = self.optim_conf["nominal_power_of_deferrable_loads"][0]
         timestep_h = self.retrieve_hass_conf["optimization_time_step"].seconds / 3600
-        # 2.5 h: non-integer, timestep-aligned. 1.25 h: sub-timestep fraction.
+        # Counterfactual margin tied to the problem scale rather than a magic number:
+        # 10% of one timestep's energy. Far above solver noise (~1e-3 Wh) yet far below
+        # the >=750 Wh gap from either test value to its nearest integer-hour schedule,
+        # so it stays valid if the timestep or nominal power are changed.
+        integer_margin = 0.1 * nominal * timestep_h
+        # 2.5 h: non-integer, timestep-aligned. 1.25 h: sub-timestep fraction. subTest
+        # reports each regime independently so a failure pinpoints which one broke.
         for fractional_hours in (2.5, 1.25):
-            self.optim_conf.update(
-                {"operating_hours_of_each_deferrable_load": [fractional_hours, 0]}
-            )
-            self.opt = self.create_optimization()
-            self.df_input_data_dayahead = self.prepare_forecast_data()
-            opt_res = self.opt.perform_dayahead_forecast_optim(
-                self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
-            )
-            # A sub-timestep fraction (1.25 h at a 30-min step) makes the strict MILP
-            # infeasible, so EMHASS falls back to the relaxed LP ("Optimal (Relaxed)").
-            # The target-energy equality is enforced on both solve paths, so the energy
-            # assertion below still holds; VALID_OPTIMAL_STATUSES accepts both statuses.
-            self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
-            # Exact fractional energy = nominal_power * fractional_hours.
-            self.assert_energy_constraint(opt_res["P_deferrable0"], fractional_hours)
-            # Discriminating counterfactual: energy must not match integer-rounded hours.
-            actual_energy = opt_res["P_deferrable0"].sum() * timestep_h
-            for integer_hours in (int(fractional_hours), int(fractional_hours) + 1):
-                self.assertGreater(
-                    abs(actual_energy - nominal * integer_hours),
-                    1.0,
-                    f"Energy {actual_energy:.1f} Wh matches integer {integer_hours} h "
-                    "-> fractional hours not honoured",
+            with self.subTest(fractional_hours=fractional_hours):
+                self.optim_conf.update(
+                    {"operating_hours_of_each_deferrable_load": [fractional_hours, 0]}
                 )
+                self.opt = self.create_optimization()
+                self.df_input_data_dayahead = self.prepare_forecast_data()
+                opt_res = self.opt.perform_dayahead_forecast_optim(
+                    self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
+                )
+                # A sub-timestep fraction (1.25 h at a 30-min step) makes the strict MILP
+                # infeasible, so EMHASS falls back to the relaxed LP ("Optimal (Relaxed)").
+                # The target-energy equality is enforced on both solve paths, so the energy
+                # assertion below still holds; VALID_OPTIMAL_STATUSES accepts both statuses.
+                self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+                # Exact fractional energy = nominal_power * fractional_hours.
+                self.assert_energy_constraint(opt_res["P_deferrable0"], fractional_hours)
+                # Discriminating counterfactual: energy must not match integer-rounded hours.
+                actual_energy = opt_res["P_deferrable0"].sum() * timestep_h
+                for integer_hours in (int(fractional_hours), int(fractional_hours) + 1):
+                    self.assertGreater(
+                        abs(actual_energy - nominal * integer_hours),
+                        integer_margin,
+                        f"Energy {actual_energy:.1f} Wh matches integer {integer_hours} h "
+                        "-> fractional hours not honoured",
+                    )
 
     def test_deferrable_load_group_shared_power(self):
         """Test that shared power budget constraint limits combined power of grouped loads."""
