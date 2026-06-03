@@ -492,8 +492,8 @@
     },
     "operating_hours_of_each_deferrable_load": {
       "friendly_name": "Deferrable load operating hours",
-      "Description": "The total number of hours that each deferrable load should operate",
-      "input": "array.int",
+      "Description": "The total number of hours that each deferrable load should operate. Fractional values are accepted (e.g. 4.5) and scheduled as the exact nominal_power * hours of energy; for control finer than the optimization timestep use operating_timesteps_of_each_deferrable_load.",
+      "input": "array.float",
       "default_value": 0,
       "unit": "h"
     },

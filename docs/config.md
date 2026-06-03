@@ -61,7 +61,7 @@ These are the parameters needed to properly define the optimization problem.
 - `nominal_power_of_deferrable_loads`: The nominal power for each deferrable load in Watts. This is a list with a number of elements consistent with the number of deferrable loads defined before. For example:
 	- 3000
 	- 750
-- `operating_hours_of_each_deferrable_load`: The total number of hours that each deferrable load should operate. For example:
+- `operating_hours_of_each_deferrable_load`: The total number of hours that each deferrable load should operate. Fractional values are accepted (e.g. `4.5`); the optimizer schedules the exact `nominal_power × hours` of energy. For control finer than the optimization timestep you can also pass `operating_timesteps_of_each_deferrable_load`. For example:
 	- 5
 	- 8
 - `start_timesteps_of_each_deferrable_load`: A list of integers defining the **earliest time step index** from which each deferrable load is allowed to start consuming power.
