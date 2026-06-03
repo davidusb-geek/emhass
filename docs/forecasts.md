@@ -52,6 +52,23 @@ curl -i -H "Content-Type:application/json" -X POST -d '{
 }' http://localhost:5000/action/dayahead-optim
 ```
 
+### Multi-day Solcast forecasts for longer MPC horizons
+
+When `weather_forecast_method: solcast` is set and a `prediction_horizon` longer than one day is passed to `naive-mpc-optim`, EMHASS automatically extends the Solcast forecast window to cover the full horizon. The Solcast API request scales its `hours=` parameter accordingly, so no extra configuration is needed — simply pass the desired `prediction_horizon` at runtime:
+
+```bash
+# Run a 36-hour naive-MPC with a native Solcast forecast (no manual delta_forecast_daily required)
+curl -i -H "Content-Type:application/json" -X POST -d '{
+    "prediction_horizon": 72,
+    "solcast_rooftop_id": "<your_system_id>",
+    "solcast_api_key": "<your_secret_api_key>"
+}' http://localhost:5000/action/naive-mpc-optim
+```
+
+Solcast returns a multi-day forecast (several days at 30-minute resolution), so a 36-hour horizon is comfortably within range; on the free hobbyist tier the practical limit is the daily API-call quota rather than the forecast length. If a `prediction_horizon` ever runs past the end of the data Solcast returns, those trailing steps are zero-filled (PV set to zero), so longer horizons are still handled safely.
+
+When the horizon auto-extends, any forecast passed as a runtime list (`weather_forecast_method: list`, `load_power_forecast`, `load_cost_forecast`, or `prod_price_forecast`) must cover the full `prediction_horizon` steps; a shorter list is rejected with an error rather than being silently truncated to one day.
+
 ### solar.forecast 
 
 A third method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the PV peak installed power in kW) that should be passed at runtime. This will be using the free public Solar.Forecast account with 12 API requests per hour, per IP, and 1h data resolution. As with Solcast, there are paid account services that may result in better forecasts.
