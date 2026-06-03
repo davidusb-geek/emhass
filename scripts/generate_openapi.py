@@ -86,13 +86,18 @@ def build_config_component(param_defs: dict) -> dict:
     return {"type": "object", "properties": props}
 
 
+def _normalise_path(rule: str) -> str:
+    """Convert a Werkzeug rule to OpenAPI path style: ``<x>`` / ``<conv:x>`` -> ``{x}``."""
+    return re.sub(r"<(?:[^:<>]+:)?([^<>]+)>", r"{\1}", rule)
+
+
 def discovered_routes() -> set[tuple[str, str]]:
     """Return {(path, METHOD)} from the live Quart url_map. Normalises <x> -> {x}."""
     from emhass.web_server import app
 
     out: set[tuple[str, str]] = set()
     for rule in app.url_map.iter_rules():
-        path = re.sub(r"<(?:[^:<>]+:)?([^<>]+)>", r"{\1}", rule.rule)
+        path = _normalise_path(rule.rule)
         for method in rule.methods or set():
             if method in ("HEAD", "OPTIONS"):
                 continue

@@ -140,8 +140,20 @@ class TestRouteGuard(unittest.TestCase):
         # the live route set must be fully partitioned by CURATED ∪ SKIP
         gen.assert_no_undocumented(gen.discovered_routes(), gen.CURATED, gen.SKIP)
 
+    def test_normalise_path_converts_converters_and_args(self):
+        self.assertEqual(gen._normalise_path("/action/<action_name>"), "/action/{action_name}")
+        self.assertEqual(gen._normalise_path("/action/<int:action_id>"), "/action/{action_id}")
+        self.assertEqual(gen._normalise_path("/static/<path:filename>"), "/static/{filename}")
+        self.assertEqual(gen._normalise_path("/healthz"), "/healthz")  # no params untouched
+
 
 class TestBuildSpec(unittest.TestCase):
+    def test_build_spec_filters_paths_to_live_routes(self):
+        # only routes present in the passed-in live set survive; other curated paths drop
+        spec = gen.build_spec(routes={("/get-config", "GET"), ("/healthz", "GET")})
+        self.assertEqual(set(spec["paths"]), {"/get-config", "/healthz"})
+        self.assertNotIn("/get-json", spec["paths"])
+
     def test_spec_has_core_shape_and_curated_paths(self):
         spec = gen.build_spec()
         self.assertEqual(spec["openapi"], "3.1.0")
@@ -182,6 +194,20 @@ class TestBuildSpec(unittest.TestCase):
 
 class TestOpenapiArtifact(unittest.TestCase):
     OUT = REPO_ROOT / "src" / "emhass" / "static" / "openapi.json"
+
+    def test_load_json_strips_schema_and_id(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.schema.json"
+            p.write_text(
+                json.dumps({"$schema": "h", "$id": "i", "type": "object", "foo": 1}),
+                encoding="utf-8",
+            )
+            loaded = gen._load_json(p)
+        self.assertNotIn("$schema", loaded)
+        self.assertNotIn("$id", loaded)
+        self.assertEqual(loaded["foo"], 1)  # real content preserved
 
     def test_committed_file_is_valid(self):
         self.assertTrue(self.OUT.exists(), f"missing {self.OUT} — run scripts/generate_openapi.py")
