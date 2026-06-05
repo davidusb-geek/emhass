@@ -1560,8 +1560,8 @@ async def treat_runtimeparams(
             forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
         else:
             params["passed_data"]["prediction_horizon"] = None
-            params["passed_data"]["soc_init"] = None
-            params["passed_data"]["soc_final"] = None
+            params["passed_data"]["soc_init"] = runtimeparams.get("soc_init")
+            params["passed_data"]["soc_final"] = runtimeparams.get("soc_final")
 
         # Parsing the thermal model parameters
         # Load the default config
