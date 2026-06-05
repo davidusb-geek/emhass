@@ -3650,6 +3650,7 @@ class Optimization:
         df_input_data: pd.DataFrame,
         p_pv: pd.Series,
         p_load: pd.Series,
+        soc_init: float | None = None,
         stage_times: dict[str, float] | None = None,
     ) -> pd.DataFrame:
         r"""
@@ -3671,7 +3672,7 @@ class Optimization:
         :rtype: pandas.DataFrame
 
         """
-        self.logger.info("Perform optimization for the day-ahead")
+        self.logger.info(f"Perform optimization for the day-ahead with soc_init: {soc_init}")
 
         # Extract cost arrays (ensure they are flat numpy arrays)
         unit_load_cost = df_input_data[self.var_load_cost].values
@@ -3685,6 +3686,7 @@ class Optimization:
             p_load.values.ravel(),
             unit_load_cost,
             unit_prod_price,
+            soc_init=soc_init,
             stage_times=stage_times,
         )
         return self.opt_res
