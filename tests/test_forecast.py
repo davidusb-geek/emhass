@@ -524,6 +524,143 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 emhass_conf["data_path"] / "weather_forecast_data.pkl",
             )
 
+    # Test #404: Solcast multi-day fixture proves day-2 PV is real, not zero-filled
+    async def test_get_weather_forecast_solcast_multiday_mock(self):
+        """Regression test for issue #404 (multi-day Solcast horizon).
+
+        The fixture ``data/test_response_solcast_multiday.json`` is the real
+        attachment from the issue report: 97 entries, 30-min cadence,
+        2024-12-26T17:30Z → 2024-12-28T17:30Z (≈48 h of Solcast data).
+
+        With ``delta_forecast_daily=2`` the ``forecast_dates`` window is 96
+        slots (2 days × 48 half-hours).  The test pins the clock so the window
+        aligns with the fixture, then asserts:
+          (a) the returned DataFrame has exactly 96 rows (no truncation), and
+          (b) day-2 PV values (rows 48–95) are non-zero — proving the code
+              returns real Solcast data for the second day rather than zeros.
+        """
+        # --- 1. Save and rename any pre-existing weather cache ---
+        if os.path.isfile(emhass_conf["data_path"] / "weather_forecast_data.pkl"):
+            os.rename(
+                emhass_conf["data_path"] / "weather_forecast_data.pkl",
+                emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
+            )
+
+        # --- 2. Build a fresh Forecast with delta_forecast_daily=2 ---
+        params = await TestForecast.get_test_params()
+        params["passed_data"] = {
+            "weather_forecast_cache": False,
+            "weather_forecast_cache_only": False,
+        }
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        optim_conf["delta_forecast_daily"] = pd.Timedelta(days=2)
+
+        fcst = Forecast(
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            params_json,
+            emhass_conf,
+            logger,
+            get_data_from_file=True,
+        )
+
+        # --- 3. PIN THE CLOCK ---
+        # forecast.py builds forecast_dates from pd.Timestamp.now(tz=time_zone).
+        # The fixture covers 2024-12-26T17:30Z → 2024-12-28T17:30Z.  We
+        # directly overwrite forecast_dates (same technique as _pin_forecast_to_date
+        # in the DST tests) so the window is fully inside the fixture range.
+        #
+        # Pinned start: 2024-12-26T17:30:00 Europe/Paris = 2024-12-26T16:30:00Z
+        # Window end  : 2024-12-28T17:30:00 Europe/Paris = 2024-12-28T16:30:00Z
+        # Day-2 solar daytime is 2024-12-28T08:30Z–16:00Z → indices ~64–95
+        pinned_start = pd.Timestamp("2024-12-26 17:30:00", tz=fcst.time_zone)
+        freq = fcst.freq  # 30 min
+        pinned_end = pinned_start + pd.DateOffset(days=2)
+        pinned_dates = (
+            pd.date_range(
+                start=pinned_start,
+                end=pinned_end - freq,
+                freq=freq,
+                tz=fcst.time_zone,
+            )
+            .tz_convert("utc")
+            .round(freq, ambiguous="infer", nonexistent="shift_forward")
+            .tz_convert(fcst.time_zone)
+        )
+        fcst.start_forecast = pinned_start
+        fcst.end_forecast = pinned_end
+        fcst.forecast_dates = pinned_dates
+        fcst.forecast_dates_tz = pinned_dates
+
+        # --- 4. Configure Solcast credentials ---
+        fcst.retrieve_hass_conf["solcast_api_key"] = "123456"
+        fcst.retrieve_hass_conf["solcast_rooftop_id"] = "123456"
+
+        # --- 5. Load the fixture ---
+        fixture_path = str(emhass_conf["data_path"] / "test_response_solcast_multiday.json")
+        with open(fixture_path, "rb") as f:
+            solcast_data = orjson.loads(f.read())
+
+        # --- 7. Mock with a REGEX so we're robust to future URL changes ---
+        # Also patch _solcast_rate_limit_ok to bypass the daily API-call counter
+        # (counter persists on disk across test runs; without the patch the test
+        # would fail whenever it runs after the counter hits its 8-call cap).
+        from unittest.mock import patch
+
+        with (
+            patch.object(fcst, "_solcast_rate_limit_ok", return_value=True),
+            aioresponses() as mocked,
+        ):
+            mocked.get(
+                re.compile(r"https://api\.solcast\.com\.au/.*"),
+                payload=solcast_data,
+            )
+
+            df_result = await fcst.get_weather_forecast(method="solcast")
+
+        # --- 9. ASSERT (a): no truncation — full 2-day window returned ---
+        self.assertIsInstance(df_result, pd.DataFrame)
+        self.assertEqual(
+            len(df_result),
+            96,
+            msg=f"Expected 96 rows (2-day window); got {len(df_result)}",
+        )
+
+        # --- 10. ASSERT (b): day-2 values are real Solcast data, not zeros ---
+        # Day-2 slot range: indices 48–95 of forecast_dates
+        # The fixture has Dec 28 solar daytime (08:30Z–16:00Z):
+        #   pv_estimate 0.0114 → 0.1800 → ... → 0.0014 kW (×1000 = W)
+        # Those timestamps map into the second half of our 48-h window.
+        day2_pv = df_result.iloc[48:]["yhat"]
+        day2_sum = day2_pv.sum()
+        self.assertGreater(
+            day2_sum,
+            0.0,
+            msg=(
+                f"Day-2 PV sum is {day2_sum:.1f} W — all zeros means the window "
+                "did not overlap the fixture (clock-pin failure or truncation bug)."
+            ),
+        )
+        # Also assert at least one specific Dec-28 daytime slot is positive.
+        # forecast_dates[80] = 2024-12-28T08:30:00Z = fixture entry pv_estimate=0.0114 → 11.4 W
+        ts_dec28_0830z = pd.Timestamp("2024-12-28 08:30:00", tz="UTC").tz_convert(fcst.time_zone)
+        self.assertIn(ts_dec28_0830z, df_result.index, msg="Dec-28 08:30Z slot missing from index")
+        pv_dec28_0830 = df_result.loc[ts_dec28_0830z, "yhat"]
+        self.assertGreater(
+            pv_dec28_0830,
+            0.0,
+            msg=f"Dec-28 08:30Z PV expected >0 W; got {pv_dec28_0830} W",
+        )
+
+        # --- 11. Restore weather cache if it existed ---
+        if os.path.isfile(emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"):
+            os.rename(
+                emhass_conf["data_path"] / "temp_weather_forecast_data.pkl",
+                emhass_conf["data_path"] / "weather_forecast_data.pkl",
+            )
+
     # Test output weather forecast using Forecast.Solar with mock get request data
     async def test_get_weather_forecast_solarforecast_method_mock(self):
         test_data_path = str(
@@ -881,6 +1018,51 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         fcst, _, _ = await self._build_longer_list_forecast(list_length=3 * 48 + 2)
         self._pin_forecast_to_date(fcst, "2025-10-24 00:00:00")
         await self._assert_longer_lists_forecast(fcst, expected_last=3 * 48 + 2)
+
+    # Guard regression: _get_weather_list / _get_load_forecast_list must not crash on None input
+    async def test_get_weather_list_none_does_not_crash(self):
+        """Before the None-guard, passing pv_power_forecast=None raised:
+        TypeError: object of type 'NoneType' has no len()
+        The guard must return None/falsy without raising."""
+        params = await TestForecast.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        # Set prediction_horizon=72 so the guard cannot blame a short list
+        params["passed_data"] = {
+            "pv_power_forecast": None,
+            "load_power_forecast": None,
+            "load_cost_forecast": None,
+            "prod_price_forecast": None,
+            "prediction_horizon": 72,
+        }
+        params_json = orjson.dumps(params).decode("utf-8")
+        fcst = Forecast(
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            params_json,
+            emhass_conf,
+            logger,
+            get_data_from_file=True,
+        )
+        # Must not raise; must return falsy (None)
+        try:
+            result = await fcst.get_weather_forecast(method="list")
+        except TypeError as exc:
+            self.fail(f"get_weather_forecast(method='list') raised TypeError on None input: {exc}")
+        self.assertFalse(
+            result is not None and (hasattr(result, "__len__") and len(result) > 0),
+            "Expected falsy/None result when pv_power_forecast=None",
+        )
+        # Same guard for load forecast
+        try:
+            load_result = await fcst.get_load_forecast(method="list")
+        except TypeError as exc:
+            self.fail(f"get_load_forecast(method='list') raised TypeError on None input: {exc}")
+        self.assertFalse(
+            load_result is not None and (hasattr(load_result, "__len__") and len(load_result) > 0),
+            "Expected falsy/None result when load_power_forecast=None",
+        )
 
     # Test output values of weather forecast using passed runtime lists and saved sensor datalf):
     async def test_get_forecasts_with_lists_special_case(self):
