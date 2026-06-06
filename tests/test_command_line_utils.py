@@ -2075,6 +2075,26 @@ class TestSchemaVersion(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.attrs["emhass_schema_version"], EMHASS_SCHEMA_VERSION)
 
 
+class TestPublishInfeasibleGuard(unittest.IsolatedAsyncioTestCase):
+    """Regression test for #875.
+
+    When the optimization comes back infeasible, perform_optimization returns a
+    frame containing only the optim_status column. publish_data used to crash with
+    KeyError: 'P_Load' (reported by g1za and ztega). It should now log and return
+    None instead.
+    """
+
+    async def test_publish_data_infeasible_returns_none(self):
+        idx = pd.date_range("2024-01-01", periods=3, freq="30min", tz="UTC")
+        infeasible_res = pd.DataFrame({"optim_status": ["Infeasible"] * 3}, index=idx)
+        with patch(
+            "emhass.command_line._get_params",
+            return_value={"passed_data": {"publish_prefix": ""}},
+        ):
+            result = await publish_data({}, logger, opt_res_latest=infeasible_res)
+        self.assertIsNone(result)
+
+
 class TestOptimizationCache(unittest.TestCase):
     """Unit tests for the OptimizationCache warm-starting functionality."""
 
