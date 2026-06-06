@@ -625,7 +625,7 @@ class Forecast:
         """Helper to retrieve weather data from a passed list."""
         data_list = self.params["passed_data"]["pv_power_forecast"]
         forecast_dates = self.forecast_dates_tz
-        if (
+        if data_list is None or (
             len(data_list) < len(forecast_dates)
             and self.params["passed_data"]["prediction_horizon"] is None
         ):
@@ -1568,7 +1568,7 @@ class Forecast:
     def _get_load_forecast_list(self) -> pd.DataFrame:
         """Helper to retrieve load data from a passed list."""
         data_list = self.params["passed_data"]["load_power_forecast"]
-        if (
+        if data_list is None or (
             len(data_list) < len(self.forecast_dates)
             and self.params["passed_data"]["prediction_horizon"] is None
         ):

@@ -168,7 +168,7 @@
     },
     "delta_forecast_daily": {
       "friendly_name": "Number of forecasted days",
-      "Description": "The number of days for forecasted data. Defaults to 1.",
+      "Description": "The number of days for forecasted data; can be overridden at runtime via runtimeparams. Defaults to 1. For naive-mpc, the forecast window is now extended automatically to cover a longer prediction_horizon, so this parameter usually need not be set manually for multi-day MPC runs.",
       "input": "int",
       "default_value": 1,
       "unit": "days"
