@@ -1,3 +1,4 @@
+import copy
 import pathlib
 import unittest
 
@@ -80,3 +81,44 @@ class TestDefaultsSmoke(unittest.IsolatedAsyncioTestCase):
             emhass_conf,
         )
         self._build_and_run(retrieve_hass_conf, optim_conf, plant_conf)
+
+    def _run_hybrid_status(self, ac_output_max):
+        """Run a hybrid-inverter optimization with PV present; return optim_status."""
+        plant_conf = copy.deepcopy(self.plant_conf)
+        plant_conf["inverter_is_hybrid"] = True
+        plant_conf["inverter_ac_output_max"] = ac_output_max
+        plant_conf["inverter_ac_input_max"] = ac_output_max
+        n = 48
+        freq = self.retrieve_hass_conf["optimization_time_step"]
+        tz = self.retrieve_hass_conf["time_zone"]
+        idx = pd.date_range("2024-01-01", periods=n, freq=freq, tz=tz)
+        p_pv = np.full(n, 3000.0)
+        p_load = np.full(n, 1000.0)
+        ulc = np.full(n, 0.2)
+        upp = np.full(n, 0.1)
+        df = pd.DataFrame({_VAR_LOAD_COST: ulc, _VAR_PROD_PRICE: upp}, index=idx)
+        opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            plant_conf,
+            _VAR_LOAD_COST,
+            _VAR_PROD_PRICE,
+            "profit",
+            emhass_conf,
+            logger,
+        )
+        res = opt.perform_optimization(df, p_pv, p_load, ulc, upp)
+        return res["optim_status"].iloc[0]
+
+    def test_hybrid_inverter_feasible_on_default_ac_output_max(self):
+        """Regression for #875: the default inverter_ac_output_max must let a hybrid
+        inverter solve. It regressed to 0 in the #830 config alignment, which caps
+        hybrid AC output at 0 W, so any PV has nowhere to go and the solve is infeasible.
+        """
+        status = self._run_hybrid_status(self.plant_conf["inverter_ac_output_max"])
+        self.assertIn("Optimal", status)
+
+    def test_hybrid_inverter_infeasible_when_ac_output_max_zero(self):
+        """Locks the failure mode: ac_output_max=0 caps hybrid AC output at 0 W."""
+        status = self._run_hybrid_status(0)
+        self.assertNotIn("Optimal", status)

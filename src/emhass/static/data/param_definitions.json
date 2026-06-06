@@ -249,14 +249,14 @@
       "friendly_name": "Max hybrid inverter AC output power",
       "Description": "Maximum hybrid inverter output power from combined PV and battery discharge.",
       "input": "int",
-      "default_value": 0,
+      "default_value": 5000,
       "unit": "W"
     },
     "inverter_ac_input_max": {
       "friendly_name": "Max hybrid inverter AC input power",
       "Description": "Maximum hybrid inverter input power from grid to charge battery.",
       "input": "int",
-      "default_value": 0,
+      "default_value": 5000,
       "unit": "W"
     },
     "inverter_efficiency_dc_ac": {
