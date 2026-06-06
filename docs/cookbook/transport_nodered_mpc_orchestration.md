@@ -32,7 +32,7 @@ Reference table of the runtime params accepted by `treat_runtimeparams` that thi
 
 | Field | Type | Purpose |
 |---|---|---|
-| `operating_hours_of_each_deferrable_load` | `list[int]` | hours each deferrable should run |
+| `operating_hours_of_each_deferrable_load` | `list[float]` | hours each deferrable should run (fractional allowed) |
 | `start_timesteps_of_each_deferrable_load` | `list[int]` | earliest allowed step per deferrable |
 | `end_timesteps_of_each_deferrable_load` | `list[int]` | latest allowed step per deferrable |
 | `load_cost_forecast` | `list[float]` | per-timestep tariff for load |
