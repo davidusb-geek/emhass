@@ -1226,6 +1226,7 @@ async def treat_runtimeparams(
 
     # Some default data needed
     custom_deferrable_forecast_id = []
+    custom_deferrable_state_id = []
     custom_predicted_temperature_id = []
     custom_heating_demand_id = []
     for k in range(params["optim_conf"]["number_of_deferrable_loads"]):
@@ -1235,6 +1236,14 @@ async def treat_runtimeparams(
                 "device_class": "power",
                 "unit_of_measurement": "W",
                 "friendly_name": f"Deferrable Load {k}",
+            }
+        )
+        custom_deferrable_state_id.append(
+            {
+                "entity_id": f"sensor.p_deferrable{k}_state",
+                "device_class": "enum",
+                "unit_of_measurement": "",
+                "friendly_name": f"Deferrable Load {k} Command",
             }
         )
         custom_predicted_temperature_id.append(
@@ -1321,6 +1330,7 @@ async def treat_runtimeparams(
             "friendly_name": "Unit Prod Price",
         },
         "custom_deferrable_forecast_id": custom_deferrable_forecast_id,
+        "custom_deferrable_state_id": custom_deferrable_state_id,
         "custom_predicted_temperature_id": custom_predicted_temperature_id,
         "custom_heating_demand_id": custom_heating_demand_id,
         "publish_prefix": "",
