@@ -51,6 +51,16 @@ header_accept = "application/json"
 error_msg_list_not_long_enough = "Passed data from passed list is not long enough"
 error_msg_method_not_valid = "Passed method is not valid"
 
+# Per-request timeout (seconds) for the Open-Meteo HTTP fetch. Without an
+# explicit timeout aiohttp's default is long, so a slow/hanging Open-Meteo
+# response could stall the whole EMHASS optimisation cycle.
+open_meteo_request_timeout = 12
+# Retry policy for the Open-Meteo fetch. Retries are ONLY attempted on a cold
+# start (no usable cache exists yet); when a cache is present a single attempt
+# is made and any failure falls back to the cache immediately (no added delay).
+open_meteo_max_attempts = 3
+open_meteo_backoff_seconds = (1, 2, 4)
+
 
 class Forecast:
     r"""
@@ -334,28 +344,56 @@ class Forecast:
                 + quote(str(self.time_zone), safe="")
                 + "&timeformat=unixtime"
             )
-            try:
-                self.logger.debug("Fetching data from Open-Meteo using URL: %s", url)
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, headers=headers) as response:
-                        self.logger.debug("Returned HTTP status code: %s", response.status)
-                        response.raise_for_status()
-                        """import bz2 # Uncomment to save a serialized data for tests
-                        import _pickle as cPickle
-                        with bz2.BZ2File("data/test_response_openmeteo_get_method.pbz2", "w") as f:
-                            cPickle.dump(response, f)"""
-                        data = await response.json()
+            # Retry only on a cold start (no usable cache to fall back on). When a
+            # cache already exists we keep a single attempt and fall back to it
+            # immediately on failure, so the steady-state path adds no delay.
+            has_cache = data is not None
+            max_attempts = 1 if has_cache else open_meteo_max_attempts
+            # A bounded per-request timeout so a slow/hanging Open-Meteo response
+            # cannot stall the EMHASS optimisation cycle.
+            timeout = aiohttp.ClientTimeout(total=open_meteo_request_timeout)
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    self.logger.debug("Fetching data from Open-Meteo using URL: %s", url)
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.get(url, headers=headers) as response:
+                            self.logger.debug("Returned HTTP status code: %s", response.status)
+                            response.raise_for_status()
+                            """import bz2 # Uncomment to save a serialized data for tests
+                            import _pickle as cPickle
+                            with bz2.BZ2File("data/test_response_openmeteo_get_method.pbz2", "w") as f:
+                                cPickle.dump(response, f)"""
+                            data = await response.json()
+                            self.logger.info(
+                                "Saving response in Open-Meteo JSON cache file: %s",
+                                json_path,
+                            )
+                            async with aiofiles.open(json_path, "w") as json_file:
+                                content = orjson.dumps(data, option=orjson.OPT_INDENT_2).decode()
+                                await json_file.write(content)
+                    # Successful fetch; stop retrying.
+                    break
+                except (TimeoutError, aiohttp.ClientError):
+                    self.logger.error(
+                        "Failed to fetch weather forecast from Open-Meteo (attempt %s/%s)",
+                        attempt,
+                        max_attempts,
+                        exc_info=True,
+                    )
+                    if attempt < max_attempts:
+                        # Cold-start retry path only: back off, then try again.
+                        backoff = open_meteo_backoff_seconds[
+                            min(attempt - 1, len(open_meteo_backoff_seconds) - 1)
+                        ]
                         self.logger.info(
-                            "Saving response in Open-Meteo JSON cache file: %s",
-                            json_path,
+                            "Retrying Open-Meteo fetch in %ss (no usable cache yet)",
+                            backoff,
                         )
-                        async with aiofiles.open(json_path, "w") as json_file:
-                            content = orjson.dumps(data, option=orjson.OPT_INDENT_2).decode()
-                            await json_file.write(content)
-            except aiohttp.ClientError:
-                self.logger.error("Failed to fetch weather forecast from Open-Meteo", exc_info=True)
-                if data is not None:
-                    self.logger.warning("Returning old cached data until next Open-Meteo attempt")
+                        await asyncio.sleep(backoff)
+                    elif has_cache:
+                        self.logger.warning(
+                            "Returning old cached data until next Open-Meteo attempt"
+                        )
 
         return data
 
