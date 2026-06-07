@@ -3053,6 +3053,10 @@ def check_def_loads(
     """
     Check parameter lists with deferrable loads number, if they do not match, enlarge to fit.
 
+    A missing key or ``None`` value is filled with ``default`` for every load. ``parameter``
+    is updated in place (and the same list returned), matching how every call site reassigns
+    ``params["optim_conf"][name] = check_def_loads(...)``.
+
     :param num_def_loads: Total number deferrable loads
     :type num_def_loads: int
     :param parameter: parameter config dict containing paramater
@@ -3073,7 +3077,7 @@ def check_def_loads(
     if current is None:
         parameter[parameter_name] = [default] * num_def_loads
         return parameter[parameter_name]
-    if type(current) is list and num_def_loads > len(current):
+    if isinstance(current, list) and num_def_loads > len(current):
         # Enlarging a short list to match number_of_deferrable_loads is this function's
         # documented job, not an error: the shipped defaults are sized for the default
         # load count, so any user that raises the count without restating every per-load
