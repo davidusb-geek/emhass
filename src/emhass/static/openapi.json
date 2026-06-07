@@ -379,6 +379,12 @@
             "title": "PV straight to grid",
             "description": "Set this parameter to true to consider that all the PV power produced is injected to the grid. No direct self-consumption. The default is false, for a system with direct self-consumption."
           },
+          "publish_deferrable_load_states": {
+            "type": "boolean",
+            "default": false,
+            "title": "Publish deferrable load command states",
+            "description": "When true, EMHASS additionally publishes one interpretable command sensor per deferrable load (sensor.p_deferrableN_state) whose state is 'on', 'off' or 'variable' for the current timestep, with the full optimized on/off/variable plan as a 'schedule' attribute. This lets automations act on a clear command instead of thresholding the power forecast themselves. Defaults to false."
+          },
           "num_threads": {
             "type": "integer",
             "default": 0,
