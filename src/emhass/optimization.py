@@ -177,6 +177,9 @@ class Optimization:
         # SOC recovery parameters
         self._init_soc_recovery_params()
 
+        # Optional intermediate SOC target parameters (issue #553)
+        self._init_soc_target_params()
+
         # Initialize deferrable load parameters (window masks and energy constraints)
         self._init_deferrable_load_params()
 
@@ -196,6 +199,25 @@ class Optimization:
         self.param_soc_high_gap.value = 0.0
         self.param_soc_low_required.value = 0.0
         self.param_soc_high_required.value = 0.0
+
+    def _init_soc_target_params(self) -> None:
+        """Initialize CVXPY parameters for the optional intermediate SOC target (#553).
+
+        ``param_soc_target_floor`` is a single per-horizon vector giving the
+        minimum stored energy (Wh) required at each timestep: the target energy
+        at the requested timestep and 0.0 everywhere else. Using one precomputed
+        floor vector (rather than a mask * value product of two parameters) keeps
+        the problem DPP / warm-start safe — the numeric multiply happens at
+        set-time, so no recanonicalisation is forced on each solve. The default
+        (all zeros) makes the constraint a no-op, so behaviour is unchanged
+        unless a target is explicitly requested. It is a vector param so it must
+        be (re)created whenever the horizon length changes. Called from __init__
+        and when resizing the optimization problem.
+        """
+        self.param_soc_target_floor = cp.Parameter(
+            self.num_timesteps, nonneg=True, name="soc_target_floor"
+        )
+        self.param_soc_target_floor.value = np.zeros(self.num_timesteps)
 
     def _init_deferrable_load_params(self) -> None:
         """
@@ -1394,6 +1416,12 @@ class Optimization:
         # Total Sum of power flow * dt == (Init - Final) * Capacity
         total_energy_change = cp.sum(energy_change)
         constraints.append(total_energy_change == (soc_init - soc_final) * cap)
+
+        # Intermediate SOC target (issue #553): require SoC >= target at the
+        # requested timestep, leaving the battery free to discharge afterward.
+        # Single precomputed floor vector; zero = no-op, so behaviour is
+        # unchanged unless a target is explicitly requested.
+        constraints.append(current_stored_energy >= self.param_soc_target_floor)
 
         # Stress Cost
         if batt_stress_conf and batt_stress_conf["active"]:
@@ -2862,6 +2890,8 @@ class Optimization:
         unit_prod_price: np.array,
         soc_init: float | None = None,
         soc_final: float | None = None,
+        soc_target: float | None = None,
+        soc_target_timestep: int | None = None,
         def_total_hours: list | None = None,
         def_total_timestep: list | None = None,
         def_start_timestep: list | None = None,
@@ -2904,6 +2934,9 @@ class Optimization:
             # Re-initialize SOC recovery parameters with the new horizon
             self._init_soc_recovery_params()
 
+            # Re-initialize the intermediate SOC target mask with the new horizon (#553)
+            self._init_soc_target_params()
+
             # Re-initialize deferrable load parameters (window masks and energy constraints)
             self._init_deferrable_load_params()
 
@@ -2928,6 +2961,58 @@ class Optimization:
             self.logger.debug(
                 f"Battery usage enabled. Initial SOC: {soc_init}, Final SOC: {soc_final}"
             )
+
+        # Optional intermediate SOC target (issue #553).
+        # Reset the floor on EVERY call so a target from a previous run is
+        # cleared (the constraint is then a no-op). When a target is requested,
+        # clamp it to the configured SOC bounds and build the floor vector
+        # numerically (target energy at the requested horizon timestep, 0.0
+        # elsewhere). The np multiply happens here at set-time, so the problem
+        # stays DPP / warm-start safe.
+        if self.optim_conf["set_use_battery"] and soc_target is not None:
+            soc_min = self.plant_conf["battery_minimum_state_of_charge"]
+            soc_max = self.plant_conf["battery_maximum_state_of_charge"]
+            soc_target_raw = float(soc_target)
+            soc_target_clamped = min(max(soc_target_raw, soc_min), soc_max)
+            if soc_target_timestep is None:
+                k_target = self.num_timesteps - 1
+            else:
+                k_target = min(max(int(float(soc_target_timestep)), 0), self.num_timesteps - 1)
+            # Observability: warn (do not change the constraint) when the request
+            # was out of range or appears unreachable in time given charge power.
+            if soc_target_raw < soc_min or soc_target_raw > soc_max:
+                self.logger.warning(
+                    f"Passed soc_target={soc_target_raw} is outside "
+                    f"[{soc_min}, {soc_max}], clamping to soc_target={soc_target_clamped}"
+                )
+            cap = self.plant_conf["battery_nominal_energy_capacity"]
+            # Max stored-energy gain per step is battery_charge_power_max * time_step:
+            # the charge constraint caps grid-side power at max_chg / eff so the
+            # battery-side energy added (grid * eff) is max_chg * time_step, i.e. the
+            # charge efficiency cancels. (Do not multiply by efficiency again here, or
+            # the bound under-estimates reach and warns spuriously when eff < 1.)
+            reach = (
+                soc_init
+                + (self.plant_conf["battery_charge_power_max"] * self.time_step * (k_target + 1))
+                / cap
+            )
+            if soc_target_clamped > reach + 1e-6:
+                self.logger.warning(
+                    f"Intermediate soc_target={soc_target_clamped} may be unreachable "
+                    f"by timestep {k_target}: from soc_init={soc_init} the maximum "
+                    f"reachable SoC is ~{reach:.3f} given battery_charge_power_max; "
+                    "the optimization may be infeasible."
+                )
+            floor = np.zeros(self.num_timesteps)
+            floor[k_target] = soc_target_clamped * cap
+            self.param_soc_target_floor.value = floor
+            self.logger.debug(
+                f"Intermediate SOC target enabled: SoC >= {soc_target_clamped} "
+                f"by timestep {k_target} (requested soc_target={soc_target}, "
+                f"soc_target_timestep={soc_target_timestep})."
+            )
+        else:
+            self.param_soc_target_floor.value = np.zeros(self.num_timesteps)
 
         # Pad deferrable load lists
         if def_total_timestep is not None:
@@ -3697,6 +3782,8 @@ class Optimization:
         prediction_horizon: int,
         soc_init: float | None = None,
         soc_final: float | None = None,
+        soc_target: float | None = None,
+        soc_target_timestep: int | None = None,
         def_total_hours: list | None = None,
         def_total_timestep: list | None = None,
         def_start_timestep: list | None = None,
@@ -3726,6 +3813,16 @@ class Optimization:
         :param soc_final: The final battery SOC for the optimization. This parameter \
             is optional, if not given soc_init = soc_final = soc_target from the configuration file.
         :type soc_final:
+        :param soc_target: An optional intermediate minimum battery SOC (fraction in [0, 1]) that \
+            must be reached by ``soc_target_timestep``, after which the battery is free to \
+            discharge again. When ``None`` (the default) no intermediate target is imposed and \
+            behaviour is unchanged. See issue #553.
+        :type soc_target: float
+        :param soc_target_timestep: The 0-based horizon timestep by which ``soc_target`` must be \
+            met. The index refers to the SoC *after* that timestep's flow. Defaults to the last \
+            timestep when ``soc_target`` is given but this is ``None``. Ignored when \
+            ``soc_target`` is ``None``.
+        :type soc_target_timestep: int
         :param def_total_timestep: The functioning timesteps for this iteration for each deferrable load. \
             (For continuous deferrable loads: functioning timesteps at nominal power)
         :type def_total_timestep: list
@@ -3775,6 +3872,8 @@ class Optimization:
             unit_prod_price,
             soc_init=soc_init,
             soc_final=soc_final,
+            soc_target=soc_target,
+            soc_target_timestep=soc_target_timestep,
             def_total_hours=def_total_hours,
             def_total_timestep=def_total_timestep,
             def_start_timestep=def_start_timestep,
