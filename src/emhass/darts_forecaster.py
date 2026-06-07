@@ -1,9 +1,10 @@
-"""A native time-series load forecaster for EMHASS built on the Darts library.
+"""A native time-series forecaster for EMHASS built on the Darts library.
 
 This module provides :class:`DartsForecaster`, an alternative to
 :class:`emhass.machine_learning_forecaster.MLForecaster` that uses a global
 gradient-boosted time-series model (LightGBM, via Darts) instead of the
-recursive ``skforecast``/``scikit-learn`` approach.
+recursive ``skforecast``/``scikit-learn`` approach. It is target-agnostic and
+serves the load, load-cost and production-price forecasts.
 
 Why a second forecaster
 -----------------------
@@ -113,7 +114,7 @@ def _require_darts():
 
 
 class DartsForecaster:
-    r"""A single-shot, weather-aware time-series load forecaster.
+    r"""A single-shot, weather-aware time-series forecaster.
 
     The class mirrors the public surface of
     :class:`emhass.machine_learning_forecaster.MLForecaster`:
@@ -125,10 +126,18 @@ class DartsForecaster:
     Unlike ``MLForecaster``, it can consume future covariates (weather +
     calendar) that are known for the forecast window. Weather is optional: if
     the caller does not pass a ``future_covariates`` frame, only calendar
-    features are used and the forecaster still works on the load sensor alone.
+    features are used and the forecaster still works on the target sensor alone.
+
+    The forecaster is **target-agnostic**: ``var_model`` names whatever series is
+    being modelled, so the same class serves the load forecast *and* the load
+    cost / production price forecasts (see the ``darts`` option on
+    :meth:`emhass.forecast.Forecast.get_load_cost_forecast` and
+    :meth:`~emhass.forecast.Forecast.get_prod_price_forecast`). Use
+    ``non_negative=False`` for a price target, which can legitimately go
+    negative.
 
     :param data: The training data. Must contain a column named ``var_model``
-        (the load sensor) and a :class:`~pandas.DatetimeIndex`. May optionally
+        (the target sensor) and a :class:`~pandas.DatetimeIndex`. May optionally
         contain extra columns to be used as future covariates (named via
         ``covariate_columns``).
     :type data: pd.DataFrame
@@ -136,7 +145,8 @@ class DartsForecaster:
         pickle filename), mirroring ``MLForecaster``.
     :type model_type: str
     :param var_model: The name of the target column / Home Assistant sensor,
-        e.g. ``sensor.power_load_no_var_loads``.
+        e.g. ``sensor.power_load_no_var_loads`` for load or a price sensor for
+        the cost / production-price forecasts.
     :type var_model: str
     :param num_lags: The longest auto-regressive lag to consider, in steps. Used
         only as a ceiling for the default lag set; the actual lags are derived in
@@ -160,6 +170,12 @@ class DartsForecaster:
     :param model_kwargs: Extra keyword arguments forwarded to the underlying
         ``darts.models.LightGBMModel`` (merged over :data:`DEFAULT_LGBM_KWARGS`).
     :type model_kwargs: dict | None
+    :param non_negative: Whether the target is physically non-negative and the
+        forecast should be floored at zero. ``True`` (the default) suits a load
+        in watts; set it to ``False`` for a target that can legitimately go
+        negative, e.g. a spot energy price (negative prices occur on grids such
+        as Amber). Defaults to ``True``.
+    :type non_negative: bool
     """
 
     def __init__(
@@ -174,6 +190,7 @@ class DartsForecaster:
         quantiles: list[float] | None = None,
         output_chunk_length: int | None = None,
         model_kwargs: dict | None = None,
+        non_negative: bool = True,
     ) -> None:
         self.data = data
         self.model_type = model_type
@@ -184,6 +201,7 @@ class DartsForecaster:
         self.covariate_columns = list(covariate_columns) if covariate_columns else []
         self.quantiles = list(quantiles) if quantiles else None
         self.model_kwargs = {**DEFAULT_LGBM_KWARGS, **(model_kwargs or {})}
+        self.non_negative = non_negative
 
         self.model = None
         self.freq: pd.Timedelta | None = None
@@ -327,6 +345,32 @@ class DartsForecaster:
             return pred_df.iloc[:, 0]
         raise KeyError(f"quantile {level} not found among {list(pred_df.columns)}")
 
+    def _build_target_series(self, frame: pd.DataFrame):
+        """Build a Darts target ``TimeSeries`` from the ``var_model`` column."""
+        from darts import TimeSeries
+
+        return TimeSeries.from_series(frame[self.var_model].astype("float32"), freq=self.freq_str)
+
+    def _prepare_target_and_covariates(self, frame: pd.DataFrame):
+        """Build the Darts target + future-covariates pair from a tz-aware frame.
+
+        Centralises the window preparation that :meth:`fit` and :meth:`predict`
+        otherwise duplicated: tz stripping (Darts requires a tz-naive index),
+        target ``TimeSeries`` construction and the future-covariate assembly,
+        all over the same frame. Linear interpolation is applied by the caller.
+
+        :param frame: A prepared frame containing at least the ``var_model``
+            column (and any covariate columns).
+        :return: ``(target, future_cov, original_tz)`` where ``target`` and
+            ``future_cov`` are Darts ``TimeSeries`` and ``original_tz`` is the
+            timezone stripped off (or ``None``), so callers can re-attach it.
+        """
+        original_tz = frame.index.tz
+        naive = self._strip_tz(frame)  # Darts requires a tz-naive index
+        target = self._build_target_series(naive)
+        future_cov = self._build_future_covariates(naive)
+        return target, future_cov, original_tz
+
     # --------------------------------------------------------------------- fit
 
     async def fit(
@@ -351,7 +395,6 @@ class DartsForecaster:
         :rtype: tuple[pd.DataFrame, pd.DataFrame]
         """
         _require_darts()
-        from darts import TimeSeries
 
         if self.var_model not in self.data.columns:
             raise KeyError(
@@ -377,9 +420,9 @@ class DartsForecaster:
         test_df = prepared.loc[split_date:]
 
         # Fit on the train portion; the single-shot model emits the whole horizon.
-        target = TimeSeries.from_series(
-            train_df[self.var_model].astype("float32"), freq=self.freq_str
-        )
+        # The future covariates are built over the full prepared frame so they
+        # span the hold-out tail used for the reported metric below.
+        target = self._build_target_series(train_df)
         future_cov = self._build_future_covariates(prepared)
 
         self.model = self._make_model(self.output_chunk_length)
@@ -441,12 +484,11 @@ class DartsForecaster:
             window. If ``None``, the model forecasts from the end of its training
             series.
         :type data_last_window: pd.DataFrame, optional
-        :return: The point load forecast (P50 if probabilistic) as a
+        :return: The point forecast (P50 if probabilistic) as a
             :class:`~pandas.Series` indexed by the forecast timestamps.
         :rtype: pd.Series
         """
         _require_darts()
-        from darts import TimeSeries
 
         if self.model is None:
             raise ValueError("Model has not been fitted yet. Call fit() first.")
@@ -465,12 +507,7 @@ class DartsForecaster:
                     method="linear", axis=0, limit_direction="both"
                 )
             )
-            original_tz = window.index.tz
-            naive = self._strip_tz(window)
-            target = TimeSeries.from_series(
-                naive[self.var_model].astype("float32"), freq=self.freq_str
-            )
-            future_cov = self._build_future_covariates(naive)
+            target, future_cov, original_tz = self._prepare_target_and_covariates(window)
             pred = await asyncio.to_thread(
                 self.model.predict,
                 n=n,
@@ -488,8 +525,11 @@ class DartsForecaster:
         else:
             self.last_quantiles = None
             point = pred_df.iloc[:, 0]
-        # Loads are non-negative.
-        point = point.clip(lower=0.0)
+        # Floor at zero only for physically non-negative targets (e.g. a load in
+        # watts). Targets that can legitimately be negative — such as a spot
+        # energy price — pass through unclipped.
+        if self.non_negative:
+            point = point.clip(lower=0.0)
         return point
 
     # -------------------------------------------------------------------- tune
@@ -586,12 +626,17 @@ class DartsForecaster:
         """
         problems = []
         values = forecast.to_numpy(dtype="float64")
+        # Peak over real (finite) samples only. Computed once and guarded so an
+        # empty or all-NaN forecast cannot raise from np.nanmax (which errors on
+        # a zero-size / all-NaN input) when building the messages below.
+        finite_values = values[np.isfinite(values)]
+        peak = float(np.max(finite_values)) if finite_values.size else float("nan")
         if not np.all(np.isfinite(values)):
             problems.append("non-finite values")
         if np.any(values < 0):
             problems.append("negative values")
-        if np.any(values > max_plausible_w):
-            problems.append(f"value > {max_plausible_w:.0f}W (peak {np.nanmax(values):.0f})")
+        if finite_values.size and np.any(finite_values > max_plausible_w):
+            problems.append(f"value > {max_plausible_w:.0f}W (peak {peak:.0f})")
 
         steps_per_day = max(1, int(round(pd.Timedelta("24h") / self.freq)))
         clean_history = history.dropna()
@@ -600,9 +645,9 @@ class DartsForecaster:
             if len(clean_history)
             else float("nan")
         )
-        pred_mean = float(np.nanmean(values)) if len(values) else float("nan")
+        pred_mean = float(np.nanmean(finite_values)) if finite_values.size else float("nan")
         detail = (
-            f"n={len(values)} mean={pred_mean:.0f}W peak={np.nanmax(values):.0f}W "
+            f"n={len(values)} mean={pred_mean:.0f}W peak={peak:.0f}W "
             f"recent_day_median={recent_level:.0f}W"
         )
         if np.isfinite(recent_level) and recent_level > 50:

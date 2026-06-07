@@ -381,7 +381,7 @@
               "default": "temperature_2m"
             },
             "title": "Darts future covariate columns",
-            "description": "Optional list of extra column names to use as future covariates for the 'darts' load forecast method (e.g. weather variables such as temperature_2m). Calendar features are always added automatically; leave empty to use calendar covariates only. Only used when load_forecast_method is 'darts'."
+            "description": "Optional list of extra column names to use as future covariates for a 'darts' forecast (e.g. weather variables such as temperature_2m). Calendar features are always added automatically; leave empty to use calendar covariates only. Used when load_forecast_method, load_cost_forecast_method or production_price_forecast_method is 'darts'."
           },
           "darts_quantiles": {
             "type": "array",
@@ -390,7 +390,13 @@
               "default": 0.5
             },
             "title": "Darts forecast quantiles",
-            "description": "Optional list of quantile levels (between 0 and 1) for a probabilistic 'darts' load forecast. When set, the model is fitted with a quantile likelihood and the median is used as the point forecast. Leave empty for a deterministic forecast. Only used when load_forecast_method is 'darts'."
+            "description": "Optional list of quantile levels (between 0 and 1) for a probabilistic 'darts' forecast. When set, the model is fitted with a quantile likelihood and the median is used as the point forecast. Leave empty for a deterministic forecast. Used when load_forecast_method, load_cost_forecast_method or production_price_forecast_method is 'darts'."
+          },
+          "darts_non_negative": {
+            "type": "boolean",
+            "default": true,
+            "title": "Darts target is non-negative",
+            "description": "Whether the 'darts' forecast target is physically non-negative and should be floored at zero. Keep true for a load forecast (watts). Set false when fitting a price/cost model whose target can legitimately go negative (e.g. spot energy prices). Only used by the 'darts' methods."
           },
           "set_total_pv_sell": {
             "type": "boolean",
@@ -510,11 +516,12 @@
             "type": "string",
             "enum": [
               "hp_hc_periods",
-              "csv"
+              "csv",
+              "darts"
             ],
             "default": "hp_hc_periods",
             "title": "Load cost method",
-            "description": "Define the method that will be used for load cost forecast. The options are ‘hp_hc_periods’ for peak and non-peak hours contracts, and ‘csv’ to load custom cost from CSV file."
+            "description": "Define the method that will be used for load cost forecast. The options are ‘hp_hc_periods’ for peak and non-peak hours contracts, ‘csv’ to load custom cost from CSV file, and ‘darts’ for a single-shot weather-aware LightGBM time-series model (requires the optional emhass[darts] extra and a model fitted on the price sensor)."
           },
           "load_peak_hour_periods": {
             "type": "array",
@@ -552,11 +559,12 @@
             "type": "string",
             "enum": [
               "constant",
-              "csv"
+              "csv",
+              "darts"
             ],
             "default": "constant",
             "title": "PV power production price forecast method",
-            "description": "Define the method that will be used for PV power production price forecast. This is the price that is paid by the utility for energy injected into the grid. The options are ‘constant’ for a constant fixed value or ‘csv’ to load custom price forecasts from a CSV file."
+            "description": "Define the method that will be used for PV power production price forecast. This is the price that is paid by the utility for energy injected into the grid. The options are ‘constant’ for a constant fixed value, ‘csv’ to load custom price forecasts from a CSV file, and ‘darts’ for a single-shot weather-aware LightGBM time-series model (requires the optional emhass[darts] extra and a model fitted on the price sensor)."
           },
           "photovoltaic_production_sell_price": {
             "type": "number",

@@ -25,6 +25,7 @@ import pickle
 import pickle as cPickle
 import re
 import tempfile
+import threading
 from datetime import datetime, timedelta
 from urllib.parse import quote
 
@@ -50,6 +51,35 @@ from emhass.utils import add_date_features, get_days_list, set_df_index_freq
 header_accept = "application/json"
 error_msg_list_not_long_enough = "Passed data from passed list is not long enough"
 error_msg_method_not_valid = "Passed method is not valid"
+
+
+def _run_coro_blocking(coro):
+    """Run an async coroutine to completion from synchronous code.
+
+    The load-cost / production-price forecast methods are synchronous (and have
+    many synchronous call sites and test mocks), but the optional ``darts``
+    branch needs to ``await`` an async Home Assistant fetch and the async
+    forecaster ``predict``. ``asyncio.run`` cannot be used when an event loop is
+    already running (the optimization helpers are async), so the coroutine is
+    executed on a short-lived worker thread with its own event loop. The Darts
+    forecaster already offloads its CPU-bound work via ``asyncio.to_thread``, so
+    running it under a private loop here is safe and keeps the public
+    ``get_*_forecast`` signatures synchronous.
+    """
+    result: dict = {}
+
+    def _runner() -> None:
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            result["value"] = loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    thread = threading.Thread(target=_runner)
+    thread.start()
+    thread.join()
+    return result["value"]
 
 
 class Forecast:
@@ -1732,6 +1762,113 @@ class Forecast:
         self.logger.debug("get_load_forecast returning:\n%s", p_load_forecast)
         return p_load_forecast
 
+    async def _fetch_price_last_window(self, var_model: str) -> pd.DataFrame | None:
+        """Retrieve a fresh recent history window for a price/cost sensor.
+
+        Used to anchor the auto-regressive lags of a Darts price/cost forecaster
+        at predict time, mirroring how :meth:`_prepare_hass_load_data` provides
+        the load model's last window. Returns a single-column frame named
+        ``var_model`` (the sensor the model was trained on), or ``None`` if the
+        data could not be retrieved (the caller then falls back to forecasting
+        from the model's own training tail).
+        """
+        days_min = max(1, int(self.optim_conf.get("delta_forecast_daily").days) + 1)
+        rh = RetrieveHass(
+            self.retrieve_hass_conf["hass_url"],
+            self.retrieve_hass_conf["long_lived_token"],
+            self.freq,
+            self.time_zone,
+            self.params,
+            self.emhass_conf,
+            self.logger,
+        )
+        days_list = get_days_list(days_min)
+        if not await rh.get_data(days_list, [var_model]):
+            return None
+        if var_model not in rh.df_final.columns:
+            self.logger.warning(
+                f"Price sensor '{var_model}' not found in retrieved data columns: "
+                f"{list(rh.df_final.columns)}"
+            )
+            return None
+        # Raw sensor values (no prepare_data): a price/cost target must NOT be
+        # zero-clamped, unlike the load. Just dedupe, sort and enforce a regular
+        # sampling frequency so the model's lags line up; the forecaster fills
+        # any interior gaps itself.
+        window = rh.df_final[[var_model]].copy()
+        window = window[~window.index.duplicated(keep="first")].sort_index()
+        window = set_df_index_freq(window)
+        return window
+
+    async def _darts_price_forecast(self, target_var: str, model_suffix: str) -> pd.Series | bool:
+        r"""Produce a load-cost / production-price forecast with the Darts model.
+
+        Loads the fitted, target-agnostic :class:`DartsForecaster` saved as
+        ``{model_type}_{model_suffix}_darts.pkl`` (train it with the standard
+        ``forecast-model-fit`` action, pointing ``var_model`` at the price/cost
+        sensor and ``model_type`` at ``{model_type}_{model_suffix}``), fetches a
+        fresh lag window for that sensor from Home Assistant, and returns a price
+        series aligned to ``self.forecast_dates``.
+
+        Weather covariates, if the model was fitted with them, are reused
+        automatically wherever the lag window supplies them and forward-filled
+        otherwise (price is dominated by the time-of-day / weekly cycle, so the
+        weather contribution is small); calendar covariates are always exact.
+
+        :param target_var: The output column name (``self.var_load_cost`` or
+            ``self.var_prod_price``).
+        :param model_suffix: ``"load_cost"`` or ``"prod_price"`` — selects the
+            pickle and keeps the two price models distinct on disk.
+        :return: The price/cost forecast as a :class:`~pandas.Series` indexed by
+            ``self.forecast_dates``, or ``False`` on any failure so the caller
+            can surface the error like the other methods.
+        """
+        from emhass.darts_forecaster import DartsDependencyError, DartsForecaster
+
+        model_type = self.params["passed_data"]["model_type"]
+        filename_path = self.emhass_conf["data_path"] / f"{model_type}_{model_suffix}_darts.pkl"
+        if not filename_path.is_file():
+            self.logger.error(
+                f"The Darts {model_suffix} forecaster file ({filename_path}) was not "
+                "found; run a 'forecast-model-fit' for this price model before predicting."
+            )
+            return False
+        async with aiofiles.open(filename_path, "rb") as inp:
+            content = await inp.read()
+            dartsf = pickle.loads(content)
+        if not isinstance(dartsf, DartsForecaster):
+            self.logger.error("Loaded Darts price model is not a DartsForecaster instance")
+            return False
+        # Anchor the lags on fresh history of the sensor the model was trained on.
+        # If the fetch fails, fall back to forecasting from the model's own tail.
+        data_last_window = None
+        if not self.get_data_from_file:
+            try:
+                data_last_window = await self._fetch_price_last_window(dartsf.var_model)
+            except Exception as exc:  # noqa: BLE001 - degrade gracefully to no-window
+                self.logger.warning(
+                    f"Could not fetch a fresh window for the Darts {model_suffix} "
+                    f"forecast ({exc}); forecasting from the model's training tail."
+                )
+        try:
+            forecast_out = await dartsf.predict(data_last_window)
+        except DartsDependencyError as exc:
+            self.logger.error(
+                "The 'darts' %s forecast method requires the optional Darts extra, "
+                "which is not installed: %s",
+                model_suffix,
+                exc,
+            )
+            return False
+        if len(forecast_out) < len(self.forecast_dates):
+            self.logger.error(
+                f"Darts {model_suffix} forecast produced {len(forecast_out)} steps, fewer "
+                f"than the {len(self.forecast_dates)} required forecast dates"
+            )
+            return False
+        values = forecast_out.to_numpy()[: len(self.forecast_dates)]
+        return pd.Series(values, index=self.forecast_dates, name=target_var)
+
     def get_load_cost_forecast(
         self,
         df_final: pd.DataFrame,
@@ -1747,8 +1884,10 @@ class Forecast:
         :param df_final: The DataFrame containing the input data.
         :type df_final: pd.DataFrame
         :param method: The method to be used to generate load cost forecast, \
-            the options are 'hp_hc_periods' for peak and non-peak hours contracts\
-            and 'csv' to load a CSV file, defaults to 'hp_hc_periods'
+            the options are 'hp_hc_periods' for peak and non-peak hours contracts, \
+            'csv' to load a CSV file, and 'darts' for a single-shot weather-aware \
+            LightGBM time-series model (requires the optional emhass[darts] extra \
+            and a model fitted on the price sensor), defaults to 'hp_hc_periods'
         :type method: str, optional
         :param csv_path: The path to the CSV file used when method = 'csv', \
             defaults to "data_load_cost_forecast.csv"
@@ -1774,6 +1913,14 @@ class Forecast:
                 df_final.loc[df_hp.index, self.var_load_cost] = self.optim_conf[
                     "load_peak_hours_cost"
                 ]
+        elif method == "darts":
+            forecast_out = _run_coro_blocking(
+                self._darts_price_forecast(self.var_load_cost, "load_cost")
+            )
+            if isinstance(forecast_out, bool) and not forecast_out:
+                return False
+            df_final = df_final.copy()
+            df_final[self.var_load_cost] = forecast_out.reindex(df_final.index)
         elif method == "csv":
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
             forecast_out = self.get_forecast_out_from_csv_or_list(
@@ -1835,8 +1982,10 @@ class Forecast:
             from hass
         :type df_input_data: pd.DataFrame
         :param method: The method to be used to generate the production price forecast, \
-            the options are 'constant' for a fixed constant value and 'csv'\
-            to load a CSV file, defaults to 'constant'
+            the options are 'constant' for a fixed constant value, 'csv' to load a \
+            CSV file, and 'darts' for a single-shot weather-aware LightGBM \
+            time-series model (requires the optional emhass[darts] extra and a \
+            model fitted on the price sensor), defaults to 'constant'
         :type method: str, optional
         :param csv_path: The path to the CSV file used when method = 'csv', \
             defaults to "/data/data_load_cost_forecast.csv"
@@ -1851,6 +2000,14 @@ class Forecast:
         csv_path = self.emhass_conf["data_path"] / csv_path
         if method == "constant":
             df_final[self.var_prod_price] = self.optim_conf["photovoltaic_production_sell_price"]
+        elif method == "darts":
+            forecast_out = _run_coro_blocking(
+                self._darts_price_forecast(self.var_prod_price, "prod_price")
+            )
+            if isinstance(forecast_out, bool) and not forecast_out:
+                return False
+            df_final = df_final.copy()
+            df_final[self.var_prod_price] = forecast_out.reindex(df_final.index)
         elif method == "csv":
             forecast_dates_csv = self.get_forecast_days_csv(timedelta_days=0)
             forecast_out = self.get_forecast_out_from_csv_or_list(

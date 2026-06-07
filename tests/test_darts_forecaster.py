@@ -76,7 +76,7 @@ class TestDartsForecasterDependency(unittest.TestCase):
         self.assertIn("darts", found["select_options"])
 
     def test_new_params_have_defaults(self):
-        """The two new Darts params have config defaults and are list-typed."""
+        """The new Darts params have config defaults of the expected type."""
         import json
 
         cfg = json.load(open(emhass_conf["defaults_path"], encoding="utf-8"))
@@ -84,6 +84,28 @@ class TestDartsForecasterDependency(unittest.TestCase):
         self.assertIn("darts_quantiles", cfg)
         self.assertEqual(cfg["darts_covariate_columns"], [])
         self.assertEqual(cfg["darts_quantiles"], [])
+        # The price/cost models need a target that can go negative.
+        self.assertIn("darts_non_negative", cfg)
+        self.assertEqual(cfg["darts_non_negative"], True)
+
+    def test_darts_is_a_valid_cost_and_price_method(self):
+        """The schema accepts 'darts' for the load-cost and prod-price methods."""
+        import json
+
+        defs = json.load(
+            open(
+                emhass_conf["root_path"] / "static/data/param_definitions.json",
+                encoding="utf-8",
+            )
+        )
+        for key in ("load_cost_forecast_method", "production_price_forecast_method"):
+            found = None
+            for _cat, params in defs.items():
+                if key in params:
+                    found = params[key]
+                    break
+            self.assertIsNotNone(found, f"{key} not found in param_definitions.json")
+            self.assertIn("darts", found["select_options"])
 
 
 @unittest.skipUnless(DARTS_AVAILABLE, "optional 'darts' extra not installed")
@@ -234,6 +256,118 @@ class TestDartsForecaster(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsInstance(p_load, pd.Series)
         self.assertTrue((p_load.index == fcst.forecast_dates).all())
+
+    def test_predict_allows_negative_when_not_non_negative(self):
+        """A non_negative=False target (a price) is not floored at zero."""
+        from emhass.darts_forecaster import DartsForecaster
+
+        async def _run():
+            frame = self._build_training_frame()
+            # Shift the series strongly negative so the forecast must be < 0
+            # unless the (load-only) zero floor is wrongly applied.
+            price = frame - float(frame.iloc[:, 0].mean()) - 1000.0
+            dartsf = DartsForecaster(
+                price,
+                "test_darts_price",
+                self.var_load,
+                48,
+                emhass_conf,
+                logger,
+                non_negative=False,
+            )
+            await dartsf.fit(split_date_delta="24h")
+            forecast = await dartsf.predict(price)
+            return forecast
+
+        import asyncio as _asyncio
+
+        forecast = _asyncio.run(_run())
+        self.assertIsInstance(forecast, pd.Series)
+        # The defining behaviour: at least one forecast value is negative,
+        # which is only possible because the zero floor was not applied.
+        self.assertTrue((forecast.to_numpy() < 0).any())
+
+    async def _fit_and_pickle_price_model(self, fcst, suffix):
+        """Fit a Darts model on a price-like series and pickle it for dispatch."""
+        from emhass.darts_forecaster import DartsForecaster
+
+        frame = self._build_training_frame()
+        # A price-like series: small magnitude, mean-shifted to include negatives.
+        scale = float(frame.iloc[:, 0].std()) or 1.0
+        price = (frame - frame.iloc[:, 0].mean()) / scale * 0.1
+        dartsf = DartsForecaster(
+            price,
+            "long_train_data",
+            self.var_load,
+            48,
+            emhass_conf,
+            logger,
+            non_negative=False,
+        )
+        await dartsf.fit(split_date_delta="24h")
+        filename_path = emhass_conf["data_path"] / f"long_train_data_{suffix}_darts.pkl"
+        async with aiofiles.open(filename_path, "wb") as outp:
+            await outp.write(pickle.dumps(dartsf, pickle.HIGHEST_PROTOCOL))
+        return filename_path
+
+    async def _make_price_dispatch_fcst(self):
+        """Build a get_data_from_file Forecast object for a price dispatch test."""
+        params = copy.deepcopy(await TestDartsForecaster.get_test_params())
+        runtimeparams = {
+            "model_type": "long_train_data",
+            "var_model": self.var_load,
+            "num_lags": 48,
+        }
+        params["passed_data"] = runtimeparams
+        params_json = orjson.dumps(params).decode("utf-8")
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            "profit",
+            params_json,
+            runtimeparams_json,
+            "forecast-model-fit",
+            logger,
+            get_data_from_file=True,
+        )
+        return input_data_dict["fcst"]
+
+    async def test_get_load_cost_forecast_darts_dispatch(self):
+        """Forecast.get_load_cost_forecast(method='darts') appends the cost column."""
+        fcst: Forecast = await self._make_price_dispatch_fcst()
+        await self._fit_and_pickle_price_model(fcst, "load_cost")
+        # get_data_from_file=True makes the helper forecast from the model tail
+        # (no live HA fetch), so the dispatch is exercised offline.
+        fcst.get_data_from_file = True
+        df_final = pd.DataFrame(index=fcst.forecast_dates)
+        out = fcst.get_load_cost_forecast(df_final, method="darts")
+        self.assertIsInstance(out, pd.DataFrame)
+        self.assertIn(fcst.var_load_cost, out.columns)
+        self.assertEqual(len(out[fcst.var_load_cost].dropna()), len(fcst.forecast_dates))
+        self.assertTrue(np.isfinite(out[fcst.var_load_cost].to_numpy()).all())
+
+    async def test_get_prod_price_forecast_darts_dispatch(self):
+        """Forecast.get_prod_price_forecast(method='darts') appends the price column."""
+        fcst: Forecast = await self._make_price_dispatch_fcst()
+        await self._fit_and_pickle_price_model(fcst, "prod_price")
+        fcst.get_data_from_file = True
+        df_final = pd.DataFrame(index=fcst.forecast_dates)
+        out = fcst.get_prod_price_forecast(df_final, method="darts")
+        self.assertIsInstance(out, pd.DataFrame)
+        self.assertIn(fcst.var_prod_price, out.columns)
+        self.assertEqual(len(out[fcst.var_prod_price].dropna()), len(fcst.forecast_dates))
+
+    async def test_get_load_cost_forecast_darts_missing_model(self):
+        """A missing price-model pickle surfaces as False, not an exception."""
+        fcst: Forecast = await self._make_price_dispatch_fcst()
+        # Ensure no pickle exists for this suffix.
+        stale = emhass_conf["data_path"] / "long_train_data_load_cost_darts.pkl"
+        if stale.exists():
+            stale.unlink()
+        fcst.get_data_from_file = True
+        df_final = pd.DataFrame(index=fcst.forecast_dates)
+        out = fcst.get_load_cost_forecast(df_final, method="darts")
+        self.assertFalse(out)
 
 
 if __name__ == "__main__":

@@ -1758,6 +1758,7 @@ async def treat_runtimeparams(
             ("perform_backtest", False, _cast_bool),
             ("darts_covariate_columns", [], None),
             ("darts_quantiles", [], None),
+            ("darts_non_negative", True, _cast_bool),
         ]
 
         # Apply Configuration

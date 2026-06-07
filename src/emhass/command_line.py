@@ -1718,12 +1718,18 @@ async def naive_mpc_optim(
 
 
 def _build_darts_forecaster(input_data_dict: dict, data, logger: logging.Logger):
-    """Construct a DartsForecaster from the input data dict (lazy import)."""
+    """Construct a DartsForecaster from the input data dict (lazy import).
+
+    The forecaster is target-agnostic (load, load cost or production price).
+    ``darts_non_negative`` (default ``True``) should be set to ``False`` when
+    fitting a price/cost model, whose target can legitimately go negative.
+    """
     from emhass.darts_forecaster import DartsForecaster
 
     passed = input_data_dict["params"]["passed_data"]
     quantiles = passed.get("darts_quantiles") or None
     covariate_columns = passed.get("darts_covariate_columns") or None
+    non_negative = passed.get("darts_non_negative", True)
     return DartsForecaster(
         data,
         passed["model_type"],
@@ -1733,6 +1739,7 @@ def _build_darts_forecaster(input_data_dict: dict, data, logger: logging.Logger)
         logger,
         covariate_columns=covariate_columns,
         quantiles=quantiles,
+        non_negative=non_negative,
     )
 
 
@@ -1788,8 +1795,18 @@ async def forecast_model_fit(
     num_lags = input_data_dict["params"]["passed_data"]["num_lags"]
     split_date_delta = input_data_dict["params"]["passed_data"]["split_date_delta"]
     perform_backtest = input_data_dict["params"]["passed_data"]["perform_backtest"]
-    # Route to the Darts forecaster when selected
-    if input_data_dict["optim_conf"].get("load_forecast_method") == "darts":
+    # Route to the Darts forecaster when any forecast that can use it (load,
+    # load cost or production price) selects 'darts'. The model is target-
+    # agnostic; which sensor it trains on is set by 'var_model', and the saved
+    # pickle name is driven by 'model_type', so a single fit action serves all
+    # three (use model_type '<base>_load_cost' / '<base>_prod_price' for prices).
+    optim_conf = input_data_dict["optim_conf"]
+    darts_methods = {
+        optim_conf.get("load_forecast_method"),
+        optim_conf.get("load_cost_forecast_method"),
+        optim_conf.get("production_price_forecast_method"),
+    }
+    if "darts" in darts_methods:
         return await _darts_model_fit(input_data_dict, logger, data, debug=debug)
     # The ML forecaster object
     mlf = MLForecaster(
