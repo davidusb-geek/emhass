@@ -175,10 +175,24 @@
     },
     "load_forecast_method": {
       "friendly_name": "Load forecast method",
-      "Description": "The load forecast method that will be used. The options are ‘csv’ to load a CSV file or ‘naive’ for a simple 1-day persistence model.",
+      "Description": "The load forecast method that will be used. The options are 'typical' for a statistical typical-day curve, 'naive' for a simple 1-day persistence model, 'mlforecaster' for a recursive scikit-learn model, 'darts' for a single-shot weather-aware LightGBM time-series model (requires the optional emhass[darts] extra) and 'csv' to load a CSV file.",
       "input": "select",
-      "select_options": ["typical", "naive", "mlforecaster", "csv"],
+      "select_options": ["typical", "naive", "mlforecaster", "darts", "csv"],
       "default_value": "typical",
+      "unit": "none"
+    },
+    "darts_covariate_columns": {
+      "friendly_name": "Darts future covariate columns",
+      "Description": "Optional list of extra column names to use as future covariates for the 'darts' load forecast method (e.g. weather variables such as temperature_2m). Calendar features are always added automatically; leave empty to use calendar covariates only. Only used when load_forecast_method is 'darts'.",
+      "input": "array.string",
+      "default_value": "temperature_2m",
+      "unit": "none"
+    },
+    "darts_quantiles": {
+      "friendly_name": "Darts forecast quantiles",
+      "Description": "Optional list of quantile levels (between 0 and 1) for a probabilistic 'darts' load forecast. When set, the model is fitted with a quantile likelihood and the median is used as the point forecast. Leave empty for a deterministic forecast. Only used when load_forecast_method is 'darts'.",
+      "input": "array.float",
+      "default_value": 0.5,
       "unit": "none"
     },
     "set_total_pv_sell": {

@@ -28,6 +28,7 @@ from emhass.utils import log_runtime_banner, stage_timer
 
 default_csv_filename = "opt_res_latest.csv"
 default_pkl_suffix = "_mlf.pkl"
+darts_pkl_suffix = "_darts.pkl"
 default_metadata_json = "metadata.json"
 test_df_literal = "test_df_final.pkl"
 EMHASS_SCHEMA_VERSION = "1.0"
@@ -1716,6 +1717,56 @@ async def naive_mpc_optim(
     return opt_res_naive_mpc
 
 
+def _build_darts_forecaster(input_data_dict: dict, data, logger: logging.Logger):
+    """Construct a DartsForecaster from the input data dict (lazy import)."""
+    from emhass.darts_forecaster import DartsForecaster
+
+    passed = input_data_dict["params"]["passed_data"]
+    quantiles = passed.get("darts_quantiles") or None
+    covariate_columns = passed.get("darts_covariate_columns") or None
+    return DartsForecaster(
+        data,
+        passed["model_type"],
+        passed["var_model"],
+        passed["num_lags"],
+        input_data_dict["emhass_conf"],
+        logger,
+        covariate_columns=covariate_columns,
+        quantiles=quantiles,
+    )
+
+
+async def _darts_model_fit(
+    input_data_dict: dict, logger: logging.Logger, data, debug: bool | None = False
+):
+    """Fit and persist a DartsForecaster. Mirrors forecast_model_fit's return shape."""
+    from emhass.darts_forecaster import DartsDependencyError
+
+    passed = input_data_dict["params"]["passed_data"]
+    try:
+        dartsf = _build_darts_forecaster(input_data_dict, data, logger)
+        df_pred, df_pred_backtest = await dartsf.fit(
+            split_date_delta=passed["split_date_delta"],
+            perform_backtest=passed["perform_backtest"],
+        )
+    except DartsDependencyError as exc:
+        # Log an actionable error before propagating, so the failure cause is
+        # clear in the logs rather than a bare ImportError stack trace.
+        logger.error(
+            "Cannot fit the 'darts' load forecast model because the optional "
+            "Darts extra is not installed: %s",
+            exc,
+        )
+        raise
+    if not debug:
+        filename = passed["model_type"] + darts_pkl_suffix
+        filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
+        async with aiofiles.open(filename_path, "wb") as outp:
+            await outp.write(pickle.dumps(dartsf, pickle.HIGHEST_PROTOCOL))
+            logger.debug("saved Darts model to " + str(filename_path))
+    return df_pred, df_pred_backtest, dartsf
+
+
 async def forecast_model_fit(
     input_data_dict: dict, logger: logging.Logger, debug: bool | None = False
 ) -> tuple[pd.DataFrame, pd.DataFrame, MLForecaster]:
@@ -1737,6 +1788,9 @@ async def forecast_model_fit(
     num_lags = input_data_dict["params"]["passed_data"]["num_lags"]
     split_date_delta = input_data_dict["params"]["passed_data"]["split_date_delta"]
     perform_backtest = input_data_dict["params"]["passed_data"]["perform_backtest"]
+    # Route to the Darts forecaster when selected
+    if input_data_dict["optim_conf"].get("load_forecast_method") == "darts":
+        return await _darts_model_fit(input_data_dict, logger, data, debug=debug)
     # The ML forecaster object
     mlf = MLForecaster(
         data,
@@ -1790,7 +1844,9 @@ async def forecast_model_predict(
     """
     # Load model
     model_type = input_data_dict["params"]["passed_data"]["model_type"]
-    filename = model_type + default_pkl_suffix
+    is_darts = input_data_dict["optim_conf"].get("load_forecast_method") == "darts"
+    suffix = darts_pkl_suffix if is_darts else default_pkl_suffix
+    filename = model_type + suffix
     filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
     if not debug:
         if filename_path.is_file():
@@ -1800,7 +1856,7 @@ async def forecast_model_predict(
                 logger.debug("loaded saved model from " + str(filename_path))
         else:
             logger.error(
-                "The ML forecaster file ("
+                "The forecaster file ("
                 + str(filename_path)
                 + ") was not found, please run a model fit method before this predict method",
             )
@@ -1873,7 +1929,9 @@ async def forecast_model_tune(
     """
     # Load model
     model_type = input_data_dict["params"]["passed_data"]["model_type"]
-    filename = model_type + default_pkl_suffix
+    is_darts = input_data_dict["optim_conf"].get("load_forecast_method") == "darts"
+    suffix = darts_pkl_suffix if is_darts else default_pkl_suffix
+    filename = model_type + suffix
     filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
     if not debug:
         if filename_path.is_file():
@@ -1883,7 +1941,7 @@ async def forecast_model_tune(
                 logger.debug("loaded saved model from " + str(filename_path))
         else:
             logger.error(
-                "The ML forecaster file ("
+                "The forecaster file ("
                 + str(filename_path)
                 + ") was not found, please run a model fit method before this tune method",
             )
@@ -1899,7 +1957,7 @@ async def forecast_model_tune(
     )
     # Save model
     if not debug:
-        filename = model_type + default_pkl_suffix
+        filename = model_type + suffix
         filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
         async with aiofiles.open(filename_path, "wb") as outp:
             await outp.write(pickle.dumps(mlf, pickle.HIGHEST_PROTOCOL))

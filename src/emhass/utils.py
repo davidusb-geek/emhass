@@ -1756,6 +1756,8 @@ async def treat_runtimeparams(
             ("split_date_delta", "48h", None),
             ("n_trials", 10, int),
             ("perform_backtest", False, _cast_bool),
+            ("darts_covariate_columns", [], None),
+            ("darts_quantiles", [], None),
         ]
 
         # Apply Configuration

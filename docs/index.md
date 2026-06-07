@@ -23,6 +23,7 @@ differences.md
 advanced_math_model.md
 forecasts.md
 mlforecaster.md
+darts_forecaster.md
 mlregressor.md
 thermal_model.md
 thermal_battery.md

@@ -359,7 +359,7 @@
             "default": 1,
             "title": "Number of forecasted days",
             "x-unit": "days",
-            "description": "The number of days for forecasted data. Defaults to 1. (unit: days)"
+            "description": "The number of days for forecasted data; can be overridden at runtime via runtimeparams. Defaults to 1. For naive-mpc, the forecast window is now extended automatically to cover a longer prediction_horizon, so this parameter usually need not be set manually for multi-day MPC runs. (unit: days)"
           },
           "load_forecast_method": {
             "type": "string",
@@ -367,11 +367,30 @@
               "typical",
               "naive",
               "mlforecaster",
+              "darts",
               "csv"
             ],
             "default": "typical",
             "title": "Load forecast method",
-            "description": "The load forecast method that will be used. The options are ‘csv’ to load a CSV file or ‘naive’ for a simple 1-day persistence model."
+            "description": "The load forecast method that will be used. The options are 'typical' for a statistical typical-day curve, 'naive' for a simple 1-day persistence model, 'mlforecaster' for a recursive scikit-learn model, 'darts' for a single-shot weather-aware LightGBM time-series model (requires the optional emhass[darts] extra) and 'csv' to load a CSV file."
+          },
+          "darts_covariate_columns": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "default": "temperature_2m"
+            },
+            "title": "Darts future covariate columns",
+            "description": "Optional list of extra column names to use as future covariates for the 'darts' load forecast method (e.g. weather variables such as temperature_2m). Calendar features are always added automatically; leave empty to use calendar covariates only. Only used when load_forecast_method is 'darts'."
+          },
+          "darts_quantiles": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "default": 0.5
+            },
+            "title": "Darts forecast quantiles",
+            "description": "Optional list of quantile levels (between 0 and 1) for a probabilistic 'darts' load forecast. When set, the model is fitted with a quantile likelihood and the median is used as the point forecast. Leave empty for a deterministic forecast. Only used when load_forecast_method is 'darts'."
           },
           "set_total_pv_sell": {
             "type": "boolean",
@@ -441,14 +460,14 @@
           },
           "inverter_ac_output_max": {
             "type": "integer",
-            "default": 0,
+            "default": 5000,
             "title": "Max hybrid inverter AC output power",
             "x-unit": "W",
             "description": "Maximum hybrid inverter output power from combined PV and battery discharge. (unit: W)"
           },
           "inverter_ac_input_max": {
             "type": "integer",
-            "default": 0,
+            "default": 5000,
             "title": "Max hybrid inverter AC input power",
             "x-unit": "W",
             "description": "Maximum hybrid inverter input power from grid to charge battery. (unit: W)"
@@ -705,12 +724,12 @@
           "operating_hours_of_each_deferrable_load": {
             "type": "array",
             "items": {
-              "type": "integer",
+              "type": "number",
               "default": 0
             },
             "title": "Deferrable load operating hours",
             "x-unit": "h",
-            "description": "The total number of hours that each deferrable load should operate (unit: h)"
+            "description": "The total number of hours that each deferrable load should operate. Fractional values are accepted (e.g. 4.5) and scheduled as the exact nominal_power * hours of energy; for control finer than the optimization timestep use operating_timesteps_of_each_deferrable_load. (unit: h)"
           },
           "treat_deferrable_load_as_semi_cont": {
             "type": "array",

@@ -1554,6 +1554,63 @@ class Forecast:
         data.set_index("ts", inplace=True)
         return data.copy().loc[self.forecast_dates]
 
+    async def _get_load_forecast_darts(
+        self, df: pd.DataFrame, use_last_window: bool, dartsf, debug: bool
+    ) -> pd.DataFrame | bool:
+        """Helper for the Darts (LightGBM time-series) load forecast.
+
+        Mirrors :meth:`_get_load_forecast_ml`: in production the fitted model is
+        read from a ``{model_type}_darts.pkl`` pickle; ``dartsf`` is only passed
+        directly for debug/unit testing. The forecaster is single-shot, so its
+        output already spans the optimization horizon.
+        """
+        # lazy: optional extra. The module imports without the heavy darts /
+        # lightgbm deps; the missing-dependency error only surfaces when the
+        # forecaster actually runs, so it is handled at the predict call below.
+        from emhass.darts_forecaster import DartsDependencyError, DartsForecaster
+
+        model_type = self.params["passed_data"]["model_type"]
+        filename_path = self.emhass_conf["data_path"] / (model_type + "_darts.pkl")
+        if not debug:
+            if filename_path.is_file():
+                async with aiofiles.open(filename_path, "rb") as inp:
+                    content = await inp.read()
+                    dartsf = pickle.loads(content)
+            else:
+                self.logger.error(
+                    "The Darts forecaster file was not found, please run a model fit "
+                    "method before this predict method"
+                )
+                return False
+        if not isinstance(dartsf, DartsForecaster):
+            self.logger.error("Loaded Darts model is not a DartsForecaster instance")
+            return False
+        data_last_window = None
+        if use_last_window:
+            data_last_window = copy.deepcopy(df)
+            data_last_window = data_last_window.rename(columns={self.var_load_new: self.var_load})
+        try:
+            forecast_out = await dartsf.predict(data_last_window)
+        except DartsDependencyError as exc:
+            # Mirror the missing-model path: log an actionable error and signal
+            # failure to the caller instead of propagating a raw stack trace.
+            self.logger.error(
+                "The 'darts' load forecast method requires the optional Darts "
+                "extra, which is not installed: %s",
+                exc,
+            )
+            return False
+        # Align to the optimization horizon (single-shot output is >= horizon).
+        if len(forecast_out) < len(self.forecast_dates):
+            self.logger.error(
+                f"Darts forecast produced {len(forecast_out)} steps, fewer than the "
+                f"{len(self.forecast_dates)} required forecast dates"
+            )
+            return False
+        values = forecast_out.to_numpy()[: len(self.forecast_dates)]
+        data = pd.DataFrame({"yhat": values}, index=self.forecast_dates)
+        return data.copy().loc[self.forecast_dates]
+
     def _get_load_forecast_csv(self, csv_path: str) -> pd.DataFrame:
         """Helper to retrieve load data from CSV."""
         df_csv = pd.read_csv(csv_path, header=None, names=["ts", "yhat"])
@@ -1589,6 +1646,7 @@ class Forecast:
         df_now: pd.DataFrame | None = pd.DataFrame(),
         use_last_window: bool | None = True,
         mlf: MLForecaster | None = None,
+        dartsf=None,
         debug: bool | None = False,
     ) -> pd.Series:
         """
@@ -1600,8 +1658,10 @@ class Forecast:
         :param method: The method to be used to generate load forecast, the options \
             are 'typical' for a typical household load consumption curve, \
             are 'naive' for a persistence model, 'mlforecaster' for using a custom \
-            previously fitted machine learning model, 'csv' to read the forecast from \
-            a CSV file and 'list' to use data directly passed at runtime as a list of \
+            previously fitted scikit-learn machine learning model, 'darts' for a \
+            single-shot weather-aware LightGBM time-series model (requires the \
+            optional emhass[darts] extra), 'csv' to read the forecast from a CSV \
+            file and 'list' to use data directly passed at runtime as a list of \
             values. Defaults to 'typical'.
         :type method: str, optional
         :param csv_path: The path to the CSV file used when method = 'csv', \
@@ -1629,7 +1689,7 @@ class Forecast:
         csv_path = self.emhass_conf["data_path"] / csv_path
         # Retrieve Data from Home Assistant if needed
         df = None
-        if method in ["naive", "mlforecaster"]:
+        if method in ["naive", "mlforecaster", "darts"]:
             df = await self._prepare_hass_load_data(days_min_load_forecast, method)
             if df is False:
                 return False
@@ -1640,6 +1700,10 @@ class Forecast:
             forecast_out = self._get_load_forecast_naive(df)
         elif method == "mlforecaster":
             forecast_out = await self._get_load_forecast_ml(df, use_last_window, mlf, debug)
+            if forecast_out is False:
+                return False
+        elif method == "darts":
+            forecast_out = await self._get_load_forecast_darts(df, use_last_window, dartsf, debug)
             if forecast_out is False:
                 return False
         elif method == "csv":

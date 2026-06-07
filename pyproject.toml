@@ -46,6 +46,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+darts = ["darts>=0.30.0", "lightgbm>=4.0.0"]
 docs = ["sphinx", "pydata-sphinx-theme", "sphinx-design", "myst-parser", "sphinx-llms-txt"]
 test = [
     "pytest",
