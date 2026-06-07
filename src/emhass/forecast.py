@@ -73,12 +73,20 @@ def _run_coro_blocking(coro):
         try:
             asyncio.set_event_loop(loop)
             result["value"] = loop.run_until_complete(coro)
+        except BaseException as exc:  # noqa: BLE001 - re-raised in the caller below
+            # Capture *any* failure raised inside the coroutine so it can be
+            # re-raised on the calling thread. Without this the worker thread
+            # would just exit, leaving "value" unset, and the caller would hit a
+            # misleading KeyError that masks the real error.
+            result["error"] = exc
         finally:
             loop.close()
 
     thread = threading.Thread(target=_runner)
     thread.start()
     thread.join()
+    if "error" in result:
+        raise result["error"]
     return result["value"]
 
 

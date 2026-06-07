@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import ast
 import asyncio
 import copy
 import logging
@@ -1717,6 +1718,49 @@ async def naive_mpc_optim(
     return opt_res_naive_mpc
 
 
+def _normalize_darts_list_param(value, cast=None):
+    """Coerce a Darts list-typed runtime param into a clean Python list.
+
+    The ``darts_quantiles`` / ``darts_covariate_columns`` params can arrive as a
+    real list (from JSON/dict config) but also as a *string* — e.g.
+    ``"[0.1, 0.5, 0.9]"`` or ``"temperature_2m, cloud_cover"`` from a YAML scalar
+    or a UI text field. Casting such a string with ``list(...)`` would explode it
+    into characters, so normalize first: parse a JSON/Python-literal list, fall
+    back to comma-splitting, drop blanks, and optionally cast each element.
+
+    :param value: The raw param value (list, string, or ``None``).
+    :param cast: Optional per-element cast (e.g. ``float`` for quantiles).
+    :return: A list (possibly empty), or ``None`` if ``value`` was empty/``None``.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        parsed = None
+        try:
+            literal = ast.literal_eval(text)
+            if isinstance(literal, (list, tuple)):
+                parsed = list(literal)
+        except (ValueError, SyntaxError):
+            parsed = None
+        if parsed is None:
+            # Plain delimited string, e.g. "a, b, c".
+            parsed = [item.strip() for item in text.strip("[]").split(",")]
+        value = parsed
+    elif isinstance(value, (list, tuple)):
+        value = list(value)
+    else:
+        # A bare scalar (e.g. a single quantile/column) becomes a 1-element list.
+        value = [value]
+
+    items = [item for item in value if not (isinstance(item, str) and not item.strip())]
+    if cast is not None:
+        items = [cast(item) for item in items]
+    return items or None
+
+
 def _build_darts_forecaster(input_data_dict: dict, data, logger: logging.Logger):
     """Construct a DartsForecaster from the input data dict (lazy import).
 
@@ -1727,8 +1771,11 @@ def _build_darts_forecaster(input_data_dict: dict, data, logger: logging.Logger)
     from emhass.darts_forecaster import DartsForecaster
 
     passed = input_data_dict["params"]["passed_data"]
-    quantiles = passed.get("darts_quantiles") or None
-    covariate_columns = passed.get("darts_covariate_columns") or None
+    # Normalize the list-typed params: they may arrive as strings from a YAML
+    # scalar or UI text field; coerce quantiles to floats and covariates to
+    # stripped strings so the forecaster always sees proper lists.
+    quantiles = _normalize_darts_list_param(passed.get("darts_quantiles"), cast=float)
+    covariate_columns = _normalize_darts_list_param(passed.get("darts_covariate_columns"), cast=str)
     non_negative = passed.get("darts_non_negative", True)
     return DartsForecaster(
         data,
@@ -1758,9 +1805,11 @@ async def _darts_model_fit(
         )
     except DartsDependencyError as exc:
         # Log an actionable error before propagating, so the failure cause is
-        # clear in the logs rather than a bare ImportError stack trace.
+        # clear in the logs rather than a bare ImportError stack trace. The fit
+        # path is target-agnostic (load, load cost or production price), so keep
+        # the message generic rather than naming only the load forecast.
         logger.error(
-            "Cannot fit the 'darts' load forecast model because the optional "
+            "Cannot fit the 'darts' forecast model because the optional "
             "Darts extra is not installed: %s",
             exc,
         )
@@ -1859,7 +1908,10 @@ async def forecast_model_predict(
     :return: The DataFrame containing the forecast prediction data
     :rtype: pd.DataFrame
     """
-    # Load model
+    # Load model. DartsDependencyError is imported lazily; the module imports
+    # without the heavy darts/lightgbm deps, so a stock install is unaffected.
+    from emhass.darts_forecaster import DartsDependencyError
+
     model_type = input_data_dict["params"]["passed_data"]["model_type"]
     is_darts = input_data_dict["optim_conf"].get("load_forecast_method") == "darts"
     suffix = darts_pkl_suffix if is_darts else default_pkl_suffix
@@ -1883,7 +1935,18 @@ async def forecast_model_predict(
         data_last_window = copy.deepcopy(input_data_dict["df_input_data"])
     else:
         data_last_window = None
-    predictions = await mlf.predict(data_last_window)
+    try:
+        predictions = await mlf.predict(data_last_window)
+    except DartsDependencyError as exc:
+        # The loaded model is a Darts forecaster but the optional extra is not
+        # installed here. Mirror the missing-model path: log a clear, actionable
+        # error and return rather than propagating a raw ImportError stack trace.
+        logger.error(
+            "Cannot run the 'darts' forecast model predict because the optional "
+            "Darts extra is not installed: %s",
+            exc,
+        )
+        return
     # Publish data to a Home Assistant sensor
     model_predict_publish = input_data_dict["params"]["passed_data"]["model_predict_publish"]
     model_predict_entity_id = input_data_dict["params"]["passed_data"]["model_predict_entity_id"]
@@ -1944,7 +2007,10 @@ async def forecast_model_tune(
     :return: The DataFrame containing the forecast data results using the optimized model
     :rtype: pd.DataFrame
     """
-    # Load model
+    # Load model. DartsDependencyError is imported lazily; the module imports
+    # without the heavy darts/lightgbm deps, so a stock install is unaffected.
+    from emhass.darts_forecaster import DartsDependencyError
+
     model_type = input_data_dict["params"]["passed_data"]["model_type"]
     is_darts = input_data_dict["optim_conf"].get("load_forecast_method") == "darts"
     suffix = darts_pkl_suffix if is_darts else default_pkl_suffix
@@ -1969,9 +2035,20 @@ async def forecast_model_tune(
         n_trials = 5
     else:
         n_trials = input_data_dict["params"]["passed_data"]["n_trials"]
-    df_pred_optim = await mlf.tune(
-        split_date_delta=split_date_delta, n_trials=n_trials, debug=debug
-    )
+    try:
+        df_pred_optim = await mlf.tune(
+            split_date_delta=split_date_delta, n_trials=n_trials, debug=debug
+        )
+    except DartsDependencyError as exc:
+        # The loaded model is a Darts forecaster but the optional extra is not
+        # installed here. Mirror the missing-model path: log a clear, actionable
+        # error and return rather than propagating a raw ImportError stack trace.
+        logger.error(
+            "Cannot tune the 'darts' forecast model because the optional "
+            "Darts extra is not installed: %s",
+            exc,
+        )
+        return None, None
     # Save model
     if not debug:
         filename = model_type + suffix

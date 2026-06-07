@@ -107,6 +107,55 @@ class TestDartsForecasterDependency(unittest.TestCase):
             self.assertIsNotNone(found, f"{key} not found in param_definitions.json")
             self.assertIn("darts", found["select_options"])
 
+    def test_run_coro_blocking_surfaces_exceptions(self):
+        """A coroutine that raises must re-raise the real error, not a KeyError.
+
+        Regression guard: the sync->async bridge runs the coroutine on a worker
+        thread. If the worker stores nothing on failure, the caller would hit a
+        misleading ``KeyError: 'value'`` that masks the true cause.
+        """
+        from emhass.forecast import _run_coro_blocking
+
+        async def _ok():
+            return 42
+
+        self.assertEqual(_run_coro_blocking(_ok()), 42)
+
+        async def _boom():
+            raise ValueError("boom from the worker coroutine")
+
+        with self.assertRaises(ValueError) as ctx:
+            _run_coro_blocking(_boom())
+        self.assertIn("boom from the worker coroutine", str(ctx.exception))
+
+    def test_normalize_darts_list_param(self):
+        """String/JSON/scalar list params are coerced to proper typed lists."""
+        from emhass.command_line import _normalize_darts_list_param
+
+        # None / empty -> None
+        self.assertIsNone(_normalize_darts_list_param(None))
+        self.assertIsNone(_normalize_darts_list_param(""))
+        self.assertIsNone(_normalize_darts_list_param("[]"))
+        self.assertIsNone(_normalize_darts_list_param([]))
+        # A real list passes through (with optional cast).
+        self.assertEqual(_normalize_darts_list_param([0.1, 0.9], cast=float), [0.1, 0.9])
+        # A JSON/Python-literal string of quantiles -> list[float] (not chars).
+        self.assertEqual(
+            _normalize_darts_list_param("[0.1, 0.5, 0.9]", cast=float), [0.1, 0.5, 0.9]
+        )
+        # A plain comma string of covariates -> stripped list[str].
+        self.assertEqual(
+            _normalize_darts_list_param("temperature_2m, cloud_cover", cast=str),
+            ["temperature_2m", "cloud_cover"],
+        )
+        # A bracketed comma string also works.
+        self.assertEqual(
+            _normalize_darts_list_param("[temperature_2m, cloud_cover]", cast=str),
+            ["temperature_2m", "cloud_cover"],
+        )
+        # A bare scalar becomes a one-element list.
+        self.assertEqual(_normalize_darts_list_param(0.5, cast=float), [0.5])
+
 
 @unittest.skipUnless(DARTS_AVAILABLE, "optional 'darts' extra not installed")
 class TestDartsForecaster(unittest.IsolatedAsyncioTestCase):
@@ -368,6 +417,111 @@ class TestDartsForecaster(unittest.IsolatedAsyncioTestCase):
         df_final = pd.DataFrame(index=fcst.forecast_dates)
         out = fcst.get_load_cost_forecast(df_final, method="darts")
         self.assertFalse(out)
+
+
+class TestDartsForecasterDispatchDependency(unittest.IsolatedAsyncioTestCase):
+    """The missing-extra path in the price/cost dispatch is logged and returns False.
+
+    This runs whether or not the optional Darts extra is installed: a real
+    :class:`DartsForecaster` is *constructed* (which needs only pandas, not the
+    heavy darts/lightgbm backend) and pickled, then ``_require_darts`` is
+    monkey-patched to raise so the dependency-missing branch is exercised
+    deterministically — mirroring how a real stock install would behave when a
+    Darts pickle is present but the extra was never installed.
+    """
+
+    async def _make_price_dispatch_fcst(self):
+        """Build a get_data_from_file Forecast for the price dispatch, plus var_load."""
+        params = copy.deepcopy(await TestDartsForecaster.get_test_params())
+        # The var_model is read from the same fixture the functional tests use.
+        async with aiofiles.open(emhass_conf["data_path"] / "test_df_final.pkl", "rb") as inp:
+            _, _, var_list, _ = pickle.loads(await inp.read())
+        var_load = str(var_list[0])
+        runtimeparams = {
+            "model_type": "long_train_data",
+            "var_model": var_load,
+            "num_lags": 48,
+        }
+        params["passed_data"] = runtimeparams
+        params_json = orjson.dumps(params).decode("utf-8")
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            "profit",
+            params_json,
+            runtimeparams_json,
+            "forecast-model-fit",
+            logger,
+            get_data_from_file=True,
+        )
+        return input_data_dict["fcst"], var_load
+
+    async def _pickle_unfitted_forecaster(self, var_load, suffix):
+        """Pickle a constructed-but-unfitted DartsForecaster for a price suffix.
+
+        Construction does not import darts/lightgbm, so this works on a stock
+        install. ``predict`` calls ``_require_darts`` before touching the model,
+        so the patched dependency error fires before the unfitted-model guard.
+        """
+        from emhass.darts_forecaster import DartsForecaster
+
+        idx = pd.date_range("2024-01-01", periods=96, freq="30min")
+        frame = pd.DataFrame({var_load: np.linspace(0.1, 0.2, len(idx))}, index=idx)
+        dartsf = DartsForecaster(
+            frame, "long_train_data", var_load, 48, emhass_conf, logger, non_negative=False
+        )
+        filename_path = emhass_conf["data_path"] / f"long_train_data_{suffix}_darts.pkl"
+        async with aiofiles.open(filename_path, "wb") as outp:
+            await outp.write(pickle.dumps(dartsf, pickle.HIGHEST_PROTOCOL))
+        return filename_path
+
+    async def test_load_cost_dispatch_missing_extra_logs_and_returns_false(self):
+        """get_load_cost_forecast(method='darts') logs + returns False if darts missing."""
+        import unittest.mock as mock
+
+        from emhass.darts_forecaster import DartsDependencyError
+
+        fcst, var_load = await self._make_price_dispatch_fcst()
+        pkl = await self._pickle_unfitted_forecaster(var_load, "load_cost")
+        self.addCleanup(lambda: pkl.unlink(missing_ok=True))
+        fcst.get_data_from_file = True
+        df_final = pd.DataFrame(index=fcst.forecast_dates)
+
+        def _raise(*_args, **_kwargs):
+            raise DartsDependencyError("simulated missing darts extra")
+
+        with mock.patch("emhass.darts_forecaster._require_darts", side_effect=_raise):
+            with self.assertLogs(level="ERROR") as captured:
+                out = fcst.get_load_cost_forecast(df_final, method="darts")
+        self.assertFalse(out)
+        self.assertTrue(
+            any("darts" in line.lower() and "extra" in line.lower() for line in captured.output),
+            msg=f"expected a clear missing-extra error log, got: {captured.output}",
+        )
+
+    async def test_prod_price_dispatch_missing_extra_logs_and_returns_false(self):
+        """get_prod_price_forecast(method='darts') logs + returns False if darts missing."""
+        import unittest.mock as mock
+
+        from emhass.darts_forecaster import DartsDependencyError
+
+        fcst, var_load = await self._make_price_dispatch_fcst()
+        pkl = await self._pickle_unfitted_forecaster(var_load, "prod_price")
+        self.addCleanup(lambda: pkl.unlink(missing_ok=True))
+        fcst.get_data_from_file = True
+        df_final = pd.DataFrame(index=fcst.forecast_dates)
+
+        def _raise(*_args, **_kwargs):
+            raise DartsDependencyError("simulated missing darts extra")
+
+        with mock.patch("emhass.darts_forecaster._require_darts", side_effect=_raise):
+            with self.assertLogs(level="ERROR") as captured:
+                out = fcst.get_prod_price_forecast(df_final, method="darts")
+        self.assertFalse(out)
+        self.assertTrue(
+            any("darts" in line.lower() and "extra" in line.lower() for line in captured.output),
+            msg=f"expected a clear missing-extra error log, got: {captured.output}",
+        )
 
 
 if __name__ == "__main__":
