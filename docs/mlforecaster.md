@@ -119,7 +119,13 @@ The supported values are sourced from the Open-Meteo weather forecast:
 `heating_degree`/`cooling_degree` are derived locally from the retrieved temperature using an 18 °C comfort set-point, so they are available even if you do not request `temp_air` itself.
 
 ```{note}
-Weather covariates are only used by the `mlforecaster` method and are retrieved from Open-Meteo regardless of the `weather_forecast_method` you use for PV. The historical weather needed to train the model is fetched from Open-Meteo's recent past window (up to 92 days), so this works without you having to record a weather sensor in Home Assistant.
+**Weather covariates always come from Open-Meteo, regardless of your `weather_forecast_method`.**
+
+EMHASS supports several methods for the PV *production* forecast (Solcast, Forecast.Solar, the built-in clear-sky model, etc.), but none of those services expose raw meteorological variables such as outside temperature, humidity, cloud cover or precipitation — they only publish a predicted power or irradiance curve. The weather covariates needed here are those raw atmospheric quantities, and Open-Meteo is the only source already integrated into EMHASS that provides them at the required resolution.
+
+For this reason, when `mlforecaster_weather_features` is non-empty, EMHASS will *always* make a separate Open-Meteo request to fetch the covariate data, irrespective of how you have configured `weather_forecast_method`. Your PV forecast method is not affected and does not need to change.
+
+No extra API key or configuration is required: Open-Meteo is free and open access, and EMHASS reuses its existing Open-Meteo cache file so the additional network overhead is minimal. The historical weather needed to train the model is fetched from Open-Meteo's recent past window (up to 92 days), so this works without you having to record a weather sensor in Home Assistant.
 ```
 
 ```{note}
