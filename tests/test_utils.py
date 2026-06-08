@@ -1452,9 +1452,9 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
 
     def test_check_def_loads(self):
         """Test padding of deferrable load parameter lists."""
-        parameter = {"operating_hours": [3, 4]}
         default_val = 5
         # Case 1: Needs padding (num_def_loads > list length)
+        parameter = {"operating_hours": [3, 4]}
         result1 = utils.check_def_loads(4, parameter, default_val, "operating_hours", logger)
         self.assertEqual(len(result1), 4)
         self.assertEqual(result1, [3, 4, 5, 5])
@@ -1463,11 +1463,25 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         result2 = utils.check_def_loads(2, parameter, default_val, "operating_hours", logger)
         self.assertEqual(len(result2), 2)
         self.assertEqual(result2, [3, 4])
-        # Case 3: Parameter doesn't exist or isn't a list (should just return as-is, though the logic might fail if not checked)
+        # Case 3: Missing key -> fill with defaults instead of raising KeyError (#929)
         parameter = {"other_param": "test"}
-        with self.assertRaises(KeyError):
-            # The function blindly returns parameter[parameter_name], so a missing key will KeyError
-            utils.check_def_loads(2, parameter, default_val, "missing_key", logger)
+        result3 = utils.check_def_loads(2, parameter, default_val, "missing_key", logger)
+        self.assertEqual(result3, [5, 5])
+        self.assertEqual(parameter["missing_key"], [5, 5])
+        # Case 4: Explicit JSON null (None) -> fill with defaults, no crash
+        parameter = {"deferrable_load_max_cost": None}
+        result4 = utils.check_def_loads(3, parameter, 0.0, "deferrable_load_max_cost", logger)
+        self.assertEqual(result4, [0.0, 0.0, 0.0])
+        # Case 5 (#929 regression): a per-load list shorter than the load count
+        # (e.g. the length-2 shipped default vs number_of_deferrable_loads=3) must pad
+        # SILENTLY. Enlarging-to-fit is the function's documented job, not a warning, so
+        # it is logged at DEBUG and never at WARNING.
+        parameter = {"deferrable_load_max_cost": [0.0, 0.0]}
+        with self.assertLogs(logger, level="DEBUG") as cm:
+            result5 = utils.check_def_loads(3, parameter, 0.0, "deferrable_load_max_cost", logger)
+        self.assertEqual(result5, [0.0, 0.0, 0.0])
+        self.assertTrue(any(r.levelno == logging.DEBUG for r in cm.records))
+        self.assertFalse(any(r.levelno >= logging.WARNING for r in cm.records))
 
     def test_parse_export_time_range(self):
         """Test timestamp parsing and validation for data exports."""

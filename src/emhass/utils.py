@@ -2907,13 +2907,6 @@ async def build_params(
             "nominal_power_of_deferrable_loads",
             logger,
         )
-        params["optim_conf"]["deferrable_load_max_cost"] = check_def_loads(
-            num_def_loads,
-            params["optim_conf"],
-            0,
-            "deferrable_load_max_cost",
-            logger,
-        )
         # Validate deferrable_load_groups
         groups = params["optim_conf"].get("deferrable_load_groups", [])
         if groups:
@@ -3060,6 +3053,10 @@ def check_def_loads(
     """
     Check parameter lists with deferrable loads number, if they do not match, enlarge to fit.
 
+    A missing key or ``None`` value is filled with ``default`` for every load. ``parameter``
+    is updated in place (and the same list returned), matching how every call site reassigns
+    ``params["optim_conf"][name] = check_def_loads(...)``.
+
     :param num_def_loads: Total number deferrable loads
     :type num_def_loads: int
     :param parameter: parameter config dict containing paramater
@@ -3073,19 +3070,26 @@ def check_def_loads(
     :return: parameter list
     :rtype: list[dict]
     """
-    if (
-        parameter.get(parameter_name, None) is not None
-        and type(parameter[parameter_name]) is list
-        and num_def_loads > len(parameter[parameter_name])
-    ):
-        logger.warning(
+    current = parameter.get(parameter_name, None)
+    # Missing key or explicit JSON null: apply the default for every load. This is
+    # expected when a per-load array is absent from the user config (e.g. a parameter
+    # added in a later release), so do it silently rather than raising KeyError.
+    if current is None:
+        parameter[parameter_name] = [default] * num_def_loads
+        return parameter[parameter_name]
+    if isinstance(current, list) and num_def_loads > len(current):
+        # Enlarging a short list to match number_of_deferrable_loads is this function's
+        # documented job, not an error: the shipped defaults are sized for the default
+        # load count, so any user that raises the count without restating every per-load
+        # array lands here. Log at debug to avoid spurious startup warnings (#929).
+        logger.debug(
             parameter_name
-            + " does not match number in num_def_loads, adding default values ("
+            + " has fewer entries than number_of_deferrable_loads, padding with default ("
             + str(default)
-            + ") to parameter"
+            + ")"
         )
-        for _x in range(len(parameter[parameter_name]), num_def_loads):
-            parameter[parameter_name].append(default)
+        for _x in range(len(current), num_def_loads):
+            current.append(default)
     result = parameter[parameter_name]
     # Replace any None elements with the default (can occur when set-config
     # receives a partial config, e.g. [null, 0] instead of [0, 0]).
