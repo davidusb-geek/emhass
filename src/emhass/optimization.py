@@ -3368,9 +3368,15 @@ class Optimization:
         # Update load active parameters: deactivate non-thermal loads with 0 operating timesteps,
         # OR with a configured window that's entirely outside the optimization horizon.
         # Thermal loads (thermal_config, thermal_battery) are always active since they're
-        # driven by temperature constraints, not operating timesteps.
+        # driven by temperature constraints, not operating timesteps. Sequence loads
+        # (list-valued nominal power) are likewise always active: their runtime is the
+        # length of the sequence and operating_hours is meaningless for them, so a value
+        # of 0 must not deactivate the load (issue #887). The energy constraint already
+        # exempts sequence loads, so this keeps param_load_active consistent with it.
+        nominal_powers = self.optim_conf["nominal_power_of_deferrable_loads"]
         for k in range(min(num_deferrable_loads, len(self.param_load_active))):
             is_thermal = k in self.param_thermal
+            is_sequence = k < len(nominal_powers) and isinstance(nominal_powers[k], list)
             has_operating_requirement = (
                 def_total_timestep and k < len(def_total_timestep) and def_total_timestep[k] > 0
             ) or (def_total_hours and k < len(def_total_hours) and def_total_hours[k] > 0)
@@ -3379,7 +3385,7 @@ class Optimization:
                 # Thermal loads are still driven by temperature constraints
                 # even if their configured window is outside the horizon.
                 self.param_load_active[k].value = 1.0
-            elif has_operating_requirement and not window_outside_horizon:
+            elif (has_operating_requirement or is_sequence) and not window_outside_horizon:
                 self.param_load_active[k].value = 1.0
             else:
                 self.param_load_active[k].value = 0.0

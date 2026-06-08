@@ -852,6 +852,30 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.opt.perform_naive_mpc_optim(df, pv, load, 6, soc_init=0.5, soc_final=0.5)
         self.assertNotIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
 
+    def test_sequence_load_runs_with_zero_operating_hours(self):
+        """Issue #887: a sequence (list-valued power) deferrable load runs for
+        the length of its sequence and ignores operating_hours, which is
+        meaningless for it. Setting that load's operating hours to 0 must not
+        make the optimization infeasible. It previously did, because the load
+        was deactivated by the operating-hours==0 path even though the energy
+        constraint already exempts sequence loads.
+        """
+        df = self.prepare_forecast_data()
+        self.optim_conf.update(
+            {
+                "set_use_battery": False,
+                "number_of_deferrable_loads": 1,
+                "nominal_power_of_deferrable_loads": [[1000, 1000]],
+                "operating_hours_of_each_deferrable_load": [0],
+            }
+        )
+        self.opt = self.create_optimization()
+        res = self.opt.perform_naive_mpc_optim(df, self.p_pv_forecast, self.p_load_forecast, 10)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertIn("P_deferrable0", res.columns)
+        # The 2-step, 1000 W sequence ran exactly once: total power 2000 W.
+        self.assertAlmostEqual(res["P_deferrable0"].sum(), 2000.0, delta=1.0)
+
     def test_intermediate_soc_target_below_soc_init_is_noop(self):
         """Issue #553: a soc_target at or below the SoC the battery already holds
         builds a non-biting floor, so the optimized plan is unchanged vs no target.
