@@ -115,6 +115,28 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
             perform_backtest=self.input_data_dict["params"]["passed_data"]["perform_backtest"],
         )
 
+    def _data_with_weather(self):
+        """Return a copy of the test data with two synthetic weather covariate columns."""
+        data = self.data.copy()
+        # A smooth daily temperature cycle + a derived heating-degree column, so the columns are
+        # meaningful (not constant) and aligned to the load index.
+        hours = data.index.hour + data.index.minute / 60.0
+        temp_air = 18.0 + 8.0 * np.sin((hours - 9.0) / 24.0 * 2 * np.pi)
+        data["temp_air"] = temp_air
+        data["heating_degree"] = np.maximum(0.0, 18.0 - temp_air)
+        return data
+
+    def _weather_future_frame(self, periods=48, freq="30min"):
+        """Build a future weather frame for the predict horizon following the train window."""
+        start = self.data.index[-1] + self.data.index.freq
+        future_index = pd.date_range(start=start, periods=periods, freq=freq)
+        hours = future_index.hour + future_index.minute / 60.0
+        temp_air = 18.0 + 8.0 * np.sin((hours - 9.0) / 24.0 * 2 * np.pi)
+        return pd.DataFrame(
+            {"temp_air": temp_air, "heating_degree": np.maximum(0.0, 18.0 - temp_air)},
+            index=future_index,
+        )
+
     def test_mlforecaster_init(self):
         mlf = self._get_standard_mlf()
         self.assertIsInstance(mlf, MLForecaster)
@@ -235,6 +257,46 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         # Default Fallback
         self.assertEqual(passed_data.get("split_date_delta"), "48h")
 
+    async def _treat_runtimeparams_passed_data(self, runtime_input):
+        """Run treat_runtimeparams with the real associations and return passed_data."""
+        params = await TestMLForecasterAsync.get_test_params()
+        if "optimization_time_step" in params["retrieve_hass_conf"]:
+            params["retrieve_hass_conf"]["optimization_time_step"] = pd.to_timedelta(
+                params["retrieve_hass_conf"]["optimization_time_step"], "minutes"
+            )
+        if "delta_forecast_daily" in params["optim_conf"]:
+            params["optim_conf"]["delta_forecast_daily"] = pd.to_timedelta(
+                params["optim_conf"]["delta_forecast_daily"], "days"
+            )
+        params_json_res, _, _, _ = await utils.treat_runtimeparams(
+            orjson.dumps(runtime_input).decode("utf-8"),
+            params,
+            {},  # retrieve_hass_conf
+            {},  # optim_conf
+            {},  # plant_conf
+            "forecast-model-fit",
+            logger,
+            emhass_conf,
+        )
+        return orjson.loads(params_json_res)["passed_data"]
+
+    async def test_treat_runtimeparams_weather_features_default_empty(self):
+        """Without a runtime override the weather features default to an empty list."""
+        passed_data = await self._treat_runtimeparams_passed_data({"model_type": "load_forecast"})
+        self.assertEqual(passed_data.get("mlforecaster_weather_features"), [])
+
+    async def test_treat_runtimeparams_weather_features_override(self):
+        """A runtime mlforecaster_weather_features list is routed into passed_data."""
+        passed_data = await self._treat_runtimeparams_passed_data(
+            {
+                "model_type": "load_forecast",
+                "mlforecaster_weather_features": ["temp_air", "heating_degree"],
+            }
+        )
+        self.assertEqual(
+            passed_data["mlforecaster_weather_features"], ["temp_air", "heating_degree"]
+        )
+
     async def test_mlforecaster_fit_backtest(self):
         """Test the backtesting block using a fast linear model and reduced data to save time."""
         # Use a fast model and a small dataset slice (e.g., last 200 rows)
@@ -285,6 +347,127 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         # Verify the specific fallback warnings were logged correctly
         self.assertTrue(any("Calculated initial_train_size" in log for log in cm.output))
         self.assertTrue(any("Adjusting initial_train_size" in log for log in cm.output))
+
+    # --- Weather covariate (exog) support -------------------------------------------------
+
+    def test_weather_features_default_is_empty(self):
+        """By default no weather features are configured (backward compatible)."""
+        mlf = self._get_standard_mlf()
+        self.assertEqual(mlf.weather_features, [])
+
+    async def test_fit_exog_columns_unchanged_without_weather(self):
+        """Without weather features, the fit exog columns must be exactly the date features."""
+        mlf = self._get_standard_mlf()
+        await self._fit_standard_mlf(mlf)
+        date_only = utils.add_date_features(pd.DataFrame(index=self.data.index))
+        # data_exo also carries the target column; drop it before comparing the exog set.
+        exog_cols = [c for c in mlf.data_exo.columns if c != mlf.var_model]
+        self.assertEqual(sorted(exog_cols), sorted(date_only.columns))
+
+    async def test_fit_includes_weather_exog_columns(self):
+        """With weather features the fit exog must include the configured weather columns."""
+        data = self._data_with_weather()
+        weather_features = ["temp_air", "heating_degree"]
+        mlf = MLForecaster(
+            data,
+            "load_forecast",
+            "sensor.power_load_no_var_loads",
+            "LinearRegression",
+            48,
+            emhass_conf,
+            logger,
+            weather_features=weather_features,
+        )
+        df_pred, _ = await mlf.fit(split_date_delta="48h", perform_backtest=False)
+        self.assertIsInstance(df_pred, pd.DataFrame)
+        for column in weather_features:
+            self.assertIn(column, mlf.data_exo.columns)
+        # The fitted skforecast forecaster must have registered the weather columns as exog.
+        self.assertTrue(set(weather_features).issubset(set(mlf.forecaster.exog_names_in_)))
+
+    async def test_predict_with_weather_future(self):
+        """A weather-trained model predicts when supplied future weather over the horizon."""
+        data = self._data_with_weather()
+        weather_features = ["temp_air", "heating_degree"]
+        mlf = MLForecaster(
+            data,
+            "load_forecast",
+            "sensor.power_load_no_var_loads",
+            "LinearRegression",
+            48,
+            emhass_conf,
+            logger,
+            weather_features=weather_features,
+        )
+        await mlf.fit(split_date_delta="48h", perform_backtest=False)
+        weather_future = self._weather_future_frame(periods=48)
+        df_pred = await mlf.predict(data_last_window=data, weather_future=weather_future)
+        self.assertIsInstance(df_pred, pd.Series)
+        self.assertEqual(len(df_pred), 48)
+
+    async def test_predict_missing_weather_future_raises(self):
+        """A weather-trained model must error clearly if no future weather is supplied."""
+        data = self._data_with_weather()
+        mlf = MLForecaster(
+            data,
+            "load_forecast",
+            "sensor.power_load_no_var_loads",
+            "LinearRegression",
+            48,
+            emhass_conf,
+            logger,
+            weather_features=["temp_air", "heating_degree"],
+        )
+        await mlf.fit(split_date_delta="48h", perform_backtest=False)
+        with self.assertRaises(ValueError):
+            await mlf.predict(data_last_window=data, weather_future=None)
+
+    async def test_fit_missing_weather_column_raises(self):
+        """Configured weather features absent from the training data must raise KeyError."""
+        mlf = MLForecaster(
+            self.data,  # no weather columns
+            "load_forecast",
+            "sensor.power_load_no_var_loads",
+            "LinearRegression",
+            48,
+            emhass_conf,
+            logger,
+            weather_features=["temp_air"],
+        )
+        with self.assertRaises(KeyError):
+            await mlf.fit(split_date_delta="48h", perform_backtest=False)
+
+    async def test_generate_exog_merges_weather(self):
+        """generate_exog attaches the requested weather columns from the future frame."""
+        weather_future = self._weather_future_frame(periods=10)
+        exog = await MLForecaster.generate_exog(
+            self.data,
+            10,
+            "sensor.power_load_no_var_loads",
+            weather_features=["temp_air", "heating_degree"],
+            weather_future=weather_future,
+        )
+        self.assertIn("temp_air", exog.columns)
+        self.assertIn("heating_degree", exog.columns)
+        self.assertEqual(len(exog), 10)
+        self.assertFalse(exog["temp_air"].isna().any())
+
+    async def test_tune_with_weather_features(self):
+        """Tuning a weather-trained model works (weather exog carried through from fit)."""
+        data = self._data_with_weather()
+        mlf = MLForecaster(
+            data,
+            "load_forecast",
+            "sensor.power_load_no_var_loads",
+            "LinearRegression",
+            48,
+            emhass_conf,
+            logger,
+            weather_features=["temp_air", "heating_degree"],
+        )
+        await mlf.fit(split_date_delta="48h", perform_backtest=False)
+        df_pred_optim = await mlf.tune(debug=True, split_date_delta="48h")
+        self.assertIsInstance(df_pred_optim, pd.DataFrame)
 
 
 if __name__ == "__main__":

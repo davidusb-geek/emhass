@@ -345,6 +345,52 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(p_pv_forecast.index.tz, self.fcst.time_zone)
             self.assertEqual(len(df_weather_openmeteo), len(p_pv_forecast))
 
+    async def test_get_weather_covariates(self):
+        """get_weather_covariates returns the requested + derived columns aligned to the index."""
+        from unittest.mock import patch
+
+        # Build a synthetic Open-Meteo minutely_15 payload spanning the forecast index plus a few
+        # past steps, with a non-constant temperature so the derived degree-days are meaningful.
+        index = self.fcst.forecast_dates
+        span_start = index[0] - 4 * self.fcst.freq
+        full = pd.date_range(start=span_start, end=index[-1], freq=self.fcst.freq, tz=index.tz)
+        times = (full.tz_convert("UTC").astype("int64") // 10**9).tolist()
+        hours = full.hour + full.minute / 60.0
+        temps = (18.0 + 8.0 * np.sin((hours - 9.0) / 24.0 * 2 * np.pi)).tolist()
+        payload = {
+            "minutely_15": {
+                "time": times,
+                "temperature_2m": temps,
+                "relative_humidity_2m": [55.0] * len(full),
+                "cloud_cover": [40.0] * len(full),
+                "wind_speed_10m": [10.0] * len(full),
+                "shortwave_radiation": [100.0] * len(full),
+                "direct_radiation": [60.0] * len(full),
+                "diffuse_radiation": [40.0] * len(full),
+                "precipitation": [0.0] * len(full),
+            }
+        }
+        weather_features = ["temp_air", "heating_degree", "cooling_degree"]
+        with patch.object(self.fcst, "_fetch_open_meteo_covariates_json", return_value=payload):
+            covariates = await self.fcst.get_weather_covariates(index, weather_features)
+        self.assertIsInstance(covariates, pd.DataFrame)
+        self.assertEqual(list(covariates.columns), weather_features)
+        self.assertEqual(len(covariates), len(index))
+        self.assertTrue(covariates.index.equals(index))
+        # No NaNs after alignment + fill.
+        self.assertFalse(covariates.isna().any().any())
+        # Derived degree-days are consistent with the 18 C comfort set-point and temperature.
+        comfort = self.fcst.WEATHER_COVARIATE_COMFORT_TEMP_C
+        expected_heating = np.maximum(0.0, comfort - covariates["temp_air"])
+        np.testing.assert_allclose(
+            covariates["heating_degree"].to_numpy(), expected_heating.to_numpy(), atol=1e-6
+        )
+
+    async def test_get_weather_covariates_rejects_unsupported(self):
+        """An unsupported covariate name raises a clear ValueError."""
+        with self.assertRaises(ValueError):
+            await self.fcst.get_weather_covariates(self.fcst.forecast_dates, ["not_a_real_column"])
+
     # Test output weather forecast using Solcast with mock get request data
     async def test_get_weather_forecast_solcast_method_mock(self):
         self.fcst.params = {
