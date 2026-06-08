@@ -2380,6 +2380,32 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 err_msg=f"bias={bias_value!r} did not produce the expected ratio {ratio}",
             )
 
+    # The quantile bias only has data to act on under the solcast method (the
+    # only provider returning pv_estimate10). For any other method the knob must
+    # warn the user it is being ignored, rather than silently doing nothing.
+    async def test_get_weather_forecast_pv_quantile_bias_warns_for_non_solcast(self):
+        """Setting the bias for a non-solcast method must warn and not crash."""
+        self.fcst.optim_conf["weather_forecast_pv_quantile_bias"] = 0.5
+        try:
+            with self.assertLogs(logger, level="WARNING") as cm:
+                df = await self.fcst.get_weather_forecast(method="csv")
+            self.assertTrue(
+                any("only applies to the 'solcast'" in msg for msg in cm.output),
+                msg=f"expected a Solcast-only warning for method=csv, got: {cm.output}",
+            )
+            self.assertIsInstance(df, pd.DataFrame)
+        finally:
+            self.fcst.optim_conf.pop("weather_forecast_pv_quantile_bias", None)
+
+    async def test_get_weather_forecast_pv_quantile_bias_zero_no_warn_non_solcast(self):
+        """The default bias of 0 must NOT warn under a non-solcast method."""
+        self.fcst.optim_conf["weather_forecast_pv_quantile_bias"] = 0.0
+        try:
+            df = await self.fcst.get_weather_forecast(method="csv")
+            self.assertIsInstance(df, pd.DataFrame)
+        finally:
+            self.fcst.optim_conf.pop("weather_forecast_pv_quantile_bias", None)
+
 
 class TestDstForecastDates(unittest.IsolatedAsyncioTestCase):
     """Standalone tests for the DST forecast-date-range fix.

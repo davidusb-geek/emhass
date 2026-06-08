@@ -767,6 +767,18 @@ class Forecast:
                 "The scrapper method has been deprecated and the keyword is accepted just for backward compatibility, please change the PV forecast method to open-meteo"
             )
         self.weather_forecast_method = method
+        # The P50/P10 quantile-bias blend is only available from Solcast, the
+        # only provider that returns pv_estimate10. If the knob is set for any
+        # other method, warn and ignore it so the Solcast dependency is explicit
+        # rather than a silent no-op. (Short-circuits before parsing for solcast,
+        # so this never double-logs with the parse inside _get_weather_solcast.)
+        if method != "solcast" and self._parse_pv_quantile_bias() > 0.0:
+            self.logger.warning(
+                "weather_forecast_pv_quantile_bias is set but only applies to the "
+                "'solcast' weather_forecast_method (the only provider returning P10 "
+                "quantiles); ignoring it for weather_forecast_method=%r.",
+                method,
+            )
         if method in ["open-meteo", "scrapper"]:
             data = await self._get_weather_open_meteo(w_forecast_cache_path, use_legacy_pvlib)
         elif method == "solcast":
