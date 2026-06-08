@@ -532,6 +532,35 @@ class Forecast:
             return None
         return await self.get_cached_forecast_data(w_forecast_cache_path)
 
+    def _parse_pv_quantile_bias(self) -> float:
+        """Return the validated weather_forecast_pv_quantile_bias as a float in [0, 1].
+
+        Coerce-then-validate so a quoted/templated value like "0.5" still works,
+        while a bad type (bool, None, list) or NaN falls back to 0.0 with a visible
+        warning rather than silently changing or disabling the forecast. Out-of-range
+        numerics are clamped to [0, 1]. The default 0.0 keeps the central P50 forecast.
+        """
+        raw_bias = self.optim_conf.get("weather_forecast_pv_quantile_bias", 0.0)
+        try:
+            if isinstance(raw_bias, bool):
+                raise TypeError
+            bias = float(raw_bias)
+            if np.isnan(bias):
+                raise ValueError
+        except (TypeError, ValueError):
+            self.logger.warning(
+                "weather_forecast_pv_quantile_bias=%r is not a valid number; using 0.0 (P50).",
+                raw_bias,
+            )
+            bias = 0.0
+        if bias < 0.0 or bias > 1.0:
+            self.logger.warning(
+                "weather_forecast_pv_quantile_bias=%s is outside [0, 1]; clamping to that range.",
+                bias,
+            )
+            bias = max(0.0, min(1.0, bias))
+        return bias
+
     async def _get_weather_solcast(self, w_forecast_cache_path: str) -> pd.DataFrame:
         """Helper to retrieve weather data from Solcast or cache."""
         cached_data = await self._get_cached_forecast_or_none(w_forecast_cache_path)
@@ -566,6 +595,11 @@ class Forecast:
         roof_ids = re.split(r"[,\s]+", self.retrieve_hass_conf["solcast_rooftop_id"].strip())
         total_data = pd.DataFrame()
 
+        # Conservative-bias blend factor, read once before the roof loop.
+        # Default 0.0 = pure P50 (no-op). See _parse_pv_quantile_bias for the
+        # coerce/validate/clamp policy.
+        bias = self._parse_pv_quantile_bias()
+
         async with aiohttp.ClientSession() as session:
             for roof_id in roof_ids:
                 url = f"https://api.solcast.com.au/rooftop_sites/{roof_id}/forecasts?hours={days_solcast}"
@@ -589,7 +623,22 @@ class Forecast:
                     solcast_timestamps = [
                         pd.Timestamp(elm["period_end"]) for elm in data["forecasts"]
                     ]
-                    data_list = [elm["pv_estimate"] * 1000 for elm in data["forecasts"]]
+                    # Blend P50 with P10 according to weather_forecast_pv_quantile_bias.
+                    # bias=0 (default) => pure P50 (no-op, identical to previous behaviour).
+                    # bias=1 => pure P10 (conservative / low estimate).
+                    # If pv_estimate10 is absent for an element, fall back to pv_estimate.
+                    data_list = []
+                    for elm in data["forecasts"]:
+                        p50 = elm["pv_estimate"]
+                        if bias > 0.0:
+                            p10 = elm.get("pv_estimate10")
+                            if p10 is not None:
+                                est = bias * p10 + (1.0 - bias) * p50
+                            else:
+                                est = p50
+                        else:
+                            est = p50
+                        data_list.append(est * 1000)
                     data_tmp = pd.DataFrame(
                         {"yhat": data_list},
                         index=pd.DatetimeIndex(solcast_timestamps, name="ts"),
@@ -740,6 +789,18 @@ class Forecast:
                 "The scrapper method has been deprecated and the keyword is accepted just for backward compatibility, please change the PV forecast method to open-meteo"
             )
         self.weather_forecast_method = method
+        # The P50/P10 quantile-bias blend is only available from Solcast, the
+        # only provider that returns pv_estimate10. If the knob is set for any
+        # other method, warn and ignore it so the Solcast dependency is explicit
+        # rather than a silent no-op. (Short-circuits before parsing for solcast,
+        # so this never double-logs with the parse inside _get_weather_solcast.)
+        if method != "solcast" and self._parse_pv_quantile_bias() > 0.0:
+            self.logger.warning(
+                "weather_forecast_pv_quantile_bias is set but only applies to the "
+                "'solcast' weather_forecast_method (the only provider returning P10 "
+                "quantiles); ignoring it for weather_forecast_method=%r.",
+                method,
+            )
         if method in ["open-meteo", "scrapper"]:
             data = await self._get_weather_open_meteo(w_forecast_cache_path, use_legacy_pvlib)
         elif method == "solcast":

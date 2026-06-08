@@ -69,6 +69,44 @@ Solcast returns a multi-day forecast (several days at 30-minute resolution), so 
 
 When the horizon auto-extends, any forecast passed as a runtime list (`weather_forecast_method: list`, `load_power_forecast`, `load_cost_forecast`, or `prod_price_forecast`) must cover the full `prediction_horizon` steps; a shorter list is rejected with an error rather than being silently truncated to one day.
 
+### Conservative PV bias (P10 blend)
+
+Solcast returns three probabilistic estimates for each forecast period: P50 (central / median), P10 (low / conservative, 10th percentile), and P90 (high / optimistic, 90th percentile). By default EMHASS uses only the P50 estimate. The `weather_forecast_pv_quantile_bias` parameter lets you blend P50 and P10 so the optimizer plans against a more cautious solar outlook.
+
+This is useful when the cost of a solar shortfall outweighs the cost of over-reserving the battery. Forecast error is asymmetric: if the sun underperforms the central estimate you may have to buy back the shortfall at the peak retail rate, which usually costs more than the value you give up by holding a little extra reserve. Biasing toward P10 makes the plan robust to that downside.
+
+The blend formula applied per period is:
+
+```
+estimate = bias * pv_estimate10 + (1 - bias) * pv_estimate
+```
+
+where `bias` is `weather_forecast_pv_quantile_bias` (range 0–1, default 0).
+
+| `weather_forecast_pv_quantile_bias` | Effective estimate | Effect on plan |
+|---|---|---|
+| `0.0` (default) | pure P50 | unchanged — matches current behaviour |
+| `0.5` | midpoint of P10 and P50 | moderately conservative solar input |
+| `1.0` | pure P10 | fully conservative — assume worst-case solar |
+
+**Example:** with `pv_estimate = 5.0 kW` and `pv_estimate10 = 2.0 kW`, a bias of `0.5` produces `0.5 × 2.0 + 0.5 × 5.0 = 3.5 kW` as the input to the optimizer. The optimizer then schedules more grid-charge or holds more battery reserve to compensate for the lower expected solar.
+
+To enable, pass the parameter at runtime or add it to your configuration:
+
+```bash
+curl -i -H "Content-Type:application/json" -X POST -d '{
+    "weather_forecast_pv_quantile_bias": 0.5,
+    "solcast_rooftop_id": "<your_system_id>",
+    "solcast_api_key": "<your_secret_api_key>"
+}' http://localhost:5000/action/dayahead-optim
+```
+
+This parameter is Solcast-only; it has no effect when `weather_forecast_method` is set to any other method. If a forecast period does not include a `pv_estimate10` value, EMHASS falls back to the central `pv_estimate` for that period.
+
+```{note}
+When the Solcast cache is enabled (`weather_forecast_cache: true`), the blended forecast is what gets cached. Changing `weather_forecast_pv_quantile_bias` therefore only takes effect on the next cache refresh; to apply a new value immediately, refresh the weather-forecast cache or run with the cache disabled.
+```
+
 ### solar.forecast 
 
 A third method uses the Solar.Forecast service. You will need to set `method=solar.forecast` and use just one parameter `solar_forecast_kwp` (the PV peak installed power in kW) that should be passed at runtime. This will be using the free public Solar.Forecast account with 12 API requests per hour, per IP, and 1h data resolution. As with Solcast, there are paid account services that may result in better forecasts.
