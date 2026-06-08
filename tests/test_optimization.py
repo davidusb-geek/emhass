@@ -876,6 +876,32 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # The 2-step, 1000 W sequence ran exactly once: total power 2000 W.
         self.assertAlmostEqual(res["P_deferrable0"].sum(), 2000.0, delta=1.0)
 
+    def test_thermal_config_unknown_key_warns(self):
+        """Issue #943: a thermal_config with an unrecognized key (e.g. the
+        singular min_temperature instead of the list min_temperatures, or a
+        stray target_temperature) is silently ignored, which yields a load that
+        never schedules. Warn so the typo is visible to the user.
+        """
+        self.optim_conf["number_of_deferrable_loads"] = 1
+        self.optim_conf["def_load_config"] = [
+            {
+                "thermal_config": {
+                    "heating_rate": 0.25,
+                    "cooling_constant": 0.01,
+                    "start_temperature": 22.0,
+                    "min_temperature": 22.0,  # singular typo: never read
+                    "target_temperature": 23.0,  # not a recognized key
+                }
+            }
+        ]
+        with self.assertLogs(level="WARNING") as logs:
+            self.create_optimization()
+        joined = "\n".join(logs.output)
+        # The singular typo is flagged and the correct list key is suggested.
+        self.assertIn("min_temperature", joined)
+        self.assertIn("min_temperatures", joined)
+        self.assertIn("target_temperature", joined)
+
     def test_intermediate_soc_target_below_soc_init_is_noop(self):
         """Issue #553: a soc_target at or below the SoC the battery already holds
         builds a non-biting floor, so the optimized plan is unchanged vs no target.
