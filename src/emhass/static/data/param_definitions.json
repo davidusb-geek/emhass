@@ -576,6 +576,13 @@
       "default_value": true,
       "unit": "none"
     },
+    "set_battery_first_priority": {
+      "friendly_name": "Drain battery before grid import",
+      "Description": "Set this to true to forbid importing from the grid while the battery is still above its minimum SoC, so stored energy is used before any import. Useful on a flat (non time-of-use) tariff. Note: this can make the problem infeasible in a timestep where the load minus PV exceeds the battery maximum discharge power.",
+      "input": "boolean",
+      "default_value": false,
+      "unit": "none"
+    },
     "set_battery_dynamic": {
       "friendly_name": "Set Battery dynamic (dis)charge power limiting",
       "Description": "Set a power dynamic limiting condition to the battery power. This is an additional constraint on the battery dynamic in power per unit of time (timestep), which allows you to set a percentage of the battery’s nominal full power as the maximum power allowed for (dis)charge.",
