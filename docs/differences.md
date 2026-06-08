@@ -61,6 +61,7 @@ See below for a list of associations between the parameters from `config_emhass.
 | optim_conf |  lp_solver_path |  lp_solver_path | |
 | optim_conf |  set_nocharge_from_grid |  set_nocharge_from_grid | |
 | optim_conf |  set_nodischarge_to_grid |  set_nodischarge_to_grid | |
+| optim_conf |  set_battery_first_priority |  set_battery_first_priority | |
 | optim_conf |  set_battery_dynamic |  set_battery_dynamic | |
 | optim_conf |  battery_dynamic_max |  battery_dynamic_max | |
 | optim_conf |  battery_dynamic_min |  battery_dynamic_min | |
