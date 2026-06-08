@@ -719,8 +719,14 @@ class Forecast:
             delta = datetime.now() - datetime.fromtimestamp(os.path.getmtime(cache_path))
             json_age = int(delta / timedelta(seconds=60))
             use_cache = json_age < max_age
-            async with aiofiles.open(cache_path) as json_file:
-                data = orjson.loads(await json_file.read())
+            try:
+                async with aiofiles.open(cache_path) as json_file:
+                    data = orjson.loads(await json_file.read())
+            except (orjson.JSONDecodeError, OSError):
+                # A corrupted/truncated cache must not block the fallback fetch: treat it as a miss.
+                self.logger.warning("Open-Meteo covariate cache is unreadable; refetching")
+                data = None
+                use_cache = False
         if not use_cache:
             self.logger.info("Fetching Open-Meteo weather covariates (past_days=%s)", past_days)
             headers = {"User-Agent": "EMHASS", "Accept": header_accept}
