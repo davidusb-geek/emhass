@@ -463,7 +463,11 @@ class Forecast:
     async def _get_weather_solcast(self, w_forecast_cache_path: str) -> pd.DataFrame:
         """Helper to retrieve weather data from Solcast or cache."""
         if os.path.isfile(w_forecast_cache_path):
-            return await self.get_cached_forecast_data(w_forecast_cache_path)
+            cached_data = await self.get_cached_forecast_data(w_forecast_cache_path)
+            if cached_data is not None:
+                return cached_data
+            # Incompatible/stale cache was discarded (issue #932); fall through
+            # to fetch fresh data from the Solcast API (quota-guarded below).
         if self.params["passed_data"].get("weather_forecast_cache_only", False):
             self.logger.warning("Solcast cache file missing or deleted due to being out of date.")
             self.logger.warning(
@@ -545,7 +549,11 @@ class Forecast:
     async def _get_weather_solar_forecast(self, w_forecast_cache_path: str) -> pd.DataFrame:
         """Helper to retrieve weather data from solar.forecast or cache."""
         if os.path.isfile(w_forecast_cache_path):
-            return await self.get_cached_forecast_data(w_forecast_cache_path)
+            cached_data = await self.get_cached_forecast_data(w_forecast_cache_path)
+            if cached_data is not None:
+                return cached_data
+            # Incompatible/stale cache was discarded (issue #932); fall through
+            # to fetch fresh data from the forecast.solar API.
         # Validation and Default Setup
         if "solar_forecast_kwp" not in self.retrieve_hass_conf:
             self.logger.warning(
@@ -1898,6 +1906,31 @@ class Forecast:
                     data[irradiance_cols] = data[irradiance_cols].fillna(0.0)
 
                 data = data.fillna(0.0)
+
+        # The weather cache file is shared across every weather_forecast_method,
+        # so a cache written by a different method can lack the column the active
+        # method needs. Serving it would crash later in get_power_from_weather
+        # with an opaque KeyError: 'yhat' (issue #932). Treat a schema-incompatible
+        # cache as a recoverable miss: drop it and return None so the rate-limited
+        # fetchers fall through to a fresh fetch (the open-meteo path already does
+        # this for its own stale cache).
+        if (
+            self.weather_forecast_method in ("solcast", "solar.forecast")
+            and self.retrieve_hass_conf.get("solar_forecast_kwp") != 0
+            and "yhat" not in data.columns
+        ):
+            self.logger.warning(
+                "Cached forecast is missing the 'yhat' column required by "
+                "weather_forecast_method='%s' (cache likely written by a "
+                "different method). Discarding the incompatible cache and "
+                "fetching fresh data.",
+                self.weather_forecast_method,
+            )
+            try:
+                os.remove(w_forecast_cache_path)
+            except FileNotFoundError:
+                pass
+            return None
         return data
 
     async def set_cached_forecast_data(self, w_forecast_cache_path, data) -> pd.DataFrame:
