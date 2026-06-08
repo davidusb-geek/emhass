@@ -166,6 +166,10 @@ For all the forecast methods (`weather`, `load_power`, `load_cost` and `producti
 - `battery_dynamic_min`: The maximum negative (for charge) battery power dynamic. This is the allowed power variation (in percentage) of battery maximum power per unit of time.
 - `weight_battery_discharge`: An additional weight (currency/ kWh) applied in the cost function to battery usage for discharging. Defaults to 0.00
 - `weight_battery_charge`: An additional weight (currency/ kWh) applied in the cost function to battery usage for charging. Defaults to 0.00
+- `battery_soc_deficit_threshold`: The state of charge below which a deficit penalty applies, for example 0.40 for 40%. Used together with `battery_soc_deficit_cost`. Defaults to 0.40.
+- `battery_soc_deficit_cost`: A virtual cost (currency/kWh/h) applied for each kWh the battery sits below `battery_soc_deficit_threshold`, per hour. This discourages draining the battery too low. Defaults to 0.00 (disabled).
+- `battery_soc_surplus_threshold`: The state of charge above which a surplus penalty applies, for example 0.90 for 90%. Used together with `battery_soc_surplus_cost`. Defaults to 0.90.
+- `battery_soc_surplus_cost`: A virtual cost (currency/kWh/h) applied for each kWh the battery sits above `battery_soc_surplus_threshold`, per hour. This discourages dwelling near full charge, so the battery fills more gradually into expected solar peaks and spends less time at a high state of charge. It is the mirror of `battery_soc_deficit_cost`. Defaults to 0.00 (disabled).
 
 ## System configuration parameters
 

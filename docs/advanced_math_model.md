@@ -206,6 +206,32 @@ curl -i -H "Content-Type: application/json" -X POST -d '{
 }' http://localhost:5000/action/naive-mpc-optim
 ```
 
+### Battery SOC Surplus Cost (high-SOC dwell penalty)
+
+Standard cost optimization will charge the battery to 100% as soon as there is cheap or surplus energy, then leave it sitting full for hours. On a flat tariff there is no price signal to stop it. Sitting at a high state of charge for long periods accelerates calendar aging, and on sunny days it means the battery fills early and exports the rest of the midday peak to the grid instead of soaking it up gradually.
+
+The SOC surplus cost adds a virtual penalty for every kWh the battery sits above a configured threshold, for every hour it stays there. The optimizer balances that penalty against the value of charging early, so it tends to delay and slow charging into the expected solar peak and spend less time near full charge. It is the mirror of the existing SOC deficit cost, which penalizes sitting below a low threshold.
+
+Two parameters control it (both default to off):
+
+- `battery_soc_surplus_threshold` (float): the SOC above which the penalty applies, for example `0.90` for 90%.
+- `battery_soc_surplus_cost` (float): the virtual cost in currency/kWh/h applied for each kWh above the threshold per hour. The default of `0.0` leaves today's behaviour unchanged.
+
+The penalty is linear in the energy held above the threshold:
+
+$$\text{Surplus penalty} = \sum_{i} c_{surplus} \cdot \Delta_t \cdot \max\left(0,\; (SOC_i - SOC_{thr})\,E_{nom}\right)$$
+
+where $c_{surplus}$ is `battery_soc_surplus_cost`, $SOC_{thr}$ is `battery_soc_surplus_threshold` and $E_{nom}$ is the battery capacity.
+
+Example usage using `runtimeparams`:
+```bash
+curl -i -H "Content-Type: application/json" -X POST -d '{
+    "battery_soc_surplus_threshold": 0.85,
+    "battery_soc_surplus_cost": 0.1,
+    "prediction_horizon": 24
+}' http://localhost:5000/action/naive-mpc-optim
+```
+
 ## The EMHASS optimizations
 
 There are 3 different optimization types that are implemented in EMHASS.

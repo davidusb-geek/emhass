@@ -726,6 +726,24 @@
         "set_use_battery": true
     }
     },
+    "battery_soc_surplus_threshold": {
+      "friendly_name": "Battery SOC surplus threshold",
+      "Description": "The SOC threshold above which surplus penalties apply. For example, 0.90 for 90% SOC. Penalties are applied for every hour and every kWh the SOC is above this value. Use together with battery_soc_surplus_cost to discourage long dwell near full charge.",
+      "input": "float",
+      "default_value": 0.9,
+      "requires": {
+        "set_use_battery": true
+    }
+    },
+    "battery_soc_surplus_cost": {
+      "friendly_name": "Battery SOC surplus cost",
+      "Description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC above the surplus threshold per hour. This penalizes periods when the battery SOC sits above the surplus threshold, delaying charging into expected solar peaks and reducing time spent near full charge (battery longevity). Defaults to 0.0 (disabled).",
+      "input": "float",
+      "default_value": 0.0,
+      "requires": {
+        "set_use_battery": true
+    }
+    },
     "ignore_pv_feedback_during_curtailment": {
       "friendly_name": "Ignore PV feedback during curtailment",
       "Description": "When set to true, prevents PV forecast from being updated with real PV data, avoiding flip-flop behavior during curtailment operations",
