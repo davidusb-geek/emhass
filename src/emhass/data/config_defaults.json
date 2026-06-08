@@ -46,6 +46,7 @@
   "is_electric_load": [true, true],
   "operating_hours_of_each_deferrable_load": [4, 0],
   "weather_forecast_method": "open-meteo",
+  "weather_forecast_pv_quantile_bias": 0.0,
   "open_meteo_cache_max_age": 30,
   "load_forecast_method": "typical",
   "model_type": "load_forecast",

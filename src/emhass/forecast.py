@@ -544,6 +544,30 @@ class Forecast:
         roof_ids = re.split(r"[,\s]+", self.retrieve_hass_conf["solcast_rooftop_id"].strip())
         total_data = pd.DataFrame()
 
+        # Read the conservative-bias parameter once, before the roof loop.
+        # Coerce-then-validate so a quoted/templated value like "0.5" still works,
+        # while a bad type (bool, None, list) or NaN falls back to 0.0 with a visible
+        # warning rather than silently changing or disabling the forecast.
+        raw_bias = self.optim_conf.get("weather_forecast_pv_quantile_bias", 0.0)
+        try:
+            if isinstance(raw_bias, bool):
+                raise TypeError
+            bias = float(raw_bias)
+            if np.isnan(bias):
+                raise ValueError
+        except (TypeError, ValueError):
+            self.logger.warning(
+                "weather_forecast_pv_quantile_bias=%r is not a valid number; using 0.0 (P50).",
+                raw_bias,
+            )
+            bias = 0.0
+        if bias < 0.0 or bias > 1.0:
+            self.logger.warning(
+                "weather_forecast_pv_quantile_bias=%s is outside [0, 1]; clamping to that range.",
+                bias,
+            )
+            bias = max(0.0, min(1.0, bias))
+
         async with aiohttp.ClientSession() as session:
             for roof_id in roof_ids:
                 url = f"https://api.solcast.com.au/rooftop_sites/{roof_id}/forecasts?hours={days_solcast}"
@@ -567,7 +591,22 @@ class Forecast:
                     solcast_timestamps = [
                         pd.Timestamp(elm["period_end"]) for elm in data["forecasts"]
                     ]
-                    data_list = [elm["pv_estimate"] * 1000 for elm in data["forecasts"]]
+                    # Blend P50 with P10 according to weather_forecast_pv_quantile_bias.
+                    # bias=0 (default) => pure P50 (no-op, identical to previous behaviour).
+                    # bias=1 => pure P10 (conservative / low estimate).
+                    # If pv_estimate10 is absent for an element, fall back to pv_estimate.
+                    data_list = []
+                    for elm in data["forecasts"]:
+                        p50 = elm["pv_estimate"]
+                        if bias > 0.0:
+                            p10 = elm.get("pv_estimate10")
+                            if p10 is not None:
+                                est = bias * p10 + (1.0 - bias) * p50
+                            else:
+                                est = p50
+                        else:
+                            est = p50
+                        data_list.append(est * 1000)
                     data_tmp = pd.DataFrame(
                         {"yhat": data_list},
                         index=pd.DatetimeIndex(solcast_timestamps, name="ts"),
