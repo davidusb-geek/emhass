@@ -719,6 +719,139 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             msg=f"expected an out-of-range clamp warning, got: {logs.output}",
         )
 
+    def test_battery_first_priority_drains_before_import(self):
+        """Issue #834: with ``set_battery_first_priority`` the optimizer must
+        not import from the grid while the battery is still above its minimum
+        SoC. On a flat tariff "drain first" and "interleave import with
+        discharge" are cost-equivalent, so the solver is otherwise free to
+        import while the battery is full. The flag forces the drain-first order.
+        """
+        df = self.prepare_forecast_data()
+        n = len(df)
+        # Night-time scenario: no PV, constant load.
+        df["p_pv_forecast"] = 0.0
+        load_w = 2000.0
+        df["p_load_forecast"] = load_w
+        # A gently increasing import price makes "import as early as possible"
+        # the UNIQUE baseline optimum, so the unconstrained run provably imports
+        # while the battery is full. The feature must override that ordering;
+        # the total import energy is identical, only its timing differs.
+        df["unit_load_cost"] = 0.20 + 0.001 * np.arange(n)
+        df["unit_prod_price"] = 0.05
+        pv = df["p_pv_forecast"].copy()
+        load = df["p_load_forecast"].copy()
+
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_nodischarge_to_grid": True,
+            }
+        )
+        prediction_horizon = 8
+        soc_init, soc_min = 0.6, 0.1
+        # Size the battery (loss-free, ample power) so its usable energy covers
+        # exactly the first half of the horizon, independent of the configured
+        # optimization_time_step, so some import is always needed in the tail.
+        step_h = self.retrieve_hass_conf["optimization_time_step"].total_seconds() / 3600.0
+        cap = (load_w * (prediction_horizon / 2) * step_h) / (soc_init - soc_min)
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": cap,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": soc_min,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+
+        # Baseline: feature OFF. Establishes that the unconstrained optimum
+        # imports while the battery is still above min.
+        self.optim_conf["set_battery_first_priority"] = False
+        self.opt = self.create_optimization()
+        res_base = self.opt.perform_naive_mpc_optim(
+            df, pv, load, prediction_horizon, soc_init=soc_init, soc_final=soc_min
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        base_import_while_charged = res_base.loc[
+            res_base["SOC_opt"] > soc_min + 0.02, "P_grid_pos"
+        ].sum()
+        self.assertGreater(
+            base_import_while_charged,
+            1.0,
+            msg="baseline did not import while the battery was charged; "
+            "the scenario no longer discriminates the feature",
+        )
+
+        # Feature ON: must drain the battery before importing.
+        self.optim_conf["set_battery_first_priority"] = True
+        self.opt = self.create_optimization()
+        res_bf = self.opt.perform_naive_mpc_optim(
+            df, pv, load, prediction_horizon, soc_init=soc_init, soc_final=soc_min
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        charged = res_bf["SOC_opt"] > soc_min + 0.02
+        self.assertGreater(charged.sum(), 0, msg="no charged timesteps to test")
+        # The constraint: no grid import in any slot where SoC is above min.
+        self.assertLess(
+            res_bf.loc[charged, "P_grid_pos"].abs().max(),
+            1.0,
+            msg="feature ON still imported while the battery was above min SoC",
+        )
+        # The unavoidable import has simply moved to the drained tail.
+        self.assertGreater(res_bf["P_grid_pos"].sum(), 1.0)
+
+    def test_battery_first_priority_infeasible_when_load_exceeds_discharge(self):
+        """Issue #834: ``set_battery_first_priority`` is a hard constraint, so it
+        can make the problem infeasible when the load exceeds the battery's
+        maximum discharge power while the battery is above min SoC (grid import
+        would be the only way to balance power, but the feature forbids it).
+        This pins that documented sharp edge.
+        """
+        df = self.prepare_forecast_data()
+        df["p_pv_forecast"] = 0.0
+        df["p_load_forecast"] = 2000.0  # exceeds the 500 W discharge cap below
+        df["unit_load_cost"] = 0.20
+        df["unit_prod_price"] = 0.05
+        pv = df["p_pv_forecast"].copy()
+        load = df["p_load_forecast"].copy()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_nodischarge_to_grid": True,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 500,  # cannot cover the 2000 W load
+                "battery_charge_power_max": 500,
+                "battery_minimum_state_of_charge": 0.1,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        # Control: the exact same setup is feasible with the feature OFF (the
+        # solver just imports the shortfall), proving the infeasibility below is
+        # caused by the new constraint and not by the scenario itself.
+        self.optim_conf["set_battery_first_priority"] = False
+        self.opt = self.create_optimization()
+        self.opt.perform_naive_mpc_optim(df, pv, load, 6, soc_init=0.5, soc_final=0.5)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+        # Feature ON: SoC stays well above min, so import is the only way to
+        # serve the load, which the feature forbids -> no optimal solution.
+        self.optim_conf["set_battery_first_priority"] = True
+        self.opt = self.create_optimization()
+        self.opt.perform_naive_mpc_optim(df, pv, load, 6, soc_init=0.5, soc_final=0.5)
+        self.assertNotIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
     def test_intermediate_soc_target_below_soc_init_is_noop(self):
         """Issue #553: a soc_target at or below the SoC the battery already holds
         builds a non-biting floor, so the optimized plan is unchanged vs no target.

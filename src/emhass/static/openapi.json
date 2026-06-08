@@ -803,6 +803,12 @@
             "title": "Forbid battery discharge to the grid",
             "description": "Set this to true if you want to forbid discharging battery power to the grid."
           },
+          "set_battery_first_priority": {
+            "type": "boolean",
+            "default": false,
+            "title": "Drain battery before grid import",
+            "description": "Set this to true to forbid importing from the grid while the battery is still above its minimum SoC, so stored energy is used before any import. Useful on a flat (non time-of-use) tariff. Note: this can make the problem infeasible in a timestep where the load minus PV exceeds the battery maximum discharge power."
+          },
           "set_battery_dynamic": {
             "type": "boolean",
             "default": false,
