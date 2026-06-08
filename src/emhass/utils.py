@@ -1226,6 +1226,7 @@ async def treat_runtimeparams(
 
     # Some default data needed
     custom_deferrable_forecast_id = []
+    custom_deferrable_state_id = []
     custom_predicted_temperature_id = []
     custom_heating_demand_id = []
     for k in range(params["optim_conf"]["number_of_deferrable_loads"]):
@@ -1235,6 +1236,14 @@ async def treat_runtimeparams(
                 "device_class": "power",
                 "unit_of_measurement": "W",
                 "friendly_name": f"Deferrable Load {k}",
+            }
+        )
+        custom_deferrable_state_id.append(
+            {
+                "entity_id": f"sensor.p_deferrable{k}_state",
+                "device_class": "enum",
+                "unit_of_measurement": "",
+                "friendly_name": f"Deferrable Load {k} Command",
             }
         )
         custom_predicted_temperature_id.append(
@@ -1321,6 +1330,7 @@ async def treat_runtimeparams(
             "friendly_name": "Unit Prod Price",
         },
         "custom_deferrable_forecast_id": custom_deferrable_forecast_id,
+        "custom_deferrable_state_id": custom_deferrable_state_id,
         "custom_predicted_temperature_id": custom_predicted_temperature_id,
         "custom_heating_demand_id": custom_heating_demand_id,
         "publish_prefix": "",
@@ -1567,6 +1577,13 @@ async def treat_runtimeparams(
                 )
                 soc_final = params["plant_conf"]["battery_maximum_state_of_charge"]
             params["passed_data"]["soc_final"] = soc_final
+            # Optional intermediate SOC target (issue #553). Both are runtime-only
+            # and default to None (no intermediate target); clamping/validation of
+            # the value and the timestep is handled in Optimization.perform_optimization.
+            params["passed_data"]["soc_target"] = runtimeparams.get("soc_target", None)
+            params["passed_data"]["soc_target_timestep"] = runtimeparams.get(
+                "soc_target_timestep", None
+            )
             if "operating_timesteps_of_each_deferrable_load" in runtimeparams.keys():
                 params["passed_data"]["operating_timesteps_of_each_deferrable_load"] = (
                     runtimeparams["operating_timesteps_of_each_deferrable_load"]
@@ -1590,6 +1607,8 @@ async def treat_runtimeparams(
             params["passed_data"]["prediction_horizon"] = None
             params["passed_data"]["soc_init"] = None
             params["passed_data"]["soc_final"] = None
+            params["passed_data"]["soc_target"] = None
+            params["passed_data"]["soc_target_timestep"] = None
 
         # Parsing the thermal model parameters
         # Load the default config
@@ -3019,6 +3038,8 @@ async def build_params(
         "prediction_horizon": None,
         "soc_init": None,
         "soc_final": None,
+        "soc_target": None,
+        "soc_target_timestep": None,
         "operating_hours_of_each_deferrable_load": None,
         "start_timesteps_of_each_deferrable_load": None,
         "end_timesteps_of_each_deferrable_load": None,
