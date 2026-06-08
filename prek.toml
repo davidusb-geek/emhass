@@ -14,3 +14,20 @@ args = ["--fix"]
 
 [[repos.hooks]]
 id = "ruff-format"
+
+# Local hook: keep the committed OpenAPI spec in sync with its sources.
+# Regenerates src/emhass/static/openapi.json whenever param_definitions.json,
+# the generator, or one of the schema inputs it reads changes. Like ruff-format,
+# this is a fixer: it rewrites the file, and prek's "files were modified by this
+# hook" then fails the commit so the regenerated spec gets staged. Mirrors the CI
+# drift-check (tests/test_openapi.py::test_committed_matches_generated) proactively.
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "generate-openapi"
+name = "regenerate openapi.json from param_definitions"
+entry = "python scripts/generate_openapi.py"
+language = "system"
+pass_filenames = false
+files = '^(src/emhass/static/data/param_definitions\.json|scripts/generate_openapi\.py|docs/api/v1/last-run\.schema\.json|docs/api/healthz\.schema\.json)$'
