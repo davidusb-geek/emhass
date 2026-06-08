@@ -309,11 +309,53 @@ class Optimization:
         # This allows updating runtime values (forecasts, temperatures) without rebuilding constraints
         self.param_thermal = {}
         def_load_config = self.optim_conf.get("def_load_config", []) or []
+        # Keys the thermal model actually reads from a load's thermal_config.
+        # Anything else is silently ignored, so we warn on it (issue #943): a
+        # typo such as the singular `min_temperature` (the model reads the list
+        # key `min_temperatures`) otherwise produces a load that never schedules,
+        # with no feedback.
+        known_thermal_config_keys = {
+            "heating_rate",
+            "cooling_constant",
+            "start_temperature",
+            "min_temperatures",
+            "max_temperatures",
+            "desired_temperatures",
+            "overshoot_temperature",
+            "penalty_factor",
+            "sense",
+        }
+        thermal_config_key_hints = {
+            "min_temperature": "min_temperatures",
+            "max_temperature": "max_temperatures",
+            "target_temperature": "min_temperatures/max_temperatures",
+            "desired_temperature": "desired_temperatures",
+        }
         for k in range(num_def_loads):
             if k < len(def_load_config) and def_load_config[k]:
                 cfg = def_load_config[k]
                 if "thermal_config" in cfg:
                     hc = cfg["thermal_config"]
+                    if isinstance(hc, dict):
+                        for bad_key in (key for key in hc if key not in known_thermal_config_keys):
+                            hint = thermal_config_key_hints.get(bad_key)
+                            if hint:
+                                self.logger.warning(
+                                    "Deferrable load %d thermal_config: unknown key '%s' is "
+                                    "ignored; did you mean '%s'? Temperature bounds use the list "
+                                    "keys min_temperatures/max_temperatures.",
+                                    k,
+                                    bad_key,
+                                    hint,
+                                )
+                            else:
+                                self.logger.warning(
+                                    "Deferrable load %d thermal_config: unknown key '%s' is "
+                                    "ignored. Recognized keys: %s.",
+                                    k,
+                                    bad_key,
+                                    ", ".join(sorted(known_thermal_config_keys)),
+                                )
                     init_temp = float(hc.get("start_temperature", 20.0) or 20.0)
                     min_temps = hc.get("min_temperatures", [])
                     max_temps = hc.get("max_temperatures", [])
