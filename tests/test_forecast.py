@@ -8,13 +8,16 @@ import pathlib
 import pickle
 import re
 import unittest
+import unittest.mock
 
 import aiofiles
+import aiohttp
 import numpy as np
 import orjson
 import pandas as pd
 from aioresponses import aioresponses
 
+from emhass import forecast as forecast_module
 from emhass import utils
 from emhass.command_line import set_input_data_dict
 from emhass.forecast import Forecast
@@ -1818,6 +1821,168 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             self.assertIn("ghi", df.columns)
             self.assertIn("dni", df.columns)
             self.assertIn("dhi", df.columns)
+
+    async def _load_openmeteo_mock_payload(self):
+        """Load the recorded Open-Meteo response used as a mock payload."""
+        test_data_path = emhass_conf["data_path"] / "test_response_openmeteo_get_method.pbz2"
+        async with aiofiles.open(test_data_path, "rb") as f:
+            compressed = await f.read()
+        data = bz2.decompress(compressed)
+        data = cPickle.loads(data)
+        return orjson.loads(data.content)
+
+    async def test_open_meteo_cold_start_retries_then_succeeds(self):
+        """Cold start (no cache): a transient failure is retried, then succeeds.
+
+        With no usable cache to fall back on, the fetch must retry rather than
+        give up on the first transient error.  The recorded payload is served on
+        the third attempt and must be returned (a non-None dict written to the
+        cache file).
+        """
+        payload = await self._load_openmeteo_mock_payload()
+        json_path = emhass_conf["data_path"] / "cached-open-meteo-forecast-b.json"
+        # Ensure a true cold start: no cache file on disk.
+        if os.path.exists(json_path):
+            os.remove(json_path)
+        url_pattern = re.compile(r"https://api\.open-meteo\.com/.*")
+        # Patch the backoff to zero so the test does not actually sleep.
+        original_backoff = forecast_module.open_meteo_backoff_seconds
+        forecast_module.open_meteo_backoff_seconds = (0, 0, 0)
+        try:
+            with aioresponses() as mocked:
+                # Two transient failures (a 504 then a connection error), then success.
+                mocked.get(url_pattern, status=504)
+                mocked.get(url_pattern, exception=aiohttp.ClientConnectionError("boom"))
+                mocked.get(url_pattern, payload=payload)
+                result = await self.fcst.get_cached_open_meteo_forecast_json()
+            # The successful third attempt must return the payload...
+            self.assertIsInstance(result, dict)
+            self.assertIn("minutely_15", result)
+            # ...and it must have been retried exactly three times.
+            requests_made = [k for k in mocked.requests if k[0] == "GET"]
+            total_calls = sum(len(v) for v in mocked.requests.values())
+            self.assertEqual(total_calls, 3, "Cold start must retry up to 3 times")
+            self.assertTrue(requests_made, "Open-Meteo GET should have been issued")
+            # The freshly fetched data must be persisted to the cache file, and
+            # the persisted content must round-trip to the same payload (proving
+            # we wrote complete, valid JSON rather than a partial/corrupt file).
+            self.assertTrue(os.path.exists(json_path))
+            async with aiofiles.open(json_path) as json_file:
+                persisted = orjson.loads(await json_file.read())
+            self.assertEqual(persisted, result)
+            self.assertIn("minutely_15", persisted)
+        finally:
+            forecast_module.open_meteo_backoff_seconds = original_backoff
+            if os.path.exists(json_path):
+                os.remove(json_path)
+
+    async def test_open_meteo_cold_start_all_attempts_fail_returns_none(self):
+        """Cold start with every attempt failing returns None and writes no cache."""
+        json_path = emhass_conf["data_path"] / "cached-open-meteo-forecast-b.json"
+        if os.path.exists(json_path):
+            os.remove(json_path)
+        url_pattern = re.compile(r"https://api\.open-meteo\.com/.*")
+        original_backoff = forecast_module.open_meteo_backoff_seconds
+        forecast_module.open_meteo_backoff_seconds = (0, 0, 0)
+        try:
+            with aioresponses() as mocked:
+                for _ in range(forecast_module.open_meteo_max_attempts):
+                    mocked.get(url_pattern, status=502)
+                result = await self.fcst.get_cached_open_meteo_forecast_json()
+                total_calls = sum(len(v) for v in mocked.requests.values())
+            # No cache + all attempts failed -> None, and nothing written to disk.
+            self.assertIsNone(result)
+            self.assertEqual(total_calls, forecast_module.open_meteo_max_attempts)
+            self.assertFalse(
+                os.path.exists(json_path),
+                "Failed cold-start fetch must not create a cache file",
+            )
+        finally:
+            forecast_module.open_meteo_backoff_seconds = original_backoff
+            if os.path.exists(json_path):
+                os.remove(json_path)
+
+    async def test_open_meteo_cache_present_falls_back_immediately_no_retry(self):
+        """Cache present: a fetch failure falls back to the cache with NO retry.
+
+        This is the steady-state path.  When a cached JSON exists, a forced
+        refresh that fails must immediately return the cached payload and make
+        exactly ONE network attempt (no retry, no added delay).  The existing
+        cache file must be preserved (never overwritten on failure).
+        """
+        payload = await self._load_openmeteo_mock_payload()
+        json_path = emhass_conf["data_path"] / "cached-open-meteo-forecast-b.json"
+        # Seed a valid cache file on disk (this is the fallback content).
+        cache_content = orjson.dumps(payload, option=orjson.OPT_INDENT_2).decode()
+        async with aiofiles.open(json_path, "w") as json_file:
+            await json_file.write(cache_content)
+        url_pattern = re.compile(r"https://api\.open-meteo\.com/.*")
+        # Guard against accidental sleeping: any retry would be a test failure,
+        # but zero the backoff regardless so a regression cannot stall the suite.
+        original_backoff = forecast_module.open_meteo_backoff_seconds
+        forecast_module.open_meteo_backoff_seconds = (0, 0, 0)
+        try:
+            with aioresponses() as mocked:
+                # Only register a SINGLE failing response.  If the code retried,
+                # the second attempt would raise (no mock left) and the test fails.
+                mocked.get(url_pattern, status=504)
+                # max_age=0 forces a refresh attempt while the cache is on disk.
+                result = await self.fcst.get_cached_open_meteo_forecast_json(max_age=0)
+                total_calls = sum(len(v) for v in mocked.requests.values())
+            # Fell back to the cached payload (a dict), exactly one attempt made.
+            self.assertIsInstance(result, dict)
+            self.assertIn("minutely_15", result)
+            self.assertEqual(total_calls, 1, "A present cache must NOT trigger retries on failure")
+            # The cache file must be untouched (never overwritten on failure).
+            async with aiofiles.open(json_path) as json_file:
+                self.assertEqual(await json_file.read(), cache_content)
+        finally:
+            forecast_module.open_meteo_backoff_seconds = original_backoff
+            if os.path.exists(json_path):
+                os.remove(json_path)
+
+    async def test_open_meteo_request_timeout_is_set(self):
+        """A bounded per-request ClientTimeout is applied to the Open-Meteo fetch.
+
+        A hanging Open-Meteo must not be able to stall the cycle.  Verify the
+        session is created with a finite total timeout, and that a timeout on a
+        cold start is handled like any other transient error (retried, then
+        None when it persists).
+        """
+        json_path = emhass_conf["data_path"] / "cached-open-meteo-forecast-b.json"
+        if os.path.exists(json_path):
+            os.remove(json_path)
+        # Assert the timeout constant is finite and sensible.
+        self.assertIsNotNone(forecast_module.open_meteo_request_timeout)
+        self.assertGreater(forecast_module.open_meteo_request_timeout, 0)
+
+        # Capture the ClientTimeout the code passes to aiohttp.ClientSession.
+        captured = {}
+        real_session = aiohttp.ClientSession
+
+        def _capture_session(*args, **kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+            return real_session(*args, **kwargs)
+
+        url_pattern = re.compile(r"https://api\.open-meteo\.com/.*")
+        original_backoff = forecast_module.open_meteo_backoff_seconds
+        forecast_module.open_meteo_backoff_seconds = (0, 0, 0)
+        try:
+            with unittest.mock.patch.object(aiohttp, "ClientSession", _capture_session):
+                with aioresponses() as mocked:
+                    # Simulate a hanging request that aiohttp surfaces as a timeout.
+                    for _ in range(forecast_module.open_meteo_max_attempts):
+                        mocked.get(url_pattern, exception=TimeoutError())
+                    result = await self.fcst.get_cached_open_meteo_forecast_json()
+            # The timeout is handled gracefully (no cache -> None after retries).
+            self.assertIsNone(result)
+            # A finite total timeout must have been supplied to the session.
+            self.assertIsInstance(captured.get("timeout"), aiohttp.ClientTimeout)
+            self.assertEqual(captured["timeout"].total, forecast_module.open_meteo_request_timeout)
+        finally:
+            forecast_module.open_meteo_backoff_seconds = original_backoff
+            if os.path.exists(json_path):
+                os.remove(json_path)
 
     def test_cloud_cover_to_irradiance(self):
         """Test the manual irradiance calculation from cloud cover."""
