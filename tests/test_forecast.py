@@ -37,6 +37,10 @@ emhass_conf["associations_path"] = emhass_conf["root_path"] / "data/associations
 # create logger
 logger, ch = utils.get_logger(__name__, emhass_conf, save_to_file=False)
 
+# Sentinel marking "leave the weather_forecast_pv_quantile_bias param unset" in the
+# Solcast-bias test helpers, distinct from any real (including 0.0/falsy) bias value.
+_BIAS_UNSET = object()
+
 
 class TestForecast(unittest.IsolatedAsyncioTestCase):
     @staticmethod
@@ -2166,6 +2170,87 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
             abs(model["STC"] - 292), 50, "Should find a module within reasonable range of 292W"
         )
 
+    # --- Shared helpers for the weather_forecast_pv_quantile_bias tests ---
+    def _build_solcast_bias_payload(self, p50, p10, p90=7.0, n_periods=50, missing_p10_tail=False):
+        """Build an inline Solcast payload anchored to the start of forecast_dates.
+
+        Anchoring to forecast_dates[0] guarantees the Solcast timestamps overlap the
+        optimization window — a historical anchor would be extrapolated by
+        time-interpolation and skew the baseline. Constant P50/P10/P90 values keep the
+        blend assertions trivial to reason about. When missing_p10_tail is set, one
+        trailing element omits pv_estimate10 (the fallback-to-P50 edge case).
+        """
+        anchor_utc = self.fcst.forecast_dates[0].tz_convert("UTC")
+        forecasts = [
+            {
+                "period_end": (anchor_utc + pd.Timedelta(minutes=30 * i)).isoformat(),
+                "period": "PT30M",
+                "pv_estimate": p50,
+                "pv_estimate10": p10,
+                "pv_estimate90": p90,
+            }
+            for i in range(n_periods)
+        ]
+        if missing_p10_tail:
+            forecasts.append(
+                {
+                    "period_end": (anchor_utc + pd.Timedelta(minutes=30 * n_periods)).isoformat(),
+                    "period": "PT30M",
+                    "pv_estimate": p50,
+                    # pv_estimate10 deliberately omitted
+                    "pv_estimate90": p90,
+                }
+            )
+        return {"forecasts": forecasts}
+
+    def _setup_solcast_bias_env(self):
+        """Wire up the mocked-Solcast environment shared by the bias tests.
+
+        Sets passed_data/credentials, bypasses the daily-quota cap (these tests
+        exercise the blend logic, not the rate limiter), and moves any pre-existing
+        weather cache aside. Restores the cache and clears the bias key via addCleanup
+        so nothing leaks into other tests even if an assertion fails. Returns the
+        mocked Solcast GET URL.
+        """
+        self.fcst.params = {
+            "passed_data": {
+                "weather_forecast_cache": False,
+                "weather_forecast_cache_only": False,
+            }
+        }
+        self.fcst.retrieve_hass_conf["solcast_api_key"] = "test_key"
+        self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "test_roof"
+        self.fcst._solcast_rate_limit_ok = lambda: True
+
+        cache_path = emhass_conf["data_path"] / "weather_forecast_data.pkl"
+        temp_path = emhass_conf["data_path"] / "temp_bias_weather_forecast_data.pkl"
+        if os.path.isfile(cache_path):
+            os.rename(cache_path, temp_path)
+
+        def _restore():
+            if os.path.isfile(temp_path):
+                os.rename(temp_path, cache_path)
+            self.fcst.optim_conf.pop("weather_forecast_pv_quantile_bias", None)
+
+        self.addCleanup(_restore)
+
+        days_solcast = int(len(self.fcst.forecast_dates) * self.fcst.freq.seconds / 3600)
+        return f"https://api.solcast.com.au/rooftop_sites/test_roof/forecasts?hours={days_solcast}"
+
+    async def _fetch_solcast_with_bias(self, get_url, payload, bias_value=_BIAS_UNSET):
+        """Fetch a mocked Solcast forecast, optionally setting the bias param first.
+
+        Passing the _BIAS_UNSET sentinel leaves the param absent (the default/no-op
+        path); any other value is written to optim_conf before the call.
+        """
+        if bias_value is _BIAS_UNSET:
+            self.fcst.optim_conf.pop("weather_forecast_pv_quantile_bias", None)
+        else:
+            self.fcst.optim_conf["weather_forecast_pv_quantile_bias"] = bias_value
+        with aioresponses() as mocked:
+            mocked.get(get_url, payload=payload)
+            return await self.fcst.get_weather_forecast(method="solcast")
+
     # Test weather_forecast_pv_quantile_bias blending (Phase 1 — forecast side only)
     async def test_get_weather_forecast_solcast_pv_quantile_bias(self):
         """Verify that weather_forecast_pv_quantile_bias blends P50 and P10 correctly.
@@ -2177,103 +2262,27 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
         Plus an edge case: an element with pv_estimate10 absent, bias=1.0 -> fallback to pv_estimate.
         """
-        # --- Build inline Solcast payload with KNOWN constant values ---
         # P50 = 5.0 kW, P10 = 2.0 kW, P90 = 7.0 kW (ratios make assertions easy to reason about)
-        P50 = 5.0
-        P10 = 2.0
-        P90 = 7.0
+        P50, P10, P90 = 5.0, 2.0, 7.0
+        payload = self._build_solcast_bias_payload(P50, P10, P90, missing_p10_tail=True)
+        get_url = self._setup_solcast_bias_env()
 
-        # Build 50 periods at 30-min cadence starting from a UTC anchor aligned to NOW.
-        # Anchoring to the start of forecast_dates ensures the Solcast timestamps overlap the
-        # optimization window — an historical anchor would be extrapolated by time-interpolation
-        # and produce the wrong baseline values for the assertions.
-        anchor_utc = self.fcst.forecast_dates[0].tz_convert("UTC")
-        n_periods = 50
-        forecasts = []
-        for i in range(n_periods):
-            ts = anchor_utc + pd.Timedelta(minutes=30 * i)
-            forecasts.append(
-                {
-                    "period_end": ts.isoformat(),
-                    "period": "PT30M",
-                    "pv_estimate": P50,
-                    "pv_estimate10": P10,
-                    "pv_estimate90": P90,
-                }
-            )
+        # (i) param unset (default = 0.0 / P50)
+        df_unset = await self._fetch_solcast_with_bias(get_url, payload)
+        self.assertIsInstance(df_unset, pd.DataFrame)
+        self.assertIn("yhat", df_unset.columns)
 
-        # One element with pv_estimate10 ABSENT — must not crash with bias=1.0 (edge case)
-        forecasts.append(
-            {
-                "period_end": (anchor_utc + pd.Timedelta(minutes=30 * n_periods)).isoformat(),
-                "period": "PT30M",
-                "pv_estimate": P50,
-                # pv_estimate10 deliberately omitted
-                "pv_estimate90": P90,
-            }
-        )
+        # (ii) explicit bias=0.0 (must equal (i))
+        df_bias0 = await self._fetch_solcast_with_bias(get_url, payload, 0.0)
+        self.assertIsInstance(df_bias0, pd.DataFrame)
 
-        inline_payload = {"forecasts": forecasts}
+        # (iii) bias=1.0 (pure P10) — FAILS on master, PASSES with fix
+        df_bias1 = await self._fetch_solcast_with_bias(get_url, payload, 1.0)
+        self.assertIsInstance(df_bias1, pd.DataFrame)
 
-        # --- Shared setup (mirrors test_get_weather_forecast_solcast_method_mock) ---
-        self.fcst.params = {
-            "passed_data": {
-                "weather_forecast_cache": False,
-                "weather_forecast_cache_only": False,
-            }
-        }
-        self.fcst.retrieve_hass_conf["solcast_api_key"] = "test_key"
-        self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "test_roof"
-        # Bypass the Solcast daily-quota safety cap: this test makes several mocked
-        # calls and is about the blend logic, not the rate limiter.
-        self.fcst._solcast_rate_limit_ok = lambda: True
-
-        # Temporarily move any pre-existing weather cache so it does not interfere
-        cache_path = emhass_conf["data_path"] / "weather_forecast_data.pkl"
-        temp_path = emhass_conf["data_path"] / "temp_bias_weather_forecast_data.pkl"
-        if os.path.isfile(cache_path):
-            os.rename(cache_path, temp_path)
-
-        days_solcast = int(len(self.fcst.forecast_dates) * self.fcst.freq.seconds / 3600)
-        get_url = (
-            f"https://api.solcast.com.au/rooftop_sites/test_roof/forecasts?hours={days_solcast}"
-        )
-
-        try:
-            # (i) param unset (default = 0.0 / P50)
-            self.fcst.optim_conf.pop("weather_forecast_pv_quantile_bias", None)
-            with aioresponses() as mocked:
-                mocked.get(get_url, payload=inline_payload)
-                df_unset = await self.fcst.get_weather_forecast(method="solcast")
-            self.assertIsInstance(df_unset, pd.DataFrame)
-            self.assertIn("yhat", df_unset.columns)
-
-            # (ii) explicit bias=0.0 (must equal (i))
-            self.fcst.optim_conf["weather_forecast_pv_quantile_bias"] = 0.0
-            with aioresponses() as mocked:
-                mocked.get(get_url, payload=inline_payload)
-                df_bias0 = await self.fcst.get_weather_forecast(method="solcast")
-            self.assertIsInstance(df_bias0, pd.DataFrame)
-
-            # (iii) bias=1.0 (pure P10) — FAILS on master, PASSES with fix
-            self.fcst.optim_conf["weather_forecast_pv_quantile_bias"] = 1.0
-            with aioresponses() as mocked:
-                mocked.get(get_url, payload=inline_payload)
-                df_bias1 = await self.fcst.get_weather_forecast(method="solcast")
-            self.assertIsInstance(df_bias1, pd.DataFrame)
-
-            # (iv) bias=0.5 (linear midpoint) — FAILS on master, PASSES with fix
-            self.fcst.optim_conf["weather_forecast_pv_quantile_bias"] = 0.5
-            with aioresponses() as mocked:
-                mocked.get(get_url, payload=inline_payload)
-                df_bias05 = await self.fcst.get_weather_forecast(method="solcast")
-            self.assertIsInstance(df_bias05, pd.DataFrame)
-
-        finally:
-            # Restore cache and remove the bias key so it does not leak into other tests
-            if os.path.isfile(temp_path):
-                os.rename(temp_path, cache_path)
-            self.fcst.optim_conf.pop("weather_forecast_pv_quantile_bias", None)
+        # (iv) bias=0.5 (linear midpoint) — FAILS on master, PASSES with fix
+        df_bias05 = await self._fetch_solcast_with_bias(get_url, payload, 0.5)
+        self.assertIsInstance(df_bias05, pd.DataFrame)
 
         # All outputs should align with forecast_dates length
         for df_name, df in [
@@ -2344,74 +2353,32 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         Each case is checked by the resulting yhat ratio vs the pure-P50 baseline.
         """
         P50, P10 = 5.0, 2.0
-        anchor_utc = self.fcst.forecast_dates[0].tz_convert("UTC")
-        forecasts = [
-            {
-                "period_end": (anchor_utc + pd.Timedelta(minutes=30 * i)).isoformat(),
-                "period": "PT30M",
-                "pv_estimate": P50,
-                "pv_estimate10": P10,
-                "pv_estimate90": 7.0,
-            }
-            for i in range(50)
+        payload = self._build_solcast_bias_payload(P50, P10)
+        get_url = self._setup_solcast_bias_env()
+
+        # baseline (pure P50) to measure ratios against
+        base = await self._fetch_solcast_with_bias(get_url, payload, 0.0)
+        mask = base["yhat"].values > 1.0
+        self.assertTrue(mask.sum() > 0)
+        base_vals = base["yhat"].values[mask]
+
+        # (bias_value, expected ratio of result to the P50 baseline)
+        cases = [
+            (True, 1.0),  # bool rejected -> P50
+            ("0.5", (0.5 * P10 + 0.5 * P50) / P50),  # string coerced -> midpoint (0.7)
+            (float("nan"), 1.0),  # NaN -> P50
+            (-1.0, 1.0),  # clamp to 0 -> P50
+            (2.0, P10 / P50),  # clamp to 1 -> P10 (0.4)
         ]
-        inline_payload = {"forecasts": forecasts}
-
-        self.fcst.params = {
-            "passed_data": {
-                "weather_forecast_cache": False,
-                "weather_forecast_cache_only": False,
-            }
-        }
-        self.fcst.retrieve_hass_conf["solcast_api_key"] = "test_key"
-        self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "test_roof"
-        # Bypass the Solcast daily-quota safety cap (see sibling bias test).
-        self.fcst._solcast_rate_limit_ok = lambda: True
-        cache_path = emhass_conf["data_path"] / "weather_forecast_data.pkl"
-        temp_path = emhass_conf["data_path"] / "temp_bias_invalid_weather_forecast_data.pkl"
-        if os.path.isfile(cache_path):
-            os.rename(cache_path, temp_path)
-        days_solcast = int(len(self.fcst.forecast_dates) * self.fcst.freq.seconds / 3600)
-        get_url = (
-            f"https://api.solcast.com.au/rooftop_sites/test_roof/forecasts?hours={days_solcast}"
-        )
-
-        async def _run(bias_value):
-            self.fcst.optim_conf["weather_forecast_pv_quantile_bias"] = bias_value
-            with aioresponses() as mocked:
-                mocked.get(get_url, payload=inline_payload)
-                return await self.fcst.get_weather_forecast(method="solcast")
-
-        try:
-            # baseline (pure P50) to measure ratios against
-            base = await _run(0.0)
-            mask = base["yhat"].values > 1.0
-            self.assertTrue(mask.sum() > 0)
-            base_vals = base["yhat"].values[mask]
-
-            # (bias_value, expected ratio of result to the P50 baseline)
-            cases = [
-                (True, 1.0),  # bool rejected -> P50
-                ("0.5", (0.5 * P10 + 0.5 * P50) / P50),  # string coerced -> midpoint (0.7)
-                (float("nan"), 1.0),  # NaN -> P50
-                (-1.0, 1.0),  # clamp to 0 -> P50
-                (2.0, P10 / P50),  # clamp to 1 -> P10 (0.4)
-            ]
-            for bias_value, ratio in cases:
-                df = await _run(bias_value)
-                self.assertFalse(
-                    df["yhat"].isna().any(), msg=f"NaN in result for bias={bias_value!r}"
-                )
-                np.testing.assert_allclose(
-                    df["yhat"].values[mask],
-                    base_vals * ratio,
-                    rtol=1e-5,
-                    err_msg=f"bias={bias_value!r} did not produce the expected ratio {ratio}",
-                )
-        finally:
-            if os.path.isfile(temp_path):
-                os.rename(temp_path, cache_path)
-            self.fcst.optim_conf.pop("weather_forecast_pv_quantile_bias", None)
+        for bias_value, ratio in cases:
+            df = await self._fetch_solcast_with_bias(get_url, payload, bias_value)
+            self.assertFalse(df["yhat"].isna().any(), msg=f"NaN in result for bias={bias_value!r}")
+            np.testing.assert_allclose(
+                df["yhat"].values[mask],
+                base_vals * ratio,
+                rtol=1e-5,
+                err_msg=f"bias={bias_value!r} did not produce the expected ratio {ratio}",
+            )
 
 
 class TestDstForecastDates(unittest.IsolatedAsyncioTestCase):

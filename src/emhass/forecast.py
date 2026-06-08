@@ -510,6 +510,35 @@ class Forecast:
             return None
         return await self.get_cached_forecast_data(w_forecast_cache_path)
 
+    def _parse_pv_quantile_bias(self) -> float:
+        """Return the validated weather_forecast_pv_quantile_bias as a float in [0, 1].
+
+        Coerce-then-validate so a quoted/templated value like "0.5" still works,
+        while a bad type (bool, None, list) or NaN falls back to 0.0 with a visible
+        warning rather than silently changing or disabling the forecast. Out-of-range
+        numerics are clamped to [0, 1]. The default 0.0 keeps the central P50 forecast.
+        """
+        raw_bias = self.optim_conf.get("weather_forecast_pv_quantile_bias", 0.0)
+        try:
+            if isinstance(raw_bias, bool):
+                raise TypeError
+            bias = float(raw_bias)
+            if np.isnan(bias):
+                raise ValueError
+        except (TypeError, ValueError):
+            self.logger.warning(
+                "weather_forecast_pv_quantile_bias=%r is not a valid number; using 0.0 (P50).",
+                raw_bias,
+            )
+            bias = 0.0
+        if bias < 0.0 or bias > 1.0:
+            self.logger.warning(
+                "weather_forecast_pv_quantile_bias=%s is outside [0, 1]; clamping to that range.",
+                bias,
+            )
+            bias = max(0.0, min(1.0, bias))
+        return bias
+
     async def _get_weather_solcast(self, w_forecast_cache_path: str) -> pd.DataFrame:
         """Helper to retrieve weather data from Solcast or cache."""
         cached_data = await self._get_cached_forecast_or_none(w_forecast_cache_path)
@@ -544,29 +573,10 @@ class Forecast:
         roof_ids = re.split(r"[,\s]+", self.retrieve_hass_conf["solcast_rooftop_id"].strip())
         total_data = pd.DataFrame()
 
-        # Read the conservative-bias parameter once, before the roof loop.
-        # Coerce-then-validate so a quoted/templated value like "0.5" still works,
-        # while a bad type (bool, None, list) or NaN falls back to 0.0 with a visible
-        # warning rather than silently changing or disabling the forecast.
-        raw_bias = self.optim_conf.get("weather_forecast_pv_quantile_bias", 0.0)
-        try:
-            if isinstance(raw_bias, bool):
-                raise TypeError
-            bias = float(raw_bias)
-            if np.isnan(bias):
-                raise ValueError
-        except (TypeError, ValueError):
-            self.logger.warning(
-                "weather_forecast_pv_quantile_bias=%r is not a valid number; using 0.0 (P50).",
-                raw_bias,
-            )
-            bias = 0.0
-        if bias < 0.0 or bias > 1.0:
-            self.logger.warning(
-                "weather_forecast_pv_quantile_bias=%s is outside [0, 1]; clamping to that range.",
-                bias,
-            )
-            bias = max(0.0, min(1.0, bias))
+        # Conservative-bias blend factor, read once before the roof loop.
+        # Default 0.0 = pure P50 (no-op). See _parse_pv_quantile_bias for the
+        # coerce/validate/clamp policy.
+        bias = self._parse_pv_quantile_bias()
 
         async with aiohttp.ClientSession() as session:
             for roof_id in roof_ids:
