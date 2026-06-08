@@ -1720,6 +1720,28 @@ async def naive_mpc_optim(
     return opt_res_naive_mpc
 
 
+def _get_weather_features(input_data_dict: dict) -> list[str]:
+    """Read the configured mlforecaster weather covariate columns (empty when unset)."""
+    return list(input_data_dict["params"]["passed_data"].get("mlforecaster_weather_features") or [])
+
+
+async def _attach_weather_covariates(
+    input_data_dict: dict, data: pd.DataFrame, weather_features: list[str], logger: logging.Logger
+) -> pd.DataFrame:
+    """Attach the configured weather covariate columns onto a load DataFrame (in place, returned).
+
+    Used for the training data (fit/tune) so the columns are aligned to the load history. A no-op
+    that returns ``data`` unchanged when no ``weather_features`` are configured.
+    """
+    if not weather_features:
+        return data
+    covariates = await input_data_dict["fcst"].get_weather_covariates(data.index, weather_features)
+    for column in weather_features:
+        data[column] = covariates[column].to_numpy()
+    logger.info("Attached %s weather covariate(s) to the load data", len(weather_features))
+    return data
+
+
 async def forecast_model_fit(
     input_data_dict: dict, logger: logging.Logger, debug: bool | None = False
 ) -> tuple[pd.DataFrame, pd.DataFrame, MLForecaster]:
@@ -1741,6 +1763,9 @@ async def forecast_model_fit(
     num_lags = input_data_dict["params"]["passed_data"]["num_lags"]
     split_date_delta = input_data_dict["params"]["passed_data"]["split_date_delta"]
     perform_backtest = input_data_dict["params"]["passed_data"]["perform_backtest"]
+    # Optionally attach weather covariates (aligned to the load history) for the model to use.
+    weather_features = _get_weather_features(input_data_dict)
+    data = await _attach_weather_covariates(input_data_dict, data, weather_features, logger)
     # The ML forecaster object
     mlf = MLForecaster(
         data,
@@ -1750,6 +1775,7 @@ async def forecast_model_fit(
         num_lags,
         input_data_dict["emhass_conf"],
         logger,
+        weather_features=weather_features,
     )
     # Fit the ML model
     df_pred, df_pred_backtest = await mlf.fit(
@@ -1814,7 +1840,21 @@ async def forecast_model_predict(
         data_last_window = copy.deepcopy(input_data_dict["df_input_data"])
     else:
         data_last_window = None
-    predictions = await mlf.predict(data_last_window)
+    # When the model was trained with weather covariates, supply the future weather over the
+    # forecast horizon so the recursive predict has the exog columns it expects.
+    weather_future = None
+    weather_features = list(getattr(mlf, "weather_features", []) or [])
+    if weather_features and data_last_window is not None:
+        steps = mlf.lags_opt if getattr(mlf, "is_tuned", False) else mlf.num_lags
+        future_index = pd.date_range(
+            start=data_last_window.index[-1] + data_last_window.index.freq,
+            periods=steps,
+            freq=data_last_window.index.freq,
+        )
+        weather_future = await input_data_dict["fcst"].get_weather_covariates(
+            future_index, weather_features
+        )
+    predictions = await mlf.predict(data_last_window, weather_future=weather_future)
     # Publish data to a Home Assistant sensor
     model_predict_publish = input_data_dict["params"]["passed_data"]["model_predict_publish"]
     model_predict_entity_id = input_data_dict["params"]["passed_data"]["model_predict_entity_id"]
