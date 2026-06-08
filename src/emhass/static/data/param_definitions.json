@@ -231,6 +231,13 @@
       "default_value": "open-meteo",
       "unit": "none"
     },
+    "weather_forecast_pv_quantile_bias": {
+      "friendly_name": "PV forecast conservative bias",
+      "Description": "Blend factor that biases the Solcast PV forecast toward its conservative P10 (low) estimate. 0 (default) uses the central P50 estimate, i.e. unchanged behaviour. 1 uses the P10 estimate. Intermediate values blend linearly: estimate = bias*P10 + (1-bias)*P50. Higher values produce more defensive plans (more battery reserve held when solar is uncertain). Only effective with weather_forecast_method set to solcast. Defaults to 0.",
+      "input": "float",
+      "default_value": 0.0,
+      "unit": "none"
+    },
     "open_meteo_cache_max_age": {
       "friendly_name": "Open-Meteo Cache Max Age",
       "Description": "The maximum age, in minutes, of the cached open-meteo json response, after which a new version will be fetched from Open-Meteo. Defaults to 30.",
