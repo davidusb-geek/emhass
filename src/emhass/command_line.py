@@ -1657,6 +1657,8 @@ async def naive_mpc_optim(
     )
     soc_init = input_data_dict["params"]["passed_data"]["soc_init"]
     soc_final = input_data_dict["params"]["passed_data"]["soc_final"]
+    soc_target = input_data_dict["params"]["passed_data"].get("soc_target", None)
+    soc_target_timestep = input_data_dict["params"]["passed_data"].get("soc_target_timestep", None)
     def_total_hours = input_data_dict["params"]["optim_conf"].get(
         "operating_hours_of_each_deferrable_load", None
     )
@@ -1677,10 +1679,12 @@ async def naive_mpc_optim(
             prediction_horizon,
             soc_init,
             soc_final,
-            def_total_hours,
-            def_total_timestep,
-            def_start_timestep,
-            def_end_timestep,
+            soc_target=soc_target,
+            soc_target_timestep=soc_target_timestep,
+            def_total_hours=def_total_hours,
+            def_total_timestep=def_total_timestep,
+            def_start_timestep=def_start_timestep,
+            def_end_timestep=def_end_timestep,
             stage_times=input_data_dict["stage_times"],
         )
     # Save CSV file for publish_data
@@ -2345,6 +2349,96 @@ async def _publish_deferrable_loads(ctx: PublishContext, opt_res_latest: pd.Data
     return cols
 
 
+# Fraction of nominal power below which a deferrable load is treated as idle
+# ('off') and at/above which it is treated as fully on. Scaling the bands with
+# nominal_power keeps the labels meaningful for both small and large loads.
+_DEFERRABLE_OFF_FRACTION = 0.01
+_DEFERRABLE_ON_FRACTION = 0.99
+# Floor for the 'off' band (in W) used when nominal_power is unknown/non-positive,
+# so a tiny solver residual still reads as 'off'.
+_DEFERRABLE_OFF_FLOOR_W = 1.0
+
+
+def _deferrable_power_to_state(power: float, nominal_power: float) -> str:
+    """Map a scheduled deferrable power to an interpretable command label.
+
+    Generic and convention-free: 'off' when the load is essentially idle, 'on'
+    when it runs at (near) its nominal power, and 'variable' for any modulated
+    level in between. Users layer their own logic (e.g. mapping 'on' to a switch)
+    on top of this label rather than re-deriving it from the raw power forecast.
+
+    The 'off' and 'on' bands are derived from ``nominal_power`` so they scale with
+    the load; when ``nominal_power`` is unknown the 'off' band falls back to a
+    small fixed floor and only 'off'/'variable' can be distinguished.
+    """
+    if not np.isfinite(power):
+        return "off"
+    if nominal_power and nominal_power > 0:
+        off_threshold = max(_DEFERRABLE_OFF_FRACTION * nominal_power, _DEFERRABLE_OFF_FLOOR_W)
+        if power <= off_threshold:
+            return "off"
+        if power >= _DEFERRABLE_ON_FRACTION * nominal_power:
+            return "on"
+        return "variable"
+    # Nominal power unknown: only the idle floor is meaningful.
+    if power <= _DEFERRABLE_OFF_FLOOR_W:
+        return "off"
+    return "variable"
+
+
+async def _publish_deferrable_states(
+    ctx: PublishContext, opt_res_latest: pd.DataFrame
+) -> list[str]:
+    """Publish one interpretable command sensor per deferrable load (opt-in).
+
+    Gated by the ``publish_deferrable_load_states`` option (default off, so the
+    zero-config behaviour is unchanged). For each deferrable load this posts a
+    string-state sensor ('on'/'off'/'variable') for the current timestep plus the
+    full optimized plan as a 'schedule' attribute — a generic, glue-agnostic
+    command surface that automations can act on directly.
+    """
+    cols = []
+    if not ctx.optim_conf.get("publish_deferrable_load_states", False):
+        return cols
+    custom_state = ctx.params["passed_data"].get("custom_deferrable_state_id")
+    if not custom_state:
+        return cols
+    number_of_deferrable_loads = ctx.optim_conf["number_of_deferrable_loads"]
+    if len(custom_state) < number_of_deferrable_loads:
+        # A short custom_deferrable_state_id means some loads get no command
+        # sensor. Warn once rather than silently dropping them, so a mis-sized
+        # runtime override is visible instead of failing quietly.
+        ctx.logger.warning(
+            "custom_deferrable_state_id has %d entries but there are %d deferrable "
+            "loads; command sensors will only be published for the first %d load(s).",
+            len(custom_state),
+            number_of_deferrable_loads,
+            len(custom_state),
+        )
+    nominal = ctx.optim_conf.get("nominal_power_of_deferrable_loads", [])
+    for k in range(number_of_deferrable_loads):
+        col_name = f"P_deferrable{k}"
+        if col_name not in opt_res_latest.columns or k >= len(custom_state):
+            continue
+        nominal_power = nominal[k] if k < len(nominal) else 0.0
+        states = opt_res_latest[col_name].apply(
+            lambda power, npow=nominal_power: _deferrable_power_to_state(power, npow)
+        )
+        await ctx.rh.post_data(
+            states,
+            ctx.idx,
+            custom_state[k]["entity_id"],
+            custom_state[k]["device_class"],
+            custom_state[k]["unit_of_measurement"],
+            custom_state[k]["friendly_name"],
+            type_var="categorical",
+            **ctx.common_kwargs,
+        )
+    # The command states are derived (not opt_res columns), so they are
+    # published as a side-effect without being added to the returned column set.
+    return cols
+
+
 async def _publish_thermal_variable(
     rh, opt_res_latest, idx, k, custom_ids, col_prefix, type_var, unit_type, kwargs
 ) -> str | None:
@@ -2588,6 +2682,7 @@ async def publish_data(
     cols_published = []
     cols_published.extend(await _publish_standard_forecasts(ctx, opt_res_latest))
     cols_published.extend(await _publish_deferrable_loads(ctx, opt_res_latest))
+    cols_published.extend(await _publish_deferrable_states(ctx, opt_res_latest))
     cols_published.extend(await _publish_thermal_loads(ctx, opt_res_latest))
     cols_published.extend(await _publish_battery_data(ctx, opt_res_latest))
     cols_published.extend(await _publish_grid_and_costs(ctx, opt_res_latest))

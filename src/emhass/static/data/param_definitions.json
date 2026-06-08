@@ -188,6 +188,13 @@
       "default_value": false,
       "unit": "none"
     },
+    "publish_deferrable_load_states": {
+      "friendly_name": "Publish deferrable load command states",
+      "Description": "When true, EMHASS additionally publishes one interpretable command sensor per deferrable load (sensor.p_deferrableN_state) whose state is 'on', 'off' or 'variable' for the current timestep, with the full optimized on/off/variable plan as a 'schedule' attribute. This lets automations act on a clear command instead of thresholding the power forecast themselves. Defaults to false.",
+      "input": "boolean",
+      "default_value": false,
+      "unit": "none"
+    },
     "num_threads": {
       "friendly_name": "Number of threads to use for the LP solver",
       "Description": "Set the number of threads for the LP solver to use, when supported by the solver. Defaults to 0 (autodetect)",
