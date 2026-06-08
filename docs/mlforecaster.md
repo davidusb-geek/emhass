@@ -34,6 +34,8 @@ The minimum number of `historic_days_to_retrieve` is hard coded to 9 by default.
 
 - `perform_backtest`: if `True` then a backtesting routine is performed to evaluate the performance of the model on the complete train set.
 
+- `mlforecaster_weather_features`: an optional list of weather covariate columns to feed the model as exogenous inputs, in addition to the always-present calendar features. See [Adding weather covariates](#adding-weather-covariates) below. Leave empty (the default) to keep the historical date-features-only behaviour.
+
 The default values for these parameters are:
 ```python
 runtimeparams = {
@@ -43,7 +45,8 @@ runtimeparams = {
     "sklearn_model": "KNeighborsRegressor",
     "num_lags": 48,
     "split_date_delta": '48h',
-    "perform_backtest": False
+    "perform_backtest": False,
+    "mlforecaster_weather_features": []
 }
 ```
 
@@ -82,6 +85,46 @@ So the mean backtest metric of our model is $R^2=0.59$.
 Here is the graphic result of the backtesting routine:
 
 ![](./images/load_forecast_knn_bare_backtest.svg)
+
+## Adding weather covariates
+
+By default the forecaster only uses calendar features derived from the timestamps (hour, day of week, month, etc.). For loads that are weather-dependent — a heat pump being the canonical example — you can additionally feed the model selected weather columns as *exogenous* inputs. Because the weather forecast is known over the optimization horizon, these are valid "future known covariates" for the recursive model, exactly like the calendar features.
+
+This is opt-in and backward-compatible: leave `mlforecaster_weather_features` empty (the default) and the model behaves exactly as before.
+
+Enable it by listing the columns you want, for example the outside temperature plus a heating/cooling-degree thermal-demand signal:
+```bash
+curl -i -H "Content-Type:application/json" -X POST \
+  -d '{"mlforecaster_weather_features": ["temp_air", "heating_degree", "cooling_degree"]}' \
+  http://localhost:5000/action/forecast-model-fit
+```
+
+The same `mlforecaster_weather_features` value should be set for the fit, tune and predict actions (most easily by configuring it once in the EMHASS config rather than per-call), so that the model is trained and used with a consistent feature set.
+
+The supported values are sourced from the Open-Meteo weather forecast:
+
+| Feature | Meaning |
+| --- | --- |
+| `temp_air` | Air temperature at 2 m (°C) |
+| `relative_humidity` | Relative humidity (%) |
+| `cloud_cover` | Total cloud cover (%) |
+| `wind_speed` | Wind speed at 10 m |
+| `ghi` | Global horizontal irradiance (shortwave radiation) |
+| `direct_radiation` | Direct radiation |
+| `diffuse_radiation` | Diffuse radiation |
+| `precipitation` | Precipitation |
+| `heating_degree` | `max(0, comfort − temp_air)` — a forecastable heating-demand signal |
+| `cooling_degree` | `max(0, temp_air − comfort)` — a forecastable cooling-demand signal |
+
+`heating_degree`/`cooling_degree` are derived locally from the retrieved temperature using an 18 °C comfort set-point, so they are available even if you do not request `temp_air` itself.
+
+```{note}
+Weather covariates are only used by the `mlforecaster` method and are retrieved from Open-Meteo regardless of the `weather_forecast_method` you use for PV. The historical weather needed to train the model is fetched from Open-Meteo's recent past window (up to 92 days), so this works without you having to record a weather sensor in Home Assistant.
+```
+
+```{note}
+A weather covariate only helps if the load actually responds to it. On a heat-pump-dominated home, adding `temp_air` + `heating_degree`/`cooling_degree` measurably reduces the load forecast error; on a weather-insensitive load it will add little. Use `perform_backtest` to verify the gain on your own data before committing to it.
+```
 
 ## The predict method
 
@@ -169,7 +212,7 @@ With this type of model what we do in EMHASS is to create new features based on 
 
 What is interesting is that these added features are based on the timestamps, they are always known in advance and useful for generating forecasts. These are the so-called future known covariates.
 
-In the future, we may test to expand using other possible known future covariates from Home Assistant, for example, a known (forecasted) temperature, a scheduled presence sensor, etc.
+This can be extended with other known future covariates. As described in [Adding weather covariates](#adding-weather-covariates), you can feed forecasted weather columns (e.g. the outside temperature) to the model — these are also future known covariates because the weather forecast spans the optimization horizon. Other signals known in advance, such as a scheduled presence sensor, could be added in the same way.
 
 ## Going further?
 This class can be generalized to forecast any given sensor variable present in Home Assistant. It has been tested and the main initial motivation for this development was for better load power consumption forecasting. But in reality, it has been coded flexibly so that you can control what variable is used, how many lags, the amount of data used to train the model, etc.

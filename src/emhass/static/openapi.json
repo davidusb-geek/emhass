@@ -373,6 +373,15 @@
             "title": "Load forecast method",
             "description": "The load forecast method that will be used. The options are ‘csv’ to load a CSV file or ‘naive’ for a simple 1-day persistence model."
           },
+          "mlforecaster_weather_features": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "default": "temp_air"
+            },
+            "title": "ML forecaster weather covariate columns",
+            "description": "Optional list of weather covariate columns to feed the 'mlforecaster' load forecast model as exogenous inputs, in addition to the always-present calendar features. Useful when the load is weather-dependent (e.g. a heat pump). Leave empty to disable (default). Supported values: temp_air, relative_humidity, cloud_cover, wind_speed, ghi, direct_radiation, diffuse_radiation, precipitation, heating_degree, cooling_degree. The values are sourced from the Open-Meteo weather forecast; heating_degree/cooling_degree are derived from the temperature."
+          },
           "set_total_pv_sell": {
             "type": "boolean",
             "default": false,

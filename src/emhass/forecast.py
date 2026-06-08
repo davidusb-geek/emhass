@@ -119,6 +119,28 @@ class Forecast:
 
     """
 
+    # Weather covariate columns that ``get_weather_covariates`` can supply to the mlforecaster
+    # (via the ``mlforecaster_weather_features`` option). The keys are the Open-Meteo
+    # ``minutely_15`` variable names; the values are the friendlier column names exposed to the
+    # model. ``heating_degree``/``cooling_degree`` are derived from the temperature, see below.
+    OPEN_METEO_COVARIATE_VARS = {
+        "temperature_2m": "temp_air",
+        "relative_humidity_2m": "relative_humidity",
+        "cloud_cover": "cloud_cover",
+        "wind_speed_10m": "wind_speed",
+        "shortwave_radiation": "ghi",
+        "direct_radiation": "direct_radiation",
+        "diffuse_radiation": "diffuse_radiation",
+        "precipitation": "precipitation",
+    }
+    # Covariates derived locally from the retrieved temperature (no extra API field needed).
+    DERIVED_COVARIATES = ("heating_degree", "cooling_degree")
+    # Comfort set-point (deg C) for the heating/cooling-degree transform. A lightweight,
+    # forecastable thermal-demand signal that lets the model lift the forecast on cold/hot days.
+    WEATHER_COVARIATE_COMFORT_TEMP_C = 18.0
+    # Names accepted in ``mlforecaster_weather_features`` (friendly weather names + derived).
+    SUPPORTED_WEATHER_COVARIATES = tuple(OPEN_METEO_COVARIATE_VARS.values()) + DERIVED_COVARIATES
+
     def __init__(
         self,
         retrieve_hass_conf: dict,
@@ -677,6 +699,118 @@ class Forecast:
             data = None
         self.logger.debug("get_weather_forecast returning:\n%s", data)
         return data
+
+    async def _fetch_open_meteo_covariates_json(self, past_days: int, forecast_days: int) -> dict:
+        """Fetch (and cache) an Open-Meteo ``minutely_15`` response spanning past + future days.
+
+        This is kept separate from :meth:`get_cached_open_meteo_forecast_json` (which serves the PV
+        path and is future-only) so the weather-covariate feature is fully self-contained and the
+        existing weather/PV behaviour is untouched. The cache is reused until it is older than the
+        configured ``open_meteo_cache_max_age`` and, as with the PV cache, a stale cache is still
+        returned as a fallback if a fresh fetch fails.
+        """
+        cache_path = os.path.abspath(
+            self.emhass_conf["data_path"] / "cached-open-meteo-covariates.json"
+        )
+        max_age = self.optim_conf.get("open_meteo_cache_max_age", 30)
+        data = None
+        use_cache = False
+        if os.path.exists(cache_path):
+            delta = datetime.now() - datetime.fromtimestamp(os.path.getmtime(cache_path))
+            json_age = int(delta / timedelta(seconds=60))
+            use_cache = json_age < max_age
+            async with aiofiles.open(cache_path) as json_file:
+                data = orjson.loads(await json_file.read())
+        if not use_cache:
+            self.logger.info("Fetching Open-Meteo weather covariates (past_days=%s)", past_days)
+            headers = {"User-Agent": "EMHASS", "Accept": header_accept}
+            url = (
+                "https://api.open-meteo.com/v1/forecast?"
+                + "latitude="
+                + str(round(self.lat, 2))
+                + "&longitude="
+                + str(round(self.lon, 2))
+                + "&minutely_15="
+                + ",".join(self.OPEN_METEO_COVARIATE_VARS.keys())
+                + "&past_days="
+                + str(int(past_days))
+                + "&forecast_days="
+                + str(int(forecast_days))
+                + "&timezone="
+                + quote(str(self.time_zone), safe="")
+                + "&timeformat=unixtime"
+            )
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, headers=headers) as response:
+                        response.raise_for_status()
+                        data = await response.json()
+                        async with aiofiles.open(cache_path, "w") as json_file:
+                            await json_file.write(
+                                orjson.dumps(data, option=orjson.OPT_INDENT_2).decode()
+                            )
+            except aiohttp.ClientError:
+                self.logger.error(
+                    "Failed to fetch weather covariates from Open-Meteo", exc_info=True
+                )
+                if data is not None:
+                    self.logger.warning("Returning old cached covariate data as a fallback")
+        return data
+
+    async def get_weather_covariates(
+        self, index: pd.DatetimeIndex, weather_features: list[str]
+    ) -> pd.DataFrame:
+        """Build the configured weather covariate columns aligned onto an arbitrary time index.
+
+        The covariates are sourced from Open-Meteo over a window that spans the requested ``index``
+        (both past, for the training history, and future, for the forecast horizon) and reindexed
+        onto ``index``. ``heating_degree``/``cooling_degree`` are derived from the temperature using
+        :attr:`WEATHER_COVARIATE_COMFORT_TEMP_C`. The returned frame carries exactly the columns in
+        ``weather_features`` (in order) and is indexed by ``index``.
+
+        :param index: The target time index to align the covariates onto (tz-aware).
+        :type index: pd.DatetimeIndex
+        :param weather_features: The covariate column names to return. Must be a subset of \
+            :attr:`SUPPORTED_WEATHER_COVARIATES`.
+        :type weather_features: list[str]
+        :return: A DataFrame indexed by ``index`` with one column per requested covariate.
+        :rtype: pd.DataFrame
+        """
+        unsupported = [c for c in weather_features if c not in self.SUPPORTED_WEATHER_COVARIATES]
+        if unsupported:
+            raise ValueError(
+                f"Unsupported mlforecaster_weather_features {unsupported}. Supported values are: "
+                f"{list(self.SUPPORTED_WEATHER_COVARIATES)}"
+            )
+        # Size the fetch window from the requested index, clamped to Open-Meteo's 92-day past limit.
+        now = pd.Timestamp.now(tz=self.time_zone)
+        span_past_days = max(0, (now.normalize() - index.min()).days + 1)
+        past_days = int(min(92, span_past_days))
+        forecast_days = max(1, (index.max().normalize() - now.normalize()).days + 1)
+        data_raw = await self._fetch_open_meteo_covariates_json(past_days, forecast_days)
+        if not data_raw or "minutely_15" not in data_raw:
+            raise ValueError("Open-Meteo returned no minutely_15 weather covariate data")
+        weather = pd.DataFrame.from_dict(data_raw["minutely_15"])
+        weather["time"] = pd.to_datetime(weather["time"], unit="s", utc=True).dt.tz_convert(
+            self.time_zone
+        )
+        weather = weather.set_index("time").rename(columns=self.OPEN_METEO_COVARIATE_VARS)
+        # Drop any duplicate timestamps (e.g. DST edges) and sort, so the reindex below is safe.
+        weather = weather[~weather.index.duplicated(keep="first")].sort_index()
+        # Derived thermal-demand covariates (computed even if temp itself was not requested).
+        if "temp_air" in weather.columns:
+            comfort = self.WEATHER_COVARIATE_COMFORT_TEMP_C
+            weather["heating_degree"] = np.maximum(0.0, comfort - weather["temp_air"])
+            weather["cooling_degree"] = np.maximum(0.0, weather["temp_air"] - comfort)
+        # Align onto the requested index, filling residual gaps the same way the date features are
+        # always fully populated, then return only the requested columns in order. The combined
+        # index lets the interpolation use the surrounding weather rows when the target instants
+        # do not coincide exactly with the 15-min Open-Meteo grid.
+        combined_index = weather.index.union(index)
+        aligned = weather.reindex(combined_index)
+        aligned = aligned.interpolate(method="linear", axis=0, limit_direction="both")
+        aligned = aligned.reindex(index).ffill().bfill()
+        return aligned[list(weather_features)]
 
     def cloud_cover_to_irradiance(
         self, cloud_cover: pd.Series, offset: int | None = 35
@@ -1528,7 +1662,19 @@ class Forecast:
         if use_last_window:
             data_last_window = copy.deepcopy(df)
             data_last_window = data_last_window.rename(columns={self.var_load_new: self.var_load})
-        forecast_out = await mlf.predict(data_last_window)
+        # When the model was trained with weather covariates, supply the future weather over the
+        # forecast horizon so the recursive predict has the exog columns it expects.
+        weather_future = None
+        weather_features = list(getattr(mlf, "weather_features", []) or [])
+        if weather_features and data_last_window is not None:
+            steps = mlf.lags_opt if getattr(mlf, "is_tuned", False) else mlf.num_lags
+            future_index = pd.date_range(
+                start=data_last_window.index[-1] + data_last_window.index.freq,
+                periods=steps,
+                freq=data_last_window.index.freq,
+            )
+            weather_future = await self.get_weather_covariates(future_index, weather_features)
+        forecast_out = await mlf.predict(data_last_window, weather_future=weather_future)
         self.logger.debug(
             "Number of ML predict forcast data generated (lags_opt): "
             + str(len(forecast_out.index))

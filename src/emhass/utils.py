@@ -1775,6 +1775,7 @@ async def treat_runtimeparams(
             ("split_date_delta", "48h", None),
             ("n_trials", 10, int),
             ("perform_backtest", False, _cast_bool),
+            ("mlforecaster_weather_features", [], None),
         ]
 
         # Apply Configuration
