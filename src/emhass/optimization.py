@@ -914,6 +914,13 @@ class Optimization:
                 n, boolean=True, name="soc_high_recovered"
             )
             vars_dict["soc_deficit_cost"] = cp.Variable(n, nonneg=True, name="soc_deficit_cost")
+            # Battery-first priority gate (issue #834): binary per timestep,
+            # 1 = grid import allowed in this slot. Only created when the
+            # feature is enabled; otherwise it never enters self.vars.
+            if self.optim_conf.get("set_battery_first_priority", False):
+                vars_dict["battery_first_import_gate"] = cp.Variable(
+                    n, boolean=True, name="battery_first_import_gate"
+                )
         else:
             # Create dummy zero variables to preserve logic structure without conditional checks everywhere
             vars_dict["p_sto_pos"] = cp.Variable(n, name="p_sto_pos_dummy")
@@ -1422,6 +1429,39 @@ class Optimization:
         # Single precomputed floor vector; zero = no-op, so behaviour is
         # unchanged unless a target is explicitly requested.
         constraints.append(current_stored_energy >= self.param_soc_target_floor)
+
+        # Battery-first priority (issue #834): on a flat (non time-of-use)
+        # tariff, "drain the battery before importing" and "interleave grid
+        # import with discharge" are cost-equivalent, so the solver may plan
+        # grid imports while the battery is still well above its minimum SoC.
+        # When enabled, forbid grid import in any timestep where the battery
+        # still has usable energy. This uses a dedicated binary gate, not the
+        # grid-direction binary D: with set_nodischarge_to_grid the constraint
+        # E <= D would otherwise force the battery to stop discharging, which is
+        # exactly what we want to avoid. Same Big-M style as the discharge/import
+        # coupling in #796.
+        # WARNING: this is a hard constraint. It can make the problem infeasible
+        # in a timestep where (load - PV) exceeds the battery maximum discharge
+        # power, since grid import is then the only way to balance power. Only
+        # enable it when the battery discharge power can cover the load.
+        if self.optim_conf.get("set_battery_first_priority", False):
+            import_gate = self.vars["battery_first_import_gate"]
+            p_grid_pos = self.vars["p_grid_pos"]
+            max_from_grid = self._prepare_power_limit_array(
+                self.plant_conf.get("maximum_power_from_grid", 9000),
+                "maximum_power_from_grid",
+                self.num_timesteps,
+            )
+            # 1% SoC tolerance so the gate opens cleanly once the battery has
+            # numerically reached its minimum, avoiding chatter at the floor.
+            soc_tolerance_energy = 0.01 * cap
+            # import_gate = 1 (import allowed) is only possible once the stored
+            # energy is at/below min + tolerance; otherwise the gate is forced
+            # to 0 and no grid import is allowed in that slot.
+            constraints.append(
+                current_stored_energy - min_energy - soc_tolerance_energy <= cap * (1 - import_gate)
+            )
+            constraints.append(p_grid_pos <= cp.multiply(max_from_grid, import_gate))
 
         # Stress Cost
         if batt_stress_conf and batt_stress_conf["active"]:
