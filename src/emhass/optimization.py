@@ -965,6 +965,7 @@ class Optimization:
                 n, boolean=True, name="soc_high_recovered"
             )
             vars_dict["soc_deficit_cost"] = cp.Variable(n, nonneg=True, name="soc_deficit_cost")
+            vars_dict["soc_surplus_cost"] = cp.Variable(n, nonneg=True, name="soc_surplus_cost")
             # Battery-first priority gate (issue #834): binary per timestep,
             # 1 = grid import allowed in this slot. Only created when the
             # feature is enabled; otherwise it never enters self.vars.
@@ -984,6 +985,8 @@ class Optimization:
             constraints.append(vars_dict["soc_high_recovered"] == 0)
             vars_dict["soc_deficit_cost"] = cp.Variable(n, name="soc_deficit_cost_dummy")
             constraints.append(vars_dict["soc_deficit_cost"] == 0)
+            vars_dict["soc_surplus_cost"] = cp.Variable(n, name="soc_surplus_cost_dummy")
+            constraints.append(vars_dict["soc_surplus_cost"] == 0)
 
         # Self-consumption variable
         if self.costfun == "self-consumption":
@@ -1185,6 +1188,15 @@ class Optimization:
                     f"Adding SOC deficit cost {soc_deficit_cost}  to objective function: "
                 )
                 objective_terms.append(-cp.sum(soc_deficit_cost))
+
+        # SOC Surplus Cost (high-SoC dwell penalty, mirror of the deficit term)
+        if self.optim_conf["set_use_battery"]:
+            soc_surplus_cost = self.vars.get("soc_surplus_cost")
+            if soc_surplus_cost is not None:
+                self.logger.debug(
+                    f"Adding SOC surplus cost {soc_surplus_cost}  to objective function: "
+                )
+                objective_terms.append(-cp.sum(soc_surplus_cost))
 
         # Sum all terms to create the final objective expression
         return cp.Maximize(cp.sum(objective_terms))
@@ -1540,6 +1552,22 @@ class Optimization:
                 soc_deficit_cost
                 >= (threshold_energy - current_stored_energy)
                 * soc_deficit_cost_rate
+                * self.time_step
+            )
+
+        # SOC Surplus Cost (mirror of the deficit penalty above: penalize SoC
+        # ABOVE a high threshold to discourage long dwell near full charge).
+        soc_surplus_threshold = self.optim_conf.get("battery_soc_surplus_threshold", 0.9)
+        soc_surplus_cost_rate = (
+            self.optim_conf.get("battery_soc_surplus_cost", 0.0) / 1000.0
+        )  # kWh to Wh
+        if soc_surplus_threshold > 0 and soc_surplus_cost_rate > 0:
+            threshold_energy = soc_surplus_threshold * cap
+            soc_surplus_cost = self.vars["soc_surplus_cost"]
+            constraints.append(
+                soc_surplus_cost
+                >= (current_stored_energy - threshold_energy)
+                * soc_surplus_cost_rate
                 * self.time_step
             )
 
@@ -2871,6 +2899,10 @@ class Optimization:
             # SOC Deficit Results
             if "soc_deficit_cost" in self.vars:
                 opt_tp["soc_deficit_cost"] = get_val(self.vars["soc_deficit_cost"])
+
+            # SOC Surplus Results
+            if "soc_surplus_cost" in self.vars:
+                opt_tp["soc_surplus_cost"] = get_val(self.vars["soc_surplus_cost"])
 
         # Hybrid Inverter Results
         if self.plant_conf["inverter_is_hybrid"]:
