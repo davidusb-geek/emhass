@@ -824,7 +824,6 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 "number_of_deferrable_loads": 0,
                 "set_battery_dynamic": False,
                 "set_nodischarge_to_grid": True,
-                "set_battery_first_priority": True,
             }
         )
         self.plant_conf.update(
@@ -838,9 +837,18 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 "battery_charge_efficiency": 1.0,
             }
         )
+        # Control: the exact same setup is feasible with the feature OFF (the
+        # solver just imports the shortfall), proving the infeasibility below is
+        # caused by the new constraint and not by the scenario itself.
+        self.optim_conf["set_battery_first_priority"] = False
         self.opt = self.create_optimization()
-        # SoC stays well above min, so import is the only way to serve the load,
-        # which the feature forbids -> no optimal solution.
+        self.opt.perform_naive_mpc_optim(df, pv, load, 6, soc_init=0.5, soc_final=0.5)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+        # Feature ON: SoC stays well above min, so import is the only way to
+        # serve the load, which the feature forbids -> no optimal solution.
+        self.optim_conf["set_battery_first_priority"] = True
+        self.opt = self.create_optimization()
         self.opt.perform_naive_mpc_optim(df, pv, load, 6, soc_init=0.5, soc_final=0.5)
         self.assertNotIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
 
