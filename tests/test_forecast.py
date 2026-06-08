@@ -664,6 +664,76 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
                 emhass_conf["data_path"] / "weather_forecast_data.pkl",
             )
 
+    # Test #932: a weather cache lacking 'yhat' (e.g. left over after switching
+    # weather_forecast_method, since the cache file is shared across methods)
+    # must not crash get_power_from_weather. The rate-limited fetchers should
+    # self-heal by refetching, the same way open-meteo already does.
+    async def test_get_weather_forecast_solcast_incompatible_cache_recovers(self):
+        from unittest.mock import patch
+
+        cache_path = emhass_conf["data_path"] / "weather_forecast_data.pkl"
+        temp_path = emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"
+        if os.path.isfile(cache_path):
+            os.rename(cache_path, temp_path)
+
+        # Schema-incompatible cache: open-meteo columns, NO 'yhat', over a stale
+        # window that does not cover forecast_dates (forces the stale-cache path).
+        stale_index = pd.date_range(
+            start=self.fcst.forecast_dates[0] - pd.Timedelta(days=2),
+            periods=len(self.fcst.forecast_dates) + 4,
+            freq=self.fcst.freq,
+        )
+        incompatible = pd.DataFrame(
+            {"ghi": 500.0, "dni": 400.0, "dhi": 100.0, "temp_air": 20.0},
+            index=stale_index,
+        )
+        with open(cache_path, "wb") as f:
+            pickle.dump(incompatible, f)
+
+        self.fcst.params = {
+            "passed_data": {
+                "weather_forecast_cache": False,
+                "weather_forecast_cache_only": False,
+            }
+        }
+        self.fcst.retrieve_hass_conf["solcast_api_key"] = "123456"
+        self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "123456"
+        # solar_forecast_kwp == 0 is the case the schema check must NOT depend on:
+        # solcast does not use that key, yet a real solcast user can leave it at 0.
+        # The old `solar_forecast_kwp != 0` guard would skip the check and serve the
+        # yhat-less cache, crashing get_power_from_weather. Pin it to 0 here.
+        self.fcst.retrieve_hass_conf["solar_forecast_kwp"] = 0
+
+        # Solcast fixture for the (mocked) fresh fetch the fix should trigger.
+        test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2")
+        async with aiofiles.open(test_data_path, "rb") as f:
+            compressed = await f.read()
+        payload = orjson.loads(cPickle.loads(bz2.decompress(compressed)).content)
+
+        try:
+            with (
+                patch.object(self.fcst, "_solcast_rate_limit_ok", return_value=True),
+                aioresponses() as mocked,
+            ):
+                mocked.get(
+                    re.compile(r"https://api\.solcast\.com\.au/.*"),
+                    payload=payload,
+                )
+                df_weather = await self.fcst.get_weather_forecast(method="solcast")
+
+            # The incompatible cache must NOT be served verbatim: the refetched
+            # frame has 'yhat' and get_power_from_weather must not raise.
+            self.assertIsInstance(df_weather, pd.DataFrame)
+            self.assertIn("yhat", df_weather.columns)
+            p_pv = self.fcst.get_power_from_weather(df_weather)
+            self.assertEqual(len(p_pv), len(self.fcst.forecast_dates))
+            self.assertFalse(p_pv.isna().any())
+        finally:
+            if os.path.isfile(cache_path):
+                os.remove(cache_path)
+            if os.path.isfile(temp_path):
+                os.rename(temp_path, cache_path)
+
     # Test output weather forecast using Forecast.Solar with mock get request data
     async def test_get_weather_forecast_solarforecast_method_mock(self):
         test_data_path = str(
