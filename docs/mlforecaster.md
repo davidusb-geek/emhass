@@ -126,6 +126,28 @@ Weather covariates are only used by the `mlforecaster` method and are retrieved 
 A weather covariate only helps if the load actually responds to it. On a heat-pump-dominated home, adding `temp_air` + `heating_degree`/`cooling_degree` measurably reduces the load forecast error; on a weather-insensitive load it will add little. Use `perform_backtest` to verify the gain on your own data before committing to it.
 ```
 
+### Benchmark results
+
+The table below summarises a **paired 20-fold rolling-origin backtest** (24 h / 288-step horizon, 5-minute resolution) on a heat-pump-influenced home load, comparing each model's load MAE with and without the `temp_air` + `heating_degree`/`cooling_degree` covariate set:
+
+| Model | AR lags | Covariates | Load MAE (W) | Change vs. baseline | Folds improved |
+| --- | ---: | --- | ---: | ---: | ---: |
+| Lasso | 864 | ✓ | ~380 | −10.5% | 15/20 |
+| Lasso | 864 | ✗ (baseline) | ~425 | — | — |
+| skforecast-LightGBM | 288 | ✓ | ~490 | −7.9% | 12/20 |
+| skforecast-LightGBM | 288 | ✗ (baseline) | ~535 | — | — |
+| KNN | 288 | ✓ | ~620 | ~0% | — |
+| KNN | 288 | ✗ (baseline) | ~620 | — | — |
+| RandomForest | 288 | not benched (recursive-288 cost prohibitive) | — | — | — |
+
+Key takeaways:
+
+- **Lasso wins the most**: a linear model generalises the 3 scalar temperature signals well over 864 autoregressive lags; the weather gain is clear and consistent (15/20 folds).
+- **KNN is unaffected**: with 288 AR lags already in the feature space, 3 extra temperature scalars are drowned out — no measurable gain.
+- **Architecture matters more than covariates**: a Darts-based direct multi-output forecaster (not recursive) achieves ~410 W MAE on the same dataset vs. ~536 W for the best recursive skforecast model, showing that the recursion error accumulation over a 24 h horizon dominates the covariate benefit. Weather covariates are still a worthwhile addition to the recursive models available in the `mlforecaster`, but further error reduction at longer horizons may require a direct-output architecture.
+
+These results are load-dependent; gains will vary with how weather-sensitive your load is. Use `perform_backtest` to measure the improvement on your own data before committing to a covariate set.
+
 ## The predict method
 
 To obtain a prediction using a previously trained model use the `forecast-model-predict` endpoint. 
