@@ -695,6 +695,11 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         }
         self.fcst.retrieve_hass_conf["solcast_api_key"] = "123456"
         self.fcst.retrieve_hass_conf["solcast_rooftop_id"] = "123456"
+        # solar_forecast_kwp == 0 is the case the schema check must NOT depend on:
+        # solcast does not use that key, yet a real solcast user can leave it at 0.
+        # The old `solar_forecast_kwp != 0` guard would skip the check and serve the
+        # yhat-less cache, crashing get_power_from_weather. Pin it to 0 here.
+        self.fcst.retrieve_hass_conf["solar_forecast_kwp"] = 0
 
         # Solcast fixture for the (mocked) fresh fetch the fix should trigger.
         test_data_path = str(emhass_conf["data_path"] / "test_response_solcast_get_method.pbz2")
