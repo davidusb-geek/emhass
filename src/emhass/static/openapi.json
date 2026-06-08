@@ -418,6 +418,12 @@
             "title": "Weather forecast method",
             "description": "This will define the weather forecast method that will be used. options are 'open-meteo', 'Solcast', 'solar.forecast' (forecast.solar) and 'csv' to load a CSV file. When loading a CSV file this will be directly considered as the PV power forecast in Watts."
           },
+          "weather_forecast_pv_quantile_bias": {
+            "type": "number",
+            "default": 0.0,
+            "title": "PV forecast conservative bias",
+            "description": "Blend factor that biases the Solcast PV forecast toward its conservative P10 (low) estimate. 0 (default) uses the central P50 estimate, i.e. unchanged behaviour. 1 uses the P10 estimate. Intermediate values blend linearly: estimate = bias*P10 + (1-bias)*P50. Higher values produce more defensive plans (more battery reserve held when solar is uncertain). Only effective with weather_forecast_method set to solcast. Defaults to 0."
+          },
           "open_meteo_cache_max_age": {
             "type": "integer",
             "default": 30,
