@@ -79,12 +79,29 @@ The results of the backtest will be shown in the logs:
 
     2023-02-20 22:05:36,825 - __main__ - INFO - Simple backtesting
     2023-02-20 22:06:32,162 - __main__ - INFO - Backtest R2 score: 0.5851552394233677
+    2023-02-20 22:06:32,163 - __main__ - INFO - Backtest metrics — MAE: 142.3456, RMSE: 198.2345, R2: 0.5852, MAPE: 12.34%
 
 So the mean backtest metric of our model is $R^2=0.59$. 
 
 Here is the graphic result of the backtesting routine:
 
 ![](./images/load_forecast_knn_bare_backtest.svg)
+
+### Backtest goodness-of-fit metrics
+
+When `perform_backtest=True` the fitted `MLForecaster` object exposes a `backtest_metrics_` attribute — a dict with the following keys computed over the out-of-sample backtest folds:
+
+| Key | Metric |
+| --- | --- |
+| `mae` | Mean Absolute Error (same unit as the target sensor, e.g. W) |
+| `rmse` | Root Mean Squared Error (same unit) |
+| `r2` | Coefficient of determination $R^2$ (dimensionless, higher is better) |
+| `mape` | Mean Absolute Percentage Error (%; rows where the actual value is zero are excluded) |
+| `n_samples` | Number of backtest steps used to compute the metrics |
+
+All four metrics are also printed to the log at INFO level after the backtest completes, making it easy to compare model variants or assess the effect of adding weather covariates.
+
+`backtest_metrics_` is `None` before `fit()` is called and when `perform_backtest=False` (the default).
 
 ## Adding weather covariates
 
@@ -246,3 +263,13 @@ This can be extended with other known future covariates. As described in [Adding
 This class can be generalized to forecast any given sensor variable present in Home Assistant. It has been tested and the main initial motivation for this development was for better load power consumption forecasting. But in reality, it has been coded flexibly so that you can control what variable is used, how many lags, the amount of data used to train the model, etc.
 
 So you can go further and try to forecast other types of variables and possibly use the results for some interesting automations in Home Assistant. If doing this, what is important is to evaluate the pertinence of the obtained forecasts. The hope is that the tools proposed here can be used for that purpose.
+
+## Future directions
+
+### Probabilistic forecasting and confidence intervals
+
+The `backtest_metrics_` attribute described above gives a useful point estimate of model quality, but it does not tell you *how much to trust a specific prediction*. Propagating forecast uncertainty through the MILP optimisation — so the solver can trade off the risk of over- and under-forecasting — would require a probabilistic model that outputs a distribution (or at least a credible interval) for each step, not a scalar.
+
+A natural candidate is **Gaussian Process Regression** (GPR), which is the only `scikit-learn` regressor that is natively stochastic: it returns a mean prediction together with a variance estimate whose shape adapts to the local density of the training data. Wiring GPR into the `mlforecaster` as an optional `sklearn_model` choice, and plumbing its per-step standard deviation through to the MILP as a second tensor, would be the foundation for **stochastic MPC** — optimising expected cost under forecast uncertainty rather than optimising a single deterministic trajectory.
+
+This is a non-trivial architecture change (the MILP formulation, the objective function, and the EMHASS optimisation layer would all need updating), and it is intentionally left as a future direction rather than implemented here.

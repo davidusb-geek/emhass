@@ -319,6 +319,35 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         self.assertIn("train", df_pred_backtest.columns)
         self.assertEqual(len(df_pred_backtest), len(fast_data))
 
+    async def test_backtest_metrics_populated_when_perform_backtest_true(self):
+        """backtest_metrics_ must be a dict with the expected keys after perform_backtest=True."""
+        fast_data = self.data.iloc[-200:]
+        mlf = MLForecaster(
+            fast_data,
+            self.input_data_dict["params"]["passed_data"]["model_type"],
+            self.input_data_dict["params"]["passed_data"]["var_model"],
+            "LinearRegression",
+            self.input_data_dict["params"]["passed_data"]["num_lags"],
+            emhass_conf,
+            logger,
+        )
+        self.assertIsNone(mlf.backtest_metrics_)
+        await mlf.fit(split_date_delta="48h", perform_backtest=True)
+        self.assertIsNotNone(mlf.backtest_metrics_)
+        self.assertIsInstance(mlf.backtest_metrics_, dict)
+        for expected_key in ("mae", "rmse", "r2", "mape", "n_samples"):
+            self.assertIn(expected_key, mlf.backtest_metrics_)
+        # Sanity: MAE and RMSE must be non-negative finite numbers
+        self.assertGreaterEqual(mlf.backtest_metrics_["mae"], 0.0)
+        self.assertGreaterEqual(mlf.backtest_metrics_["rmse"], 0.0)
+        self.assertGreater(mlf.backtest_metrics_["n_samples"], 0)
+
+    async def test_backtest_metrics_none_when_perform_backtest_false(self):
+        """backtest_metrics_ must remain None when perform_backtest=False (the default)."""
+        mlf = self._get_standard_mlf()
+        await mlf.fit(split_date_delta="48h", perform_backtest=False)
+        self.assertIsNone(mlf.backtest_metrics_)
+
     async def test_mlforecaster_tune_short_train_size_recovery(self):
         """Test the fallback logic when initial_train_size <= window_size during tuning."""
         # Use 50 rows (25 hours). This is enough data for fit() to succeed.
