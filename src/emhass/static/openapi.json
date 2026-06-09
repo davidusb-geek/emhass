@@ -506,7 +506,7 @@
             "type": "boolean",
             "default": false,
             "title": "Set compute curtailment (grid export limit)",
-            "description": "Set to True to compute a special PV curtailment variable (Default False)"
+            "description": "Set to True to compute a special PV curtailment variable (Default False). When enabled, curtailment that is cost-equivalent is scheduled as late as possible in the optimization horizon"
           },
           "load_cost_forecast_method": {
             "type": "string",
