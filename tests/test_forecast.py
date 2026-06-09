@@ -395,6 +395,125 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.fcst.get_weather_covariates(self.fcst.forecast_dates, ["not_a_real_column"])
 
+    async def test_build_weather_future_returns_none_without_weather_features(self):
+        """_build_weather_future returns None when the model has no weather_features."""
+        from unittest.mock import MagicMock
+
+        data_last_window = self.df_input_data.copy()
+        # A minimal mock MLForecaster with no weather features
+        mock_mlf = MagicMock()
+        mock_mlf.weather_features = []
+        mock_mlf.is_tuned = False
+        mock_mlf.num_lags = 48
+
+        result = await self.fcst._build_weather_future(data_last_window, mock_mlf)
+        self.assertIsNone(result)
+
+    async def test_build_weather_future_returns_none_when_no_last_window(self):
+        """_build_weather_future returns None when data_last_window is None."""
+        from unittest.mock import MagicMock
+
+        mock_mlf = MagicMock()
+        mock_mlf.weather_features = ["temp_air"]
+        mock_mlf.is_tuned = False
+        mock_mlf.num_lags = 48
+
+        result = await self.fcst._build_weather_future(None, mock_mlf)
+        self.assertIsNone(result)
+
+    async def test_build_weather_future_builds_correct_horizon(self):
+        """_build_weather_future calls get_weather_covariates over the correct future index."""
+        from unittest.mock import MagicMock, patch
+
+        index = self.fcst.forecast_dates
+        span_start = index[0] - 4 * self.fcst.freq
+        full = pd.date_range(start=span_start, end=index[-1], freq=self.fcst.freq, tz=index.tz)
+        times = (full.tz_convert("UTC").astype("int64") // 10**9).tolist()
+        payload = {
+            "minutely_15": {
+                "time": times,
+                "temperature_2m": [20.0] * len(full),
+                "relative_humidity_2m": [50.0] * len(full),
+                "cloud_cover": [30.0] * len(full),
+                "wind_speed_10m": [5.0] * len(full),
+                "shortwave_radiation": [200.0] * len(full),
+                "direct_radiation": [150.0] * len(full),
+                "diffuse_radiation": [50.0] * len(full),
+                "precipitation": [0.0] * len(full),
+            }
+        }
+        num_lags = 16
+        data_last_window = self.df_input_data.copy()
+        mock_mlf = MagicMock()
+        mock_mlf.weather_features = ["temp_air"]
+        mock_mlf.is_tuned = False
+        mock_mlf.num_lags = num_lags
+
+        with patch.object(self.fcst, "_fetch_open_meteo_covariates_json", return_value=payload):
+            weather_future = await self.fcst._build_weather_future(data_last_window, mock_mlf)
+
+        self.assertIsNotNone(weather_future)
+        self.assertIsInstance(weather_future, pd.DataFrame)
+        self.assertEqual(len(weather_future), num_lags)
+        self.assertIn("temp_air", weather_future.columns)
+        # Verify the horizon is anchored exactly one step after the last window index.
+        expected_start = data_last_window.index[-1] + data_last_window.index.freq
+        self.assertEqual(weather_future.index[0], expected_start)
+        # Verify the horizon frequency matches the input window frequency.
+        self.assertEqual(weather_future.index.freq, data_last_window.index.freq)
+
+    async def test_build_weather_future_uses_lags_opt_when_tuned(self):
+        """_build_weather_future uses mlf.lags_opt (not num_lags) when is_tuned=True."""
+        from unittest.mock import MagicMock, patch
+
+        index = self.fcst.forecast_dates
+        span_start = index[0] - 4 * self.fcst.freq
+        full = pd.date_range(start=span_start, end=index[-1], freq=self.fcst.freq, tz=index.tz)
+        times = (full.tz_convert("UTC").astype("int64") // 10**9).tolist()
+        payload = {
+            "minutely_15": {
+                "time": times,
+                "temperature_2m": [20.0] * len(full),
+                "relative_humidity_2m": [50.0] * len(full),
+                "cloud_cover": [30.0] * len(full),
+                "wind_speed_10m": [5.0] * len(full),
+                "shortwave_radiation": [200.0] * len(full),
+                "direct_radiation": [150.0] * len(full),
+                "diffuse_radiation": [50.0] * len(full),
+                "precipitation": [0.0] * len(full),
+            }
+        }
+        lags_opt_value = 24
+        data_last_window = self.df_input_data.copy()
+        mock_mlf = MagicMock()
+        mock_mlf.weather_features = ["temp_air"]
+        mock_mlf.is_tuned = True
+        mock_mlf.lags_opt = lags_opt_value
+        mock_mlf.num_lags = 48  # should be ignored when is_tuned=True
+
+        with patch.object(self.fcst, "_fetch_open_meteo_covariates_json", return_value=payload):
+            weather_future = await self.fcst._build_weather_future(data_last_window, mock_mlf)
+
+        self.assertIsNotNone(weather_future)
+        self.assertEqual(len(weather_future), lags_opt_value)
+
+    async def test_build_weather_future_raises_on_non_uniform_index(self):
+        """_build_weather_future raises ValueError when index freq cannot be inferred."""
+        from unittest.mock import MagicMock
+
+        # Build an irregular (non-uniform) index so that both .freq and pd.infer_freq return None.
+        irregular_timestamps = pd.to_datetime(
+            ["2023-01-01 00:00", "2023-01-01 00:15", "2023-01-01 01:00"]
+        ).tz_localize(self.fcst.time_zone)
+        data_last_window = pd.DataFrame(index=irregular_timestamps)
+        mock_mlf = MagicMock()
+        mock_mlf.weather_features = ["temp_air"]
+        mock_mlf.is_tuned = False
+        mock_mlf.num_lags = 4
+
+        with self.assertRaises(ValueError, msg="Expected ValueError for non-uniform index"):
+            await self.fcst._build_weather_future(data_last_window, mock_mlf)
+
     # Test output weather forecast using Solcast with mock get request data
     async def test_get_weather_forecast_solcast_method_mock(self):
         self.fcst.params = {

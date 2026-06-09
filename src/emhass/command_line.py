@@ -1842,18 +1842,7 @@ async def forecast_model_predict(
         data_last_window = None
     # When the model was trained with weather covariates, supply the future weather over the
     # forecast horizon so the recursive predict has the exog columns it expects.
-    weather_future = None
-    weather_features = list(getattr(mlf, "weather_features", []) or [])
-    if weather_features and data_last_window is not None:
-        steps = mlf.lags_opt if getattr(mlf, "is_tuned", False) else mlf.num_lags
-        future_index = pd.date_range(
-            start=data_last_window.index[-1] + data_last_window.index.freq,
-            periods=steps,
-            freq=data_last_window.index.freq,
-        )
-        weather_future = await input_data_dict["fcst"].get_weather_covariates(
-            future_index, weather_features
-        )
+    weather_future = await input_data_dict["fcst"]._build_weather_future(data_last_window, mlf)
     predictions = await mlf.predict(data_last_window, weather_future=weather_future)
     # Publish data to a Home Assistant sensor
     model_predict_publish = input_data_dict["params"]["passed_data"]["model_predict_publish"]

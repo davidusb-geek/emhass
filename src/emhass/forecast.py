@@ -1764,6 +1764,49 @@ class Forecast:
         historical_values = df.iloc[-forecast_horizon:]
         return pd.DataFrame(historical_values.values, index=self.forecast_dates, columns=["yhat"])
 
+    async def _build_weather_future(
+        self, data_last_window: pd.DataFrame, mlf
+    ) -> pd.DataFrame | None:
+        """Build the future-weather DataFrame required by a weather-trained MLForecaster.
+
+        Returns a DataFrame aligned to the model's forecast horizon (``mlf.lags_opt`` when tuned,
+        ``mlf.num_lags`` otherwise) containing the weather covariate columns the model was trained
+        with, or ``None`` when the model was trained without weather features or when
+        ``data_last_window`` is None.
+
+        Factoring out this block avoids identical horizon-construction code in both
+        ``_get_load_forecast_ml`` and ``command_line.forecast_model_predict``.
+
+        :param data_last_window: The last observed window; its tail index + ``freq`` anchors the \
+            future date range.
+        :type data_last_window: pd.DataFrame
+        :param mlf: A fitted (and optionally tuned) ``MLForecaster`` instance.
+        :return: Future weather DataFrame, or None.
+        :rtype: pd.DataFrame | None
+        """
+        if data_last_window is None:
+            return None
+        weather_features = list(getattr(mlf, "weather_features", []) or [])
+        if not weather_features:
+            return None
+        # Resolve the index frequency — DatetimeIndex.freq can be None when the index was
+        # constructed without an explicit freq (e.g. after a reindex or iloc slice).
+        window_freq = data_last_window.index.freq
+        if window_freq is None:
+            window_freq = pd.tseries.frequencies.to_offset(pd.infer_freq(data_last_window.index))
+        if window_freq is None:
+            raise ValueError(
+                "_build_weather_future: could not infer a regular frequency from "
+                "data_last_window.index — ensure the index has a uniform step size."
+            )
+        steps = mlf.lags_opt if getattr(mlf, "is_tuned", False) else mlf.num_lags
+        future_index = pd.date_range(
+            start=data_last_window.index[-1] + window_freq,
+            periods=steps,
+            freq=window_freq,
+        )
+        return await self.get_weather_covariates(future_index, weather_features)
+
     async def _get_load_forecast_ml(
         self, df: pd.DataFrame, use_last_window: bool, mlf, debug: bool
     ) -> pd.DataFrame | bool:
@@ -1787,16 +1830,7 @@ class Forecast:
             data_last_window = data_last_window.rename(columns={self.var_load_new: self.var_load})
         # When the model was trained with weather covariates, supply the future weather over the
         # forecast horizon so the recursive predict has the exog columns it expects.
-        weather_future = None
-        weather_features = list(getattr(mlf, "weather_features", []) or [])
-        if weather_features and data_last_window is not None:
-            steps = mlf.lags_opt if getattr(mlf, "is_tuned", False) else mlf.num_lags
-            future_index = pd.date_range(
-                start=data_last_window.index[-1] + data_last_window.index.freq,
-                periods=steps,
-                freq=data_last_window.index.freq,
-            )
-            weather_future = await self.get_weather_covariates(future_index, weather_features)
+        weather_future = await self._build_weather_future(data_last_window, mlf)
         forecast_out = await mlf.predict(data_last_window, weather_future=weather_future)
         self.logger.debug(
             "Number of ML predict forcast data generated (lags_opt): "
