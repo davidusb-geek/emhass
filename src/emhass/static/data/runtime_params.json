@@ -21,6 +21,20 @@
       "default_value": null,
       "unit": "fraction"
     },
+    "soc_target": {
+      "friendly_name": "Intermediate battery state of charge target",
+      "Description": "Optional minimum battery state of charge, as a fraction in [0,1] (NOT percent), that must be reached by soc_target_timestep, after which the battery is free to discharge again. Defaults to no intermediate target (None) so behaviour is unchanged when omitted. Clamped to [battery_minimum_state_of_charge, battery_maximum_state_of_charge] if out of range. An unreachable target by its timestep makes the problem infeasible. Only used by naive-mpc-optim. See issue #553 and passing_data.md.",
+      "input": "float",
+      "default_value": null,
+      "unit": "fraction"
+    },
+    "soc_target_timestep": {
+      "friendly_name": "Intermediate SOC target timestep",
+      "Description": "The 0-based horizon timestep by which soc_target must be met. Defaults to the last timestep when soc_target is given but this is omitted; clamped to [0, prediction_horizon-1]. Ignored when soc_target is not set. Only used by naive-mpc-optim. See issue #553 and passing_data.md.",
+      "input": "int",
+      "default_value": null,
+      "unit": "timesteps"
+    },
     "operating_timesteps_of_each_deferrable_load": {
       "friendly_name": "Operating timesteps of each deferrable load",
       "Description": "Per-deferrable-load total number of operating timesteps over the horizon (the timestep-based alternative to operating_hours_of_each_deferrable_load, preferred for sub-hour steps). One int per deferrable load. Only used by naive-mpc-optim. See passing_data.md.",

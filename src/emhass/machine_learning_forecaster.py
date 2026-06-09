@@ -18,7 +18,7 @@ from sklearn.ensemble import (
     RandomForestRegressor,
 )
 from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
-from sklearn.metrics import r2_score
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.svm import SVR
@@ -35,6 +35,14 @@ class MLForecaster:
     based on timestamp information (hour, day, week, etc).
 
     This class uses the `skforecast` module and the machine learning models are from `scikit-learn`.
+
+    In addition to the always-present date features, the forecaster can optionally consume\
+    extra *exogenous* covariates (for example weather columns such as the outside temperature)\
+    that are known over the whole train/forecast window. These are passed through to\
+    `skforecast`'s ``ForecasterRecursive`` ``exog`` argument unchanged. The columns to use are\
+    listed in ``weather_features`` and must be present in the input ``data`` (for fit/tune) and\
+    supplied for the forecast horizon at predict time (see ``predict``). When ``weather_features``\
+    is empty the behaviour is identical to a date-features-only model.
 
     It exposes three main methods:
 
@@ -55,6 +63,7 @@ class MLForecaster:
         num_lags: int,
         emhass_conf: dict,
         logger: logging.Logger,
+        weather_features: list[str] | None = None,
     ) -> None:
         r"""Define constructor for the forecast class.
 
@@ -77,6 +86,12 @@ class MLForecaster:
         :type emhass_conf: dict
         :param logger: The passed logger object
         :type logger: logging.Logger
+        :param weather_features: An optional list of extra exogenous covariate column names \
+            (for example weather columns such as ``temp_air``) that are known over the whole \
+            train/forecast window and should be fed to the model in addition to the date \
+            features. These columns must be present in ``data``. Defaults to None (date \
+            features only, i.e. the historical behaviour).
+        :type weather_features: Optional[list[str]], optional
         """
         self.data = data
         self.model_type = model_type
@@ -85,10 +100,12 @@ class MLForecaster:
         self.num_lags = num_lags
         self.emhass_conf = emhass_conf
         self.logger = logger
+        self.weather_features = list(weather_features) if weather_features else []
         self.is_tuned = False
         self.forecaster: ForecasterRecursive | None = None
         self.optimize_results: pd.DataFrame | None = None
         self.optimize_results_object = None
+        self.backtest_metrics_: dict | None = None
 
         # A quick data preparation
         self._prepare_data()
@@ -136,8 +153,21 @@ class MLForecaster:
         return lags
 
     @staticmethod
-    async def generate_exog(data_last_window, periods, var_name):
-        """Generate the exogenous data for future timestamps."""
+    async def generate_exog(
+        data_last_window, periods, var_name, weather_features=None, weather_future=None
+    ):
+        """Generate the exogenous data for future timestamps.
+
+        :param data_last_window: The last window of observed data, used to anchor the future date \
+            range.
+        :param periods: The number of future steps to generate exog for.
+        :param var_name: The name of the (target) variable column to seed the frame with.
+        :param weather_features: Optional list of extra covariate column names to carry over from \
+            ``weather_future`` into the generated exog. Defaults to None (date features only).
+        :param weather_future: Optional DataFrame holding the future values of the columns named \
+            in ``weather_features``. It is aligned onto the generated future date range. Defaults \
+            to None.
+        """
         forecast_dates = pd.date_range(
             start=data_last_window.index[-1] + data_last_window.index.freq,
             periods=periods,
@@ -145,6 +175,44 @@ class MLForecaster:
         )
         exog = pd.DataFrame({var_name: [np.nan] * periods}, index=forecast_dates)
         exog = utils.add_date_features(exog)
+        if weather_features:
+            exog = MLForecaster._merge_weather_exog(
+                exog, weather_features, weather_future, "future"
+            )
+        return exog
+
+    @staticmethod
+    def _merge_weather_exog(exog, weather_features, weather_source, context):
+        """Align and attach the configured weather covariate columns onto an exog frame.
+
+        The columns are reindexed onto ``exog.index`` (so the same calendar instants are used) and
+        any residual gaps are filled by interpolation then forward/backward fill, mirroring how the
+        date features are always fully populated. A missing column or an empty/None source raises a
+        clear ``KeyError``/``ValueError`` so the configuration mistake surfaces early rather than as
+        an opaque skforecast "Missing columns in exog" error later.
+
+        :param exog: The exog frame (already carrying the date features) to enrich.
+        :param weather_features: List of weather covariate column names to attach.
+        :param weather_source: A DataFrame holding those columns over (at least) the span of \
+            ``exog.index``.
+        :param context: A short label ('train' or 'future') used only for error messages.
+        """
+        if weather_source is None:
+            raise ValueError(
+                f"weather_features {weather_features} were configured but no weather data was "
+                f"provided for the {context} window"
+            )
+        missing = [column for column in weather_features if column not in weather_source.columns]
+        if missing:
+            raise KeyError(
+                f"Configured weather_features {missing} not found in the {context} weather data "
+                f"columns: {list(weather_source.columns)}"
+            )
+        aligned = weather_source[weather_features].reindex(exog.index)
+        aligned = aligned.interpolate(method="linear", axis=0, limit_direction="both")
+        aligned = aligned.ffill().bfill()
+        for column in weather_features:
+            exog[column] = aligned[column].to_numpy()
         return exog
 
     def _get_sklearn_model(self, model_name: str):
@@ -190,13 +258,17 @@ class MLForecaster:
             as the test period to evaluate the model, defaults to '48h'
         :type split_date_delta: Optional[str], optional
         :param perform_backtest: If `True` then a back testing routine is performed to evaluate \
-            the performance of the model on the complete train set, defaults to False
+            the performance of the model on the complete train set, defaults to False.
+            When True, the ``backtest_metrics_`` attribute is populated with a dict containing
+            MAE, RMSE, R2, and MAPE computed over the out-of-sample backtest folds.
         :type perform_backtest: Optional[bool], optional
         :return: The DataFrame containing the forecast data results without and with backtest
         :rtype: Tuple[pd.DataFrame, pd.DataFrame]
         """
         try:
             self.logger.info("Performing a forecast model fit for " + self.model_type)
+            # Reset metrics so a reused instance never exposes stale results from a previous fit.
+            self.backtest_metrics_ = None
 
             # Check if variable exists in data
             if self.var_model not in self.data.columns:
@@ -207,6 +279,13 @@ class MLForecaster:
             # Preparing the data: adding exogenous features
             self.data_exo = pd.DataFrame(index=self.data.index)
             self.data_exo = utils.add_date_features(self.data_exo)
+            # Optional extra exogenous covariates (e.g. weather). They must be present as columns
+            # in the training data, aligned to the load history. When weather_features is empty
+            # this block is a no-op and the model is date-features-only (historical behaviour).
+            if self.weather_features:
+                self.data_exo = MLForecaster._merge_weather_exog(
+                    self.data_exo, self.weather_features, self.data, "train"
+                )
             self.data_exo[self.var_model] = self.data[self.var_model]
 
             self.data_exo = await self.interpolate_async(self.data_exo)
@@ -309,6 +388,69 @@ class MLForecaster:
                 # Use loc to align indices properly - only assign where indices match
                 df_pred_backtest.loc[pred_values.index, "pred"] = pred_values
 
+                # Compute goodness-of-fit metrics over the backtest fold predictions.
+                # Only rows where the backtest produced a prediction are used; the leading
+                # rows (the initial warm-up window) remain NaN and are excluded.
+                actual_values = df_pred_backtest["train"].astype(float)
+                predicted_values = df_pred_backtest["pred"].astype(float)
+                valid_mask = predicted_values.notna() & actual_values.notna()
+                n_valid_samples = int(valid_mask.sum())
+                actual_valid = actual_values[valid_mask]
+                predicted_valid = predicted_values[valid_mask]
+
+                # Guard against degenerate cases (all-NaN predictions or single sample).
+                # r2_score requires at least 2 samples; MAE/RMSE require at least 1.
+                if n_valid_samples == 0:
+                    self.backtest_metrics_ = {
+                        "mae": float("nan"),
+                        "rmse": float("nan"),
+                        "r2": float("nan"),
+                        "mape": float("nan"),
+                        "n_samples": 0,
+                    }
+                    self.logger.warning(
+                        "Backtest produced no valid predictions — metrics set to NaN"
+                    )
+                else:
+                    backtest_mae = float(mean_absolute_error(actual_valid, predicted_valid))
+                    backtest_rmse = float(
+                        np.sqrt(mean_squared_error(actual_valid, predicted_valid))
+                    )
+                    # r2_score is undefined for a single sample (variance == 0)
+                    backtest_r2_full = (
+                        float(r2_score(actual_valid, predicted_valid))
+                        if n_valid_samples > 1
+                        else float("nan")
+                    )
+                    # MAPE: exclude zero actuals to avoid division by zero
+                    nonzero_mask = actual_valid != 0
+                    if nonzero_mask.sum() > 0:
+                        backtest_mape = float(
+                            np.mean(
+                                np.abs(
+                                    (actual_valid[nonzero_mask] - predicted_valid[nonzero_mask])
+                                    / actual_valid[nonzero_mask]
+                                )
+                            )
+                            * 100
+                        )
+                    else:
+                        backtest_mape = float("nan")
+
+                    self.backtest_metrics_ = {
+                        "mae": backtest_mae,
+                        "rmse": backtest_rmse,
+                        "r2": backtest_r2_full,
+                        "mape": backtest_mape,
+                        "n_samples": n_valid_samples,
+                    }
+                    self.logger.info(
+                        f"Backtest metrics — MAE: {backtest_mae:.4f}, "
+                        f"RMSE: {backtest_rmse:.4f}, "
+                        f"R2: {backtest_r2_full:.4f}, "
+                        f"MAPE: {backtest_mape:.2f}%"
+                    )
+
             return df_pred, df_pred_backtest
 
         except asyncio.CancelledError:
@@ -321,6 +463,7 @@ class MLForecaster:
     async def predict(
         self,
         data_last_window: pd.DataFrame | None = None,
+        weather_future: pd.DataFrame | None = None,
     ) -> pd.Series:
         """The predict method to generate forecasts from a previously fitted ML model.
 
@@ -329,6 +472,10 @@ class MLForecaster:
             model is an auto-regressive model with lags. If not passed then the data used during the \
             model train is used, defaults to None
         :type data_last_window: Optional[pd.DataFrame], optional
+        :param weather_future: When the model was trained with ``weather_features``, this DataFrame \
+            must provide the future values of those columns over the forecast horizon (the weather \
+            forecast). It is ignored when no ``weather_features`` are configured. Defaults to None.
+        :type weather_future: Optional[pd.DataFrame], optional
         :return: A pandas series containing the generated forecasts.
         :rtype: pd.Series
         """
@@ -344,25 +491,23 @@ class MLForecaster:
                 )
             else:
                 data_last_window = await self.interpolate_async(data_last_window)
+                steps = self.lags_opt if self.is_tuned else self.num_lags
+                # getattr fallback keeps models pickled before weather_features existed working.
+                weather_features = getattr(self, "weather_features", [])
+                exog = await self.generate_exog(
+                    data_last_window,
+                    steps,
+                    self.var_model,
+                    weather_features=weather_features,
+                    weather_future=weather_future,
+                )
 
-                if self.is_tuned:
-                    exog = await self.generate_exog(data_last_window, self.lags_opt, self.var_model)
-
-                    predictions = await asyncio.to_thread(
-                        self.forecaster.predict,
-                        steps=self.lags_opt,
-                        last_window=data_last_window[self.var_model],
-                        exog=exog.drop(self.var_model, axis=1),
-                    )
-                else:
-                    exog = await self.generate_exog(data_last_window, self.num_lags, self.var_model)
-
-                    predictions = await asyncio.to_thread(
-                        self.forecaster.predict,
-                        steps=self.num_lags,
-                        last_window=data_last_window[self.var_model],
-                        exog=exog.drop(self.var_model, axis=1),
-                    )
+                predictions = await asyncio.to_thread(
+                    self.forecaster.predict,
+                    steps=steps,
+                    last_window=data_last_window[self.var_model],
+                    exog=exog.drop(self.var_model, axis=1),
+                )
 
             return predictions
 

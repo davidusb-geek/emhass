@@ -359,6 +359,60 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
             "Summary line missing — expected one INFO record from orchestrator",
         )
 
+    # Test naive-mpc with prediction_horizon=72 auto-extends delta_forecast_daily to 2 days
+    async def test_naive_mpc_autoextends_horizon_end_to_end(self):
+        """Integration test: prediction_horizon=72 (36 h, 2 days at 30-min steps) with
+        NO delta_forecast_daily override must cause set_input_data_dict to bump
+        delta_forecast_daily from 1 → 2 days, give 72 forecast_dates, and let
+        naive_mpc_optim return a 72-row result with no NaNs."""
+        costfun = "profit"
+        action = "naive-mpc-optim"
+        # 72 elements: forecast lists must cover the full 72-step horizon
+        runtimeparams = {
+            "prediction_horizon": 72,
+            "pv_power_forecast": list(range(1, 73)),
+            "load_power_forecast": list(range(1, 73)),
+            "load_cost_forecast": [0.15] * 72,
+            "prod_price_forecast": [0.05] * 72,
+        }
+        runtimeparams_json = orjson.dumps(runtimeparams).decode("utf-8")
+        params = copy.deepcopy(await TestCommandLineAsyncUtils.get_test_params(set_use_pv=True))
+        params["passed_data"] = runtimeparams
+        params_json = orjson.dumps(params).decode("utf-8")
+
+        idd = await set_input_data_dict(
+            emhass_conf,
+            costfun,
+            params_json,
+            runtimeparams_json,
+            action,
+            logger,
+            get_data_from_file=True,
+        )
+        self.assertIsInstance(idd, dict)
+
+        # THE KEY INVARIANT: delta_forecast_daily bumped to 2 days by the auto-extend logic
+        self.assertEqual(
+            idd["fcst"].optim_conf["delta_forecast_daily"].days,
+            2,
+            "delta_forecast_daily must be bumped to 2 days to cover a 72-step horizon",
+        )
+        # forecast_dates must cover the full 72-step window
+        self.assertEqual(
+            len(idd["fcst"].forecast_dates),
+            72,
+            f"forecast_dates must have exactly 72 entries; got {len(idd['fcst'].forecast_dates)}",
+        )
+
+        opt_res = await naive_mpc_optim(idd, logger, debug=True)
+        self.assertIsInstance(opt_res, pd.DataFrame)
+        self.assertEqual(len(opt_res), 72, f"opt_res must have 72 rows; got {len(opt_res)}")
+        self.assertEqual(
+            opt_res.isnull().sum().sum(),
+            0,
+            "opt_res must contain no NaN values",
+        )
+
     # Test naive mpc optimization
     async def test_naive_mpc_optim(self):
         # Test mpc optimization
@@ -2073,6 +2127,26 @@ class TestSchemaVersion(unittest.IsolatedAsyncioTestCase):
         ):
             result = await publish_data({}, logger)
         self.assertEqual(result.attrs["emhass_schema_version"], EMHASS_SCHEMA_VERSION)
+
+
+class TestPublishInfeasibleGuard(unittest.IsolatedAsyncioTestCase):
+    """Regression test for #875.
+
+    When the optimization comes back infeasible, perform_optimization returns a
+    frame containing only the optim_status column. publish_data used to crash with
+    KeyError: 'P_Load' (reported by g1za and ztega). It should now log and return
+    None instead.
+    """
+
+    async def test_publish_data_infeasible_returns_none(self):
+        idx = pd.date_range("2024-01-01", periods=3, freq="30min", tz="UTC")
+        infeasible_res = pd.DataFrame({"optim_status": ["Infeasible"] * 3}, index=idx)
+        with patch(
+            "emhass.command_line._get_params",
+            return_value={"passed_data": {"publish_prefix": ""}},
+        ):
+            result = await publish_data({}, logger, opt_res_latest=infeasible_res)
+        self.assertIsNone(result)
 
 
 class TestOptimizationCache(unittest.TestCase):

@@ -1452,9 +1452,9 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
 
     def test_check_def_loads(self):
         """Test padding of deferrable load parameter lists."""
-        parameter = {"operating_hours": [3, 4]}
         default_val = 5
         # Case 1: Needs padding (num_def_loads > list length)
+        parameter = {"operating_hours": [3, 4]}
         result1 = utils.check_def_loads(4, parameter, default_val, "operating_hours", logger)
         self.assertEqual(len(result1), 4)
         self.assertEqual(result1, [3, 4, 5, 5])
@@ -1463,11 +1463,25 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         result2 = utils.check_def_loads(2, parameter, default_val, "operating_hours", logger)
         self.assertEqual(len(result2), 2)
         self.assertEqual(result2, [3, 4])
-        # Case 3: Parameter doesn't exist or isn't a list (should just return as-is, though the logic might fail if not checked)
+        # Case 3: Missing key -> fill with defaults instead of raising KeyError (#929)
         parameter = {"other_param": "test"}
-        with self.assertRaises(KeyError):
-            # The function blindly returns parameter[parameter_name], so a missing key will KeyError
-            utils.check_def_loads(2, parameter, default_val, "missing_key", logger)
+        result3 = utils.check_def_loads(2, parameter, default_val, "missing_key", logger)
+        self.assertEqual(result3, [5, 5])
+        self.assertEqual(parameter["missing_key"], [5, 5])
+        # Case 4: Explicit JSON null (None) -> fill with defaults, no crash
+        parameter = {"deferrable_load_max_cost": None}
+        result4 = utils.check_def_loads(3, parameter, 0.0, "deferrable_load_max_cost", logger)
+        self.assertEqual(result4, [0.0, 0.0, 0.0])
+        # Case 5 (#929 regression): a per-load list shorter than the load count
+        # (e.g. the length-2 shipped default vs number_of_deferrable_loads=3) must pad
+        # SILENTLY. Enlarging-to-fit is the function's documented job, not a warning, so
+        # it is logged at DEBUG and never at WARNING.
+        parameter = {"deferrable_load_max_cost": [0.0, 0.0]}
+        with self.assertLogs(logger, level="DEBUG") as cm:
+            result5 = utils.check_def_loads(3, parameter, 0.0, "deferrable_load_max_cost", logger)
+        self.assertEqual(result5, [0.0, 0.0, 0.0])
+        self.assertTrue(any(r.levelno == logging.DEBUG for r in cm.records))
+        self.assertFalse(any(r.levelno >= logging.WARNING for r in cm.records))
 
     def test_parse_export_time_range(self):
         """Test timestamp parsing and validation for data exports."""
@@ -1531,6 +1545,97 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         df_clean = df.dropna()
         df_result = utils.handle_nan_values(df_clean, "drop", "timestamp", logger)
         self.assertEqual(len(df_result), 2)
+
+    async def test_naive_mpc_horizon_extends_forecast_window(self):
+        """RED regression test: naive-mpc with prediction_horizon > default window must
+        expand delta_forecast_daily to cover the full horizon.
+
+        Bug: forecast_dates is built from delta_forecast_daily (config default = 1 day = 48
+        steps at 30 min) BEFORE prediction_horizon is parsed.  The subsequent slice
+          forecast_dates = copy.deepcopy(forecast_dates)[0:prediction_horizon]
+        is a no-op when prediction_horizon > len(forecast_dates), silently leaving the
+        window at 1 day with no warning.
+
+        Fix (Phase 1): once prediction_horizon is known inside the naive-mpc-optim branch,
+        if it needs more steps than delta_forecast provides, raise delta_forecast to
+        ceil(prediction_horizon * optimization_time_step_minutes / 1440) and update
+        params["optim_conf"]["delta_forecast_daily"].
+
+        Observable: returned optim_conf["delta_forecast_daily"].days
+        """
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+
+        # --- PRIMARY assertion (RED today) ---
+        # prediction_horizon=72 steps @ 30 min = 36 h = 2 days
+        # No delta_forecast_daily in runtimeparams → config default of 1 day
+        # After the fix, delta_forecast_daily must be extended to 2 days.
+        runtimeparams_wide = {
+            "prediction_horizon": 72,
+            "optimization_time_step": 30,
+        }
+        runtimeparams_wide_json = orjson.dumps(runtimeparams_wide).decode("utf-8")
+
+        _, _, optim_conf_wide, _ = await treat_runtimeparams(
+            runtimeparams_wide_json,
+            params_json,
+            retrieve_hass_conf.copy(),
+            optim_conf.copy(),
+            plant_conf.copy(),
+            "naive-mpc-optim",
+            logger,
+            emhass_conf,
+        )
+
+        actual_days_wide = optim_conf_wide["delta_forecast_daily"].days
+        self.assertEqual(
+            actual_days_wide,
+            2,
+            f"prediction_horizon=72 @ 30 min = 36 h requires delta_forecast_daily=2 days, "
+            f"but got {actual_days_wide} day(s). "
+            f"This is the silent-truncation bug: forecast_dates is built before "
+            f"prediction_horizon is parsed, so the horizon is never extended.",
+        )
+
+    async def test_naive_mpc_horizon_unchanged_when_within_one_day(self):
+        """Backwards-compat guard (must PASS before AND after the Phase 1 fix):
+        a naive-mpc prediction_horizon that fits inside the default 1-day window
+        must leave delta_forecast_daily untouched (no spurious extension).
+
+        Kept as its own test (not appended to the RED extend-test) so it always
+        runs: assertEqual short-circuits, so a guard sharing a method with a RED
+        assertion would never execute during the RED phase.
+        """
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+
+        # prediction_horizon=24 steps @ 30 min = 12 h < 1 day -> no change needed
+        runtimeparams_narrow = {
+            "prediction_horizon": 24,
+            "optimization_time_step": 30,
+        }
+        runtimeparams_narrow_json = orjson.dumps(runtimeparams_narrow).decode("utf-8")
+
+        _, _, optim_conf_narrow, _ = await treat_runtimeparams(
+            runtimeparams_narrow_json,
+            params_json,
+            retrieve_hass_conf.copy(),
+            optim_conf.copy(),
+            plant_conf.copy(),
+            "naive-mpc-optim",
+            logger,
+            emhass_conf,
+        )
+
+        actual_days_narrow = optim_conf_narrow["delta_forecast_daily"].days
+        self.assertEqual(
+            actual_days_narrow,
+            1,
+            f"prediction_horizon=24 @ 30 min = 12 h fits within 1 day; "
+            f"delta_forecast_daily must remain 1, but got {actual_days_narrow}.",
+        )
 
     def test_resample_and_filter_data(self):
         """Test time range filtering and data resampling."""

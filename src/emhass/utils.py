@@ -1226,6 +1226,7 @@ async def treat_runtimeparams(
 
     # Some default data needed
     custom_deferrable_forecast_id = []
+    custom_deferrable_state_id = []
     custom_predicted_temperature_id = []
     custom_heating_demand_id = []
     for k in range(params["optim_conf"]["number_of_deferrable_loads"]):
@@ -1235,6 +1236,14 @@ async def treat_runtimeparams(
                 "device_class": "power",
                 "unit_of_measurement": "W",
                 "friendly_name": f"Deferrable Load {k}",
+            }
+        )
+        custom_deferrable_state_id.append(
+            {
+                "entity_id": f"sensor.p_deferrable{k}_state",
+                "device_class": "enum",
+                "unit_of_measurement": "",
+                "friendly_name": f"Deferrable Load {k} Command",
             }
         )
         custom_predicted_temperature_id.append(
@@ -1321,6 +1330,7 @@ async def treat_runtimeparams(
             "friendly_name": "Unit Prod Price",
         },
         "custom_deferrable_forecast_id": custom_deferrable_forecast_id,
+        "custom_deferrable_state_id": custom_deferrable_state_id,
         "custom_predicted_temperature_id": custom_predicted_temperature_id,
         "custom_heating_demand_id": custom_heating_demand_id,
         "publish_prefix": "",
@@ -1506,11 +1516,39 @@ async def treat_runtimeparams(
 
         # MPC control case
         if set_type == "naive-mpc-optim":
-            if "prediction_horizon" not in runtimeparams.keys():
+            if (
+                "prediction_horizon" not in runtimeparams.keys()
+                or runtimeparams["prediction_horizon"] is None
+            ):
                 prediction_horizon = 10  # 10 time steps by default
             else:
                 prediction_horizon = runtimeparams["prediction_horizon"]
             params["passed_data"]["prediction_horizon"] = prediction_horizon
+            # Auto-extend the forecast window to cover the requested MPC horizon.
+            # forecast_dates was sized from delta_forecast_daily (default 1 day) above,
+            # before prediction_horizon was known; a longer horizon would otherwise be
+            # silently truncated by the [0:prediction_horizon] slice below, and the
+            # weather/Solcast fetch (which scales its request to the window length)
+            # would only pull 1 day. So grow the window to fit and rebuild it once.
+            steps_per_day = int(24 * 60 / optimization_time_step)
+            required_delta_forecast = max(
+                delta_forecast,
+                -(-int(prediction_horizon) // steps_per_day),  # ceil division
+            )
+            if required_delta_forecast > delta_forecast:
+                logger.info(
+                    "naive-mpc prediction_horizon=%s exceeds the %s-day forecast window; "
+                    "extending delta_forecast_daily to %s day(s) to cover the full horizon "
+                    "and its weather forecast.",
+                    prediction_horizon,
+                    delta_forecast,
+                    required_delta_forecast,
+                )
+                delta_forecast = required_delta_forecast
+                params["optim_conf"]["delta_forecast_daily"] = pd.Timedelta(days=delta_forecast)
+                forecast_dates = get_forecast_dates(
+                    optimization_time_step, delta_forecast, time_zone
+                )
             if "soc_init" not in runtimeparams.keys():
                 soc_init = params["plant_conf"]["battery_target_state_of_charge"]
             else:
@@ -1539,6 +1577,13 @@ async def treat_runtimeparams(
                 )
                 soc_final = params["plant_conf"]["battery_maximum_state_of_charge"]
             params["passed_data"]["soc_final"] = soc_final
+            # Optional intermediate SOC target (issue #553). Both are runtime-only
+            # and default to None (no intermediate target); clamping/validation of
+            # the value and the timestep is handled in Optimization.perform_optimization.
+            params["passed_data"]["soc_target"] = runtimeparams.get("soc_target", None)
+            params["passed_data"]["soc_target_timestep"] = runtimeparams.get(
+                "soc_target_timestep", None
+            )
             if "operating_timesteps_of_each_deferrable_load" in runtimeparams.keys():
                 params["passed_data"]["operating_timesteps_of_each_deferrable_load"] = (
                     runtimeparams["operating_timesteps_of_each_deferrable_load"]
@@ -1566,6 +1611,13 @@ async def treat_runtimeparams(
             params["passed_data"]["soc_final"] = (
                 float(runtimeparams["soc_final"]) if "soc_final" in runtimeparams else None
             )
+            params["passed_data"]["soc_target"] = (
+              float(runtimeparams["soc_target"]) if "soc_target" in runtimeparams else None
+            )
+            params["passed_data"]["soc_target_timestep"] = (
+                int(runtimeparams["soc_target_timestep"]) if "soc_target_timestep" in runtimeparams else None
+            )
+
 
         # Parsing the thermal model parameters
         # Load the default config
@@ -1732,6 +1784,7 @@ async def treat_runtimeparams(
             ("split_date_delta", "48h", None),
             ("n_trials", 10, int),
             ("perform_backtest", False, _cast_bool),
+            ("mlforecaster_weather_features", [], None),
         ]
 
         # Apply Configuration
@@ -2864,13 +2917,6 @@ async def build_params(
             "nominal_power_of_deferrable_loads",
             logger,
         )
-        params["optim_conf"]["deferrable_load_max_cost"] = check_def_loads(
-            num_def_loads,
-            params["optim_conf"],
-            0,
-            "deferrable_load_max_cost",
-            logger,
-        )
         # Validate deferrable_load_groups
         groups = params["optim_conf"].get("deferrable_load_groups", [])
         if groups:
@@ -2995,6 +3041,8 @@ async def build_params(
         "prediction_horizon": None,
         "soc_init": None,
         "soc_final": None,
+        "soc_target": None,
+        "soc_target_timestep": None,
         "operating_hours_of_each_deferrable_load": None,
         "start_timesteps_of_each_deferrable_load": None,
         "end_timesteps_of_each_deferrable_load": None,
@@ -3015,6 +3063,10 @@ def check_def_loads(
     """
     Check parameter lists with deferrable loads number, if they do not match, enlarge to fit.
 
+    A missing key or ``None`` value is filled with ``default`` for every load. ``parameter``
+    is updated in place (and the same list returned), matching how every call site reassigns
+    ``params["optim_conf"][name] = check_def_loads(...)``.
+
     :param num_def_loads: Total number deferrable loads
     :type num_def_loads: int
     :param parameter: parameter config dict containing paramater
@@ -3028,19 +3080,26 @@ def check_def_loads(
     :return: parameter list
     :rtype: list[dict]
     """
-    if (
-        parameter.get(parameter_name, None) is not None
-        and type(parameter[parameter_name]) is list
-        and num_def_loads > len(parameter[parameter_name])
-    ):
-        logger.warning(
+    current = parameter.get(parameter_name, None)
+    # Missing key or explicit JSON null: apply the default for every load. This is
+    # expected when a per-load array is absent from the user config (e.g. a parameter
+    # added in a later release), so do it silently rather than raising KeyError.
+    if current is None:
+        parameter[parameter_name] = [default] * num_def_loads
+        return parameter[parameter_name]
+    if isinstance(current, list) and num_def_loads > len(current):
+        # Enlarging a short list to match number_of_deferrable_loads is this function's
+        # documented job, not an error: the shipped defaults are sized for the default
+        # load count, so any user that raises the count without restating every per-load
+        # array lands here. Log at debug to avoid spurious startup warnings (#929).
+        logger.debug(
             parameter_name
-            + " does not match number in num_def_loads, adding default values ("
+            + " has fewer entries than number_of_deferrable_loads, padding with default ("
             + str(default)
-            + ") to parameter"
+            + ")"
         )
-        for _x in range(len(parameter[parameter_name]), num_def_loads):
-            parameter[parameter_name].append(default)
+        for _x in range(len(current), num_def_loads):
+            current.append(default)
     result = parameter[parameter_name]
     # Replace any None elements with the default (can occur when set-config
     # receives a partial config, e.g. [null, 0] instead of [0, 0]).

@@ -49,6 +49,8 @@ EXPECTED_KEYS = {
     "prediction_horizon",
     "soc_init",
     "soc_final",
+    "soc_target",
+    "soc_target_timestep",
     "operating_timesteps_of_each_deferrable_load",
     "alpha",
     "beta",
