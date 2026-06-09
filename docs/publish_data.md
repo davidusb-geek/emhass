@@ -41,6 +41,28 @@ Below you can find a list of the variables resulting from EMHASS computation, sh
 | cost_fun_cost | Forecasted cost associated with deferring loads to maximize solar self-consumption. This helps you evaluate the trade-off between managing the load and not managing and potential cost savings. | sensor.total_cost_fun_value |
 | optim_status | This contains the status of the latest execution and is the same you can see in the Log following an optimization job. Its values can be Optimal or Infeasible. | sensor.optim_status |
 
+## Deferrable load command states *(optional)*
+
+By default each deferrable load is published as a *power* sensor
+(`sensor.p_deferrableX`), and your automations decide what to do with that
+power value (e.g. by thresholding it). If you would rather act on a clear,
+ready-made command, enable the `publish_deferrable_load_states` option.
+
+When enabled, EMHASS additionally publishes one **command sensor** per
+deferrable load:
+
+| Variable | Description | Published Sensor |
+|---|---|---|
+| P_deferrableX_state<br/>[X = 0, 1, 2, ...] | An interpretable command for deferrable load X at the current timestep: `off` (idle), `on` (running at nominal power) or `variable` (a modulated level in between). The full optimized plan over the horizon is attached as a `schedule` attribute (a list of `{date, value}` entries). This is a generic, automation-agnostic command surface — you map `on`/`off`/`variable` onto your own switch, number or script as you see fit. | sensor.p_deferrableX_state |
+
+The labels are derived from the optimized `P_deferrableX` power and the load's
+`nominal_power_of_deferrable_loads`, so they stay consistent with the power
+forecast. The default is `false`, so the zero-config behaviour is unchanged.
+
+The entity ids can be overridden at runtime with `custom_deferrable_state_id`
+(a list of dictionaries, one per deferrable load, mirroring
+`custom_deferrable_forecast_id`).
+
 ## Alternative publish methods
 Due to the flexibility of EMHASS, multiple different approaches to publishing the optimization results have been created. Select an option that best meets your use case:
 

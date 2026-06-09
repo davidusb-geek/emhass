@@ -5,7 +5,7 @@
 These are anonymized, abstract templates. They are not real users' systems. Each block is a starting point — the parameter values reflect typical hardware in the archetype, but you must verify against your own equipment. See [Configuration](../config.md) for the full parameter reference.
 
 ```{note}
-**Integer hours only.** `operating_hours_of_each_deferrable_load` accepts whole integers (see [issue #373](https://github.com/davidusb-geek/emhass/issues/373)). The blueprints below round all hour values up to the nearest integer. If your loads need finer control, reduce `optimization_time_step` (e.g. to 15 minutes) so the same wall-clock duration spans more timesteps.
+**Fractional hours are supported.** `operating_hours_of_each_deferrable_load` accepts fractional values; the optimizer targets exactly `nominal_power × hours` of energy (see [issue #373](https://github.com/davidusb-geek/emhass/issues/373)). The blueprints below use whole-hour values for readability, but you can specify e.g. `3.5`. For control finer than the optimization timestep you can also reduce `optimization_time_step` or pass `operating_timesteps_of_each_deferrable_load`.
 ```
 
 ## 1. Single-family home — PV + battery + heat pump + EV + dynamic tariff

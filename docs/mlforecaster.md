@@ -34,6 +34,8 @@ The minimum number of `historic_days_to_retrieve` is hard coded to 9 by default.
 
 - `perform_backtest`: if `True` then a backtesting routine is performed to evaluate the performance of the model on the complete train set.
 
+- `mlforecaster_weather_features`: an optional list of weather covariate columns to feed the model as exogenous inputs, in addition to the always-present calendar features. See [Adding weather covariates](#adding-weather-covariates) below. Leave empty (the default) to keep the historical date-features-only behaviour.
+
 The default values for these parameters are:
 ```python
 runtimeparams = {
@@ -43,7 +45,8 @@ runtimeparams = {
     "sklearn_model": "KNeighborsRegressor",
     "num_lags": 48,
     "split_date_delta": '48h',
-    "perform_backtest": False
+    "perform_backtest": False,
+    "mlforecaster_weather_features": []
 }
 ```
 
@@ -76,12 +79,97 @@ The results of the backtest will be shown in the logs:
 
     2023-02-20 22:05:36,825 - __main__ - INFO - Simple backtesting
     2023-02-20 22:06:32,162 - __main__ - INFO - Backtest R2 score: 0.5851552394233677
+    2023-02-20 22:06:32,163 - __main__ - INFO - Backtest metrics — MAE: 142.3456, RMSE: 198.2345, R2: 0.5852, MAPE: 12.34%
 
 So the mean backtest metric of our model is $R^2=0.59$. 
 
 Here is the graphic result of the backtesting routine:
 
 ![](./images/load_forecast_knn_bare_backtest.svg)
+
+### Backtest goodness-of-fit metrics
+
+When `perform_backtest=True` the fitted `MLForecaster` object exposes a `backtest_metrics_` attribute — a dict with the following keys computed over the out-of-sample backtest folds:
+
+| Key | Metric |
+| --- | --- |
+| `mae` | Mean Absolute Error (same unit as the target sensor, e.g. W) |
+| `rmse` | Root Mean Squared Error (same unit) |
+| `r2` | Coefficient of determination $R^2$ (dimensionless, higher is better) |
+| `mape` | Mean Absolute Percentage Error (%; rows where the actual value is zero are excluded) |
+| `n_samples` | Number of backtest steps used to compute the metrics |
+
+All four metrics are also printed to the log at INFO level after the backtest completes, making it easy to compare model variants or assess the effect of adding weather covariates.
+
+`backtest_metrics_` is `None` before `fit()` is called and when `perform_backtest=False` (the default).
+
+## Adding weather covariates
+
+By default the forecaster only uses calendar features derived from the timestamps (hour, day of week, month, etc.). For loads that are weather-dependent — a heat pump being the canonical example — you can additionally feed the model selected weather columns as *exogenous* inputs. Because the weather forecast is known over the optimization horizon, these are valid "future known covariates" for the recursive model, exactly like the calendar features.
+
+This is opt-in and backward-compatible: leave `mlforecaster_weather_features` empty (the default) and the model behaves exactly as before.
+
+Enable it by listing the columns you want, for example the outside temperature plus a heating/cooling-degree thermal-demand signal:
+```bash
+curl -i -H "Content-Type:application/json" -X POST \
+  -d '{"mlforecaster_weather_features": ["temp_air", "heating_degree", "cooling_degree"]}' \
+  http://localhost:5000/action/forecast-model-fit
+```
+
+The same `mlforecaster_weather_features` value should be set for the fit, tune and predict actions (most easily by configuring it once in the EMHASS config rather than per-call), so that the model is trained and used with a consistent feature set.
+
+The supported values are sourced from the Open-Meteo weather forecast:
+
+| Feature | Meaning |
+| --- | --- |
+| `temp_air` | Air temperature at 2 m (°C) |
+| `relative_humidity` | Relative humidity (%) |
+| `cloud_cover` | Total cloud cover (%) |
+| `wind_speed` | Wind speed at 10 m |
+| `ghi` | Global horizontal irradiance (shortwave radiation) |
+| `direct_radiation` | Direct radiation |
+| `diffuse_radiation` | Diffuse radiation |
+| `precipitation` | Precipitation |
+| `heating_degree` | `max(0, comfort − temp_air)` — a forecastable heating-demand signal |
+| `cooling_degree` | `max(0, temp_air − comfort)` — a forecastable cooling-demand signal |
+
+`heating_degree`/`cooling_degree` are derived locally from the retrieved temperature using an 18 °C comfort set-point, so they are available even if you do not request `temp_air` itself.
+
+```{note}
+**Weather covariates always come from Open-Meteo, regardless of your `weather_forecast_method`.**
+
+EMHASS supports several methods for the PV *production* forecast (Solcast, Forecast.Solar, the built-in clear-sky model, etc.), but none of those services expose raw meteorological variables such as outside temperature, humidity, cloud cover or precipitation — they only publish a predicted power or irradiance curve. The weather covariates needed here are those raw atmospheric quantities, and Open-Meteo is the only source already integrated into EMHASS that provides them at the required resolution.
+
+For this reason, when `mlforecaster_weather_features` is non-empty, EMHASS will *always* make a separate Open-Meteo request to fetch the covariate data, irrespective of how you have configured `weather_forecast_method`. Your PV forecast method is not affected and does not need to change.
+
+No extra API key or configuration is required: Open-Meteo is free and open access, and EMHASS reuses its existing Open-Meteo cache file so the additional network overhead is minimal. The historical weather needed to train the model is fetched from Open-Meteo's recent past window (up to 92 days), so this works without you having to record a weather sensor in Home Assistant.
+```
+
+```{note}
+A weather covariate only helps if the load actually responds to it. On a heat-pump-dominated home, adding `temp_air` + `heating_degree`/`cooling_degree` measurably reduces the load forecast error; on a weather-insensitive load it will add little. Use `perform_backtest` to verify the gain on your own data before committing to it.
+```
+
+### Benchmark results
+
+The table below summarises a **paired 20-fold rolling-origin backtest** (24 h / 288-step horizon, 5-minute resolution) on a heat-pump-influenced home load, comparing each model's load MAE with and without the `temp_air` + `heating_degree`/`cooling_degree` covariate set:
+
+| Model | AR lags | Covariates | Load MAE (W) | Change vs. baseline | Folds improved |
+| --- | ---: | --- | ---: | ---: | ---: |
+| Lasso | 864 | ✓ | ~380 | −10.5% | 15/20 |
+| Lasso | 864 | ✗ (baseline) | ~425 | — | — |
+| skforecast-LightGBM | 288 | ✓ | ~490 | −7.9% | 12/20 |
+| skforecast-LightGBM | 288 | ✗ (baseline) | ~535 | — | — |
+| KNN | 288 | ✓ | ~620 | ~0% | — |
+| KNN | 288 | ✗ (baseline) | ~620 | — | — |
+| RandomForest | 288 | not benched (recursive-288 cost prohibitive) | — | — | — |
+
+Key takeaways:
+
+- **Lasso wins the most**: a linear model generalises the 3 scalar temperature signals well over 864 autoregressive lags; the weather gain is clear and consistent (15/20 folds).
+- **KNN is unaffected**: with 288 AR lags already in the feature space, 3 extra temperature scalars are drowned out — no measurable gain.
+- **Architecture matters more than covariates**: a Darts-based direct multi-output forecaster (not recursive) achieves ~410 W MAE on the same dataset vs. ~536 W for the best recursive skforecast model, showing that the recursion error accumulation over a 24 h horizon dominates the covariate benefit. Weather covariates are still a worthwhile addition to the recursive models available in the `mlforecaster`, but further error reduction at longer horizons may require a direct-output architecture.
+
+These results are load-dependent; gains will vary with how weather-sensitive your load is. Use `perform_backtest` to measure the improvement on your own data before committing to a covariate set.
 
 ## The predict method
 
@@ -169,9 +257,19 @@ With this type of model what we do in EMHASS is to create new features based on 
 
 What is interesting is that these added features are based on the timestamps, they are always known in advance and useful for generating forecasts. These are the so-called future known covariates.
 
-In the future, we may test to expand using other possible known future covariates from Home Assistant, for example, a known (forecasted) temperature, a scheduled presence sensor, etc.
+This can be extended with other known future covariates. As described in [Adding weather covariates](#adding-weather-covariates), you can feed forecasted weather columns (e.g. the outside temperature) to the model — these are also future known covariates because the weather forecast spans the optimization horizon. Other signals known in advance, such as a scheduled presence sensor, could be added in the same way.
 
 ## Going further?
 This class can be generalized to forecast any given sensor variable present in Home Assistant. It has been tested and the main initial motivation for this development was for better load power consumption forecasting. But in reality, it has been coded flexibly so that you can control what variable is used, how many lags, the amount of data used to train the model, etc.
 
 So you can go further and try to forecast other types of variables and possibly use the results for some interesting automations in Home Assistant. If doing this, what is important is to evaluate the pertinence of the obtained forecasts. The hope is that the tools proposed here can be used for that purpose.
+
+## Future directions
+
+### Probabilistic forecasting and confidence intervals
+
+The `backtest_metrics_` attribute described above gives a useful point estimate of model quality, but it does not tell you *how much to trust a specific prediction*. Propagating forecast uncertainty through the MILP optimisation — so the solver can trade off the risk of over- and under-forecasting — would require a probabilistic model that outputs a distribution (or at least a credible interval) for each step, not a scalar.
+
+A natural candidate is **Gaussian Process Regression** (GPR), which is the only `scikit-learn` regressor that is natively stochastic: it returns a mean prediction together with a variance estimate whose shape adapts to the local density of the training data. Wiring GPR into the `mlforecaster` as an optional `sklearn_model` choice, and plumbing its per-step standard deviation through to the MILP as a second tensor, would be the foundation for **stochastic MPC** — optimising expected cost under forecast uncertainty rather than optimising a single deterministic trajectory.
+
+This is a non-trivial architecture change (the MILP formulation, the objective function, and the EMHASS optimisation layer would all need updating), and it is intentionally left as a future direction rather than implemented here.

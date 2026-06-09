@@ -1198,6 +1198,10 @@ class RetrieveHass:
             state = data_df.loc[data_df.index[idx]]
         elif type_var == "mlregressor":
             state = float(data_df[idx])
+        elif type_var == "categorical":
+            # String/label state (e.g. a deferrable load 'on'/'off'/'variable'
+            # command); the full horizon of labels rides along as an attribute.
+            state = data_df.loc[data_df.index[idx]]
         else:
             state = np.round(data_df.loc[data_df.index[idx]], 2)
         if type_var == "power":
@@ -1290,6 +1294,23 @@ class RetrieveHass:
                 "scheduled_forecast",
                 state,
             )
+        elif type_var == "categorical":
+            # A string/label state plus the full horizon of labels as a
+            # 'schedule' attribute. Used for interpretable per-load command
+            # sensors (e.g. 'on'/'off'/'variable'); no numeric rounding.
+            list_df = copy.deepcopy(data_df).loc[data_df.index[idx] :].reset_index()
+            list_df.columns = ["timestamps", entity_id]
+            schedule = [
+                {"date": ts.isoformat(), "value": str(val)}
+                for ts, val in zip(list_df["timestamps"].tolist(), list_df[entity_id].tolist())
+            ]
+            data = {
+                "state": str(state),
+                "attributes": {
+                    "friendly_name": friendly_name,
+                    "schedule": schedule,
+                },
+            }
         elif type_var == "energy":
             data = RetrieveHass.get_attr_data_dict(
                 data_df,

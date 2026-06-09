@@ -576,6 +576,384 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             soc_final,
         )
 
+    def test_perform_naive_mpc_optim_intermediate_soc_target(self):
+        """Issue #553: an intermediate ``soc_target`` must be met by
+        ``soc_target_timestep`` while the battery is still free to discharge
+        afterward, and passing no target must leave behaviour unchanged.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        # Flat, equal buy/sell prices -> zero time-arbitrage incentive. With a
+        # lossless battery any charge/discharge round-trip is exactly cost-neutral,
+        # so the unconstrained baseline has no economic reason to move the battery.
+        self.df_input_data_dayahead["unit_load_cost"] = 0.2
+        self.df_input_data_dayahead["unit_prod_price"] = 0.2
+        self.optim_conf.update({"set_use_battery": True})
+        self.optim_conf.update({"number_of_deferrable_loads": 0})
+        self.optim_conf.update({"set_battery_dynamic": False})
+        # A small positive cycle cost makes leaving the battery untouched the
+        # unique baseline optimum (any cycling is then strictly worse), so the
+        # charge seen in the targeted run is unambiguously caused by the floor.
+        self.optim_conf.update({"weight_battery_discharge": 1.0})
+        self.optim_conf.update({"weight_battery_charge": 1.0})
+        # Allow export so the battery can discharge down to soc_final (otherwise
+        # the no-discharge-to-grid default makes shedding 0.8->0.5 infeasible when
+        # local load is low). This keeps the test focused on the intermediate target.
+        self.optim_conf.update({"set_nodischarge_to_grid": False})
+        # Clean, ample battery so a mid-horizon target is reachable and the
+        # SOC trajectory is deterministic (no efficiency losses).
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        prediction_horizon = 10
+        # Deterministic charge-up scenario: start and end low so the
+        # unconstrained baseline has no reason to charge (it stays ~soc_init),
+        # but a mid-horizon target forces a clear charge 0.3->0.9 by step 5 and
+        # back to 0.3 — feasible at 20 kW / 10 kWh / eff 1.0.
+        soc_init = 0.3
+        soc_final = 0.3
+        target_step = 5
+        soc_target = 0.9
+
+        # Baseline (no intermediate target) — establishes the unconstrained SOC.
+        self.opt = self.create_optimization()
+        opt_res_baseline = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            soc_init=soc_init,
+            soc_final=soc_final,
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertIn("SOC_opt", opt_res_baseline.columns)
+        soc_baseline_at_step = opt_res_baseline["SOC_opt"].iloc[target_step]
+        # No-op-by-default coverage: with no target and no arbitrage incentive the
+        # baseline leaves the battery on soc_init, well below the target. This is
+        # what proves the floor param (not arbitrage / tie-breaking) drives the
+        # change in the targeted run below.
+        self.assertAlmostEqual(soc_baseline_at_step, soc_init, delta=1e-2)
+        self.assertLess(soc_baseline_at_step, soc_target - 0.2)
+
+        # With intermediate target — SOC at target_step must meet/exceed soc_target.
+        self.opt = self.create_optimization()
+        opt_res_target = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            prediction_horizon,
+            soc_init=soc_init,
+            soc_final=soc_final,
+            soc_target=soc_target,
+            soc_target_timestep=target_step,
+        )
+        self.assertEqual(self.opt.optim_status, "Optimal")
+        self.assertIn("SOC_opt", opt_res_target.columns)
+        # Lock in the DPP fix: a non-DPP product of two parameters would force
+        # recanonicalisation and flip this to False (this is what catches Fix 1
+        # regressing).
+        self.assertTrue(self.opt.prob.is_dpp())
+        soc_target_at_step = opt_res_target["SOC_opt"].iloc[target_step]
+
+        # 1) The target is enforced at the requested timestep.
+        self.assertGreaterEqual(soc_target_at_step, soc_target - 1e-3)
+        # 2) The constraint actually bit: the targeted run holds clearly more
+        #    charge at the target step than the unconstrained baseline did.
+        self.assertGreaterEqual(soc_target_at_step, soc_baseline_at_step + 0.2)
+        # 3) The battery is still free to discharge afterward: the end-of-horizon
+        #    SOC still lands on soc_final (target does not pin the tail).
+        self.assertLess(
+            np.abs(opt_res_target.loc[opt_res_target.index[-1], "SOC_opt"] - soc_final),
+            1e-2,
+        )
+
+    def test_intermediate_soc_target_clamped_above_max(self):
+        """Issue #553: a soc_target above battery_maximum_state_of_charge is
+        clamped to the ceiling (with a warning) instead of forcing infeasibility.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["unit_load_cost"] = 0.2
+        self.df_input_data_dayahead["unit_prod_price"] = 0.2
+        self.optim_conf.update({"set_use_battery": True})
+        self.optim_conf.update({"number_of_deferrable_loads": 0})
+        self.optim_conf.update({"set_battery_dynamic": False})
+        self.optim_conf.update({"set_nodischarge_to_grid": False})
+        soc_max = 0.8
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": soc_max,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        self.opt = self.create_optimization()
+        with self.assertLogs(level="WARNING") as logs:
+            opt_res = self.opt.perform_naive_mpc_optim(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast,
+                self.p_load_forecast,
+                10,
+                soc_init=0.3,
+                soc_final=0.3,
+                soc_target=1.5,  # absurd: above the 0.8 ceiling
+                soc_target_timestep=5,
+            )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        # Clamped: the target step reaches the ceiling and SOC never exceeds it.
+        self.assertGreaterEqual(opt_res["SOC_opt"].iloc[5], soc_max - 1e-3)
+        self.assertLessEqual(opt_res["SOC_opt"].max(), soc_max + 1e-3)
+        # And the out-of-range request is surfaced to the user.
+        self.assertTrue(
+            any("outside" in line for line in logs.output),
+            msg=f"expected an out-of-range clamp warning, got: {logs.output}",
+        )
+
+    def test_battery_first_priority_drains_before_import(self):
+        """Issue #834: with ``set_battery_first_priority`` the optimizer must
+        not import from the grid while the battery is still above its minimum
+        SoC. On a flat tariff "drain first" and "interleave import with
+        discharge" are cost-equivalent, so the solver is otherwise free to
+        import while the battery is full. The flag forces the drain-first order.
+        """
+        df = self.prepare_forecast_data()
+        n = len(df)
+        # Night-time scenario: no PV, constant load.
+        df["p_pv_forecast"] = 0.0
+        load_w = 2000.0
+        df["p_load_forecast"] = load_w
+        # A gently increasing import price makes "import as early as possible"
+        # the UNIQUE baseline optimum, so the unconstrained run provably imports
+        # while the battery is full. The feature must override that ordering;
+        # the total import energy is identical, only its timing differs.
+        df["unit_load_cost"] = 0.20 + 0.001 * np.arange(n)
+        df["unit_prod_price"] = 0.05
+        pv = df["p_pv_forecast"].copy()
+        load = df["p_load_forecast"].copy()
+
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_nodischarge_to_grid": True,
+            }
+        )
+        prediction_horizon = 8
+        soc_init, soc_min = 0.6, 0.1
+        # Size the battery (loss-free, ample power) so its usable energy covers
+        # exactly the first half of the horizon, independent of the configured
+        # optimization_time_step, so some import is always needed in the tail.
+        step_h = self.retrieve_hass_conf["optimization_time_step"].total_seconds() / 3600.0
+        cap = (load_w * (prediction_horizon / 2) * step_h) / (soc_init - soc_min)
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": cap,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": soc_min,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+
+        # Baseline: feature OFF. Establishes that the unconstrained optimum
+        # imports while the battery is still above min.
+        self.optim_conf["set_battery_first_priority"] = False
+        self.opt = self.create_optimization()
+        res_base = self.opt.perform_naive_mpc_optim(
+            df, pv, load, prediction_horizon, soc_init=soc_init, soc_final=soc_min
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        base_import_while_charged = res_base.loc[
+            res_base["SOC_opt"] > soc_min + 0.02, "P_grid_pos"
+        ].sum()
+        self.assertGreater(
+            base_import_while_charged,
+            1.0,
+            msg="baseline did not import while the battery was charged; "
+            "the scenario no longer discriminates the feature",
+        )
+
+        # Feature ON: must drain the battery before importing.
+        self.optim_conf["set_battery_first_priority"] = True
+        self.opt = self.create_optimization()
+        res_bf = self.opt.perform_naive_mpc_optim(
+            df, pv, load, prediction_horizon, soc_init=soc_init, soc_final=soc_min
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        charged = res_bf["SOC_opt"] > soc_min + 0.02
+        self.assertGreater(charged.sum(), 0, msg="no charged timesteps to test")
+        # The constraint: no grid import in any slot where SoC is above min.
+        self.assertLess(
+            res_bf.loc[charged, "P_grid_pos"].abs().max(),
+            1.0,
+            msg="feature ON still imported while the battery was above min SoC",
+        )
+        # The unavoidable import has simply moved to the drained tail.
+        self.assertGreater(res_bf["P_grid_pos"].sum(), 1.0)
+
+    def test_battery_first_priority_infeasible_when_load_exceeds_discharge(self):
+        """Issue #834: ``set_battery_first_priority`` is a hard constraint, so it
+        can make the problem infeasible when the load exceeds the battery's
+        maximum discharge power while the battery is above min SoC (grid import
+        would be the only way to balance power, but the feature forbids it).
+        This pins that documented sharp edge.
+        """
+        df = self.prepare_forecast_data()
+        df["p_pv_forecast"] = 0.0
+        df["p_load_forecast"] = 2000.0  # exceeds the 500 W discharge cap below
+        df["unit_load_cost"] = 0.20
+        df["unit_prod_price"] = 0.05
+        pv = df["p_pv_forecast"].copy()
+        load = df["p_load_forecast"].copy()
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_nodischarge_to_grid": True,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 500,  # cannot cover the 2000 W load
+                "battery_charge_power_max": 500,
+                "battery_minimum_state_of_charge": 0.1,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        # Control: the exact same setup is feasible with the feature OFF (the
+        # solver just imports the shortfall), proving the infeasibility below is
+        # caused by the new constraint and not by the scenario itself.
+        self.optim_conf["set_battery_first_priority"] = False
+        self.opt = self.create_optimization()
+        self.opt.perform_naive_mpc_optim(df, pv, load, 6, soc_init=0.5, soc_final=0.5)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+        # Feature ON: SoC stays well above min, so import is the only way to
+        # serve the load, which the feature forbids -> no optimal solution.
+        self.optim_conf["set_battery_first_priority"] = True
+        self.opt = self.create_optimization()
+        self.opt.perform_naive_mpc_optim(df, pv, load, 6, soc_init=0.5, soc_final=0.5)
+        self.assertNotIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+    def test_sequence_load_runs_with_zero_operating_hours(self):
+        """Issue #887: a sequence (list-valued power) deferrable load runs for
+        the length of its sequence and ignores operating_hours, which is
+        meaningless for it. Setting that load's operating hours to 0 must not
+        make the optimization infeasible. It previously did, because the load
+        was deactivated by the operating-hours==0 path even though the energy
+        constraint already exempts sequence loads.
+        """
+        df = self.prepare_forecast_data()
+        self.optim_conf.update(
+            {
+                "set_use_battery": False,
+                "number_of_deferrable_loads": 1,
+                "nominal_power_of_deferrable_loads": [[1000, 1000]],
+                "operating_hours_of_each_deferrable_load": [0],
+            }
+        )
+        self.opt = self.create_optimization()
+        res = self.opt.perform_naive_mpc_optim(df, self.p_pv_forecast, self.p_load_forecast, 10)
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertIn("P_deferrable0", res.columns)
+        # The 2-step, 1000 W sequence ran exactly once: total power 2000 W.
+        self.assertAlmostEqual(res["P_deferrable0"].sum(), 2000.0, delta=1.0)
+
+    def test_thermal_config_unknown_key_warns(self):
+        """Issue #943: a thermal_config with an unrecognized key (e.g. the
+        singular min_temperature instead of the list min_temperatures, or a
+        stray target_temperature) is silently ignored, which yields a load that
+        never schedules. Warn so the typo is visible to the user.
+        """
+        self.optim_conf["number_of_deferrable_loads"] = 1
+        self.optim_conf["def_load_config"] = [
+            {
+                "thermal_config": {
+                    "heating_rate": 0.25,
+                    "cooling_constant": 0.01,
+                    "start_temperature": 22.0,
+                    "min_temperature": 22.0,  # singular typo: never read
+                    "target_temperature": 23.0,  # not a recognized key
+                }
+            }
+        ]
+        with self.assertLogs(level="WARNING") as logs:
+            self.create_optimization()
+        joined = "\n".join(logs.output)
+        # The singular typo is flagged and the correct list key is suggested.
+        self.assertIn("min_temperature", joined)
+        self.assertIn("min_temperatures", joined)
+        self.assertIn("target_temperature", joined)
+
+    def test_intermediate_soc_target_below_soc_init_is_noop(self):
+        """Issue #553: a soc_target at or below the SoC the battery already holds
+        builds a non-biting floor, so the optimized plan is unchanged vs no target.
+        """
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["unit_load_cost"] = 0.2
+        self.df_input_data_dayahead["unit_prod_price"] = 0.2
+        self.optim_conf.update({"set_use_battery": True})
+        self.optim_conf.update({"number_of_deferrable_loads": 0})
+        self.optim_conf.update({"set_battery_dynamic": False})
+        self.optim_conf.update({"set_nodischarge_to_grid": False})
+        self.optim_conf.update({"weight_battery_discharge": 1.0})
+        self.optim_conf.update({"weight_battery_charge": 1.0})
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        self.opt = self.create_optimization()
+        opt_res_baseline = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            10,
+            soc_init=0.3,
+            soc_final=0.3,
+        )
+        self.opt = self.create_optimization()
+        opt_res_low_target = self.opt.perform_naive_mpc_optim(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast,
+            self.p_load_forecast,
+            10,
+            soc_init=0.3,
+            soc_final=0.3,
+            soc_target=0.2,  # below soc_init -> floor never binds
+            soc_target_timestep=5,
+        )
+        # Identical optimized SoC trajectory: the floor imposed nothing.
+        assert_series_equal(
+            opt_res_baseline["SOC_opt"],
+            opt_res_low_target["SOC_opt"],
+            atol=1e-3,
+            check_names=False,
+        )
+
     def test_perform_naive_mpc_optim_weight_scaling(self):
         """
         Regression test: Ensure weights are applied element-wise, not as matrix multiplication.
@@ -4775,6 +5153,52 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "Load 1 with 0 hours should be deactivated",
         )
 
+    def test_fractional_operating_hours(self):
+        """Fractional ``operating_hours_of_each_deferrable_load`` are honoured and
+        schedule the exact corresponding energy (regression for issue #373).
+
+        ``assert_energy_constraint`` checks scheduled energy == ``nominal_power *
+        fractional_hours`` to 1e-3 Wh. An integer-only implementation would
+        truncate/round e.g. 2.5 h to 2 or 3 h and produce ``nominal_power * {2, 3}``
+        Wh, so the assertion (plus the explicit integer-counterfactual below)
+        cannot false-green.
+        """
+        nominal = self.optim_conf["nominal_power_of_deferrable_loads"][0]
+        timestep_h = self.retrieve_hass_conf["optimization_time_step"].seconds / 3600
+        # Counterfactual margin tied to the problem scale rather than a magic number:
+        # 10% of one timestep's energy. Far above solver noise (~1e-3 Wh) yet far below
+        # the >=750 Wh gap from either test value to its nearest integer-hour schedule,
+        # so it stays valid if the timestep or nominal power are changed.
+        integer_margin = 0.1 * nominal * timestep_h
+        # 2.5 h: non-integer, timestep-aligned. 1.25 h: sub-timestep fraction. subTest
+        # reports each regime independently so a failure pinpoints which one broke.
+        for fractional_hours in (2.5, 1.25):
+            with self.subTest(fractional_hours=fractional_hours):
+                self.optim_conf.update(
+                    {"operating_hours_of_each_deferrable_load": [fractional_hours, 0]}
+                )
+                self.opt = self.create_optimization()
+                self.df_input_data_dayahead = self.prepare_forecast_data()
+                opt_res = self.opt.perform_dayahead_forecast_optim(
+                    self.df_input_data_dayahead, self.p_pv_forecast, self.p_load_forecast
+                )
+                # A sub-timestep fraction (1.25 h at a 30-min step) makes the strict MILP
+                # infeasible, so EMHASS falls back to the relaxed LP ("Optimal (Relaxed)").
+                # The target-energy equality is enforced on both solve paths, so the energy
+                # assertion below still holds; VALID_OPTIMAL_STATUSES accepts both statuses.
+                self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+                # Exact fractional energy = nominal_power * fractional_hours.
+                self.assert_energy_constraint(opt_res["P_deferrable0"], fractional_hours)
+                # Discriminating counterfactual: energy must not match integer-rounded hours.
+                actual_energy = opt_res["P_deferrable0"].sum() * timestep_h
+                for integer_hours in (int(fractional_hours), int(fractional_hours) + 1):
+                    self.assertGreater(
+                        abs(actual_energy - nominal * integer_hours),
+                        integer_margin,
+                        f"Energy {actual_energy:.1f} Wh matches integer {integer_hours} h "
+                        "-> fractional hours not honoured",
+                    )
+
     def test_deferrable_load_group_shared_power(self):
         """Test that shared power budget constraint limits combined power of grouped loads."""
         self.optim_conf.update(
@@ -5369,11 +5793,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
         logger.debug("Pdef0\n{}".format(opt_res["P_deferrable0"]))
         logger.debug("Pdef1\n{}".format(opt_res["P_deferrable1"]))
-        
+
         # Verify load 0 was not scheduled, load 1 was
         self.assertTrue(np.allclose(opt_res["P_deferrable0"], 0.0))
         self.assertTrue(np.allclose(opt_res["P_deferrable1"], [0, 1000, 1000, 0]))
-        
+
 
 if __name__ == "__main__":
     unittest.main()

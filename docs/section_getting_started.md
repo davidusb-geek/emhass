@@ -9,5 +9,6 @@ usage_guide
 automations
 differences
 study_cases/index
+cookbook/index
 
 ```

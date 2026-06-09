@@ -168,7 +168,7 @@
     },
     "delta_forecast_daily": {
       "friendly_name": "Number of forecasted days",
-      "Description": "The number of days for forecasted data. Defaults to 1.",
+      "Description": "The number of days for forecasted data; can be overridden at runtime via runtimeparams. Defaults to 1. For naive-mpc, the forecast window is now extended automatically to cover a longer prediction_horizon, so this parameter usually need not be set manually for multi-day MPC runs.",
       "input": "int",
       "default_value": 1,
       "unit": "days"
@@ -181,9 +181,23 @@
       "default_value": "typical",
       "unit": "none"
     },
+    "mlforecaster_weather_features": {
+      "friendly_name": "ML forecaster weather covariate columns",
+      "Description": "Optional list of weather covariate columns to feed the 'mlforecaster' load forecast model as exogenous inputs, in addition to the always-present calendar features. Useful when the load is weather-dependent (e.g. a heat pump). Leave empty to disable (default). Supported values: temp_air, relative_humidity, cloud_cover, wind_speed, ghi, direct_radiation, diffuse_radiation, precipitation, heating_degree, cooling_degree. The values are sourced from the Open-Meteo weather forecast; heating_degree/cooling_degree are derived from the temperature.",
+      "input": "array.string",
+      "default_value": "temp_air",
+      "unit": "none"
+    },
     "set_total_pv_sell": {
       "friendly_name": "PV straight to grid",
       "Description": "Set this parameter to true to consider that all the PV power produced is injected to the grid. No direct self-consumption. The default is false, for a system with direct self-consumption.",
+      "input": "boolean",
+      "default_value": false,
+      "unit": "none"
+    },
+    "publish_deferrable_load_states": {
+      "friendly_name": "Publish deferrable load command states",
+      "Description": "When true, EMHASS additionally publishes one interpretable command sensor per deferrable load (sensor.p_deferrableN_state) whose state is 'on', 'off' or 'variable' for the current timestep, with the full optimized on/off/variable plan as a 'schedule' attribute. This lets automations act on a clear command instead of thresholding the power forecast themselves. Defaults to false.",
       "input": "boolean",
       "default_value": false,
       "unit": "none"
@@ -215,6 +229,13 @@
       "input": "select",
       "select_options": ["open-meteo", "solcast", "solar.forecast", "csv"],
       "default_value": "open-meteo",
+      "unit": "none"
+    },
+    "weather_forecast_pv_quantile_bias": {
+      "friendly_name": "PV forecast conservative bias",
+      "Description": "Blend factor that biases the Solcast PV forecast toward its conservative P10 (low) estimate. 0 (default) uses the central P50 estimate, i.e. unchanged behaviour. 1 uses the P10 estimate. Intermediate values blend linearly: estimate = bias*P10 + (1-bias)*P50. Higher values produce more defensive plans (more battery reserve held when solar is uncertain). Only effective with weather_forecast_method set to solcast. Defaults to 0.",
+      "input": "float",
+      "default_value": 0.0,
       "unit": "none"
     },
     "open_meteo_cache_max_age": {
@@ -249,14 +270,14 @@
       "friendly_name": "Max hybrid inverter AC output power",
       "Description": "Maximum hybrid inverter output power from combined PV and battery discharge.",
       "input": "int",
-      "default_value": 0,
+      "default_value": 5000,
       "unit": "W"
     },
     "inverter_ac_input_max": {
       "friendly_name": "Max hybrid inverter AC input power",
       "Description": "Maximum hybrid inverter input power from grid to charge battery.",
       "input": "int",
-      "default_value": 0,
+      "default_value": 5000,
       "unit": "W"
     },
     "inverter_efficiency_dc_ac": {
@@ -492,8 +513,8 @@
     },
     "operating_hours_of_each_deferrable_load": {
       "friendly_name": "Deferrable load operating hours",
-      "Description": "The total number of hours that each deferrable load should operate",
-      "input": "array.int",
+      "Description": "The total number of hours that each deferrable load should operate. Fractional values are accepted (e.g. 4.5) and scheduled as the exact nominal_power * hours of energy; for control finer than the optimization timestep use operating_timesteps_of_each_deferrable_load.",
+      "input": "array.float",
       "default_value": 0,
       "unit": "h"
     },
@@ -567,6 +588,13 @@
       "Description": "Set this to true if you want to forbid discharging battery power to the grid.",
       "input": "boolean",
       "default_value": true,
+      "unit": "none"
+    },
+    "set_battery_first_priority": {
+      "friendly_name": "Drain battery before grid import",
+      "Description": "Set this to true to forbid importing from the grid while the battery is still above its minimum SoC, so stored energy is used before any import. Useful on a flat (non time-of-use) tariff. Note: this can make the problem infeasible in a timestep where the load minus PV exceeds the battery maximum discharge power.",
+      "input": "boolean",
+      "default_value": false,
       "unit": "none"
     },
     "set_battery_dynamic": {

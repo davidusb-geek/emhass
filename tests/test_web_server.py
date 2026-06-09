@@ -89,7 +89,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         mock_build_params.return_value = {"some": "params"}
         mock_p2c.return_value = {"final": "config"}
         response = await self.client.get("/get-config")
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
         data = await response.get_json()
         self.assertEqual(data, {"final": "config"})
 
@@ -101,7 +101,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         mock_build_params.return_value = {"default": "params"}
         mock_p2c.return_value = {"final": "default"}
         response = await self.client.get("/get-config/defaults")
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
         data = await response.get_json()
         self.assertEqual(data, {"final": "default"})
 
@@ -115,7 +115,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         # Test successful conversion
         yaml_data = b"foo: bar"
         response = await self.client.post("/get-json", data=yaml_data)
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
         data = await response.get_data()
         self.assertEqual(orjson.loads(data), {"converted": "config"})
         # Test invalid YAML
@@ -136,7 +136,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         mock_build_params.return_value = {"new": "params"}
         mock_p2c.return_value = {"new": "config"}
         response = await self.client.post("/set-config", json={"some": "data"})
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
         self.assertTrue(f_write.write.called)
 
     @patch("emhass.web_server.set_input_data_dict")
@@ -152,7 +152,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         mock_optim.return_value = pd.DataFrame()
         mock_get_inject.return_value = {}
         response = await self.client.post("/action/perfect-optim", json={})
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
         mock_optim.assert_called_once()
 
     @patch("emhass.web_server.export_influxdb_to_csv")
@@ -161,7 +161,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         mock_load.return_value = ({}, "profit", "{}")
         mock_export.return_value = True
         response = await self.client.post("/action/export-influxdb-to-csv", json={})
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
 
     @patch("emhass.web_server.grab_log")
     @patch("emhass.web_server.export_influxdb_to_csv")
@@ -187,7 +187,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         mock_fit.return_value = (pd.DataFrame(), None, MagicMock())
         mock_get_inject.return_value = {}
         response = await self.client.post("/action/forecast-model-fit", json={})
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
         mock_fit.assert_called_once()
 
     @patch("emhass.web_server.set_input_data_dict")
@@ -202,7 +202,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         # Success
         mock_predict.return_value = pd.DataFrame({"col": [1, 2]})
         response = await self.client.post("/action/forecast-model-predict", json={})
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
         # Fail
         mock_predict.return_value = None
         # Mock check_file_log to return False, simulating no error in log, but code returns 400
@@ -224,7 +224,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         # Success case
         mock_tune.return_value = (pd.DataFrame(), MagicMock())
         response = await self.client.post("/action/forecast-model-tune", json={})
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
         # Fail case
         mock_tune.return_value = (None, None)
         with patch("emhass.web_server.check_file_log", new=AsyncMock(return_value=False)):
@@ -239,7 +239,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         mock_set_input.return_value = {"retrieve_hass_conf": {"continual_publish": False}}
         mock_fit.return_value = True
         response = await self.client.post("/action/regressor-model-fit", json={})
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
 
     @patch("emhass.web_server.set_input_data_dict")
     @patch("emhass.web_server.regressor_model_predict")
@@ -249,7 +249,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         mock_set_input.return_value = {"retrieve_hass_conf": {"continual_publish": False}}
         mock_predict.return_value = True
         response = await self.client.post("/action/regressor-model-predict", json={})
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
 
     @patch("emhass.web_server.aiofiles.open")
     async def test_check_file_log(self, mock_file):
@@ -382,7 +382,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
             headers={"Content-Type": "application/json"},
         )
         # Assertions
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
         log_found = False
         for call in mock_logger.error.call_args_list:
             args, _ = call
@@ -439,7 +439,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
             data=valid_json_str,
             headers={"Content-Type": "application/json"},
         )
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
         # Verify no error was logged
         self.assertFalse(mock_logger.error.called)
         # Verify runtime params were passed correctly
