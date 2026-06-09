@@ -1,8 +1,8 @@
-import asyncio
 import ast
+import asyncio
 import copy
-import operator
 import logging
+import operator
 import os
 import pathlib
 import re
@@ -606,7 +606,14 @@ class RetrieveHass:
 
         :param days_list: A list of days to retrieve data for
         :type days_list: pandas.date_range
-        :param var_list: List of sensor entity IDs to retrieve
+        :param var_list: List of variables to retrieve. Each entry is either a
+            plain sensor entity id (e.g. ``'sensor.power_a'``) or an arithmetic
+            expression combining several timeseries using the ``{{ ... }}``
+            syntax, for example ``"{{'sensor.power_a' - 'sensor.power_b' * 1000}}"``.
+            For an expression, every referenced entity is queried separately from
+            InfluxDB and the operation (``+``, ``-``, ``*``, ``/``, ``**``, ``%``,
+            unary ``+``/``-`` and numeric constants are supported) is applied
+            element-wise on the corresponding values of the returned timeseries.
         :type var_list: list
         :return: Success status of data retrieval
         :rtype: bool
@@ -663,7 +670,9 @@ class RetrieveHass:
 
             if self._is_influx_expression(variable):
                 try:
-                    parsed_expression, entities, token_to_entity = self._extract_influx_expression_entities(variable)
+                    parsed_expression, entities, token_to_entity = (
+                        self._extract_influx_expression_entities(variable)
+                    )
                     series_mapping: dict[str, pd.Series] = {}
 
                     for token, entity in token_to_entity.items():
@@ -684,9 +693,7 @@ class RetrieveHass:
                         f"Evaluated InfluxDB expression '{variable}' with entities: {entities}"
                     )
                 except (ValueError, SyntaxError):
-                    self.logger.exception(
-                        f"Failed to evaluate InfluxDB expression '{variable}'"
-                    )
+                    self.logger.exception(f"Failed to evaluate InfluxDB expression '{variable}'")
                     failed_variables.append(variable)
             else:
                 if variable not in sensor_cache:
@@ -749,7 +756,9 @@ class RetrieveHass:
         stripped = variable.strip() if isinstance(variable, str) else ""
         return stripped.startswith("{{") and stripped.endswith("}}")
 
-    def _extract_influx_expression_entities(self, expression: str) -> tuple[str, list[str], dict[str, str]]:
+    def _extract_influx_expression_entities(
+        self, expression: str
+    ) -> tuple[str, list[str], dict[str, str]]:
         """
         Replace quoted entity IDs in an expression with safe variable tokens.
 
