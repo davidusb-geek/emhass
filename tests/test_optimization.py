@@ -6,6 +6,7 @@ import pickle
 import random
 import unittest
 from datetime import datetime
+from unittest import mock
 
 import aiofiles
 import numpy as np
@@ -6468,10 +6469,12 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         df_input, opt_module = self._make_curtailment_scenario()
 
         def run(eps_override=None):
-            original = getattr(opt_module, "CURTAILMENT_TIEBREAK_EPS", 0.0)
-            if eps_override is not None:
-                opt_module.CURTAILMENT_TIEBREAK_EPS = eps_override
-            try:
+            eps = (
+                eps_override
+                if eps_override is not None
+                else getattr(opt_module, "CURTAILMENT_TIEBREAK_EPS", 0.0)
+            )
+            with mock.patch.object(opt_module, "CURTAILMENT_TIEBREAK_EPS", eps, create=True):
                 opt = Optimization(
                     self.retrieve_hass_conf,
                     self.optim_conf,
@@ -6493,8 +6496,6 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
                 return res
-            finally:
-                opt_module.CURTAILMENT_TIEBREAK_EPS = original
 
         opt_res = run()
 
@@ -6544,9 +6545,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         df_input, opt_module = self._make_curtailment_scenario()
 
         def run_with_eps(eps_value):
-            original = getattr(opt_module, "CURTAILMENT_TIEBREAK_EPS", 0.0)
-            opt_module.CURTAILMENT_TIEBREAK_EPS = eps_value
-            try:
+            with mock.patch.object(opt_module, "CURTAILMENT_TIEBREAK_EPS", eps_value, create=True):
                 opt = Optimization(
                     self.retrieve_hass_conf,
                     self.optim_conf,
@@ -6568,8 +6567,6 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
                 return res
-            finally:
-                opt_module.CURTAILMENT_TIEBREAK_EPS = original
 
         res_with = run_with_eps(getattr(opt_module, "CURTAILMENT_TIEBREAK_EPS", 1e-7))
         res_without = run_with_eps(0.0)
