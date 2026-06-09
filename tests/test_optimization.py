@@ -924,6 +924,286 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.opt = self.create_optimization()
         self.assertNotIn("peak_import", self.opt.vars)
 
+        # A non-finite value ("inf") is ignored too (no peak var, no crash).
+        self.optim_conf["capacity_cost_per_kw"] = "inf"
+        self.opt = self.create_optimization()
+        self.assertNotIn("peak_import", self.opt.vars)
+
+    def test_capacity_charge_respects_current_period_peak(self):
+        """Issue #623 Phase 2: current_period_peak (Watts, runtime-only) is the peak
+        already locked in for the billing period. With a capacity charge active, only
+        import ABOVE current_period_peak is worth shaving:
+          - current_period_peak = 0  -> prices the full horizon peak (== Phase 1).
+          - current_period_peak ABOVE the achievable horizon peak -> nothing left to
+            shave; plan == the no-capacity baseline (battery idle, full spike).
+        Discriminator: capacity_cost_per_kw > 0 is FIXED across the two capacity runs,
+        so only current_period_peak changes. A Phase-1-only build (ignoring
+        current_period_peak) would shave in BOTH and fail the high-baseline check.
+        """
+        df = self.prepare_forecast_data()
+        n = len(df)
+        prediction_horizon = 6
+        df["p_pv_forecast"] = 0.0
+        load = np.full(n, 1000.0)
+        load[2] = 5000.0  # achievable horizon peak ~5 kW = 5000 W
+        df["p_load_forecast"] = load
+        pv = df["p_pv_forecast"].copy()
+        load_s = df["p_load_forecast"].copy()
+        df["unit_load_cost"] = 0.20
+        df["unit_prod_price"] = 0.20
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_nodischarge_to_grid": True,
+                "weight_battery_discharge": 0.1,
+                "weight_battery_charge": 0.1,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        soc_init = 0.5
+        soc_final = 0.5
+
+        def run(cap_cost, current_period_peak):
+            self.optim_conf["capacity_cost_per_kw"] = cap_cost
+            self.opt = self.create_optimization()
+            res = self.opt.perform_naive_mpc_optim(
+                df,
+                pv,
+                load_s,
+                prediction_horizon,
+                soc_init=soc_init,
+                soc_final=soc_final,
+                current_period_peak=current_period_peak,
+            )
+            self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+            return res
+
+        # RUN 1 - no capacity charge: true no-op baseline (full spike imported).
+        res_baseline = run(cap_cost=0.0, current_period_peak=0.0)
+        peak_baseline = res_baseline["P_grid_pos"].iloc[:prediction_horizon].max()
+        self.assertGreater(
+            peak_baseline,
+            4000.0,
+            msg="baseline did not import the full spike; scenario no longer discriminates",
+        )
+        self.assertNotIn("peak_import", self.opt.vars)  # off => no var
+
+        # RUN 2 - capacity charge ON, current_period_peak = 0: Phase-1 shaving.
+        res_shave = run(cap_cost=2.0, current_period_peak=0.0)
+        self.assertTrue(self.opt.prob.is_dpp())  # DPP preserved (warm-start)
+        self.assertIn("peak_import", self.opt.vars)
+        peak_shave = res_shave["P_grid_pos"].iloc[:prediction_horizon].max()
+        self.assertLess(
+            peak_shave,
+            peak_baseline - 1000.0,
+            msg="current_period_peak=0 must reproduce Phase 1 shaving",
+        )
+
+        # RUN 3 - SAME capacity charge, current_period_peak ABOVE achievable peak
+        # (20000 W = 20 kW >> 5000 W spike): peak already locked in -> nothing left
+        # to shave -> plan == the no-capacity baseline (battery idle, full spike).
+        res_locked = run(cap_cost=2.0, current_period_peak=20000.0)
+        self.assertTrue(self.opt.prob.is_dpp())
+        peak_locked = res_locked["P_grid_pos"].iloc[:prediction_horizon].max()
+        # (a) does NOT shave: peak matches the no-capacity baseline.
+        self.assertGreater(
+            peak_locked,
+            peak_baseline - 1e-3,
+            msg="capacity charge shaved a peak already locked in above current_period_peak",
+        )
+        # (b) whole-plan equivalence to the no-capacity baseline (strongest form).
+        np.testing.assert_allclose(
+            res_locked["P_grid_pos"].iloc[:prediction_horizon].to_numpy(),
+            res_baseline["P_grid_pos"].iloc[:prediction_horizon].to_numpy(),
+            atol=1e-3,
+        )
+        # (c) counterfactual defeating a Phase-1-only build: SAME cost, run 2 shaved,
+        #     run 3 did not. If current_period_peak were ignored these would be equal.
+        self.assertGreater(
+            peak_locked,
+            peak_shave + 1000.0,
+            msg="current_period_peak ignored: high baseline still shaved like peak=0",
+        )
+
+    def test_current_period_peak_noop_and_coercion(self):
+        """Issue #623 Phase 2: current_period_peak with the feature OFF is a no-op;
+        with the feature ON, 0/unset reproduces the Phase-1 plan, a numeric string is
+        coerced, and an invalid/negative value falls back to 0 with a warning.
+        """
+        df = self.prepare_forecast_data()
+        n = len(df)
+        prediction_horizon = 6
+        df["p_pv_forecast"] = 0.0
+        load = np.full(n, 1000.0)
+        load[2] = 5000.0
+        df["p_load_forecast"] = load
+        pv = df["p_pv_forecast"].copy()
+        load_s = df["p_load_forecast"].copy()
+        df["unit_load_cost"] = 0.20
+        df["unit_prod_price"] = 0.20
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_nodischarge_to_grid": True,
+                "weight_battery_discharge": 0.1,
+                "weight_battery_charge": 0.1,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+
+        # (i) Feature OFF + current_period_peak set => no peak var, plan unchanged.
+        self.optim_conf["capacity_cost_per_kw"] = 0.0
+        self.opt = self.create_optimization()
+        res_off_set = self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            soc_init=0.5,
+            soc_final=0.5,
+            current_period_peak=20000.0,
+        )
+        self.assertNotIn("peak_import", self.opt.vars)
+        self.opt = self.create_optimization()
+        res_off_unset = self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            soc_init=0.5,
+            soc_final=0.5,
+        )
+        np.testing.assert_allclose(
+            res_off_set["P_grid_pos"].to_numpy(),
+            res_off_unset["P_grid_pos"].to_numpy(),
+            atol=1e-6,
+        )
+
+        # (ii) Feature ON: peak=0 explicit == unset (identical plan).
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.opt = self.create_optimization()
+        res_zero = self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            soc_init=0.5,
+            soc_final=0.5,
+            current_period_peak=0.0,
+        )
+        self.opt = self.create_optimization()
+        res_unset_on = self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            soc_init=0.5,
+            soc_final=0.5,
+        )
+        np.testing.assert_allclose(
+            res_zero["P_grid_pos"].to_numpy(),
+            res_unset_on["P_grid_pos"].to_numpy(),
+            atol=1e-6,
+        )
+
+        # (iii) numeric string is coerced and locks in the peak (no shaving vs zero).
+        self.opt = self.create_optimization()
+        res_str = self.opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load_s,
+            prediction_horizon,
+            soc_init=0.5,
+            soc_final=0.5,
+            current_period_peak="20000",
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertGreater(
+            res_str["P_grid_pos"].iloc[:prediction_horizon].max(),
+            res_zero["P_grid_pos"].iloc[:prediction_horizon].max() + 1000.0,
+            msg='numeric string "20000" must coerce and lock the peak in (no shave)',
+        )
+
+        # (iv) invalid string -> warning, treated as 0, identical plan to peak=0.
+        self.opt = self.create_optimization()
+        with self.assertLogs(level="WARNING") as logs:
+            res_bad = self.opt.perform_naive_mpc_optim(
+                df,
+                pv,
+                load_s,
+                prediction_horizon,
+                soc_init=0.5,
+                soc_final=0.5,
+                current_period_peak="not a number",
+            )
+        self.assertTrue(any("current_period_peak" in line for line in logs.output))
+        np.testing.assert_allclose(
+            res_bad["P_grid_pos"].to_numpy(),
+            res_zero["P_grid_pos"].to_numpy(),
+            atol=1e-6,
+        )
+
+        # (v) negative -> warning, treated as 0, identical plan to peak=0.
+        self.opt = self.create_optimization()
+        with self.assertLogs(level="WARNING"):
+            res_neg = self.opt.perform_naive_mpc_optim(
+                df,
+                pv,
+                load_s,
+                prediction_horizon,
+                soc_init=0.5,
+                soc_final=0.5,
+                current_period_peak=-5.0,
+            )
+        np.testing.assert_allclose(
+            res_neg["P_grid_pos"].to_numpy(),
+            res_zero["P_grid_pos"].to_numpy(),
+            atol=1e-6,
+        )
+
+        # (vi) non-finite "inf" -> warning, treated as 0 (cp.Parameter rejects
+        # inf), identical plan to peak=0; must degrade gracefully, not crash.
+        self.opt = self.create_optimization()
+        with self.assertLogs(level="WARNING"):
+            res_inf = self.opt.perform_naive_mpc_optim(
+                df,
+                pv,
+                load_s,
+                prediction_horizon,
+                soc_init=0.5,
+                soc_final=0.5,
+                current_period_peak="inf",
+            )
+        np.testing.assert_allclose(
+            res_inf["P_grid_pos"].to_numpy(),
+            res_zero["P_grid_pos"].to_numpy(),
+            atol=1e-6,
+        )
+
     def test_battery_first_priority_drains_before_import(self):
         """Issue #834: with ``set_battery_first_priority`` the optimizer must
         not import from the grid while the battery is still above its minimum
