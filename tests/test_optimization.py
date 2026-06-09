@@ -6399,6 +6399,344 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(np.allclose(opt_res["P_deferrable0"], 0.0))
         self.assertTrue(np.allclose(opt_res["P_deferrable1"], [0, 1000, 1000, 0]))
 
+    def _make_curtailment_scenario(self):
+        """Build shared config and input DataFrame for curtailment tie-break tests (issue #342).
+
+        Scenario: 8 steps @ 30-min. PV=1200W, load=200W, surplus=1000W/step.
+        Export cap=0 (no grid export). Battery cap=2000Wh, charge_rate=2000W
+        (absorbs up to 1000Wh/step == the per-step surplus energy).
+        soc_init=0, soc_final=1.0: battery stores exactly 2000Wh net.
+        Total surplus = 8 * 1000W * 0.5h = 4000Wh; battery absorbs 2000Wh;
+        so exactly 2000Wh must be curtailed.
+
+        Temporal freedom: any 4 of the 8 steps can be the curtailment steps (battery
+        covers the other 4). Flat prices make all allocations cost-equal; the
+        tie-break is the ONLY thing that distinguishes them.
+        """
+        import emhass.optimization as opt_module
+
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": False,
+                "compute_curtailment": True,
+                "battery_nominal_energy_capacity": 2000,  # 2 kWh
+                "battery_charge_power_max": 2000,  # 2 kW -> 1000 Wh/step max
+                "battery_discharge_power_max": 2000,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_target_state_of_charge": 1.0,
+                "maximum_power_to_grid": 0,  # no export
+            }
+        )
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "set_nocharge_from_grid": True,
+                "set_nodischarge_to_grid": True,
+                "weight_battery_discharge": 0.0,
+                "weight_battery_charge": 0.0,
+                "operating_hours_of_each_deferrable_load": [0, 0],
+            }
+        )
+
+        n = 8
+        dates = pd.date_range(
+            start=pd.Timestamp("2024-01-01 06:00:00", tz=self.retrieve_hass_conf["time_zone"]),
+            periods=n,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df = pd.DataFrame(index=dates)
+        df["p_pv_forecast"] = 1200.0  # W
+        df["p_load_forecast"] = 200.0  # W  (net surplus = 1000 W/step)
+        df[self.fcst.var_load_cost] = 0.1  # flat, no real cost difference across steps
+        df[self.fcst.var_prod_price] = 0.0  # no export revenue (export blocked anyway)
+
+        return df, opt_module
+
+    def test_curtailment_scheduled_late(self):
+        """Discriminating test (issue #342): with temporal freedom the solver must prefer
+        the LATEST feasible timesteps for curtailment.
+
+        See _make_curtailment_scenario: battery absorbs half of the horizon's surplus
+        (soc 0->1.0). The other half must be curtailed. All allocations share the same
+        real cost (flat prices) so the tie-break penalty is the only distinguisher.
+        Without it the solver places curtailment arbitrarily; with it curtailment must
+        concentrate in the SECOND HALF (center-of-mass > midpoint).
+        """
+        df_input, opt_module = self._make_curtailment_scenario()
+
+        def run(eps_override=None):
+            original = getattr(opt_module, "CURTAILMENT_TIEBREAK_EPS", 0.0)
+            if eps_override is not None:
+                opt_module.CURTAILMENT_TIEBREAK_EPS = eps_override
+            try:
+                opt = Optimization(
+                    self.retrieve_hass_conf,
+                    self.optim_conf,
+                    self.plant_conf,
+                    self.fcst.var_load_cost,
+                    self.fcst.var_prod_price,
+                    "profit",
+                    emhass_conf,
+                    logger,
+                )
+                res = opt.perform_optimization(
+                    df_input,
+                    df_input["p_pv_forecast"].values,
+                    df_input["p_load_forecast"].values,
+                    df_input[opt.var_load_cost].values,
+                    df_input[opt.var_prod_price].values,
+                    soc_init=0.0,
+                    soc_final=1.0,
+                )
+                self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+                return res
+            finally:
+                opt_module.CURTAILMENT_TIEBREAK_EPS = original
+
+        opt_res = run()
+
+        self.assertIn("P_PV_curtailment", opt_res.columns)
+        curtailment = opt_res["P_PV_curtailment"].values
+        n = len(curtailment)
+
+        # Scenario guarantees forced curtailment (total surplus > battery capacity)
+        self.assertGreater(
+            curtailment.sum(),
+            0,
+            "No curtailment occurred - scenario misconfigured",
+        )
+
+        indices = np.arange(n)
+        total_curtail = curtailment.sum()
+        com = np.dot(indices, curtailment) / total_curtail
+        midpoint = (n - 1) / 2.0  # 3.5 for n=8
+
+        # With tie-break: curtailment mass in LATE timesteps -> CoM > midpoint
+        self.assertGreater(
+            com,
+            midpoint,
+            f"Curtailment CoM {com:.2f} should be > midpoint {midpoint:.2f}. "
+            f"Curtailment per step: {curtailment}",
+        )
+
+        # Counterfactual discriminating-power check: negate EPS -> EARLY preference -> CoM < midpoint
+        res_early = run(eps_override=-getattr(opt_module, "CURTAILMENT_TIEBREAK_EPS", 1e-7))
+        c_early = res_early["P_PV_curtailment"].values
+        total_early = c_early.sum()
+        if total_early > 0:
+            com_early = np.dot(indices, c_early) / total_early
+            self.assertLess(
+                com_early,
+                midpoint,
+                f"With negative EPS, curtailment CoM {com_early:.2f} should be < midpoint "
+                f"{midpoint:.2f}. Curtailment per step: {c_early}",
+            )
+
+    def test_curtailment_tiebreak_cost_invariant(self):
+        """Issue #342: The tie-break must not change the real economic cost.
+        Solve the same scenario with normal EPS and EPS=0; assert that real cost
+        (grid import minus export revenue) and total curtailed energy are equal
+        within tight tolerance.
+        """
+        df_input, opt_module = self._make_curtailment_scenario()
+
+        def run_with_eps(eps_value):
+            original = getattr(opt_module, "CURTAILMENT_TIEBREAK_EPS", 0.0)
+            opt_module.CURTAILMENT_TIEBREAK_EPS = eps_value
+            try:
+                opt = Optimization(
+                    self.retrieve_hass_conf,
+                    self.optim_conf,
+                    self.plant_conf,
+                    self.fcst.var_load_cost,
+                    self.fcst.var_prod_price,
+                    "profit",
+                    emhass_conf,
+                    logger,
+                )
+                res = opt.perform_optimization(
+                    df_input,
+                    df_input["p_pv_forecast"].values,
+                    df_input["p_load_forecast"].values,
+                    df_input[opt.var_load_cost].values,
+                    df_input[opt.var_prod_price].values,
+                    soc_init=0.0,
+                    soc_final=1.0,
+                )
+                self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+                return res
+            finally:
+                opt_module.CURTAILMENT_TIEBREAK_EPS = original
+
+        res_with = run_with_eps(getattr(opt_module, "CURTAILMENT_TIEBREAK_EPS", 1e-7))
+        res_without = run_with_eps(0.0)
+
+        time_step_h = self.retrieve_hass_conf["optimization_time_step"].seconds / 3600.0
+        unit_load_cost = df_input[self.fcst.var_load_cost].values
+        unit_prod_price = df_input[self.fcst.var_prod_price].values
+
+        def real_cost(res):
+            # Real import cost minus export revenue (tie-break term excluded)
+            import_cost = np.sum(res["P_grid_pos"].values * unit_load_cost) * time_step_h * 0.001
+            export_rev = np.sum(-res["P_grid_neg"].values * unit_prod_price) * time_step_h * 0.001
+            return import_cost - export_rev
+
+        cost_with = real_cost(res_with)
+        cost_without = real_cost(res_without)
+
+        denom = max(abs(cost_without), 1e-10)
+        self.assertLess(
+            abs(cost_with - cost_without) / denom,
+            1e-6,
+            f"Real cost changed: with_eps={cost_with:.8f}, without_eps={cost_without:.8f}",
+        )
+
+        # Total curtailed energy must be unchanged
+        curtail_with = res_with["P_PV_curtailment"].values.sum() * time_step_h * 0.001
+        curtail_without = res_without["P_PV_curtailment"].values.sum() * time_step_h * 0.001
+        self.assertAlmostEqual(
+            curtail_with,
+            curtail_without,
+            places=4,
+            msg=f"Total curtailed energy changed: {curtail_with:.6f} vs {curtail_without:.6f}",
+        )
+
+    def test_curtailment_tiebreak_absent_when_disabled(self):
+        """Issue #342: When compute_curtailment=False, the tie-break term must not
+        reference p_pv_curtailment in the objective (structurally absent).
+        """
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": False,
+                "compute_curtailment": False,
+            }
+        )
+        self.optim_conf.update(
+            {
+                "set_use_battery": False,
+                "operating_hours_of_each_deferrable_load": [0, 0],
+            }
+        )
+
+        periods = 4
+        dates = pd.date_range(
+            start=pd.Timestamp("2024-01-01 06:00:00", tz=self.retrieve_hass_conf["time_zone"]),
+            periods=periods,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df_input = pd.DataFrame(index=dates)
+        df_input["p_pv_forecast"] = 1000.0
+        df_input["p_load_forecast"] = 200.0
+        df_input[self.fcst.var_load_cost] = 0.1
+        df_input[self.fcst.var_prod_price] = 0.05
+
+        opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            "profit",
+            emhass_conf,
+            logger,
+        )
+
+        opt.perform_optimization(
+            df_input,
+            df_input["p_pv_forecast"].values,
+            df_input["p_load_forecast"].values,
+            df_input[opt.var_load_cost].values,
+            df_input[opt.var_prod_price].values,
+        )
+
+        self.assertIsNotNone(opt.prob, "prob should be built after perform_optimization")
+
+        # p_pv_curtailment must NOT appear in the objective when compute_curtailment=False
+        obj_var_names = {v.name() for v in opt.prob.objective.variables()}
+        self.assertNotIn(
+            "p_pv_curtailment",
+            obj_var_names,
+            f"p_pv_curtailment should not be in objective when compute_curtailment=False. "
+            f"Objective variables: {obj_var_names}",
+        )
+
+    def test_continuous_deferrable_inactive_no_phantom_consumption(self):
+        """An inactive pure-continuous deferrable load (0 operating hours, no
+        binaries) must not absorb surplus PV. Without the param_load_active bound
+        in the continuous branch it acts as a free energy sink, and the
+        curtailment tie-break (issue #342) would then deterministically route
+        surplus into the disabled load instead of booking it as curtailment.
+        """
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": False,
+                "compute_curtailment": True,
+                "maximum_power_to_grid": 0,  # no export
+            }
+        )
+        self.optim_conf.update(
+            {
+                "set_use_battery": False,
+                "operating_hours_of_each_deferrable_load": [0, 0],
+                # Pure continuous: no binaries, so the load-active bound is the
+                # only thing standing between an inactive load and the surplus
+                "treat_deferrable_load_as_semi_cont": [False, False],
+                "set_deferrable_load_single_constant": [False, False],
+            }
+        )
+
+        n = 8
+        dates = pd.date_range(
+            start=pd.Timestamp("2024-01-01 06:00:00", tz=self.retrieve_hass_conf["time_zone"]),
+            periods=n,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df_input = pd.DataFrame(index=dates)
+        df_input["p_pv_forecast"] = 1200.0  # W
+        df_input["p_load_forecast"] = 200.0  # W (surplus = 1000 W/step, unexportable)
+        df_input[self.fcst.var_load_cost] = 0.1
+        df_input[self.fcst.var_prod_price] = 0.0
+
+        opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            "profit",
+            emhass_conf,
+            logger,
+        )
+        opt_res = opt.perform_optimization(
+            df_input,
+            df_input["p_pv_forecast"].values,
+            df_input["p_load_forecast"].values,
+            df_input[opt.var_load_cost].values,
+            df_input[opt.var_prod_price].values,
+        )
+        self.assertIn(opt.optim_status, VALID_OPTIMAL_STATUSES)
+
+        # Inactive loads must consume nothing
+        for col in ("P_deferrable0", "P_deferrable1"):
+            self.assertTrue(
+                np.allclose(opt_res[col].values, 0.0, atol=1e-6),
+                f"{col} should be zero for an inactive continuous load, got {opt_res[col].values}",
+            )
+
+        # The full surplus must be booked as curtailment, not silently dumped
+        time_step_h = self.retrieve_hass_conf["optimization_time_step"].seconds / 3600.0
+        expected_curtail_wh = 1000.0 * n * time_step_h
+        actual_curtail_wh = opt_res["P_PV_curtailment"].values.sum() * time_step_h
+        self.assertAlmostEqual(
+            actual_curtail_wh,
+            expected_curtail_wh,
+            delta=1.0,
+            msg=f"Expected {expected_curtail_wh} Wh curtailed, got {actual_curtail_wh}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

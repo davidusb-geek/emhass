@@ -42,6 +42,12 @@ THERMAL_CONFIG_KEY_HINTS = {
     ),
 }
 
+# Tie-break weight for PV curtailment timing (issue #342): must be far below
+# real tariff coefficients (~1e-4 $/W per step) yet large enough for the LP to
+# act on (above HiGHS dual feasibility tolerance once multiplied by realistic
+# curtailment powers in W).
+CURTAILMENT_TIEBREAK_EPS = 1e-7
+
 
 class Optimization:
     r"""
@@ -1286,6 +1292,20 @@ class Optimization:
         capacity_cost_per_kw = self._get_capacity_cost_per_kw()
         if capacity_cost_per_kw > 0 and "peak_import" in self.vars:
             objective_terms.append(-capacity_cost_per_kw * (self.vars["peak_import"] / 1000.0))
+
+        # Curtailment timing tie-break (issue #342). p_pv_curtailment carries no cost
+        # of its own, so among equal-cost optima the solver may curtail early in the
+        # horizon even when storing now and curtailing later is equally cheap. Add a
+        # tiny time-decreasing penalty so the latest feasible timesteps are preferred.
+        # The weight is normalized by the horizon length and the epsilon is orders of
+        # magnitude below any real tariff coefficient, so it breaks ties without ever
+        # flipping a real economic decision.
+        if self.plant_conf["compute_curtailment"]:
+            p_pv_curtailment = self.vars["p_pv_curtailment"]
+            tiebreak_weights = np.arange(self.num_timesteps, 0, -1) / self.num_timesteps
+            objective_terms.append(
+                -CURTAILMENT_TIEBREAK_EPS * cp.sum(cp.multiply(tiebreak_weights, p_pv_curtailment))
+            )
 
         # Sum all terms to create the final objective expression
         return cp.Maximize(cp.sum(objective_terms))
@@ -2848,6 +2868,15 @@ class Optimization:
                 # Just bound by nominal power. No binary variables involved.
                 constraints.append(p_deferrable[k] >= 0)
                 constraints.append(p_deferrable[k] <= M)
+
+                # Load deactivation parity with the binary branch above: a pure
+                # continuous load has no binaries for param_load_active to act on,
+                # so an inactive load (operating hours = 0, or window outside the
+                # horizon) would be left as a free energy sink for surplus PV.
+                # Bound it by the same activation parameter instead. Thermal loads
+                # are unaffected (param_load_active is pinned to 1 for them).
+                if k < len(self.param_load_active):
+                    constraints.append(p_deferrable[k] <= M * self.param_load_active[k])
 
         # Process shared thermal tanks once each, after the per-load loop. Each
         # shared tank is fed by N >= 1 deferrable loads; their per-load
