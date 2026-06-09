@@ -267,6 +267,8 @@ class MLForecaster:
         """
         try:
             self.logger.info("Performing a forecast model fit for " + self.model_type)
+            # Reset metrics so a reused instance never exposes stale results from a previous fit.
+            self.backtest_metrics_ = None
 
             # Check if variable exists in data
             if self.var_model not in self.data.columns:
@@ -392,40 +394,62 @@ class MLForecaster:
                 actual_values = df_pred_backtest["train"].astype(float)
                 predicted_values = df_pred_backtest["pred"].astype(float)
                 valid_mask = predicted_values.notna() & actual_values.notna()
+                n_valid_samples = int(valid_mask.sum())
                 actual_valid = actual_values[valid_mask]
                 predicted_valid = predicted_values[valid_mask]
 
-                backtest_mae = float(mean_absolute_error(actual_valid, predicted_valid))
-                backtest_rmse = float(np.sqrt(mean_squared_error(actual_valid, predicted_valid)))
-                backtest_r2_full = float(r2_score(actual_valid, predicted_valid))
-                # MAPE: exclude zero actuals to avoid division by zero
-                nonzero_mask = actual_valid != 0
-                if nonzero_mask.sum() > 0:
-                    backtest_mape = float(
-                        np.mean(
-                            np.abs(
-                                (actual_valid[nonzero_mask] - predicted_valid[nonzero_mask])
-                                / actual_valid[nonzero_mask]
-                            )
-                        )
-                        * 100
+                # Guard against degenerate cases (all-NaN predictions or single sample).
+                # r2_score requires at least 2 samples; MAE/RMSE require at least 1.
+                if n_valid_samples == 0:
+                    self.backtest_metrics_ = {
+                        "mae": float("nan"),
+                        "rmse": float("nan"),
+                        "r2": float("nan"),
+                        "mape": float("nan"),
+                        "n_samples": 0,
+                    }
+                    self.logger.warning(
+                        "Backtest produced no valid predictions — metrics set to NaN"
                     )
                 else:
-                    backtest_mape = float("nan")
+                    backtest_mae = float(mean_absolute_error(actual_valid, predicted_valid))
+                    backtest_rmse = float(
+                        np.sqrt(mean_squared_error(actual_valid, predicted_valid))
+                    )
+                    # r2_score is undefined for a single sample (variance == 0)
+                    backtest_r2_full = (
+                        float(r2_score(actual_valid, predicted_valid))
+                        if n_valid_samples > 1
+                        else float("nan")
+                    )
+                    # MAPE: exclude zero actuals to avoid division by zero
+                    nonzero_mask = actual_valid != 0
+                    if nonzero_mask.sum() > 0:
+                        backtest_mape = float(
+                            np.mean(
+                                np.abs(
+                                    (actual_valid[nonzero_mask] - predicted_valid[nonzero_mask])
+                                    / actual_valid[nonzero_mask]
+                                )
+                            )
+                            * 100
+                        )
+                    else:
+                        backtest_mape = float("nan")
 
-                self.backtest_metrics_ = {
-                    "mae": backtest_mae,
-                    "rmse": backtest_rmse,
-                    "r2": backtest_r2_full,
-                    "mape": backtest_mape,
-                    "n_samples": int(valid_mask.sum()),
-                }
-                self.logger.info(
-                    f"Backtest metrics — MAE: {backtest_mae:.4f}, "
-                    f"RMSE: {backtest_rmse:.4f}, "
-                    f"R2: {backtest_r2_full:.4f}, "
-                    f"MAPE: {backtest_mape:.2f}%"
-                )
+                    self.backtest_metrics_ = {
+                        "mae": backtest_mae,
+                        "rmse": backtest_rmse,
+                        "r2": backtest_r2_full,
+                        "mape": backtest_mape,
+                        "n_samples": n_valid_samples,
+                    }
+                    self.logger.info(
+                        f"Backtest metrics — MAE: {backtest_mae:.4f}, "
+                        f"RMSE: {backtest_rmse:.4f}, "
+                        f"R2: {backtest_r2_full:.4f}, "
+                        f"MAPE: {backtest_mape:.2f}%"
+                    )
 
             return df_pred, df_pred_backtest
 

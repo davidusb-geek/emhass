@@ -456,6 +456,11 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(weather_future, pd.DataFrame)
         self.assertEqual(len(weather_future), num_lags)
         self.assertIn("temp_air", weather_future.columns)
+        # Verify the horizon is anchored exactly one step after the last window index.
+        expected_start = data_last_window.index[-1] + data_last_window.index.freq
+        self.assertEqual(weather_future.index[0], expected_start)
+        # Verify the horizon frequency matches the input window frequency.
+        self.assertEqual(weather_future.index.freq, data_last_window.index.freq)
 
     async def test_build_weather_future_uses_lags_opt_when_tuned(self):
         """_build_weather_future uses mlf.lags_opt (not num_lags) when is_tuned=True."""
@@ -491,6 +496,23 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(weather_future)
         self.assertEqual(len(weather_future), lags_opt_value)
+
+    async def test_build_weather_future_raises_on_non_uniform_index(self):
+        """_build_weather_future raises ValueError when index freq cannot be inferred."""
+        from unittest.mock import MagicMock
+
+        # Build an irregular (non-uniform) index so that both .freq and pd.infer_freq return None.
+        irregular_timestamps = pd.to_datetime(
+            ["2023-01-01 00:00", "2023-01-01 00:15", "2023-01-01 01:00"]
+        ).tz_localize(self.fcst.time_zone)
+        data_last_window = pd.DataFrame(index=irregular_timestamps)
+        mock_mlf = MagicMock()
+        mock_mlf.weather_features = ["temp_air"]
+        mock_mlf.is_tuned = False
+        mock_mlf.num_lags = 4
+
+        with self.assertRaises(ValueError, msg="Expected ValueError for non-uniform index"):
+            await self.fcst._build_weather_future(data_last_window, mock_mlf)
 
     # Test output weather forecast using Solcast with mock get request data
     async def test_get_weather_forecast_solcast_method_mock(self):

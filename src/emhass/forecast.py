@@ -1789,11 +1789,21 @@ class Forecast:
         weather_features = list(getattr(mlf, "weather_features", []) or [])
         if not weather_features:
             return None
+        # Resolve the index frequency — DatetimeIndex.freq can be None when the index was
+        # constructed without an explicit freq (e.g. after a reindex or iloc slice).
+        window_freq = data_last_window.index.freq
+        if window_freq is None:
+            window_freq = pd.tseries.frequencies.to_offset(pd.infer_freq(data_last_window.index))
+        if window_freq is None:
+            raise ValueError(
+                "_build_weather_future: could not infer a regular frequency from "
+                "data_last_window.index — ensure the index has a uniform step size."
+            )
         steps = mlf.lags_opt if getattr(mlf, "is_tuned", False) else mlf.num_lags
         future_index = pd.date_range(
-            start=data_last_window.index[-1] + data_last_window.index.freq,
+            start=data_last_window.index[-1] + window_freq,
             periods=steps,
-            freq=data_last_window.index.freq,
+            freq=window_freq,
         )
         return await self.get_weather_covariates(future_index, weather_features)
 

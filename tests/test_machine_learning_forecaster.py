@@ -348,6 +348,28 @@ class TestMLForecasterAsync(unittest.IsolatedAsyncioTestCase):
         await mlf.fit(split_date_delta="48h", perform_backtest=False)
         self.assertIsNone(mlf.backtest_metrics_)
 
+    async def test_backtest_metrics_reset_on_refit_without_backtest(self):
+        """backtest_metrics_ must be reset to None when fit() is called without perform_backtest.
+
+        Ensures a reused instance does not carry stale metrics from a previous fit.
+        """
+        fast_data = self.data.iloc[-200:]
+        mlf = MLForecaster(
+            fast_data,
+            self.input_data_dict["params"]["passed_data"]["model_type"],
+            self.input_data_dict["params"]["passed_data"]["var_model"],
+            "LinearRegression",
+            self.input_data_dict["params"]["passed_data"]["num_lags"],
+            emhass_conf,
+            logger,
+        )
+        # First fit WITH backtest — populates backtest_metrics_
+        await mlf.fit(split_date_delta="48h", perform_backtest=True)
+        self.assertIsNotNone(mlf.backtest_metrics_)
+        # Second fit WITHOUT backtest — metrics must be cleared, not carry over from the first fit
+        await mlf.fit(split_date_delta="48h", perform_backtest=False)
+        self.assertIsNone(mlf.backtest_metrics_)
+
     async def test_mlforecaster_tune_short_train_size_recovery(self):
         """Test the fallback logic when initial_train_size <= window_size during tuning."""
         # Use 50 rows (25 hours). This is enough data for fit() to succeed.
