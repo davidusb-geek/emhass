@@ -719,6 +719,211 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             msg=f"expected an out-of-range clamp warning, got: {logs.output}",
         )
 
+    def test_capacity_charge_shaves_peak_import(self):
+        """Issue #623: an opt-in ``capacity_cost_per_kw`` must flatten the peak
+        grid import. With the feature off no peak variable is created and the
+        plan is unchanged; with it on the planned import peak drops, and the
+        problem stays DPP (warm-start preserved).
+        """
+        df = self.prepare_forecast_data()
+        n = len(df)
+        prediction_horizon = 6
+        # No PV; a flat load with one sharp spike the optimizer would otherwise
+        # import in full. The battery can discharge to shave that spike.
+        df["p_pv_forecast"] = 0.0
+        load = np.full(n, 1000.0)
+        load[2] = 5000.0  # the peak to be shaved
+        df["p_load_forecast"] = load
+        pv = df["p_pv_forecast"].copy()
+        load_s = df["p_load_forecast"].copy()
+        # Flat tariff -> no energy-arbitrage incentive to move the battery; a
+        # small cycle cost makes "just import the spike" the UNIQUE baseline
+        # optimum (battery use is strictly worse), so any peak shaving in the
+        # feature-on run is caused by the capacity term, not by tie-breaking.
+        df["unit_load_cost"] = 0.20
+        df["unit_prod_price"] = 0.20
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_nodischarge_to_grid": True,
+                "weight_battery_discharge": 0.1,
+                "weight_battery_charge": 0.1,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+        # Same start and end SoC: no forced discharge, so the baseline leaves the
+        # battery idle and imports the whole spike (deterministic peak).
+        soc_init = 0.5
+        soc_final = 0.5
+
+        # Baseline: feature OFF (capacity_cost_per_kw default 0).
+        self.optim_conf["capacity_cost_per_kw"] = 0.0
+        self.opt = self.create_optimization()
+        res_off = self.opt.perform_naive_mpc_optim(
+            df, pv, load_s, prediction_horizon, soc_init=soc_init, soc_final=soc_final
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        peak_off = res_off["P_grid_pos"].iloc[:prediction_horizon].max()
+        self.assertGreater(
+            peak_off,
+            4000.0,
+            msg="baseline did not import the full spike; scenario no longer discriminates",
+        )
+        # No peak variable exists when the feature is off (true no-op structure).
+        self.assertNotIn("peak_import", self.opt.vars)
+
+        # Feature ON: a positive capacity cost must lower the import peak.
+        self.optim_conf["capacity_cost_per_kw"] = 2.0
+        self.opt = self.create_optimization()
+        res_on = self.opt.perform_naive_mpc_optim(
+            df, pv, load_s, prediction_horizon, soc_init=soc_init, soc_final=soc_final
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        # DPP preserved (warm-start safe): a non-DPP term would flip this.
+        self.assertTrue(self.opt.prob.is_dpp())
+        self.assertIn("peak_import", self.opt.vars)
+        peak_on = res_on["P_grid_pos"].iloc[:prediction_horizon].max()
+        self.assertLess(
+            peak_on,
+            peak_off - 1000.0,
+            msg="capacity charge did not shave the import peak",
+        )
+
+    def test_capacity_charge_zero_equals_unset(self):
+        """Issue #623: ``capacity_cost_per_kw`` of 0 must produce the identical
+        plan to the parameter being absent, i.e. a provable no-op default.
+        """
+        df = self.prepare_forecast_data()
+        n = len(df)
+        prediction_horizon = 6
+        df["p_pv_forecast"] = 0.0
+        load = np.full(n, 1000.0)
+        load[2] = 5000.0
+        df["p_load_forecast"] = load
+        pv = df["p_pv_forecast"].copy()
+        load_s = df["p_load_forecast"].copy()
+        df["unit_load_cost"] = 0.20
+        df["unit_prod_price"] = 0.20
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_nodischarge_to_grid": True,
+                "weight_battery_discharge": 0.1,
+                "weight_battery_charge": 0.1,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+
+        # Parameter absent entirely.
+        self.optim_conf.pop("capacity_cost_per_kw", None)
+        self.opt = self.create_optimization()
+        res_absent = self.opt.perform_naive_mpc_optim(
+            df, pv, load_s, prediction_horizon, soc_init=0.5, soc_final=0.5
+        )
+        self.assertNotIn("peak_import", self.opt.vars)
+
+        # Parameter present and explicitly 0.
+        self.optim_conf["capacity_cost_per_kw"] = 0.0
+        self.opt = self.create_optimization()
+        res_zero = self.opt.perform_naive_mpc_optim(
+            df, pv, load_s, prediction_horizon, soc_init=0.5, soc_final=0.5
+        )
+        self.assertNotIn("peak_import", self.opt.vars)
+        # Identical plans: the explicit 0 changes nothing vs the absent default.
+        np.testing.assert_allclose(
+            res_zero["P_grid_pos"].to_numpy(),
+            res_absent["P_grid_pos"].to_numpy(),
+            atol=1e-6,
+        )
+
+    def test_capacity_charge_coerces_string_and_rejects_invalid(self):
+        """Issue #623: capacity_cost_per_kw is runtime-overridable and arrives
+        verbatim, so an HA template delivers it as a string. A numeric string
+        must be coerced and applied; a non-numeric or negative value must be
+        ignored (no crash, no peak variable) with a warning.
+        """
+        df = self.prepare_forecast_data()
+        n = len(df)
+        prediction_horizon = 6
+        df["p_pv_forecast"] = 0.0
+        load = np.full(n, 1000.0)
+        load[2] = 5000.0
+        df["p_load_forecast"] = load
+        pv = df["p_pv_forecast"].copy()
+        load_s = df["p_load_forecast"].copy()
+        df["unit_load_cost"] = 0.20
+        df["unit_prod_price"] = 0.20
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "number_of_deferrable_loads": 0,
+                "set_battery_dynamic": False,
+                "set_nodischarge_to_grid": True,
+                "weight_battery_discharge": 0.1,
+                "weight_battery_charge": 0.1,
+            }
+        )
+        self.plant_conf.update(
+            {
+                "battery_nominal_energy_capacity": 10000,
+                "battery_discharge_power_max": 20000,
+                "battery_charge_power_max": 20000,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+            }
+        )
+
+        # A numeric string is coerced and the feature engages.
+        self.optim_conf["capacity_cost_per_kw"] = "2.0"
+        self.opt = self.create_optimization()
+        res_str = self.opt.perform_naive_mpc_optim(
+            df, pv, load_s, prediction_horizon, soc_init=0.5, soc_final=0.5
+        )
+        self.assertIn(self.opt.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertIn("peak_import", self.opt.vars)
+        self.assertIn("P_grid_pos", res_str.columns)
+
+        # A non-numeric value is ignored with a warning and creates no peak var.
+        self.optim_conf["capacity_cost_per_kw"] = "not a number"
+        with self.assertLogs(level="WARNING") as logs:
+            self.opt = self.create_optimization()
+        self.assertNotIn("peak_import", self.opt.vars)
+        self.assertTrue(
+            any("capacity_cost_per_kw" in line for line in logs.output),
+            msg=f"expected an invalid-value warning, got: {logs.output}",
+        )
+
+        # A negative value is ignored too (no peak var, fails safe).
+        self.optim_conf["capacity_cost_per_kw"] = -5.0
+        self.opt = self.create_optimization()
+        self.assertNotIn("peak_import", self.opt.vars)
+
     def test_battery_first_priority_drains_before_import(self):
         """Issue #834: with ``set_battery_first_priority`` the optimizer must
         not import from the grid while the battery is still above its minimum

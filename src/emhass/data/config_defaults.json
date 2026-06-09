@@ -128,5 +128,6 @@
   "battery_soc_deficit_threshold": 0.40,
   "battery_soc_deficit_cost": 0.0,
   "battery_soc_surplus_threshold": 0.90,
-  "battery_soc_surplus_cost": 0.0
+  "battery_soc_surplus_cost": 0.0,
+  "capacity_cost_per_kw": 0.0
 }

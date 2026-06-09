@@ -952,6 +952,13 @@
             "title": "Battery SOC surplus cost",
             "description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC above the surplus threshold per hour. This penalizes periods when the battery SOC sits above the surplus threshold, delaying charging into expected solar peaks and reducing time spent near full charge (battery longevity). Defaults to 0.0 (disabled)."
           },
+          "capacity_cost_per_kw": {
+            "type": "number",
+            "default": 0.0,
+            "title": "Capacity (demand) charge cost",
+            "x-unit": "¤/kW",
+            "description": "A cost (currency per kW) applied to the peak grid import power over the optimisation horizon, for tariffs with a capacity or demand charge. 0 (default) disables it and leaves the plan unchanged. A positive value makes the optimiser flatten the import peak, trading it off against energy cost in a single pass. The peak is priced once (it is a power charge, not energy), so set it to the marginal value of shaving 1 kW of peak. (unit: ¤/kW)"
+          },
           "ignore_pv_feedback_during_curtailment": {
             "type": "boolean",
             "default": false,
