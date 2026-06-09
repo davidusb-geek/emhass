@@ -886,6 +886,34 @@ class Optimization:
             return val.values.tolist()
         return val if isinstance(val, list) else []
 
+    def _get_capacity_cost_per_kw(self):
+        """Capacity / demand charge rate (currency per kW) for issue #623,
+        coerced to a non-negative float.
+
+        ``capacity_cost_per_kw`` is runtime-overridable (see associations.csv),
+        and runtime params are copied verbatim, so an HA template typically
+        delivers it as a string. Coerce defensively and fall back to 0.0 (feature
+        off) on a missing, non-numeric, NaN or negative value rather than letting
+        the ``> 0`` gate crash the problem build.
+        """
+        raw = self.optim_conf.get("capacity_cost_per_kw", 0.0)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            self.logger.warning(
+                f"Invalid capacity_cost_per_kw value ({raw!r}); "
+                "ignoring it (no capacity charge applied)."
+            )
+            return 0.0
+        # value != value catches NaN.
+        if value != value or value < 0:
+            self.logger.warning(
+                f"capacity_cost_per_kw must be a number >= 0, got {raw!r}; "
+                "ignoring it (no capacity charge applied)."
+            )
+            return 0.0
+        return value
+
     def _initialize_decision_variables(self):
         """
         Initialize all main decision variables for the CVXPY problem.
@@ -998,6 +1026,18 @@ class Optimization:
 
         # Curtailment variable
         vars_dict["p_pv_curtailment"] = cp.Variable(n, nonneg=True, name="p_pv_curtailment")
+
+        # Peak grid-import variable for the capacity / demand charge (issue #623).
+        # Opt-in: only created when capacity_cost_per_kw > 0, so when the feature
+        # is off the problem is byte-identical to before (no extra variable, no
+        # constraint, no objective term). peak_import (W) is a single scalar
+        # bounded below by every grid-import timestep, i.e. the epigraph of
+        # max(p_grid_pos) over the horizon; the cost on it is added in
+        # _build_objective_function. The gate is a static config value so it is
+        # part of the OptimizationCache key (a change rebuilds the problem).
+        if self._get_capacity_cost_per_kw() > 0:
+            vars_dict["peak_import"] = cp.Variable(nonneg=True, name="peak_import")
+            constraints.append(vars_dict["peak_import"] >= vars_dict["p_grid_pos"])
 
         # Sum of deferrable loads ON THE ELECTRIC BUS. A load flagged with
         # is_electric_load[k] = False (gas boiler, oil burner, district
@@ -1197,6 +1237,17 @@ class Optimization:
                     f"Adding SOC surplus cost {soc_surplus_cost}  to objective function: "
                 )
                 objective_terms.append(-cp.sum(soc_surplus_cost))
+
+        # Capacity / demand charge (issue #623). A one-time cost on the peak grid
+        # import over the optimisation, priced in currency per kW. The peak_import
+        # variable only exists when capacity_cost_per_kw > 0 (opt-in; default 0 is
+        # a true no-op). This is a peak-POWER charge, so it is NOT scaled by
+        # time_step the way the per-timestep energy terms are; peak_import is in W
+        # and divided by 1000 to price it in kW. Subtracted because the objective
+        # is maximised.
+        capacity_cost_per_kw = self._get_capacity_cost_per_kw()
+        if capacity_cost_per_kw > 0 and "peak_import" in self.vars:
+            objective_terms.append(-capacity_cost_per_kw * (self.vars["peak_import"] / 1000.0))
 
         # Sum all terms to create the final objective expression
         return cp.Maximize(cp.sum(objective_terms))

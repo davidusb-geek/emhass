@@ -744,6 +744,13 @@
         "set_use_battery": true
     }
     },
+    "capacity_cost_per_kw": {
+      "friendly_name": "Capacity (demand) charge cost",
+      "Description": "A cost (currency per kW) applied to the peak grid import power over the optimisation horizon, for tariffs with a capacity or demand charge. 0 (default) disables it and leaves the plan unchanged. A positive value makes the optimiser flatten the import peak, trading it off against energy cost in a single pass. The peak is priced once (it is a power charge, not energy), so set it to the marginal value of shaving 1 kW of peak.",
+      "input": "float",
+      "default_value": 0.0,
+      "unit": "¤/kW"
+    },
     "ignore_pv_feedback_during_curtailment": {
       "friendly_name": "Ignore PV feedback during curtailment",
       "Description": "When set to true, prevents PV forecast from being updated with real PV data, avoiding flip-flop behavior during curtailment operations",
