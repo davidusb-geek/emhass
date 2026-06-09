@@ -18,7 +18,7 @@ from sklearn.ensemble import (
     RandomForestRegressor,
 )
 from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
-from sklearn.metrics import r2_score
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.svm import SVR
@@ -105,6 +105,7 @@ class MLForecaster:
         self.forecaster: ForecasterRecursive | None = None
         self.optimize_results: pd.DataFrame | None = None
         self.optimize_results_object = None
+        self.backtest_metrics_: dict | None = None
 
         # A quick data preparation
         self._prepare_data()
@@ -257,13 +258,17 @@ class MLForecaster:
             as the test period to evaluate the model, defaults to '48h'
         :type split_date_delta: Optional[str], optional
         :param perform_backtest: If `True` then a back testing routine is performed to evaluate \
-            the performance of the model on the complete train set, defaults to False
+            the performance of the model on the complete train set, defaults to False.
+            When True, the ``backtest_metrics_`` attribute is populated with a dict containing
+            MAE, RMSE, R2, and MAPE computed over the out-of-sample backtest folds.
         :type perform_backtest: Optional[bool], optional
         :return: The DataFrame containing the forecast data results without and with backtest
         :rtype: Tuple[pd.DataFrame, pd.DataFrame]
         """
         try:
             self.logger.info("Performing a forecast model fit for " + self.model_type)
+            # Reset metrics so a reused instance never exposes stale results from a previous fit.
+            self.backtest_metrics_ = None
 
             # Check if variable exists in data
             if self.var_model not in self.data.columns:
@@ -382,6 +387,69 @@ class MLForecaster:
 
                 # Use loc to align indices properly - only assign where indices match
                 df_pred_backtest.loc[pred_values.index, "pred"] = pred_values
+
+                # Compute goodness-of-fit metrics over the backtest fold predictions.
+                # Only rows where the backtest produced a prediction are used; the leading
+                # rows (the initial warm-up window) remain NaN and are excluded.
+                actual_values = df_pred_backtest["train"].astype(float)
+                predicted_values = df_pred_backtest["pred"].astype(float)
+                valid_mask = predicted_values.notna() & actual_values.notna()
+                n_valid_samples = int(valid_mask.sum())
+                actual_valid = actual_values[valid_mask]
+                predicted_valid = predicted_values[valid_mask]
+
+                # Guard against degenerate cases (all-NaN predictions or single sample).
+                # r2_score requires at least 2 samples; MAE/RMSE require at least 1.
+                if n_valid_samples == 0:
+                    self.backtest_metrics_ = {
+                        "mae": float("nan"),
+                        "rmse": float("nan"),
+                        "r2": float("nan"),
+                        "mape": float("nan"),
+                        "n_samples": 0,
+                    }
+                    self.logger.warning(
+                        "Backtest produced no valid predictions — metrics set to NaN"
+                    )
+                else:
+                    backtest_mae = float(mean_absolute_error(actual_valid, predicted_valid))
+                    backtest_rmse = float(
+                        np.sqrt(mean_squared_error(actual_valid, predicted_valid))
+                    )
+                    # r2_score is undefined for a single sample (variance == 0)
+                    backtest_r2_full = (
+                        float(r2_score(actual_valid, predicted_valid))
+                        if n_valid_samples > 1
+                        else float("nan")
+                    )
+                    # MAPE: exclude zero actuals to avoid division by zero
+                    nonzero_mask = actual_valid != 0
+                    if nonzero_mask.sum() > 0:
+                        backtest_mape = float(
+                            np.mean(
+                                np.abs(
+                                    (actual_valid[nonzero_mask] - predicted_valid[nonzero_mask])
+                                    / actual_valid[nonzero_mask]
+                                )
+                            )
+                            * 100
+                        )
+                    else:
+                        backtest_mape = float("nan")
+
+                    self.backtest_metrics_ = {
+                        "mae": backtest_mae,
+                        "rmse": backtest_rmse,
+                        "r2": backtest_r2_full,
+                        "mape": backtest_mape,
+                        "n_samples": n_valid_samples,
+                    }
+                    self.logger.info(
+                        f"Backtest metrics — MAE: {backtest_mae:.4f}, "
+                        f"RMSE: {backtest_rmse:.4f}, "
+                        f"R2: {backtest_r2_full:.4f}, "
+                        f"MAPE: {backtest_mape:.2f}%"
+                    )
 
             return df_pred, df_pred_backtest
 
