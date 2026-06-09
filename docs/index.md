@@ -117,6 +117,8 @@ EMHASS is a Python module designed to optimize your home energy interfacing with
 [🚀 Quick Start](quick_start) · [⚙️ Configuration](section_config) · [💻 API Reference](section_reference)
 
 [🗣️ Community](https://community.home-assistant.io/t/emhass-an-energy-management-for-home-assistant/338126) · [🛠️ Issues](https://github.com/davidusb-geek/emhass/issues) · [🧩 Home Assistant Add-on](https://github.com/davidusb-geek/emhass-add-on)
+
+[📁 Study cases](study_cases/index) · [🧑‍🍳 Cookbook](cookbook/index)
 :::
 
 <br>
@@ -237,8 +239,6 @@ section_getting_started
 section_config
 section_core
 section_thermal
-study_cases/index
-cookbook/index
 section_reference
 
 ```

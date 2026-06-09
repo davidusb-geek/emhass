@@ -1,4 +1,4 @@
-# Cookbook
+# 🧑‍🍳 Cookbook
 
 Short, standalone, copy-pasteable recipes for common EMHASS patterns. Each recipe follows a fixed template: Goal / Prerequisites / Config / Snippet / Caveats / Credits.
 
