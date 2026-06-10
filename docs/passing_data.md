@@ -99,6 +99,8 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `publish_prefix` use this key to pass a common prefix to all published data. This will add a prefix to the sensor name but also the forecast attribute keys within the sensor.
 
+- `current_period_peak` the peak grid import (in Watts) already incurred during the current billing period. Only used by `naive-mpc-optim`, and only when a capacity/demand charge (`capacity_cost_per_kw`) is configured. See the dedicated section below.
+
 ### Requiring an intermediate battery SOC target (naive-mpc-optim)
 
 By default the battery SOC is only pinned at the start (`soc_init`) and end (`soc_final`) of the horizon, leaving the optimizer free to choose the trajectory in between. Sometimes you want to *guarantee* the battery reaches a given charge level **partway through** the horizon — for example, "make sure the battery is full by the time the cheap window ends, even though it's fine to discharge it afterwards". This is the request in [issue #553](https://github.com/davidusb-geek/emhass/issues/553).
@@ -140,6 +142,46 @@ rest_command:
 
 ```{warning}
 The target must be *reachable* by its timestep. If the requested SOC cannot be achieved in time given `soc_init`, `battery_charge_power_max` and the optimization time step, EMHASS logs a warning and the LP is likely to be **infeasible** (the target is a hard constraint, so it is not silently relaxed). Size `soc_target` / `soc_target_timestep` to what your charge power actually allows (e.g. don't ask for +0.7 SOC in 3 steps if a full charge takes 10). Note too that with the default `set_nodischarge_to_grid: true` a high target can be infeasible if local load is too low to shed the stored energy back down to `soc_final`. `soc_target_timestep` is clamped to `[0, prediction_horizon - 1]`.
+```
+
+### Capping the demand charge at the peak already incurred (naive-mpc-optim)
+
+EMHASS can model a capacity / demand charge via the configuration parameter `capacity_cost_per_kw` (issue [#623](https://github.com/davidusb-geek/emhass/issues/623)): a cost on the single highest grid-import power over the optimization horizon, which pushes the optimizer to flatten import peaks.
+
+In a real tariff the demand charge is assessed over the whole **billing period** (e.g. a month), not just the optimization horizon. Once you have already hit, say, 7 kW earlier in the month, there is no point spending battery energy now to keep this horizon's peak below 7 kW: that peak is already "locked in" and will be billed regardless. The optional runtime key `current_period_peak` tells EMHASS what that already-incurred peak is, so it only shaves the part of a new peak that is actually above it.
+
+- `current_period_peak`: the peak grid import already reached this billing period, in **Watts** (not kW). Only effective when `capacity_cost_per_kw > 0`; ignored otherwise. The planned import peak is floored at this value, so the optimizer will not waste battery or deferrable flexibility trying to push the peak below a level already incurred.
+
+It defaults to *unset* (`None`, equivalent to 0), in which case the full horizon peak is priced, identical to behaviour without this key. It is a one-sided floor (`peak_import >= current_period_peak`), so it never forces additional import and never makes the problem infeasible.
+
+For example, with a capacity charge configured and 7 kW already incurred this month:
+
+```json
+{
+  "prediction_horizon": 48,
+  "soc_init": 0.30,
+  "current_period_peak": 7000
+}
+```
+
+As an HA `rest_command`, reading a kW sensor that tracks the monthly peak and converting to Watts:
+
+```yaml
+rest_command:
+  naive_mpc_optim:
+    url: http://localhost:5000/action/naive-mpc-optim
+    method: post
+    content_type: application/json
+    payload: >
+      {
+        "prediction_horizon": 48,
+        "soc_init": {{ states('sensor.battery_soc') | float / 100 }},
+        "current_period_peak": {{ states('sensor.monthly_peak_grid_import_kw') | float(0) * 1000 }}
+      }
+```
+
+```{warning}
+`current_period_peak` is in **Watts**, not kilowatts: pass `7000`, not `7`, for a 7 kW peak (if your sensor is in kW, multiply by 1000 as shown above). It only has an effect when `capacity_cost_per_kw` is set above 0; on its own it does nothing. It is a floor, not a target: it never raises import or forces a new peak, it only stops the optimizer chasing a peak it cannot reduce. A negative, non-finite (NaN or infinity) or non-numeric value is ignored (treated as 0). Reset it at the start of each billing period (e.g. via a utility-meter cycle) so a stale high value does not suppress legitimate peak shaving in the new period.
 ```
 
 ### Passing forecast data

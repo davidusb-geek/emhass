@@ -1584,6 +1584,12 @@ async def treat_runtimeparams(
             params["passed_data"]["soc_target_timestep"] = runtimeparams.get(
                 "soc_target_timestep", None
             )
+            # Peak grid import already incurred this billing period (issue #623,
+            # Phase 2). Runtime-only, in Watts; defaults to None (no floor).
+            # Coercion/validation happens in Optimization.perform_optimization.
+            params["passed_data"]["current_period_peak"] = runtimeparams.get(
+                "current_period_peak", None
+            )
             if "operating_timesteps_of_each_deferrable_load" in runtimeparams.keys():
                 params["passed_data"]["operating_timesteps_of_each_deferrable_load"] = (
                     runtimeparams["operating_timesteps_of_each_deferrable_load"]
@@ -1617,6 +1623,7 @@ async def treat_runtimeparams(
             params["passed_data"]["soc_target_timestep"] = (
                 int(runtimeparams["soc_target_timestep"]) if "soc_target_timestep" in runtimeparams else None
             )
+            params["passed_data"]["current_period_peak"] = None
 
 
         # Parsing the thermal model parameters
@@ -3043,6 +3050,7 @@ async def build_params(
         "soc_final": None,
         "soc_target": None,
         "soc_target_timestep": None,
+        "current_period_peak": None,
         "operating_hours_of_each_deferrable_load": None,
         "start_timesteps_of_each_deferrable_load": None,
         "end_timesteps_of_each_deferrable_load": None,

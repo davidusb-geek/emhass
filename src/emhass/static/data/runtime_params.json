@@ -35,6 +35,13 @@
       "default_value": null,
       "unit": "timesteps"
     },
+    "current_period_peak": {
+      "friendly_name": "Current billing-period peak grid import",
+      "Description": "Optional peak grid import already incurred during the current billing period, in Watts, used to floor the demand/capacity charge so the optimisation does not chase a new peak below one already locked in this period. Only the import above this value is worth shaving. Only effective when capacity_cost_per_kw > 0; ignored otherwise. Defaults to no floor (None -> 0.0) so behaviour is unchanged when omitted (the full horizon peak is priced, identical to Phase 1). A negative, non-finite (NaN/inf) or non-numeric value is ignored with a warning. Only used by naive-mpc-optim. See issue #623 and passing_data.md.",
+      "input": "float",
+      "default_value": null,
+      "unit": "W"
+    },
     "operating_timesteps_of_each_deferrable_load": {
       "friendly_name": "Operating timesteps of each deferrable load",
       "Description": "Per-deferrable-load total number of operating timesteps over the horizon (the timestep-based alternative to operating_hours_of_each_deferrable_load, preferred for sub-hour steps). One int per deferrable load. Only used by naive-mpc-optim. See passing_data.md.",

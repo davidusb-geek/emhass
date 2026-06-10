@@ -4,7 +4,7 @@ import logging
 import os
 import pickle
 import time
-from math import ceil
+from math import ceil, isfinite
 
 import cvxpy as cp
 import numpy as np
@@ -210,6 +210,9 @@ class Optimization:
         # Optional intermediate SOC target parameters (issue #553)
         self._init_soc_target_params()
 
+        # Peak grid import already incurred this billing period (issue #623, Phase 2)
+        self._init_current_period_peak_param()
+
         # Initialize deferrable load parameters (window masks and energy constraints)
         self._init_deferrable_load_params()
 
@@ -248,6 +251,30 @@ class Optimization:
             self.num_timesteps, nonneg=True, name="soc_target_floor"
         )
         self.param_soc_target_floor.value = np.zeros(self.num_timesteps)
+
+    def _init_current_period_peak_param(self) -> None:
+        """Initialize the CVXPY parameter for the peak grid import already
+        incurred this billing period (issue #623, Phase 2).
+
+        ``param_current_period_peak`` is a single scalar in WATTS (matching
+        p_grid_pos / peak_import) used to raise the floor of the ``peak_import``
+        epigraph variable so the demand / capacity charge accounts for a peak
+        already locked in for the period: once the floor binds, shaving below it
+        has zero marginal value, so the solver does not waste battery or
+        deferrable flexibility on a peak it cannot reduce.
+
+        Like ``param_soc_target_floor`` it is a ``cp.Parameter`` so its value is
+        set per call without forcing a problem rebuild (DPP / warm-start safe).
+        Default 0.0 makes the added constraint ``peak_import >= 0`` redundant
+        with the variable's own non-negativity and the existing
+        ``peak_import >= p_grid_pos`` epigraph, so behaviour is identical to
+        Phase 1 unless a value is explicitly passed. Being a scalar (not
+        horizon-dependent) it does NOT need re-creation when the horizon
+        resizes, so unlike ``_init_soc_target_params`` it is created in
+        __init__ only.
+        """
+        self.param_current_period_peak = cp.Parameter(nonneg=True, name="current_period_peak")
+        self.param_current_period_peak.value = 0.0
 
     def _init_deferrable_load_params(self) -> None:
         """
@@ -886,6 +913,36 @@ class Optimization:
             return val.values.tolist()
         return val if isinstance(val, list) else []
 
+    def _get_capacity_cost_per_kw(self):
+        """Capacity / demand charge rate (currency per kW) for issue #623,
+        coerced to a non-negative float.
+
+        ``capacity_cost_per_kw`` is runtime-overridable (see associations.csv),
+        and runtime params are copied verbatim, so an HA template typically
+        delivers it as a string. Coerce defensively and fall back to 0.0 (feature
+        off) on a missing, non-numeric, non-finite or negative value rather than letting
+        the ``> 0`` gate crash the problem build.
+        """
+        raw = self.optim_conf.get("capacity_cost_per_kw", 0.0)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            self.logger.warning(
+                f"Invalid capacity_cost_per_kw value ({raw!r}); "
+                "ignoring it (no capacity charge applied)."
+            )
+            return 0.0
+        # not isfinite(...) catches NaN and +/-inf; the second clause catches
+        # negatives. An HA template can deliver any of these (incl. the string
+        # "inf"), and cvxpy rejects a non-finite value, so fall back to 0.0.
+        if not isfinite(value) or value < 0:
+            self.logger.warning(
+                f"capacity_cost_per_kw must be a finite number >= 0, got {raw!r}; "
+                "ignoring it (no capacity charge applied)."
+            )
+            return 0.0
+        return value
+
     def _initialize_decision_variables(self):
         """
         Initialize all main decision variables for the CVXPY problem.
@@ -998,6 +1055,27 @@ class Optimization:
 
         # Curtailment variable
         vars_dict["p_pv_curtailment"] = cp.Variable(n, nonneg=True, name="p_pv_curtailment")
+
+        # Peak grid-import variable for the capacity / demand charge (issue #623).
+        # Opt-in: only created when capacity_cost_per_kw > 0, so when the feature
+        # is off the problem is byte-identical to before (no extra variable, no
+        # constraint, no objective term). peak_import (W) is a single scalar
+        # bounded below by every grid-import timestep, i.e. the epigraph of
+        # max(p_grid_pos) over the horizon; the cost on it is added in
+        # _build_objective_function. The gate is a static config value so it is
+        # part of the OptimizationCache key (a change rebuilds the problem).
+        if self._get_capacity_cost_per_kw() > 0:
+            vars_dict["peak_import"] = cp.Variable(nonneg=True, name="peak_import")
+            constraints.append(vars_dict["peak_import"] >= vars_dict["p_grid_pos"])
+            # Floor peak_import at any demand already incurred this billing period
+            # (issue #623, Phase 2). With the floor binding, shaving below it has
+            # zero marginal value, so the solver does not waste battery /
+            # deferrable flexibility on a peak already locked in for the month.
+            # The value is a cp.Parameter (W, default 0.0) so it is updated per
+            # call without a rebuild (DPP / warm-start safe); default 0.0 makes
+            # this redundant with the nonneg bound and the epigraph above, so the
+            # plan is identical to Phase 1.
+            constraints.append(vars_dict["peak_import"] >= self.param_current_period_peak)
 
         # Sum of deferrable loads ON THE ELECTRIC BUS. A load flagged with
         # is_electric_load[k] = False (gas boiler, oil burner, district
@@ -1197,6 +1275,17 @@ class Optimization:
                     f"Adding SOC surplus cost {soc_surplus_cost}  to objective function: "
                 )
                 objective_terms.append(-cp.sum(soc_surplus_cost))
+
+        # Capacity / demand charge (issue #623). A one-time cost on the peak grid
+        # import over the optimisation, priced in currency per kW. The peak_import
+        # variable only exists when capacity_cost_per_kw > 0 (opt-in; default 0 is
+        # a true no-op). This is a peak-POWER charge, so it is NOT scaled by
+        # time_step the way the per-timestep energy terms are; peak_import is in W
+        # and divided by 1000 to price it in kW. Subtracted because the objective
+        # is maximised.
+        capacity_cost_per_kw = self._get_capacity_cost_per_kw()
+        if capacity_cost_per_kw > 0 and "peak_import" in self.vars:
+            objective_terms.append(-capacity_cost_per_kw * (self.vars["peak_import"] / 1000.0))
 
         # Sum all terms to create the final objective expression
         return cp.Maximize(cp.sum(objective_terms))
@@ -3015,6 +3104,7 @@ class Optimization:
         soc_final: float | None = None,
         soc_target: float | None = None,
         soc_target_timestep: int | None = None,
+        current_period_peak: float | None = None,
         def_total_hours: list | None = None,
         def_total_timestep: list | None = None,
         def_start_timestep: list | None = None,
@@ -3059,6 +3149,12 @@ class Optimization:
 
             # Re-initialize the intermediate SOC target mask with the new horizon (#553)
             self._init_soc_target_params()
+
+            # NOTE: param_current_period_peak (issue #623, Phase 2) is a SCALAR
+            # cp.Parameter, horizon-independent, so it is intentionally NOT
+            # re-created on resize (unlike the soc_target vector floor above).
+            # _initialize_decision_variables (re-called below) re-appends its
+            # floor constraint against the same persistent scalar parameter.
 
             # Re-initialize deferrable load parameters (window masks and energy constraints)
             self._init_deferrable_load_params()
@@ -3136,6 +3232,40 @@ class Optimization:
             )
         else:
             self.param_soc_target_floor.value = np.zeros(self.num_timesteps)
+
+        # Peak grid import already incurred this billing period (issue #623,
+        # Phase 2). Reset on EVERY call so a value from a previous MPC tick does
+        # not leak. Only meaningful when the capacity charge is active (the
+        # peak_import variable and its floor constraint exist only then); when
+        # the charge is off this just resets the unused parameter. The value is
+        # in WATTS to match p_grid_pos / peak_import, so no scaling is needed. A
+        # non-numeric, non-finite (NaN/inf) or negative runtime value falls back to 0.0 (prices
+        # the full horizon peak == Phase 1) with a warning rather than crashing.
+        if self._get_capacity_cost_per_kw() > 0 and current_period_peak is not None:
+            try:
+                peak_floor_w = float(current_period_peak)
+            except (TypeError, ValueError):
+                self.logger.warning(
+                    f"Invalid current_period_peak value ({current_period_peak!r}); "
+                    "ignoring it (no incurred-peak floor applied)."
+                )
+                peak_floor_w = 0.0
+            # not isfinite(...) catches NaN and +/-inf; the second clause catches
+            # negatives. cp.Parameter(nonneg=True) rejects inf, so guard it here.
+            if not isfinite(peak_floor_w) or peak_floor_w < 0:
+                self.logger.warning(
+                    f"current_period_peak must be a finite number >= 0 (Watts), got "
+                    f"{current_period_peak!r}; ignoring it (no incurred-peak floor applied)."
+                )
+                peak_floor_w = 0.0
+            self.param_current_period_peak.value = peak_floor_w
+            if peak_floor_w > 0:
+                self.logger.debug(
+                    f"Capacity charge: flooring peak_import at already-incurred "
+                    f"current_period_peak = {peak_floor_w} W."
+                )
+        else:
+            self.param_current_period_peak.value = 0.0
 
         # Pad deferrable load lists
         if def_total_timestep is not None:
@@ -3915,6 +4045,7 @@ class Optimization:
         soc_final: float | None = None,
         soc_target: float | None = None,
         soc_target_timestep: int | None = None,
+        current_period_peak: float | None = None,
         def_total_hours: list | None = None,
         def_total_timestep: list | None = None,
         def_start_timestep: list | None = None,
@@ -3954,6 +4085,15 @@ class Optimization:
             timestep when ``soc_target`` is given but this is ``None``. Ignored when \
             ``soc_target`` is ``None``.
         :type soc_target_timestep: int
+        :param current_period_peak: Optional peak grid import (in Watts) already \
+            incurred during the current billing period. When the capacity charge \
+            (``capacity_cost_per_kw`` > 0) is active, the planned import peak is \
+            floored at this value so the optimization does not spend battery or \
+            deferrable flexibility shaving below a peak already locked in for the \
+            month. ``None`` / 0 (the default) prices the full horizon peak, \
+            identical to omitting it. Ignored when ``capacity_cost_per_kw`` is 0. \
+            Runtime-only; only used by naive-mpc-optim. See issue #623.
+        :type current_period_peak: float
         :param def_total_timestep: The functioning timesteps for this iteration for each deferrable load. \
             (For continuous deferrable loads: functioning timesteps at nominal power)
         :type def_total_timestep: list
@@ -4005,6 +4145,7 @@ class Optimization:
             soc_final=soc_final,
             soc_target=soc_target,
             soc_target_timestep=soc_target_timestep,
+            current_period_peak=current_period_peak,
             def_total_hours=def_total_hours,
             def_total_timestep=def_total_timestep,
             def_start_timestep=def_start_timestep,
