@@ -7,7 +7,6 @@ import pandas as pd
 
 from emhass.optimization import Optimization
 
-
 TEST_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
