@@ -1618,13 +1618,14 @@ async def treat_runtimeparams(
                 float(runtimeparams["soc_final"]) if "soc_final" in runtimeparams else None
             )
             params["passed_data"]["soc_target"] = (
-              float(runtimeparams["soc_target"]) if "soc_target" in runtimeparams else None
+                float(runtimeparams["soc_target"]) if "soc_target" in runtimeparams else None
             )
             params["passed_data"]["soc_target_timestep"] = (
-                int(runtimeparams["soc_target_timestep"]) if "soc_target_timestep" in runtimeparams else None
+                int(runtimeparams["soc_target_timestep"])
+                if "soc_target_timestep" in runtimeparams
+                else None
             )
             params["passed_data"]["current_period_peak"] = None
-
 
         # Parsing the thermal model parameters
         # Load the default config
