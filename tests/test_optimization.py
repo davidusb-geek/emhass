@@ -5650,6 +5650,122 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[2], 0.50)
         self.assertGreaterEqual(opt_res_with_cost["SOC_opt"].iloc[3], 0.50)
 
+    def test_battery_soc_surplus_cost(self):
+        """Test that the battery SOC surplus cost discourages the
+        battery from dwelling above a high SOC threshold unless the
+        price difference is sufficient. Mirror of the SOC deficit
+        cost test."""
+
+        # Same small 2 kWh battery as the deficit test.
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": False,
+                "compute_curtailment": False,
+                "battery_nominal_energy_capacity": 2000,  # 2kWh
+                "battery_discharge_power_max": 1000,  # 1kW
+                "battery_charge_power_max": 1000,  # 1kW
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+                "battery_target_state_of_charge": 1.0,
+            }
+        )
+
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "set_nocharge_from_grid": False,  # Allow grid charging
+                "set_nodischarge_to_grid": False,  # Allow grid selling
+                "operating_hours_of_each_deferrable_load": [0, 0],
+                "load_cost_forecast_method": "csv",
+                "production_price_forecast_method": "csv",
+                "battery_soc_surplus_threshold": 0.5,
+            }
+        )
+
+        # 4 periods of 30 minutes. Buy is cheap throughout and the
+        # sell price is high in the last two periods, so the cheapest
+        # plan (absent any surplus cost) is to charge up early (SOC
+        # well above the 0.5 threshold) and sell it back later. The
+        # surplus cost should make that high-SOC dwell unattractive.
+        periods = 4
+        dates = pd.date_range(
+            start=pd.Timestamp.now(tz=self.retrieve_hass_conf["time_zone"]),
+            periods=periods,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df_input = pd.DataFrame(index=dates)
+        df_input["p_pv_forecast"] = 0.0
+        df_input["p_load_forecast"] = 0.0
+        df_input[self.fcst.var_prod_price] = [0.05, 0.05, 0.30, 0.30]
+        df_input[self.fcst.var_load_cost] = [0.1, 0.1, 0.1, 0.1]
+
+        # --- Run 1: No Surplus Cost ---
+        self.optim_conf["battery_soc_surplus_cost"] = 0.0
+        self.opt_no_cost = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        opt_res_no_cost = self.opt_no_cost.perform_optimization(
+            df_input,
+            df_input["p_pv_forecast"].values,
+            df_input["p_load_forecast"].values,
+            df_input[self.opt_no_cost.var_load_cost].values,
+            df_input[self.opt_no_cost.var_prod_price].values,
+            soc_init=0.5,
+            soc_final=0.5,
+        )
+
+        # --- Run 2: With Surplus Cost of 1.0 per kWh per h ---
+        self.optim_conf["battery_soc_surplus_cost"] = 1.0
+        self.opt_with_cost = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            self.costfun,
+            emhass_conf,
+            logger,
+        )
+
+        opt_res_with_cost = self.opt_with_cost.perform_optimization(
+            df_input,
+            df_input["p_pv_forecast"].values,
+            df_input["p_load_forecast"].values,
+            df_input[self.opt_with_cost.var_load_cost].values,
+            df_input[self.opt_with_cost.var_prod_price].values,
+            soc_init=0.5,
+            soc_final=0.5,
+        )
+
+        # Both optimizations must solve.
+        self.assertEqual(self.opt_no_cost.optim_status, "Optimal")
+        self.assertEqual(self.opt_with_cost.optim_status, "Optimal")
+
+        # Result column exists in both runs.
+        self.assertIn("soc_surplus_cost", opt_res_with_cost.columns)
+        self.assertIn("soc_surplus_cost", opt_res_no_cost.columns)
+
+        # Discriminating power: without the surplus cost the optimizer
+        # DOES dwell above the threshold to exploit the price spread.
+        self.assertGreater(opt_res_no_cost["SOC_opt"].max(), 0.5)
+
+        # With a large surplus cost it never dwells above the threshold.
+        self.assertLessEqual(opt_res_with_cost["SOC_opt"].max(), 0.5 + 1e-6)
+
+        # And the reported surplus penalty stays at zero in that case.
+        for i in range(periods):
+            self.assertAlmostEqual(opt_res_with_cost["soc_surplus_cost"].iloc[i], 0.0, places=6)
+
     def test_load_max_cost(self):
         """Test that a nonzero max cost for a load prevents the load
         from being scheduled unless it can be done for less than the
