@@ -940,6 +940,18 @@
             "title": "Battery SOC deficit cost",
             "description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC deficit per hour. This penalizes periods when the battery SOC falls below the deficit threshold."
           },
+          "battery_soc_surplus_threshold": {
+            "type": "number",
+            "default": 0.9,
+            "title": "Battery SOC surplus threshold",
+            "description": "The SOC threshold above which surplus penalties apply. For example, 0.90 for 90% SOC. Penalties are applied for every hour and every kWh the SOC is above this value. Use together with battery_soc_surplus_cost to discourage long dwell near full charge."
+          },
+          "battery_soc_surplus_cost": {
+            "type": "number",
+            "default": 0.0,
+            "title": "Battery SOC surplus cost",
+            "description": "A virtual cost (Currency/kWh/h) applied for each kWh of SOC above the surplus threshold per hour. This penalizes periods when the battery SOC sits above the surplus threshold, delaying charging into expected solar peaks and reducing time spent near full charge (battery longevity). Defaults to 0.0 (disabled)."
+          },
           "ignore_pv_feedback_during_curtailment": {
             "type": "boolean",
             "default": false,
