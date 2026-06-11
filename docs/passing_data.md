@@ -253,6 +253,27 @@ Then on the EMHASS configuration you need to set:
 Finally, if using the Add-on, you need to fill both "influxdb_password" and "influxdb_username" in the Add-on **Configuration** pane.
 If using the Docker standalone or legacy installation method, then you need to set these in the `secrets_emhass.yaml` file.
 
+### Arithmetic expressions in the sensor list
+
+When using InfluxDB, the entity id you would normally give to a sensor list parameter (such as `sensor_power_photovoltaics` or `sensor_power_load_no_var_loads`) can instead be an arithmetic expression that combines several InfluxDB time series. Wrap the expression in `{{ ... }}` and quote each entity id:
+
+```text
+{{'sensor.power_a' - 'sensor.power_b' * 1000}}
+```
+
+Each quoted entity is queried separately and the operation is applied element-wise on the values returned for the matching timestamps. The supported operators are `+`, `-`, `*`, `/`, `**`, `%`, unary `+`/`-` and numeric constants. Anything else (function calls, attribute access, comparisons, names that are not quoted entities, ...) is rejected, so an expression cannot run arbitrary code. An entity referenced more than once within expressions is only queried once. This is useful when the quantity EMHASS needs is not stored as a single sensor, for example a net power that is the difference of two meters, or a unit conversion.
+
+```{note}
+
+A few caveats apply because of how InfluxDB 1.x aggregates data:
+
+- Each series is bucketed with `GROUP BY time() FILL(previous)`, so every entity in an expression lands on the same time grid and the arithmetic stays aligned. For the leading buckets of the requested window, EMHASS queries each entity slightly earlier (by one day) so the first values can be forward-filled from the most recent prior reading; a sensor whose previous reading is older than that still starts with a short gap, which the downstream regression absorbs.
+- If a referenced sensor updates less often than once per day, that one-day lookback may not reach its previous reading and the expression starts with leading `NaN`. If that affects your setup, add the expression to `sensor_replace_zero` or `sensor_linear_interp` so the gap is filled before the optimization.
+- An entity used both as a plain sensor and inside an expression is queried twice (the plain entry over the requested window, the expression entity over the padded window), so its plain column and its value inside an expression can differ at the leading buckets.
+- InfluxDB 1.x cannot time-weight inside `GROUP BY`, so a source that updates more slowly than the optimization time step simply repeats its last value within each bucket. Keep this in mind when combining series that report at very different rates.
+- If any entity referenced by an expression returns no data, the whole InfluxDB retrieval fails (a plain sensor that returns no data is still skipped, as before).
+```
+
 
 ## Passing in secret parameters
 Secret parameters are passed differently, depending on which method you choose. Alternative options are also present for passing secrets, if you are running EMHASS separately from Home Assistant. _(I.e. not via EMHASS-Add-on)_ 
