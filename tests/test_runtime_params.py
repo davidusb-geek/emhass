@@ -64,6 +64,8 @@ EXPECTED_KEYS = {
     "def_current_power",
     "def_current_operating_timesteps",
     "def_load_config",
+    "shared_thermal_tanks",
+    "shared_tank_start_temperatures",
 }
 
 

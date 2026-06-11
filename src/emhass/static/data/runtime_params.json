@@ -149,6 +149,24 @@
         "description": "Thermal load / thermal-battery configuration schema",
         "url": "docs/thermal_battery.md"
       }
+    },
+    "shared_thermal_tanks": {
+      "friendly_name": "Shared thermal tanks",
+      "Description": "Runtime list of shared thermal storage tanks (multi-source storage): the manual flat alternative to heat_topology (issue #539). Each tank object carries id, load_ids, volume, start_temperature, min/max_temperatures, and demand fields - the same schema the heat_topology compiler emits. Ignored with a warning if not a list of objects. When heat_topology is also set, the compiled topology replaces this list: pass heat_topology itself at runtime instead.",
+      "input": "object",
+      "default_value": null,
+      "unit": "none",
+      "externalDocs": {
+        "description": "Shared-tank storage schema (heat_topology reference)",
+        "url": "docs/heat_topology.md"
+      }
+    },
+    "shared_tank_start_temperatures": {
+      "friendly_name": "Shared tank start temperatures",
+      "Description": "Per-tank start-temperature override keyed by tank id, e.g. {\"dhw\": 48.5}. Applied after the heat_topology compile, so it patches manual and compiled tanks alike - the per-run analog of soc_init / heater_start_temperatures for MPC loops feeding a live tank sensor. Unknown tank ids and non-numeric values are ignored with a warning.",
+      "input": "object",
+      "default_value": null,
+      "unit": "°C"
     }
   }
 }

@@ -2113,6 +2113,27 @@ async def treat_runtimeparams(
                             "start_temperature"
                         ] = runtimeparams["heater_start_temperatures"][k]
 
+        # Shared thermal tanks (multi-source storage) passed at runtime: the
+        # manual flat alternative to heat_topology (issue #539). Same surface
+        # as def_load_config above - runtime-only, no config-file counterpart.
+        if "shared_thermal_tanks" in runtimeparams:
+            tanks = runtimeparams["shared_thermal_tanks"]
+            if isinstance(tanks, list) and all(isinstance(t, dict) for t in tanks):
+                params["optim_conf"]["shared_thermal_tanks"] = tanks
+                topology = params["optim_conf"].get("heat_topology")
+                if isinstance(topology, dict) and topology:
+                    logger.warning(
+                        "Both heat_topology and runtime shared_thermal_tanks are "
+                        "set; the compiled topology replaces the runtime tank "
+                        "list. Pass heat_topology itself at runtime to change "
+                        "tanks per run."
+                    )
+            else:
+                logger.warning(
+                    "shared_thermal_tanks must be a list of tank objects, got %s; ignoring.",
+                    type(tanks).__name__,
+                )
+
         # Treat passed forecast data lists. When an external P10
         # companion is supplied, P50/P10 are validated and aligned together below
         # so they cannot silently drift onto different timelines.
@@ -2635,6 +2656,42 @@ async def treat_runtimeparams(
             heat_topology,
         )
 
+    # Per-tank start-temperature override (issue #539), keyed by tank id.
+    # Applied AFTER the heat_topology compile so it patches manual and
+    # compiled tanks alike - the per-run analog of soc_init and
+    # heater_start_temperatures for MPC loops feeding live sensor readings.
+    if runtimeparams and "shared_tank_start_temperatures" in runtimeparams:
+        overrides = runtimeparams["shared_tank_start_temperatures"]
+        if not isinstance(overrides, dict):
+            logger.warning(
+                "shared_tank_start_temperatures must be an object mapping tank "
+                "id to a temperature, got %s; ignoring.",
+                type(overrides).__name__,
+            )
+        else:
+            tanks = optim_conf.get("shared_thermal_tanks") or []
+            tank_ids = {t.get("id") for t in tanks if isinstance(t, dict)}
+            for tank_id, temp in overrides.items():
+                if tank_id not in tank_ids:
+                    logger.warning(
+                        "shared_tank_start_temperatures: unknown tank id '%s' "
+                        "(known ids: %s); ignoring.",
+                        tank_id,
+                        sorted(i for i in tank_ids if i is not None),
+                    )
+                    continue
+                try:
+                    temp_value = float(temp)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "shared_tank_start_temperatures['%s']=%r is not numeric; ignoring.",
+                        tank_id,
+                        temp,
+                    )
+                    continue
+                for tank in tanks:
+                    if isinstance(tank, dict) and tank.get("id") == tank_id:
+                        tank["start_temperature"] = temp_value
     # Re-normalise per-load deferrable array params against the FINAL
     # number_of_deferrable_loads (#1040). This has to run last: the
     # association loop above, the def_load_config handling, and the

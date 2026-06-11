@@ -1565,6 +1565,117 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(optim_conf_out["number_of_deferrable_loads"], 1)
         self.assertEqual(len(optim_conf_out["def_load_config"]), 1)
 
+    @staticmethod
+    async def _run_treat_runtimeparams(runtimeparams_dict, set_type="naive-mpc-optim"):
+        """Helper: run treat_runtimeparams with default params and the given
+        runtime dict; return the resulting optim_conf."""
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        runtimeparams_json = orjson.dumps(runtimeparams_dict).decode("utf-8")
+        _, _, optim_conf_out, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            set_type,
+            logger,
+            emhass_conf,
+        )
+        return optim_conf_out
+
+    @staticmethod
+    def _manual_tank(start_temperature=50.0):
+        return {
+            "id": "dhw",
+            "load_ids": [0, 1],
+            "volume": 0.2,
+            "start_temperature": start_temperature,
+            "min_temperatures": [45.0] * 48,
+            "max_temperatures": [65.0] * 48,
+        }
+
+    async def test_treat_runtimeparams_shared_thermal_tanks_runtime(self):
+        """shared_thermal_tanks passed at runtime lands in optim_conf: the
+        manual flat alternative to heat_topology (issue #539), so tanks can be
+        combined with arbitrary other deferrable loads and refreshed per run."""
+        out = await self._run_treat_runtimeparams(
+            {
+                "def_load_config": [
+                    {"thermal_source": {"supply_temperature": 55.0, "carnot_efficiency": 0.4}},
+                    {"thermal_source": {"efficiency": 1.0}},
+                ],
+                "shared_thermal_tanks": [self._manual_tank()],
+            }
+        )
+        self.assertEqual(len(out["shared_thermal_tanks"]), 1)
+        self.assertEqual(out["shared_thermal_tanks"][0]["id"], "dhw")
+        self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 50.0)
+        self.assertEqual(out["number_of_deferrable_loads"], 2)
+
+    async def test_treat_runtimeparams_shared_thermal_tanks_rejects_garbage(self):
+        """A non-list (e.g. an accidentally stringified payload) is ignored
+        with a warning instead of crashing the optimizer later."""
+        with self.assertLogs(logger, level="WARNING") as log_cm:
+            out = await self._run_treat_runtimeparams({"shared_thermal_tanks": "[{'id': 'dhw'}]"})
+        self.assertTrue(any("shared_thermal_tanks" in m for m in log_cm.output))
+        self.assertFalse(out.get("shared_thermal_tanks"))
+
+    async def test_treat_runtimeparams_shared_tank_start_temperature_patch(self):
+        """shared_tank_start_temperatures patches a manual tank by id; unknown
+        ids and non-numeric values warn and are skipped."""
+        with self.assertLogs(logger, level="WARNING") as log_cm:
+            out = await self._run_treat_runtimeparams(
+                {
+                    "shared_thermal_tanks": [self._manual_tank(start_temperature=50.0)],
+                    "shared_tank_start_temperatures": {
+                        "dhw": 48.5,
+                        "no_such_tank": 30.0,
+                        # non-numeric for a KNOWN id requires a second tank
+                    },
+                }
+            )
+        self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 48.5)
+        self.assertTrue(any("no_such_tank" in m for m in log_cm.output))
+
+    async def test_treat_runtimeparams_shared_tank_start_temperature_non_numeric(self):
+        """A non-numeric override for a known tank id warns and keeps the
+        configured start_temperature."""
+        with self.assertLogs(logger, level="WARNING") as log_cm:
+            out = await self._run_treat_runtimeparams(
+                {
+                    "shared_thermal_tanks": [self._manual_tank(start_temperature=50.0)],
+                    "shared_tank_start_temperatures": {"dhw": "warm-ish"},
+                }
+            )
+        self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 50.0)
+        self.assertTrue(any("not numeric" in m for m in log_cm.output))
+
+    async def test_treat_runtimeparams_shared_tank_start_temperature_patches_compiled(self):
+        """The override applies AFTER the heat_topology compile, so a tank that
+        only exists as compiled topology output is patched too."""
+        topo = {
+            "sources": [{"id": "boiler", "type": "gas", "efficiency": 0.9, "nominal_power": 10000}],
+            "storage": [
+                {
+                    "id": "tank",
+                    "volume": 0.1,
+                    "start_temperature": 35,
+                    "min_temperature": [25] * 48,
+                    "max_temperature": [60] * 48,
+                }
+            ],
+            "flows": [{"from": "boiler", "to": "tank"}],
+        }
+        out = await self._run_treat_runtimeparams(
+            {
+                "heat_topology": topo,
+                "shared_tank_start_temperatures": {"tank": 41.0},
+            }
+        )
+        self.assertEqual(out["shared_thermal_tanks"][0]["start_temperature"], 41.0)
+
     async def test_treat_runtimeparams_bool_coercion(self):
         """_cast_bool None-guard and scalar-padding paths must be covered.
 
