@@ -3403,6 +3403,86 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         total = res["P_deferrable0"].sum() + res["P_deferrable1"].sum()
         self.assertGreater(total, 0, "Expected some dispatch to satisfy draw_off demand")
 
+    def _run_shared_tank_no_cap(
+        self, operating_hours, start_timesteps, end_timesteps, single_constant=(False, False)
+    ):
+        """One shared DHW tank fed by two temperature-driven sources (no caps).
+
+        A mid-horizon min_temperature of 55 C forces a heating dispatch so that
+        deactivating the members (pinning them to 0 W) would make the problem
+        infeasible. Used to exercise the param_load_active / window-mask handling
+        for shared-tank members independently of any source feature."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        min_t = [45.0] * 48
+        for i in range(28, 34):
+            min_t[i] = 55.0
+        self.optim_conf["number_of_deferrable_loads"] = 2
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [3500, 3000]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0, 0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = list(operating_hours)
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False, False]
+        self.optim_conf["set_deferrable_load_single_constant"] = list(single_constant)
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0, 0.0]
+        self.optim_conf["set_deferrable_max_startups"] = [0, 0]
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = list(start_timesteps)
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = list(end_timesteps)
+        self.optim_conf["def_load_config"] = [
+            {"thermal_source": {"supply_temperature": 55.0, "carnot_efficiency": 0.40}},
+            {"thermal_source": {"efficiency": 1.0}},
+        ]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "dhw",
+                "load_ids": [0, 1],
+                "volume": 0.20,
+                "density": 1000,
+                "heat_capacity": 4.186,
+                "start_temperature": 48.0,
+                "thermal_loss": 0.10,
+                "min_temperatures": min_t,
+                "max_temperatures": [65.0] * 48,
+            }
+        ]
+        opt = self.create_optimization()
+        ulc = self.df_input_data_dayahead[opt.var_load_cost].values
+        upp = self.df_input_data_dayahead[opt.var_prod_price].values
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            ulc,
+            upp,
+        )
+        return opt, res
+
+    def test_shared_tank_member_zero_operating_hours_stays_active(self):
+        """A shared-tank source with operating_hours == 0 (the natural setting for a
+        temperature-driven load) must not be deactivated by the param_load_active
+        loop. Before the fix both members were pinned to 0 W, the tank could not
+        hold its min_temperatures band, and the problem went infeasible."""
+        opt, res = self._run_shared_tank_no_cap(
+            operating_hours=(0, 0), start_timesteps=(0, 0), end_timesteps=(0, 0)
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        total = res["P_deferrable0"].sum() + res["P_deferrable1"].sum()
+        self.assertGreater(total, 0, "Shared-tank members were deactivated; tank cannot heat")
+
+    def test_shared_tank_window_outside_horizon_stays_optimal(self):
+        """A shared-tank source whose configured window is entirely outside the
+        horizon must have its window mask reset to all-ones (temperature
+        constraints drive the load). Before the fix the mask was zeroed, pinning
+        every member to 0 W and making the problem infeasible."""
+        opt, res = self._run_shared_tank_no_cap(
+            operating_hours=(0, 0),
+            start_timesteps=(600, 600),
+            end_timesteps=(800, 800),
+            single_constant=(True, True),
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        total = res["P_deferrable0"].sum() + res["P_deferrable1"].sum()
+        self.assertGreater(total, 0, "Window outside horizon gagged the shared-tank members")
+
     def test_is_electric_load_excludes_load_from_grid_balance(self):
         """A load with is_electric_load[k]=False must not appear in p_def_sum
         (and hence not in grid_pos / grid_neg balance constraints).
