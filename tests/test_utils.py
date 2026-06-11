@@ -3635,6 +3635,60 @@ class TestCompileHeatTopology(unittest.TestCase):
             with self.assertRaises(ValueError, msg=f"cap={bad_cap!r} should raise"):
                 utils.compile_heat_topology(self._hp_booster_topo(bad_cap))
 
+    def _capped_hp_only_topo(self, hp_cap, min_temps):
+        """Single capped heat pump feeding one tank (no uncapped fallback)."""
+        return {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.4,
+                    "nominal_power": 3500,
+                    "max_supply_temperature": hp_cap,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": min_temps,
+                    "max_temperature": [65] * len(min_temps),
+                }
+            ],
+            "flows": [{"from": "hp", "to": "dhw"}],
+        }
+
+    def test_min_temperatures_above_all_source_ceilings_raises(self):
+        """A static minimum band above every feeding source's ceiling is
+        physically unreachable: compile fails fast naming storage and step."""
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(self._capped_hp_only_topo(53.0, [45.0, 45.0, 60.0, 45.0]))
+        self.assertIn("dhw", str(ctx.exception))
+        self.assertIn("min_temperatures[2]", str(ctx.exception))
+
+    def test_min_temperatures_above_cap_ok_with_uncapped_source(self):
+        """The same 60 C band is fine when an uncapped source also feeds the
+        tank (it can serve the band above the heat pump's ceiling)."""
+        topo = self._hp_booster_topo(53.0)
+        topo["storage"][0]["min_temperature"] = [45.0, 45.0, 60.0, 45.0]
+        out = utils.compile_heat_topology(topo)  # must not raise
+        self.assertEqual(out["shared_thermal_tanks"][0]["min_temperatures"][2], 60.0)
+
+    def test_min_temperatures_vs_padded_per_step_cap(self):
+        """The ceiling check pads a short per-step cap with its last value, and
+        a minimum exactly at the ceiling is allowed (boundary is reachable)."""
+        # Cap list [53, 46] pads to 46 for steps 2-3; min of 50 at step 3 raises.
+        with self.assertRaises(ValueError) as ctx:
+            utils.compile_heat_topology(
+                self._capped_hp_only_topo([53.0, 46.0], [45.0, 45.0, 45.0, 50.0])
+            )
+        self.assertIn("min_temperatures[3]", str(ctx.exception))
+        # min == ceiling everywhere is reachable -> compiles.
+        out = utils.compile_heat_topology(self._capped_hp_only_topo(53.0, [53.0, 53.0, 53.0, 53.0]))
+        self.assertEqual(len(out["shared_thermal_tanks"]), 1)
+
     def test_actuator_group_emits_deferrable_group(self):
         """One physical boiler serving two tanks via mutex."""
         topo = {

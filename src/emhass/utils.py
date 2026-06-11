@@ -606,6 +606,7 @@ def compile_heat_topology(topology: dict) -> dict:
     cost_per_load: list = []
     is_electric_load: list[bool] = []
     flow_to_load_idx: dict[tuple[str, str], int] = {}
+    cap_by_src_id: dict[str, float | list | None] = {}
 
     for i, f in enumerate(flows):
         src = src_by_id[f["from"]]
@@ -704,6 +705,9 @@ def compile_heat_topology(topology: dict) -> dict:
                     "the source. Omit the key to leave it uncapped."
                 )
             source_block["max_supply_temperature"] = cap_value
+            cap_by_src_id[src["id"]] = cap_value
+        else:
+            cap_by_src_id[src["id"]] = None
         def_load_config.append({"thermal_source": source_block})
         # Cost track resolution
         cost_track_id = src.get("cost_track")
@@ -794,6 +798,29 @@ def compile_heat_topology(topology: dict) -> dict:
             "max_temperatures": list(s.get("max_temperature", []))
             or list(s.get("max_temperatures", [])),
         }
+        # Fail fast when the static minimum band is physically unreachable: if
+        # EVERY source feeding this tank has a max_supply_temperature and some
+        # min_temperatures[t] exceeds the highest ceiling at t, no source can
+        # heat the tank into its band and the problem is infeasible by
+        # construction. Only the static list is checked here; a
+        # min_temperature_curve resolves against weather at solve time.
+        feeding_caps = [cap_by_src_id[f["from"]] for f in flows if f["to"] == sid]
+        if feeding_caps and all(c is not None for c in feeding_caps):
+            for t, min_val in enumerate(tank["min_temperatures"]):
+                if min_val is None:
+                    continue
+                ceiling = max(
+                    (c[t] if t < len(c) else c[-1]) if isinstance(c, list) else c
+                    for c in feeding_caps
+                )
+                if float(min_val) > ceiling:
+                    raise ValueError(
+                        f"heat_topology.storage[{sid}].min_temperatures[{t}]={min_val} "
+                        f"exceeds the highest max_supply_temperature ({ceiling}) of "
+                        "the sources feeding this storage; no source can reach that "
+                        "temperature. Raise a source ceiling, lower the minimum, or "
+                        "add an uncapped source (e.g. an electric booster)."
+                    )
         # Weather-compensated minimum temperature: when the radiator needs a higher
         # supply T to keep up with building heat loss on a cold day, the buffer min
         # should track. Same linear law as the source's heating_curve.
