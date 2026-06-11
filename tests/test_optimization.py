@@ -5256,12 +5256,17 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             {"thermal_source": {"supply_temperature": 55.0, "carnot_efficiency": 0.40}},
             {"thermal_source": {"efficiency": 0.92}},
         ]
-        # Declare the shared tank
+        # Declare the shared tank. Volume must give the semi-continuous sources
+        # room to fire: one full-power 30-min HP slot injects ~5 kWh thermal,
+        # which on a 0.2 m3 tank is a ~22 K jump - impossible inside the
+        # 45-62 C band, making the MILP infeasible (it then silently "passed"
+        # via the relaxed-LP fallback). At 0.5 m3 the same slot is ~8.8 K,
+        # which fits, so the MILP solves to a true Optimal.
         self.optim_conf["shared_thermal_tanks"] = [
             {
                 "id": "dhw",
                 "load_ids": [0, 1],
-                "volume": 0.20,
+                "volume": 0.50,
                 "density": 1000,
                 "heat_capacity": 4.186,
                 "start_temperature": 50.0,
@@ -5283,6 +5288,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             unit_prod_price,
         )
 
+        # The MILP itself must solve - "Optimal (Relaxed)" means the binary
+        # problem was infeasible and the relaxed fallback masked it.
+        self.assertEqual(opt.optim_status, "Optimal")
         # Both load columns present
         self.assertIn("P_deferrable0", res.columns)
         self.assertIn("P_deferrable1", res.columns)
@@ -5546,6 +5554,11 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # require bit-exact match (different constraint construction paths),
         # but both should be Optimal and the totals should be in the same
         # order of magnitude.
+        self.assertEqual(
+            opt.optim_status,
+            "Optimal",
+            "Shared-tank run must solve the MILP itself, not the relaxed fallback",
+        )
         leg_total = res_legacy["P_deferrable0"].sum()
         sh_total = res_shared["P_deferrable0"].sum()
         self.assertGreaterEqual(leg_total, 0)
