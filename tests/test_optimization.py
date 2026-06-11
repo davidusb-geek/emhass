@@ -5585,6 +5585,153 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             heating_energy(False, null_gains=True), heating_energy(False), places=3
         )
 
+    def _run_soft_tank(self, tank_extra=None, source0_extra=None, source1_extra=None):
+        """Helper: one shared tank fed by a cheap 'HP' (load 0, flat COP 3.0)
+        and an electric booster (load 1, efficiency 1.0), both modulating.
+        `tank_extra` / `source*_extra` merge extra fields into the tank dict
+        and the thermal_source blocks (desired/overshoot/penalty etc.)."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        draw_off = [0.0] * 48
+        draw_off[14] = 1.0
+        draw_off[40] = 1.2
+        src0 = {"efficiency": 3.0}
+        src0.update(source0_extra or {})
+        src1 = {"efficiency": 1.0}
+        src1.update(source1_extra or {})
+        self.optim_conf["number_of_deferrable_loads"] = 2
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [3500, 3000]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0, 0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [4, 4]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False, False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False, False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0, 0.0]
+        self.optim_conf["set_deferrable_max_startups"] = [0, 0]
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0, 0]
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0, 0]
+        self.optim_conf["def_load_config"] = [
+            {"thermal_source": src0},
+            {"thermal_source": src1},
+        ]
+        tank = {
+            "id": "dhw",
+            "load_ids": [0, 1],
+            "volume": 0.30,
+            "density": 1000,
+            "heat_capacity": 4.186,
+            "start_temperature": 50.0,
+            "thermal_loss": 0.05,
+            "draw_off_demand": draw_off,
+            "min_temperatures": [45.0] * 48,
+            "max_temperatures": [65.0] * 48,
+        }
+        tank.update(tank_extra or {})
+        self.optim_conf["shared_thermal_tanks"] = [tank]
+        opt = self.create_optimization()
+        ulc = self.df_input_data_dayahead[opt.var_load_cost].values
+        upp = self.df_input_data_dayahead[opt.var_prod_price].values
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            ulc,
+            upp,
+        )
+        return opt, res
+
+    def test_shared_tank_combined_draw_off_and_building_demand(self):
+        """Demand models on a shared tank are additive (issue #539): a tank
+        with BOTH a hot-water draw-off profile and building-physics demand
+        must serve their sum. Before the fix the draw-off profile silently
+        shadowed the building demand (either/or resolution), even though the
+        heat_topology compiler emits tanks carrying both."""
+        building = {
+            "u_value": 0.5,
+            "envelope_area": 300.0,
+            "ventilation_rate": 0.5,
+            "heated_volume": 250.0,
+            "indoor_target_temperature": 20.0,
+        }
+        opt, res = self._run_soft_tank(
+            tank_extra=building,
+            source0_extra=None,
+            source1_extra=None,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        # Expected building demand (kWh per step) from the same physics helper
+        building_demand = utils.calculate_heating_demand_physics(
+            u_value=0.5,
+            envelope_area=300.0,
+            ventilation_rate=0.5,
+            heated_volume=250.0,
+            indoor_target_temperature=20.0,
+            outdoor_temperature_forecast=[10.0] * 48,
+            optimization_time_step=30,
+        )
+        building_sum = float(np.sum(building_demand[:47]))
+        draw_sum = 2.2
+        dt = 0.5
+        thermal_in_kwh = (
+            (res["P_deferrable0"].sum() * 3.0 + res["P_deferrable1"].sum() * 1.0) * dt / 1000.0
+        )
+        # Draw-off-only dispatch (the old either/or behaviour) would be a few
+        # kWh; serving BOTH demands requires clearly more than the building
+        # demand alone (band drift and losses give the slack margin).
+        self.assertGreater(
+            thermal_in_kwh,
+            draw_sum + 0.7 * building_sum,
+            "Tank must serve draw-off AND building demand, not just one of them",
+        )
+
+    def test_shared_tank_per_source_overshoot_gates_source(self):
+        """A source with overshoot_temperature stops while the tank is above
+        its threshold; an uncapped/higher-threshold source serves the band
+        above it (Micr0mega's HP 55 C + element 75 C pattern on #539). The
+        desired_temperatures penalty pulls the tank above the cheap source's
+        threshold, so the expensive source must do the lifting."""
+        opt, res = self._run_soft_tank(
+            tank_extra={"desired_temperatures": 60.0, "penalty_factor": 50.0},
+            source0_extra={"overshoot_temperature": 55.0},
+            source1_extra={"overshoot_temperature": 75.0},  # above tank max -> never gates
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        tank_cols = [c for c in res.columns if "predicted_temp_heater" in c]
+        self.assertTrue(tank_cols, f"no tank temp column in {res.columns.tolist()}")
+        temp = res[tank_cols[0]].reset_index(drop=True)
+        hp = res["P_deferrable0"].reset_index(drop=True)
+        booster = res["P_deferrable1"].reset_index(drop=True)
+        # The comfort penalty must pull the tank above the HP threshold...
+        self.assertGreater(temp.max(), 55.5, "Desired-band penalty should lift tank above 55 C")
+        # ...which only the booster may serve: HP off while tank above 55 C.
+        above = temp > 55.05
+        self.assertTrue(above.any())
+        self.assertLess(
+            hp[above].max(),
+            1e-3,
+            "Source with overshoot_temperature=55 must be off while tank is above 55 C",
+        )
+        self.assertGreater(booster.sum(), 0, "Booster should serve the band above 55 C")
+
+    def test_shared_tank_desired_only_penalty_pulls_temperature(self):
+        """desired_temperatures without any overshoot gates is a pure soft
+        target: no source is blocked, but the shortfall penalty pulls the tank
+        toward the target compared to an identical run without it."""
+        opt_base, res_base = self._run_soft_tank()
+        self.assertEqual(opt_base.optim_status, "Optimal")
+        opt_soft, res_soft = self._run_soft_tank(
+            tank_extra={"desired_temperatures": 60.0, "penalty_factor": 50.0}
+        )
+        self.assertEqual(opt_soft.optim_status, "Optimal")
+        tank_cols = [c for c in res_soft.columns if "predicted_temp_heater" in c]
+        self.assertTrue(tank_cols)
+        mean_base = res_base[tank_cols[0]].iloc[5:].mean()
+        mean_soft = res_soft[tank_cols[0]].iloc[5:].mean()
+        self.assertGreater(
+            mean_soft,
+            mean_base + 1.0,
+            "Comfort penalty should pull the tank clearly toward the 60 C target",
+        )
+
     def _run_shared_tank_no_cap(
         self, operating_hours, start_timesteps, end_timesteps, single_constant=(False, False)
     ):
