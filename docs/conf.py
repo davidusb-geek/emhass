@@ -11,9 +11,10 @@
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 
 import os
+import re
 import sys
 
-for x in os.walk("../src/"):
+for x in os.walk(os.path.abspath("../src/")):
     sys.path.insert(0, x[0])
 
 # -- Project information -----------------------------------------------------
@@ -22,8 +23,20 @@ project = "emhass"
 copyright = "2021-2026, David HERNANDEZ TORRES"
 author = "David HERNANDEZ TORRES"
 
+
+def get_version() -> str:
+    init_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "src", "emhass", "__init__.py")
+    )
+    with open(init_path, encoding="utf-8") as f:
+        match = re.search(r'^__version__\s*=\s*[\'"]([^\'"]+)[\'"]', f.read(), re.MULTILINE)
+        if match:
+            return match.group(1)
+        raise RuntimeError(f"Unable to find version string in {init_path}")
+
+
 # The full version, including alpha/beta/rc tags
-release = "0.17.6"
+release = get_version()
 
 # -- General configuration ---------------------------------------------------
 
