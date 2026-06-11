@@ -682,6 +682,28 @@ def compile_heat_topology(topology: dict) -> dict:
         if "comfort_sense" in target_storage:
             source_block["sense"] = str(target_storage["comfort_sense"]).lower()
         is_electric_load.append(bool(src.get("electric", type_is_electric.get(src_type, True))))
+        # Optional per-source temperature ceiling: this source may only add heat
+        # while the shared tank is at or below this temperature (e.g. a heat pump
+        # limited to its supply/condenser temperature). A source without it (e.g.
+        # an electric booster) can drive the tank up to the tank's max_temperatures.
+        _cap = src.get("max_supply_temperature")
+        if _cap is not None:
+            if isinstance(_cap, (list, tuple, np.ndarray)):
+                cap_value = [float(x) for x in _cap]
+                if not cap_value:
+                    raise ValueError(
+                        f"heat_topology.sources[{src['id']}].max_supply_temperature "
+                        "is an empty list; omit the key to leave the source uncapped."
+                    )
+            else:
+                cap_value = float(_cap)
+            if any(x <= 0 for x in (cap_value if isinstance(cap_value, list) else [cap_value])):
+                raise ValueError(
+                    f"heat_topology.sources[{src['id']}].max_supply_temperature "
+                    "must be > 0 degC; a non-positive ceiling permanently disables "
+                    "the source. Omit the key to leave it uncapped."
+                )
+            source_block["max_supply_temperature"] = cap_value
         def_load_config.append({"thermal_source": source_block})
         # Cost track resolution
         cost_track_id = src.get("cost_track")

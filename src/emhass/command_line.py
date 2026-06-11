@@ -349,6 +349,13 @@ class OptimizationCache:
                 # Exclude runtime parameters (start_temperature, desired_temperatures) from hash
                 thermal_hash = config_hash(cfg["thermal_battery"], thermal_runtime_keys)
                 load_type = f"thermal_battery:{thermal_hash}"
+            elif "thermal_source" in cfg:
+                # Shared-tank source block (compiled from heat_topology). Its fields
+                # (COP parameters, max_supply_temperature, ...) are baked into the
+                # problem at build time, not parameterized, so any change must miss
+                # the cache and force a rebuild.
+                thermal_hash = config_hash(cfg["thermal_source"], thermal_runtime_keys)
+                load_type = f"thermal_source:{thermal_hash}"
             else:
                 load_type = "standard"
             def_structure.append((i, load_type))
