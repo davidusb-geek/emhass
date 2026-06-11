@@ -1,8 +1,11 @@
+import ast
 import asyncio
 import copy
 import logging
+import operator
 import os
 import pathlib
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Self
@@ -29,6 +32,19 @@ header_accept = "application/json"
 header_auth = "Bearer"
 hass_url = "http://supervisor/core/api"
 sensor_prefix = "sensor."
+
+# When a var_list entry is an arithmetic expression, every entity it references is
+# queried over a window padded this much earlier than the requested start, then sliced
+# back. This lets InfluxDB's GROUP BY time() FILL(previous) seed the leading in-window
+# buckets from the most recent prior value instead of returning leading NaNs (which would
+# misalign two series that update at different phases). A prior value older than this is
+# not recovered; the downstream regression absorbs the residual leading gap.
+INFLUX_EXPRESSION_LOOKBACK = pd.Timedelta(days=1)
+
+# Upper bound on a constant exponent in an InfluxDB var_list expression. Real energy
+# arithmetic never needs large exponents; the cap stops a crafted ``10 ** 1000000`` style
+# entry from materializing a multi-megabyte integer and exhausting CPU/memory.
+INFLUX_EXPRESSION_MAX_POW_EXPONENT = 1000
 
 
 class RetrieveHass:
@@ -634,7 +650,13 @@ class RetrieveHass:
 
         :param days_list: A list of days to retrieve data for
         :type days_list: pandas.date_range
-        :param var_list: List of sensor entity IDs to retrieve
+        :param var_list: List of variables to retrieve. Each entry is either a plain
+            sensor entity id (e.g. ``'sensor.power_a'``) or an arithmetic expression
+            combining several timeseries with the ``{{ ... }}`` syntax, for example
+            ``"{{'sensor.power_a' - 'sensor.power_b' * 1000}}"``. For an expression every
+            referenced entity is queried separately and the operation (``+``, ``-``,
+            ``*``, ``/``, ``**``, ``%``, unary ``+``/``-`` and numeric constants only) is
+            applied element-wise on the values returned for the matching timestamps.
         :type var_list: list
         :return: Success status of data retrieval
         :rtype: bool
@@ -679,22 +701,52 @@ class RetrieveHass:
         if end_time < requested_end:
             self.logger.debug(f"End time capped at current time (requested: {requested_end})")
 
-        # Collect sensor dataframes
+        # Collect dataframes for every variable (plain sensors and expression outputs).
+        # Plain sensors and expression entities use separate caches: plain sensors are queried
+        # over the requested window (the same query as before, now de-duplicated through the
+        # cache), expression entities over a padded window so leading buckets can be
+        # forward-filled (see _build_influx_expression_df).
         sensor_dfs = []
+        sensor_cache: dict[str, pd.DataFrame | None] = {}
+        expr_entity_cache: dict[str, pd.DataFrame | None] = {}
+        failed_variables: list[str] = []
         global_min_time = None
         global_max_time = None
 
-        for sensor in filter(None, var_list):
-            df_sensor = self._fetch_sensor_data(client, sensor, start_time, end_time)
-            if df_sensor is not None:
-                sensor_dfs.append(df_sensor)
-                # Track global time range
-                sensor_min = df_sensor.index.min()
-                sensor_max = df_sensor.index.max()
-                global_min_time = min(global_min_time or sensor_min, sensor_min)
-                global_max_time = max(global_max_time or sensor_max, sensor_max)
+        for variable in filter(None, var_list):
+            if self._is_influx_expression(variable):
+                df_variable = self._build_influx_expression_df(
+                    client, variable, start_time, end_time, expr_entity_cache
+                )
+                if df_variable is None or df_variable.empty:
+                    failed_variables.append(variable)
+                    continue
+            else:
+                if variable not in sensor_cache:
+                    sensor_cache[variable] = self._fetch_sensor_data(
+                        client, variable, start_time, end_time
+                    )
+                df_variable = sensor_cache[variable]
+                if df_variable is None:
+                    # Preserve existing behavior: a missing plain sensor is skipped, not
+                    # treated as a hard failure. Only expressions abort the retrieval, since
+                    # they cannot be evaluated when a referenced entity has no data.
+                    continue
+
+            sensor_dfs.append(df_variable)
+            # Track global time range
+            sensor_min = df_variable.index.min()
+            sensor_max = df_variable.index.max()
+            global_min_time = min(global_min_time or sensor_min, sensor_min)
+            global_max_time = max(global_max_time or sensor_max, sensor_max)
 
         client.close()
+
+        if failed_variables:
+            self.logger.error(
+                f"InfluxDB expression evaluation failed for: {sorted(set(failed_variables))}"
+            )
+            return False
 
         if not sensor_dfs:
             self.logger.error("No data retrieved from InfluxDB")
@@ -726,6 +778,173 @@ class RetrieveHass:
         self.var_list = var_list
         self.logger.info(f"InfluxDB data retrieval completed: {self.df_final.shape}")
         return True
+
+    def _is_influx_expression(self, variable: str) -> bool:
+        """Check if a var_list entry uses the arithmetic expression syntax: ``{{ ... }}``."""
+        stripped = variable.strip() if isinstance(variable, str) else ""
+        return stripped.startswith("{{") and stripped.endswith("}}")
+
+    def _extract_influx_expression_entities(
+        self, expression: str
+    ) -> tuple[str, list[str], dict[str, str]]:
+        """Replace quoted entity IDs in an expression with safe variable tokens.
+
+        Example::
+
+            "{{'sensor.a' - 'sensor.b' * 1000}}"
+            -> ("_v0 - _v1 * 1000", ["sensor.a", "sensor.b"], {"_v0": "sensor.a", "_v1": "sensor.b"})
+
+        A repeated entity reuses its token (so it is only queried once).
+        """
+        expression_body = expression.strip()[2:-2].strip()
+        quoted_entity = r"'([^']+)'|\"([^\"]+)\""
+        if not re.search(quoted_entity, expression_body):
+            raise ValueError("Expression does not contain quoted entity IDs.")
+
+        entities: list[str] = []
+        token_to_entity: dict[str, str] = {}
+        entity_to_token: dict[str, str] = {}
+
+        def replace_entity(match: re.Match[str]) -> str:
+            entity = match.group(1) or match.group(2)
+            if entity not in entity_to_token:
+                token = f"_v{len(entity_to_token)}"
+                entity_to_token[entity] = token
+                token_to_entity[token] = entity
+                entities.append(entity)
+            return entity_to_token[entity]
+
+        parsed_expression = re.sub(quoted_entity, replace_entity, expression_body)
+        return parsed_expression, entities, token_to_entity
+
+    def _build_influx_expression_df(
+        self,
+        client,
+        expression: str,
+        start_time: pd.Timestamp,
+        end_time: pd.Timestamp,
+        entity_cache: dict[str, pd.DataFrame | None],
+    ) -> pd.DataFrame | None:
+        """Fetch the referenced entities and evaluate an arithmetic var_list expression.
+
+        Returns a single-column DataFrame named after the ``expression`` string, or None if
+        the expression is invalid or any referenced entity returned no data. Each entity is
+        queried over a window padded by ``INFLUX_EXPRESSION_LOOKBACK`` and sliced back to
+        ``[start_time, end_time)`` so the leading buckets are forward-filled from the most
+        recent prior value, keeping series that update at different phases aligned.
+        """
+        try:
+            parsed_expression, entities, token_to_entity = self._extract_influx_expression_entities(
+                expression
+            )
+        except ValueError:
+            self.logger.exception(f"Invalid InfluxDB expression '{expression}'")
+            return None
+
+        padded_start = start_time - INFLUX_EXPRESSION_LOOKBACK
+        start_aware = (
+            start_time.tz_localize("UTC")
+            if start_time.tzinfo is None
+            else start_time.tz_convert("UTC")
+        )
+
+        series_mapping: dict[str, pd.Series] = {}
+        for token, entity in token_to_entity.items():
+            if entity not in entity_cache:
+                df_entity = self._fetch_sensor_data(client, entity, padded_start, end_time)
+                if df_entity is not None:
+                    df_entity = df_entity.loc[df_entity.index >= start_aware]
+                entity_cache[entity] = df_entity
+            df_entity = entity_cache[entity]
+            if df_entity is None or df_entity.empty:
+                self.logger.error(
+                    f"InfluxDB expression '{expression}' references entity '{entity}' "
+                    "which returned no data"
+                )
+                return None
+            series_mapping[token] = df_entity[entity]
+
+        try:
+            expression_result = self._evaluate_influx_expression(parsed_expression, series_mapping)
+        except (TypeError, ValueError, SyntaxError, ArithmeticError, RecursionError, MemoryError):
+            # A malformed or pathological entry (deep nesting, integer overflow, a dtype mismatch
+            # raising TypeError, division by zero, ...) must fail the retrieval cleanly rather than
+            # propagate out and abort the whole optimization.
+            self.logger.exception(f"Failed to evaluate InfluxDB expression '{expression}'")
+            return None
+
+        self.logger.debug(f"Evaluated InfluxDB expression '{expression}' with entities: {entities}")
+        return pd.DataFrame({expression: expression_result})
+
+    def _evaluate_influx_expression(
+        self, parsed_expression: str, series_mapping: dict[str, pd.Series]
+    ) -> pd.Series:
+        """Safely evaluate an arithmetic expression over pandas Series and numeric constants.
+
+        Only the arithmetic operators ``+ - * / ** %``, unary ``+``/``-`` and int/float
+        constants are allowed; entity tokens resolve to their fetched Series. Any other AST
+        node (attribute access, calls, subscripts, comparisons, bare names, booleans, ...)
+        raises ValueError, so a crafted var_list entry cannot reach arbitrary code.
+        """
+        tree = ast.parse(parsed_expression, mode="eval")
+
+        binary_operators = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+            ast.Pow: operator.pow,
+            ast.Mod: operator.mod,
+        }
+        unary_operators = {
+            ast.UAdd: operator.pos,
+            ast.USub: operator.neg,
+        }
+
+        def eval_node(node):
+            if isinstance(node, ast.Expression):
+                return eval_node(node.body)
+            if isinstance(node, ast.BinOp):
+                op_type = type(node.op)
+                if op_type not in binary_operators:
+                    raise ValueError(f"Unsupported binary operator: {op_type.__name__}")
+                left = eval_node(node.left)
+                right = eval_node(node.right)
+                # Guard against a huge integer power exhausting CPU/memory. Cap BOTH operands:
+                # a large exponent (``_v0 ** 1e6``) and a large base built by a chained power
+                # (``(10 ** 1000) ** 100``) are both rejected before the expensive computation.
+                if op_type is ast.Pow:
+                    for operand in (left, right):
+                        if (
+                            isinstance(operand, (int, float))
+                            and not isinstance(operand, bool)
+                            and abs(operand) > INFLUX_EXPRESSION_MAX_POW_EXPONENT
+                        ):
+                            raise ValueError(
+                                "Power operand magnitude too large in InfluxDB expression"
+                            )
+                return binary_operators[op_type](left, right)
+            if isinstance(node, ast.UnaryOp):
+                op_type = type(node.op)
+                if op_type not in unary_operators:
+                    raise ValueError(f"Unsupported unary operator: {op_type.__name__}")
+                return unary_operators[op_type](eval_node(node.operand))
+            if isinstance(node, ast.Name):
+                if node.id not in series_mapping:
+                    raise ValueError(f"Unknown entity token in expression: {node.id}")
+                return series_mapping[node.id]
+            if isinstance(node, ast.Constant):
+                value = node.value
+                # bool is a subclass of int; reject it so True/False can't silently mean 1/0
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise ValueError(f"Unsupported constant type: {type(value).__name__}")
+                return value
+            raise ValueError(f"Unsupported expression element: {type(node).__name__}")
+
+        result = eval_node(tree)
+        if not isinstance(result, pd.Series):
+            raise ValueError("Expression must produce a pandas Series result.")
+        return result
 
     def _init_influx_client(self):
         """Initialize InfluxDB client connection."""

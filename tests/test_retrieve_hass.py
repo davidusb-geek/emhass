@@ -435,6 +435,346 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             450.0,
         )
 
+    # ------------------------------------------------------------------
+    # InfluxDB arithmetic expression support in var_list
+    # ------------------------------------------------------------------
+    # A var_list entry may use the "{{ ... }}" syntax to combine several timeseries
+    # with simple arithmetic, e.g. "{{'sensor.power_a' - 'sensor.power_b' * 1000}}".
+    # Each referenced entity is queried separately and the operation is applied
+    # element-wise on the values for the matching timestamps. (Idea by @dewi-ny-je, #803.)
+
+    def _make_influxdb_rh(self):
+        """Build a RetrieveHass instance configured to use InfluxDB."""
+        params_influx = {
+            "retrieve_hass_conf": {
+                "use_influxdb": True,
+                "influxdb_host": "fake-host",
+                "influxdb_port": 8086,
+                "influxdb_username": "fake-user",
+                "influxdb_password": "fake-pass",  # pragma: allowlist secret
+                "influxdb_database": "fake-db",
+                "influxdb_measurement": "W",
+            }
+        }
+        return RetrieveHass(
+            self.retrieve_hass_conf["hass_url"],
+            self.retrieve_hass_conf["long_lived_token"],
+            self.retrieve_hass_conf["optimization_time_step"],
+            self.retrieve_hass_conf["time_zone"],
+            params_influx,
+            emhass_conf,
+            logger,
+            get_data_from_file=False,
+        )
+
+    @staticmethod
+    def _influx_query_side_effect(entity_data, tag_values=None):
+        """Build a client.query side_effect serving discovery and data queries.
+
+        :param entity_data: mapping of InfluxDB entity_id -> list of points (each a dict
+            with "time" and "mean_value"). An empty list emulates a sensor that exists
+            but returns no data.
+        :param tag_values: entity_ids advertised by "SHOW TAG VALUES" (defaults to the
+            keys of entity_data).
+        """
+        if tag_values is None:
+            tag_values = list(entity_data)
+
+        def query_side_effect(query):
+            mock_result = MagicMock()
+            if "SHOW MEASUREMENTS" in query:
+                mock_result.get_points.return_value = [{"name": "W"}]
+            elif "SHOW TAG VALUES" in query:
+                mock_result.get_points.return_value = [{"value": value} for value in tag_values]
+            else:
+                points = []
+                for entity_id, data in entity_data.items():
+                    if f"'{entity_id}'" in query:
+                        points = data
+                        break
+                mock_result.get_points.return_value = points
+            return mock_result
+
+        return query_side_effect
+
+    def test_influx_is_expression(self):
+        """_is_influx_expression detects the {{ ... }} arithmetic syntax."""
+        self.assertTrue(self.rh._is_influx_expression("{{'sensor.a' - 'sensor.b'}}"))
+        self.assertTrue(self.rh._is_influx_expression("  {{ 'sensor.a' * 2 }}  "))
+        self.assertFalse(self.rh._is_influx_expression("sensor.power_a"))
+        self.assertFalse(self.rh._is_influx_expression("{{ not closed"))
+        self.assertFalse(self.rh._is_influx_expression("not opened }}"))
+        self.assertFalse(self.rh._is_influx_expression(""))
+
+    def test_influx_extract_expression_entities(self):
+        """Quoted entity IDs are replaced by safe tokens and de-duplicated."""
+        parsed, entities, token_to_entity = self.rh._extract_influx_expression_entities(
+            "{{'sensor.power_a' - 'sensor.power_b' * 1000}}"
+        )
+        self.assertEqual(parsed, "_v0 - _v1 * 1000")
+        self.assertEqual(entities, ["sensor.power_a", "sensor.power_b"])
+        self.assertEqual(token_to_entity, {"_v0": "sensor.power_a", "_v1": "sensor.power_b"})
+        # Double quotes are accepted as well
+        parsed2, entities2, _ = self.rh._extract_influx_expression_entities(
+            '{{"sensor.a" + "sensor.b"}}'
+        )
+        self.assertEqual(parsed2, "_v0 + _v1")
+        self.assertEqual(entities2, ["sensor.a", "sensor.b"])
+        # A repeated entity reuses the same token (a single query is enough)
+        parsed3, entities3, _ = self.rh._extract_influx_expression_entities(
+            "{{'sensor.a' + 'sensor.a' / 2}}"
+        )
+        self.assertEqual(entities3, ["sensor.a"])
+        self.assertEqual(parsed3, "_v0 + _v0 / 2")
+        # An expression without any entity is rejected
+        with self.assertRaises(ValueError):
+            self.rh._extract_influx_expression_entities("{{1 + 2}}")
+
+    def test_influx_evaluate_expression(self):
+        """Arithmetic is applied element-wise with standard operator precedence."""
+        idx = pd.date_range("2023-04-01 10:00", periods=3, freq="30min", tz="UTC")
+        series_a = pd.Series([1500.0, 1800.0, 2000.0], index=idx)
+        series_b = pd.Series([0.5, 0.3, 1.0], index=idx)
+        mapping = {"_v0": series_a, "_v1": series_b}
+        # Multiplication binds tighter than subtraction: a - (b * 1000)
+        result = self.rh._evaluate_influx_expression("_v0 - _v1 * 1000", mapping)
+        pd.testing.assert_series_equal(result, series_a - series_b * 1000, check_names=False)
+        # Division combined with a unary minus
+        result_div = self.rh._evaluate_influx_expression("-_v0 / _v1", mapping)
+        pd.testing.assert_series_equal(result_div, -series_a / series_b, check_names=False)
+        # An unknown token raises (no silent zero-fill)
+        with self.assertRaises(ValueError):
+            self.rh._evaluate_influx_expression("_v0 + _v9", mapping)
+        # A malformed expression surfaces a SyntaxError
+        with self.assertRaises(SyntaxError):
+            self.rh._evaluate_influx_expression("_v0 +", mapping)
+        # An expression that does not yield a Series is rejected
+        with self.assertRaises(ValueError):
+            self.rh._evaluate_influx_expression("1 + 2", {})
+
+    def test_influx_evaluate_expression_rejects_unsafe(self):
+        """The evaluator allows only arithmetic over Series and numeric constants."""
+        idx = pd.date_range("2023-04-01 10:00", periods=2, freq="30min", tz="UTC")
+        mapping = {
+            "_v0": pd.Series([1.0, 2.0], index=idx),
+            "_v1": pd.Series([3.0, 4.0], index=idx),
+        }
+        rejected = [
+            "_v0.__class__",  # attribute access
+            "_v0[0]",  # subscript
+            "_v0 > _v1",  # comparison
+            "_v0 and _v1",  # boolean operator
+            "_v0 * True",  # bool constant (must not be treated as 1)
+            "__import__('os')",  # function call
+            "os",  # bare name not in the mapping
+            "_v0 + 'x'",  # string constant
+            "_v0 ** 100000",  # exponent magnitude over the DoS cap
+            "(10 ** 1000) ** 100",  # chained power building a huge base is also rejected
+        ]
+        for expr in rejected:
+            with self.assertRaises(ValueError, msg=f"should reject: {expr}"):
+                self.rh._evaluate_influx_expression(expr, mapping)
+        # A reasonable exponent is still allowed
+        result = self.rh._evaluate_influx_expression("_v0 ** 2", mapping)
+        pd.testing.assert_series_equal(result, mapping["_v0"] ** 2, check_names=False)
+
+    async def test_influx_expression_pads_and_slices_entity_fetch(self):
+        """Expression entities are queried over a padded window then sliced to [start, end)."""
+        from emhass.retrieve_hass import INFLUX_EXPRESSION_LOOKBACK
+
+        rh = self._make_influxdb_rh()
+        start = pd.Timestamp("2026-06-01 00:00:00")
+        end = pd.Timestamp("2026-06-02 00:00:00")
+        full_idx = pd.date_range("2026-05-31 12:00", "2026-06-01 12:00", freq="30min", tz="UTC")
+        captured = {}
+
+        def fake_fetch(client, entity, fetch_start, fetch_end):
+            captured["start"] = fetch_start
+            return pd.DataFrame({entity: range(len(full_idx))}, index=full_idx)
+
+        with patch.object(rh, "_fetch_sensor_data", side_effect=fake_fetch):
+            df = rh._build_influx_expression_df(MagicMock(), "{{'sensor.a' * 2}}", start, end, {})
+
+        # The entity was fetched over a window padded earlier than the requested start
+        self.assertEqual(captured["start"], start - INFLUX_EXPRESSION_LOOKBACK)
+        # The result is sliced back to [start, end): no pre-window rows leak through
+        start_utc = pd.Timestamp("2026-06-01 00:00:00", tz="UTC")
+        self.assertEqual(int((df.index < start_utc).sum()), 0)
+        self.assertGreaterEqual(df.index.min(), start_utc)
+
+    async def test_influx_expression_pathological_fails_soft(self):
+        """A pathological expression (deep nesting, overflow, /0) fails soft, not crash.
+
+        These raise RecursionError / OverflowError / ZeroDivisionError rather than ValueError,
+        so they must be caught and turned into a clean retrieval failure instead of aborting the
+        run.
+        """
+        rh = self._make_influxdb_rh()
+        idx = pd.date_range("2026-06-01 00:00", periods=4, freq="30min", tz="UTC")
+        series_df = pd.DataFrame({"sensor.a": [1.0, 2.0, 3.0, 4.0]}, index=idx)
+        start = pd.Timestamp("2026-06-01 00:00:00")
+        end = pd.Timestamp("2026-06-02 00:00:00")
+
+        with patch.object(rh, "_fetch_sensor_data", return_value=series_df):
+            # Deep nesting overflows the parser/evaluator recursion limit
+            deep = "{{" + "(" * 3000 + "'sensor.a'" + ")" * 3000 + "}}"
+            self.assertIsNone(rh._build_influx_expression_df(MagicMock(), deep, start, end, {}))
+            # A large constant power overflows when converted to float during the multiply
+            overflow = "{{'sensor.a' * (10 ** 1000)}}"
+            self.assertIsNone(rh._build_influx_expression_df(MagicMock(), overflow, start, end, {}))
+            # A constant division-by-zero raises ZeroDivisionError (an ArithmeticError). Note a
+            # Series-by-zero divide does NOT raise (pandas yields inf), so the /0 must be between
+            # scalar constants to exercise this branch.
+            div_zero = "{{'sensor.a' + 1 / 0}}"
+            self.assertIsNone(rh._build_influx_expression_df(MagicMock(), div_zero, start, end, {}))
+
+    async def test_influx_expression_dtype_mismatch_fails_soft(self):
+        """A non-numeric (object-dtype) series raises TypeError under arithmetic and fails soft."""
+        rh = self._make_influxdb_rh()
+        idx = pd.date_range("2026-06-01 00:00", periods=3, freq="30min", tz="UTC")
+        # A sensor that returned text values: subtracting a number raises TypeError in pandas
+        string_df = pd.DataFrame({"sensor.a": ["on", "off", "on"]}, index=idx)
+        start = pd.Timestamp("2026-06-01 00:00:00")
+        end = pd.Timestamp("2026-06-02 00:00:00")
+
+        with patch.object(rh, "_fetch_sensor_data", return_value=string_df):
+            self.assertIsNone(
+                rh._build_influx_expression_df(MagicMock(), "{{'sensor.a' - 1000}}", start, end, {})
+            )
+
+    @patch("influxdb.InfluxDBClient", autospec=True)
+    async def test_get_data_influxdb_expression(self, mock_influx_client_class):
+        """get_data_influxdb evaluates an arithmetic expression across sensors."""
+        rh_influx = self._make_influxdb_rh()
+        mock_client_instance = mock_influx_client_class.return_value
+        mock_client_instance.query.side_effect = self._influx_query_side_effect(
+            {
+                "power_a": [
+                    {"time": "2023-04-01T10:00:00Z", "mean_value": 1500.0},
+                    {"time": "2023-04-01T10:30:00Z", "mean_value": 1800.0},
+                ],
+                "power_b": [
+                    {"time": "2023-04-01T10:00:00Z", "mean_value": 0.5},
+                    {"time": "2023-04-01T10:30:00Z", "mean_value": 0.3},
+                ],
+            }
+        )
+        days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
+        expression = "{{'sensor.power_a' - 'sensor.power_b' * 1000}}"
+        success = await rh_influx.get_data(days_list, [expression])
+        self.assertTrue(success)
+
+        df = rh_influx.df_final
+        self.assertEqual(list(df.columns), [expression])
+        self.assertAlmostEqual(df.loc["2023-04-01 10:00:00+00:00"][expression], 1500.0 - 0.5 * 1000)
+        self.assertAlmostEqual(df.loc["2023-04-01 10:30:00+00:00"][expression], 1800.0 - 0.3 * 1000)
+        mock_client_instance.close.assert_called_once()
+
+    @patch("influxdb.InfluxDBClient", autospec=True)
+    async def test_get_data_influxdb_expression_entity_cached(self, mock_influx_client_class):
+        """An entity used in multiple expressions is queried only once."""
+        rh_influx = self._make_influxdb_rh()
+        mock_client_instance = mock_influx_client_class.return_value
+        mock_client_instance.query.side_effect = self._influx_query_side_effect(
+            {
+                "power_a": [
+                    {"time": "2023-04-01T10:00:00Z", "mean_value": 1000.0},
+                    {"time": "2023-04-01T10:30:00Z", "mean_value": 1200.0},
+                ],
+                "power_b": [
+                    {"time": "2023-04-01T10:00:00Z", "mean_value": 100.0},
+                    {"time": "2023-04-01T10:30:00Z", "mean_value": 200.0},
+                ],
+            }
+        )
+        days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
+        e1 = "{{'sensor.power_a' + 'sensor.power_b'}}"
+        e2 = "{{'sensor.power_a' - 'sensor.power_b'}}"
+        success = await rh_influx.get_data(days_list, [e1, e2])
+        self.assertTrue(success)
+
+        df = rh_influx.df_final
+        self.assertAlmostEqual(df.loc["2023-04-01 10:00:00+00:00"][e1], 1100.0)
+        self.assertAlmostEqual(df.loc["2023-04-01 10:00:00+00:00"][e2], 900.0)
+        power_a_data_queries = [
+            c.args[0]
+            for c in mock_client_instance.query.call_args_list
+            if 'AND "entity_id"=' in c.args[0] and "'power_a'" in c.args[0]
+        ]
+        self.assertEqual(len(power_a_data_queries), 1)
+
+    @patch("influxdb.InfluxDBClient", autospec=True)
+    async def test_get_data_influxdb_expression_mixed(self, mock_influx_client_class):
+        """var_list may mix a plain sensor and an expression."""
+        rh_influx = self._make_influxdb_rh()
+        mock_client_instance = mock_influx_client_class.return_value
+        mock_client_instance.query.side_effect = self._influx_query_side_effect(
+            {
+                "power_a": [
+                    {"time": "2023-04-01T10:00:00Z", "mean_value": 1500.0},
+                    {"time": "2023-04-01T10:30:00Z", "mean_value": 1800.0},
+                ],
+                "power_b": [
+                    {"time": "2023-04-01T10:00:00Z", "mean_value": 500.0},
+                    {"time": "2023-04-01T10:30:00Z", "mean_value": 450.0},
+                ],
+            }
+        )
+        days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
+        expression = "{{'sensor.power_a' + 'sensor.power_b'}}"
+        var_list = ["sensor.power_a", expression]
+        success = await rh_influx.get_data(days_list, var_list)
+        self.assertTrue(success)
+
+        df = rh_influx.df_final
+        self.assertEqual(list(df.columns), var_list)
+        self.assertAlmostEqual(df.loc["2023-04-01 10:00:00+00:00"]["sensor.power_a"], 1500.0)
+        self.assertAlmostEqual(df.loc["2023-04-01 10:00:00+00:00"][expression], 2000.0)
+        self.assertAlmostEqual(df.loc["2023-04-01 10:30:00+00:00"][expression], 2250.0)
+
+    @patch("influxdb.InfluxDBClient", autospec=True)
+    async def test_get_data_influxdb_expression_missing_entity(self, mock_influx_client_class):
+        """An expression referencing a sensor with no data fails cleanly."""
+        rh_influx = self._make_influxdb_rh()
+        mock_client_instance = mock_influx_client_class.return_value
+        mock_client_instance.query.side_effect = self._influx_query_side_effect(
+            {
+                "power_a": [
+                    {"time": "2023-04-01T10:00:00Z", "mean_value": 1500.0},
+                    {"time": "2023-04-01T10:30:00Z", "mean_value": 1800.0},
+                ],
+                "power_missing": [],
+            },
+            tag_values=["power_a"],
+        )
+        days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
+        expression = "{{'sensor.power_a' + 'sensor.power_missing'}}"
+        success = await rh_influx.get_data(days_list, [expression])
+        self.assertFalse(success)
+
+    @patch("influxdb.InfluxDBClient", autospec=True)
+    async def test_get_data_influxdb_plain_missing_sensor_skipped(self, mock_influx_client_class):
+        """A missing PLAIN sensor is skipped, not a hard failure (unchanged behavior).
+
+        Only expressions abort the retrieval; a plain var_list keeps its prior behavior
+        of dropping a sensor that returned no data and proceeding with the rest.
+        """
+        rh_influx = self._make_influxdb_rh()
+        mock_client_instance = mock_influx_client_class.return_value
+        mock_client_instance.query.side_effect = self._influx_query_side_effect(
+            {
+                "power_a": [
+                    {"time": "2023-04-01T10:00:00Z", "mean_value": 1500.0},
+                    {"time": "2023-04-01T10:30:00Z", "mean_value": 1800.0},
+                ],
+            },
+            tag_values=["power_a"],
+        )
+        days_list = pd.date_range(start="2023-04-01", periods=1, freq="D", tz="UTC")
+        success = await rh_influx.get_data(days_list, ["sensor.power_a", "sensor.power_missing"])
+        self.assertTrue(success)
+        self.assertEqual(list(rh_influx.df_final.columns), ["sensor.power_a"])
+
     # Test publish data
     async def test_publish_data(self):
         response, data = await self.rh.post_data(
