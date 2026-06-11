@@ -866,9 +866,10 @@ class RetrieveHass:
 
         try:
             expression_result = self._evaluate_influx_expression(parsed_expression, series_mapping)
-        except (ValueError, SyntaxError, ArithmeticError, RecursionError, MemoryError):
-            # A malformed or pathological entry (deep nesting, integer overflow, ...) must fail
-            # the retrieval cleanly rather than propagate out and abort the whole optimization.
+        except (TypeError, ValueError, SyntaxError, ArithmeticError, RecursionError, MemoryError):
+            # A malformed or pathological entry (deep nesting, integer overflow, a dtype mismatch
+            # raising TypeError, division by zero, ...) must fail the retrieval cleanly rather than
+            # propagate out and abort the whole optimization.
             self.logger.exception(f"Failed to evaluate InfluxDB expression '{expression}'")
             return None
 
