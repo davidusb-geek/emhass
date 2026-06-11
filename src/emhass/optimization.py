@@ -3349,7 +3349,7 @@ class Optimization:
         # array into the corresponding parameter.
         cost_per_load_overrides = self.optim_conf.get("cost_forecast_per_deferrable_load", None)
         if cost_per_load_overrides is not None and not isinstance(
-            cost_per_load_overrides, (list, tuple)
+            cost_per_load_overrides, (list | tuple)
         ):
             self.logger.warning(
                 "cost_forecast_per_deferrable_load is set but is %s, not a list (value: %r). "
@@ -3367,7 +3367,7 @@ class Optimization:
             )
             if override is None:
                 param.value = np.asarray(unit_load_cost, dtype=float)
-            elif not isinstance(override, (list, tuple)):
+            elif not isinstance(override, (list | tuple)):
                 self.logger.warning(
                     "cost_forecast_per_deferrable_load[%d] is %s (value: %r), expected list. "
                     "Falling back to shared tariff for this load.",
