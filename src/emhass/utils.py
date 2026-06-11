@@ -708,6 +708,13 @@ def compile_heat_topology(topology: dict) -> dict:
             cap_by_src_id[src["id"]] = cap_value
         else:
             cap_by_src_id[src["id"]] = None
+        # Optional per-source soft threshold: with the storage's
+        # desired_temperatures set, this source is switched off while the tank
+        # sits above this temperature (a preference, unlike the hard
+        # max_supply_temperature ceiling). Sources without it inherit the
+        # storage-level overshoot_temperature at solve time.
+        if "overshoot_temperature" in src:
+            source_block["overshoot_temperature"] = float(src["overshoot_temperature"])
         def_load_config.append({"thermal_source": source_block})
         # Cost track resolution
         cost_track_id = src.get("cost_track")

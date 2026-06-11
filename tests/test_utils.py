@@ -3588,6 +3588,40 @@ class TestCompileHeatTopology(unittest.TestCase):
         # Booster (load 1) has no cap -> key absent
         self.assertNotIn("max_supply_temperature", out["def_load_config"][1]["thermal_source"])
 
+    def test_source_overshoot_temperature_passed_through(self):
+        """A source's overshoot_temperature (soft per-source threshold) is
+        compiled into its thermal_source block; sources without it omit the
+        key (they inherit the storage-level value at solve time)."""
+        topo = {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.4,
+                    "nominal_power": 3500,
+                    "overshoot_temperature": 55,
+                },
+                {"id": "booster", "type": "electric", "efficiency": 1.0, "nominal_power": 3000},
+            ],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 4,
+                    "max_temperature": [65] * 4,
+                    "desired_temperature": 60,
+                }
+            ],
+            "flows": [{"from": "hp", "to": "dhw"}, {"from": "booster", "to": "dhw"}],
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(out["def_load_config"][0]["thermal_source"]["overshoot_temperature"], 55.0)
+        self.assertNotIn("overshoot_temperature", out["def_load_config"][1]["thermal_source"])
+        # Storage-level soft target still lands on the tank (scalar broadcast at solve time)
+        self.assertEqual(out["shared_thermal_tanks"][0]["desired_temperatures"], 60.0)
+
     def _hp_booster_topo(self, hp_cap):
         """Minimal HP+booster topology with the given HP max_supply_temperature."""
         return {
