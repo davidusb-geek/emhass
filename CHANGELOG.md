@@ -23,7 +23,7 @@ Here are the major highlights of this release:
 - Developer Goodies: We’ve automated OpenAPI JSON generation, greened our code-quality CI, and added per-deferrable command-state sensors.
 - Documentation: The docs have been reorganized for better flow, and we've updated the Cookbook and Use Cases sections.
 
-A huge thank you to all the contributors (@LesIT1, @BrettLynch123, @OptimalNothing90, @Sjeiz, and @davidusb-geek) who helped make this release possible!
+A huge thank you to all the contributors (@LesIT1, @BrettLynch123, @OptimalNothing90 and @Sjeiz) who helped make this release possible!
 
 ### Improvement
 - feat: support arithmetic expressions in InfluxDB var_list entries (@LesIT1)
