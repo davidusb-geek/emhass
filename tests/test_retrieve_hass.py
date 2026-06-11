@@ -603,10 +603,11 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(df.index.min(), start_utc)
 
     async def test_influx_expression_pathological_fails_soft(self):
-        """A pathological expression (deep nesting, integer overflow) fails soft, not crash.
+        """A pathological expression (deep nesting, overflow, /0) fails soft, not crash.
 
-        These raise RecursionError / OverflowError rather than ValueError, so they must be
-        caught and turned into a clean retrieval failure instead of aborting the run.
+        These raise RecursionError / OverflowError / ZeroDivisionError rather than ValueError,
+        so they must be caught and turned into a clean retrieval failure instead of aborting the
+        run.
         """
         rh = self._make_influxdb_rh()
         idx = pd.date_range("2026-06-01 00:00", periods=4, freq="30min", tz="UTC")
@@ -621,6 +622,25 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             # A large constant power overflows when converted to float during the multiply
             overflow = "{{'sensor.a' * (10 ** 1000)}}"
             self.assertIsNone(rh._build_influx_expression_df(MagicMock(), overflow, start, end, {}))
+            # A constant division-by-zero raises ZeroDivisionError (an ArithmeticError). Note a
+            # Series-by-zero divide does NOT raise (pandas yields inf), so the /0 must be between
+            # scalar constants to exercise this branch.
+            div_zero = "{{'sensor.a' + 1 / 0}}"
+            self.assertIsNone(rh._build_influx_expression_df(MagicMock(), div_zero, start, end, {}))
+
+    async def test_influx_expression_dtype_mismatch_fails_soft(self):
+        """A non-numeric (object-dtype) series raises TypeError under arithmetic and fails soft."""
+        rh = self._make_influxdb_rh()
+        idx = pd.date_range("2026-06-01 00:00", periods=3, freq="30min", tz="UTC")
+        # A sensor that returned text values: subtracting a number raises TypeError in pandas
+        string_df = pd.DataFrame({"sensor.a": ["on", "off", "on"]}, index=idx)
+        start = pd.Timestamp("2026-06-01 00:00:00")
+        end = pd.Timestamp("2026-06-02 00:00:00")
+
+        with patch.object(rh, "_fetch_sensor_data", return_value=string_df):
+            self.assertIsNone(
+                rh._build_influx_expression_df(MagicMock(), "{{'sensor.a' - 1000}}", start, end, {})
+            )
 
     @patch("influxdb.InfluxDBClient", autospec=True)
     async def test_get_data_influxdb_expression(self, mock_influx_client_class):
