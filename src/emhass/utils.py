@@ -915,6 +915,83 @@ def compile_heat_topology(topology: dict) -> dict:
     }
 
 
+def _extend_optim_conf_with_compiled_topology(
+    optim_conf: dict, compiled: dict, logger: logging.Logger
+) -> None:
+    """Append compiled heat_topology loads after the user's configured loads.
+
+    Used when the topology sets ``extend_deferrable_loads: true``. The user's
+    first N deferrable loads stay untouched (short per-load arrays are padded
+    to N with the usual defaults first, longer ones truncated to N so the
+    compiled loads land at deterministic indices), the compiled loads take
+    indices N..N+M-1, and every compiled load reference (shared-tank
+    ``load_ids``, actuator-group ``deferrable<i>`` names) is shifted by N.
+    Existing manual ``shared_thermal_tanks`` / ``deferrable_load_groups``
+    entries are kept; the compiled ones are appended after them.
+    """
+    offset = int(optim_conf.get("number_of_deferrable_loads") or 0)
+    num_compiled = compiled["number_of_deferrable_loads"]
+
+    # Per-load arrays: user's values (normalized to `offset` entries) followed
+    # by the compiled values. Pad defaults match the established per-load
+    # defaults used elsewhere (check_def_loads call sites).
+    pad_defaults = {
+        "nominal_power_of_deferrable_loads": 0.0,
+        "minimum_power_of_deferrable_loads": 0.0,
+        "treat_deferrable_load_as_semi_cont": True,
+        "operating_hours_of_each_deferrable_load": 0,
+        "set_deferrable_load_single_constant": False,
+        "set_deferrable_startup_penalty": 0.0,
+        "deferrable_load_max_cost": 0.0,
+        "set_deferrable_max_startups": 0,
+        "start_timesteps_of_each_deferrable_load": 0,
+        "end_timesteps_of_each_deferrable_load": 0,
+        "cost_forecast_per_deferrable_load": None,
+        "is_electric_load": True,
+    }
+    for key, default in pad_defaults.items():
+        existing = optim_conf.get(key)
+        existing = list(existing) if isinstance(existing, list) else []
+        existing += [default] * (offset - len(existing))
+        optim_conf[key] = existing[:offset] + list(compiled[key])
+    # def_load_config pads with fresh dicts (no shared instance between slots).
+    def_cfgs = optim_conf.get("def_load_config")
+    def_cfgs = list(def_cfgs) if isinstance(def_cfgs, list) else []
+    def_cfgs += [{} for _ in range(offset - len(def_cfgs))]
+    optim_conf["def_load_config"] = def_cfgs[:offset] + list(compiled["def_load_config"])
+
+    # Shift compiled load references by the user's load count.
+    shifted_tanks = []
+    for tank in compiled["shared_thermal_tanks"]:
+        tank = dict(tank)
+        tank["load_ids"] = [int(i) + offset for i in tank.get("load_ids", [])]
+        shifted_tanks.append(tank)
+    shifted_groups = []
+    for group in compiled["deferrable_load_groups"]:
+        group = dict(group)
+        group["names"] = [
+            f"deferrable{int(name.removeprefix('deferrable')) + offset}"
+            for name in group.get("names", [])
+        ]
+        shifted_groups.append(group)
+    optim_conf["shared_thermal_tanks"] = (
+        list(optim_conf.get("shared_thermal_tanks") or []) + shifted_tanks
+    )
+    optim_conf["deferrable_load_groups"] = (
+        list(optim_conf.get("deferrable_load_groups") or []) + shifted_groups
+    )
+
+    optim_conf["number_of_deferrable_loads"] = offset + num_compiled
+    logger.info(
+        "heat_topology extend_deferrable_loads: %d configured loads kept, "
+        "%d topology loads appended at indices %d..%d",
+        offset,
+        num_compiled,
+        offset,
+        offset + num_compiled - 1,
+    )
+
+
 def calculate_thermal_loss_signed(
     outdoor_temperature_forecast: np.ndarray | pd.Series,
     indoor_temperature: float,
@@ -2609,36 +2686,45 @@ async def treat_runtimeparams(
         except ValueError as e:
             logger.error("heat_topology compile failed: %s", e)
             raise
-        # Merge compiled fields into optim_conf, allowing user-set fields to win
-        # for things the compiler always populates (e.g. operating_hours).
-        for key, val in compiled.items():
-            if key not in optim_conf or optim_conf[key] in (None, [], {}):
-                optim_conf[key] = val
-            else:
-                # For the structural fields we ALWAYS want compiled values
-                # (otherwise the compiled def_load_config doesn't match
-                # number_of_deferrable_loads, etc.)
-                if key in {
-                    "number_of_deferrable_loads",
-                    "def_load_config",
-                    "shared_thermal_tanks",
-                    "deferrable_load_groups",
-                    "nominal_power_of_deferrable_loads",
-                    "minimum_power_of_deferrable_loads",
-                    "treat_deferrable_load_as_semi_cont",
-                    "cost_forecast_per_deferrable_load",
-                    # All per-load arrays must match number_of_deferrable_loads,
-                    # which the compiler sets - so override any defaults.
-                    "set_deferrable_load_single_constant",
-                    "set_deferrable_startup_penalty",
-                    "deferrable_load_max_cost",
-                    "set_deferrable_max_startups",
-                    "operating_hours_of_each_deferrable_load",
-                    "start_timesteps_of_each_deferrable_load",
-                    "end_timesteps_of_each_deferrable_load",
-                    "is_electric_load",
-                }:
+        if heat_topology.get("extend_deferrable_loads", False):
+            # Opt-in append mode: keep the user's configured deferrable loads
+            # and add the compiled topology loads AFTER them. Setting the flag
+            # is the user asserting their flat per-load config describes real
+            # loads (the compiler cannot tell configured loads apart from
+            # defaults, which is why replace is the default).
+            _extend_optim_conf_with_compiled_topology(optim_conf, compiled, logger)
+        else:
+            # Default replace mode: merge compiled fields into optim_conf,
+            # allowing user-set fields to win for things the compiler always
+            # populates (e.g. operating_hours).
+            for key, val in compiled.items():
+                if key not in optim_conf or optim_conf[key] in (None, [], {}):
                     optim_conf[key] = val
+                else:
+                    # For the structural fields we ALWAYS want compiled values
+                    # (otherwise the compiled def_load_config doesn't match
+                    # number_of_deferrable_loads, etc.)
+                    if key in {
+                        "number_of_deferrable_loads",
+                        "def_load_config",
+                        "shared_thermal_tanks",
+                        "deferrable_load_groups",
+                        "nominal_power_of_deferrable_loads",
+                        "minimum_power_of_deferrable_loads",
+                        "treat_deferrable_load_as_semi_cont",
+                        "cost_forecast_per_deferrable_load",
+                        # All per-load arrays must match number_of_deferrable_loads,
+                        # which the compiler sets - so override any defaults.
+                        "set_deferrable_load_single_constant",
+                        "set_deferrable_startup_penalty",
+                        "deferrable_load_max_cost",
+                        "set_deferrable_max_startups",
+                        "operating_hours_of_each_deferrable_load",
+                        "start_timesteps_of_each_deferrable_load",
+                        "end_timesteps_of_each_deferrable_load",
+                        "is_electric_load",
+                    }:
+                        optim_conf[key] = val
         params["optim_conf"] = optim_conf
         logger.info(
             "heat_topology compiled: %d sources, %d storage, %d flows, %d groups",

@@ -1566,6 +1566,111 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(optim_conf_out["def_load_config"]), 1)
 
     @staticmethod
+    def _hp_booster_extend_topo(extend):
+        """HP + booster feeding one DHW tank, with a mutex actuator group."""
+        topo = {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.4,
+                    "nominal_power": 3500,
+                },
+                {"id": "booster", "type": "electric", "efficiency": 1.0, "nominal_power": 3000},
+            ],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 48,
+                    "min_temperature": [45] * 48,
+                    "max_temperature": [65] * 48,
+                }
+            ],
+            "flows": [{"from": "hp", "to": "dhw"}, {"from": "booster", "to": "dhw"}],
+            "actuator_groups": [
+                {"flows": [["hp", "dhw"], ["booster", "dhw"]], "mutual_exclusion": True}
+            ],
+        }
+        if extend:
+            topo["extend_deferrable_loads"] = True
+        return topo
+
+    async def test_treat_runtimeparams_heat_topology_extend_appends_loads(self):
+        """extend_deferrable_loads keeps the configured loads and appends the
+        topology loads after them, shifting tank load_ids and group names."""
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+        original_num = optim_conf["number_of_deferrable_loads"]
+        original_nominal = list(optim_conf["nominal_power_of_deferrable_loads"])
+
+        runtimeparams_json = orjson.dumps(
+            {"heat_topology": self._hp_booster_extend_topo(extend=True)}
+        ).decode("utf-8")
+        _, _, out, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+
+        self.assertEqual(out["number_of_deferrable_loads"], original_num + 2)
+        # User loads untouched, topology loads appended
+        self.assertEqual(out["nominal_power_of_deferrable_loads"][:original_num], original_nominal)
+        self.assertEqual(out["nominal_power_of_deferrable_loads"][original_num:], [3500.0, 3000.0])
+        # Compiled load references shifted by the user's load count
+        self.assertEqual(
+            out["shared_thermal_tanks"][0]["load_ids"],
+            [original_num, original_num + 1],
+        )
+        self.assertEqual(
+            out["deferrable_load_groups"][0]["names"],
+            [f"deferrable{original_num}", f"deferrable{original_num + 1}"],
+        )
+        # Per-load arrays all sized to the new count; padded slots get defaults
+        for key in (
+            "treat_deferrable_load_as_semi_cont",
+            "set_deferrable_load_single_constant",
+            "cost_forecast_per_deferrable_load",
+            "is_electric_load",
+            "def_load_config",
+        ):
+            self.assertEqual(len(out[key]), original_num + 2, key)
+        self.assertEqual(out["is_electric_load"], [True] * (original_num + 2))
+        self.assertIn("thermal_source", out["def_load_config"][original_num])
+
+    async def test_treat_runtimeparams_heat_topology_replace_stays_default(self):
+        """Without the flag the compiler keeps today's replace behaviour:
+        the topology defines the whole load set, indices start at 0."""
+        params = await TestUtils.get_test_params()
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+
+        runtimeparams_json = orjson.dumps(
+            {"heat_topology": self._hp_booster_extend_topo(extend=False)}
+        ).decode("utf-8")
+        _, _, out, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+
+        self.assertEqual(out["number_of_deferrable_loads"], 2)
+        self.assertEqual(out["shared_thermal_tanks"][0]["load_ids"], [0, 1])
+        self.assertEqual(out["deferrable_load_groups"][0]["names"], ["deferrable0", "deferrable1"])
+
+    @staticmethod
     async def _run_treat_runtimeparams(runtimeparams_dict, set_type="naive-mpc-optim"):
         """Helper: run treat_runtimeparams with default params and the given
         runtime dict; return the resulting optim_conf."""

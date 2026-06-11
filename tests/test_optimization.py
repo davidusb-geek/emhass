@@ -5875,6 +5875,78 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         # Cooling holds the zone below its 24 C start (it drifts up without the fix).
         self.assertLess(pred.mean(), 24.0, "zone was not cooled (drifted up instead)")
 
+    def test_shared_thermal_tank_offset_load_ids(self):
+        """A shared tank whose members are NOT loads 0..M-1 must work: this is
+        exactly what heat_topology's extend_deferrable_loads produces (user
+        loads first, topology loads appended). Loads 0-1 are ordinary
+        deferrable loads; loads 2-3 feed the tank via load_ids [2, 3]."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+
+        draw_off = [0.0] * 48
+        draw_off[14] = 1.0
+        draw_off[40] = 1.2
+
+        self.optim_conf["number_of_deferrable_loads"] = 4
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [3000, 750, 3500, 25000]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0, 0, 0, 0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [2, 2, 4, 4]
+        # Tank members modulate (continuous): a 30-min full-power slot of either
+        # source overshoots this small tank's 62 C ceiling, so semi-continuous
+        # sources would make the MILP infeasible (the pre-existing two-source
+        # test only "passes" via the silent relaxed-LP fallback).
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [True, True, False, False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False] * 4
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0] * 4
+        self.optim_conf["set_deferrable_max_startups"] = [0] * 4
+        self.optim_conf["deferrable_load_max_cost"] = [0.0] * 4
+        self.optim_conf["is_electric_load"] = [True] * 4
+        self.optim_conf["def_current_state"] = [False] * 4
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0] * 4
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0] * 4
+        self.optim_conf["def_load_config"] = [
+            {},
+            {},
+            {"thermal_source": {"supply_temperature": 55.0, "carnot_efficiency": 0.40}},
+            {"thermal_source": {"efficiency": 0.92}},
+        ]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "dhw",
+                "load_ids": [2, 3],
+                "volume": 0.20,
+                "density": 1000,
+                "heat_capacity": 4.186,
+                "start_temperature": 50.0,
+                "thermal_loss": 0.05,
+                "draw_off_demand": draw_off,
+                "min_temperatures": [45.0] * 48,
+                "max_temperatures": [62.0] * 48,
+            }
+        ]
+
+        opt = self.create_optimization()
+        unit_load_cost = self.df_input_data_dayahead[opt.var_load_cost].values
+        unit_prod_price = self.df_input_data_dayahead[opt.var_prod_price].values
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            unit_load_cost,
+            unit_prod_price,
+        )
+
+        self.assertEqual(opt.optim_status, "Optimal")
+        # The ordinary loads still meet their operating-hours energy targets
+        dt = 0.5  # 30-minute test timestep
+        self.assertAlmostEqual(res["P_deferrable0"].sum() * dt, 3000 * 2, delta=1.0)
+        self.assertAlmostEqual(res["P_deferrable1"].sum() * dt, 750 * 2, delta=1.0)
+        # The tank is driven by its offset members
+        tank_cols = [c for c in res.columns if "predicted_temp_heater" in c]
+        self.assertTrue(tank_cols, f"no tank temp column in {res.columns.tolist()}")
+        tank_total = res["P_deferrable2"].sum() + res["P_deferrable3"].sum()
+        self.assertGreater(tank_total, 0, "Tank members must dispatch to hold the band")
+
     def test_is_electric_load_excludes_load_from_grid_balance(self):
         """A load with is_electric_load[k]=False must not appear in p_def_sum
         (and hence not in grid_pos / grid_neg balance constraints).
