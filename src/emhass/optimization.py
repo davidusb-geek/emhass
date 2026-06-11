@@ -93,6 +93,13 @@ BATTERY_FIRST_IMPORT_PENALTY_FACTOR = 100.0
 # whenever that is possible, while a contradictory target relaxes to the closest
 # reachable SoC instead of returning infeasible.
 SOC_FINAL_DEVIATION_PENALTY_FACTOR = 100.0
+# Default big-M (deg C) for the per-source max_supply_temperature gate on
+# shared thermal tanks. When allow_k = 0 the gate must leave the tank
+# temperature unconstrained, so M must be at least (highest feasible tank
+# temperature - lowest source cap). 100 covers domestic hot-water tanks; the
+# gate widens it per tank when a configured max_temperatures says the tank can
+# run hotter (e.g. industrial or glycol systems).
+SHARED_TANK_CAP_BIG_M_TEMP = 100.0
 
 
 class Optimization:
@@ -4252,7 +4259,12 @@ class Optimization:
         # ceiling; a source without a cap (e.g. an electric booster) can drive the
         # tank up to the tank's own max_temperatures. Big-M gate: allow_k[t] == 1
         # permits source k at step t, and is only allowed while temp[t] <= cap.
-        big_m_temp = 100.0
+        # The gate is a physical limit, so it is kept (booleans included) in the
+        # relaxed-LP fallback rebuild too - same treatment as the tank's hard
+        # min/max temperatures; the fallback must not publish a plan the
+        # hardware cannot execute.
+        finite_max_temps = [v for v in max_temperatures_list if v is not None]
+        tank_temp_ub = max(finite_max_temps) if finite_max_temps else None
         for k, cap in zip(load_ids, source_caps):
             if cap is None:
                 continue
@@ -4265,6 +4277,11 @@ class Optimization:
                 cap_arr = np.array(cap_list[:required_len])
             else:
                 cap_arr = np.full(required_len, float(cap))
+            # M must dominate (max feasible tank temperature - cap), otherwise
+            # allow_k = 0 would wrongly bound the tank temperature itself.
+            big_m_temp = SHARED_TANK_CAP_BIG_M_TEMP
+            if tank_temp_ub is not None:
+                big_m_temp = max(big_m_temp, tank_temp_ub - float(cap_arr.min()))
             nominal_k = self.optim_conf["nominal_power_of_deferrable_loads"][k]
             if isinstance(nominal_k, list | np.ndarray):
                 nominal_k = max(nominal_k)
