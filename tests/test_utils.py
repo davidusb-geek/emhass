@@ -3555,6 +3555,86 @@ class TestCompileHeatTopology(unittest.TestCase):
         self.assertEqual(out["cost_forecast_per_deferrable_load"][0][0], 0.25)
         self.assertEqual(out["cost_forecast_per_deferrable_load"][1][0], 0.085)
 
+    def test_max_supply_temperature_passed_through(self):
+        """A source's max_supply_temperature is compiled into its thermal_source
+        block; sources without it omit the key (backward compatible)."""
+        topo = {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.4,
+                    "nominal_power": 3500,
+                    "max_supply_temperature": 53,
+                },
+                {"id": "booster", "type": "electric", "efficiency": 1.0, "nominal_power": 3000},
+            ],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 4,
+                    "max_temperature": [65] * 4,
+                }
+            ],
+            "flows": [{"from": "hp", "to": "dhw"}, {"from": "booster", "to": "dhw"}],
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(
+            out["def_load_config"][0]["thermal_source"]["max_supply_temperature"], 53.0
+        )
+        # Booster (load 1) has no cap -> key absent
+        self.assertNotIn("max_supply_temperature", out["def_load_config"][1]["thermal_source"])
+
+    def _hp_booster_topo(self, hp_cap):
+        """Minimal HP+booster topology with the given HP max_supply_temperature."""
+        return {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.4,
+                    "nominal_power": 3500,
+                    "max_supply_temperature": hp_cap,
+                },
+                {"id": "booster", "type": "electric", "efficiency": 1.0, "nominal_power": 3000},
+            ],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 4,
+                    "max_temperature": [65] * 4,
+                }
+            ],
+            "flows": [{"from": "hp", "to": "dhw"}, {"from": "booster", "to": "dhw"}],
+        }
+
+    def test_max_supply_temperature_per_step_list_and_ndarray(self):
+        """A per-step cap (weather-compensated supply temperature) compiles to a
+        float list; numpy arrays are accepted and normalized to a plain list."""
+        out = utils.compile_heat_topology(self._hp_booster_topo([53, 53, 46, 46]))
+        self.assertEqual(
+            out["def_load_config"][0]["thermal_source"]["max_supply_temperature"],
+            [53.0, 53.0, 46.0, 46.0],
+        )
+        out = utils.compile_heat_topology(self._hp_booster_topo(np.array([53.0, 46.0])))
+        self.assertEqual(
+            out["def_load_config"][0]["thermal_source"]["max_supply_temperature"],
+            [53.0, 46.0],
+        )
+
+    def test_max_supply_temperature_rejects_non_positive_and_empty(self):
+        """A cap <= 0 (likely a typo or a mistaken 'disable' sentinel) and an
+        empty list are rejected with a clear error naming the source."""
+        for bad_cap in (0, -5, [53.0, 0.0], []):
+            with self.assertRaises(ValueError, msg=f"cap={bad_cap!r} should raise"):
+                utils.compile_heat_topology(self._hp_booster_topo(bad_cap))
+
     def test_actuator_group_emits_deferrable_group(self):
         """One physical boiler serving two tanks via mutex."""
         topo = {
