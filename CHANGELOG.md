@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.17.7 - 2026-06-11
+We are excited to announce the latest release of EMHASS! This version brings highly requested features for battery management, significant upgrades to forecasting, and a solid round of bug squashing.
+
+Here are the major highlights of this release:
+
+### Advanced Battery & Power Management
+- Intermediate Battery SoC Targets: You can now set an optional intermediate State of Charge (SoC) target for a specific timestep.
+- Battery First Priority: A new opt-in feature allows you to drain your battery completely before importing from the grid.
+- Smarter Curtailment & Preservation: PV curtailment is now scheduled as late as possible, and we’ve introduced a new battery SoC surplus cost (high-SoC dwell penalty) to help preserve battery health.
+
+### Enhanced Forecasting & Machine Learning
+- Solcast & Open-Meteo Upgrades: Naive-MPC now auto-extends the forecast window to cover the prediction horizon (enabling multi-day Solcast!). We’ve also added a feature to blend Solcast P50/P10 forecasts and improved Open-Meteo fetching with timeouts and cold-start retries.
+- MLForecaster Improvements: You can now add optional weather covariates to the ML forecaster, along with new backtest goodness-of-fit metrics to validate your models.
+
+### Cost Optimization & Utility Billing
+- Demand Charges: Added opt-in capacity/demand charge calculations that include a billing-period peak floor, perfect for more complex utility tariffs.
+- InfluxDB Math: You can now use arithmetic expressions directly in InfluxDB var_list entries.
+
+### Stability, UI, & Under-the-Hood
+- Better Error Handling: Optimization failures now surface gracefully on publish instead of throwing a generic KeyError. We've also fixed weather cache compatibility issues and spurious startup warnings.
+- Developer Goodies: We’ve automated OpenAPI JSON generation, greened our code-quality CI, and added per-deferrable command-state sensors.
+- Documentation: The docs have been reorganized for better flow, and we've updated the Cookbook and Use Cases sections.
+
+A huge thank you to all the contributors (@LesIT1, @BrettLynch123, @OptimalNothing90, @Sjeiz, and @davidusb-geek) who helped make this release possible!
+
+### Improvement
+- feat: support arithmetic expressions in InfluxDB var_list entries (@LesIT1)
+- style: green the code-quality CI (ruff format + import sort) (@LesIT1)
+- feat: schedule PV curtailment as late as possible (closes #342) (@LesIT1)
+- feat: opt-in capacity / demand charge with a billing-period peak floor (#623) (@LesIT1)
+- feat: add battery SOC surplus cost (high-SOC dwell penalty) (@LesIT1)
+- feat(mlforecaster): add backtest goodness-of-fit metrics and extract _build_weather_future helper (@BrettLynch123)
+- feat(forecast): blend Solcast P50/P10 via weather_forecast_pv_quantile_bias (@LesIT1)
+- feat: warn on unrecognized thermal_config keys (issue #943) (@LesIT1)
+- feat: add set_battery_first_priority to drain battery before grid import (closes #834) (@LesIT1)
+- feat: add optional weather covariates to the mlforecaster (#847) (@BrettLynch123)
+- ci(codecov): skip Codecov upload on fork PRs so the run check can pass (@LesIT1)
+- chore: add prek hook to auto-regenerate openapi.json (@OptimalNothing90)
+- forecast: add timeout + cold-start retry to the Open-Meteo fetch (@BrettLynch123)
+- feat: add optional per-deferrable command-state sensors (@BrettLynch123)
+- test: raise node subprocess timeout to 120s for Windows CI flake (@OptimalNothing90)
+- naive-mpc: auto-extend forecast window to cover prediction_horizon (enables multi-day Solcast, #404) (@LesIT1)
+- Add optional intermediate battery SoC target (soc_target / soc_target_timestep) — addresses #553 (@LesIT1)
+- feat: add openapi.json + auto-generation and drift check (@OptimalNothing90)
+
+### Documentation
+- docs: rearranged main header Use Casses and Cookbook sections (@davidusb-geek)
+- docs: correct stale "integer hours only" claim for operating_hours_of_each_deferrable_load + add regression test (#373) (@LesIT1)
+
+### Fix
+- fix: keep sequence (list-power) deferrable loads active when operating_hours is 0 (closes #887) (@LesIT1)
+- fix: recover from schema-incompatible weather forecast cache (issue #932) (@LesIT1)
+- fix(utils): stop spurious deferrable_load_max_cost warning on startup (#929) (@LesIT1)
+- fix: regenerate committed openapi.json (stale vs param_definitions) (@LesIT1)
+- fix: pass soc_init to dayahead-optim from runtime parameters (@Sjeiz)
+- fix: restore hybrid inverter AC power defaults to 5000 (#875) (@OptimalNothing90)
+- fix: surface infeasible optimization on publish instead of KeyError (#875) (@OptimalNothing90)
+- fix: cap aiohttp<3.13 in test extra for aioresponses compatibility (@OptimalNothing90)
+- fix: return HTTP 200 (not 201) from JSON API endpoints (@OptimalNothing90)
+- fix: close weather cache file before unlink (Windows WinError 32) (@OptimalNothing90)
+
 ## 0.17.6 - 2026-06-01
 ### Improvement
 - feat: add runtime_params.json (machine-readable runtime param schema) (@OptimalNothing90)
