@@ -551,6 +551,27 @@ function buildParamElement(
       .replaceAll('>', '&gt;').replaceAll('"', '&quot;');
     return `<input class="param_input" type="text" placeholder="[]" value="${escaped}">`;
   }
+  // Object parameters (nested JSON such as heat_topology) get a multi-line
+  // textarea: a one-line <input> is unusable for large nested structures.
+  // Absent config, JSON null and the legacy string "null" all render as an
+  // empty box. Content is entity-escaped; the browser decodes it back, so the
+  // value round-trips through saveConfiguration's JSON.parse unchanged.
+  if (parameter_definition_object["input"] === "object") {
+    let json_text = "";
+    if (value !== null && value !== undefined && value !== "" && value !== "null") {
+      json_text = typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
+    }
+    json_text = json_text
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;");
+    const placeholder_attr = String(placeholder ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;");
+    return `<textarea class="param_input param-json" rows="10" spellcheck="false" placeholder="${placeholder_attr}">${json_text}</textarea>`;
+  }
 
   //generate and return param input html,
   //check if param value is not an object, if so assume its a single value.
@@ -590,10 +611,6 @@ function buildParamElement(
           <input class="param_input" type="${type}" placeholder="${placeholder}" value="">
           ${type_specific_html_end}
           `;
-    }
-    // The nested-object path below is designed only for load_peak_hour_periods.
-    if (parameter_definition_object["input"] === "object") {
-      return `<input class="param_input" type="text" placeholder="${placeholder}" value="${JSON.stringify(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')}">`;
     }
     //for items such as load_peak_hour_periods (object of objects with arrays)
     // exclude null: typeof null === "object" is a JS gotcha — null elements must fall to the array branch
@@ -960,9 +977,11 @@ async function saveConfiguration(param_definitions) {
             continue;
           }
 
-          // object-type: JSON.parse the text-box value; treat "" and "null" as JSON null
+          // object-type: JSON.parse the textarea value; treat "" and "null" as
+          // JSON null. Trim so stray whitespace/newlines in an otherwise empty
+          // textarea do not read as invalid JSON.
           if (parameter_definition_object["input"] === "object") {
-            const raw = (param_values[0] ?? "").toString();
+            const raw = (param_values[0] ?? "").toString().trim();
             if (raw === "" || raw === "null") {
               config[parameter_definition_name] = null;
             } else {
