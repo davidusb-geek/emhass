@@ -5732,6 +5732,108 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "Comfort penalty should pull the tank clearly toward the 60 C target",
         )
 
+    async def test_full_stack_runtime_tanks_end_to_end(self):
+        """Integration of the #539 stack through the runtime path: manual
+        shared_thermal_tanks passed as runtime parameters (Micr0mega's flow),
+        carrying combined draw-off + building demand AND soft comfort fields,
+        with operating_hours = 0 (temperature-driven sources, which requires
+        the shared-tank activation fix) and a shared_tank_start_temperatures
+        override. No single feature branch can run this combination."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        draw_off = [0.0] * 48
+        draw_off[14] = 1.0
+        draw_off[40] = 1.2
+        runtimeparams = {
+            "number_of_deferrable_loads": 2,
+            "nominal_power_of_deferrable_loads": [3500, 3000],
+            "operating_hours_of_each_deferrable_load": [0, 0],
+            "treat_deferrable_load_as_semi_cont": [False, False],
+            "def_load_config": [
+                {"thermal_source": {"efficiency": 3.0, "overshoot_temperature": 55.0}},
+                {"thermal_source": {"efficiency": 1.0}},
+            ],
+            "shared_thermal_tanks": [
+                {
+                    "id": "dhw",
+                    "load_ids": [0, 1],
+                    "volume": 0.30,
+                    "start_temperature": 20.0,  # overridden below
+                    "thermal_loss": 0.05,
+                    "draw_off_demand": draw_off,
+                    "u_value": 0.5,
+                    "envelope_area": 300.0,
+                    "ventilation_rate": 0.5,
+                    "heated_volume": 250.0,
+                    "indoor_target_temperature": 20.0,
+                    "min_temperatures": [45.0] * 48,
+                    "max_temperatures": [65.0] * 48,
+                    "desired_temperatures": 58.0,
+                    "penalty_factor": 50.0,
+                }
+            ],
+            "shared_tank_start_temperatures": {"dhw": 50.0},
+        }
+        config = await build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+        _, secrets = await build_secrets(emhass_conf, logger, no_response=True)
+        params = await build_params(emhass_conf, secrets, config, logger)
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(params_json, logger)
+        _, _, optim_conf_out, _ = await utils.treat_runtimeparams(
+            orjson.dumps(runtimeparams).decode("utf-8"),
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+
+        # Runtime plumbing landed: tanks present, start temperature patched
+        self.assertEqual(len(optim_conf_out["shared_thermal_tanks"]), 1)
+        self.assertEqual(optim_conf_out["shared_thermal_tanks"][0]["start_temperature"], 50.0)
+
+        opt = self.create_optimization(optim_conf=optim_conf_out)
+        ulc = self.df_input_data_dayahead[opt.var_load_cost].values
+        upp = self.df_input_data_dayahead[opt.var_prod_price].values
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            ulc,
+            upp,
+        )
+
+        # operating_hours = 0 must NOT deactivate the temperature-driven
+        # sources (the #974/#975 class of failure): the MILP itself solves.
+        self.assertEqual(opt.optim_status, "Optimal")
+        # Both demand models are served, not just the draw-off profile.
+        building_demand = utils.calculate_heating_demand_physics(
+            u_value=0.5,
+            envelope_area=300.0,
+            ventilation_rate=0.5,
+            heated_volume=250.0,
+            indoor_target_temperature=20.0,
+            outdoor_temperature_forecast=[10.0] * 48,
+            optimization_time_step=30,
+        )
+        building_sum = float(np.sum(building_demand[:47]))
+        dt = 0.5
+        thermal_in_kwh = (
+            (res["P_deferrable0"].sum() * 3.0 + res["P_deferrable1"].sum() * 1.0) * dt / 1000.0
+        )
+        self.assertGreater(thermal_in_kwh, 2.2 + 0.7 * building_sum)
+        # The per-source overshoot gate holds end-to-end: the cheap source
+        # stays off while the tank is above its 55 C threshold.
+        tank_cols = [c for c in res.columns if "predicted_temp_heater" in c]
+        self.assertTrue(tank_cols)
+        temp = res[tank_cols[0]].reset_index(drop=True)
+        hp = res["P_deferrable0"].reset_index(drop=True)
+        above = temp > 55.05
+        if above.any():
+            self.assertLess(hp[above].max(), 1e-3)
+
     def _run_shared_tank_no_cap(
         self, operating_hours, start_timesteps, end_timesteps, single_constant=(False, False)
     ):
