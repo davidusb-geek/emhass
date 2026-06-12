@@ -45,6 +45,7 @@ from emhass.utils import (
     build_legacy_config_params,
     build_params,
     build_secrets,
+    compile_heat_topology,
     get_injection_dict,
     get_injection_dict_forecast_calibration,
     get_injection_dict_forecast_model_fit,
@@ -441,6 +442,17 @@ async def parameter_set():
     # check if data is empty
     if len(request_data) == 0:
         return await make_response(["failed to retrieve config json"], 400)
+
+    # Validate heat_topology at save time instead of at the next optimization
+    # run: the compiler's ValueError names the offending field, so surface it
+    # in the UI alert now rather than failing an unattended run later.
+    heat_topology = request_data.get("heat_topology")
+    if isinstance(heat_topology, dict) and heat_topology:
+        try:
+            compile_heat_topology(heat_topology)
+        except ValueError as e:
+            app.logger.warning("Rejected config save: heat_topology invalid: %s", e)
+            return await make_response([f"heat_topology is invalid: {e}"], 400)
 
     # Format config by converting to params (format params. check if params match legacy option.json format. If so format)
     params = await build_params(emhass_conf, params_secrets, request_data, app.logger)

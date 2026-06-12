@@ -139,6 +139,65 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(f_write.write.called)
 
+    @patch("emhass.web_server.aiofiles.open")
+    @patch("os.path.exists")
+    @patch("emhass.web_server.build_params")
+    @patch("emhass.web_server.param_to_config")
+    async def test_parameter_set_rejects_invalid_heat_topology(
+        self, mock_p2c, mock_build_params, mock_exists, mock_file
+    ):
+        """An invalid heat_topology is rejected at save time with the compiler's
+        field-precise error, instead of failing at the next optimization run."""
+        mock_exists.return_value = True
+        f_defaults = AsyncMock()
+        f_defaults.read.return_value = orjson.dumps({"default": 1})
+        mock_file.return_value.__aenter__.return_value = f_defaults
+        bad_topology = {
+            "sources": [{"id": "hp", "type": "not_a_real_type", "nominal_power": 1000}],
+            "storage": [{"id": "dhw", "volume": 0.2}],
+            "flows": [{"from": "hp", "to": "dhw"}],
+        }
+        response = await self.client.post("/set-config", json={"heat_topology": bad_topology})
+        self.assertEqual(response.status_code, 400)
+        body = await response.get_json()
+        self.assertIn("heat_topology is invalid", body[0])
+        self.assertIn("not_a_real_type", body[0])
+        # Validation failure must stop the save before any config is built
+        mock_build_params.assert_not_called()
+        mock_p2c.assert_not_called()
+
+    @patch("emhass.web_server.aiofiles.open")
+    @patch("os.path.exists")
+    @patch("emhass.web_server.build_params")
+    @patch("emhass.web_server.param_to_config")
+    async def test_parameter_set_accepts_valid_heat_topology(
+        self, mock_p2c, mock_build_params, mock_exists, mock_file
+    ):
+        """A valid heat_topology compiles cleanly and the save proceeds."""
+        mock_exists.return_value = True
+        f_defaults = AsyncMock()
+        f_defaults.read.return_value = orjson.dumps({"default": 1})
+        f_write = AsyncMock()
+        mock_file.return_value.__aenter__.side_effect = [f_defaults, f_write, f_write]
+        mock_build_params.return_value = {"new": "params"}
+        mock_p2c.return_value = {"new": "config"}
+        good_topology = {
+            "sources": [{"id": "boiler", "type": "gas", "efficiency": 0.9, "nominal_power": 10000}],
+            "storage": [
+                {
+                    "id": "tank",
+                    "volume": 0.1,
+                    "start_temperature": 35,
+                    "min_temperature": [25] * 4,
+                    "max_temperature": [60] * 4,
+                }
+            ],
+            "flows": [{"from": "boiler", "to": "tank"}],
+        }
+        response = await self.client.post("/set-config", json={"heat_topology": good_topology})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(f_write.write.called)
+
     @patch("emhass.web_server.set_input_data_dict")
     @patch("emhass.web_server.perfect_forecast_optim")
     @patch("emhass.web_server._save_injection_dict")
