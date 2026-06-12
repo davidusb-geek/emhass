@@ -5981,6 +5981,119 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         if above.any():
             self.assertLess(hp[above].max(), 1e-3)
 
+    async def test_full_stack_topology_extend_with_other_loads_end_to_end(self):
+        """The compiled-topology counterpart of the runtime-tanks test: a
+        heat_topology with extend_deferrable_loads passed at runtime, alongside
+        two ordinary steerable loads (washing-machine style), through
+        treat_runtimeparams (compile + append) and a full perform_optimization
+        on the standard forecast fixtures. The ordinary loads must meet their
+        operating-hours energy targets at indices 0-1 while the compiled
+        HP + booster drive the tank at the shifted indices 2-3, with the
+        compiled max_supply_temperature gating the HP."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+        min_t = [45.0] * 48
+        for i in range(28, 34):
+            min_t[i] = 60.0  # above the HP cap -> only the booster can serve it
+        draw_off = [0.0] * 48
+        draw_off[14] = 1.0
+        topology = {
+            "extend_deferrable_loads": True,
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.4,
+                    "nominal_power": 3500,
+                    "treat_as_semi_cont": False,
+                    "max_supply_temperature": 53,
+                },
+                {
+                    "id": "booster",
+                    "type": "electric",
+                    "efficiency": 1.0,
+                    "nominal_power": 3000,
+                    "treat_as_semi_cont": False,
+                },
+            ],
+            "storage": [
+                {
+                    "id": "dhw",
+                    "volume": 0.3,
+                    "start_temperature": 48,
+                    "thermal_loss": 0.05,
+                    "min_temperature": min_t,
+                    "max_temperature": [65] * 48,
+                }
+            ],
+            "consumers": [{"type": "profile", "target": "dhw", "profile": draw_off}],
+            "flows": [{"from": "hp", "to": "dhw"}, {"from": "booster", "to": "dhw"}],
+        }
+        runtimeparams = {
+            # The user's REAL steerable loads, configured flat as usual
+            "number_of_deferrable_loads": 2,
+            "nominal_power_of_deferrable_loads": [3000, 750],
+            "operating_hours_of_each_deferrable_load": [2, 2],
+            "treat_deferrable_load_as_semi_cont": [True, True],
+            # ...plus the heating system as a topology, appended behind them
+            "heat_topology": topology,
+        }
+        config = await build_config(emhass_conf, logger, emhass_conf["defaults_path"])
+        _, secrets = await build_secrets(emhass_conf, logger, no_response=True)
+        params = await build_params(emhass_conf, secrets, config, logger)
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = get_yaml_parse(params_json, logger)
+        _, _, optim_conf_out, _ = await utils.treat_runtimeparams(
+            orjson.dumps(runtimeparams).decode("utf-8"),
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+
+        # Compile + append plumbing
+        self.assertEqual(optim_conf_out["number_of_deferrable_loads"], 4)
+        self.assertEqual(optim_conf_out["shared_thermal_tanks"][0]["load_ids"], [2, 3])
+        self.assertEqual(
+            optim_conf_out["def_load_config"][2]["thermal_source"]["max_supply_temperature"],
+            53.0,
+        )
+
+        opt = self.create_optimization(optim_conf=optim_conf_out)
+        ulc = self.df_input_data_dayahead[opt.var_load_cost].values
+        upp = self.df_input_data_dayahead[opt.var_prod_price].values
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            ulc,
+            upp,
+        )
+
+        self.assertEqual(opt.optim_status, "Optimal")
+        dt = 0.5
+        # The ordinary steerable loads meet their energy targets untouched
+        self.assertAlmostEqual(res["P_deferrable0"].sum() * dt, 3000 * 2, delta=1.0)
+        self.assertAlmostEqual(res["P_deferrable1"].sum() * dt, 750 * 2, delta=1.0)
+        # The compiled topology loads drive the tank at the shifted indices
+        tank_cols = [c for c in res.columns if "predicted_temp_heater" in c]
+        self.assertTrue(tank_cols, f"no tank temp column in {res.columns.tolist()}")
+        temp = res[tank_cols[0]].reset_index(drop=True)
+        hp = res["P_deferrable2"].reset_index(drop=True)
+        booster = res["P_deferrable3"].reset_index(drop=True)
+        self.assertGreater(booster.sum(), 0, "Booster must serve the 60 C band above the cap")
+        above = temp > 53.05
+        self.assertTrue(above.any(), "Tank must exceed the HP cap to reach the 60 C band")
+        self.assertLess(
+            hp[above].max(),
+            1e-3,
+            "Compiled max_supply_temperature must gate the HP at its shifted index",
+        )
+
     def _run_shared_tank_no_cap(
         self, operating_hours, start_timesteps, end_timesteps, single_constant=(False, False)
     ):
