@@ -11621,6 +11621,56 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             "construction regardless of outdoor forecast",
         )
 
+    def test_shared_tank_fresh_build_honors_start_temperature(self):
+        """Each fresh shared-tank build pins the tank to its own
+        start_temperature (the first predicted temperature equals it). This is
+        the property the #970 cache bypass relies on: because the warm-start
+        cache is skipped for shared tanks, every MPC tick rebuilds and the live
+        tank temperature is honored instead of the first tick's stale value."""
+        for start in (55.0, 50.0):
+            self.df_input_data_dayahead = self.prepare_forecast_data()
+            self.df_input_data_dayahead["outdoor_temperature_forecast"] = [10.0] * 48
+            self.optim_conf["number_of_deferrable_loads"] = 1
+            self.optim_conf["nominal_power_of_deferrable_loads"] = [3000]
+            self.optim_conf["minimum_power_of_deferrable_loads"] = [0]
+            self.optim_conf["operating_hours_of_each_deferrable_load"] = [0]
+            self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False]
+            self.optim_conf["set_deferrable_load_single_constant"] = [False]
+            self.optim_conf["set_deferrable_startup_penalty"] = [0.0]
+            self.optim_conf["set_deferrable_max_startups"] = [0]
+            self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0]
+            self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0]
+            self.optim_conf["def_load_config"] = [
+                {"thermal_source": {"supply_temperature": 60.0, "carnot_efficiency": 0.45}}
+            ]
+            self.optim_conf["shared_thermal_tanks"] = [
+                {
+                    "id": "dhw",
+                    "load_ids": [0],
+                    "volume": 0.3,
+                    "start_temperature": start,
+                    "min_temperatures": [45.0] * 48,
+                    "max_temperatures": [60.0] * 48,
+                    "draw_off_demand": [0.2] * 48,
+                }
+            ]
+            opt = self.create_optimization()
+            res = opt.perform_optimization(
+                self.df_input_data_dayahead,
+                self.p_pv_forecast.values.ravel(),
+                self.p_load_forecast.values.ravel(),
+                self.df_input_data_dayahead[opt.var_load_cost].values,
+                self.df_input_data_dayahead[opt.var_prod_price].values,
+            )
+            self.assertEqual(opt.optim_status, "Optimal")
+            first_temp = res["predicted_temp_heater0"].reset_index(drop=True).iloc[0]
+            self.assertAlmostEqual(
+                first_temp,
+                start,
+                places=1,
+                msg=f"Fresh build must start the tank at its configured {start} C, got {first_temp}",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
