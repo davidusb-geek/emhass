@@ -605,23 +605,22 @@ class Optimization:
                 )
 
     @staticmethod
-    def _coerce_min_on_timesteps(value, k: int) -> int:
-        """Validate a def_minimum_on_time entry into a non-negative int (timesteps, issue #952).
+    def _coerce_nonneg_timesteps(value, k: int, param_name: str) -> int:
+        """Validate a per-load timestep entry into a non-negative int (issue #952).
 
-        Mirrors the validation given to def_current_on_timesteps so a malformed
-        config value fails loudly with context instead of a bare int() error.
+        Shared by def_minimum_on_time and def_current_on_timesteps so all
+        min-on / elapsed-on-time timestep validation lives in one place and a
+        malformed value fails loudly with context instead of a bare int() error.
         """
         try:
             steps = int(value)
         except (TypeError, ValueError) as err:
             raise ValueError(
-                f"Invalid def_minimum_on_time value at index {k}: {value!r}. "
+                f"Invalid {param_name} value at index {k}: {value!r}. "
                 "Expected a non-negative integer (timesteps)."
             ) from err
         if steps < 0:
-            raise ValueError(
-                f"def_minimum_on_time[{k}]={steps} is negative; minimum on-time must be >= 0."
-            )
+            raise ValueError(f"{param_name}[{k}]={steps} is negative; must be >= 0.")
         return steps
 
     def _update_def_current_on_timesteps_params(self, num_def_loads: int) -> None:
@@ -658,18 +657,7 @@ class Optimization:
 
         for k in range(num_def_loads):
             val = cot_conf[k] if k < n_conf else 0
-            try:
-                elapsed = int(val)
-            except (TypeError, ValueError) as err:
-                raise ValueError(
-                    f"Invalid def_current_on_timesteps value at index {k}: {val!r}. "
-                    "Expected a non-negative integer (timesteps already ON)."
-                ) from err
-            if elapsed < 0:
-                raise ValueError(
-                    f"def_current_on_timesteps[{k}]={elapsed} is negative; "
-                    "elapsed on-time must be >= 0."
-                )
+            elapsed = self._coerce_nonneg_timesteps(val, k, "def_current_on_timesteps")
             if k < len(self.param_current_on_timesteps):
                 self.param_current_on_timesteps[k].value = float(elapsed)
 
@@ -2918,8 +2906,8 @@ class Optimization:
                     and "def_minimum_on_time" in self.optim_conf
                     and k < len(self.optim_conf["def_minimum_on_time"])
                 ):
-                    min_on_n = self._coerce_min_on_timesteps(
-                        self.optim_conf["def_minimum_on_time"][k], k
+                    min_on_n = self._coerce_nonneg_timesteps(
+                        self.optim_conf["def_minimum_on_time"][k], k, "def_minimum_on_time"
                     )
                     if min_on_n > 0:
                         # For every timestep t where p_def_start[k][t] fires (1 = rising
@@ -3746,7 +3734,9 @@ class Optimization:
                 min_on_lb = np.zeros(n)
                 def_min_on = self.optim_conf.get("def_minimum_on_time", [])
                 min_on_n = (
-                    self._coerce_min_on_timesteps(def_min_on[k], k) if k < len(def_min_on) else 0
+                    self._coerce_nonneg_timesteps(def_min_on[k], k, "def_minimum_on_time")
+                    if k < len(def_min_on)
+                    else 0
                 )
                 # Only fire when load is ON, N > 0, NOT single-constant (those use
                 # their own currently-running pin), and elapsed is explicitly supplied.
