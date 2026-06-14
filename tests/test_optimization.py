@@ -6770,6 +6770,7 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         Passes debug=True so P_def_bin2_<k> columns are included in the result,
         allowing run-length assertions on the binary ON/OFF state directly.
         """
+        assert len(df) == n, f"scenario dataframe length {len(df)} != n={n}"
         oc = copy.deepcopy(self.optim_conf)
         oc.update(optim_conf_overrides)
         opt = Optimization(
