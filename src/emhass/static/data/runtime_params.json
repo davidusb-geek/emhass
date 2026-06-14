@@ -90,6 +90,13 @@
       "default_value": null,
       "unit": "none"
     },
+    "def_current_on_timesteps": {
+      "friendly_name": "Deferrable elapsed ON timesteps",
+      "Description": "Per-load integer list: how many consecutive optimization timesteps each load has already been ON at the start of this horizon. Used together with minimum_on_time_of_each_deferrable_load (def_minimum_on_time) to force the remaining on-time from an in-progress minimum-ON window. Example: if N=3 and the load has already been on for 2 timesteps, remaining=1 step is forced ON from t=0. Only meaningful when def_current_state[k]=true and minimum_on_time_of_each_deferrable_load[k]>0. When absent, no initial-run forcing is applied (NOT assumed zero). Related to issue #605 (rolling-window tracking). One non-negative integer per deferrable load.",
+      "input": "array.int",
+      "default_value": null,
+      "unit": "timesteps"
+    },
     "def_load_config": {
       "friendly_name": "Deferrable load special config",
       "Description": "Per-deferrable-load special configuration carrying the thermal_config / thermal_battery models. Deep, evolving nested schema; not inlined here. See the linked documentation for the full structure.",

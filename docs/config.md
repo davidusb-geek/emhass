@@ -104,6 +104,19 @@ Example:
 	- False
 	- False
 - `set_deferrable_startup_penalty`: Set to a list of floats. For each deferrable load with a penalty `P`, each time the deferrable load turns on will incur an additional cost of `P * nominal_power_of_deferrable_loads * cost_of_electricity` at that time.
+- `def_minimum_on_time`: Per-load minimum number of consecutive optimization timesteps a load must stay ON once started (short-cycle / min-up-time protection). One integer per deferrable load. Set to `0` (default) to disable for that load -- **default-off, exact no-op**. Example: `[3, 0]` requires load 0 to stay on for at least 3 consecutive timesteps once started; load 1 has no constraint.
+
+  Unit: timesteps. Convert to minutes: `N x optimization_time_step`. With the default 30-minute step, `3 timesteps = 90 minutes`.
+
+  **Primary use case:** `treat_deferrable_load_as_semi_cont: true` loads (heat pump, AC, pump) where `bin2 = 1` forces the full nominal power -- min-on-time prevents short-cycling that wears the compressor. For loads without `treat_deferrable_load_as_semi_cont`, the constraint holds the ON/OFF binary but does not force a specific power level.
+
+  **Not applied to `set_deferrable_load_single_constant` loads:** those already run as one continuous block, so a separate minimum on-time is redundant and is ignored for them.
+
+  **Self-protecting against window end:** if a start cannot complete the minimum ON window before the load's `end_timesteps_of_each_deferrable_load`, the solver simply does not take that start -- the problem stays Optimal. No forced infeasibility.
+
+  **Composes with `set_deferrable_max_startups`:** the two constraints are independent (count vs window) and coexist cleanly. A pathological combination of low max-startups, long min-on, and a short operating window can over-constrain a load; if you use both, ensure `max_startups x min_on_time <= available_timesteps`.
+
+  **Initial-condition remainder:** to carry the remaining on-time across MPC ticks when the load is already running, also pass `def_current_on_timesteps` at runtime (see Passing data at runtime).
 - `deferrable_load_groups`: Define groups of deferrable loads that share a physical actuator (e.g. a heat pump serving both hot water and underfloor heating). Each group can enforce a shared power budget, mutual exclusion, or both. This is a list of group objects, each with the following fields:
 	- `names`: List of deferrable load names in the group (e.g. `["deferrable0", "deferrable1"]`).
 	- `max_power` *(optional when `mutual_exclusion` is `true`)*: Maximum combined power in Watts for all loads in the group at any timestep. Required when `mutual_exclusion` is `false`.

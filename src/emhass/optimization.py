@@ -358,6 +358,19 @@ class Optimization:
             ar.value = 0.0
             self.param_already_running_sc.append(ar)
 
+        # Min-on-time elapsed tracking (for initial-condition remainder, issue #952).
+        # param_current_on_timesteps[k]: integer timesteps the load has already been ON
+        # at the start of this horizon. Only meaningful when def_current_state[k]=True
+        # and def_minimum_on_time[k] > 0. Absent in optim_conf -> no initial force.
+        # This is a scalar nonneg Parameter (mirrors param_def_current_state).
+        # The CONSTRAINT enforcing remaining = max(0, N - elapsed) ON steps is applied
+        # by writing param_running_lb in the per-solve param-update block below.
+        self.param_current_on_timesteps = []
+        for k in range(num_def_loads):
+            cot = cp.Parameter(nonneg=True, name=f"current_on_timesteps_{k}")
+            cot.value = 0.0
+            self.param_current_on_timesteps.append(cot)
+
         # Load active parameters: allows deactivating non-thermal loads with 0 operating
         # timesteps without rebuilding the problem. When param_load_active[k] = 0, all
         # binary variables for load k are forced to 0 by constraints, letting the solver
@@ -590,6 +603,75 @@ class Optimization:
                     f"Invalid def_current_state value at index {k}: {state!r}. "
                     "Expected one of {{True, False, 0, 1, 0.0, 1.0}}."
                 )
+
+    @staticmethod
+    def _coerce_min_on_timesteps(value, k: int) -> int:
+        """Validate a def_minimum_on_time entry into a non-negative int (timesteps, issue #952).
+
+        Mirrors the validation given to def_current_on_timesteps so a malformed
+        config value fails loudly with context instead of a bare int() error.
+        """
+        try:
+            steps = int(value)
+        except (TypeError, ValueError) as err:
+            raise ValueError(
+                f"Invalid def_minimum_on_time value at index {k}: {value!r}. "
+                "Expected a non-negative integer (timesteps)."
+            ) from err
+        if steps < 0:
+            raise ValueError(
+                f"def_minimum_on_time[{k}]={steps} is negative; minimum on-time must be >= 0."
+            )
+        return steps
+
+    def _update_def_current_on_timesteps_params(self, num_def_loads: int) -> None:
+        """Update def_current_on_timesteps CVXPY Parameters from optim_conf.
+
+        Reads ``optim_conf["def_current_on_timesteps"]`` (a per-load list of
+        non-negative integers representing how many timesteps each load has
+        already been ON at the start of the horizon) and writes the values
+        into ``self.param_current_on_timesteps``.
+
+        This is used to compute the remaining min-on-time steps for a currently-
+        running load (issue #952): remaining = max(0, N - elapsed). When the key
+        is absent from optim_conf the parameter is reset to 0.0 for all loads,
+        which means no initial-run forcing is applied (NOT assumed-zero-elapsed;
+        the absent-key path is intentionally a no-op).
+
+        See also: ``_update_def_current_state_params`` (mirrors the same pattern).
+        """
+        if "def_current_on_timesteps" not in self.optim_conf:
+            for k in range(min(num_def_loads, len(self.param_current_on_timesteps))):
+                self.param_current_on_timesteps[k].value = 0.0
+            return
+
+        cot_conf = self.optim_conf["def_current_on_timesteps"]
+        n_conf = len(cot_conf)
+        if n_conf != num_def_loads:
+            self.logger.warning(
+                "def_current_on_timesteps length mismatch: "
+                "num_deferrable_loads=%d, len(def_current_on_timesteps)=%d; "
+                "extra entries will be ignored or missing ones assumed 0",
+                num_def_loads,
+                n_conf,
+            )
+
+        for k in range(num_def_loads):
+            val = cot_conf[k] if k < n_conf else 0
+            try:
+                elapsed = int(val)
+            except (TypeError, ValueError) as err:
+                raise ValueError(
+                    f"Invalid def_current_on_timesteps value at index {k}: {val!r}. "
+                    "Expected a non-negative integer (timesteps already ON)."
+                ) from err
+            if elapsed < 0:
+                raise ValueError(
+                    f"def_current_on_timesteps[{k}]={elapsed} is negative; "
+                    "elapsed on-time must be >= 0."
+                )
+            if k < len(self.param_current_on_timesteps):
+                self.param_current_on_timesteps[k].value = float(elapsed)
 
     def update_battery_power_limits(self, plant_conf: dict) -> None:
         """
@@ -2816,14 +2898,57 @@ class Optimization:
                         # The sum of all start events across the horizon cannot exceed the limit
                         constraints.append(cp.sum(p_def_start[k]) <= max_starts)
 
+                # Minimum ON-time (min-up-time) constraint (issue #952).
+                # Primary target: treat_deferrable_load_as_semi_cont loads (heat pump /
+                # AC / pump) where bin2=1 forces full nominal power, making min-on
+                # fully meaningful. Also works for has_min_power loads (bin2=1 implies
+                # power >= min_power). For plain/default loads bin2=1 means power is in
+                # [0, nominal]; min-on holds the binary ON but power may be fractional.
+                # Does NOT apply to sequence loads (shaped by convolution, not bin2).
+                # N == 0 -> no constraint added -> exact byte-identical no-op (default).
+                # def_minimum_on_time lives in optim_conf (build-time int), so changing
+                # it auto-invalidates the solver cache and triggers a full rebuild.
+                # Excluded for single-constant loads: those already run as one
+                # continuous block (their own currently-running pin), so a separate
+                # min-on-time is redundant and could over-constrain their
+                # sum(p_def_bin2) == required_timesteps equality.
+                if (
+                    not is_sequence_load
+                    and not is_single_const
+                    and "def_minimum_on_time" in self.optim_conf
+                    and k < len(self.optim_conf["def_minimum_on_time"])
+                ):
+                    min_on_n = self._coerce_min_on_timesteps(
+                        self.optim_conf["def_minimum_on_time"][k], k
+                    )
+                    if min_on_n > 0:
+                        # For every timestep t where p_def_start[k][t] fires (1 = rising
+                        # edge), keep bin2 ON for the next min_on_n steps. Clamped to
+                        # the horizon end so the constraint is never trivially infeasible.
+                        # Self-protecting vs window: if a start can't fit N on-steps
+                        # within its operating window, the solver simply won't start the
+                        # load -> stays Optimal. (Tested by FEASIBILITY test.)
+                        for t in range(n):
+                            window_end = min(t + min_on_n, n)
+                            constraints.append(
+                                cp.sum(p_def_bin2[k][t:window_end])
+                                >= (window_end - t) * p_def_start[k][t]
+                            )
+
                 if not is_sequence_load:
+                    # Force-on mask: p_def_bin2[k] >= param_running_lb[k] for all
+                    # binary-logic non-sequence loads. The mask is written in the
+                    # param-update block by two independent mechanisms:
+                    #   - single-constant pin (currently-running single-const load)
+                    #   - min-on-time remainder (issue #952; any load with N>0 and elapsed)
+                    # Both write to param_running_lb; the update block takes elementwise
+                    # MAX so neither overwrites the other. Default mask is all-zeros
+                    # (no-op for loads where neither mechanism applies).
+                    if k < len(self.param_running_lb):
+                        constraints.append(p_def_bin2[k] >= self.param_running_lb[k])
+
                     # Single Constant Start
                     if is_single_const:
-                        # Force ON for the initial run when the load is already running.
-                        # param_running_lb[k][t] = 1 for t in [0, remaining_steps).
-                        if k < len(self.param_running_lb):
-                            constraints.append(p_def_bin2[k] >= self.param_running_lb[k])
-
                         # Startup count: normally exactly 1 per active load.
                         # Subtract param_already_running_sc so a currently-running load
                         # requires 0 new starts (it never turned off within the horizon).
@@ -3493,6 +3618,9 @@ class Optimization:
         # Update def_current_state parameters before the per-load loop so that
         # param_def_current_state[k].value is current when the pinning block reads it.
         self._update_def_current_state_params(num_deferrable_loads)
+        # Update def_current_on_timesteps so the min-on remainder block (issue #952)
+        # has the correct elapsed on-time when it runs in the per-load loop below.
+        self._update_def_current_on_timesteps_params(num_deferrable_loads)
 
         # Update Energy Constraint Parameters for Deferrable Loads
         # These control the Big-M relaxation of energy/timestep constraints
@@ -3544,16 +3672,24 @@ class Optimization:
                 self.param_required_timesteps[k].value = 0.0
                 self.param_timesteps_active[k].value = 0.0  # Constraint is relaxed (Big-M)
 
-            # Pin currently-running single-constant loads to ON for their remaining timesteps.
-            # If the load is already on and single-constant, force p_def_bin2[k] = 1 for
-            # the first required_timesteps slots and suppress the startup event (already on).
-            # Also widen the window mask so the forced-on period is never blocked.
+            # Build param_running_lb mask for this load.
+            # Two independent mechanisms can both write to param_running_lb[k]:
+            #   A) Single-constant pin: force ON for the remaining required_timesteps
+            #      when a single-constant load is currently running.
+            #   B) Min-on-time remainder: for any semi-continuous (or min-power)
+            #      load that is currently ON, force ON for max(0, N - elapsed) steps
+            #      to honour the tail of an in-progress min-on window (issue #952).
+            # When both apply to the same k, take the ELEMENTWISE MAX (OR) of the two
+            # masks -- the stricter force wins, and neither overwrites the other.
             if k < len(self.param_running_lb):
                 current_state = (
                     self.param_def_current_state[k].value > 0.5
                     if k < len(self.param_def_current_state)
                     else False
                 )
+
+                # --- A) Single-constant pin ---
+                single_const_lb = np.zeros(n)
                 if (
                     is_single_const
                     and current_state
@@ -3578,24 +3714,21 @@ class Optimization:
                             else 0,
                             n,
                         )
-                    # cfg_end == 0 means no window restriction → treat as full horizon.
+                    # cfg_end == 0 means no window restriction -> treat as full horizon.
                     effective_end = cfg_end if cfg_end > 0 else n
                     pinned_steps = min(required_timesteps, effective_end, n)
 
-                    lb_mask = np.zeros(n)
-                    lb_mask[:pinned_steps] = 1.0
-                    self.param_running_lb[k].value = lb_mask
+                    single_const_lb[:pinned_steps] = 1.0
                     self.param_already_running_sc[k].value = 1.0
 
-                    # Widen the window mask's start to 0 (load is running now),
-                    # but never extend past the configured end timestep.
+                    # Widen the window mask so the forced-on period is never blocked.
                     if k < len(self.param_window_masks):
                         wm = self.param_window_masks[k].value.copy()
                         wm[:pinned_steps] = 1.0
                         self.param_window_masks[k].value = wm
 
                     self.logger.debug(
-                        "Deferrable load %d: currently running, pinning %d timesteps ON "
+                        "Deferrable load %d: single-const running, pinning %d timesteps ON "
                         "(requested %d, window end %d, horizon %d)",
                         k,
                         pinned_steps,
@@ -3604,8 +3737,91 @@ class Optimization:
                         n,
                     )
                 else:
-                    self.param_running_lb[k].value = np.zeros(n)
                     self.param_already_running_sc[k].value = 0.0
+
+                # --- B) Min-on-time remainder (issue #952) ---
+                # Applies when: load is currently ON, N > 0, AND elapsed on-time
+                # (def_current_on_timesteps[k]) is supplied. Absent elapsed -> no force
+                # (NOT assumed-zero; document this clearly).
+                min_on_lb = np.zeros(n)
+                def_min_on = self.optim_conf.get("def_minimum_on_time", [])
+                min_on_n = (
+                    self._coerce_min_on_timesteps(def_min_on[k], k) if k < len(def_min_on) else 0
+                )
+                # Only fire when load is ON, N > 0, NOT single-constant (those use
+                # their own currently-running pin), and elapsed is explicitly supplied.
+                if (
+                    current_state
+                    and min_on_n > 0
+                    and not is_single_const
+                    and "def_current_on_timesteps" in self.optim_conf
+                    and k < len(self.optim_conf["def_current_on_timesteps"])
+                ):
+                    # Use the validated Parameter value (set by
+                    # _update_def_current_on_timesteps_params) rather than re-reading
+                    # the raw optim_conf entry in the solve loop.
+                    elapsed = int(self.param_current_on_timesteps[k].value)
+                    remaining = max(0, min_on_n - elapsed)
+                    if remaining > 0:
+                        # Clamp to horizon and to the load's operating-window end.
+                        # Re-derive effective_end using the same logic as the
+                        # single-constant pin above (reuses validate_def_timewindow).
+                        if (
+                            def_total_timestep
+                            and k < len(def_total_timestep)
+                            and def_total_timestep[k] > 0
+                        ):
+                            _, cfg_end_mot, _ = Optimization.validate_def_timewindow(
+                                def_start_timestep[k]
+                                if def_start_timestep and k < len(def_start_timestep)
+                                else 0,
+                                def_end_timestep[k]
+                                if def_end_timestep and k < len(def_end_timestep)
+                                else 0,
+                                ceil(def_total_timestep[k]),
+                                n,
+                            )
+                        elif (
+                            def_total_hours and k < len(def_total_hours) and def_total_hours[k] > 0
+                        ):
+                            _, cfg_end_mot, _ = Optimization.validate_def_timewindow(
+                                def_start_timestep[k]
+                                if def_start_timestep and k < len(def_start_timestep)
+                                else 0,
+                                def_end_timestep[k]
+                                if def_end_timestep and k < len(def_end_timestep)
+                                else 0,
+                                ceil(def_total_hours[k] / self.time_step),
+                                n,
+                            )
+                        else:
+                            cfg_end_mot = 0
+                        effective_end_mot = cfg_end_mot if cfg_end_mot > 0 else n
+                        pinned_mot = min(remaining, effective_end_mot, n)
+                        min_on_lb[:pinned_mot] = 1.0
+
+                        # Widen the window mask so forced-on steps are never blocked.
+                        if pinned_mot > 0 and k < len(self.param_window_masks):
+                            wm_mot = self.param_window_masks[k].value.copy()
+                            wm_mot[:pinned_mot] = 1.0
+                            self.param_window_masks[k].value = wm_mot
+
+                        self.logger.debug(
+                            "Deferrable load %d: min-on remainder, elapsed=%d N=%d "
+                            "remaining=%d -> pinning %d timesteps ON (horizon %d, window_end %d)",
+                            k,
+                            elapsed,
+                            min_on_n,
+                            remaining,
+                            pinned_mot,
+                            n,
+                            effective_end_mot,
+                        )
+
+                # ELEMENTWISE MAX: combine single-const pin and min-on remainder.
+                # Neither mechanism overwrites the other; the stricter force wins.
+                combined_lb = np.maximum(single_const_lb, min_on_lb)
+                self.param_running_lb[k].value = combined_lb
 
         # Update load active parameters: deactivate non-thermal loads with 0 operating timesteps,
         # OR with a configured window that's entirely outside the optimization horizon.
