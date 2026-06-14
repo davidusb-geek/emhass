@@ -553,6 +553,13 @@
       "default_value": 0,
       "unit": "count"
     },
+    "def_minimum_on_time": {
+      "friendly_name": "Minimum ON-time for deferrable loads",
+      "Description": "Per-load minimum number of consecutive optimization timesteps a load must stay ON once started (min-up-time / short-cycle protection). One integer per deferrable load. Set to 0 (default) to disable for that load -- default-off, exact no-op. 1 timestep = optimization_time_step minutes (e.g. 3 timesteps at 30-min resolution = 90 minutes minimum run). Intended primarily for treat_deferrable_load_as_semi_cont loads (heat pumps, AC, pumps) where the ON/OFF binary is tightly coupled to the full nominal power. For plain/continuous-power loads the constraint holds the binary state ON but the power level may be fractional. Composes cleanly with set_deferrable_max_startups (independent constraints). Note: when the minimum ON window cannot fit within the load's operating-window end, the solver simply does not start the load for that horizon rather than forcing infeasibility.",
+      "input": "array.int",
+      "default_value": 0,
+      "unit": "timesteps"
+    },
     "start_timesteps_of_each_deferrable_load": {
       "friendly_name": "Deferrable start timestamp",
       "Description": "The timestep as from which each deferrable load is allowed to operate (if you don’t want the deferrable load to use the whole optimization time window). If you specify a value of 0 (or negative), the deferrable load will be optimized as from the beginning of the complete prediction horizon window.",

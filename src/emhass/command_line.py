@@ -267,6 +267,9 @@ class OptimizationCache:
             "start_timesteps_of_each_deferrable_load",
             "end_timesteps_of_each_deferrable_load",
             "def_current_state",
+            # Per-call elapsed on-time for min-on remainder (issue #952); value
+            # is read via cp.Parameter so no rebuild on cache hit.
+            "def_current_on_timesteps",
             "minimum_power_of_deferrable_loads",
             "cost_forecast_per_deferrable_load",
             # shared_thermal_tanks has its own structural hash field above

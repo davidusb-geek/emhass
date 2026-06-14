@@ -69,6 +69,7 @@ See below for a list of associations between the parameters from `config_emhass.
 | optim_conf |  weight_battery_charge |  weight_battery_charge | |
 | optim_conf |  def_start_timestep |  list_start_timesteps_of_each_deferrable_load |  start_timesteps_of_each_deferrable_load | 
 | optim_conf |  def_end_timestep |  list_end_timesteps_of_each_deferrable_load |  end_timesteps_of_each_deferrable_load | 
+| optim_conf |  def_minimum_on_time |  def_minimum_on_time | |
 | plant_conf |  P_grid_max |  maximum_power_from_grid | |
 | plant_conf |  module_model |  list_pv_module_model |  pv_module_model  | |
 | plant_conf |  inverter_model |  list_pv_inverter_model |  pv_inverter_model  | |
