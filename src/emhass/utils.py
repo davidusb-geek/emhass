@@ -1924,6 +1924,23 @@ async def treat_runtimeparams(
                 n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
                 params["optim_conf"]["def_current_state"] = [_cast_bool(dcs)] * n_loads
 
+        # def_current_on_timesteps: per-load elapsed ON timesteps for min-on remainder
+        # (issue #952). Mirrors def_current_state: absent key -> no initial force (NOT
+        # assumed zero). Validates that each entry is a non-negative integer.
+        if "def_current_on_timesteps" in runtimeparams.keys():
+            dcot = runtimeparams["def_current_on_timesteps"]
+            # String -> parse JSON list
+            if isinstance(dcot, str):
+                try:
+                    dcot = orjson.loads(dcot)
+                except Exception:
+                    logger.warning(f"Could not parse def_current_on_timesteps string: {dcot}")
+            n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
+            if isinstance(dcot, list):
+                params["optim_conf"]["def_current_on_timesteps"] = [int(v) for v in dcot]
+            else:
+                params["optim_conf"]["def_current_on_timesteps"] = [int(dcot)] * n_loads
+
         # set_deferrable_load_single_constant arrives via the generic associations.csv
         # path as-is (may be a list of strings from runtimeparams JSON).  Apply the
         # same _cast_bool coercion so 'False' → False, not True (#873, mirrors #876).
