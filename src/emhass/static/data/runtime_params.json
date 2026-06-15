@@ -97,6 +97,13 @@
       "default_value": null,
       "unit": "timesteps"
     },
+    "def_current_power": {
+      "friendly_name": "Current power of deferrable loads",
+      "Description": "Per-load actual power (watts) each deferrable load is drawing right now, at the start of the optimization horizon. When greater than 0, the optimizer pins P_deferrable[k] at the first timestep to this value, forces the load ON at that timestep, and suppresses the phantom startup penalty for it. One non-negative float per deferrable load, in the same order as nominal_power_of_deferrable_loads; default null (absent key) is an exact no-op so today's behaviour is preserved. This is a separate runtime input rather than an extension of def_current_state, so the binary on/off decision stays strict and fractional watt values cannot weaken it. For treat_deferrable_load_as_semi_cont loads the power is fixed at nominal, so the supplied wattage acts only as an on/off signal (the load is forced ON at nominal; the value pin is omitted). For loads with minimum_power_of_deferrable_loads > 0 the supplied value should be >= the configured minimum, and for all loads it should be <= nominal_power_of_deferrable_loads; values outside those bounds make the solve infeasible (the value is never silently clamped). Single-constant, sequence (list-valued nominal power) and thermal loads ignore this input; use def_current_state for a currently-running single-constant load. Runtime-overridable on every optimization tick without a cache rebuild. Related to issue #605.",
+      "input": "array.float",
+      "default_value": null,
+      "unit": "W"
+    },
     "def_load_config": {
       "friendly_name": "Deferrable load special config",
       "Description": "Per-deferrable-load special configuration carrying the thermal_config / thermal_battery models. Deep, evolving nested schema; not inlined here. See the linked documentation for the full structure.",
