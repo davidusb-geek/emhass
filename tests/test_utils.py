@@ -1565,6 +1565,55 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(optim_conf_out["number_of_deferrable_loads"], 1)
         self.assertEqual(len(optim_conf_out["def_load_config"]), 1)
 
+    async def test_treat_runtimeparams_heat_topology_startup_penalty_survives(self):
+        """A source's startup_penalty/max_startups survive compilation into
+        optim_conf. The compiler is the authority for these per-load arrays
+        (it always overrides them), so a regression that zeroed them would
+        silently disable anti-short-cycling for every heat_topology user."""
+        params = await TestUtils.get_test_params()
+        topo = {
+            "sources": [
+                {
+                    "id": "boiler",
+                    "type": "gas",
+                    "efficiency": 0.9,
+                    "nominal_power": 38000,
+                    "min_power": 4400,
+                    "startup_penalty": 0.3,
+                    "max_startups": 2,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "tank",
+                    "volume": 0.1,
+                    "start_temperature": 35,
+                    "min_temperature": [25] * 48,
+                    "max_temperature": [60] * 48,
+                    "thermal_loss": 0.05,
+                }
+            ],
+            "flows": [{"from": "boiler", "to": "tank"}],
+        }
+        params["optim_conf"]["heat_topology"] = topo
+        params_json = orjson.dumps(params).decode("utf-8")
+        retrieve_hass_conf, optim_conf, plant_conf = utils.get_yaml_parse(params_json, logger)
+
+        runtimeparams_json = orjson.dumps({}).decode("utf-8")
+        _, _, optim_conf_out, _ = await treat_runtimeparams(
+            runtimeparams_json,
+            params_json,
+            retrieve_hass_conf,
+            optim_conf,
+            plant_conf,
+            "dayahead-optim",
+            logger,
+            emhass_conf,
+        )
+
+        self.assertEqual(optim_conf_out["set_deferrable_startup_penalty"], [0.3])
+        self.assertEqual(optim_conf_out["set_deferrable_max_startups"], [2])
+
     @staticmethod
     def _hp_booster_extend_topo(extend):
         """HP + booster feeding one DHW tank, with a mutex actuator group."""
@@ -3770,6 +3819,126 @@ class TestCompileHeatTopology(unittest.TestCase):
         # Per-source cost tracks
         self.assertEqual(out["cost_forecast_per_deferrable_load"][0][0], 0.25)
         self.assertEqual(out["cost_forecast_per_deferrable_load"][1][0], 0.085)
+
+    def test_startup_penalty_and_max_startups_compiled_per_source(self):
+        """A source's startup_penalty and max_startups compile into the per-load
+        anti-short-cycle arrays, applied to EVERY flow the source drives. Sources
+        that omit them default to 0 (disabled), so existing topologies are
+        unchanged."""
+        topo = {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 55,
+                    "carnot_efficiency": 0.40,
+                    "nominal_power": 3000,
+                    "cost_track": "retail",
+                },
+                {
+                    "id": "gas",
+                    "type": "gas",
+                    "efficiency": 0.92,
+                    "nominal_power": 38000,
+                    "min_power": 4400,
+                    "startup_penalty": 0.3,
+                    "max_startups": 2,
+                    "cost_track": "gas_flat",
+                },
+            ],
+            "storage": [
+                {
+                    "id": "buf",
+                    "volume": 0.1,
+                    "start_temperature": 38,
+                    "min_temperature": [30] * 48,
+                    "max_temperature": [52] * 48,
+                    "thermal_loss": 0.08,
+                },
+                {
+                    "id": "dhw",
+                    "volume": 0.2,
+                    "start_temperature": 50,
+                    "min_temperature": [45] * 48,
+                    "max_temperature": [62] * 48,
+                    "thermal_loss": 0.1,
+                },
+            ],
+            "flows": [
+                {"from": "hp", "to": "buf"},
+                {"from": "gas", "to": "buf"},
+                {"from": "gas", "to": "dhw"},
+            ],
+            "cost_tracks": {"retail": [0.25] * 48, "gas_flat": [0.11] * 48},
+        }
+        out = utils.compile_heat_topology(topo)
+        # Flows compile in order: 0 hp->buf, 1 gas->buf, 2 gas->dhw. The gas
+        # penalty/cap apply to BOTH gas loads (1, 2); the hp load (0) stays 0.
+        self.assertEqual(out["set_deferrable_startup_penalty"], [0.0, 0.3, 0.3])
+        self.assertEqual(out["set_deferrable_max_startups"], [0, 2, 2])
+
+    def test_startup_penalty_and_max_startups_default_zero(self):
+        """A source that omits the fields compiles to disabled (0) controls."""
+        topo = {
+            "sources": [
+                {
+                    "id": "gas",
+                    "type": "gas",
+                    "efficiency": 0.92,
+                    "nominal_power": 25000,
+                    "cost_track": "gas",
+                }
+            ],
+            "storage": [
+                {
+                    "id": "buf",
+                    "volume": 0.05,
+                    "start_temperature": 35,
+                    "min_temperature": [25] * 48,
+                    "max_temperature": [50] * 48,
+                    "thermal_loss": 0.06,
+                }
+            ],
+            "flows": [{"from": "gas", "to": "buf"}],
+            "cost_tracks": {"gas": [0.085] * 48},
+        }
+        out = utils.compile_heat_topology(topo)
+        self.assertEqual(out["set_deferrable_startup_penalty"], [0.0])
+        self.assertEqual(out["set_deferrable_max_startups"], [0])
+
+    def test_startup_penalty_rejects_negative(self):
+        """A negative startup_penalty or max_startups is rejected at compile."""
+
+        def topo(extra):
+            return {
+                "sources": [
+                    {
+                        "id": "gas",
+                        "type": "gas",
+                        "efficiency": 0.9,
+                        "nominal_power": 25000,
+                        "cost_track": "gas",
+                        **extra,
+                    }
+                ],
+                "storage": [
+                    {
+                        "id": "buf",
+                        "volume": 0.05,
+                        "start_temperature": 35,
+                        "min_temperature": [25] * 48,
+                        "max_temperature": [50] * 48,
+                        "thermal_loss": 0.06,
+                    }
+                ],
+                "flows": [{"from": "gas", "to": "buf"}],
+                "cost_tracks": {"gas": [0.085] * 48},
+            }
+
+        with self.assertRaises(ValueError):
+            utils.compile_heat_topology(topo({"startup_penalty": -0.1}))
+        with self.assertRaises(ValueError):
+            utils.compile_heat_topology(topo({"max_startups": -1}))
 
     def test_max_supply_temperature_passed_through(self):
         """A source's max_supply_temperature is compiled into its thermal_source

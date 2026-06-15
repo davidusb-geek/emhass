@@ -602,6 +602,8 @@ def compile_heat_topology(topology: dict) -> dict:
     min_power = []
     treat_semi_cont = []
     operating_hours = []
+    startup_penalty = []
+    max_startups = []
     def_load_config = []
     cost_per_load: list = []
     is_electric_load: list[bool] = []
@@ -624,6 +626,24 @@ def compile_heat_topology(topology: dict) -> dict:
         min_power.append(src_min_power)
         treat_semi_cont.append(bool(src.get("treat_as_semi_cont", True)))
         operating_hours.append(int(src.get("operating_hours", 4)))
+        # Anti-short-cycle controls (optional, per source). The startup penalty
+        # prices each off->on switch (softly discouraging short-cycling); the
+        # max_startups cap is a hard limit on the number of starts per horizon.
+        # Both default to 0 (disabled) so existing topologies are unchanged.
+        penalty = float(src.get("startup_penalty", 0.0))
+        if penalty < 0:
+            raise ValueError(
+                f"heat_topology.sources[{src['id']}].startup_penalty must be >= 0, "
+                f"got {penalty}"
+            )
+        startup_penalty.append(penalty)
+        starts_cap = int(src.get("max_startups", 0))
+        if starts_cap < 0:
+            raise ValueError(
+                f"heat_topology.sources[{src['id']}].max_startups must be >= 0, "
+                f"got {starts_cap}"
+            )
+        max_startups.append(starts_cap)
         # Source-side fields - shape expected by resolve_thermal_battery_cop
         source_block: dict = {}
         src_type = src.get("type", "").lower()
@@ -902,9 +922,9 @@ def compile_heat_topology(topology: dict) -> dict:
         "treat_deferrable_load_as_semi_cont": treat_semi_cont,
         "operating_hours_of_each_deferrable_load": operating_hours,
         "set_deferrable_load_single_constant": [False] * num_loads,
-        "set_deferrable_startup_penalty": [0.0] * num_loads,
+        "set_deferrable_startup_penalty": startup_penalty,
         "deferrable_load_max_cost": [0.0] * num_loads,
-        "set_deferrable_max_startups": [0] * num_loads,
+        "set_deferrable_max_startups": max_startups,
         "start_timesteps_of_each_deferrable_load": [0] * num_loads,
         "end_timesteps_of_each_deferrable_load": [0] * num_loads,
         "def_load_config": def_load_config,
