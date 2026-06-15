@@ -7302,18 +7302,26 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             VALID_OPTIMAL_STATUSES,
             f"phantom-startup suppression solve non-optimal: {_opt.optim_status}",
         )
-        # p_def_start_0 at t=0 must be 0 (no startup event).
-        if "P_def_start_0" in res.columns:
-            start_t0 = res["P_def_start_0"].values[0]
-            self.assertAlmostEqual(
-                start_t0,
-                0.0,
-                delta=0.01,
-                msg=(
-                    f"Phantom startup not suppressed: P_def_start[0][0]={start_t0} "
-                    "(expected 0). def_current_power must bump param_def_current_state."
-                ),
-            )
+        # p_def_start_0 at t=0 must be 0 (no startup event). _run_min_on_optim runs
+        # with debug=True so the per-load start column is always emitted; assert its
+        # presence so the key check fails loudly if that ever changes instead of being
+        # silently skipped.
+        self.assertIn(
+            "P_def_start_0",
+            res.columns,
+            "P_def_start_0 missing from debug output; the phantom-startup assertion "
+            "would be skipped without it.",
+        )
+        start_t0 = res["P_def_start_0"].values[0]
+        self.assertAlmostEqual(
+            start_t0,
+            0.0,
+            delta=0.01,
+            msg=(
+                f"Phantom startup not suppressed: P_def_start[0][0]={start_t0} "
+                "(expected 0). def_current_power must bump param_def_current_state."
+            ),
+        )
 
     def test_current_power_length_mismatch_warns(self):
         """Length mismatch (len != num_def_loads) must warn, not crash."""
