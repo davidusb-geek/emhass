@@ -2647,7 +2647,7 @@ class TestDstForecastDates(unittest.IsolatedAsyncioTestCase):
         # utils.get_forecast_dates is the reference (uses DateOffset)
         # fcst_dst.freq is the optimization_time_step Timedelta
         freq_minutes = int(fcst_dst.freq.seconds // 60)
-        with patch("emhass.utils._get_now", return_value=dst_start_naive):
+        with patch("emhass.utils._get_now", return_value=dst_start_ts):
             ref_dates = utils.get_forecast_dates(freq_minutes, 7, self.paris_tz)
 
         self.assertEqual(
@@ -2698,7 +2698,7 @@ class TestDstForecastDates(unittest.IsolatedAsyncioTestCase):
         )
 
         freq_minutes = int(fcst_normal.freq.seconds // 60)
-        with patch("emhass.utils._get_now", return_value=normal_start_naive):
+        with patch("emhass.utils._get_now", return_value=normal_start_ts):
             ref_dates = utils.get_forecast_dates(freq_minutes, 7, self.paris_tz)
 
         self.assertEqual(len(fcst_normal.forecast_dates), len(ref_dates))
