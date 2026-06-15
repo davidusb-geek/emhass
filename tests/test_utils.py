@@ -5,7 +5,7 @@ import logging
 import pathlib
 import unittest
 from copy import deepcopy
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import numpy as np
@@ -160,8 +160,8 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         )
         expected_dates = [ts.isoformat() for ts in expected_range]
 
-        # 3. Set the return value for the mock (which is now passed in as an argument)
-        mock_ts_now.return_value = mock_now
+        # 3. Set the return value for the mock - tz-aware UTC instant equal to the local time
+        mock_ts_now.return_value = time_zone.localize(mock_now).astimezone(UTC)
 
         actual_dates = utils.get_forecast_dates(freq, delta_forecast, time_zone)
 
@@ -189,8 +189,8 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         )
         expected_dates = [ts.isoformat() for ts in expected_range]
 
-        # 3. Set the return value for the mock
-        mock_ts_now.return_value = mock_now
+        # 3. Set the return value for the mock - tz-aware UTC instant equal to the local time
+        mock_ts_now.return_value = time_zone.localize(mock_now).astimezone(UTC)
 
         actual_dates = utils.get_forecast_dates(freq, delta_forecast, time_zone)
         # 4. Perform assertions
@@ -199,6 +199,53 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertListEqual(actual_dates, expected_dates)
         self.assertIn("+10:00", actual_dates[2])
         self.assertIn("+11:00", actual_dates[3])
+
+    def test_get_forecast_dates_host_tz_differs_from_config(self):
+        """Issue #984: forecast dates must be correct when host clock is UTC but EMHASS tz differs.
+
+        Simulates a UTC host by patching emhass.utils.datetime so both call forms
+        (datetime.now() and datetime.now(tz)) behave as on a UTC host. The fix converts
+        the aware UTC instant to the config tz (tz_convert) instead of localizing a naive
+        wall clock (which mislabels UTC wall-clock time as local time).
+        """
+
+        class _FakeDT(datetime):
+            """Subclass of datetime so isinstance checks in utils still work."""
+
+            @classmethod
+            def now(cls, tz=None):
+                base = datetime(2026, 6, 15, 11, 17, 0)  # UTC wall clock
+                if tz is None:
+                    # Base-code path: old _get_now() calls datetime.now() with no tz.
+                    # Kept so this same test runs (and fails) against the unfixed code.
+                    return base
+                return base.replace(tzinfo=UTC).astimezone(tz)
+
+        brisbane = pytz.timezone("Australia/Brisbane")
+
+        # --- host != config tz case (UTC host, Brisbane config) ---
+        with patch("emhass.utils.datetime", _FakeDT):
+            dates = utils.get_forecast_dates(5, 2, brisbane)
+        # Correct local now: 11:17 UTC -> 21:17 AEST (+10); floored to 5min -> 21:15
+        self.assertEqual(dates[0], "2026-06-15T21:15:00+10:00")
+
+        # --- control: host clock == config tz (Brisbane host, Brisbane config) ---
+        class _FakeDTLocal(datetime):
+            """Simulates a Brisbane host: naive now() is 21:17 local; aware now() is consistent."""
+
+            @classmethod
+            def now(cls, tz=None):
+                local_naive = datetime(2026, 6, 15, 21, 17, 0)
+                if tz is None:
+                    # Base-code path (datetime.now() with no tz); kept for base-safety.
+                    return local_naive
+                # Express the same instant tz-aware in the requested tz
+                return brisbane.localize(local_naive).astimezone(tz)
+
+        with patch("emhass.utils.datetime", _FakeDTLocal):
+            dates_local = utils.get_forecast_dates(5, 2, brisbane)
+        # Same correct local start expected
+        self.assertEqual(dates_local[0], "2026-06-15T21:15:00+10:00")
 
     async def test_treat_runtimeparams(self):
         # Test dayahead runtime params

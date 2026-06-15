@@ -106,8 +106,8 @@ def get_logger(
 
 
 def _get_now() -> datetime:
-    """Helper function to get the current time, for easier mocking."""
-    return datetime.now()
+    """Return the current instant as a timezone-aware UTC datetime. Separated out for easier mocking in tests."""
+    return datetime.now(UTC)
 
 
 def get_forecast_dates(
@@ -132,7 +132,9 @@ def get_forecast_dates(
     freq = pd.to_timedelta(freq, "minutes")
     start_time = _get_now()
 
-    start_forecast = pd.Timestamp(start_time, tz=time_zone).replace(microsecond=0).floor(freq=freq)
+    start_forecast = (
+        pd.Timestamp(start_time).tz_convert(time_zone).replace(microsecond=0).floor(freq=freq)
+    )
     end_forecast = start_forecast + pd.tseries.offsets.DateOffset(days=delta_forecast)
     final_end_date = end_forecast + pd.tseries.offsets.DateOffset(days=timedelta_days) - freq
 
