@@ -132,6 +132,9 @@ def get_forecast_dates(
     freq = pd.to_timedelta(freq, "minutes")
     start_time = _get_now()
 
+    # start_time is the timezone-aware UTC instant from _get_now(); tz_convert expresses it in
+    # the configured timezone regardless of the host clock. It raises on a naive value, so a
+    # refactor that reintroduced a naive "now" here would fail loudly rather than silently shift.
     start_forecast = (
         pd.Timestamp(start_time).tz_convert(time_zone).replace(microsecond=0).floor(freq=freq)
     )
