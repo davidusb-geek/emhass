@@ -13,8 +13,8 @@ We will need to define these parameters to retrieve data from Home Assistant. Th
 
 - `optimization_time_step`: The time step to resample retrieved data from hass. This parameter is given in minutes. It should not be defined too low or you will run into memory problems when defining the Linear Programming optimization. Defaults to 30. 
 - `historic_days_to_retrieve`: We will retrieve data from now to historic_days_to_retrieve days. Defaults to 2.
-- `sensor_power_photovoltaics`: This is the name of the photovoltaic power-produced sensor in Watts from Home Assistant. For example: 'sensor.power_photovoltaics'.
-- `sensor_power_load_no_var_loads`: The name of the household power consumption sensor in Watts from Home Assistant. The deferrable loads that we will want to include in the optimization problem should be subtracted from this sensor in HASS. For example: 'sensor.power_load_no_var_loads'
+- `sensor_power_photovoltaics`: This is the name of the photovoltaic power-produced sensor in Watts from Home Assistant. For example: 'sensor.power_photovoltaics'. When using InfluxDB as the data source (`use_influxdb`), this can also be an arithmetic expression combining several InfluxDB time series (see the note below). This is especially useful for rescaling a series stored in the wrong unit of measure, for example converting a sensor logged in kW to the W that EMHASS expects.
+- `sensor_power_load_no_var_loads`: The name of the household power consumption sensor in Watts from Home Assistant. The deferrable loads that we will want to include in the optimization problem should be subtracted from this sensor in HASS. For example: 'sensor.power_load_no_var_loads'. As with `sensor_power_photovoltaics`, when using InfluxDB this can be an arithmetic expression over several time series (see the note below). The subtraction can then be performed on the fly over the whole historical series, avoiding the need to create dedicated helper sensors in Home Assistant.
 - `load_negative`: Set this parameter to True if the retrieved load variable is negative by convention. Defaults to False.
 - `set_zero_min`: Set this parameter to True to give a special treatment for a minimum value saturation to zero for power consumption data. Values below zero are replaced by nans. Defaults to True.
 - `var_replace_zero`: The list of retrieved variables that we would want to replace nans (if they exist) with zeros. For example:
@@ -31,6 +31,16 @@ We will need to define these parameters to retrieve data from Home Assistant. Th
 - `influxdb_database`: The name of the InfluxDB database containing your Home Assistant data. Defaults to `homeassistant`.
 - `influxdb_measurement`: The measurement name where your sensor data is stored. Defaults to `W` for the Home Assistant integration.
 - `influxdb_retention_policy`: The retention policy to use for InfluxDB queries. Defaults to `autogen`.
+
+```{note}
+When InfluxDB is enabled, any sensor list parameter (such as `sensor_power_photovoltaics` or `sensor_power_load_no_var_loads`) accepts an arithmetic expression over several InfluxDB time series instead of a single entity id, using the `{{ ... }}` syntax, for example `{{'sensor.power_a' - 'sensor.power_b' * 1000}}`. This is handy whenever the quantity EMHASS needs is not stored as a single sensor, for example:
+
+- a net power that is the difference of two meters (grid import minus export, total consumption minus a sub-metered load, ...);
+- a unit conversion, such as rescaling a series logged in kW to the W that EMHASS expects;
+- combining several partial sources into one total (e.g. summing two PV strings or several circuits).
+
+Because the operation is applied on the fly over the whole retrieved history, you no longer need to create dedicated template/helper sensors in Home Assistant just to feed EMHASS. See [the InfluxDB section in the passing data documentation](passing_data.md#arithmetic-expressions-in-the-sensor-list) for the full syntax, the supported operators and the caveats.
+```
 
 A second part of this section is given by some privacy-sensitive parameters that should be included as:
 - The list of secret parameters filled in the form on the Add-on **Configuration** pane if using the Add-on installation method.
