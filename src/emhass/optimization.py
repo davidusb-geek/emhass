@@ -371,6 +371,25 @@ class Optimization:
             cot.value = 0.0
             self.param_current_on_timesteps.append(cot)
 
+        # Current-power parameters (issue #605).
+        # param_def_current_power[k]: the actual power (W) the load is drawing at t=0.
+        # param_def_current_power_active[k]: 1 iff the power-pin constraint should be
+        #   tight (i.e. the load is affected AND pin-eligible, see below). Both are set
+        #   on every solve by _update_def_current_power_params. Default 0.0 = no-op.
+        # _def_current_power_affected[k]: True iff def_current_power changes anything for
+        #   load k (drives the t=0 force-on / phantom-startup suppression). Excludes
+        #   single_const / sequence / thermal loads entirely (see the update method).
+        self.param_def_current_power = []
+        self.param_def_current_power_active = []
+        self._def_current_power_affected = [False] * num_def_loads
+        for k in range(num_def_loads):
+            pw = cp.Parameter(nonneg=True, name=f"def_current_power_{k}")
+            pw.value = 0.0
+            self.param_def_current_power.append(pw)
+            active = cp.Parameter(nonneg=True, name=f"def_current_power_active_{k}")
+            active.value = 0.0
+            self.param_def_current_power_active.append(active)
+
         # Load active parameters: allows deactivating non-thermal loads with 0 operating
         # timesteps without rebuilding the problem. When param_load_active[k] = 0, all
         # binary variables for load k are forced to 0 by constraints, letting the solver
@@ -660,6 +679,108 @@ class Optimization:
             elapsed = self._coerce_nonneg_timesteps(val, k, "def_current_on_timesteps")
             if k < len(self.param_current_on_timesteps):
                 self.param_current_on_timesteps[k].value = float(elapsed)
+
+    @staticmethod
+    def _coerce_nonneg_power(value, k: int, param_name: str) -> float:
+        """Validate a per-load def_current_power entry into a non-negative float (issue #605).
+
+        A malformed value fails loudly with the param name and index for context.
+        """
+        try:
+            watts = float(value)
+        except (TypeError, ValueError) as err:
+            raise ValueError(
+                f"Invalid {param_name} value at index {k}: {value!r}. "
+                "Expected a non-negative number (watts)."
+            ) from err
+        if watts < 0:
+            raise ValueError(f"{param_name}[{k}]={watts} is negative; must be >= 0.")
+        return watts
+
+    def _update_def_current_power_params(self, num_def_loads: int) -> None:
+        """Update def_current_power CVXPY Parameters from optim_conf (issue #605).
+
+        Reads ``optim_conf["def_current_power"]`` (a per-load list of non-negative
+        floats in watts representing the power each load is currently drawing) and
+        writes the values into ``self.param_def_current_power`` and
+        ``self.param_def_current_power_active``.
+
+        Side-effect: when power[k] > 0, also bumps ``param_def_current_state[k]``
+        to max(existing, 1.0) so the t=0 phantom-startup penalty is suppressed
+        (mirrors the logic a caller would supply via def_current_state). The
+        *input* boolean def_current_state is left untouched; only the internal
+        CVXPY Parameter is shared.
+
+        When the key is absent from optim_conf all parameters reset to 0.0, which
+        is an exact no-op (no pin, no force-on, no phantom-startup suppression).
+
+        Must be called AFTER ``_update_def_current_state_params`` so the existing
+        param_def_current_state value is available for the max(...) bump.
+        """
+        self._def_current_power_affected = [False] * num_def_loads
+        if "def_current_power" not in self.optim_conf:
+            for k in range(min(num_def_loads, len(self.param_def_current_power))):
+                self.param_def_current_power[k].value = 0.0
+                self.param_def_current_power_active[k].value = 0.0
+            return
+
+        dcp_conf = self.optim_conf["def_current_power"]
+        n_conf = len(dcp_conf)
+        if n_conf != num_def_loads:
+            self.logger.warning(
+                "def_current_power length mismatch: "
+                "num_deferrable_loads=%d, len(def_current_power)=%d; "
+                "extra entries will be ignored or missing ones assumed 0",
+                num_def_loads,
+                n_conf,
+            )
+
+        # Eligibility is structural (determined at build time from load type).
+        # Re-derive it here using the same flags used in the constraint block so the
+        # parameters match what was baked into the problem.
+        nominal_powers = self.optim_conf.get("nominal_power_of_deferrable_loads", [])
+        semi_cont_flags = self.optim_conf.get("treat_deferrable_load_as_semi_cont", [])
+        single_const_flags = self.optim_conf.get("set_deferrable_load_single_constant", [])
+
+        for k in range(num_def_loads):
+            val = dcp_conf[k] if k < n_conf else 0
+            watts = self._coerce_nonneg_power(val, k, "def_current_power")
+
+            if k < len(self.param_def_current_power):
+                self.param_def_current_power[k].value = watts
+
+            is_semi_cont = semi_cont_flags[k] if k < len(semi_cont_flags) else False
+            is_single_const = single_const_flags[k] if k < len(single_const_flags) else False
+            is_sequence_load = k < len(nominal_powers) and isinstance(nominal_powers[k], list)
+            is_thermal = k in self.param_thermal
+
+            # A load is AFFECTED by def_current_power only when injecting its t=0
+            # power/on-state is meaningful and safe. Excluded entirely:
+            #   - single_const: runs as one fixed block; "currently running" is already
+            #     handled by def_current_state (which pins the remaining required
+            #     timesteps). A below-nominal pin here would fight the required-energy
+            #     target and silently relax the MIP, so use def_current_state for these.
+            #   - sequence (list-valued nominal power): shaped by convolution, no free
+            #     t=0 power variable to pin or force.
+            #   - thermal: governed by temperature dynamics, not an on/off binary.
+            affected = watts > 0 and not is_single_const and not is_sequence_load and not is_thermal
+            if k < len(self._def_current_power_affected):
+                self._def_current_power_affected[k] = affected
+
+            # The power PIN additionally needs a free t=0 power variable, so semi_cont
+            # is excluded from the pin (its power == nominal*bin); for an affected
+            # semi_cont load the t=0 force-on alone injects nominal, which is correct
+            # for an on/off device.
+            pin_active = affected and not is_semi_cont
+            if k < len(self.param_def_current_power_active):
+                self.param_def_current_power_active[k].value = 1.0 if pin_active else 0.0
+
+            # Suppress phantom startup: if this load is reported as running now,
+            # bump param_def_current_state so t=0 is not counted as a start event.
+            if affected and k < len(self.param_def_current_state):
+                self.param_def_current_state[k].value = max(
+                    self.param_def_current_state[k].value, 1.0
+                )
 
     def update_battery_power_limits(self, plant_conf: dict) -> None:
         """
@@ -2991,6 +3112,33 @@ class Optimization:
                 if k < len(self.param_load_active):
                     constraints.append(p_deferrable[k] <= M * self.param_load_active[k])
 
+            # Current-power pin at t=0 (issue #605).
+            # Applies to pin-eligible loads only: not semi_cont (strict p==nominal*bin),
+            # not single_const (fixed-energy block; a below-nominal pin would fight the
+            # required-energy target), not sequence (profile-shaped), not thermal
+            # (temperature dynamics govern). Uses parametric big-M so the constraint is a
+            # structural no-op when param_def_current_power_active[k]=0, enabling cache
+            # reuse across calls. The same M already used for this load (computed above)
+            # is reused so the bound is consistent with the p<=M*bin2 constraint.
+            if (
+                not is_semi_cont
+                and not is_single_const
+                and not is_sequence_load
+                and k not in self.param_thermal
+                and k < len(self.param_def_current_power)
+                and k < len(self.param_def_current_power_active)
+            ):
+                constraints.append(
+                    p_deferrable[k][0]
+                    <= self.param_def_current_power[k]
+                    + M * (1 - self.param_def_current_power_active[k])
+                )
+                constraints.append(
+                    p_deferrable[k][0]
+                    >= self.param_def_current_power[k]
+                    - M * (1 - self.param_def_current_power_active[k])
+                )
+
         # Process shared thermal tanks once each, after the per-load loop. Each
         # shared tank is fed by N >= 1 deferrable loads; their per-load
         # thermal_battery dynamics were skipped above.
@@ -3609,6 +3757,9 @@ class Optimization:
         # Update def_current_on_timesteps so the min-on remainder block (issue #952)
         # has the correct elapsed on-time when it runs in the per-load loop below.
         self._update_def_current_on_timesteps_params(num_deferrable_loads)
+        # Update def_current_power (issue #605): runs AFTER _update_def_current_state_params
+        # so it can bump param_def_current_state to suppress the phantom t=0 startup.
+        self._update_def_current_power_params(num_deferrable_loads)
 
         # Update Energy Constraint Parameters for Deferrable Loads
         # These control the Big-M relaxation of energy/timestep constraints
@@ -3808,9 +3959,32 @@ class Optimization:
                             effective_end_mot,
                         )
 
-                # ELEMENTWISE MAX: combine single-const pin and min-on remainder.
-                # Neither mechanism overwrites the other; the stricter force wins.
-                combined_lb = np.maximum(single_const_lb, min_on_lb)
+                # Current-power force-on (issue #605): when load k is affected by
+                # def_current_power, force bin2[k][0] = 1 so the load stays ON at
+                # t=0. Only index 0 matters here; for pinned loads the power-pin
+                # constraint already implies bin2[0]=1, so this is what keeps an affected
+                # semi_cont load ON (at nominal). Excludes single_const / sequence /
+                # thermal via _def_current_power_affected (set in the update method).
+                # Widen window_mask[0] too so a load whose window starts after t=0 is
+                # not immediately blocked by the mask (mirrors the single-const / min-on
+                # widen pattern above).
+                current_power_lb = np.zeros(n)
+                if (
+                    k < len(self._def_current_power_affected)
+                    and self._def_current_power_affected[k]
+                ):
+                    current_power_lb[0] = 1.0
+                    # Widen window mask at t=0 so the forced-on step is never blocked.
+                    if k < len(self.param_window_masks):
+                        wm_cp = self.param_window_masks[k].value.copy()
+                        if wm_cp[0] < 1.0:
+                            wm_cp[0] = 1.0
+                            self.param_window_masks[k].value = wm_cp
+
+                # ELEMENTWISE MAX: combine single-const pin, min-on remainder, and
+                # current-power force-on.  Neither mechanism overwrites the other;
+                # the stricter force wins.
+                combined_lb = np.maximum(np.maximum(single_const_lb, min_on_lb), current_power_lb)
                 self.param_running_lb[k].value = combined_lb
 
         # Update load active parameters: deactivate non-thermal loads with 0 operating timesteps,

@@ -7091,6 +7091,354 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             f"single-constant loads). Got: {_opt.optim_status}",
         )
 
+    # ---------------------------------------------------------------------------
+    # Tests for def_current_power (issue #605)
+    # All tests are base-safe: they read the new config key via optim_conf dict
+    # (not a new attribute) so Import/AttributeError is not possible on base code.
+    # RED tests are designed to FAIL on the behavioural assertion on base code,
+    # not on an exception.
+    # ---------------------------------------------------------------------------
+
+    def _make_current_power_scenario(self, n=10, prices=None, nominal=3000.0):
+        """Build a minimal input DataFrame for def_current_power tests.
+
+        n timesteps at 30-min steps; flat load=0, pv=0, custom prices allow
+        crafting cost incentives so the base solver would turn the load off at t=0.
+        """
+        if prices is None:
+            prices = [0.9] * n
+        index = pd.date_range(start="2023-01-01 00:00:00", periods=n, freq="30min", tz="UTC")
+        df = pd.DataFrame(index=index)
+        df["p_pv_forecast"] = 0.0
+        df["p_load_forecast"] = 0.0
+        df[self.fcst.var_load_cost] = prices
+        df[self.fcst.var_prod_price] = 0.0
+        return df
+
+    def _make_current_power_overrides(self, **extra):
+        """Return a base optim_conf override dict suitable for def_current_power tests."""
+        base = {
+            "costfun": "cost",
+            "number_of_deferrable_loads": 2,
+            "nominal_power_of_deferrable_loads": [3000.0, 750.0],
+            "minimum_power_of_deferrable_loads": [0.0, 0.0],
+            "operating_hours_of_each_deferrable_load": [1.0, 0.0],
+            "treat_deferrable_load_as_semi_cont": [False, False],
+            "set_deferrable_load_single_constant": [False, False],
+            "set_deferrable_startup_penalty": [0.0, 0.0],
+            "set_deferrable_max_startups": [0, 0],
+            "start_timesteps_of_each_deferrable_load": [0, 0],
+            "end_timesteps_of_each_deferrable_load": [0, 0],
+            "def_load_config": [],
+            "deferrable_load_groups": [],
+            "set_use_battery": False,
+        }
+        base.update(extra)
+        return base
+
+    def test_current_power_pin_red(self):
+        """RED (issue #605): continuous load, supplied partial watts < nominal.
+
+        With a high electricity price at t=0, the base solver sets P_def[0][0]=0
+        (load off at t=0). When def_current_power[0]=1500 (50% of 3000 W
+        nominal), the pin must force P_def[0][0]==1500.
+
+        Base code: ignores def_current_power -> P_def[0][0] is free / driven to 0.
+        This test FAILS on the assertAlmostEqual assertion on base code (P_def[0]=0,
+        not 1500), NOT on an Attribute/KeyError, so it is RED-on-base-safe.
+        """
+        n = 10
+        # Very high price at t=0 so the base solver wants to be OFF immediately.
+        prices = [0.9, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05]
+        df = self._make_current_power_scenario(n=n, prices=prices, nominal=3000.0)
+
+        # Counterfactual: without def_current_power, load turns off at t=0
+        overrides = self._make_current_power_overrides()
+
+        # --- Counterfactual: verify base truly turns load off at t=0 ---
+        _opt_base, res_base = self._run_min_on_optim(overrides, df, n)
+        self.assertIn(
+            _opt_base.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"Counterfactual solve non-optimal: {_opt_base.optim_status}",
+        )
+        p_def0_base = res_base["P_deferrable0"].values[0]
+        self.assertAlmostEqual(
+            p_def0_base,
+            0.0,
+            delta=1.0,
+            msg=(
+                "Counterfactual FAILED: base solver did not turn load off at t=0 on "
+                f"this price profile. P_def[0]={p_def0_base}. "
+                "Adjust the price profile so the base solver turns the load off."
+            ),
+        )
+
+        # --- With def_current_power=1500: pin must fix P_def[0][0] to 1500 W ---
+        with_pin = self._make_current_power_overrides(
+            **{"def_current_power": [1500.0, 0.0]},
+        )
+        _opt_pin, res_pin = self._run_min_on_optim(with_pin, df, n)
+        self.assertIn(
+            _opt_pin.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"Solve with def_current_power=[1500,0] non-optimal: {_opt_pin.optim_status}",
+        )
+        # BEHAVIOURAL assertion -- this line fails on base code (returns 0, not 1500).
+        p_def0_pin = res_pin["P_deferrable0"].values[0]
+        self.assertAlmostEqual(
+            p_def0_pin,
+            1500.0,
+            delta=1.0,
+            msg=(
+                f"def_current_power pin failed: expected P_def[0][0]=1500, got {p_def0_pin}. "
+                "Base code returns 0 here (turns load off) -- this is the RED assertion."
+            ),
+        )
+
+    def test_current_power_noop_no_key(self):
+        """def_current_power absent = results identical to all-zeros (no-op proven).
+
+        Run the same scenario twice (without def_current_power, then with all zeros)
+        and verify results are equal. Also confirm that with a cost incentive to be OFF
+        at t=0, the load truly is off (so the test cannot false-green by coincidence).
+        """
+        n = 10
+        prices = [0.9, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05]
+        df = self._make_current_power_scenario(n=n, prices=prices)
+
+        overrides_no_key = self._make_current_power_overrides()
+        overrides_zeros = self._make_current_power_overrides(
+            **{"def_current_power": [0.0, 0.0]},
+        )
+
+        _opt_a, res_a = self._run_min_on_optim(overrides_no_key, df, n)
+        _opt_b, res_b = self._run_min_on_optim(overrides_zeros, df, n)
+
+        self.assertIn(_opt_a.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertIn(_opt_b.optim_status, VALID_OPTIMAL_STATUSES)
+
+        np.testing.assert_allclose(
+            res_a["P_deferrable0"].values,
+            res_b["P_deferrable0"].values,
+            atol=1e-6,
+            err_msg="def_current_power=[0,0] changed the result vs absent key (should be no-op)",
+        )
+        np.testing.assert_allclose(
+            res_a["P_deferrable1"].values,
+            res_b["P_deferrable1"].values,
+            atol=1e-6,
+            err_msg="def_current_power=[0,0] changed load-1 result vs absent key",
+        )
+
+        # Also confirm the cost incentive actually drives load-0 off at t=0 (anti-green)
+        p0_t0 = res_a["P_deferrable0"].values[0]
+        self.assertAlmostEqual(
+            p0_t0,
+            0.0,
+            delta=1.0,
+            msg=(
+                f"No-op scenario: expected load-0 OFF at t=0 (P_def=0), got {p0_t0}. "
+                "The anti-green check failed; adjust the price profile."
+            ),
+        )
+
+    def test_current_power_semi_cont_force_on_nominal(self):
+        """semi_cont load + def_current_power > 0: force ON at t=0, P_def[0]==nominal.
+
+        For treat_deferrable_load_as_semi_cont loads the power pin is omitted
+        (power == nominal*bin strictly), but the force-ON must still apply.
+        The result at t=0 must be at nominal (3000 W), not the supplied 1500.
+        """
+        n = 10
+        # High price at t=0 so base solver wants to be OFF.
+        prices = [0.9, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05]
+        df = self._make_current_power_scenario(n=n, prices=prices, nominal=3000.0)
+
+        overrides = self._make_current_power_overrides(
+            treat_deferrable_load_as_semi_cont=[True, True],
+            def_current_power=[1500.0, 0.0],
+        )
+        _opt, res = self._run_min_on_optim(overrides, df, n)
+        self.assertIn(
+            _opt.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"semi_cont + def_current_power solve non-optimal: {_opt.optim_status}",
+        )
+        p0_t0 = res["P_deferrable0"].values[0]
+        # semi_cont: power must be at nominal (not the partial supplied value).
+        self.assertAlmostEqual(
+            p0_t0,
+            3000.0,
+            delta=1.0,
+            msg=(
+                f"semi_cont + def_current_power: expected P_def[0][0]=3000 (nominal), "
+                f"got {p0_t0}. Force-ON should give nominal, not the supplied partial."
+            ),
+        )
+
+    def test_current_power_phantom_startup_suppressed(self):
+        """def_current_power > 0 with no def_current_state must NOT incur a startup at t=0.
+
+        A startup penalty at t=0 for a load that is already running is wrong. The
+        phantom-startup suppression bumps param_def_current_state so startup detection
+        treats t=0 as 'was already ON'.
+        """
+        n = 10
+        prices = [0.05] * n
+        df = self._make_current_power_scenario(n=n, prices=prices, nominal=3000.0)
+
+        # With a startup penalty and def_current_state NOT set, base code fires a
+        # phantom start at t=0. With def_current_power the suppression must prevent it.
+        overrides = self._make_current_power_overrides(
+            treat_deferrable_load_as_semi_cont=[True, True],
+            set_deferrable_startup_penalty=[1.0, 0.0],
+            def_current_power=[3000.0, 0.0],
+            # def_current_state intentionally NOT set
+        )
+        _opt, res = self._run_min_on_optim(overrides, df, n)
+        self.assertIn(
+            _opt.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"phantom-startup suppression solve non-optimal: {_opt.optim_status}",
+        )
+        # p_def_start_0 at t=0 must be 0 (no startup event). _run_min_on_optim runs
+        # with debug=True so the per-load start column is always emitted; assert its
+        # presence so the key check fails loudly if that ever changes instead of being
+        # silently skipped.
+        self.assertIn(
+            "P_def_start_0",
+            res.columns,
+            "P_def_start_0 missing from debug output; the phantom-startup assertion "
+            "would be skipped without it.",
+        )
+        start_t0 = res["P_def_start_0"].values[0]
+        self.assertAlmostEqual(
+            start_t0,
+            0.0,
+            delta=0.01,
+            msg=(
+                f"Phantom startup not suppressed: P_def_start[0][0]={start_t0} "
+                "(expected 0). def_current_power must bump param_def_current_state."
+            ),
+        )
+
+    def test_current_power_length_mismatch_warns(self):
+        """Length mismatch (len != num_def_loads) must warn, not crash."""
+        n = 5
+        prices = [0.5] * n
+        df = self._make_current_power_scenario(n=n, prices=prices)
+
+        overrides = self._make_current_power_overrides(
+            **{"def_current_power": [500.0]},  # len=1, num_loads=2 -> mismatch
+        )
+        # Should complete without raising; the logger warning is checked by inspection.
+        _opt, res = self._run_min_on_optim(overrides, df, n)
+        self.assertIn(
+            _opt.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"Length-mismatch must not crash the solve. Got: {_opt.optim_status}",
+        )
+
+    def test_current_power_invalid_value_raises(self):
+        """Negative or non-numeric def_current_power raises ValueError with context."""
+        n = 5
+        prices = [0.5] * n
+        df = self._make_current_power_scenario(n=n, prices=prices)
+
+        # Negative value
+        overrides_neg = self._make_current_power_overrides(
+            **{"def_current_power": [-100.0, 0.0]},
+        )
+        with self.assertRaises(ValueError, msg="Negative power should raise ValueError"):
+            self._run_min_on_optim(overrides_neg, df, n)
+
+        # Non-numeric string value
+        overrides_str = self._make_current_power_overrides(
+            **{"def_current_power": ["not_a_number", 0.0]},
+        )
+        with self.assertRaises(ValueError, msg="Non-numeric power should raise ValueError"):
+            self._run_min_on_optim(overrides_str, df, n)
+
+    def test_current_power_window_mask_widened(self):
+        """Window mask at t=0 is widened when def_current_power > 0 and window starts later.
+
+        A load whose configured start_timestep > 0 has mask[0]=0 by default. When
+        def_current_power[k] > 0 the force-ON must also widen mask[0] to 1 so the
+        load is not immediately blocked by the mask constraint.
+        """
+        n = 10
+        prices = [0.05] * n
+        df = self._make_current_power_scenario(n=n, prices=prices, nominal=3000.0)
+
+        # Window starts at t=3, but load is reported as running at t=0.
+        overrides = self._make_current_power_overrides(
+            operating_hours_of_each_deferrable_load=[1.0, 0.0],
+            start_timesteps_of_each_deferrable_load=[3, 0],
+            end_timesteps_of_each_deferrable_load=[0, 0],
+            def_current_power=[1500.0, 0.0],
+        )
+        _opt, res = self._run_min_on_optim(overrides, df, n)
+        self.assertIn(
+            _opt.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            (
+                "Window-mask widen: load running outside its window should still be "
+                f"feasible when def_current_power forces t=0 ON. Got: {_opt.optim_status}"
+            ),
+        )
+        p0_t0 = res["P_deferrable0"].values[0]
+        self.assertGreater(
+            p0_t0,
+            0.0,
+            msg=(
+                f"Window mask was not widened at t=0: P_def[0][0]={p0_t0} (expected > 0). "
+                "def_current_power force-ON must widen mask[0] to allow t=0 power."
+            ),
+        )
+
+    def test_current_power_single_const_ignored(self):
+        """single_const loads ignore def_current_power (issue #605 fix).
+
+        A single-constant load runs as one fixed block; "currently running" is
+        handled by def_current_state, not def_current_power. An earlier design
+        wrongly treated single_const as pin-eligible: pinning a below-nominal
+        power fought the required-energy block, made the MIP infeasible, and the
+        solver silently relaxed to a continuous LP returning an accepted-but-wrong
+        "Optimal (Relaxed)" dispatch. With the fix def_current_power is a no-op for
+        single_const loads, so the dispatch is identical to omitting it and the
+        solve stays cleanly optimal.
+        """
+        n = 10
+        prices = [0.9, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05]
+        df = self._make_current_power_scenario(n=n, prices=prices, nominal=3000.0)
+
+        base = self._make_current_power_overrides(
+            set_deferrable_load_single_constant=[True, False],
+        )
+        with_dcp = self._make_current_power_overrides(
+            set_deferrable_load_single_constant=[True, False],
+            def_current_power=[1500.0, 0.0],
+        )
+
+        opt_base, res_base = self._run_min_on_optim(base, df, n)
+        opt_dcp, res_dcp = self._run_min_on_optim(with_dcp, df, n)
+
+        self.assertIn(opt_base.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertIn(
+            opt_dcp.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"single_const + def_current_power non-optimal: {opt_dcp.optim_status}",
+        )
+        # def_current_power must be fully ignored for a single_const load, so the
+        # dispatch matches the run without it (not a relaxed / pinned result).
+        np.testing.assert_allclose(
+            res_dcp["P_deferrable0"].values,
+            res_base["P_deferrable0"].values,
+            atol=1e-6,
+            err_msg="def_current_power changed a single_const load (must be ignored)",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

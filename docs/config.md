@@ -127,6 +127,27 @@ Example:
   **Composes with `set_deferrable_max_startups`:** the two constraints are independent (count vs window) and coexist cleanly. A pathological combination of low max-startups, long min-on, and a short operating window can over-constrain a load; if you use both, ensure `max_startups x min_on_time <= available_timesteps`.
 
   **Initial-condition remainder:** to carry the remaining on-time across MPC ticks when the load is already running, also pass `def_current_on_timesteps` at runtime (see Passing data at runtime).
+- `def_current_power`: Per-load actual power (watts) each deferrable load is drawing right now at the start of the optimization horizon. **Default `[0, 0]` (or absent key) is an exact no-op** -- today's behaviour is preserved. One non-negative float per deferrable load, in the same order as `nominal_power_of_deferrable_loads`. Supply the real sensor reading in watts.
+
+  Unit: W (watts). Runtime-overridable on every MPC tick without rebuilding the solver cache.
+
+  When `def_current_power[k] > 0`, the optimizer applies three coordinated effects:
+
+  1. **Pin:** fixes `P_deferrable[k][t=0]` to the supplied power, correcting the t=0 power balance when the load is excluded from the main load sensor.
+  2. **Force ON:** forces the load's binary `bin2[0] = 1` at t=0, preventing the optimizer from immediately scheduling a stop.
+  3. **Suppress phantom startup:** sets the internal initial-state to ON so no startup penalty fires at t=0 (equivalent to also passing `def_current_state[k]=true`).
+
+  This is a separate runtime input rather than an extension of `def_current_state`, so the binary on/off decision stays strict 0/1 and a fractional watt value can never weaken it.
+
+  **Semi-continuous loads (`treat_deferrable_load_as_semi_cont: true`):** because semi-continuous power is strictly `nominal * bin` (cannot be an arbitrary fraction of nominal), the power pin is omitted for these loads. Supplying any non-zero value still triggers the force-ON and phantom-startup suppression, so the load is held ON at its full nominal power at t=0. The supplied wattage acts as an on/off signal only.
+
+  **Loads with minimum power (`minimum_power_of_deferrable_loads > 0`):** the supplied value should be at or above the configured minimum to avoid an infeasible t=0 power balance. Supplying a value below the minimum and above zero will produce an infeasible solve (the pin forces `p = supplied` while the min-power constraint forces `p >= min_power`).
+
+  **Supplied value exceeds nominal:** the existing window-mask upper bound (`p <= nominal * mask`) prevents values above nominal from being pinned; the solve will be infeasible. Supply values within `[min_power, nominal]`.
+
+  **Single-constant, sequence and thermal loads** ignore `def_current_power` (it is a no-op for those load types). A single-constant load runs as one fixed block, so its currently-running state is handled by `def_current_state` (which pins the remaining required timesteps); pinning a below-nominal power there would fight the required-energy target. Use `def_current_state` for a currently-running single-constant load.
+
+  **Typical MPC use:** read the load's power sensor at the start of each optimization tick and pass the reading in watts via the runtime API so the optimizer knows the load is running and at what level.
 - `deferrable_load_groups`: Define groups of deferrable loads that share a physical actuator (e.g. a heat pump serving both hot water and underfloor heating). Each group can enforce a shared power budget, mutual exclusion, or both. This is a list of group objects, each with the following fields:
 	- `names`: List of deferrable load names in the group (e.g. `["deferrable0", "deferrable1"]`).
 	- `max_power` *(optional when `mutual_exclusion` is `true`)*: Maximum combined power in Watts for all loads in the group at any timestep. Required when `mutual_exclusion` is `false`.
