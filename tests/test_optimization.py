@@ -6734,6 +6734,281 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             msg=f"Expected {expected_curtail_wh} Wh curtailed, got {actual_curtail_wh}",
         )
 
+    def _make_nodischarge_scenario(self, inverter_is_hybrid, n=6):
+        """Build config and DataFrame for issue #936 nodischarge tests.
+
+        Scenario: PV always exceeds load so every timestep is a net export (D=0).
+        The battery must shed a large SoC (0.9->0.1) by discharging to local load
+        while PV handles the export.  The new power-form constraint allows this for
+        AC-coupled systems (grid export stays <= PV), whereas the legacy E<=D binary
+        coupling blocks all discharge when D=0, making the problem infeasible.
+
+        Numbers (step_h = time_step in hours):
+          PV = 3000 W, load = 600 W  ->  unconstrained export = 2400 W per step.
+          Battery discharges at most load=600 W/step (the power-form ceiling when D=0):
+            cap * (0.9-0.1) = 600 W * n * step_h  ->  cap = 600*n*step_h / 0.8
+          With n=6 and step_h=0.5:  cap = 600*6*0.5/0.8 = 2250 Wh.
+          Total discharge  = 600*6*0.5 = 1800 Wh = 0.8 * 2250  checkmark.
+          Export per step  = PV - load + batt_discharge = 3000 - 600 + 600 = 3000,
+            but grid_neg = -(PV+sto_pos-load) = -(3000+600-600)= -3000 so
+            p_grid_neg + p_pv = -3000+3000 = 0 >= 0  checkmark.
+
+        For AC-coupled with the fix: feasible (battery covers load each step).
+        For AC-coupled on base / for hybrid with fix: D=0 forces E=0 -> infeasible.
+
+        Args:
+            inverter_is_hybrid: True -> hybrid path (E<=D stays); False -> AC-coupled fix.
+            n: horizon steps.
+        """
+        tz = self.retrieve_hass_conf["time_zone"]
+        dates = pd.date_range(
+            start=pd.Timestamp("2024-06-15 09:00:00", tz=tz),
+            periods=n,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df = pd.DataFrame(index=dates)
+        # PV > load: every step is a net export so D=0 throughout.
+        p_pv_w = 3000.0
+        p_load_w = 600.0
+        df["p_pv_forecast"] = p_pv_w
+        df["p_load_forecast"] = p_load_w
+        df[self.fcst.var_load_cost] = 0.20
+        df[self.fcst.var_prod_price] = 0.10
+
+        step_h = self.retrieve_hass_conf["optimization_time_step"].total_seconds() / 3600.0
+        soc_init = 0.9
+        soc_final = 0.1
+        # Cap sized so the battery can shed exactly (soc_init-soc_final) by discharging
+        # at p_load_w per step (the maximum the power-form constraint permits when exporting).
+        # cap * 0.8 = p_load_w * n * step_h
+        cap = p_load_w * n * step_h / (soc_init - soc_final)
+        # discharge_power_max >= p_load_w is sufficient; set 2x for headroom.
+        discharge_power = p_load_w * 2
+
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": inverter_is_hybrid,
+                "compute_curtailment": False,
+                "battery_nominal_energy_capacity": cap,
+                "battery_discharge_power_max": discharge_power,
+                "battery_charge_power_max": discharge_power,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+            }
+        )
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "set_nodischarge_to_grid": True,
+                "set_nocharge_from_grid": False,
+                "set_battery_dynamic": False,
+                "number_of_deferrable_loads": 0,
+                "weight_battery_discharge": 0.0,
+                "weight_battery_charge": 0.0,
+            }
+        )
+        return df, soc_init, soc_final
+
+    def test_nodischarge_to_grid_ac_coupled_feasible_issue936(self):
+        """Issue #936: non-hybrid (AC-coupled) systems with set_nodischarge_to_grid=True
+        must remain feasible when a large SoC must be shed with zero net-import timesteps
+        (high PV, all steps are export).
+
+        RED on base (E<=D): every timestep has D=0 (export) so E must be 0 (no discharge),
+        making it impossible to reach soc_final=0.1 from soc_init=0.9 -> infeasible.
+        GREEN with fix (p_grid_neg + p_pv >= 0): battery can discharge to local load
+        even during PV-export steps, so the SoC shed is feasible.
+        """
+        df, soc_init, soc_final = self._make_nodischarge_scenario(inverter_is_hybrid=False)
+
+        opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            "profit",
+            emhass_conf,
+            logger,
+        )
+        opt.perform_optimization(
+            df,
+            df["p_pv_forecast"].values,
+            df["p_load_forecast"].values,
+            df[opt.var_load_cost].values,
+            df[opt.var_prod_price].values,
+            soc_init=soc_init,
+            soc_final=soc_final,
+        )
+        self.assertIn(
+            opt.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"AC-coupled set_nodischarge_to_grid should be feasible when battery discharges "
+            f"to local load during PV export; got status={opt.optim_status!r} (issue #936)",
+        )
+
+    def test_nodischarge_to_grid_hybrid_still_blocks_discharge_issue936(self):
+        """Issue #936 counterfactual: hybrid inverters must still apply E<=D.
+
+        Same high-PV, large-SoC-shed scenario as the non-hybrid test, but with
+        inverter_is_hybrid=True.  The fix must leave the hybrid branch unchanged
+        (E<=D), so every export timestep (D=0) still blocks battery discharge (E=0),
+        making the large SoC shed infeasible.  If the fix accidentally removed E<=D
+        from the hybrid branch this test would pass (feasible) and must be treated
+        as a regression.
+        """
+        df, soc_init, soc_final = self._make_nodischarge_scenario(inverter_is_hybrid=True)
+
+        opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            "profit",
+            emhass_conf,
+            logger,
+        )
+        opt.perform_optimization(
+            df,
+            df["p_pv_forecast"].values,
+            df["p_load_forecast"].values,
+            df[opt.var_load_cost].values,
+            df[opt.var_prod_price].values,
+            soc_init=soc_init,
+            soc_final=soc_final,
+        )
+        self.assertNotIn(
+            opt.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"Hybrid set_nodischarge_to_grid must keep E<=D, blocking discharge during export "
+            f"-> infeasible for large SoC shed; got status={opt.optim_status!r} (issue #936)",
+        )
+
+    def test_nodischarge_to_grid_curtailment_no_battery_export_issue936(self):
+        """Curtailment leak regression (#936): when compute_curtailment=True the export
+        bound must use curtailed PV (p_pv - p_pv_curtailment), not raw p_pv.
+
+        Exact PROBE-1 scenario from RESULT-adversarial.md:
+          non-hybrid, compute_curtailment=True, set_nodischarge_to_grid=True,
+          set_nocharge_from_grid=True, high feed-in (unit_prod_price=1.00),
+          PV=3000 W, load=500 W, SoC 0.9->0.1, loss-free 10 kWh battery, n=6 steps.
+
+        Without the fix (p_grid_neg + p_pv >= 0): the uncurtailed p_pv=3000 W sets
+        the export ceiling; the solver curtails PV (free) and routes battery energy
+        into the freed export quota, leaking battery->grid while the constraint is
+        nominally satisfied.  Observed: step 1 leaks 1000 W, steps 3-6 leak 3000 W.
+
+        With the fix (p_grid_neg + p_pv - p_pv_curtailment >= 0): the export ceiling
+        tracks actual available PV.  The only feasible solution requires discharging
+        <= 500 W to local load per step (total 1500 Wh << 8000 Wh required SoC shed),
+        so the solver correctly returns Infeasible -- there is no legal way to achieve
+        the forced SoC drain; the only paths that previously allowed it were illegal
+        battery-to-grid flows.
+
+        RED: pre-fix code returns Optimal AND battery->grid leak is detected.
+        GREEN: post-fix code returns Infeasible (the sole feasible paths were illegal)
+               OR (if somehow Optimal) leak assertion holds.
+        """
+        tz = self.retrieve_hass_conf["time_zone"]
+        n = 6
+        dates = pd.date_range(
+            start=pd.Timestamp("2024-06-15 09:00:00", tz=tz),
+            periods=n,
+            freq=self.retrieve_hass_conf["optimization_time_step"],
+        )
+        df = pd.DataFrame(index=dates)
+        p_pv_w = 3000.0
+        p_load_w = 500.0
+        df["p_pv_forecast"] = p_pv_w
+        df["p_load_forecast"] = p_load_w
+        # High feed-in incentivises draining battery via export.
+        df[self.fcst.var_load_cost] = 0.20
+        df[self.fcst.var_prod_price] = 1.00
+
+        soc_init = 0.9
+        soc_final = 0.1
+        # Loss-free 10 kWh battery: SoC shed = 0.8 * 10000 = 8000 Wh required.
+        # Max legal discharge under fix = load * n * step_h = 500*6*0.5 = 1500 Wh.
+        # Gap (6500 Wh) is not achievable without battery->grid; fix correctly makes
+        # the problem infeasible while pre-fix code finds Optimal by exploiting
+        # curtailment as an escape valve.
+        cap = 10000.0  # Wh
+        discharge_power = 4000.0  # W >> load
+
+        self.plant_conf.update(
+            {
+                "inverter_is_hybrid": False,
+                "compute_curtailment": True,
+                "battery_nominal_energy_capacity": cap,
+                "battery_discharge_power_max": discharge_power,
+                "battery_charge_power_max": discharge_power,
+                "battery_discharge_efficiency": 1.0,
+                "battery_charge_efficiency": 1.0,
+                "battery_minimum_state_of_charge": 0.0,
+                "battery_maximum_state_of_charge": 1.0,
+            }
+        )
+        self.optim_conf.update(
+            {
+                "set_use_battery": True,
+                "set_nodischarge_to_grid": True,
+                "set_nocharge_from_grid": True,
+                "set_battery_dynamic": False,
+                "number_of_deferrable_loads": 0,
+                "weight_battery_discharge": 0.0,
+                "weight_battery_charge": 0.0,
+            }
+        )
+
+        opt = Optimization(
+            self.retrieve_hass_conf,
+            self.optim_conf,
+            self.plant_conf,
+            self.fcst.var_load_cost,
+            self.fcst.var_prod_price,
+            "profit",
+            emhass_conf,
+            logger,
+        )
+        opt_res = opt.perform_optimization(
+            df,
+            df["p_pv_forecast"].values,
+            df["p_load_forecast"].values,
+            df[opt.var_load_cost].values,
+            df[opt.var_prod_price].values,
+            soc_init=soc_init,
+            soc_final=soc_final,
+        )
+
+        if opt.optim_status not in VALID_OPTIMAL_STATUSES:
+            # Post-fix expected path: Infeasible because the only solutions were
+            # illegal battery->grid flows.  Nothing more to assert.
+            return
+
+        # If the solver reached Optimal (pre-fix or under numerical relaxation),
+        # assert that no battery energy reached the grid.  On the unfixed branch
+        # this assertion will fail, proving the leak.
+        epsilon = 1e-3  # W - numerical tolerance
+        p_grid_neg = opt_res["P_grid_neg"].values  # <= 0; grid export
+        p_pv_vals = opt_res["P_PV"].values
+        p_pv_curt = opt_res["P_PV_curtailment"].values
+        pv_available = p_pv_vals - p_pv_curt  # actual PV at AC bus
+        battery_export = -(p_grid_neg) - pv_available  # > 0 means batt->grid leak
+
+        for t in range(n):
+            self.assertLessEqual(
+                battery_export[t],
+                epsilon,
+                f"Step {t}: battery energy exported to grid = {battery_export[t]:.1f} W "
+                f"(P_grid_neg={p_grid_neg[t]:.1f}, P_PV={p_pv_vals[t]:.1f}, "
+                f"P_PV_curtailment={p_pv_curt[t]:.1f}, pv_avail={pv_available[t]:.1f}); "
+                f"set_nodischarge_to_grid + compute_curtailment must prevent this "
+                f"(issue #936 curtailment fix)",
+            )
+
     # ---------------------------------------------------------------------------
     # Tests for def_minimum_on_time (issue #952)
     # All tests are base-safe: they read the new config key via optim_conf dict

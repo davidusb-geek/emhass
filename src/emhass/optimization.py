@@ -1694,9 +1694,20 @@ class Optimization:
         if self.optim_conf["set_nocharge_from_grid"]:
             constraints.append(p_sto_neg + p_pv >= 0)
 
-        # No discharge to grid: Battery cannot discharge (E=1) while grid is exporting (D=0)
+        # No discharge to grid: prevent battery energy from reaching the grid. Hybrid inverters
+        # prioritise PV to the load, so the battery cannot discharge while PV exports (strict E<=D, #796).
+        # AC-coupled systems can, so E<=D wrongly forbids battery-to-load during export and makes the
+        # solve infeasible when a large SoC must be shed (#936). For them bound grid export to the
+        # available PV instead (net of curtailment), blocking battery-to-grid while allowing battery-to-load.
         if self.optim_conf["set_nodischarge_to_grid"]:
-            constraints.append(E <= D)
+            if self.plant_conf["inverter_is_hybrid"]:
+                constraints.append(E <= D)
+            elif self.plant_conf["compute_curtailment"]:
+                constraints.append(
+                    self.vars["p_grid_neg"] + p_pv - self.vars["p_pv_curtailment"] >= 0
+                )
+            else:
+                constraints.append(self.vars["p_grid_neg"] + p_pv >= 0)
 
         # Dynamic Power Limits (Ramp Rate)
         if self.optim_conf["set_battery_dynamic"]:
