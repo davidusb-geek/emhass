@@ -5217,10 +5217,10 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
 
     # Test MIP gap tolerance configuration
     def test_mip_gap_default_value(self):
-        """Test that default MIP gap is 0 (exact optimal for backward compatibility)."""
+        """Test that the shipped default MIP gap is 0.01 (within 1% of optimal, see #986)."""
         self.df_input_data_dayahead = self.prepare_forecast_data()
-        # Default should be 0 for backward compatibility
-        self.assertEqual(self.optim_conf.get("lp_solver_mip_rel_gap", 0.0), 0.0)
+        # The default loaded from config_defaults.json is 0.01, not exact optimal.
+        self.assertEqual(self.optim_conf.get("lp_solver_mip_rel_gap"), 0.01)
 
         self.opt = self.create_optimization()
         self.opt_res_dayahead = self.opt.perform_dayahead_forecast_optim(

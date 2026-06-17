@@ -88,6 +88,8 @@ No configuration is required—caching works automatically.
 
 For Mixed-Integer Programming problems (which occur when using semi-continuous loads, single-constant loads, or startup penalties), the solver can spend significant time proving a solution is exactly optimal. The `lp_solver_mip_rel_gap` parameter allows the solver to stop earlier when a "good enough" solution is found.
 
+The default is `0.01` (within 1% of optimal). This small tolerance keeps deep-horizon problems (long prediction horizons at a fine time step) from exhausting the solver time limit before any plan is published, which is otherwise a real failure mode on slower hardware. Set it to `0` to recover the previous exact-optimal behaviour.
+
 **Configuration:**
 
 ```yaml
@@ -101,8 +103,9 @@ lp_solver_mip_rel_gap: 0.05  # Stop when within 5% of optimal
 
 | Value | Description | Use Case |
 |-------|-------------|----------|
-| 0 | Exact optimal (default) | When precision is critical |
-| 0.05 | Within 5% of optimal | **Recommended** for most users - ~2x speedup |
+| 0 | Exact optimal | When precision is critical and solve time is not a concern |
+| 0.01 | Within 1% of optimal (default) | Balanced; avoids time-limit failures on deep horizons |
+| 0.05 | Within 5% of optimal | ~2x speedup for a small quality trade-off |
 | 0.10 | Within 10% of optimal | Fast solving, good for testing |
 | 0.20 | Within 20% of optimal | Very fast, adequate for simple decisions |
 

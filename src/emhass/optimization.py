@@ -4156,10 +4156,15 @@ class Optimization:
                 solver_opts["threads"] = int(threads)
             # 'run_crossover' ensures a cleaner solution (closer to simplex vertex)
             solver_opts["run_crossover"] = "on"
-            # MIP gap tolerance: allows solver to stop when within X% of optimal
-            # Default 0 for backward compatibility (exact optimal)
-            # Recommended: Set to 0.05 (5%) for ~2x speedup with negligible quality loss
-            # Benchmarks show: 5% gap gives 1.75x speedup, 10% gives 1.86x, 20% gives 2.89x
+            # MIP gap tolerance: allows solver to stop when within X% of optimal.
+            # The shipped default is 0.01 (1%), set in config_defaults.json /
+            # param_definitions.json, which keeps deep-horizon MILPs from timing
+            # out before any plan is published (see issue #986). The 0.0 fallback
+            # below only applies when the key is absent entirely from a hand-built
+            # optim_conf that bypassed the config system; exact optimal is the safe
+            # choice there. Set lp_solver_mip_rel_gap: 0 to opt back in to exact
+            # optimal. Higher values solve faster still: benchmarks show 5% gap
+            # ~1.75x, 10% ~1.86x, 20% ~2.89x speedup.
             mip_gap = self.optim_conf.get("lp_solver_mip_rel_gap", 0.0)
             # Validate MIP gap is within sensible bounds [0, 1]
             if mip_gap < 0:
