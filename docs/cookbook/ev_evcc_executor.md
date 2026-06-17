@@ -130,6 +130,10 @@ automation:
               - service: rest_command.evcc_mode_off
 ```
 
+`sensor.p_deferrable2` is the EV because the EV is the third deferrable in the Step 1 load order
+(the index is 0-based, so the third load is `2`). If you change the deferrable order, adjust the
+sensor name and index to match.
+
 `now` charges at the charger's configured rate during the slots EMHASS picked. EMHASS, not evcc,
 decides when those slots are, so the tariff and PV optimization still happens, it just happens in the
 planner. If you would rather evcc follow PV surplus within a slot, use the `pv` or `minpv` variant in
@@ -166,7 +170,7 @@ day.
 If the driver plugs in and starts charging by hand mid-window, the house load sensor
 (`sensor_power_load_no_var_loads`) excludes the charger, so `P_load[0]` handed to EMHASS is too low
 and the optimizer may plan to switch off the load the driver just switched on. This is the
-study-case "[Mid-session state is not forced](../study_cases/ev.md)" limit.
+study case "[Mid-session state is not forced](../study_cases/ev.md)" limit.
 
 Pass the charger's **actual current power in watts** as `def_current_power` (a runtime-only per-load
 list, in the same order as `nominal_power_of_deferrable_loads`). EMHASS pins the first timestep to
@@ -185,7 +189,7 @@ and the optimizer schedules around it instead of stopping it.
 - **Coupling direction.** This is evcc-as-executor under EMHASS, not the evcc-as-frontend proposal
   in [#29815](https://github.com/evcc-io/evcc/discussions/29815). Don't wire both.
 - **No within-slot PV modulation by default.** EMHASS plans on-or-off-at-nominal per timestep (the
-  [study-case power-modulation limit](../study_cases/ev.md)) and does the time-shifting; the Step 3
+  [study case power-modulation limit](../study_cases/ev.md)) and does the time-shifting; the Step 3
   `now` mapping enforces it at the charger's configured rate. If you want evcc to follow PV surplus
   inside a slot, use the `pv`/`minpv` variant in Step 4 and accept it may under-deliver versus the
   plan.
@@ -195,6 +199,10 @@ and the optimizer schedules around it instead of stopping it.
 - **`def_current_power` needs a release after v0.17.7.** Before that, Step 5 doesn't apply and a
   manual mid-window charge may be re-planned off.
 - **Keep evcc off the house battery.** Exclude the battery from evcc's meters. EMHASS owns it.
+- **Secure the control endpoints.** These examples call EMHASS and evcc over plain HTTP on the LAN.
+  evcc's loadpoint API has no authentication of its own, and the EMHASS `/action/*` endpoints command
+  real loads, so don't expose either to the internet unprotected. Keep them on the local network, or
+  put them behind a reverse proxy that adds TLS and auth.
 - **Fail safe.** An executor or transport failure should default to a safe state (a kill-switch plus
   a watchdog that stops commanding on stale data). See
   [Good Practices](../study_cases/good_practices.md).
