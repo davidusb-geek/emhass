@@ -3548,6 +3548,41 @@ class TestCompileHeatTopology(unittest.TestCase):
         self.assertEqual(out["shared_thermal_tanks"][0]["load_ids"], [0])
         self.assertEqual(out["cost_forecast_per_deferrable_load"][0], [0.085] * 48)
 
+    def test_fixed_supply_hp_without_cap_warns(self):
+        """A fixed-supply heat pump (supply_temperature, no heating curve) without
+        max_supply_temperature is warned: supply_temperature drives the COP only and
+        is not enforced as a physical ceiling, so the optimiser may plan to heat the
+        tank above it. Setting max_supply_temperature silences the warning (the cap is
+        left opt-in because auto-capping at the supply temperature makes a tank whose
+        min_temperature sits at that temperature infeasible)."""
+        def topo(with_cap):
+            src = {
+                "id": "hp", "type": "heatpump", "supply_temperature": 45,
+                "carnot_efficiency": 0.4, "nominal_power": 3000, "cost_track": "e",
+            }
+            if with_cap:
+                src["max_supply_temperature"] = 45
+            return {
+                "sources": [src],
+                "storage": [{
+                    "id": "buf", "volume": 0.1, "start_temperature": 38,
+                    "min_temperature": [30] * 48, "max_temperature": [60] * 48,
+                    "thermal_loss": 0.08,
+                }],
+                "flows": [{"from": "hp", "to": "buf"}],
+                "cost_tracks": {"e": [0.2] * 48},
+            }
+        logger = logging.getLogger("emhass.utils")
+        with self.assertLogs(logger, level="WARNING") as cm:
+            utils.compile_heat_topology(topo(with_cap=False))
+        self.assertTrue(
+            any("not enforced as a physical ceiling" in m for m in cm.output),
+            "expected a ceiling warning for a fixed-supply HP without max_supply_temperature",
+        )
+        # With the cap set the warning must not fire.
+        with self.assertNoLogs(logger, level="WARNING"):
+            utils.compile_heat_topology(topo(with_cap=True))
+
     def test_two_sources_one_storage(self):
         """HP + gas both feed the same DHW tank."""
         topo = {
