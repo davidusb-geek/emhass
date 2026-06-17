@@ -728,6 +728,25 @@ def compile_heat_topology(topology: dict) -> dict:
             cap_by_src_id[src["id"]] = cap_value
         else:
             cap_by_src_id[src["id"]] = None
+            # A constant-supply heat pump (supply_temperature, no heating curve)
+            # cannot physically heat water above its supply temperature, but
+            # supply_temperature drives the COP only - it is NOT enforced as a
+            # ceiling. Without max_supply_temperature the optimiser may plan to
+            # heat the tank above it (a physically unreachable setpoint). Warn so
+            # the user can add max_supply_temperature to cap it. (Left opt-in:
+            # auto-capping at supply_temperature makes a tank whose min_temperature
+            # sits at the supply temperature infeasible.)
+            if "supply_temperature" in source_block:
+                logging.getLogger(__name__).warning(
+                    "heat_topology.sources[%s] is a fixed-supply heat pump "
+                    "(supply_temperature=%.0f C) without max_supply_temperature: "
+                    "supply_temperature sets the COP only and is not enforced as a "
+                    "physical ceiling, so the optimiser may heat the tank above it. "
+                    "Set max_supply_temperature to cap the tank at the supply "
+                    "temperature.",
+                    src["id"],
+                    float(source_block["supply_temperature"]),
+                )
         # Optional per-source soft threshold: with the storage's
         # desired_temperatures set, this source is switched off while the tank
         # sits above this temperature (a preference, unlike the hard
