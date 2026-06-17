@@ -8081,6 +8081,7 @@ class Optimization:
         p_load: pd.Series,
         soc_init: float | list | None = None,
         soc_final: float | list | None = None,
+        current_period_peak: float | None = None,
         stage_times: dict[str, float] | None = None,
     ) -> pd.DataFrame:
         r"""
@@ -8111,6 +8112,13 @@ class Optimization:
             ``set_battery_first_priority`` is enabled and the horizon starts \
             at a high SOC.
         :type soc_final: float | list, optional
+        :param current_period_peak: Optional peak grid import (in Watts) already \
+            incurred in the current billing period. When the capacity tariff \
+            (``capacity_cost_per_kw`` > 0) is active, the planned import peak is \
+            floored at this value, so importing up to the already-paid peak is free \
+            (only NEW peaks above it are priced). Mirrors the MPC path; without it \
+            the dayahead solver minimises the absolute peak and ignores the floor.
+        :type current_period_peak: float, optional
         :param stage_times: Optional dict to record nested sub-stage timings
             (``optim_solve.build`` / ``optim_solve.solve`` / ``optim_solve.extract``).
         :type stage_times: dict, optional
@@ -8136,6 +8144,7 @@ class Optimization:
             unit_prod_price,
             soc_init=soc_init,
             soc_final=soc_final,
+            current_period_peak=current_period_peak,
             stage_times=stage_times,
         )
         return self.opt_res
