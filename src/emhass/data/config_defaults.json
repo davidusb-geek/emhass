@@ -85,6 +85,7 @@
   "deferrable_load_max_cost": [0.0, 0.0],
   "set_deferrable_max_startups": [0, 0],
   "def_minimum_on_time": [0, 0],
+  "def_minimum_off_time": [0, 0],
   "deferrable_load_groups": [],
   "load_peak_hours_cost": 0.1907,
   "load_offpeak_hours_cost": 0.1419,
