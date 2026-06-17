@@ -7092,6 +7092,356 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         )
 
     # ---------------------------------------------------------------------------
+    # Tests for def_minimum_off_time (#952 follow-on)
+    # All tests are base-safe: they read the new config key via optim_conf dict
+    # (not a new attribute) so Import/AttributeError is not possible on base code.
+    # RED tests are designed to FAIL on the behavioural assertion on base code,
+    # not on an exception.
+    # ---------------------------------------------------------------------------
+
+    def _collect_off_runs(self, binary_series):
+        """Return list of lengths of all interior OFF runs (between ON segments).
+
+        An OFF run is only counted when it falls between two ON segments -- i.e.
+        it is preceded by at least one ON step (so a stop event fired) and followed
+        by at least one ON step (so a restart will happen). Leading/trailing OFF
+        periods (before the first ON or after the last ON) are excluded because no
+        stop-event fired at t=0 when the load was already OFF before the horizon.
+        """
+        runs = []
+        in_off_run = False
+        current_len = 0
+        seen_on = False
+        for val in binary_series:
+            if val > 0.5:
+                if in_off_run and seen_on:
+                    # This OFF run is sandwiched between two ON segments.
+                    runs.append(current_len)
+                in_off_run = False
+                current_len = 0
+                seen_on = True
+            else:
+                if seen_on:
+                    in_off_run = True
+                    current_len += 1
+        # Do NOT count trailing OFF run (no restart after it).
+        return runs
+
+    def test_minimum_off_time_forward_red1(self):
+        """RED-1 (forward): with a price profile that makes the base solver
+        short-cycle a semi_cont load (on-off-on with a very short interior OFF gap),
+        setting def_minimum_off_time=[3,0] must ensure every interior OFF run
+        (between two ON segments) is at least 3 steps long.
+
+        The load starts ON (def_current_state=True) so a stop event at t=0 or t=1
+        fires the stop binary, making the forward constraint relevant.
+
+        Base code: no min-off constraint -> short OFF gaps are allowed -> this test
+        FAILS on the assertion that all interior OFF runs are >= N.
+        """
+        # Price profile chosen to produce a short interior OFF gap under base code:
+        #   t=0-3: cheap -> ON
+        #   t=4: expensive spike -> OFF for exactly 1 step (stop event fires)
+        #   t=5-9: cheap -> ON
+        # With 9 required operating timesteps out of 10 total, the load must be ON for
+        # 9 steps and OFF for 1. The expensive spike at t=4 makes t=4 the only OFF step.
+        # Interior OFF run = 1 < N=3.
+        # With min-off=3: must stay OFF for 3+ steps if it stops, costing 3x the spike.
+        # Since 3 steps OFF is expensive (2 additional cheap slots lost), the solver
+        # prefers to stay ON throughout (interior OFF run = 0, or tolerate 3 step gap).
+        # Either way: no interior OFF run shorter than 3 exists when min-off=3 is active.
+        n = 10
+        prices = [0.05, 0.05, 0.05, 0.05, 0.9, 0.05, 0.05, 0.05, 0.05, 0.05]
+        df = self._make_min_on_scenario(n=n, prices=prices)
+
+        base_overrides = {
+            "costfun": "cost",
+            "number_of_deferrable_loads": 2,
+            "nominal_power_of_deferrable_loads": [3000.0, 750.0],
+            "minimum_power_of_deferrable_loads": [0.0, 0.0],
+            "operating_hours_of_each_deferrable_load": [4.5, 0.0],
+            "treat_deferrable_load_as_semi_cont": [True, True],
+            "set_deferrable_load_single_constant": [False, False],
+            "set_deferrable_startup_penalty": [0.0, 0.0],
+            "set_deferrable_max_startups": [0, 0],
+            "start_timesteps_of_each_deferrable_load": [0, 0],
+            "end_timesteps_of_each_deferrable_load": [0, 0],
+            "def_load_config": [],
+            "deferrable_load_groups": [],
+            "set_use_battery": False,
+        }
+
+        # --- counterfactual (no min-off): base solver produces short interior OFF gap ---
+        _opt_base, res_base = self._run_min_on_optim(base_overrides, df, n)
+        bin2_base = res_base["P_def_bin2_0"].values
+        off_runs_base = self._collect_off_runs(bin2_base)
+        self.assertTrue(
+            len(off_runs_base) > 0 and min(off_runs_base) < 3,
+            "Counterfactual FAILED: base solver did not produce a short interior OFF gap "
+            f"(between two ON segments) on this price profile. "
+            f"Bin2={bin2_base}, interior OFF runs={off_runs_base}. "
+            "Adjust prices/operating hours so the base solver short-cycles OFF.",
+        )
+
+        # --- with min-off constraint: every interior OFF run must be >= N=3 ---
+        min_off_overrides = dict(base_overrides)
+        min_off_overrides["def_minimum_off_time"] = [3, 0]
+        _opt_min_off, res_min_off = self._run_min_on_optim(min_off_overrides, df, n)
+        self.assertIn(
+            _opt_min_off.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"Optimization with def_minimum_off_time=[3,0] returned non-optimal: "
+            f"{_opt_min_off.optim_status}",
+        )
+        bin2_min_off = res_min_off["P_def_bin2_0"].values
+        off_runs_constrained = self._collect_off_runs(bin2_min_off)
+        # If the solver chose to stay all-ON (zero interior OFF gaps) that is an
+        # allowed outcome -- the min-off constraint is satisfied trivially. But if
+        # any interior OFF gap exists it must be >= N=3.
+        if off_runs_constrained:
+            min_off_run = min(off_runs_constrained)
+            self.assertGreaterEqual(
+                min_off_run,
+                3,
+                f"def_minimum_off_time=[3,0] did not enforce min interior OFF run length>=3. "
+                f"Bin2={bin2_min_off}, interior OFF runs={off_runs_constrained}",
+            )
+        else:
+            # Anti-vacuity guard: if BOTH base and constrained have zero interior
+            # OFF runs the scenario never exercises the forward constraint, so the
+            # "if" branch above could pass without testing anything. The base run
+            # must short-cycle (asserted earlier via off_runs_base) for this test
+            # to be meaningful.
+            self.assertGreater(
+                len(off_runs_base),
+                0,
+                "Both base and constrained plans have zero interior OFF runs -- the "
+                "scenario does not exercise the forward min-off constraint. "
+                f"Base bin2={bin2_base}, constrained bin2={bin2_min_off}.",
+            )
+
+    def test_minimum_off_time_remainder_red2(self):
+        """RED-2 (remainder): a currently-OFF load with N=3, elapsed=1 must be
+        forced OFF for exactly 2 more steps (remaining = N - elapsed = 2), but no
+        more. And with no elapsed supplied, no initial force is applied (load is
+        free to turn on immediately).
+
+        Base code: no initial-run forcing for min-off -> first step of the
+        horizon is free -> this test FAILS on the assertion that t=0 is forced OFF.
+        """
+        n = 10
+        # Make t=0..1 very cheap so solver wants to be ON immediately.
+        # With min-off remainder forcing (remaining=2), it MUST stay OFF for 2 steps.
+        prices = [0.01, 0.01, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9]
+        df = self._make_min_on_scenario(n=n, prices=prices)
+
+        overrides = {
+            "costfun": "cost",
+            "number_of_deferrable_loads": 2,
+            "nominal_power_of_deferrable_loads": [3000.0, 750.0],
+            "minimum_power_of_deferrable_loads": [0.0, 0.0],
+            "operating_hours_of_each_deferrable_load": [1.0, 0.0],
+            "treat_deferrable_load_as_semi_cont": [True, True],
+            "set_deferrable_load_single_constant": [False, False],
+            "set_deferrable_startup_penalty": [0.0, 0.0],
+            "set_deferrable_max_startups": [0, 0],
+            "start_timesteps_of_each_deferrable_load": [0, 0],
+            "end_timesteps_of_each_deferrable_load": [0, 0],
+            "def_load_config": [],
+            "deferrable_load_groups": [],
+            "set_use_battery": False,
+            # Load 0 is currently OFF
+            "def_current_state": [False, False],
+        }
+
+        # Sub-test A: elapsed=1, N=3 -> remaining=2 -> t=0 and t=1 must be OFF
+        with_elapsed = dict(overrides)
+        with_elapsed["def_minimum_off_time"] = [3, 0]
+        with_elapsed["def_current_off_timesteps"] = [1, 0]
+        _opt_a, res_a = self._run_min_on_optim(with_elapsed, df, n)
+        self.assertIn(
+            _opt_a.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"Optimization with elapsed=1, N=3 returned non-optimal: {_opt_a.optim_status}",
+        )
+        bin2_a = res_a["P_def_bin2_0"].values
+        # t=0 must be OFF (forced by remainder)
+        self.assertAlmostEqual(
+            bin2_a[0],
+            0.0,
+            delta=0.1,
+            msg=f"Load 0 should be forced OFF at t=0 (elapsed=1, N=3, remaining=2). Bin2={bin2_a}",
+        )
+        # t=1 must also be OFF (remaining=2 covers t=0 and t=1)
+        self.assertAlmostEqual(
+            bin2_a[1],
+            0.0,
+            delta=0.1,
+            msg=f"Load 0 should be forced OFF at t=1 (elapsed=1, N=3, remaining=2). Bin2={bin2_a}",
+        )
+
+        # Sub-test B: no elapsed supplied -> no initial force -> t=0 may be ON
+        # (the solver will go ON immediately since price at t=0,1 is very cheap)
+        no_elapsed = dict(overrides)
+        no_elapsed["def_minimum_off_time"] = [3, 0]
+        # def_current_off_timesteps intentionally absent
+        _opt_b, res_b = self._run_min_on_optim(no_elapsed, df, n)
+        self.assertIn(
+            _opt_b.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"Optimization without elapsed returned non-optimal: {_opt_b.optim_status}",
+        )
+        bin2_b = res_b["P_def_bin2_0"].values
+        # Without elapsed, no initial force is applied.
+        # The solver should run at t=0 (very cheap) to satisfy 1h of operation.
+        self.assertGreater(
+            bin2_b[0],
+            0.5,
+            f"Without elapsed, t=0 should be free (ON at cheap price). Bin2={bin2_b}",
+        )
+
+    def test_minimum_off_time_noop(self):
+        """NO-OP: def_minimum_off_time all-zero must produce the identical
+        objective value and plan as today (no constraint added). This is the
+        default-off guarantee.
+        """
+        n = 10
+        prices = [0.05, 0.05, 0.5, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05]
+        df = self._make_min_on_scenario(n=n, prices=prices)
+
+        overrides = {
+            "costfun": "cost",
+            "number_of_deferrable_loads": 2,
+            "nominal_power_of_deferrable_loads": [3000.0, 750.0],
+            "minimum_power_of_deferrable_loads": [0.0, 0.0],
+            "operating_hours_of_each_deferrable_load": [3.0, 0.0],
+            "treat_deferrable_load_as_semi_cont": [True, True],
+            "set_deferrable_load_single_constant": [False, False],
+            "set_deferrable_startup_penalty": [0.0, 0.0],
+            "set_deferrable_max_startups": [0, 0],
+            "start_timesteps_of_each_deferrable_load": [0, 0],
+            "end_timesteps_of_each_deferrable_load": [0, 0],
+            "def_load_config": [],
+            "deferrable_load_groups": [],
+            "set_use_battery": False,
+        }
+
+        # Without any def_minimum_off_time key (base behaviour)
+        _opt_base, res_base = self._run_min_on_optim(overrides, df, n)
+        self.assertIn(_opt_base.optim_status, VALID_OPTIMAL_STATUSES)
+
+        # With all-zero def_minimum_off_time
+        with_zeros = dict(overrides)
+        with_zeros["def_minimum_off_time"] = [0, 0]
+        _opt_zeros, res_zeros = self._run_min_on_optim(with_zeros, df, n)
+        self.assertIn(_opt_zeros.optim_status, VALID_OPTIMAL_STATUSES)
+
+        # Plans must match
+        np.testing.assert_array_almost_equal(
+            res_base["P_deferrable0"].values,
+            res_zeros["P_deferrable0"].values,
+            decimal=3,
+            err_msg="def_minimum_off_time=[0,0] changed P_deferrable0 vs no-key baseline",
+        )
+        np.testing.assert_array_almost_equal(
+            res_base["P_deferrable1"].values,
+            res_zeros["P_deferrable1"].values,
+            decimal=3,
+            err_msg="def_minimum_off_time=[0,0] changed P_deferrable1 vs no-key baseline",
+        )
+
+    def test_minimum_off_time_feasibility_tight_window(self):
+        """FEASIBILITY: a load that turns off near the start cannot restart because
+        the min-off window extends past the horizon. Problem stays Optimal.
+
+        Specifically: N=8, horizon=10. The load runs at t=0 (single step forced ON
+        via def_current_state=True + zero elapsed), then turns OFF at t=1. With
+        min-off=8, it cannot restart until t=9 -- but there are not enough steps
+        remaining to fit the 1h requirement. Problem stays Optimal (load simply
+        doesn't restart, operating-hours not met but solver can satisfy the
+        energy constraint target with what it has).
+
+        We actually use a simpler test: N=6, load starts OFF at t=0. With
+        end_timestep=3 the load can only run in [0,3). But if min-off is large,
+        any stop prevents restart. With N=6, any stop prevents restart for 6 steps.
+        If the load is forced OFF for the whole horizon the problem stays Optimal
+        (param_running_ub forces OFF and no Big-M infeasibility is triggered).
+        """
+        n = 10
+        prices = [0.05] * n
+        df = self._make_min_on_scenario(n=n, prices=prices)
+
+        overrides = {
+            "costfun": "cost",
+            "number_of_deferrable_loads": 2,
+            "nominal_power_of_deferrable_loads": [3000.0, 750.0],
+            "minimum_power_of_deferrable_loads": [0.0, 0.0],
+            "operating_hours_of_each_deferrable_load": [0.5, 0.0],
+            "treat_deferrable_load_as_semi_cont": [True, True],
+            "set_deferrable_load_single_constant": [False, False],
+            "set_deferrable_startup_penalty": [0.0, 0.0],
+            "set_deferrable_max_startups": [0, 0],
+            "start_timesteps_of_each_deferrable_load": [0, 0],
+            "end_timesteps_of_each_deferrable_load": [0, 0],
+            "def_load_config": [],
+            "deferrable_load_groups": [],
+            "set_use_battery": False,
+            # Load 0 currently OFF with 0 elapsed -> min-off remainder NOT triggered
+            # (no def_current_off_timesteps key); the forward constraint does apply.
+            "def_current_state": [False, False],
+            # Large min-off: once it stops after 1 timestep, can't restart for N=8 steps.
+            # This leaves at most 2 possible on-slots (t=0 then stuck off until t=8..9).
+            # Problem must stay Optimal regardless.
+            "def_minimum_off_time": [8, 0],
+        }
+
+        _opt, _res = self._run_min_on_optim(overrides, df, n)
+        self.assertIn(
+            _opt.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"Problem with tight min-off window should stay Optimal. Got: {_opt.optim_status}",
+        )
+
+    def test_minimum_off_time_single_constant_excluded(self):
+        """REGRESSION: a single-constant load with def_minimum_off_time set must
+        NOT be over-constrained. min-off-time is excluded for single-constant loads
+        (same gating as min-on), so the problem stays Optimal.
+        """
+        n = 10
+        prices = [0.05] * n
+        df = self._make_min_on_scenario(n=n, prices=prices)
+
+        overrides = {
+            "costfun": "cost",
+            "number_of_deferrable_loads": 2,
+            "nominal_power_of_deferrable_loads": [3000.0, 750.0],
+            "minimum_power_of_deferrable_loads": [0.0, 0.0],
+            "operating_hours_of_each_deferrable_load": [1.0, 0.0],
+            "treat_deferrable_load_as_semi_cont": [False, False],
+            "set_deferrable_load_single_constant": [True, False],
+            "set_deferrable_startup_penalty": [0.0, 0.0],
+            "set_deferrable_max_startups": [0, 0],
+            "start_timesteps_of_each_deferrable_load": [0, 0],
+            "end_timesteps_of_each_deferrable_load": [0, 0],
+            "def_load_config": [],
+            "deferrable_load_groups": [],
+            "set_use_battery": False,
+            # Large min-off (5) that would over-constrain a single-const load if applied.
+            # Excluded by is_single_const gate -> stays Optimal.
+            "def_minimum_off_time": [5, 0],
+            "def_current_state": [False, False],
+            "def_current_off_timesteps": [1, 0],
+        }
+
+        _opt, _res = self._run_min_on_optim(overrides, df, n)
+        self.assertIn(
+            _opt.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"single-constant + min-off must stay Optimal (min-off excluded for "
+            f"single-constant loads). Got: {_opt.optim_status}",
+        )
+
+    # ---------------------------------------------------------------------------
     # Tests for def_current_power (issue #605)
     # All tests are base-safe: they read the new config key via optim_conf dict
     # (not a new attribute) so Import/AttributeError is not possible on base code.

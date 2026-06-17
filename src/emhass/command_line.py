@@ -270,6 +270,9 @@ class OptimizationCache:
             # Per-call elapsed on-time for min-on remainder (issue #952); value
             # is read via cp.Parameter so no rebuild on cache hit.
             "def_current_on_timesteps",
+            # Per-call elapsed off-time for min-off remainder (#952 follow-on); value
+            # is read via cp.Parameter so no rebuild on cache hit.
+            "def_current_off_timesteps",
             # Per-call current power in watts (issue #605); pin value is a cp.Parameter.
             "def_current_power",
             "minimum_power_of_deferrable_loads",
