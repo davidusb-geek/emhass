@@ -95,6 +95,10 @@ _XFAIL_REASON: dict[str, str] = {
         "no stringly-typed guard; raises a contextual error on non-integer timestep "
         "values, consistent with the other per-load deferrable params (see #900)"
     ),
+    "def_minimum_off_time": (
+        "no stringly-typed guard; raises a contextual error on non-integer timestep "
+        "values, consistent with the other per-load deferrable params (see #900)"
+    ),
 }
 
 # Per-param, per-bad-value overrides for the xfail marker.

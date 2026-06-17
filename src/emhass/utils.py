@@ -1946,6 +1946,23 @@ async def treat_runtimeparams(
             else:
                 params["optim_conf"]["def_current_on_timesteps"] = [int(dcot)] * n_loads
 
+        # def_current_off_timesteps: per-load elapsed OFF timesteps for min-off remainder
+        # (#952 follow-on). Mirrors def_current_on_timesteps: absent key -> no initial
+        # force (NOT assumed zero). Validates that each entry is a non-negative integer.
+        if "def_current_off_timesteps" in runtimeparams:
+            dcoft = runtimeparams["def_current_off_timesteps"]
+            # String -> parse JSON list
+            if isinstance(dcoft, str):
+                try:
+                    dcoft = orjson.loads(dcoft)
+                except Exception:
+                    logger.warning(f"Could not parse def_current_off_timesteps string: {dcoft}")
+            n_loads = len(params["optim_conf"]["nominal_power_of_deferrable_loads"])
+            if isinstance(dcoft, list):
+                params["optim_conf"]["def_current_off_timesteps"] = [int(v) for v in dcoft]
+            else:
+                params["optim_conf"]["def_current_off_timesteps"] = [int(dcoft)] * n_loads
+
         # def_current_power: per-load current power in watts (issue #605).
         # Absent key -> no pin, no force-on (NOT assumed zero). Mirrors def_current_on_timesteps.
         if "def_current_power" in runtimeparams:

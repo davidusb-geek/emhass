@@ -127,6 +127,19 @@ Example:
   **Composes with `set_deferrable_max_startups`:** the two constraints are independent (count vs window) and coexist cleanly. A pathological combination of low max-startups, long min-on, and a short operating window can over-constrain a load; if you use both, ensure `max_startups x min_on_time <= available_timesteps`.
 
   **Initial-condition remainder:** to carry the remaining on-time across MPC ticks when the load is already running, also pass `def_current_on_timesteps` at runtime (see Passing data at runtime).
+- `def_minimum_off_time`: Per-load minimum number of consecutive optimization timesteps a load must stay OFF once it stops (short-cycle / min-down-time protection). One integer per deferrable load. Set to `0` (default) to disable for that load -- **default-off, exact no-op**. Example: `[3, 0]` requires load 0 to remain off for at least 3 consecutive timesteps after stopping; load 1 has no constraint.
+
+  Unit: timesteps. Convert to minutes: `N x optimization_time_step`. With the default 30-minute step, `3 timesteps = 90 minutes`.
+
+  **Primary use case:** `treat_deferrable_load_as_semi_cont: true` loads (heat pump, AC, compressor) where rapid ON-OFF-ON cycling causes compressor wear or violates manufacturer limits. Prevents the optimizer from restarting a load immediately after stopping it.
+
+  **Not applied to `set_deferrable_load_single_constant` loads:** those already run as one continuous block, so a separate minimum off-time constraint is not applicable and is ignored for them.
+
+  **Self-protecting against horizon end:** if the load turns off near the end of the horizon and the minimum OFF window extends beyond the horizon, the constraint applies only within the remaining timesteps -- the problem stays Optimal.
+
+  **Composes with `def_minimum_on_time` and `set_deferrable_max_startups`:** all three constraints are independent and coexist cleanly. A long minimum off-time combined with a tight operating window can leave too few timesteps for a load to deliver its required energy; if you rely on both, make sure the minimum off-time still leaves enough operating timesteps for the load to run.
+
+  **Initial-condition remainder:** to carry the remaining off-time across MPC ticks when the load is already stopped, also pass `def_current_off_timesteps` at runtime (see Passing data at runtime).
 - `def_current_power`: Per-load actual power (watts) each deferrable load is drawing right now at the start of the optimization horizon. **Default `[0, 0]` (or absent key) is an exact no-op** -- today's behaviour is preserved. One non-negative float per deferrable load, in the same order as `nominal_power_of_deferrable_loads`. Supply the real sensor reading in watts.
 
   Unit: W (watts). Runtime-overridable on every MPC tick without rebuilding the solver cache.

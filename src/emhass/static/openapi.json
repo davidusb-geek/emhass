@@ -790,6 +790,16 @@
             "x-unit": "timesteps",
             "description": "Per-load minimum number of consecutive optimization timesteps a load must stay ON once started (min-up-time / short-cycle protection). One integer per deferrable load. Set to 0 (default) to disable for that load -- default-off, exact no-op. 1 timestep = optimization_time_step minutes (e.g. 3 timesteps at 30-min resolution = 90 minutes minimum run). Intended primarily for treat_deferrable_load_as_semi_cont loads (heat pumps, AC, pumps) where the ON/OFF binary is tightly coupled to the full nominal power. For plain/continuous-power loads the constraint holds the binary state ON but the power level may be fractional. Composes cleanly with set_deferrable_max_startups (independent constraints). Note: when the minimum ON window cannot fit within the load's operating-window end, the solver simply does not start the load for that horizon rather than forcing infeasibility. (unit: timesteps)"
           },
+          "def_minimum_off_time": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "default": 0
+            },
+            "title": "Minimum OFF-time for deferrable loads",
+            "x-unit": "timesteps",
+            "description": "Per-load minimum number of consecutive optimization timesteps a load must stay OFF once it stops (min-down-time / short-cycle protection). One integer per deferrable load. Set to 0 (default) to disable for that load -- default-off, exact no-op. 1 timestep = optimization_time_step minutes (e.g. 3 timesteps at 30-min resolution = 90 minutes minimum off-time). Intended primarily for treat_deferrable_load_as_semi_cont loads (heat pumps, AC, compressors) where rapid ON-OFF-ON cycling causes wear or violates manufacturer limits. Composes cleanly with def_minimum_on_time and set_deferrable_max_startups (independent constraints). Note: when the minimum OFF window cannot fit within the remaining horizon, the solver simply defers the next start; the problem stays Optimal. Excludes single-constant and sequence loads (same gating as def_minimum_on_time). (unit: timesteps)"
+          },
           "start_timesteps_of_each_deferrable_load": {
             "type": "array",
             "items": {
