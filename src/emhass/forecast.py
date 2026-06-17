@@ -1383,7 +1383,7 @@ class Forecast:
         :rtype: pd.date_range
 
         """
-        start_forecast_csv = pd.Timestamp(datetime.now(), tz=self.time_zone).replace(microsecond=0)
+        start_forecast_csv = pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0)
         if self.method_ts_round == "nearest":
             start_forecast_csv = pd.Timestamp.now(tz=self.time_zone).replace(microsecond=0)
         elif self.method_ts_round == "first":
