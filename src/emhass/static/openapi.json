@@ -410,10 +410,10 @@
           },
           "lp_solver_mip_rel_gap": {
             "type": "number",
-            "default": 0.0,
+            "default": 0.01,
             "title": "MIP relative gap tolerance",
             "x-unit": "fraction",
-            "description": "For mixed-integer problems (with binary variables), the solver stops when the solution is within this percentage of optimal. Valid range: 0 to 1 (0% to 100%). Higher values (e.g., 0.05 = 5%) solve faster with minimal quality loss. Recommended: 0.05 for ~2x speedup. Defaults to 0 (exact optimal). (unit: fraction)"
+            "description": "For mixed-integer problems (with binary variables), the solver stops when the solution is within this percentage of optimal. Valid range: 0 to 1 (0% to 100%). Higher values (e.g., 0.05 = 5%) solve faster with minimal quality loss. Defaults to 0.01 (within 1% of optimal), which keeps deep-horizon problems from timing out without a published plan. Set to 0 for exact optimal. (unit: fraction)"
           },
           "weather_forecast_method": {
             "type": "string",
