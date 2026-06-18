@@ -11,7 +11,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from emhass import last_run
+import numpy as np
+import pandas as pd
+
+from emhass import last_run, plan_store
 
 
 class TestLastRunRecordReturn(unittest.TestCase):
@@ -38,3 +41,39 @@ class TestLastRunRecordReturn(unittest.TestCase):
         snap = last_run.read(self.tmp_path)
         self.assertIsNotNone(ts)
         self.assertEqual(ts, snap["timestamp"])
+
+
+class TestPlanStore(unittest.TestCase):
+    """plan_store serialize / record / read (cache + write-through)."""
+
+    def setUp(self):
+        self.tmp_path = Path(tempfile.mkdtemp())
+        plan_store._cache = None
+
+    def tearDown(self):
+        plan_store._cache = None
+
+    def test_serialize_opt_res_records_iso_and_nan(self):
+        idx = pd.to_datetime(["2026-06-17T00:00:00+00:00", "2026-06-17T00:30:00+00:00"], utc=True)
+        idx.name = "timestamp"
+        df = pd.DataFrame(
+            {"P_Load": [100.0, np.nan], "optim_status": ["Optimal", "Optimal"]}, index=idx
+        )
+        records = plan_store.serialize(df)
+        self.assertTrue(records[0]["timestamp"].startswith("2026-06-17T00:00:00"))
+        self.assertEqual(records[0]["P_Load"], 100.0)
+        self.assertIsNone(records[1]["P_Load"])  # NaN -> null
+
+    def test_record_then_read_roundtrip(self):
+        self.assertIsNone(plan_store.read(self.tmp_path))  # cold start, no run yet
+        plan_store.record(
+            self.tmp_path,
+            plan=[{"timestamp": "2026-06-17T00:00:00Z", "P_Load": 100.0}],
+            generated_at="2026-06-17T00:00:05Z",
+            schema_version="1.0",
+        )
+        snap = plan_store.read(self.tmp_path)
+        self.assertEqual(snap["generated_at"], "2026-06-17T00:00:05Z")
+        self.assertEqual(snap["emhass_schema_version"], "1.0")
+        self.assertEqual(snap["plan"][0]["P_Load"], 100.0)
+        self.assertTrue((self.tmp_path / "plan_latest.json").exists())  # write-through
