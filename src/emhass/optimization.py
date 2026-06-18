@@ -2615,15 +2615,16 @@ class Optimization:
         where cop_k is resolved via utils.resolve_thermal_battery_cop (Carnot
         for heat pumps, flat for constant-efficiency sources like gas).
 
-        Returns: (predicted_temp_var, heating_demand_arr) for downstream
-        plotting / publishing.
+        Returns: (predicted_temp_var, heating_demand_arr, penalty_term) where
+        penalty_term is the signed comfort penalty (<= 0, added to the Maximize
+        objective) or None when no desired_temperatures are configured.
         """
         tank = self._get_shared_thermal_tanks()[tank_idx]
         tank_id = tank.get("id", f"tank{tank_idx}")
         required_len = self.num_timesteps
         load_ids = [int(k) for k in tank.get("load_ids", [])]
         if not load_ids:
-            return None, None
+            return None, None, None
 
         # Tank physics
         volume = tank["volume"]
@@ -2721,6 +2722,17 @@ class Optimization:
             )
             cop_arrays.append(np.asarray(cops))
 
+        # Comfort sense (heat vs cool). The compiler propagates the destination
+        # storage's comfort_sense onto tank["sense"]; default to heat for legacy
+        # configs. sense_coeff = +1 for heating (source adds heat), -1 for cooling
+        # (source removes heat) — mirrors the per-load thermal paths.
+        tank_sense = utils.normalize_heat_cool_mode(
+            tank.get("sense") or "heat",
+            field_name="sense",
+            context=f"shared tank {tank_id}",
+        )
+        sense_coeff = 1 if tank_sense == "heat" else -1
+
         # Build CVXPY tank temperature variable
         predicted_temp = cp.Variable(required_len, name=f"temp_shared_{tank_id}")
         constraints.append(predicted_temp[0] == start_temperature)
@@ -2733,11 +2745,12 @@ class Optimization:
             raw_heat = raw_heat + cp.multiply(cops[:-1], p_k[:-1]) / 1000 * self.time_step
 
         # First-order thermal dynamics
-        # T[t+1] = T[t] + conversion * (raw_heat[t] - demand[t] - loss[t])
+        # T[t+1] = T[t] + conversion * (sense_coeff*raw_heat[t] - demand[t] - loss[t])
+        # In cool mode (sense_coeff = -1) running a source LOWERS the tank temperature.
         constraints.append(
             predicted_temp[1:]
             == predicted_temp[:-1]
-            + conversion * (raw_heat - heating_demand[:-1] - thermal_losses[:-1])
+            + conversion * (sense_coeff * raw_heat - heating_demand[:-1] - thermal_losses[:-1])
         )
 
         # Hard min/max temperature constraints (skipping index 0 - already pinned)
@@ -2754,7 +2767,66 @@ class Optimization:
             max_vals = np.array([max_temperatures_list[i] for i in max_idx])
             constraints.append(predicted_temp[max_idx] <= max_vals)
 
-        return predicted_temp, heating_demand
+        # Soft comfort constraints (overshoot/desired/penalty) — same pattern as the
+        # per-load thermal_battery path. Without this the hard min/max are the ONLY
+        # temperature pressure, so in cool mode the zone drifts up to (just under) the
+        # hard max and no cooling is ever scheduled. The signed penalty creates the
+        # incentive to hold the tank near `desired_temperatures` in the comfort sense.
+        penalty_expr = 0
+        desired_temps_raw = tank.get("desired_temperatures", [])
+        # The compiler may store a scalar desired_temperature; broadcast to horizon.
+        if isinstance(desired_temps_raw, (int, float)):
+            desired_temps_list = [float(desired_temps_raw)] * required_len
+        else:
+            desired_temps_list = list(desired_temps_raw)
+        overshoot_temperature = tank.get("overshoot_temperature", None)
+
+        if desired_temps_list and overshoot_temperature is not None:
+            is_overshoot = cp.Variable(
+                required_len, boolean=True, name=f"is_overshoot_shared_{tank_id}"
+            )
+            big_m = 100
+
+            if tank_sense == "heat":
+                constraints.append(
+                    predicted_temp - overshoot_temperature - (big_m * is_overshoot) <= 0
+                )
+                constraints.append(
+                    predicted_temp - overshoot_temperature + (big_m * (1 - is_overshoot)) >= 0
+                )
+            else:
+                constraints.append(
+                    predicted_temp - overshoot_temperature - (-big_m * is_overshoot) >= 0
+                )
+                constraints.append(
+                    predicted_temp - overshoot_temperature + (-big_m * (1 - is_overshoot)) <= 0
+                )
+
+            # Suppress every member source while the tank is in the comfortable region.
+            for k in load_ids:
+                nominal_power = self.optim_conf["nominal_power_of_deferrable_loads"][k]
+                if isinstance(nominal_power, list):
+                    nominal_power = max(nominal_power)
+                constraints.append(
+                    self.vars["p_deferrable"][k] <= nominal_power * (1 - is_overshoot)
+                )
+
+        if desired_temps_list:
+            penalty_factor = tank.get("penalty_factor", 10)
+            valid_indices = [
+                i
+                for i, val in enumerate(desired_temps_list)
+                if val is not None and 0 < i < required_len
+            ]
+            if valid_indices:
+                des_temps = np.array([desired_temps_list[i] for i in valid_indices])
+                # deviation in the comfort sense: heat penalises T < desired,
+                # cool penalises T > desired (sense_coeff = -1 flips the sign).
+                deviation = (predicted_temp[valid_indices] - des_temps) * sense_coeff
+                penalty_expr = -cp.pos(-deviation * penalty_factor)
+
+        penalty_term = None if isinstance(penalty_expr, int) else cp.sum(penalty_expr)
+        return predicted_temp, heating_demand, penalty_term
 
     def _add_deferrable_load_constraints(
         self,
@@ -3286,9 +3358,11 @@ class Optimization:
         # shared tank is fed by N >= 1 deferrable loads; their per-load
         # thermal_battery dynamics were skipped above.
         for tank_idx, tank in enumerate(self._get_shared_thermal_tanks()):
-            shared_pred_temp, shared_demand = self._add_shared_thermal_tank_constraints(
-                constraints, tank_idx, data_opt, p_load
+            shared_pred_temp, shared_demand, shared_penalty = (
+                self._add_shared_thermal_tank_constraints(constraints, tank_idx, data_opt, p_load)
             )
+            if shared_penalty is not None:
+                penalty_terms_total += shared_penalty
             if shared_pred_temp is not None:
                 # Surface the tank state on the first member load so downstream
                 # publishing has a temperature column to report. Subsequent
