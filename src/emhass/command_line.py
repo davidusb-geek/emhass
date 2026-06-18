@@ -3838,7 +3838,13 @@ async def _publish_thermal_loads(ctx: PublishContext, opt_res_latest: pd.DataFra
         if k >= len(def_load_config):
             continue
         load_cfg = def_load_config[k]
-        if "thermal_config" not in load_cfg and "thermal_battery" not in load_cfg:
+        # heat_topology compiles each load to a {"thermal_source": ...} block; it must
+        # publish its predicted temperature / heating demand like thermal_config and
+        # thermal_battery do (issue #539 - the OptimizationCacheKey path already handles
+        # thermal_source, this gate was the one spot that did not).
+        if not any(
+            k2 in load_cfg for k2 in ("thermal_config", "thermal_battery", "thermal_source")
+        ):
             continue
         col_t = await _publish_thermal_variable(
             ctx.rh,

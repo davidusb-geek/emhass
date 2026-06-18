@@ -1757,6 +1757,64 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(found_temp, "Should publish predicted temperature")
         self.assertTrue(found_heat, "Should publish heating demand")
 
+    async def test_publish_thermal_loads_topology_source(self):
+        """A heat_topology-compiled load is {"thermal_source": ...}; its predicted
+        temperature and heating demand must publish too, exactly like thermal_config /
+        thermal_battery. Regression for issue #539: the publish gate only let
+        thermal_config / thermal_battery through, so custom_predicted_temperature_id
+        produced nothing for a heat_topology config (the OptimizationCacheKey path was
+        extended for thermal_source but this gate was not)."""
+        params = await TestCommandLineAsyncUtils.get_test_params()
+        params["optim_conf"]["def_load_config"] = [
+            {"thermal_source": {"supply_temperature": 52, "carnot_efficiency": 0.45}}
+        ]
+        params["optim_conf"]["number_of_deferrable_loads"] = 1
+        runtimeparams = {
+            "custom_predicted_temperature_id": [
+                {"entity_id": "sensor.temp", "unit_of_measurement": "C", "friendly_name": "Temp"}
+            ],
+            "custom_heating_demand_id": [
+                {"entity_id": "sensor.heat", "unit_of_measurement": "W", "friendly_name": "Heat"}
+            ],
+        }
+        params["passed_data"] = runtimeparams
+        params_json = orjson.dumps(params).decode("utf-8")
+        input_data_dict = await set_input_data_dict(
+            emhass_conf,
+            "profit",
+            params_json,
+            None,
+            "publish-data",
+            logger,
+            get_data_from_file=True,
+        )
+        idx = pd.date_range(end=pd.Timestamp.now(tz="Europe/Paris"), periods=1, freq="30min")
+        mock_df = pd.DataFrame(
+            {
+                "predicted_temp_heater0": [52.0],
+                "heating_demand_heater0": [1000.0],
+                "P_PV": [0.0],
+                "P_Load": [0.0],
+                "P_grid": [0.0],
+                "optim_status": ["Optimal"],
+                "unit_load_cost": [0.1],
+                "unit_prod_price": [0.05],
+            },
+            index=idx,
+        )
+        input_data_dict["rh"].post_data = AsyncMock(return_value=True)
+        with patch("emhass.command_line._get_closest_index", return_value=0):
+            await publish_data(input_data_dict, logger, opt_res_latest=mock_df)
+        call_args_list = input_data_dict["rh"].post_data.call_args_list
+        self.assertTrue(
+            any("sensor.temp" in str(args) for args in call_args_list),
+            "Should publish predicted temperature for a thermal_source (topology) load",
+        )
+        self.assertTrue(
+            any("sensor.heat" in str(args) for args in call_args_list),
+            "Should publish heating demand for a thermal_source (topology) load",
+        )
+
     async def test_regressor_preparation_errors(self):
         """
         Test logger error paths in _prepare_regressor_fit (missing CSV, missing columns).
