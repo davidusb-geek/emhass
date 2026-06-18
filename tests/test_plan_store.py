@@ -77,3 +77,42 @@ class TestPlanStore(unittest.TestCase):
         self.assertEqual(snap["emhass_schema_version"], "1.0")
         self.assertEqual(snap["plan"][0]["P_Load"], 100.0)
         self.assertTrue((self.tmp_path / "plan_latest.json").exists())  # write-through
+
+
+class TestRecordOptimSnapshotWritesPlan(unittest.TestCase):
+    """_record_optim_snapshot writes the plan with generated_at == last_run timestamp."""
+
+    def setUp(self):
+        self.tmp_path = Path(tempfile.mkdtemp())
+        last_run._cache = None
+        plan_store._cache = None
+
+    def tearDown(self):
+        last_run._cache = None
+        plan_store._cache = None
+
+    def test_record_optim_snapshot_writes_plan_with_shared_timestamp(self):
+        import logging
+
+        from emhass import command_line
+
+        idx = pd.to_datetime(["2026-06-17T00:00:00+00:00"], utc=True)
+        idx.name = "timestamp"
+        opt_res = pd.DataFrame({"P_Load": [100.0], "optim_status": ["Optimal"]}, index=idx)
+        input_data_dict = {
+            "emhass_conf": {"data_path": self.tmp_path},
+            "stage_times": {},
+        }
+        command_line._record_optim_snapshot(
+            input_data_dict,
+            last_run.ACTION_DAYAHEAD_OPTIM,
+            opt_res,
+            0.0,
+            logging.getLogger("test_plan_store"),
+        )
+        plan = plan_store.read(self.tmp_path)
+        lr = last_run.read(self.tmp_path)
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan["plan"][0]["P_Load"], 100.0)
+        # shared timestamp: plan generated_at equals the last_run timestamp
+        self.assertEqual(plan["generated_at"], lr["timestamp"])

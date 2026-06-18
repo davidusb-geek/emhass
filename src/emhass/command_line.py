@@ -18,7 +18,7 @@ import numpy as np
 import orjson
 import pandas as pd
 
-from emhass import last_run, utils
+from emhass import last_run, plan_store, utils
 from emhass.forecast import Forecast
 from emhass.machine_learning_forecaster import MLForecaster
 from emhass.machine_learning_regressor import MLRegressor
@@ -51,7 +51,7 @@ def _record_optim_snapshot(
             if isinstance(opt_res, pd.DataFrame) and "optim_status" in opt_res
             else "Unknown"
         )
-        last_run.record(
+        ts = last_run.record(
             input_data_dict["emhass_conf"]["data_path"],
             action=action,
             stage_times=input_data_dict["stage_times"],
@@ -60,6 +60,16 @@ def _record_optim_snapshot(
             duration_total_seconds=_time.monotonic() - t0_monotonic,
             schema_version=EMHASS_SCHEMA_VERSION,
         )
+        # Write the structured plan snapshot reusing the SAME timestamp last_run
+        # stamped, so GET /api/v1/plan and GET /api/v1/last-run agree on the run
+        # instant. Backs the /api/v1/plan endpoint (AC-6).
+        if isinstance(opt_res, pd.DataFrame):
+            plan_store.record(
+                input_data_dict["emhass_conf"]["data_path"],
+                plan=plan_store.serialize(opt_res),
+                generated_at=ts,
+                schema_version=EMHASS_SCHEMA_VERSION,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning("last_run: failed to record %s snapshot", action, exc_info=exc)
 
