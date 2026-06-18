@@ -765,6 +765,61 @@ class TestAPIV1LastRun(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["error_message"], "Solver failed to converge")
 
 
+class TestAPIV1Plan(unittest.IsolatedAsyncioTestCase):
+    """Integration tests for GET /api/v1/plan (AC-6)."""
+
+    async def asyncSetUp(self):
+        self.client = web_server.app.test_client()
+        self.original_conf = web_server.emhass_conf.copy()
+        self.tmp_path = pathlib.Path(tempfile.mkdtemp())
+        web_server.emhass_conf = {
+            "data_path": self.tmp_path,
+        }
+        from emhass import plan_store
+
+        plan_store._cache = None
+
+    async def asyncTearDown(self):
+        web_server.emhass_conf = self.original_conf
+        from emhass import plan_store
+
+        plan_store._cache = None
+
+    async def test_api_v1_plan_no_run(self):
+        """GET before any optim returns 200 with status='no-run' and null plan."""
+        import json
+
+        resp = await self.client.get("/api/v1/plan")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.headers.get("Cache-Control"), "no-store")
+        body = json.loads(await resp.get_data())
+        self.assertEqual(body["status"], "no-run")
+        self.assertIsNone(body["generated_at"])
+        self.assertIsNone(body["plan"])
+        self.assertIn("emhass_schema_version", body)
+
+    async def test_api_v1_plan_after_record(self):
+        """After plan_store.record() runs, GET returns the plan with status='ok'."""
+        import json
+
+        from emhass import plan_store
+
+        plan_store.record(
+            self.tmp_path,
+            plan=[{"timestamp": "2026-06-17T00:00:00Z", "P_Load": 100.0}],
+            generated_at="2026-06-17T00:00:05Z",
+            schema_version="1.0",
+        )
+
+        resp = await self.client.get("/api/v1/plan")
+        self.assertEqual(resp.status_code, 200)
+        body = json.loads(await resp.get_data())
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["generated_at"], "2026-06-17T00:00:05Z")
+        self.assertEqual(body["emhass_schema_version"], "1.0")
+        self.assertEqual(body["plan"][0]["P_Load"], 100.0)
+
+
 class TestHealthVerdict(unittest.TestCase):
     """Unit tests for the pure _health_verdict helper (AC-4). Recency-only."""
 
