@@ -3483,6 +3483,69 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         total = res["P_deferrable0"].sum() + res["P_deferrable1"].sum()
         self.assertGreater(total, 0, "Window outside horizon gagged the shared-tank members")
 
+    def test_shared_thermal_tank_cooling_schedules(self):
+        """A shared-tank heat-pump source feeding a comfort_sense: cool zone must
+        actively cool. With a warm outdoor forecast and a desired temperature below
+        the start, the source should run (>0 W) and pull the zone below its start.
+        Before the fix the shared-tank dynamics added source heat with a fixed +
+        sign (no sense_coeff) and built no comfort penalty, so the source stayed at
+        0 W and the zone drifted up toward the hard max instead of cooling."""
+        self.df_input_data_dayahead = self.prepare_forecast_data()
+        self.df_input_data_dayahead["outdoor_temperature_forecast"] = [33.0] * 48
+        self.optim_conf["number_of_deferrable_loads"] = 1
+        self.optim_conf["nominal_power_of_deferrable_loads"] = [2100]
+        self.optim_conf["minimum_power_of_deferrable_loads"] = [0]
+        self.optim_conf["operating_hours_of_each_deferrable_load"] = [0]
+        self.optim_conf["treat_deferrable_load_as_semi_cont"] = [False]
+        self.optim_conf["set_deferrable_load_single_constant"] = [False]
+        self.optim_conf["set_deferrable_startup_penalty"] = [0.0]
+        self.optim_conf["set_deferrable_max_startups"] = [0]
+        self.optim_conf["start_timesteps_of_each_deferrable_load"] = [0]
+        self.optim_conf["end_timesteps_of_each_deferrable_load"] = [0]
+        self.optim_conf["def_load_config"] = [
+            {
+                "thermal_source": {
+                    "supply_temperature": 18.0,
+                    "carnot_efficiency": 0.35,
+                    "sense": "cool",
+                }
+            },
+        ]
+        self.optim_conf["shared_thermal_tanks"] = [
+            {
+                "id": "zone",
+                "load_ids": [0],
+                "volume": 0.20,
+                "density": 1000,
+                "heat_capacity": 4.186,
+                "start_temperature": 24.0,
+                "thermal_loss": 0.30,
+                "sense": "cool",
+                "min_temperatures": [10.0] * 48,
+                "max_temperatures": [28.0] * 48,
+                "desired_temperatures": [22.0] * 48,
+                "penalty_factor": 10,
+            }
+        ]
+        opt = self.create_optimization()
+        ulc = self.df_input_data_dayahead[opt.var_load_cost].values
+        upp = self.df_input_data_dayahead[opt.var_prod_price].values
+        res = opt.perform_optimization(
+            self.df_input_data_dayahead,
+            self.p_pv_forecast.values.ravel(),
+            self.p_load_forecast.values.ravel(),
+            ulc,
+            upp,
+        )
+        self.assertEqual(opt.optim_status, "Optimal")
+        # The cooling source actually runs (0 W before the fix).
+        self.assertGreater(res["P_deferrable0"].sum(), 0, "cooling source never ran")
+        tank_cols = [c for c in res.columns if "temp_shared_zone" in c or "temp_heater" in c]
+        self.assertTrue(tank_cols, f"Expected a tank temp column, got {res.columns.tolist()}")
+        pred = res[tank_cols[0]]
+        # Cooling holds the zone below its 24 C start (it drifts up without the fix).
+        self.assertLess(pred.mean(), 24.0, "zone was not cooled (drifted up instead)")
+
     def test_is_electric_load_excludes_load_from_grid_balance(self):
         """A load with is_electric_load[k]=False must not appear in p_def_sum
         (and hence not in grid_pos / grid_neg balance constraints).
