@@ -20,7 +20,7 @@ from markupsafe import Markup
 from quart import Quart, make_response, request
 from quart import logging as log
 
-from emhass import last_run
+from emhass import last_run, plan_store
 from emhass.command_line import (
     EMHASS_SCHEMA_VERSION,
     continual_publish,
@@ -670,6 +670,33 @@ async def api_v1_last_run():
         }
     else:
         response_body = snap
+
+    response = await make_response(orjson.dumps(response_body))
+    response.headers["Content-Type"] = "application/json"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/api/v1/plan", methods=["GET"])
+async def api_v1_plan():
+    """Return the latest optimization plan as structured JSON.
+
+    Always-200 envelope with status enum:
+      - "no-run": no optim has completed yet (state lost on restart with no disk file)
+      - "ok": a plan is available
+
+    Schema: docs/api/v1/plan.schema.json (JSON Schema draft 2020-12).
+    """
+    snap = plan_store.read(emhass_conf["data_path"])
+    if snap is None:
+        response_body = {
+            "status": "no-run",
+            "generated_at": None,
+            "emhass_schema_version": EMHASS_SCHEMA_VERSION,
+            "plan": None,
+        }
+    else:
+        response_body = {"status": "ok", **snap}
 
     response = await make_response(orjson.dumps(response_body))
     response.headers["Content-Type"] = "application/json"
