@@ -22,6 +22,7 @@ CURATED = {
     "/get-json": {"POST"},
     "/action/{action_name}": {"POST"},
     "/api/v1/last-run": {"GET"},
+    "/api/v1/plan": {"GET"},
     "/healthz": {"GET"},
 }
 
@@ -118,6 +119,7 @@ def assert_no_undocumented(routes: set, curated: dict, skip: set) -> None:
 _REPO = Path(__file__).resolve().parents[1]
 _PARAM_DEFS = _REPO / "src" / "emhass" / "static" / "data" / "param_definitions.json"
 _LAST_RUN_SCHEMA = _REPO / "docs" / "api" / "v1" / "last-run.schema.json"
+_PLAN_SCHEMA = _REPO / "docs" / "api" / "v1" / "plan.schema.json"
 _HEALTHZ_SCHEMA = _REPO / "docs" / "api" / "healthz.schema.json"
 _OUT = _REPO / "src" / "emhass" / "static" / "openapi.json"
 
@@ -146,6 +148,7 @@ def build_spec(routes: set | None = None) -> dict:
     components = {
         "Config": build_config_component(param_defs),
         "LastRun": _load_json(_LAST_RUN_SCHEMA),
+        "Plan": _load_json(_PLAN_SCHEMA),
         "Healthz": _load_json(_HEALTHZ_SCHEMA),
     }
     config_ref = {"$ref": "#/components/schemas/Config"}
@@ -222,6 +225,17 @@ def build_spec(routes: set | None = None) -> dict:
                     "200": {
                         "description": "Last-run envelope",
                         **json_ct({"$ref": "#/components/schemas/LastRun"}),
+                    }
+                },
+            }
+        },
+        "/api/v1/plan": {
+            "get": {
+                "summary": "Latest optimization plan",
+                "responses": {
+                    "200": {
+                        "description": "Plan envelope",
+                        **json_ct({"$ref": "#/components/schemas/Plan"}),
                     }
                 },
             }
