@@ -2058,6 +2058,29 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             f"({cooling_when_cool})",
         )
 
+    def test_thermal_battery_hdd_cooling_warns(self):
+        """Degree-day (specific_heating_demand) demand is heating-only.
+
+        With sense='cool' on the HDD path the optimizer must warn rather than
+        silently produce heating-style demand on cold periods (#996 review).
+        """
+        hdd_cooling_config = {
+            "start_temperature": 24.0,
+            "supply_temperature": 18.0,
+            "volume": 12.0,
+            "specific_heating_demand": 100.0,
+            "area": 100.0,
+            "min_temperatures": [20.0] * 48,
+            "max_temperatures": [26.0] * 48,
+            "sense": "cool",
+        }
+        with self.assertLogs(level="WARNING") as logs:
+            self.run_thermal_battery_optimization(hdd_cooling_config, outdoor_temps=36.0)
+        self.assertTrue(
+            any("heating-only" in message for message in logs.output),
+            f"Expected a heating-only warning for HDD sense='cool'; got {logs.output}",
+        )
+
     def test_thermal_management_penalty(self):
         # Case: Penalize mode (Legacy behavior)
         # We use desired_temperatures, which triggers the penalty logic
