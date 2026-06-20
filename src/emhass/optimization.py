@@ -1045,6 +1045,7 @@ class Optimization:
                             shgc=shgc,
                             internal_gains_forecast=internal_gains_forecast,
                             internal_gains_factor=internal_gains_factor,
+                            sense=hc.get("sense") or "heat",
                         )
                         params["heating_demand"].value = np.array(heating_demand[:n])
                     else:
@@ -2293,6 +2294,7 @@ class Optimization:
                         shgc=shgc,
                         internal_gains_forecast=internal_gains_forecast,
                         internal_gains_factor=internal_gains_factor,
+                        sense=sense,
                     )
                     params["heating_demand"].value = np.array(demand[:required_len])
 
@@ -2382,6 +2384,7 @@ class Optimization:
                         indoor_target_temperature=indoor_target_temp,
                         outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
                         optimization_time_step=int(self.freq.total_seconds() / 60),
+                        sense=sense,
                     )
                 else:
                     demand = utils.calculate_heating_demand(
@@ -2686,6 +2689,7 @@ class Optimization:
                     indoor_target_temperature=indoor_target_temp,
                     outdoor_temperature_forecast=outdoor_temp_arr.tolist(),
                     optimization_time_step=int(self.freq.total_seconds() / 60),
+                    sense=tank.get("sense") or "heat",
                 )
             elif "specific_heating_demand" in tank and "area" in tank:
                 demand = utils.calculate_heating_demand(
