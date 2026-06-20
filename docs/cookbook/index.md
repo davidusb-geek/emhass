@@ -15,9 +15,11 @@ Short, standalone, copy-pasteable recipes for common EMHASS patterns. Each recip
 
 ### EV charging
 
-No recipes yet. **EVCC integration architecture is under active discussion** at [evcc-io/evcc#29815](https://github.com/evcc-io/evcc/discussions/29815) — EV-EVCC-coupled recipes will land after that resolves.
+- [EMHASS as planner, evcc as executor](ev_evcc_executor.md): EMHASS plans the EV charge as one deferrable in the whole-home optimization, and evcc executes it on the car (current modulation, live SOC, PV tracking). Works today on released evcc and EMHASS.
 
-Seed material for HA-flavored EV recipes (community contributions welcome): [Discussion #824](https://github.com/davidusb-geek/emhass/discussions/824) thread (daily-commute, surplus-only, multi-day, calendar-driven, negative-price-aware, modulating-power patterns).
+This is the opposite coupling to the evcc-as-frontend idea under discussion at [evcc-io/evcc#29815](https://github.com/evcc-io/evcc/discussions/29815) (evcc calling EMHASS as its backend optimizer). That recipe can land if and when #29815 resolves; the two coexist.
+
+More HA-flavored EV recipes are welcome. See the [Discussion #824](https://github.com/davidusb-geek/emhass/discussions/824) thread for seed patterns (daily-commute, surplus-only, multi-day, calendar-driven, negative-price-aware, modulating-power).
 
 ### Domestic hot water (DHW)
 
