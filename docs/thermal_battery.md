@@ -290,6 +290,18 @@ When configured, the optimizer penalizes deviations from the desired temperature
     * `"heat"`: Penalizes temperatures below desired (standard heating)
     * `"cool"`: Penalizes temperatures above desired (cooling mode)
     * Example: `"heat"`
+    * With the physics-based demand method (`u_value` etc.), `sense` also sets the
+      direction of the building load. In heating mode the demand is the heat the
+      building loses when it is colder outside than `indoor_target_temperature`,
+      and solar and internal gains reduce it. In cooling mode the demand is the
+      heat the building gains when it is hotter outside than
+      `indoor_target_temperature`, and solar and internal gains add to it - so the
+      cooling load correctly lands on the hot part of the day rather than the cool
+      night. Set `indoor_target_temperature` to the temperature you want to hold.
+    * Cooling demand is only modelled by the physics method (`u_value`,
+      `envelope_area`, `ventilation_rate`, `heated_volume`). The simpler degree-day
+      method (`specific_heating_demand` + `area`) is heating-only, so use the
+      physics parameters for a `sense: "cool"` load.
 
 ### Heat pump group coupling
 

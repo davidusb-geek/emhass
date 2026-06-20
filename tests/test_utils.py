@@ -2465,6 +2465,120 @@ class TestHeatingDemand(unittest.TestCase):
             self.assertIn("very low", str(w[0].message))
             self.assertIn("Watts, not kilowatts", str(w[0].message))
 
+    def test_calculate_heating_demand_physics_cooling_sense_targets_hot_steps(self):
+        """sense='cool': demand magnitude lands on HOT steps, not cold ones (#994).
+
+        Base-safe: if the running build does not accept a ``sense`` argument the
+        call falls back to the default (heating) behaviour, under which the
+        magnitude ordering is INVERTED, so this test fails on the behavioural
+        assertion rather than on a TypeError.
+        """
+        import inspect
+
+        indoor_temp = 24.0
+        # Hot day, cool night profile: steps 0-1 hot (outdoor > indoor),
+        # steps 2-3 cool (outdoor < indoor).
+        outdoor_temps = np.array([34.0, 30.0, 20.0, 16.0])
+        kwargs = {
+            "u_value": 0.30,
+            "envelope_area": 342.0,
+            "ventilation_rate": 0.3,
+            "heated_volume": 597.0,
+            "indoor_target_temperature": indoor_temp,
+            "outdoor_temperature_forecast": outdoor_temps,
+            "optimization_time_step": 60,
+        }
+        supports_sense = (
+            "sense" in inspect.signature(utils.calculate_heating_demand_physics).parameters
+        )
+        if supports_sense:
+            kwargs["sense"] = "cool"
+
+        demand = utils.calculate_heating_demand_physics(**kwargs)
+
+        hot_magnitude = abs(demand[0]) + abs(demand[1])
+        cool_magnitude = abs(demand[2]) + abs(demand[3])
+
+        # Cooling need must be driven by the HOT steps, not the cool ones.
+        self.assertGreater(
+            hot_magnitude,
+            cool_magnitude,
+            msg=(
+                "Cooling demand should be non-zero when it is hot outside, near-zero "
+                f"when it is cool (got hot={hot_magnitude:.4f} cool={cool_magnitude:.4f})"
+            ),
+        )
+
+    def test_calculate_heating_demand_physics_cooling_sign_and_solar(self):
+        """sense='cool': demand is signed as a heat gain (<= 0) and solar adds load.
+
+        Skipped on builds without ``sense`` support so the suite stays green on
+        base; the behavioural RED proof above is the base-sensitive one.
+        """
+        import inspect
+
+        if "sense" not in inspect.signature(utils.calculate_heating_demand_physics).parameters:
+            self.skipTest("running build has no cooling sense support")
+
+        indoor_temp = 24.0
+        outdoor_temps = np.array([34.0, 34.0, 34.0, 34.0])
+        base_kwargs = {
+            "u_value": 0.30,
+            "envelope_area": 342.0,
+            "ventilation_rate": 0.3,
+            "heated_volume": 597.0,
+            "indoor_target_temperature": indoor_temp,
+            "outdoor_temperature_forecast": outdoor_temps,
+            "optimization_time_step": 60,
+            "sense": "cool",
+        }
+
+        demand_no_solar = utils.calculate_heating_demand_physics(**base_kwargs)
+        # Signed as a heat gain: cooling demand is never positive.
+        self.assertTrue(
+            np.all(demand_no_solar <= 0.0),
+            "Cooling demand should be returned as a heat gain (<= 0)",
+        )
+
+        # Solar gains ADD to the cooling load (push demand more negative).
+        demand_with_solar = utils.calculate_heating_demand_physics(
+            **base_kwargs,
+            solar_irradiance_forecast=np.array([600.0, 600.0, 600.0, 600.0]),
+            window_area=12.0,
+            shgc=0.6,
+        )
+        self.assertTrue(
+            np.all(demand_with_solar <= demand_no_solar + 1e-9),
+            "Solar gains should increase cooling load (more negative demand)",
+        )
+
+    def test_calculate_heating_demand_physics_heating_sense_is_noop(self):
+        """Default and explicit sense='heat' must be byte-identical (true no-op)."""
+        import inspect
+
+        indoor_temp = 21.0
+        outdoor_temps = np.array([22.0, 15.0, 10.0, 5.0])
+        kwargs = {
+            "u_value": 0.35,
+            "envelope_area": 380.0,
+            "ventilation_rate": 0.4,
+            "heated_volume": 240.0,
+            "indoor_target_temperature": indoor_temp,
+            "outdoor_temperature_forecast": outdoor_temps,
+            "optimization_time_step": 60,
+            "solar_irradiance_forecast": np.array([0.0, 200.0, 400.0, 0.0]),
+            "window_area": 28.0,
+            "shgc": 0.6,
+        }
+        demand_default = utils.calculate_heating_demand_physics(**kwargs)
+
+        if "sense" in inspect.signature(utils.calculate_heating_demand_physics).parameters:
+            demand_heat = utils.calculate_heating_demand_physics(**kwargs, sense="heat")
+            np.testing.assert_array_equal(demand_default, demand_heat)
+
+        # Heating demand stays non-negative regardless.
+        self.assertTrue(np.all(demand_default >= 0.0))
+
     def test_calculate_cop_heatpump(self):
         """Test heat pump COP calculation utility function with Carnot-based formula."""
         # Test basic calculation with example outdoor temperatures

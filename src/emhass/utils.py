@@ -944,9 +944,10 @@ def calculate_heating_demand_physics(
     shgc: float = 0.6,
     internal_gains_forecast: np.ndarray | pd.Series | None = None,
     internal_gains_factor: float = 0.0,
+    sense: str = "heat",
 ) -> np.ndarray:
     """
-    Calculate heating demand per timestep based on building physics heat loss model.
+    Calculate heating or cooling demand per timestep based on building physics heat loss model.
 
     More accurate than HDD method as it directly calculates transmission and ventilation
     losses based on building thermal properties. Optionally accounts for solar gains
@@ -997,7 +998,17 @@ def calculate_heating_demand_physics(
         - 1.0: All electrical energy becomes internal heat (theoretical maximum)
         Default: 0.0
     :type internal_gains_factor: float, optional
-    :return: Array of heating demand values (kWh) per timestep
+    :param sense: Thermal mode, ``"heat"`` (default) or ``"cool"``. In heating mode the
+        result is the positive heat the building loses (and must be replaced) when it is
+        colder outside than the target, with solar and internal gains subtracted. In
+        cooling mode the result is the heat the building gains when it is hotter outside
+        than the target, with solar and internal gains added, returned as a SIGNED
+        negative value (heat gain) to match the sign convention of
+        :func:`calculate_thermal_loss_signed`. Default ``"heat"`` is byte-identical to the
+        previous behaviour.
+    :type sense: str, optional
+    :return: Array of demand values (kWh) per timestep. Positive for heating (heat to
+        supply), zero or negative for cooling (heat gain to remove).
     :rtype: np.ndarray
 
     Example:
@@ -1024,8 +1035,19 @@ def calculate_heating_demand_physics(
         else np.asarray(outdoor_temperature_forecast)
     )
 
-    # Calculate temperature difference (only heat when outdoor < indoor)
-    temp_diff = indoor_target_temperature - outdoor_temps
+    # Normalize the thermal mode. Heating models the heat the building loses when
+    # it is colder outside than the target; cooling models the heat it gains when it
+    # is hotter outside. gain_sign folds the direction of solar/internal gains: in
+    # heating they REDUCE the load (free heat), in cooling they ADD to it.
+    sense = normalize_heat_cool_mode(sense, field_name="sense", context="thermal demand")
+    gain_sign = -1.0 if sense == "cool" else 1.0
+
+    # Temperature difference driving the envelope load (magnitude, per timestep).
+    # Heating: load when outdoor < indoor. Cooling: load when outdoor > indoor.
+    if sense == "cool":
+        temp_diff = outdoor_temps - indoor_target_temperature
+    else:
+        temp_diff = indoor_target_temperature - outdoor_temps
     temp_diff = np.maximum(temp_diff, 0.0)
 
     # Transmission losses: Q_trans = U * A * ΔT (W to kW)
@@ -1055,8 +1077,12 @@ def calculate_heating_demand_physics(
         # GHI is in W/m², so multiply by window_area (m²) gives W, then divide by 1000 for kW
         solar_gains_kw = window_area * shgc * solar_irradiance / 1000.0
 
-        # Subtract solar gains from heat loss (but never go negative)
-        total_loss_kw = np.maximum(total_loss_kw - solar_gains_kw, 0.0)
+        # Heating: subtract solar gains from heat loss (but never go negative).
+        # Cooling: gain_sign flips this so solar gains ADD to the cooling load, which
+        # is left unfloored because gains only ever deepen it.
+        total_loss_kw = total_loss_kw - gain_sign * solar_gains_kw
+        if sense != "cool":
+            total_loss_kw = np.maximum(total_loss_kw, 0.0)
 
     # Validate internal_gains_factor is in expected range [0, 1]
     if internal_gains_factor < 0 or internal_gains_factor > 1:
@@ -1100,12 +1126,20 @@ def calculate_heating_demand_physics(
         # load_power is in W, convert to kW; factor is dimensionless (0-1)
         internal_gains_kw = internal_gains * internal_gains_factor / W_TO_KW
 
-        # Subtract internal gains from heat loss (but never go negative)
-        total_loss_kw = np.maximum(total_loss_kw - internal_gains_kw, 0.0)
+        # Heating: subtract internal gains from heat loss (never go negative).
+        # Cooling: gain_sign flips this so internal gains ADD to the cooling load.
+        total_loss_kw = total_loss_kw - gain_sign * internal_gains_kw
+        if sense != "cool":
+            total_loss_kw = np.maximum(total_loss_kw, 0.0)
 
-    # Convert to kWh for the timestep
+    # Convert to kWh for the timestep. Cooling demand is returned as a signed heat
+    # gain (<= 0) so the shared thermal state equation (which subtracts the demand
+    # term) raises indoor temperature when it is hot, matching calculate_thermal_loss_signed.
     hours_per_timestep = optimization_time_step / 60.0
-    return total_loss_kw * hours_per_timestep
+    demand = total_loss_kw * hours_per_timestep
+    if sense == "cool":
+        demand = -demand
+    return demand
 
 
 def update_params_with_ha_config(
