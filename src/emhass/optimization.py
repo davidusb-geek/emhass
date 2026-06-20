@@ -3907,6 +3907,10 @@ class Optimization:
         # so it can bump param_def_current_state to suppress the phantom t=0 startup.
         self._update_def_current_power_params(num_deferrable_loads)
 
+        # Shared-tank members are temperature-driven; used below to exempt them
+        # from the operating-timestep deactivation in the param_load_active loop.
+        shared_tank_membership = self._load_shared_tank_membership()
+
         # Update Energy Constraint Parameters for Deferrable Loads
         # These control the Big-M relaxation of energy/timestep constraints
         for k in range(min(num_deferrable_loads, len(self.param_target_energy))):
@@ -4186,15 +4190,20 @@ class Optimization:
 
         # Update load active parameters: deactivate non-thermal loads with 0 operating timesteps,
         # OR with a configured window that's entirely outside the optimization horizon.
-        # Thermal loads (thermal_config, thermal_battery) are always active since they're
-        # driven by temperature constraints, not operating timesteps. Sequence loads
+        # Thermal loads (thermal_config, thermal_battery, and shared-tank sources) are
+        # always active since they're driven by temperature constraints, not operating
+        # timesteps. Shared-tank members already skip the energy/operating constraints
+        # above (is_thermal_battery), so they must not be deactivated here either —
+        # otherwise a member with operating_hours == 0 (the natural setting for a
+        # temperature-driven source) is pinned to 0 W, the tank cannot hold its
+        # min_temperatures band, and the problem goes infeasible. Sequence loads
         # (list-valued nominal power) are likewise always active: their runtime is the
         # length of the sequence and operating_hours is meaningless for them, so a value
         # of 0 must not deactivate the load (issue #887). The energy constraint already
         # exempts sequence loads, so this keeps param_load_active consistent with it.
         nominal_powers = self.optim_conf["nominal_power_of_deferrable_loads"]
         for k in range(min(num_deferrable_loads, len(self.param_load_active))):
-            is_thermal = k in self.param_thermal
+            is_thermal = k in self.param_thermal or k in shared_tank_membership
             is_sequence = k < len(nominal_powers) and isinstance(nominal_powers[k], list)
             has_operating_requirement = (
                 def_total_timestep and k < len(def_total_timestep) and def_total_timestep[k] > 0
@@ -4204,6 +4213,20 @@ class Optimization:
                 # Thermal loads are still driven by temperature constraints
                 # even if their configured window is outside the horizon.
                 self.param_load_active[k].value = 1.0
+                # Shared-tank members must also keep an open window mask: a
+                # configured window outside the horizon zeroes the mask, which
+                # would pin every member to 0 W and make the tank's
+                # min_temperatures unreachable (infeasible, then the relaxed
+                # fallback fails too and nothing is published).
+                if k in shared_tank_membership and window_outside_horizon:
+                    if k < len(self.param_window_masks):
+                        self.param_window_masks[k].value = np.ones(n)
+                    self.logger.warning(
+                        "Deferrable load %d is a shared-tank source with a configured "
+                        "window outside the horizon; ignoring the window (temperature "
+                        "constraints drive this load).",
+                        k,
+                    )
             elif (has_operating_requirement or is_sequence) and not window_outside_horizon:
                 self.param_load_active[k].value = 1.0
             else:
