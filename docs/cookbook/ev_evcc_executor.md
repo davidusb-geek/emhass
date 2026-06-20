@@ -196,6 +196,13 @@ and the optimizer schedules around it instead of stopping it.
 - **Deadline maths assumes no DST.** The Step 2 `timedelta(days=1)` is exactly 24 hours, so on a
   timezone that observes daylight saving the 05:00 deadline can land an hour off on the switch days.
   Adjust the template if that applies to you.
+- **A missed deadline rolls into the next day.** Once 05:00 passes, the Step 2 template sets the
+  deadline to the next 05:00, so if the car did not reach target overnight (it under-delivered on a
+  low-sun `pv`/`minpv` night, or it was unplugged) the leftover energy carries a next-day deadline.
+  EMHASS then schedules it in the cheapest slots before then, which can be the next day's midday PV.
+  That is the cheapest outcome by design, but if you need the charge kept to overnight, bound the
+  window: set the EV deferrable's `start_timesteps`/`end_timesteps` to the overnight slots, or gate
+  the Step 3 automation on time of day, so a missed night does not become a daytime charge.
 - **`def_current_power` needs a release after v0.17.7.** Before that, Step 5 doesn't apply and a
   manual mid-window charge may be re-planned off.
 - **Keep evcc off the house battery.** Exclude the battery from evcc's meters. EMHASS owns it.
