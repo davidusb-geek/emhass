@@ -2319,6 +2319,15 @@ class Optimization:
                 else:
                     base_temperature = hc.get("base_temperature", 18.0)
                     annual_reference_hdd = hc.get("annual_reference_hdd", 3000.0)
+                    if sense == "cool":
+                        self.logger.warning(
+                            "Load %s: the degree-day (specific_heating_demand) "
+                            "demand model is heating-only; sense='cool' will be "
+                            "treated as heating. Configure the physics model "
+                            "(u_value, envelope_area, ventilation_rate, "
+                            "heated_volume) for cooling demand.",
+                            k,
+                        )
                     demand = utils.calculate_heating_demand(
                         specific_heating_demand=hc["specific_heating_demand"],
                         floor_area=hc["area"],
@@ -2387,6 +2396,15 @@ class Optimization:
                         sense=sense,
                     )
                 else:
+                    if sense == "cool":
+                        self.logger.warning(
+                            "Load %s: the degree-day (specific_heating_demand) "
+                            "demand model is heating-only; sense='cool' will be "
+                            "treated as heating. Configure the physics model "
+                            "(u_value, envelope_area, ventilation_rate, "
+                            "heated_volume) for cooling demand.",
+                            k,
+                        )
                     demand = utils.calculate_heating_demand(
                         specific_heating_demand=hc["specific_heating_demand"],
                         floor_area=hc["area"],
@@ -2476,6 +2494,10 @@ class Optimization:
 
             # Temperature uses filtered Q_input instead of raw heat
             # sense_coeff: +1 for heating (pump adds heat), -1 for cooling (pump removes heat)
+            # Sign convention: heating_demand is >=0 for heating and <=0 for
+            # cooling (calculate_heating_demand_physics returns a signed heat
+            # gain), so subtracting it cools the tank when heating and warms it
+            # when cooling, matching the thermal_losses sign convention.
             constraints.append(
                 predicted_temp_thermal[1:]
                 == predicted_temp_thermal[:-1]
@@ -2692,6 +2714,15 @@ class Optimization:
                     sense=tank.get("sense") or "heat",
                 )
             elif "specific_heating_demand" in tank and "area" in tank:
+                if str(tank.get("sense") or "heat").strip().lower() == "cool":
+                    self.logger.warning(
+                        "Shared tank %s: the degree-day (specific_heating_demand) "
+                        "demand model is heating-only; sense='cool' will be treated "
+                        "as heating. Configure the physics model (u_value, "
+                        "envelope_area, ventilation_rate, heated_volume) for cooling "
+                        "demand.",
+                        tank_id,
+                    )
                 demand = utils.calculate_heating_demand(
                     specific_heating_demand=tank["specific_heating_demand"],
                     floor_area=tank["area"],

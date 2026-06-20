@@ -301,7 +301,8 @@ When configured, the optimizer penalizes deviations from the desired temperature
     * Cooling demand is only modelled by the physics method (`u_value`,
       `envelope_area`, `ventilation_rate`, `heated_volume`). The simpler degree-day
       method (`specific_heating_demand` + `area`) is heating-only, so use the
-      physics parameters for a `sense: "cool"` load.
+      physics parameters for a `sense: "cool"` load. Pairing `sense: "cool"` with
+      the degree-day method logs a warning and falls back to heating-only demand.
 
 ### Heat pump group coupling
 
