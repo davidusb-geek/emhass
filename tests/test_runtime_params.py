@@ -59,6 +59,7 @@ EXPECTED_KEYS = {
     "weather_forecast_cache_only",
     "def_current_state",
     "def_current_power",
+    "def_current_operating_timesteps",
     "def_load_config",
 }
 
