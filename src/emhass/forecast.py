@@ -764,6 +764,61 @@ class Forecast:
         data.set_index("ts", inplace=True)
         return data
 
+    def _list_method_needs_weather(self) -> bool:
+        """Whether a configured deferrable load consumes weather-derived data.
+
+        The ``list`` weather path only carries the passed PV power (``yhat``). A
+        thermal load's physics demand additionally needs ``ghi`` (solar gains) and
+        ``temp_air`` (the outdoor-temperature fallback), so when one is configured
+        we still fetch open-meteo to supply those columns (issue #997). Pure
+        PV/battery setups never trigger the extra fetch, keeping the list path a
+        no-op for them.
+        """
+        return any(
+            isinstance(cfg, dict)
+            and (
+                isinstance(cfg.get("thermal_config"), dict)
+                or isinstance(cfg.get("thermal_battery"), dict)
+            )
+            for cfg in self.optim_conf.get("def_load_config", []) or []
+        )
+
+    async def _augment_list_with_open_meteo(
+        self, data: pd.DataFrame, w_forecast_cache_path: str, use_legacy_pvlib: bool
+    ) -> pd.DataFrame:
+        """Graft open-meteo weather columns onto a list-method PV frame (issue #997).
+
+        The passed PV power (``yhat``) is preserved untouched; every weather-derived
+        column (``ghi``, ``temp_air`` and the rest) is copied over, reindexed onto the
+        list frame's index. Fail-soft: if the open-meteo fetch is unavailable the plain
+        list frame is returned unchanged, so an offline/air-gapped setup keeps
+        working exactly as before (just without solar gains).
+        """
+        try:
+            weather = await self._get_weather_open_meteo(w_forecast_cache_path, use_legacy_pvlib)
+        except Exception:
+            self.logger.warning(
+                "Could not fetch open-meteo weather to accompany the passed "
+                "pv_power_forecast; thermal solar gains and the outdoor-temperature "
+                "fallback are unavailable for this run (issue #997).",
+                exc_info=True,
+            )
+            return data
+        if weather is None:
+            self.logger.warning(
+                "open-meteo weather fetch returned no data while accompanying the "
+                "passed pv_power_forecast; thermal solar gains are unavailable this run."
+            )
+            return data
+        for col in weather.columns:
+            if col == "yhat":
+                continue
+            # Both frames are built on the same forecast horizon; "nearest"
+            # only absorbs sub-second index rounding between the list index
+            # (forecast_dates_tz) and the open-meteo index.
+            data[col] = weather[col].reindex(data.index, method="nearest")
+        return data
+
     async def get_weather_forecast(
         self,
         method: str | None = "open-meteo",
@@ -811,6 +866,14 @@ class Forecast:
             data = self._get_weather_csv(csv_path)
         elif method == "list":
             data = self._get_weather_list()
+            # When PV is supplied as a runtime list, weather_forecast_method is
+            # forced to "list" and only the PV power survives. If a thermal load
+            # needs weather-derived GHI/temperature, still fetch open-meteo for
+            # those columns so solar gains are not silently dropped (issue #997).
+            if data is not None and self._list_method_needs_weather():
+                data = await self._augment_list_with_open_meteo(
+                    data, w_forecast_cache_path, use_legacy_pvlib
+                )
         else:
             self.logger.error("Method %r is not valid", method)
             data = None
@@ -2167,9 +2230,13 @@ class Forecast:
             data = data.loc[self.forecast_dates[0] : self.forecast_dates[-1]]
             self.logger.info("Retrieved forecast data from the previously saved cache.")
         else:
-            if self.weather_forecast_method == "open-meteo":
+            if self.weather_forecast_method in ("open-meteo", "list"):
                 # Open-Meteo has no rate limits: delete the stale cache so
-                # the next call fetches fresh data directly from the API.
+                # the next call fetches fresh data directly from the API. The
+                # "list" method only reaches this cache via the open-meteo
+                # weather augmentation (issue #997), which is open-meteo-sourced
+                # too, so it gets the same refetch-fresh treatment rather than
+                # being served stale, zero-filled irradiance.
                 self.logger.warning(
                     "Cache does not fully cover the requested timeframe. "
                     "Removing stale Open-Meteo cache; fresh data will be fetched from the API."
