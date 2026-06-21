@@ -794,9 +794,14 @@ class Forecast:
         list frame is returned unchanged, so an offline/air-gapped setup keeps
         working exactly as before (just without solar gains).
         """
+        # Only swallow the external failure modes the open-meteo path can raise
+        # (network, file/cache IO, malformed or incomplete response data). A
+        # programming error should still surface rather than be downgraded to a
+        # warning. This keeps the augmentation fail-soft for an offline setup
+        # without hiding real bugs.
         try:
             weather = await self._get_weather_open_meteo(w_forecast_cache_path, use_legacy_pvlib)
-        except Exception:
+        except (aiohttp.ClientError, OSError, ValueError, KeyError):
             self.logger.warning(
                 "Could not fetch open-meteo weather to accompany the passed "
                 "pv_power_forecast; thermal solar gains and the outdoor-temperature "
