@@ -898,7 +898,7 @@ rest_command:
 Important notes:
 - `outdoor_temperature_forecast` is required for thermal battery optimization (building heating mode)
 - `start_temperature` should ideally come from a real sensor (floor temp for underfloor heating, tank sensor for hot water)
-- If using solar gains, ensure your forecast data includes `ghi` (global horizontal irradiance)
+- If using solar gains, the optimization data needs a `ghi` (global horizontal irradiance) column. This comes from the weather forecast automatically, including when you pass your own `pv_power_forecast` (see "Solar gains not working" in Troubleshooting)
 - Add `"thermal_inertia_time_constant": 2.0` to the `thermal_battery` dict to enable the thermal inertia filter
 - In MPC mode, `Q_input` auto-persists between solves; use `"q_input_initial": 0.5` to manually override
 - For hot water tanks, add `"density": 997, "heat_capacity": 4.184` and a `"draw_off_demand"` profile or `"specific_heating_demand": 0.0, "area":1.0`
@@ -1053,6 +1053,21 @@ Requirements for solar gains:
 3. Must use physics-based method (not HDD method)
 
 Check the logs for: "Using physics-based heating demand with solar gains"
+
+#### Passing your own `pv_power_forecast`
+
+Supplying `pv_power_forecast` as a runtime parameter switches the weather forecast
+method to `list`, which on its own only carries the PV power and no `ghi` or
+`temp_air`. To keep solar-gain modelling working in that case, EMHASS still fetches
+the open-meteo weather forecast for the `ghi` and outdoor-temperature columns
+whenever a thermal load is configured, while using your passed list for the PV
+power. So bringing your own PV forecast no longer silently disables solar gains.
+
+This extra weather fetch only happens when a `thermal_config` or `thermal_battery`
+load is present, so pure PV/battery setups that pass `pv_power_forecast` are
+unaffected and make no extra weather call. If open-meteo is unreachable the run
+falls back to no solar gains (a warning is logged) rather than failing. A passed
+`outdoor_temperature_forecast` still takes precedence over the fetched temperature.
 
 ### Hot water tank temperature drops too fast
 

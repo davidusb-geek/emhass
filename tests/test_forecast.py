@@ -1094,6 +1094,117 @@ class TestForecast(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(df_input_data["unit_prod_price"].values[0], 1)
         self.assertEqual(df_input_data["unit_prod_price"].values[-1], 48)
 
+    # --- issue #997: list weather method keeps GHI/temp_air for thermal loads ---
+    async def _build_list_fcst_pinned(self, with_thermal: bool):
+        """Build a pinned 1-day list-method Forecast, optionally with a thermal load."""
+        fcst, _, _ = await self._build_longer_list_forecast(48)
+        fcst.optim_conf["delta_forecast_daily"] = pd.Timedelta(days=1)
+        self._pin_forecast_to_date(fcst, "2024-06-15 00:00:00")
+        fcst.params["passed_data"]["prediction_horizon"] = None
+        fcst.optim_conf["def_load_config"] = (
+            [{"thermal_config": {"window_area": 2.0, "u_value": 1.0}}] if with_thermal else []
+        )
+        return fcst
+
+    def _fake_open_meteo_frame(self, fcst):
+        """An open-meteo-shaped weather frame on the forecast index (ghi + temp_air)."""
+        idx = fcst.forecast_dates_tz
+        return pd.DataFrame(
+            {
+                "ghi": np.linspace(0.0, 800.0, len(idx)),
+                "temp_air": np.linspace(10.0, 25.0, len(idx)),
+            },
+            index=idx,
+        )
+
+    async def test_get_weather_forecast_list_keeps_ghi_for_thermal(self):
+        """#997: a thermal load + passed PV list still gets GHI/temp from open-meteo."""
+        fcst = await self._build_list_fcst_pinned(with_thermal=True)
+        fake = self._fake_open_meteo_frame(fcst)
+        with unittest.mock.patch.object(
+            fcst,
+            "_get_weather_open_meteo",
+            new=unittest.mock.AsyncMock(return_value=fake),
+        ) as m:
+            data = await fcst.get_weather_forecast(method="list")
+        m.assert_awaited_once()
+        self.assertIn("ghi", data.columns)
+        self.assertIn("temp_air", data.columns)
+        self.assertFalse(data["ghi"].isnull().any())
+        # PV power (yhat) is exactly the passed list, untouched by the augmentation
+        self.assertEqual(data["yhat"].iloc[0], 1)
+        self.assertEqual(data["yhat"].iloc[-1], 48)
+        # weather method stays "list" so get_power_from_weather still returns yhat
+        self.assertEqual(fcst.weather_forecast_method, "list")
+
+    async def test_get_weather_forecast_list_no_thermal_is_noop(self):
+        """#997 no-op: with no thermal load, no open-meteo fetch fires, only yhat."""
+        fcst = await self._build_list_fcst_pinned(with_thermal=False)
+        with unittest.mock.patch.object(
+            fcst,
+            "_get_weather_open_meteo",
+            new=unittest.mock.AsyncMock(return_value=self._fake_open_meteo_frame(fcst)),
+        ) as m:
+            data = await fcst.get_weather_forecast(method="list")
+        m.assert_not_awaited()
+        self.assertEqual(list(data.columns), ["yhat"])
+        self.assertEqual(data["yhat"].iloc[0], 1)
+        self.assertEqual(data["yhat"].iloc[-1], 48)
+
+    async def test_get_weather_forecast_list_open_meteo_failure_is_soft(self):
+        """#997 fail-soft: an open-meteo error leaves the plain list frame and warns."""
+        fcst = await self._build_list_fcst_pinned(with_thermal=True)
+        with unittest.mock.patch.object(
+            fcst,
+            "_get_weather_open_meteo",
+            new=unittest.mock.AsyncMock(side_effect=aiohttp.ClientError("boom")),
+        ):
+            with self.assertLogs(logger, level="WARNING") as cm:
+                data = await fcst.get_weather_forecast(method="list")
+        self.assertEqual(list(data.columns), ["yhat"])
+        self.assertIn("issue #997", "\n".join(cm.output))
+
+    async def test_get_weather_forecast_list_open_meteo_none_is_soft(self):
+        """#997 fail-soft: open-meteo returning None leaves the plain list frame."""
+        fcst = await self._build_list_fcst_pinned(with_thermal=True)
+        with unittest.mock.patch.object(
+            fcst,
+            "_get_weather_open_meteo",
+            new=unittest.mock.AsyncMock(return_value=None),
+        ):
+            with self.assertLogs(logger, level="WARNING") as cm:
+                data = await fcst.get_weather_forecast(method="list")
+        self.assertEqual(list(data.columns), ["yhat"])
+        self.assertIn("no data", "\n".join(cm.output))
+
+    async def test_get_cached_forecast_data_list_method_refetches_stale(self):
+        """#997: under the open-meteo weather augmentation (method='list'), a cache
+        that does not cover the window is treated like open-meteo (deleted for a
+        fresh refetch) rather than served best-effort stale with zero-filled GHI."""
+        cache_path = emhass_conf["data_path"] / "weather_forecast_data.pkl"
+        temp_path = emhass_conf["data_path"] / "temp_weather_forecast_data.pkl"
+        if os.path.isfile(cache_path):
+            os.rename(cache_path, temp_path)
+        stale_index = pd.date_range(
+            start=self.fcst.forecast_dates[0] - pd.Timedelta(days=5),
+            periods=8,
+            freq=self.fcst.freq,
+        )
+        stale = pd.DataFrame({"ghi": 100.0, "temp_air": 20.0}, index=stale_index)
+        with open(cache_path, "wb") as f:
+            pickle.dump(stale, f)
+        self.fcst.weather_forecast_method = "list"
+        try:
+            result = await self.fcst.get_cached_forecast_data(str(cache_path))
+            removed = not os.path.isfile(cache_path)
+        finally:
+            if os.path.isfile(cache_path):
+                os.remove(cache_path)
+            if os.path.isfile(temp_path):
+                os.rename(temp_path, cache_path)
+        self.assertIsNone(result)
+        self.assertTrue(removed)
+
     # Test output weather forecast using longer passed runtime lists
     async def _build_longer_list_forecast(self, list_length: int):
         """Build a Forecast configured for 3-day list-based forecasts.
