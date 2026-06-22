@@ -2762,6 +2762,11 @@ async def continual_publish(
         # on the next interval, otherwise published sensors freeze until restart.
         try:
             freq = await _publish_and_update_freq(input_data_dict, entity_path, logger, freq)
+        except asyncio.CancelledError:
+            # Task cancellation (e.g. shutdown) must propagate, never be retried.
+            # CancelledError is a BaseException so the broad except below would
+            # not catch it anyway; this makes that intent explicit.
+            raise
         except Exception:
             logger.exception("continual_publish cycle failed; retrying next interval")
     return False
