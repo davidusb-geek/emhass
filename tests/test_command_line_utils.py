@@ -2039,7 +2039,13 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         # Reaching a second iteration proves the first exception was swallowed
         # and the loop kept running.
         self.assertEqual(count, 2)
+        # The transient failure is logged (with traceback) exactly once, and the
+        # message is pinned so a future refactor cannot silently drop it.
         logger.exception.assert_called_once()
+        self.assertIn(
+            "continual_publish cycle failed; retrying next interval",
+            logger.exception.call_args[0][0],
+        )
 
 
 class TestCommandLineTimezoneLogic(unittest.IsolatedAsyncioTestCase):

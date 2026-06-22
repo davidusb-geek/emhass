@@ -1097,8 +1097,9 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
                         dont_post=True,
                     )
                     # Both the entity data file and metadata.json are committed
-                    # atomically: a temp file is os.replace'd into place (never
-                    # an in-place write). Two replaces: entity then metadata.
+                    # atomically: each is os.replace'd from a temp file into
+                    # place (never an in-place write). Exactly two replaces, one
+                    # per file; the relative order is not significant.
                     self.assertEqual(mock_replace.call_count, 2)
                     replaced = {}
                     for call in mock_replace.call_args_list:
