@@ -1096,12 +1096,17 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
                         save_entities=True,
                         dont_post=True,
                     )
-                    # The metadata is committed atomically: a temp file is
-                    # os.replace'd into metadata.json (never an in-place write).
-                    mock_replace.assert_called_once()
-                    tmp_src, dest = mock_replace.call_args.args
-                    self.assertTrue(str(tmp_src).endswith(".tmp"))
-                    self.assertEqual(pathlib.Path(dest).name, "metadata.json")
+                    # Both the entity data file and metadata.json are committed
+                    # atomically: a temp file is os.replace'd into place (never
+                    # an in-place write). Two replaces: entity then metadata.
+                    self.assertEqual(mock_replace.call_count, 2)
+                    replaced = {}
+                    for call in mock_replace.call_args_list:
+                        tmp_src, dest = call.args
+                        self.assertTrue(str(tmp_src).endswith(".tmp"))
+                        replaced[pathlib.Path(dest).name] = str(tmp_src)
+                    self.assertIn("metadata.json", replaced)
+                    self.assertIn(entity_id + ".json", replaced)
         finally:
             # Restore path to prevent polluting other tests
             self.rh.emhass_conf["data_path"] = original_path
@@ -1270,6 +1275,59 @@ class TestRetrieveHass(unittest.IsolatedAsyncioTestCase):
             with open(metadata_path, "rb") as f:
                 metadata = orjson.loads(f.read())
             self.assertIn("sensor.x", metadata)
+
+    async def test_entity_data_file_written_atomically(self):
+        """The per-entity data file must be committed via a temp file + os.replace,
+        not an in-place truncating write, so the continual_publish reader never
+        observes the zero-byte window that raises ``ValueError: Expected object or
+        value`` in pd.read_json. Regression for issue #1000."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.rh.emhass_conf["data_path"] = pathlib.Path(tmpdir)
+            # get_data_from_file=True skips the network POST but still reaches
+            # the save_entities block (response_ok is forced True).
+            self.rh.get_data_from_file = True
+
+            data_df = pd.Series(
+                [100.0, 200.0],
+                index=pd.date_range("2024-01-01", periods=2, freq="30min"),
+            )
+            data_df.name = "test_data"
+            entity_id = "sensor.atomic_test"
+
+            replaced_names = []
+            real_replace = os.replace
+
+            def spy_replace(src, dst):
+                replaced_names.append(pathlib.Path(dst).name)
+                return real_replace(src, dst)
+
+            with patch("os.replace", side_effect=spy_replace):
+                response, _ = await self.rh.post_data(
+                    data_df,
+                    0,
+                    entity_id,
+                    "power",
+                    "W",
+                    entity_id,
+                    "power",
+                    save_entities=True,
+                    dont_post=True,
+                )
+
+            self.assertTrue(response.ok)
+            entities_path = pathlib.Path(tmpdir) / "entities"
+            entity_file = entities_path / (entity_id + ".json")
+            # The entity data file is committed through os.replace, exactly like
+            # metadata.json (RED on base: base only os.replace's metadata.json).
+            # Exactly two atomic commits: the entity file and metadata.json.
+            self.assertEqual(len(replaced_names), 2)
+            self.assertIn(entity_id + ".json", replaced_names)
+            # The final file exists and parses cleanly.
+            self.assertTrue(entity_file.is_file())
+            with open(entity_file, "rb") as f:
+                orjson.loads(f.read())
+            # The atomic commit must not leave temp files behind.
+            self.assertEqual(list(entities_path.glob("*.tmp")), [])
 
     async def test_session_lazy_initialization(self):
         """Test that session is lazily initialized on first use."""
