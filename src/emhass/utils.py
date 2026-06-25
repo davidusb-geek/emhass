@@ -647,6 +647,13 @@ def compile_heat_topology(topology: dict) -> dict:
                 "recognised. Allowed types: heatpump, heat_pump, gas, oil, "
                 "district, electric, constant_efficiency."
             )
+        # Propagate the target storage's comfort_sense onto the source block so the
+        # COP resolver computes the correct (heating vs cooling) Carnot lift. Without
+        # this, resolve_thermal_battery_cop defaults to "heat" and clamps the cooling
+        # COP to 1.0 on a warm day (a heat pump can then never cool the zone).
+        target_storage = sto_by_id.get(f["to"], {})
+        if "comfort_sense" in target_storage:
+            source_block["sense"] = str(target_storage["comfort_sense"]).lower()
         is_electric_load.append(bool(src.get("electric", type_is_electric.get(src_type, True))))
         def_load_config.append({"thermal_source": source_block})
         # Cost track resolution

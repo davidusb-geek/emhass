@@ -3502,6 +3502,41 @@ class TestCompileHeatTopology(unittest.TestCase):
         self.assertEqual(tank["penalty_factor"], 5.0)
         self.assertEqual(tank["sense"], "heat")
 
+    def test_storage_comfort_sense_propagates_to_source(self):
+        """A heat-pump source feeding a `comfort_sense: cool` storage must receive
+        sense="cool" on its compiled thermal_source block, so
+        resolve_thermal_battery_cop computes the cooling COP instead of defaulting
+        to "heat" and clamping the COP to 1.0 on a warm day (outdoor >= supply)."""
+        topo = {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "supply_temperature": 18,
+                    "carnot_efficiency": 0.35,
+                    "nominal_power": 2100,
+                    "min_power": 250,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "zone",
+                    "volume": 0.2,
+                    "start_temperature": 24,
+                    "min_temperatures": [10] * 48,
+                    "max_temperatures": [28] * 48,
+                    "comfort_sense": "cool",
+                }
+            ],
+            "flows": [{"from": "hp", "to": "zone"}],
+        }
+        out = utils.compile_heat_topology(topo)
+        source = out["def_load_config"][0]["thermal_source"]
+        self.assertEqual(source.get("sense"), "cool")
+        # On a warm day the cooling COP must not collapse to the clamped 1.0.
+        cop = utils.resolve_thermal_battery_cop(source, [31.0] * 48, length=48)
+        self.assertGreater(cop[0], 1.5)
+
     def test_storage_soft_comfort_scalar_desired_temperature(self):
         """Scalar `desired_temperature` is accepted and stored as a float."""
         topo = {
