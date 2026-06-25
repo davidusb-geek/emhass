@@ -2759,8 +2759,19 @@ async def continual_publish(
         timestamp_diff = freq.total_seconds() - (datetime.now(time_zone).timestamp() % 60)
         sleep_seconds = max(0.0, min(timestamp_diff, 60.0))
         await asyncio.sleep(sleep_seconds)
-        # Delegate processing to helper function to reduce complexity
-        freq = await _publish_and_update_freq(input_data_dict, entity_path, logger, freq)
+        # Delegate processing to helper function to reduce complexity. A
+        # transient failure in a single cycle (e.g. a half-written entity file
+        # read mid-publish) must not kill the background task: log it and retry
+        # on the next interval, otherwise published sensors freeze until restart.
+        try:
+            freq = await _publish_and_update_freq(input_data_dict, entity_path, logger, freq)
+        except asyncio.CancelledError:
+            # Task cancellation (e.g. shutdown) must propagate, never be retried.
+            # CancelledError is a BaseException so the broad except below would
+            # not catch it anyway; this makes that intent explicit.
+            raise
+        except Exception:
+            logger.exception("continual_publish cycle failed; retrying next interval")
     return False
 
 
@@ -2778,7 +2789,10 @@ async def _publish_and_update_freq(input_data_dict, entity_path, logger, current
         return current_freq
     # Loop through all saved entity files
     for entity in entity_path_contents:
-        if entity != default_metadata_json:
+        # Skip metadata and any in-flight atomic-write temp files: entity and
+        # metadata files are committed via a "<name>.<...>.tmp" + os.replace, and
+        # that temp file can be momentarily visible to this directory listing.
+        if entity != default_metadata_json and not entity.endswith(".tmp"):
             await publish_json(
                 entity,
                 input_data_dict,

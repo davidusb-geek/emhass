@@ -7,6 +7,7 @@ import os
 import pathlib
 import re
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Self
 
@@ -1645,8 +1646,19 @@ class RetrieveHass:
                     index="timestamp", orient="index", date_unit="s", date_format="iso"
                 )
                 parsed = orjson.loads(result)
-                async with aiofiles.open(entities_path / (entity_id + ".json"), "w") as file:
+                # Atomic commit: write to a unique temp file then os.replace, so
+                # a concurrent reader (the continual_publish background task)
+                # always sees a complete document, never the zero-byte window an
+                # in-place truncating write would expose. The uuid suffix keeps
+                # the temp name unique even if the same entity is published
+                # concurrently (this write is not under _metadata_lock).
+                entity_file = entities_path / (entity_id + ".json")
+                tmp_entity_path = entity_file.with_name(
+                    f"{entity_id}.json.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+                )
+                async with aiofiles.open(tmp_entity_path, "w") as file:
                     await file.write(orjson.dumps(parsed, option=orjson.OPT_INDENT_2).decode())
+                os.replace(tmp_entity_path, entity_file)
 
                 # Save the required metadata to json file. The whole
                 # read-modify-write is serialized with a process-wide lock and

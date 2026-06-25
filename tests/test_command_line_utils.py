@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import asyncio
 import copy
 import json
 import os
@@ -7,7 +8,7 @@ import pathlib
 import pickle
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import aiofiles
@@ -25,6 +26,7 @@ from emhass.command_line import (
     _prepare_dayahead_optim,
     _publish_and_update_freq,
     adjust_pv_forecast,
+    continual_publish,
     dayahead_forecast_optim,
     export_influxdb_to_csv,
     forecast_model_fit,
@@ -1904,15 +1906,23 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         mock_listdir.return_value = []
         res = await _publish_and_update_freq(input_data_dict, entity_path, logger, current_freq)
         self.assertEqual(res, current_freq)
-        # Test 3: Directory has files, metadata exists, new frequency returned
-        mock_listdir.return_value = ["sensor1.json", "metadata.json"]
+        # Test 3: Directory has files, metadata exists, new frequency returned.
+        # The listing also contains an in-flight atomic-write temp file, which
+        # must be skipped (publishing it would derive a bogus entity_id and
+        # KeyError in publish_json).
+        mock_listdir.return_value = [
+            "sensor1.json",
+            "metadata.json",
+            "sensor1.json.1234.deadbeef.tmp",
+        ]
         mock_isfile.return_value = True
         # Mock reading the metadata.json file
         mock_file_handle = AsyncMock()
         mock_file_handle.read.return_value = orjson.dumps({"lowest_time_step": 15})
         mock_aio_open.return_value.__aenter__.return_value = mock_file_handle
         res = await _publish_and_update_freq(input_data_dict, entity_path, logger, current_freq)
-        # publish_json should only be called for "sensor1.json", NOT "metadata.json"
+        # publish_json should only be called for "sensor1.json", NOT
+        # "metadata.json" nor the ".tmp" temp file.
         mock_publish_json.assert_called_once_with(
             "sensor1.json", input_data_dict, entity_path, logger, "continual_publish"
         )
@@ -1990,6 +2000,52 @@ class TestCommandLineAsyncUtils(unittest.IsolatedAsyncioTestCase):
         mock_rh.reset_mock()
         await publish_json(entity_file, input_data_dict, entity_path, logger)
         self.assertEqual(mock_rh.post_data.call_args[1]["idx"], 1)
+
+    @patch("emhass.command_line.asyncio.sleep", new_callable=AsyncMock)
+    @patch("emhass.command_line._publish_and_update_freq")
+    async def test_continual_publish_survives_cycle_exception(self, mock_update, _mock_sleep):
+        """A transient failure in a single publish cycle (e.g. issue #1000's
+        empty-file read raising ValueError) must not kill the background task:
+        the loop logs it and continues on the next interval. RED on base, where
+        the exception propagates out of continual_publish and publishing stops
+        until restart."""
+        input_data_dict = {
+            "retrieve_hass_conf": {
+                "time_zone": UTC,
+                "optimization_time_step": pd.Timedelta(minutes=5),
+            }
+        }
+        entity_path = pathlib.Path("/mock/entities")
+        logger = MagicMock()
+
+        count = 0
+
+        async def fake_update(*args, **kwargs):
+            nonlocal count
+            count += 1
+            if count == 1:
+                # The exact failure reported in issue #1000.
+                raise ValueError("Expected object or value")
+            # Break out of the otherwise-infinite loop on the second iteration.
+            # CancelledError is a BaseException, so a correct ``except Exception``
+            # guard does not swallow it.
+            raise asyncio.CancelledError
+
+        mock_update.side_effect = fake_update
+
+        with self.assertRaises(asyncio.CancelledError):
+            await continual_publish(input_data_dict, entity_path, logger)
+
+        # Reaching a second iteration proves the first exception was swallowed
+        # and the loop kept running.
+        self.assertEqual(count, 2)
+        # The transient failure is logged (with traceback) exactly once, and the
+        # message is pinned so a future refactor cannot silently drop it.
+        logger.exception.assert_called_once()
+        self.assertIn(
+            "continual_publish cycle failed; retrying next interval",
+            logger.exception.call_args[0][0],
+        )
 
 
 class TestCommandLineTimezoneLogic(unittest.IsolatedAsyncioTestCase):
