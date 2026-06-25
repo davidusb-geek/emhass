@@ -275,6 +275,9 @@ class OptimizationCache:
             "def_current_off_timesteps",
             # Per-call current power in watts (issue #605); pin value is a cp.Parameter.
             "def_current_power",
+            # Per-call completed operating timesteps today (issue #983); decrements
+            # required_timesteps + target_energy via cp.Parameter (no rebuild on cache hit).
+            "def_current_operating_timesteps",
             "minimum_power_of_deferrable_loads",
             "cost_forecast_per_deferrable_load",
             # shared_thermal_tanks has its own structural hash field above

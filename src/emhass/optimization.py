@@ -414,6 +414,16 @@ class Optimization:
             active.value = 0.0
             self.param_def_current_power_active.append(active)
 
+        # Completed operating-timesteps parameters (issue #983).
+        # param_current_operating_timesteps[k]: how many operating timesteps load k has
+        # already run today. Used to decrement required_timesteps and target_energy in the
+        # per-solve param-update block, clamped at 0. Absent key -> no decrement (no-op).
+        self.param_current_operating_timesteps = []
+        for k in range(num_def_loads):
+            cotp = cp.Parameter(nonneg=True, name=f"current_operating_timesteps_{k}")
+            cotp.value = 0.0
+            self.param_current_operating_timesteps.append(cotp)
+
         # Load active parameters: allows deactivating non-thermal loads with 0 operating
         # timesteps without rebuilding the problem. When param_load_active[k] = 0, all
         # binary variables for load k are forced to 0 by constraints, letting the solver
@@ -844,6 +854,44 @@ class Optimization:
                 self.param_def_current_state[k].value = max(
                     self.param_def_current_state[k].value, 1.0
                 )
+
+    def _update_def_current_operating_timesteps_params(self, num_def_loads: int) -> None:
+        """Update def_current_operating_timesteps CVXPY Parameters from optim_conf (issue #983).
+
+        Reads ``optim_conf["def_current_operating_timesteps"]`` (a per-load list of
+        non-negative integers representing how many operating timesteps each must-run load
+        has already completed today) and writes the values into
+        ``self.param_current_operating_timesteps``.
+
+        When the key is absent from optim_conf all parameters reset to 0.0, which is an
+        exact no-op (no decrement applied). The actual decrement of ``required_timesteps``
+        and ``target_energy`` is applied in the per-solve param-update loop using the
+        parameter values set here.
+
+        A length mismatch is warned and handled gracefully: extra entries are ignored,
+        missing ones are assumed 0 (no decrement for that load).
+        """
+        if "def_current_operating_timesteps" not in self.optim_conf:
+            for k in range(min(num_def_loads, len(self.param_current_operating_timesteps))):
+                self.param_current_operating_timesteps[k].value = 0.0
+            return
+
+        cots_conf = self.optim_conf["def_current_operating_timesteps"]
+        n_conf = len(cots_conf)
+        if n_conf != num_def_loads:
+            self.logger.warning(
+                "def_current_operating_timesteps length mismatch: "
+                "num_deferrable_loads=%d, len(def_current_operating_timesteps)=%d; "
+                "extra entries will be ignored or missing ones assumed 0",
+                num_def_loads,
+                n_conf,
+            )
+
+        for k in range(num_def_loads):
+            val = cots_conf[k] if k < n_conf else 0
+            elapsed = self._coerce_nonneg_timesteps(val, k, "def_current_operating_timesteps")
+            if k < len(self.param_current_operating_timesteps):
+                self.param_current_operating_timesteps[k].value = float(elapsed)
 
     def update_battery_power_limits(self, plant_conf: dict) -> None:
         """
@@ -4015,10 +4063,23 @@ class Optimization:
         # Update def_current_power (issue #605): runs AFTER _update_def_current_state_params
         # so it can bump param_def_current_state to suppress the phantom t=0 startup.
         self._update_def_current_power_params(num_deferrable_loads)
+        # Update def_current_operating_timesteps (issue #983): stores the elapsed completed
+        # operating timesteps so the per-load loop below can decrement required_timesteps
+        # and target_energy accordingly.
+        self._update_def_current_operating_timesteps_params(num_deferrable_loads)
 
         # Shared-tank members are temperature-driven; used below to exempt them
         # from the operating-timestep deactivation in the param_load_active loop.
         shared_tank_membership = self._load_shared_tank_membership()
+
+        # Loads whose must-run requirement is fully satisfied by the COTS decrement
+        # (issue #983): elapsed completed timesteps >= required, so remaining clamps
+        # to 0. Such a load MUST be released (treated as a load with no operating
+        # requirement) -- otherwise the param_load_active loop keeps it active
+        # (has_operating_requirement is True from def_total_hours/timestep) and the
+        # single-constant startup constraint forces a phantom extra block. Populated
+        # in the decrement branch below; consumed by the param_load_active loop.
+        cots_satisfied_loads = set()
 
         # Update Energy Constraint Parameters for Deferrable Loads
         # These control the Big-M relaxation of energy/timestep constraints
@@ -4048,6 +4109,57 @@ class Optimization:
                 required_timesteps = 0
                 target_energy = 0.0
                 constraint_active = False
+
+            # Apply completed-operating-timesteps decrement (issue #983).
+            # If the caller signals that the load has already run for some timesteps
+            # today, reduce the remaining required run and energy proportionally.
+            # Clamped at 0 so an elapsed >= required never produces negative values
+            # or an infeasible model.  Applies to both standard and single_constant
+            # must-run loads (no is_single_const gate -- that is the whole point of
+            # this param vs def_current_on_timesteps which is gated not is_single_const).
+            if (
+                k < len(self.param_current_operating_timesteps)
+                and self.param_current_operating_timesteps[k].value > 0
+                and constraint_active
+            ):
+                elapsed_steps = int(self.param_current_operating_timesteps[k].value)
+                required_timesteps = max(0, required_timesteps - elapsed_steps)
+                # target_energy units: W * h  (nominal_power in W, time_step in h)
+                target_energy = max(
+                    0.0, target_energy - elapsed_steps * nominal_power * self.time_step
+                )
+                # If the decrement reduces required to 0, fully relax the constraint
+                # so the load is not forced to run.
+                if required_timesteps == 0:
+                    constraint_active = False
+                    # The must-run requirement is now MET. Record the load so the
+                    # param_load_active loop deactivates it (param_load_active=0),
+                    # the same as a load with no operating requirement -- otherwise
+                    # the single-constant startup constraint
+                    # (sum(p_def_start) == param_load_active - already_running)
+                    # would still force a phantom startup block. This branch only
+                    # runs when constraint_active was True, which already excludes
+                    # thermal / shared-tank / sequence loads (their energy/timestep
+                    # constraints are skipped), but the param_load_active loop guards
+                    # those cases again for safety.
+                    cots_satisfied_loads.add(k)
+                    # CRITICAL INTERACTION with def_current_power (issue #982/#605):
+                    # a currently-running load may also have def_current_power[k] > 0,
+                    # which (for pin-eligible loads) PINS p_deferrable[k][0] to that
+                    # wattage and force-ON's bin2[k][0] via _def_current_power_affected.
+                    # With param_load_active=0 the load is bounded to 0 W for the whole
+                    # horizon (p_def_bin2 <= 0 and p_deferrable <= M*0), so the t=0
+                    # force-on / pin would conflict and make the model INFEASIBLE.
+                    # A target-MET load must be allowed to turn off, so release the
+                    # current-power pin and force-on for it (the t0 pin is treated as
+                    # released for COTS-satisfied loads). Single_const loads are never
+                    # affected by def_current_power anyway (excluded in
+                    # _update_def_current_power_params), so this is a no-op for them and
+                    # only matters for a standard (semi_cont) COTS-satisfied load.
+                    if k < len(self._def_current_power_affected):
+                        self._def_current_power_affected[k] = False
+                    if k < len(self.param_def_current_power_active):
+                        self.param_def_current_power_active[k].value = 0.0
 
             # Set energy constraint parameters. Force-relax the constraint if
             # the load's configured window is entirely outside the horizon
@@ -4150,10 +4262,19 @@ class Optimization:
                 )
                 # Only fire when load is ON, N > 0, NOT single-constant (those use
                 # their own currently-running pin), and elapsed is explicitly supplied.
+                # COTS-satisfied loads (issue #983) are RELEASED from every force-on
+                # mechanism: the param_load_active loop deactivates them
+                # (param_load_active=0 => bin2<=0), so a min-on force-on here
+                # (param_running_lb => bin2>=1) would conflict and make the MILP
+                # INFEASIBLE (rescued only by the global relaxed-LP fallback, which
+                # degrades the whole solve). A target-MET load must be free to turn
+                # off, so skip Block B for it (mirrors Block A's required_timesteps>0
+                # gate and the def_current_power release above).
                 if (
                     current_state
                     and min_on_n > 0
                     and not is_single_const
+                    and k not in cots_satisfied_loads
                     and "def_current_on_timesteps" in self.optim_conf
                     and k < len(self.optim_conf["def_current_on_timesteps"])
                 ):
@@ -4336,6 +4457,19 @@ class Optimization:
                         "constraints drive this load).",
                         k,
                     )
+            elif k in cots_satisfied_loads and not is_sequence:
+                # COTS decrement fully satisfied this must-run load (issue #983):
+                # remaining required clamped to 0. Deactivate it exactly like a load
+                # with no operating requirement so the single-constant startup
+                # constraint does not force a phantom block. is_thermal is already
+                # handled above; guard is_sequence here too (sequence loads never
+                # enter the decrement branch -- their energy constraint is exempt --
+                # so cots_satisfied_loads can't contain one, but stay defensive).
+                self.param_load_active[k].value = 0.0
+                self.logger.debug(
+                    f"Deferrable load {k}: deactivated (operating requirement met "
+                    "by def_current_operating_timesteps, issue #983)"
+                )
             elif (has_operating_requirement or is_sequence) and not window_outside_horizon:
                 self.param_load_active[k].value = 1.0
             else:
