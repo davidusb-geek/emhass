@@ -161,6 +161,19 @@ Example:
   **Single-constant, sequence and thermal loads** ignore `def_current_power` (it is a no-op for those load types). A single-constant load runs as one fixed block, so its currently-running state is handled by `def_current_state` (which pins the remaining required timesteps); pinning a below-nominal power there would fight the required-energy target. Use `def_current_state` for a currently-running single-constant load.
 
   **Typical MPC use:** read the load's power sensor at the start of each optimization tick and pass the reading in watts via the runtime API so the optimizer knows the load is running and at what level.
+- `def_current_operating_timesteps`: Per-load integer list: how many operating timesteps each must-run deferrable load has already completed today at the start of this optimization horizon. The optimizer schedules only the REMAINDER: `required_timesteps` and `target_energy` are each decremented by the elapsed amount, clamped at 0. **Default `null` (absent key) or `[0, 0]` is an exact no-op** -- today's plan is unchanged. One non-negative integer per deferrable load, in the same order as `nominal_power_of_deferrable_loads`.
+
+  Unit: timesteps. Convert from time: `elapsed_hours / optimization_time_step`. With the default 30-minute step, 2 elapsed hours = 4 timesteps.
+
+  Applies to **both standard and single_constant must-run loads** (unlike `def_current_on_timesteps` which is gated on `def_minimum_on_time > 0` and excluded for single_constant loads). If a load has no required operating hours configured (`operating_hours_of_each_deferrable_load[k] == 0`), the elapsed value is ignored.
+
+  When the elapsed count equals or exceeds the total required timesteps, the remainder clamps to 0 and the constraint is fully relaxed -- the load is no longer forced to run in this tick, and the solve stays Optimal.
+
+  **Interaction with `def_current_state`:** if you also pass `def_current_state[k]=true` for a single_constant load, the optimizer uses both signals: the currently-running pin (block A) uses the *decremented* `required_timesteps`, so the running-block anchor also shrinks automatically.
+
+  **Daily reset boundary:** EMHASS does not track wall-clock day rollover. The caller (supervisor / automation) is responsible for resetting the elapsed count to 0 at the start of each day, exactly as with `def_current_on_timesteps` and `def_current_power`.
+
+  **Typical MPC use:** at each optimization tick, read the load's run-time counter (e.g. from a Home Assistant energy meter or runtime helper) and pass the elapsed timesteps so the optimizer schedules only the outstanding run.
 - `deferrable_load_max_cost`: Make a deferrable load *optional* by capping how much it may cost to run. This is a list of floats, one value per deferrable load, in the same currency units as your load cost forecast. The default `0` keeps a load **mandatory**: the optimizer must deliver its full `operating_hours_of_each_deferrable_load` of energy within the horizon, as it always has. A value above `0` makes the load **optional**: the optimizer schedules it only when its complete run can be done for less than that amount (the cost of the energy it consumes plus any `set_deferrable_startup_penalty`), otherwise the load is left off for the whole horizon. This suits a "nice to have" load that is only worth running when energy is cheap enough, for example a heat pump boosting hot water above its normal setpoint, or an immersion heater that should only soak up surplus when prices are very low. The cap is an all-or-nothing budget for the load's entire run, not a per-timestep price limit. It applies to every deferrable load type (standard, semi-continuous, single-constant and sequence loads) except thermal loads configured with a `thermal_config` or `thermal_battery`, which follow their own temperature targets instead. For example:
 	```json
 	"deferrable_load_max_cost": [0, 0.65]

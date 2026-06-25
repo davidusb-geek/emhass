@@ -8264,6 +8264,444 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             err_msg="def_current_power changed a single_const load (must be ignored)",
         )
 
+    # ---------------------------------------------------------------------------
+    # Tests for def_current_operating_timesteps (issue #983)
+    # Runtime-only, per-load "completed operating timesteps today" signal that
+    # DECREMENTS the remaining required run (required_timesteps + target_energy).
+    # Applies to both standard and single_constant must-run loads.
+    # All tests are base-safe: they read the new config key via optim_conf dict
+    # so no AttributeError on base code. RED tests fail on the BEHAVIOURAL
+    # assertion (full block scheduled instead of remainder), not on an exception.
+    # ---------------------------------------------------------------------------
+
+    def _make_cots_overrides(self, is_single_const=True, operating_hours=3.0, **extra):
+        """Return a base optim_conf override dict for def_current_operating_timesteps tests.
+
+        Default: single_constant load with 3 h required (= 6 timesteps at 30 min).
+        Pass is_single_const=False for a standard (semi_cont) load test.
+        """
+        base = {
+            "costfun": "cost",
+            "number_of_deferrable_loads": 2,
+            "nominal_power_of_deferrable_loads": [3000.0, 750.0],
+            "minimum_power_of_deferrable_loads": [0.0, 0.0],
+            "operating_hours_of_each_deferrable_load": [operating_hours, 0.0],
+            "treat_deferrable_load_as_semi_cont": [not is_single_const, True],
+            "set_deferrable_load_single_constant": [is_single_const, False],
+            "set_deferrable_startup_penalty": [0.0, 0.0],
+            "set_deferrable_max_startups": [0, 0],
+            "start_timesteps_of_each_deferrable_load": [0, 0],
+            "end_timesteps_of_each_deferrable_load": [0, 0],
+            "def_load_config": [],
+            "deferrable_load_groups": [],
+            "set_use_battery": False,
+        }
+        base.update(extra)
+        return base
+
+    def test_current_operating_timesteps_single_const_red(self):
+        """RED (issue #983): single_constant load with elapsed > 0 schedules only remainder.
+
+        A must-run single_constant load requires 6 timesteps (3 h at 30 min). When
+        def_current_operating_timesteps=[2, 0], only 4 timesteps remain. The optimizer
+        must schedule exactly 4 timesteps (sum(bin2_0) == 4).
+
+        Base code: ignores def_current_operating_timesteps -> schedules the full 6
+        timesteps (sum(bin2_0) == 6). This test FAILS on the assertEqual on base code
+        (gets 6, not 4), NOT on an Attribute/KeyError, so it is RED-on-base-safe.
+        """
+        n = 10
+        # Flat prices so the optimizer is indifferent and schedules the full block.
+        prices = [0.2] * n
+        df = self._make_min_on_scenario(n=n, prices=prices)
+
+        # Counterfactual: without elapsed, full 6 timesteps scheduled.
+        base = self._make_cots_overrides(
+            is_single_const=True,
+            operating_hours=3.0,
+        )
+        _opt_base, res_base = self._run_min_on_optim(base, df, n)
+        self.assertIn(
+            _opt_base.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"Counterfactual solve non-optimal: {_opt_base.optim_status}",
+        )
+        # Counterfactual: confirm base schedules the full 6 timesteps.
+        bin2_base = res_base["P_def_bin2_0"].values
+        total_base = int(round(bin2_base.sum()))
+        self.assertEqual(
+            total_base,
+            6,
+            f"Counterfactual FAILED: expected 6 timesteps scheduled, got {total_base}. "
+            f"bin2={bin2_base}",
+        )
+
+        # With elapsed=2: only 4 timesteps should be scheduled.
+        with_elapsed = self._make_cots_overrides(
+            is_single_const=True,
+            operating_hours=3.0,
+            def_current_operating_timesteps=[2, 0],
+        )
+        _opt_rem, res_rem = self._run_min_on_optim(with_elapsed, df, n)
+        self.assertIn(
+            _opt_rem.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"Remainder solve non-optimal: {_opt_rem.optim_status}",
+        )
+        # BEHAVIOURAL assertion -- this line fails on base code (schedules 6, not 4).
+        bin2_rem = res_rem["P_def_bin2_0"].values
+        total_rem = int(round(bin2_rem.sum()))
+        self.assertEqual(
+            total_rem,
+            4,
+            f"def_current_operating_timesteps decrement failed: expected 4 timesteps "
+            f"remaining, got {total_rem}. bin2={bin2_rem}. Base code returns 6 here "
+            "-- this is the RED assertion.",
+        )
+
+    def test_current_operating_timesteps_noop_no_key(self):
+        """def_current_operating_timesteps absent = identical plan to all-zeros (no-op).
+
+        Run the same single_constant scenario twice (without the key, then with all
+        zeros) and verify the results are equal. Also confirm the full block is
+        scheduled in both cases so the test cannot false-green.
+        """
+        n = 10
+        prices = [0.2] * n
+        df = self._make_min_on_scenario(n=n, prices=prices)
+
+        overrides_no_key = self._make_cots_overrides(is_single_const=True, operating_hours=3.0)
+        overrides_zeros = self._make_cots_overrides(
+            is_single_const=True,
+            operating_hours=3.0,
+            def_current_operating_timesteps=[0, 0],
+        )
+
+        _opt_a, res_a = self._run_min_on_optim(overrides_no_key, df, n)
+        _opt_b, res_b = self._run_min_on_optim(overrides_zeros, df, n)
+
+        self.assertIn(_opt_a.optim_status, VALID_OPTIMAL_STATUSES)
+        self.assertIn(_opt_b.optim_status, VALID_OPTIMAL_STATUSES)
+
+        np.testing.assert_allclose(
+            res_a["P_deferrable0"].values,
+            res_b["P_deferrable0"].values,
+            atol=1e-6,
+            err_msg="def_current_operating_timesteps=[0,0] changed the result vs absent key (no-op broken)",
+        )
+
+        # Anti-green: full 6 timesteps should be scheduled in the no-op path.
+        bin2_a = res_a["P_def_bin2_0"].values
+        total_a = int(round(bin2_a.sum()))
+        self.assertEqual(
+            total_a,
+            6,
+            f"No-op anti-green FAILED: expected full 6 timesteps, got {total_a}.",
+        )
+
+    def test_current_operating_timesteps_standard_load(self):
+        """Standard (non-single_const) load decrement via def_current_operating_timesteps.
+
+        A semi_cont load requires 3 h = 6 timesteps. With elapsed=3, only 3 timesteps
+        of energy should be scheduled (total power sum / nominal ~= 3 timesteps).
+        """
+        n = 10
+        prices = [0.2] * n
+        df = self._make_min_on_scenario(n=n, prices=prices)
+
+        # Counterfactual: full 6-timestep run (3 h).
+        base = self._make_cots_overrides(is_single_const=False, operating_hours=3.0)
+        _opt_base, res_base = self._run_min_on_optim(base, df, n)
+        self.assertIn(_opt_base.optim_status, VALID_OPTIMAL_STATUSES)
+        p0_base = res_base["P_deferrable0"].values
+        # Energy delivered (Wh): sum(P) * time_step (0.5 h per step)
+        energy_base = p0_base.sum() * 0.5
+        self.assertAlmostEqual(
+            energy_base,
+            3000.0 * 3.0,  # 3000 W * 3 h = 9000 Wh
+            delta=100.0,
+            msg=f"Counterfactual energy wrong: expected ~9000 Wh, got {energy_base:.0f}",
+        )
+
+        # With elapsed=3: only 3 timesteps (1.5 h) of energy should remain.
+        with_elapsed = self._make_cots_overrides(
+            is_single_const=False,
+            operating_hours=3.0,
+            def_current_operating_timesteps=[3, 0],
+        )
+        _opt_rem, res_rem = self._run_min_on_optim(with_elapsed, df, n)
+        self.assertIn(_opt_rem.optim_status, VALID_OPTIMAL_STATUSES)
+        p0_rem = res_rem["P_deferrable0"].values
+        energy_rem = p0_rem.sum() * 0.5
+        self.assertAlmostEqual(
+            energy_rem,
+            3000.0 * 1.5,  # 3 remaining timesteps * 0.5 h * 3000 W = 4500 Wh
+            delta=100.0,
+            msg=(
+                f"Standard-load decrement failed: expected ~4500 Wh remaining, "
+                f"got {energy_rem:.0f}. Base code schedules ~9000 Wh (full block)."
+            ),
+        )
+
+    def test_current_operating_timesteps_clamp_elapsed_ge_required(self):
+        """Elapsed >= required: required becomes 0, model feasible, load not forced.
+
+        When elapsed >= total required timesteps the decrement clamps at 0. The load
+        is no longer forced (constraint_active=False), so the optimizer may schedule 0
+        timesteps. The solve must remain Optimal.
+        """
+        n = 10
+        # High prices everywhere so optimizer wants the load off.
+        prices = [0.9] * n
+        df = self._make_min_on_scenario(n=n, prices=prices)
+
+        # elapsed=6 >= required=6 (3 h at 30 min) -> remainder = 0
+        overrides = self._make_cots_overrides(
+            is_single_const=True,
+            operating_hours=3.0,
+            def_current_operating_timesteps=[6, 0],
+        )
+        _opt, res = self._run_min_on_optim(overrides, df, n)
+        self.assertIn(
+            _opt.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"Clamp test: solve non-optimal after elapsed>=required: {_opt.optim_status}",
+        )
+        # Load should not be forced on (remainder == 0 -> constraint fully relaxed).
+        bin2 = res["P_def_bin2_0"].values
+        total = int(round(bin2.sum()))
+        self.assertEqual(
+            total,
+            0,
+            f"Clamp test: expected 0 timesteps scheduled (remainder=0), got {total}. bin2={bin2}",
+        )
+
+    def test_current_operating_timesteps_over_elapsed_clamp(self):
+        """Elapsed > required: clamped to 0, model remains feasible.
+
+        elapsed=10 > required=6 must not produce negative required/energy or an
+        infeasible solve. Clamp ensures required_timesteps = max(0, 6-10) = 0.
+        """
+        n = 10
+        prices = [0.9] * n
+        df = self._make_min_on_scenario(n=n, prices=prices)
+
+        overrides = self._make_cots_overrides(
+            is_single_const=True,
+            operating_hours=3.0,
+            def_current_operating_timesteps=[10, 0],
+        )
+        _opt, res = self._run_min_on_optim(overrides, df, n)
+        self.assertIn(
+            _opt.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"Over-elapsed clamp test: solve non-optimal: {_opt.optim_status}",
+        )
+        bin2 = res["P_def_bin2_0"].values
+        self.assertEqual(
+            int(round(bin2.sum())),
+            0,
+            f"Over-elapsed clamp: expected 0 timesteps scheduled, got {bin2.sum():.1f}",
+        )
+
+    def test_current_operating_timesteps_length_mismatch_warns(self):
+        """Length mismatch (len != num_def_loads) must log a WARNING and not crash.
+
+        Mirrors test_current_power_length_mismatch_warns. Passes a
+        def_current_operating_timesteps list of length 1 against a 2-load scenario
+        (num_deferrable_loads=2). The optimizer must:
+          1. Log a WARNING containing "def_current_operating_timesteps length mismatch"
+          2. Still complete the solve and return an Optimal status.
+        """
+        n = 10
+        prices = [0.2] * n
+        df = self._make_min_on_scenario(n=n, prices=prices)
+
+        # len=1, num_loads=2 -> length mismatch
+        overrides = self._make_cots_overrides(
+            is_single_const=True,
+            operating_hours=3.0,
+            def_current_operating_timesteps=[2],  # only 1 entry for 2 loads
+        )
+        with self.assertLogs(level="WARNING") as logs:
+            _opt, _res = self._run_min_on_optim(overrides, df, n)
+
+        self.assertIn(
+            _opt.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"Length-mismatch must not crash the solve. Got: {_opt.optim_status}",
+        )
+        self.assertTrue(
+            any("def_current_operating_timesteps length mismatch" in line for line in logs.output),
+            f"Expected WARNING containing 'def_current_operating_timesteps length mismatch'; "
+            f"got: {logs.output}",
+        )
+
+    def test_current_operating_timesteps_running_singleconst_clamp(self):
+        """Running single_const load with elapsed >= required stays feasible (clamp-to-zero).
+
+        A single_constant must-run load requiring 2 timesteps (1 h at 30 min) is
+        currently running (def_current_state=True, def_current_on_timesteps=2 to pin
+        it at t=0). def_current_operating_timesteps=[2, 0] means it has already
+        completed all 2 required timesteps today.
+
+        The decrement must clamp remaining_required to 0. The model must:
+          1. Solve Optimal -- NOT become infeasible.
+          2. Schedule 0 additional full-block timesteps for load 0 (requirement
+             satisfied; load is not forced to run a phantom extra block).
+
+        This is the adversarial coverage gap: a currently-running single_const load
+        whose elapsed >= required should be fully released (constraint_active=False),
+        not stranded in an infeasible over-constrained state.
+        """
+        n = 10
+        # Expensive prices so the optimizer avoids running the load if it is free to.
+        prices = [0.9] * n
+        df = self._make_min_on_scenario(n=n, prices=prices)
+
+        # operating_hours=1.0 -> 2 timesteps at 30 min. elapsed=2 -> clamps to 0.
+        overrides = self._make_cots_overrides(
+            is_single_const=True,
+            operating_hours=1.0,
+            def_current_operating_timesteps=[2, 0],
+        )
+        # Pin the load as currently running at t=0 (single_const running-pin pattern).
+        overrides["def_current_state"] = [True, False]
+        overrides["def_current_on_timesteps"] = [2, 0]
+
+        _opt, res = self._run_min_on_optim(overrides, df, n)
+
+        self.assertIn(
+            _opt.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"Running single_const + elapsed>=required must stay Optimal (clamp-to-zero). "
+            f"Got: {_opt.optim_status}. A non-Optimal result means the load was stranded "
+            "in an infeasible over-constrained state instead of being released.",
+        )
+        # With remaining_required=0 and high prices, the optimizer must not schedule
+        # any additional full block (bin2 sum should be 0).
+        bin2 = res["P_def_bin2_0"].values
+        self.assertEqual(
+            int(round(bin2.sum())),
+            0,
+            f"Running single_const clamp-to-zero: expected 0 additional timesteps "
+            f"(requirement already satisfied), got {bin2.sum():.1f}. bin2={bin2}",
+        )
+
+    def test_current_operating_timesteps_satisfied_with_current_power_feasible(self):
+        """COTS-satisfied currently-running load + def_current_power set stays FEASIBLE.
+
+        Critical interaction guard (issues #983 x #982/#605): a currently-running
+        single_const load whose elapsed >= required (remaining clamps to 0) is
+        deactivated (param_load_active=0). If a non-zero def_current_power t=0
+        force-on / power-pin were left active for that load, it would conflict with
+        the load being bounded to 0 W for the whole horizon and make the model
+        INFEASIBLE. The fix releases the current-power pin/force-on for COTS-satisfied
+        loads, so the solve must remain Optimal and schedule no extra block.
+        """
+        n = 10
+        prices = [0.9] * n
+        df = self._make_min_on_scenario(n=n, prices=prices)
+
+        # operating_hours=1.0 -> 2 timesteps; elapsed=2 -> clamps to 0.
+        overrides = self._make_cots_overrides(
+            is_single_const=True,
+            operating_hours=1.0,
+            def_current_operating_timesteps=[2, 0],
+        )
+        overrides["def_current_state"] = [True, False]
+        overrides["def_current_on_timesteps"] = [2, 0]
+        # def_current_power set for the running load: this is the adversarial leg.
+        # (For single_const it is excluded from the pin upstream, but exercise the
+        # path explicitly so a regression in that exclusion is caught here as an
+        # infeasibility rather than slipping through.)
+        overrides["def_current_power"] = [3000.0, 0.0]
+
+        _opt, res = self._run_min_on_optim(overrides, df, n)
+
+        self.assertIn(
+            _opt.optim_status,
+            VALID_OPTIMAL_STATUSES,
+            f"COTS-satisfied running load WITH def_current_power must stay feasible "
+            f"(pin/force-on released). Got: {_opt.optim_status}.",
+        )
+        bin2 = res["P_def_bin2_0"].values
+        self.assertEqual(
+            int(round(bin2.sum())),
+            0,
+            f"COTS-satisfied + def_current_power: expected 0 timesteps scheduled, "
+            f"got {bin2.sum():.1f}. bin2={bin2}",
+        )
+
+    def test_current_operating_timesteps_satisfied_standard_min_on_feasible(self):
+        """COTS-satisfied STANDARD (semi_cont) load with a min-on remainder stays
+        plain Optimal and is released (issues #983 x #952/#980).
+
+        The reproduced HIGH-severity bug: a currently-running STANDARD (semi_cont,
+        NOT single_const) load that ALSO has an in-progress min-on window
+        (def_minimum_on_time set, def_current_on_timesteps mid-window) AND whose
+        must-run requirement is already satisfied by def_current_operating_timesteps
+        (elapsed >= required, remaining clamps to 0).
+
+        Without the fix, the COTS decrement deactivates the load
+        (param_load_active=0 => bin2 <= 0) while min-on Block B force-ON's it via
+        param_running_lb (bin2 >= 1). The two constraints conflict => the MILP is
+        INFEASIBLE and is rescued only by the GLOBAL relaxed-LP fallback, which
+        returns status "Optimal (Relaxed)" and degrades the entire solve. (Single_const
+        is safe only because Block B is gated `not is_single_const`.)
+
+        The fix gates Block B on `k not in cots_satisfied_loads`, so a COTS-satisfied
+        load is FREE (optimizer may run it if economical) but never FORCED. The solve
+        must therefore return PLAIN "Optimal" (NOT the relaxed fallback), and the load
+        must be RELEASED -- not pinned ON for the whole min-on tail.
+
+        This asserts the EXACT status string "Optimal" (not VALID_OPTIMAL_STATUSES)
+        precisely to distinguish a healthy MILP solve from the relaxed-LP rescue.
+        """
+        n = 10
+        # Expensive prices everywhere so a released load wants to be OFF; if Block B
+        # were still forcing it ON, that force (not economics) would drive bin2 high.
+        prices = [0.9] * n
+        df = self._make_min_on_scenario(n=n, prices=prices)
+
+        # STANDARD (semi_cont) load 0. operating_hours=1.0 -> 2 required timesteps at
+        # 30 min; def_current_operating_timesteps=[2, 0] -> elapsed 2 >= required 2,
+        # remaining clamps to 0 -> COTS-satisfied.
+        overrides = self._make_cots_overrides(
+            is_single_const=False,
+            operating_hours=1.0,
+            def_current_operating_timesteps=[2, 0],
+        )
+        # Currently running, mid min-on window: min_on=6 timesteps, elapsed on-time=2
+        # so remaining=4 -> Block B would force 4 ON steps (the infeasibility leg).
+        overrides["def_minimum_on_time"] = [6, 0]
+        overrides["def_current_state"] = [True, False]
+        overrides["def_current_on_timesteps"] = [2, 0]
+
+        _opt, res = self._run_min_on_optim(overrides, df, n)
+
+        # PLAIN Optimal (not "Optimal (Relaxed)") proves the MILP itself is feasible
+        # and the relaxed-LP fallback was NOT triggered.
+        self.assertEqual(
+            _opt.optim_status,
+            "Optimal",
+            f"COTS-satisfied STANDARD load with min-on remainder must solve plain "
+            f"'Optimal', NOT the relaxed-LP fallback. Got: {_opt.optim_status}. A "
+            f"'(Relaxed)' status means min-on Block B force-ON conflicted with the "
+            "param_load_active=0 deactivation and the MILP went infeasible.",
+        )
+        # Released: with the requirement met and high prices, the load must NOT be
+        # pinned ON for the min-on tail. (If Block B still fired it would be forced ON
+        # for 4 steps; release => optimizer keeps it off, bin2 sum == 0.)
+        bin2 = res["P_def_bin2_0"].values
+        self.assertEqual(
+            int(round(bin2.sum())),
+            0,
+            f"COTS-satisfied STANDARD load with min-on remainder must be released "
+            f"(not forced ON for the min-on tail), expected 0 timesteps, got "
+            f"{bin2.sum():.1f}. bin2={bin2}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -111,6 +111,13 @@
       "default_value": null,
       "unit": "W"
     },
+    "def_current_operating_timesteps": {
+      "friendly_name": "Completed operating timesteps of deferrable loads",
+      "Description": "Per-load integer list: how many operating timesteps each must-run deferrable load has already completed today at the start of this optimization horizon. The optimizer schedules only the REMAINDER: required_timesteps and target_energy are each decremented by the elapsed amount, clamped at 0. Applies to both standard and single_constant must-run loads. Default null (absent key) is an exact no-op -- today's plan is unchanged. Example: if a load requires 6 timesteps total and has already run for 2, only 4 remain for this solve. One non-negative integer per deferrable load, in the same order as nominal_power_of_deferrable_loads. The daily reset boundary is the caller's responsibility (EMHASS does not track wall-clock day rollover). Runtime-overridable on every optimization tick without a cache rebuild. Related to issue #983.",
+      "input": "array.int",
+      "default_value": null,
+      "unit": "timesteps"
+    },
     "def_load_config": {
       "friendly_name": "Deferrable load special config",
       "Description": "Per-deferrable-load special configuration carrying the thermal_config / thermal_battery models. Deep, evolving nested schema; not inlined here. See the linked documentation for the full structure.",
