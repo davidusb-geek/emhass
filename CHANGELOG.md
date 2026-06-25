@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.17.8 - 2026-06-25
+
+### Improvement
+- feat: carry over completed operating timesteps for must-run deferrables (closes #983) (@LesIT1)
+- feat: optional minimum off-time per deferrable load (#952) (@LesIT1)
+- feat: optional def_current_power to pin a deferrable load's current power at t=0 (#605) (@LesIT1)
+- feat: optional minimum on-time per deferrable load (#952) (@LesIT1)
+- Document InfluxDB arithmetic expressions for sensor parameters (@dewi-ny-je)
+
+### Documentation
+- docs(cookbook): add EV recipe - EMHASS as planner, evcc as executor (@LesIT1)
+- docs: document deferrable_load_max_cost (optional loads with a cost ceiling) (@LesIT1)
+
+### Fix
+- fix: atomic entity-file writes so continual_publish survives a partial read (@LesIT1)
+- fix(thermal): keep solar gains when pv_power_forecast is passed (#997) (@LesIT1)
+- fix(thermal): compute cooling demand for thermal_battery sense=cool (#994) (@LesIT1)
+- fix: schedule cooling for shared-tank comfort_sense: cool zones (@Thimpey)
+- fix: default lp_solver_mip_rel_gap to 0.01 to avoid deep-horizon solver timeouts (#986) (@LesIT1)
+- fix: correct forecast dates when host clock differs from configured timezone (#984) (@LesIT1)
+- fix: set_nodischarge_to_grid no longer blocks battery discharge to local load on AC-coupled systems (closes #936) (@LesIT1)
+- fix: keep shared-tank sources active when operating_hours == 0 (@Thimpey)
+
 ## 0.17.7 - 2026-06-11
 We are excited to announce the latest release of EMHASS! This version brings highly requested features for battery management, significant upgrades to forecasting, and a solid round of bug squashing.
 
